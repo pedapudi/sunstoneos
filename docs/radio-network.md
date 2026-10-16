@@ -1,0 +1,145 @@
+# Native IPv4 service over the radio transport
+
+The network service runs FreeRTOS+TCP with the native AIC8800 Ethernet
+transport. It implements static IPv4 addressing, ARP, ICMP replies, UDP, and
+outgoing TCP connections. Applications submit copied requests through
+`sunstone_net.h`; the privileged worker owns every stack socket and all radio
+polling. This document assumes familiarity with FreeRTOS tasks and IP sockets.
+
+The implementation passed native AArch64 compilation and the composed network checks. The composed model uses
+actual FreeRTOS tasks, FreeRTOS+TCP, socket allocation, the Ethernet adapter,
+and the SDIO controller model. Physical radio networking remains unqualified.
+
+## Source and configuration
+
+The external stack is FreeRTOS+TCP 4.4.2 at revision
+`b86ad086e9870099bb0ac18a75dcb7f6dd508cc7`, under the MIT license.
+The archive SHA-256 is
+`60a2eea0de133948bb9a12f09abcba8e47800c3bbf61fe42fc7db6af453f142a`.
+The source comes from the [FreeRTOS repository](https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/tree/b86ad086e9870099bb0ac18a75dcb7f6dd508cc7).
+The source authenticator compares the complete source directory, license, and
+release history with that archive before building.
+
+The private configuration enables software IP, UDP, and TCP checksums.
+It sets a 1500-byte MTU, a 1460-byte TCP MSS, and four MSS units for each
+TCP send and receive stream. DHCP, DNS, IPv6, service discovery, and TCP server
+APIs remain required follow-on work. This initial application API supports
+UDP open, TCP open, connect, send, receive, and close.
+
+The optional `cmake/radio-network.cmake` builds `radio-network-model` with
+`SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR`, and `SUNSTONE_NETWORK_C_HEADERS`.
+Private configuration headers precede the general kernel headers for this
+target. The external TCP and RSN sources remain unmodified and outside Git.
+A production image must link the same adapter, allocator, stack sources,
+configuration, and socket disposal hook with its qualified platform binding.
+
+## Ownership and memory remain bounded
+
+The service has four registered client tasks and four sockets. Each client
+may have one outstanding request or unread reply. Requests and replies copy
+at most 1472 payload bytes; applications receive opaque handles rather than
+stack pointers. Task identity restricts access to each client's sockets.
+Public request and result spans must exclude the service, radio objects, and
+borrowed immutable firmware blobs; admission checks those ranges.
+
+The image reserves a 256 KiB heap for the pinned FreeRTOS `heap_4` allocator.
+The heap supplies socket objects, event groups, TCP streams, stack tasks, and
+stack queues. Definite allocation refusal leaves the allocator usable.
+The IP task and its interface remain allocated for the image lifetime.
+The service does not reset or replace a live stack instance.
+
+The Ethernet pool contains 24 fixed 1536-byte slots. The adapter copies each
+outgoing frame into an eight-entry queue before releasing the stack's frame
+when requested. A full queue refuses the frame and releases that descriptor.
+The worker owns one additional current frame until its SDIO result is known.
+Ordinary transmission completion proves bus transfer; it does not prove an
+access point acknowledgement or remote application receipt.
+
+Incoming validated Ethernet frames are copied into the fixed pool. Successful
+IP-event admission transfers descriptor ownership to the IP task. Pool
+exhaustion or a full IP queue drops the copied frame and releases any acquired
+descriptor. The adapter consumes the original radio record after this decision.
+Unsupported or unrelated radio records remain retained. An additional
+serialized dispatcher must inspect and consume those records before reception
+can continue; the network worker currently exposes no application API for them.
+
+## Deadlines preserve socket and packet ownership
+
+Each request carries a finite timeout in FreeRTOS ticks. The deadline begins
+when the service copies the request, including queue time. Stack send and
+receive waits are zero. The worker checks the deadline before advancing an
+operation and before reporting successful completion. A late result retains
+known byte counts, received payload, and the socket handle in its reply.
+A positive send result means that the stack accepted those bytes. On an ARP
+cache miss, the pinned UDP stack consumes the datagram to generate an ARP
+request. Applications needing reliable delivery must use an acknowledged
+protocol or retry according to their protocol.
+
+Public FreeRTOS bind and close functions contain unbounded internal waits.
+The adapter instead submits their source-defined IP events with zero queue
+wait. Bind completion requires the actual socket event group and bound-list
+membership. Close completion requires the stack's socket-free hook after
+buffer and event-group disposal. The hook retires the allocation address
+before returning it to the heap, so address reuse cannot complete another
+socket's close.
+
+A timed-out open, connect, or close retains its socket record. Explicit close
+can finish disposal, including after a previous close has completed in the
+IP task. A timed-out receive does not consume a future frame. A late receive
+that already removed bytes reports those bytes in the timeout reply.
+Waiting for a reply does not cancel the underlying request.
+
+Packets admitted to SDIO remain owned through an uncertain transfer or fault.
+A queued frame that has never been admitted may be dropped when its separate
+queue timeout expires. Terminal faults stop further radio polling and retain
+all unresolved storage for external quiescence and recovery.
+
+## Security authority belongs to one association
+
+Activation requires a completed authorized association, idle data transmission,
+a ready card and controller, and no outstanding SDIO or security transfer.
+The bootstrap task transfers exclusive transport ownership to the worker.
+Configuration, entropy contexts, and the radio object graph remain pinned.
+Held receive records transfer with that ownership.
+
+The adapter checks the association generation before admitting queued frames.
+Generation change, link loss, or unresolved roaming revokes the interface and
+all application handles. Temporary controlled-port closure during rekey pauses
+ordinary data admission. EAPOL remains owned by the supplicant and cannot enter
+the ordinary Ethernet output queue.
+
+Production configuration requires cryptographic random-number and TCP sequence
+providers plus an admission record identifying their qualification. Provider
+failure closes output synchronously. The TCP sequence hook has no error return;
+its placeholder result cannot authorize an outgoing SYN after that closure.
+The composition's deterministic providers are test inputs only.
+
+Automatic reconnection, stack retirement, packet handling across a replacement
+association, and full radio power modes remain unimplemented. They must preserve
+these ownership rules before a service can recover without restarting its image.
+
+## Composition and external proof limits
+
+The fixture begins with a reconstructed authorized WPA2 association. It uses
+real radio receive validation and packet-number checks, but its firmware peer
+supplies decrypted CCMP records. It does not execute physical firmware,
+authenticate an access point, establish real entropy, or perform CCMP decryption.
+The existing RSN handshake evidence remains separate.
+
+The synthetic peer validates outgoing IPv4 and transport checksums, answers ARP,
+echoes UDP, and completes a TCP handshake and data exchange. The model also
+exercises allocation refusal, socket limits, finite receive waits, IP-queue
+saturation, retained close ownership, and association-generation revocation.
+A separate short invocation exercises entropy failure before SYN output.
+Another delays a positive stack send result beyond its request deadline and
+checks that the timeout reply preserves accepted bytes and the socket handle.
+The lifecycle and entropy results reuse their original executable; the delayed
+send check adds only a model link wrapper around the actual stack send call.
+A final isolated admission check rejects result buffers overlapping retained
+firmware blobs. It reuses the earlier protocol and lifecycle evidence.
+
+Run `checks/radio-network.py --help` for source, compiler, emulator, and evidence
+arguments. Evidence includes command output, the executable digest, and source
+digests. The emulator has no host network interface. No physical queue request
+is appropriate until SDIO clock, pin, power, recovery, firmware, RF profile,
+entropy, and authorized network credentials have qualified platform bindings.
