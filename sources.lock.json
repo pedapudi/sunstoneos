@@ -76,5 +76,47 @@
     "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/LICENSE.powervr",
     "archive": "gpu/LICENSE.powervr",
     "sha256": "1c9aa6bd6703a7ce1cdb879542fa1d8aca115a327bd819b193c971de9c53f402"
+  },
+  "board-gpu-power-pck600-domains-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pm_domain/pck600_domains.c",
+    "archive": "gpu-power/drivers/pm_domain/pck600_domains.c",
+    "sha256": "2d9c2b60b3b264d1732538815d12570e45386d30b280a1d0b4f5b9780bdc49ee"
+  },
+  "board-gpu-power-sun60iw2-power-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/include/dt-bindings/power/sun60iw2-power.h",
+    "archive": "gpu-power/include/dt-bindings/power/sun60iw2-power.h",
+    "sha256": "f5da443de3a15290511f60c5a8697bc01ec714985eb876108e1da9db76fadbe7"
+  },
+  "board-gpu-power-ccu-sun60iw2-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+    "archive": "gpu-power/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+    "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77"
+  },
+  "board-gpu-power-ccu-sun60iw2-r-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-r.c",
+    "archive": "gpu-power/drivers/clk/sunxi-ng/ccu-sun60iw2-r.c",
+    "sha256": "9285e1b35bfae975e2c1257d477d843ad277916b9c555c12c5f88e1c7ea02554"
+  },
+  "board-gpu-power-sun60iw2p1-dtsi": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+    "archive": "gpu-power/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+    "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa"
+  },
+  "board-gpu-power-sun60i-a733-orangepi-zero3w-dts": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+    "archive": "gpu-power/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+    "sha256": "31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39"
+  },
+  "board-gpu-power-pvr-power-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_power.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_power.c",
+    "sha256": "5ab4ff9c54cd8060f0feb6b5c8320da5000c1c24a09f30fbf8c03ef283b732d5"
   }
 }

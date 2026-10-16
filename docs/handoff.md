@@ -138,6 +138,13 @@ The [native memory adapter](gpu-memory.md) now connects shared firmware records
 to uncached CPU mappings and publishes/reclaims cached firmware backing. Two
 emulator cases pass lifecycle integration and retained mapping failure. Board
 allocation, physical cache behavior, and isolation remain unqualified.
+The [power controller](gpu-power.md) now has host/reference evidence for bounded
+GPU clock/reset and power-domain transitions. Shared-resource acquisition and
+physical register operations remain outstanding. [Interrupt delivery](gpu-interrupts.md)
+now wakes the privileged worker through a bounded GIC mask/notification/rearm
+path. Two QEMU cases pass cross-core delivery, backlog handling, reopen, and
+retained failures. One native-memory lifecycle case also passes with the updated
+service's interrupt callbacks disabled. Physical GPU assertion remains untested.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -314,8 +321,9 @@ the tool hash and recovery evidence in the application document.
    implementation sequence.
 
 7. Integrate the GPU lifecycle service's board backend with reserved allocations,
-   the [native memory adapter](gpu-memory.md), power/reset control, resource-specific firmware event
-   handlers, and physical interrupt delivery. The [FreeRTOS service](gpu-service.md)
+   the [native memory adapter](gpu-memory.md), [power controller](gpu-power.md),
+   shared-resource manager, resource-specific firmware event handlers, and
+   [interrupt delivery](gpu-interrupts.md). The [FreeRTOS service](gpu-service.md)
    now integrates resource preparation, startup, control, and shutdown under one
    privileged worker. Its two-core emulator check passes ownership, migration,
    reopen, event service, and retained startup/control/shutdown failures. Reuse
@@ -325,9 +333,15 @@ the tool hash and recovery evidence in the application document.
    Reuse `gpu-memory-20261016` for native translation, shared-memory access,
    publication/reclamation, and permission-change failure. Reserve uncached
    firmware resource mappings without cacheable aliases on the board; qualify
-   physical cache/interconnect behavior after recovery. Power/reset and IRQ
-   development are assigned to isolated parallel workers; coordinate integration
-   before changing their service interfaces or files.
+   physical cache/interconnect behavior after recovery. Reuse `gpu-power-20261016`
+   and `gpu-irq-20261016/failed-enable-disable` for the new power and interrupt
+   components. The source-locked power setting is 400 MHz at 800 mV; it is not a
+   frequency measurement or performance target. Power-off does not establish
+   memory isolation. The shared-resource manager and protected watchdog-expiry
+   diagnostic remain assigned to parallel workers in the `gpu-resources` and
+   `watchdog-expiry` branches. Firmware event handling is assigned to a worker
+   in `gpu-events`. Inspect live agent state before reassigning their files.
+   Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic
    and drain outstanding transactions before resources can be reused. Implement

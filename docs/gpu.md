@@ -26,6 +26,10 @@ check passes ownership, reopen, event service, and retained-failure cases.
 The [native memory adapter](gpu-memory.md) has emulator evidence for translation,
 uncached shared resources, and cached firmware publication/reclamation. The
 backend still requires physical power, cache, interrupt, and isolation qualification.
+The [power controller](gpu-power.md) has bounded clock/reset/domain sequencing
+with host/reference evidence. [Interrupt delivery](gpu-interrupts.md) now connects
+the worker to GIC mask/rearm operations and passes actual QEMU interrupt delivery.
+Shared-resource management and the physical board bindings remain outstanding.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -172,8 +176,8 @@ The next implementation steps are:
    separate synchronization.
    Use the checked MIPS preparation component for firmware mappings and boot data;
    interpret additional feature parameters as initialization requires them.
-2. Integrate platform power, clocks, reset, and identity checks after independent
-   watchdog recovery is qualified. Boot the pinned firmware and verify its
+2. Integrate shared-resource management, the checked power controller, and
+   identity checks after independent watchdog recovery is qualified. Boot the pinned firmware and verify its
    startup/completion protocol on the device.
 3. Adapt the shader compiler and command-generation runtime to native services.
    Execute bounded compute and offscreen graphics with known results, then

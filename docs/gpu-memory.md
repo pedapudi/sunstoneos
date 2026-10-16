@@ -93,6 +93,12 @@ four initialized data bytes, and 684,064 bytes of BSS/reserved stacks. The
 adapter's initialization frame is 832 bytes; other individual frames are at
 most 96 bytes. Called functions add their own frames.
 
+After [optional interrupt delivery](gpu-interrupts.md) changed the service,
+one native-memory lifecycle case passed with interrupt callbacks disabled.
+This checks the integrated service layout and polling fallback. Its evidence
+is in `gpu-memory-20261016/irq-service-integration/`; the mapping-failure case
+and the interrupt component's own cases retain their earlier evidence.
+
 After relevant inputs change, configure the pinned firmware as described in
 [the service record](gpu-service.md), then run:
 

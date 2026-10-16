@@ -8,6 +8,9 @@ registers. GPU firmware instructions and graphics/compute workloads do not run.
 The [native memory adapter](gpu-memory.md) adds emulator evidence for translation
 and cache operations. Physical power, cache synchronization, interrupts, isolation, and recovery
 remain unqualified.
+The optional [interrupt integration](gpu-interrupts.md) masks delivery, queues a
+worker wakeup, and rearms only after event service drains its backlog. The
+polling fallback remains available when interrupt callbacks are omitted.
 
 The [interface](../include/pvr_gpu_service.h) and
 [implementation](../drivers/gpu/pvr_gpu_service.c) use static storage and copied

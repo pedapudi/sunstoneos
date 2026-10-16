@@ -86,6 +86,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   for CPU translation, uncached shared resources, cached firmware publication,
   reclamation, and retained permission failures. Physical coherence and board
   reservation remain unqualified.
+  The [power controller](gpu-power.md) has host/reference evidence for GPU
+  clock/reset and domain transitions; shared-resource management remains required.
+  [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
+  cores, queue saturation, backlog draining, deferred rearm, and retained failures.
+  Physical GPU power and interrupt behavior remain unqualified.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
