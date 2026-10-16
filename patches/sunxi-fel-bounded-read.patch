@@ -1,0 +1,36 @@
+--- fel_lib.c
++++ fel_lib.c
+@@ -99,14 +99,25 @@
+ }
+ 
+ static int usb_bulk_recv(libusb_device_handle *usb, int ep, void *data,
+-			 int length)
+-{
+-	int rc, recv;
+-	/* A short transfer ends this stage; the next packet may be AWUS. */
+-	rc = libusb_bulk_transfer(usb, ep, data, length, &recv, USB_TIMEOUT);
+-	if (rc != 0)
+-		usb_error(rc, "usb_bulk_recv()", 2);
+-	return recv;
++                         int length)
++{
++    int total = 0;
++    while (total < length) {
++        int remaining = length - total;
++        int chunk = remaining < AW_USB_MAX_BULK_SEND ? remaining : AW_USB_MAX_BULK_SEND;
++        int received = 0;
++        int rc = libusb_bulk_transfer(usb, ep, (unsigned char *)data + total, chunk,
++                                     &received, USB_TIMEOUT);
++        if (rc != 0) {
++            fprintf(stderr, "Receive failed after %d bytes; request=%d partial=%d\n",
++                    total, chunk, received);
++            usb_error(rc, "usb_bulk_recv()", 2);
++        }
++        total += received;
++        /* A short packet ends this stage; the next packet can be AWUS. */
++        if (received < chunk) break;
++    }
++    return total;
+ }
+ 
+ struct aw_usb_request {

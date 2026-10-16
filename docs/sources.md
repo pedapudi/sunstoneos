@@ -72,3 +72,12 @@ release `14.3.rel1`. Its downloaded SHA-256 matches the publisher’s companion
 checksum and is pinned in the dependency manifest. Project sources still use
 Clang 21. The distribution retains its library license notices and GCC runtime
 library exception; downloaded files remain outside tracked source.
+
+The FEL bounded-receive patch follows the status-validation patch. It caps each
+USB receive at 512 KiB while preserving short-response boundaries. The
+[application evidence](mimus.md) records the full-speed timeout diagnosis,
+recovery without reset, and successful model readback with this patch.
+
+The mimus application uses the local port revision in
+[apps/mimus/source.json](../apps/mimus/source.json). Model provenance and body
+preservation are recorded by `tools/prepare-mimus.py` in each input manifest.

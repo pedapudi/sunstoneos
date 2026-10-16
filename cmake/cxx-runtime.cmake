@@ -7,13 +7,7 @@ endif()
 enable_language(CXX)
 set(newlib_sysroot "${NEWLIB_ROOT}/aarch64-none-elf")
 set(newlib_cxx "${newlib_sysroot}/include/c++/14.3.1")
-foreach(target a733-cxx-check a733-cxx-model)
-  add_executable(${target}
-    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
-    arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
-    runtime/newlib.c runtime/new_delete.cc checks/cxx-runtime.cc
-    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
-    "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
+function(sunstone_cxx_compile target)
   target_include_directories(${target} PRIVATE include platform/a733
     "${FREERTOS_DIR}/include" "${PORT}")
   target_include_directories(${target} SYSTEM PRIVATE
@@ -26,6 +20,15 @@ foreach(target a733-cxx-check a733-cxx-model)
     -fno-unwind-tables -fno-asynchronous-unwind-tables -ffp-contract=off
     -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra
     "$<$<COMPILE_LANGUAGE:CXX>:-fhosted;-fno-exceptions;-fno-rtti;-fno-threadsafe-statics;-nostdinc++>")
+endfunction()
+foreach(target a733-cxx-check a733-cxx-model)
+  add_executable(${target}
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
+    runtime/newlib.c runtime/new_delete.cc checks/cxx-runtime.cc
+    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
+  sunstone_cxx_compile(${target})
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld"
     -Wl,--defsym=__runtime_heap_size=4194304

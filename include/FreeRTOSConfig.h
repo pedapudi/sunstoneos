@@ -18,6 +18,7 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #ifdef SUNSTONE_NEWLIB
 #define configUSE_NEWLIB_REENTRANT 1
 #define INCLUDE_xTaskGetSchedulerState 1
+#define INCLUDE_xTaskGetCurrentTaskHandle 1
 #endif
 
 #define configUSE_PREEMPTION 1

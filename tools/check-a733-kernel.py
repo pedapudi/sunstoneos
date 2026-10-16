@@ -22,7 +22,17 @@ parser.add_argument("--evidence", type=Path,
 parser.add_argument("--mode", choices=("kernel", "timeout"), default="kernel")
 parser.add_argument("--expect", default="PASS kernel:",
                     help="Required success text for a bounded runtime check")
+parser.add_argument("--ram-input", type=Path, help="Input bundle loaded at 0x43000000; at most 32 MiB")
+parser.add_argument("--ram-input-present", action="store_true", help="Verify existing RAM input instead of uploading it")
+parser.add_argument("--return-timeout", type=float, default=10)
 args = parser.parse_args()
+if not 5 <= args.return_timeout <= 600:
+    sys.exit("Return timeout must be between 5 and 600 seconds.")
+if args.ram_input_present and not args.ram_input:
+    sys.exit("--ram-input-present requires --ram-input.")
+ram_input = args.ram_input.read_bytes() if args.ram_input else None
+if ram_input is not None and not 0 < len(ram_input) <= 32 * 1024 * 1024:
+    sys.exit("RAM input exceeds its reserved interval.")
 image = args.image.read_bytes()
 if not image or len(image) > 0x100000:
     sys.exit("Kernel image exceeds the reserved image interval.")
@@ -41,7 +51,7 @@ def save():
     (args.evidence / "session.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
-def transaction(*arguments):
+def transaction(*arguments, timeout=30):
     if access.identity(node) != node_identity:
         raise RuntimeError("Device identity changed before a protocol request.")
     command = [str(args.fel), "-d", f"{int(node.parent.name)}:{int(node.name)}",
@@ -50,7 +60,7 @@ def transaction(*arguments):
     record["transactions"].append(item)
     save()
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as error:
         item["failure"] = "FEL timeout; no further device requests."
         save()
@@ -85,6 +95,14 @@ try:
         signature = struct.unpack_from("<I", (args.evidence / "before.bin").read_bytes())[0]
         if signature not in (0x41363450, 0x454c3150, 0x534b4552):
             raise RuntimeError("No prior AArch64 probe signature; establish initialized DDR first.")
+        if ram_input is not None:
+            record["ram_input_sha256"] = hashlib.sha256(ram_input).hexdigest()
+            record["ram_input_reused"] = args.ram_input_present
+            arguments = [] if args.ram_input_present else ["write", "0x43000000", args.ram_input]
+            transaction(*arguments, "read", "0x43000000", len(ram_input),
+                        args.evidence / "input-readback.bin", timeout=120)
+            if (args.evidence / "input-readback.bin").read_bytes() != ram_input:
+                raise RuntimeError("RAM input differs; execution refused.")
         blank = bytearray(16384)
         struct.pack_into("<Q", blank, 80, args.mode == "timeout")
         (args.evidence / "blank.bin").write_bytes(blank)
@@ -95,7 +113,7 @@ try:
         with usb_guard.reenumeration("sunstoneos-a733", "FreeRTOS check and forced-FEL return", 2):
             transaction("write", "0x42000000", args.evidence / "blank.bin")
             transaction("reset64", "0x41000000")
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + args.return_timeout
             # Poll only host device metadata. Do not send protocol requests until
             # the new instance exists and udev has granted access.
             while True:
@@ -107,7 +125,7 @@ try:
                 except FileNotFoundError:
                     pass
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("FEL did not return with access within 10 seconds; no reset retry.")
+                    raise RuntimeError("FEL did not return with access before the deadline; no reset retry.")
                 time.sleep(0.1)
             node = candidate
             node_identity = access.identity(node)

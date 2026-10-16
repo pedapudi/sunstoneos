@@ -99,22 +99,8 @@ Raw evidence is under `~/.cache/sunstoneos/evidence/`: the emulator record is
 log, returned memory, upload readback, and source/toolchain input hashes.
 Reuse these results while the relevant inputs remain unchanged.
 
-## Mimus integration requirements
+## Mimus integration
 
-Inspection used mimus revision `18c7c81968f56c8c985af0ec26448184cf6a17ec`.
-The portable engine needs C++23 containers and `std::expected`, allocation,
-a monotonic profiling clock, and a stable task identity for its work-dispatch
-logic. Its sequential execution path already exists. Platform adapters must
-replace host clock and thread calls without changing arithmetic.
-
-The next integration must load the existing model tensors and punctuation data,
-validate the model’s declared target, and recognize recorded 16 kHz mono audio.
-The existing target declarations do not include Orange Pi; an explicit profile
-is required. Preserve weight bytes when preparing model metadata for that profile.
-Compare features, log probabilities, text, punctuation, and formatting against
-the host before optimizing Arm kernels or adding worker cores.
-
-This runtime check does not execute mimus. Model loading, the clock and identity
-adapters, audio replay, complete transcription parity, and performance
-measurements remain outstanding. Full onboard hardware support remains a
-separate completion requirement.
+The [mimus application](mimus.md) uses this runtime with external clock and task
+identity providers. Its authoritative record covers model declarations,
+recorded-audio execution, parity evidence, and remaining qualification.
