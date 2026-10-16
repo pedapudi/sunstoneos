@@ -31,6 +31,8 @@ The [native DMA memory record](dma-memory.md) identifies the cache-maintenance
 and translation references used by the EL1 adapter.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
+The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
+references for the native page-table builder.
 The board-specific boot0 binary comes from the board build repository at
 `a95129bf30ea11886cc35f08ebb3e69695a26656`. Its header specifies a 245,760-byte
 image loaded at `0x47000`. Selected power/clock and DDR functions have executed

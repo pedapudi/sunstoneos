@@ -40,8 +40,10 @@ callers. Its RAM/FIFO admission policy also passes host checks. Board reservatio
 clock/reset setup, and a production privileged service remain outstanding.
 The [NPU investigation](npu.md) identifies available driver source and the
 remaining model-loader/compiler dependencies. A host inspector now matches
-compiled-model metadata and rejects malformed containers. Native NPU execution
-remains unimplemented and physically untested.
+compiled-model metadata and rejects malformed containers. Native [NPU page-table
+construction](npu-mmu.md) now passes a host model for translations, permissions,
+all physical-address extensions, guards, and atomic refusal. It compiles for
+AArch64. Controller integration and physical NPU execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -171,9 +173,10 @@ the tool hash and recovery evidence in the application document.
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
 
-6. Port the available NPU driver core to FreeRTOS and implement native model
-   relocation handling. Obtain and pin the A733 host compiler for a small
-   numerical fixture. The [NPU record](npu.md) identifies references, container
+6. Integrate the native NPU page-table builder with a FreeRTOS controller
+   service for MMU activation, submission, buffer ownership, and fault handling.
+   Continue the available driver-core port and implement native model relocation.
+   Obtain and pin the A733 host compiler for a small numerical fixture. The [NPU record](npu.md) identifies references, container
    inspection evidence, and the remaining implementation sequence.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
