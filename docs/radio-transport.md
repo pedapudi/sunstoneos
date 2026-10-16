@@ -8,7 +8,8 @@ physical radio communication, firmware startup, Wi-Fi, and Bluetooth remain
 unqualified.
 
 The implementation is a worker component with owned buffers. It has no Linux,
-filesystem, network stack, allocator, or firmware-image dependency.
+filesystem, network stack, or allocator dependency. After identity, it can hand
+off to the [native firmware engine](radio-firmware.md) under the same owner.
 [include/aic8800_sdio_transport.h](../include/aic8800_sdio_transport.h) defines
 its admission, polling, and message-consumption API.
 
@@ -91,9 +92,9 @@ would erase that ownership and is forbidden.
 ## Bootstrap requests use bounded FIFO transfers
 
 The setup-write request contains 24 bytes; each identity-read request contains
-20 bytes. The transport zeros the complete 512-byte transmit buffer before
-encoding each request, leaving
-the source's required zero tail and block padding. It reads the function-1 credit
+20 bytes. The transport zeros the 512-byte transmit block used for each
+bootstrap request before encoding it, leaving the source's required zero tail
+and block padding. It reads the function-1 credit
 register at `0x03` and waits until one 512-byte request fits within the available
 credits. The source defines each credit as 1,536 bytes and uses a strict less-than
 comparison for command submission.
@@ -128,8 +129,7 @@ not install an ISR or acquire interrupt ownership from another worker.
 A poll parses at most one control record from the receive aggregate. The first
 matching confirmation for the setup-write message ID or requested read address
 is copied into owned scalar storage. Both reads complete before the codec derives
-revision, H-variant status,
-and subrevision. Unknown revision codes remain visible, with no firmware choice.
+revision, H-variant status, and subrevision. Unknown revision codes remain visible, with no firmware choice.
 
 A valid unrelated response, including a duplicate confirmation, remains in the
 receive buffer. `aic8800_transport_peek` returns a borrowed view of its record and
@@ -189,11 +189,12 @@ python3 checks/aic8800-sdio-transport.py \
 ```
 
 The runner verifies its pinned reference files, including the message header
-and sender. Physical execution still needs shared-resource admission, qualified
-recovery, controller bindings, and verified current bootstrap ownership.
-Soft-interrupt handling, normal data traffic, sleep/wake management, firmware
-loading, and network/HCI integration remain outstanding. There is no board
-executable to submit to the physical test queue.
+and sender. The [firmware engine](radio-firmware.md) extends the same transport with
+1,536-byte uploads after completed identity. Physical execution still needs
+shared-resource admission, qualified recovery, controller bindings, and verified
+current bootstrap ownership. Soft-interrupt handling, normal data traffic,
+sleep/wake management, binding verification, and network/HCI integration remain
+outstanding. There is no board executable to submit to the physical test queue.
 
 ## Pinned references
 

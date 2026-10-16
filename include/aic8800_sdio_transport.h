@@ -4,17 +4,20 @@
 #include "aic8800_sdio_codec.h"
 
 #define AIC8800_TRANSPORT_RX_BYTES 4096u
-#define AIC8800_TRANSPORT_TX_BYTES 512u
+#define AIC8800_TRANSPORT_TX_BYTES 1536u
+struct aic8800_firmware;
 
 enum aic8800_transport_variant { AIC8800_TRANSPORT_D80_BOOTSTRAP = 1 };
 enum aic8800_transport_pad { AIC8800_PAD_KEEP = 1, AIC8800_PAD_WRITE_80 };
 enum aic8800_transport_state { AIC8800_TRANSPORT_NEW, AIC8800_TRANSPORT_SETUP,
     AIC8800_TRANSPORT_READY, AIC8800_TRANSPORT_IDENTITY,
-    AIC8800_TRANSPORT_COMPLETE, AIC8800_TRANSPORT_FAULT };
+    AIC8800_TRANSPORT_COMPLETE, AIC8800_TRANSPORT_FAULT,
+    AIC8800_TRANSPORT_FIRMWARE, AIC8800_TRANSPORT_START_CONFIRMED };
 enum aic8800_transport_error { AIC8800_TRANSPORT_NO_ERROR,
     AIC8800_TRANSPORT_HOST_ERROR, AIC8800_TRANSPORT_TIMEOUT,
     AIC8800_TRANSPORT_SETUP_ERROR, AIC8800_TRANSPORT_RX_BOUNDS,
-    AIC8800_TRANSPORT_UNSUPPORTED_IRQ, AIC8800_TRANSPORT_MESSAGE_ERROR };
+    AIC8800_TRANSPORT_UNSUPPORTED_IRQ, AIC8800_TRANSPORT_MESSAGE_ERROR,
+    AIC8800_TRANSPORT_FIRMWARE_ERROR };
 struct aic8800_transport_config {
     enum aic8800_transport_variant variant; /* Explicit source protocol choice. */
     enum aic8800_transport_pad pad; /* Source's conditional function-0 F1 write. */
@@ -36,6 +39,7 @@ struct aic8800_identity_admission {
 };
 struct aic8800_sdio_transport {
     struct sdio_card *card;
+    struct aic8800_firmware *firmware;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
@@ -45,7 +49,7 @@ struct aic8800_sdio_transport {
     enum aic8800_transport_error error;
     enum aic8800_codec_result codec_result;
     uint64_t deadline, wait_until, enable_deadline;
-    size_t rx_bytes, cursor;
+    size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
@@ -76,6 +80,14 @@ int aic8800_transport_setup(struct aic8800_sdio_transport *, uint64_t deadline);
  */
 int aic8800_transport_read_identity(struct aic8800_sdio_transport *,
                                   const struct aic8800_identity_admission *, uint64_t deadline);
+/* Privileged firmware engine handoff after COMPLETE identity, once only, under
+ * the same clean, awake, exclusive bootstrap lifetime. No raw command API is
+ * exposed. Engine and immutable borrowed blobs cannot alias transport/card/host.
+ * Both objects retain ownership through START_CONFIRMED or fault; this state
+ * is not normal Wi-Fi/HCI readiness. Binding events remain consumer-owned work.
+ */
+int aic8800_transport_load_firmware(struct aic8800_sdio_transport *,
+                                  struct aic8800_firmware *, uint64_t deadline);
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
  */

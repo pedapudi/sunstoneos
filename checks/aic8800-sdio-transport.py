@@ -14,9 +14,9 @@ REFERENCES = {
     "aic_bsp_driver.h": "9f72ebdd743ac0af134df50ebc36ea25876b9a361a89b82e17a4a8c2e4d918b3",
     "sdio_io.c": "2f9db1b81f01d359faa689fb7609c04d6a9fdd7d833d16e201f74d7201e51e44",
 }
-SOURCES = ["checks/aic8800-sdio-transport.c", "drivers/net/aic8800_sdio_transport.c", "drivers/storage/sunxi_sdio.c",
+SOURCES = ["drivers/net/aic8800_firmware.c", "checks/aic8800-sdio-transport.c", "drivers/net/aic8800_sdio_transport.c", "drivers/storage/sunxi_sdio.c",
            "drivers/storage/sdio_card.c", "drivers/net/aic8800_sdio_codec.c"]
-HEADERS = ["include/sunxi_sdio.h", "include/sdio_card.h", "include/aic8800_sdio_codec.h", "include/aic8800_sdio_transport.h", "checks/sdio-controller.c"]
+HEADERS = ["include/aic8800_firmware.h", "include/sunxi_sdio.h", "include/sdio_card.h", "include/aic8800_sdio_codec.h", "include/aic8800_sdio_transport.h", "checks/sdio-controller.c"]
 
 
 def digest(path):

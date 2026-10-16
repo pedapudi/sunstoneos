@@ -1,12 +1,13 @@
 /* Native bounded worker. Published register and protocol references are pinned
  * in docs/radio-transport.md; no Linux driver code or allocation is used. */
 #include "aic8800_sdio_transport.h"
+#include "aic8800_firmware.h"
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
     PAD_F2, PAD_F1, SETTLE, BYTE_MODE, IRQ_READ, IRQ_WRITE,
     FUNCTION_IRQ_READ, FUNCTION_IRQ_WRITE, CREDIT, TX, RX_STATUS, RX_LENGTH,
-    RX, PARSE, RESTORE_PAD, RESTORE_SETTLE };
+    RX, PARSE, RESTORE_PAD, RESTORE_SETTLE, FIRMWARE_STEP };
 #define SETUP_OPERATION 2u
 static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int overlap(const void *a, size_t an, const void *b, size_t bn)
@@ -15,14 +16,22 @@ static int overlap(const void *a, size_t an, const void *b, size_t bn)
 }
 static int independent(const struct aic8800_sdio_transport *t, const void *p, size_t n)
 {
-    return span(p, n) && !overlap(t, sizeof(*t), p, n) &&
-        !overlap(t->card, sizeof(*t->card), p, n) &&
-        !overlap(t->card->host, sizeof(*t->card->host), p, n);
+    if (!span(p, n) || overlap(t, sizeof(*t), p, n) ||
+        overlap(t->card, sizeof(*t->card), p, n) ||
+        overlap(t->card->host, sizeof(*t->card->host), p, n)) return 0;
+    if (t->firmware) {
+        if (overlap(t->firmware, sizeof(*t->firmware), p, n)) return 0;
+        for (unsigned i = 0; i < AIC8800_FIRMWARE_BLOBS; ++i)
+            if (overlap(t->firmware->config.blobs[i].data, t->firmware->config.blobs[i].bytes, p, n)) return 0;
+    }
+    return 1;
 }
 static void fail(struct aic8800_sdio_transport *t, enum aic8800_transport_error e)
 {
     if (t->state == AIC8800_TRANSPORT_FAULT) return;
     t->error = e; t->state = AIC8800_TRANSPORT_FAULT;
+    if (t->firmware) aic8800_firmware_stop(t->firmware, t,
+        e == AIC8800_TRANSPORT_TIMEOUT ? AIC8800_FW_TIME_ERROR : AIC8800_FW_TRANSPORT_ERROR);
     sunxi_sdio_stop(t->card->host, e == AIC8800_TRANSPORT_TIMEOUT ?
                     SUNXI_SDIO_TIMEOUT : SUNXI_SDIO_CARD_ERROR);
     t->last_result = t->card->host->result;
@@ -68,7 +77,8 @@ int aic8800_transport_setup(struct aic8800_sdio_transport *t, uint64_t deadline)
 }
 static void encode(struct aic8800_sdio_transport *t)
 {
-    for (size_t i = 0; i < sizeof(t->tx); ++i) t->tx[i] = 0;
+    t->tx_bytes = 512;
+    for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = 0;
     if (t->expected == SETUP_OPERATION)
         t->codec_result = aic8800_sdio_encode_bootstrap_setup(t->tx, sizeof(t->tx));
     else t->codec_result = aic8800_sdio_encode_identity_read(
@@ -85,6 +95,20 @@ int aic8800_transport_read_identity(struct aic8800_sdio_transport *t,
     t->admission = *a; t->deadline = deadline; t->wait_until = 0;
     t->expected = SETUP_OPERATION; t->state = AIC8800_TRANSPORT_IDENTITY;
     t->phase = CREDIT; encode(t); return 1;
+}
+int aic8800_transport_load_firmware(struct aic8800_sdio_transport *t,
+                                  struct aic8800_firmware *f, uint64_t deadline)
+{
+    if (!t || !t->initialized || t->entered || t->state != AIC8800_TRANSPORT_COMPLETE ||
+        t->held || t->pending || t->firmware || t->card->host->state != SUNXI_SDIO_READY ||
+        !independent(t, f, sizeof(*f)) || !f->initialized || f->state != AIC8800_FW_NEW ||
+        deadline <= t->card->host->last_now) return 0;
+    for (unsigned i = 0; i < AIC8800_FIRMWARE_BLOBS; ++i)
+        if (!independent(t, f->config.blobs[i].data, f->config.blobs[i].bytes)) return 0;
+    uint64_t delay = t->config.ticks_per_ms / 2 + t->config.ticks_per_ms % 2;
+    if (!aic8800_firmware_claim(f, &t->identity, t, t->card->host->last_now, deadline, delay)) return 0;
+    t->firmware = f; t->deadline = deadline; t->wait_until = 0;
+    t->phase = FIRMWARE_STEP; t->state = AIC8800_TRANSPORT_FIRMWARE; return 1;
 }
 static int cmd52(struct aic8800_sdio_transport *t, unsigned fn, uint32_t addr, int write, uint8_t value,
                  struct sunxi_sdio_request *r)
@@ -118,10 +142,20 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     case IRQ_WRITE: ok = cmd52(t, 0, 4, 1, t->prior_irq | 7, &r); break;
     case FUNCTION_IRQ_READ: ok = cmd52(t, 1, 0, 0, 0, &r); break;
     case FUNCTION_IRQ_WRITE: ok = cmd52(t, 1, 0, 1, t->prior_function_irq | 7, &r); break;
+    case FIRMWARE_STEP:
+        aic8800_firmware_step(t->firmware, t, now);
+        if (t->firmware->state == AIC8800_FW_FAULT) { fail(t, AIC8800_TRANSPORT_FIRMWARE_ERROR); return 1; }
+        if (t->firmware->state == AIC8800_FW_REQUEST) {
+            t->tx_bytes = t->firmware->request_bytes;
+            if (!t->tx_bytes || t->tx_bytes > sizeof(t->tx) || t->tx_bytes % 512) return 0;
+            for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->firmware->request[i];
+            t->phase = CREDIT;
+        }
+        return 1;
     case CREDIT: ok = cmd52(t, 1, 3, 0, 0, &r); break;
     case RX_STATUS: ok = cmd52(t, 1, 4, 0, 0, &r); break;
     case RX_LENGTH: ok = cmd52(t, 1, 5, 0, 0, &r); break;
-    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->tx, sizeof(t->tx), &r); break;
+    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->tx, t->tx_bytes, &r); break;
     case RX: ok = sdio_card_cmd53(t->card, 1, 0x0f, 0, 0,
                      t->rx_bytes > 512 ? 512 : 0, t->rx, t->rx_bytes, &r); break;
     default: return 0;
@@ -168,10 +202,12 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
     case FUNCTION_IRQ_READ: t->prior_function_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_WRITE: t->state = AIC8800_TRANSPORT_READY; break;
     case CREDIT:
-        if (value && sizeof(t->tx) < (size_t)value * 1536) t->phase = TX;
+        if (value && t->tx_bytes < (size_t)value * 1536) t->phase = TX;
         else delay(t, now, t->config.poll_interval);
         break;
-    case TX: t->phase = RX_STATUS; break;
+    case TX:
+        if (t->firmware && !aic8800_firmware_sent(t->firmware, t)) { fail(t, AIC8800_TRANSPORT_FIRMWARE_ERROR); break; }
+        t->phase = RX_STATUS; break;
     case RX_STATUS:
         t->raw_rx_status = value;
         if (value & 0x80) { fail(t, AIC8800_TRANSPORT_UNSUPPORTED_IRQ); break; }
@@ -190,6 +226,12 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
 static void aggregate_done(struct aic8800_sdio_transport *t)
 {
     t->cursor = t->rx_bytes;
+    if (t->firmware) {
+        if (t->firmware->state == AIC8800_FW_WAITING) t->phase = RX_STATUS;
+        else if (t->firmware->state == AIC8800_FW_START_CONFIRMED) t->state = AIC8800_TRANSPORT_START_CONFIRMED;
+        else t->phase = FIRMWARE_STEP;
+        return;
+    }
     if (t->expected == SETUP_OPERATION) {
         if (!t->setup_confirmed) t->phase = RX_STATUS;
         else if (t->config.pad == AIC8800_PAD_WRITE_80) t->phase = RESTORE_PAD;
@@ -202,17 +244,27 @@ static void aggregate_done(struct aic8800_sdio_transport *t)
     if (t->codec_result != AIC8800_CODEC_OK) fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);
     else t->state = AIC8800_TRANSPORT_COMPLETE;
 }
-static void parse(struct aic8800_sdio_transport *t)
+static void parse(struct aic8800_sdio_transport *t, uint64_t now)
 {
     if (t->held) return;
     if (t->cursor == t->rx_bytes) { aggregate_done(t); return; }
     struct aic8800_sdio_response r;
-    if (t->expected == SETUP_OPERATION)
+    if (t->firmware)
+        t->codec_result = aic8800_firmware_response(t->firmware, t, t->rx + t->cursor,
+            t->rx_bytes - t->cursor, now, &r);
+    else if (t->expected == SETUP_OPERATION)
         t->codec_result = aic8800_sdio_decode_bootstrap_setup_response(t->rx + t->cursor,
             t->rx_bytes - t->cursor, &r);
     else t->codec_result = aic8800_sdio_decode_identity_response(t->rx + t->cursor,
         t->rx_bytes - t->cursor, (enum aic8800_identity_register)t->expected, &r);
     if (t->codec_result == AIC8800_CODEC_END) { aggregate_done(t); return; }
+    if (t->firmware) {
+        if (t->firmware->state == AIC8800_FW_FAULT) { fail(t, AIC8800_TRANSPORT_FIRMWARE_ERROR); return; }
+        if (t->codec_result == AIC8800_CODEC_OK) t->cursor += r.consumed;
+        else if (t->codec_result == AIC8800_CODEC_UNRELATED) { t->unrelated = r; t->held = 1; }
+        else fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);
+        return;
+    }
     int have = t->expected == SETUP_OPERATION ? t->setup_confirmed : t->have[t->expected];
     if (t->codec_result == AIC8800_CODEC_OK && !have) {
         if (t->expected == SETUP_OPERATION) {
@@ -234,7 +286,8 @@ void aic8800_transport_poll(struct aic8800_sdio_transport *t)
 {
     uint64_t now;
     if (!t || !t->initialized || t->entered ||
-        (t->state != AIC8800_TRANSPORT_SETUP && t->state != AIC8800_TRANSPORT_IDENTITY)) return;
+        (t->state != AIC8800_TRANSPORT_SETUP && t->state != AIC8800_TRANSPORT_IDENTITY &&
+         t->state != AIC8800_TRANSPORT_FIRMWARE)) return;
     t->entered = 1;
     if (!observe(t, &now)) goto out;
     if (t->pending) {
@@ -248,8 +301,9 @@ void aic8800_transport_poll(struct aic8800_sdio_transport *t)
         /* Parsing a newly received aggregate starts on the next worker call. */
         if (t->phase == PARSE) goto post;
     }
-    if (t->state == AIC8800_TRANSPORT_SETUP || t->state == AIC8800_TRANSPORT_IDENTITY) {
-        if (t->phase == PARSE) parse(t);
+    if (t->state == AIC8800_TRANSPORT_SETUP || t->state == AIC8800_TRANSPORT_IDENTITY ||
+        t->state == AIC8800_TRANSPORT_FIRMWARE) {
+        if (t->phase == PARSE) parse(t, now);
         else if (!admit(t, now)) fail(t, AIC8800_TRANSPORT_HOST_ERROR);
     }
 post:

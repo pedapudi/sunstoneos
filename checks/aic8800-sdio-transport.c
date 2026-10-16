@@ -239,7 +239,10 @@ static void bootstrap_failures(void)
     assert(transport.last_result.transferred == 4 && host.request.data == transport.tx);
     assert(transmissions == 0 && transport.pending); stopped();
 }
-int main(int argc, char **argv)
+#ifndef AIC8800_TRANSPORT_FIXTURE_MAIN
+#define AIC8800_TRANSPORT_FIXTURE_MAIN main
+#endif
+int AIC8800_TRANSPORT_FIXTURE_MAIN(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "bootstrap")) {
         good(); bootstrap_failures();
