@@ -114,7 +114,9 @@ I2S or claim DMA before acquisition reaches `READY`.
 Resource deadlines are absolute, nonwrapping monotonic microseconds. They are
 separate from the DMA controller's tick-based capture timeout. The core checks
 time after final callbacks and each configuration access. The binding checks
-time around MMIO, lock acquisition and external callbacks. No common mutex is
+time around MMIO, lock acquisition and external callbacks. Clock observations
+returned to the core also enforce and advance the parent's monotonic lower
+bound, including the final acquisition observation. No common mutex is
 held while waiting for PLL lock or reset settling.
 
 An uncertain register access, regressing clock or expired admitted transaction
@@ -138,7 +140,9 @@ recovery from that failure.
 The platform fixture exercises cold startup, exact-profile adoption, all listed
 consumer conflicts, shared parent retention after local close, partial pin
 writes, busy locks, lock timeout, clock regression, uncertain module writes and late callbacks.
-A late pin-release observation also retains the saved identity. The shared
+A late pin-release observation also retains the saved identity. A focused acquisition case makes the final core clock sample regress below
+the parent's latest observation while remaining above the core's earlier
+sample. It requires retained recovery before any DMA or I2S access. The shared
 mutex model rejects nested acquisition during pin or lease callbacks.
 ASan and UBSan reported no errors.
 

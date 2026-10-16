@@ -289,7 +289,15 @@ static int local_now(void *cookie, uint64_t *now)
 {
     struct a733_i2s_platform *s=cookie;
     if (!s || !s->initialized || s->failed || !a733_audio_parent_ready(s->parent)) return 0;
-    return s->parent->ops.now_us(s->parent->cookie,now);
+    uint64_t observed;
+    if (!now || !s->parent->ops.now_us(s->parent->cookie,&observed) ||
+        observed < s->parent->last_time) {
+        s->failed=1;
+        return 0;
+    }
+    s->parent->last_time=observed;
+    *now=observed;
+    return 1;
 }
 static int local_read(void *cookie, uintptr_t a, uint32_t *v)
 {

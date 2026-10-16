@@ -21,6 +21,7 @@ static unsigned mutex, reads, writes, held[5], publish_count, releases;
 static unsigned conflict_scope, late_acquire, late_publish, late_release, busy_lock;
 static unsigned lease_pending, write_failure, lock_never, late_pin_release, late_write;
 static uintptr_t failure_address;
+static unsigned regress_after_enable, regression_phase;
 static uint32_t saved_div2, pll_trace[8];
 static unsigned pll_count;
 static int enter(void *cookie, uint64_t deadline)
@@ -29,11 +30,19 @@ static int enter(void *cookie, uint64_t deadline)
     if (busy_lock) return 0;
     mutex=1; return 1;
 }
-static void leave(void *cookie) { assert(cookie == &parent && mutex); mutex=0; }
+static void leave(void *cookie)
+{
+    assert(cookie == &parent && mutex); mutex=0;
+    if (regress_after_enable && (ccu[0x1200/4] & B(31))) {
+        regress_after_enable=0; regression_phase=1;
+    }
+}
 static int time_now(void *cookie, uint64_t *out)
 {
     assert(cookie == &parent);
     if (late_pin_release && !binding.pin_lease.id) now=900;
+    if (regression_phase == 1) { now=100; regression_phase=2; }
+    else if (regression_phase == 2) { now=99; regression_phase=3; }
     *out=now; return 1;
 }
 static uint32_t *word(uintptr_t a)
@@ -111,6 +120,7 @@ static void setup(unsigned cold)
     conflict_scope=late_acquire=late_publish=late_release=busy_lock=0;
     lease_pending=write_failure=lock_never=late_pin_release=late_write=0; failure_address=0;
     osc=0; saved_div2=2u<<20; pll_count=0;
+    regress_after_enable=regression_phase=0;
     ccu[0]=(0xf8000000u | (99u<<8) | (99u<<16));
     ccu[0x280/4]=saved_div2 | B(7); /* Unowned field survives. */
     ccu[0x1200/4]=B(12); ccu[0x120c/4]=B(8);
@@ -171,9 +181,41 @@ static void clock_failure_cases(void)
     }
     puts("I2S platform: uncertain and late module writes retain all tokens and stop I/O");
 }
+static uint32_t forbidden_dma_read(void *cookie, uintptr_t address)
+{
+    (void)cookie; (void)address;
+    assert(!"clock regression must stop before any DMA claim access");
+    return 0;
+}
+static void monotonic_core_case(void)
+{
+    setup(0); ready_parent();
+    /* A modeled DMA prerequisite; no DMA callback may execute in this case. */
+    struct a733_dma_controller dma={.initialized=1,.base=0x04601000,
+        .authorized_channels=1,.operations={.read=forbidden_dma_read}};
+    struct a733_i2s_capture capture={0};
+    assert(a733_i2s_open(&capture,&plan.format,&iops,&binding,&dma,0,900) == A733_I2S_OPENING);
+    assert(a733_i2s_poll(&capture) == A733_I2S_OPENING);
+    assert(a733_i2s_poll(&capture) == A733_I2S_OPENING && binding.pin_lease.id);
+    now+=20; regress_after_enable=1;
+    uint64_t core_before=capture.resource_time;
+    assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY);
+    assert(regression_phase == 3 && now == 99 && parent.last_time == 100 && core_before < now);
+    assert(capture.platform_held && !capture.dma_held && binding.local.id && binding.pin_lease.id);
+    assert(binding.failed);
+    unsigned io=reads+writes;
+    assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY);
+    assert(a733_i2s_close(&capture,900) == A733_I2S_RECOVERY && io == reads+writes);
+    failed_local_stays_quiet();
+    puts("I2S acquisition: core rejects time below parent's latest observation before DMA or controller access");
+}
 int main(int argc, char **argv)
 {
-    if (argc == 2) { assert(strcmp(argv[1],"--clock-faults") == 0); clock_failure_cases(); return 0; }
+    if (argc == 2) {
+        if (strcmp(argv[1],"--monotonic-core") == 0) monotonic_core_case();
+        else { assert(strcmp(argv[1],"--clock-faults") == 0); clock_failure_cases(); }
+        return 0;
+    }
     assert(argc == 1);
     setup(1); lease_pending=1; ready_parent();
     assert(publish_count == 1 && held[A733_AUDIO_REFERENCE] && held[A733_AUDIO_STABLE]);
@@ -250,6 +292,7 @@ int main(int argc, char **argv)
     assert(iops.acquire_poll(&binding,900) == RETAINED && binding.local.id);
     failed_local_stays_quiet();
     clock_failure_cases();
+    monotonic_core_case();
     puts("I2S platform: parent authorization, clock sequence, shared lifetime, pin retention and deadlines passed");
     return 0;
 }
