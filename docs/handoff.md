@@ -112,6 +112,10 @@ one host check integrates their mappings with firmware staging and queue formatt
 Native [GPU workload tables](gpu-vm.md) now prepare all six page sizes and a
 firmware memory-context record. Complete bytes match pinned entry encoders;
 one sanitizer check passes translation boundaries and 34 atomic refusals.
+The [startup controller](gpu-start.md) now publishes firmware resources, performs
+ordered register setup through callbacks, and waits for readiness with an absolute
+deadline. Complete traces match the original startup functions. Host checks cover
+minimum delays, 42 retained-failure cases, and 40 atomic input refusals.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -287,8 +291,12 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement GPU startup sequencing validated against device features, then
-   integrate platform resources.
+7. Implement GPU interrupt/event handling, firmware compatibility and health
+   checks, and a verified shutdown protocol. Integrate the startup controller
+   with platform resources and FreeRTOS serialization. Native [startup](gpu-start.md)
+   now has host/reference evidence for the MIPS register sequence, minimum
+   delays, readiness, and retained failures; reuse `gpu-start-20261016`.
+   Physical startup remains blocked on independent watchdog recovery.
    Native [GPU workload tables](gpu-vm.md) now have host and reference evidence
    for six page sizes; reuse `gpu-vm-20261016`. Allocation, cache publication,
    live mapping changes, invalidation, and device attachment remain outstanding.
@@ -299,7 +307,7 @@ the tool hash and recovery evidence in the application document.
    workload page tables are separate from firmware translation.
    Integrate the [checked transport](gpu-queues.md)
    with shared allocations, platform memory callbacks, FreeRTOS serialization,
-   event handlers, and bounded startup/recovery. GPU job completion remains
+   event handlers, and verified shutdown/recovery. GPU job completion remains
    separate from command acceptance. Reuse the `gpu-ccb-20261016` evidence.
    Native [MIPS preparation](gpu-mips.md)
    now constructs the firmware page table, boot configuration, and wrapper

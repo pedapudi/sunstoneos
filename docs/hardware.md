@@ -71,7 +71,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reference initializers and pass integration with queue formatting and MIPS
   mappings. Native [GPU workload tables](gpu-vm.md) support six page sizes and
   match the pinned entry encoders and firmware context initializer. These
-  components compile for AArch64. Physical identity,
+  components compile for AArch64. The [startup controller](gpu-start.md) passes
+  host ordering, deadline, and retained-failure checks; complete register traces
+  match the reference startup functions. Physical identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
