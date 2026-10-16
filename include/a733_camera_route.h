@@ -20,8 +20,11 @@ struct a733_route_config {
 struct a733_route_ops {
     int (*now_us)(void *,uint64_t *);
     /* 1 complete, 0 pending, -1 uncertain failure. Token before side effects.
-     * Reserve ISP1 CH0 crossbar input/output selections, all VIPP0 channels,
-     * parameter span and clocks/reset. Prove the actual bus/IOMMU mapping and
+     * Reserve both complete TOP selector words at offsets 0x40 and 0xa0,
+     * excluding every other writer until release, including writers of other
+     * channel fields. Masked updates preserve other bits but span polls.
+     * Reserve all VIPP0 channels, parameter span and clocks/reset.
+     * Prove the actual bus/IOMMU mapping and
      * read/prefetch guard size, cache isolation, local CSI clocks, independent
      * recovery and quiet producer. DMA0 must be safely owned by the same path.
      * Do not enable the sensor or parser as part of this admission.

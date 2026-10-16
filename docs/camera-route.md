@@ -12,6 +12,13 @@ register `0x40` with `parser * 4` and register `0xa0` with `4`. Camera TOP begin
 at `0x05800800`. Only the documented four-bit selector fields change. This route
 does not enable processing in the physical ISP or require its tuning tables.
 
+Admission reserves both complete selector words at TOP offsets `0x40` and
+`0xa0` until release. Every other writer, including writers of other channel
+fields in either word, must remain excluded during that lifetime. The controller
+preserves unrelated bits, but its read and write occur in separate polls.
+Field-level ownership would allow an intervening update to be overwritten.
+Terminal faults retain this exclusion until coordinated recovery.
+
 The route and [single-image receiver mode](../include/a733_csi_receiver.h) are
 implemented and source-checked. Neither has run on the board. A native platform
 backend still needs shared clock/power ownership, pin configuration, calibrated
