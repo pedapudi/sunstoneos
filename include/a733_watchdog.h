@@ -4,7 +4,9 @@
 
 /* Exclusive early-boot ownership; zero-initialize the context before use.
  * Hardware reset and ROM return are untested.
- * Expiry resets the SoC and requests FEL through the volatile RTC flag.
+ * Expiry requests system reset. The RTC flag requests FEL from boot0; it
+ * does not establish a storage-independent ROM return. Before use, callers
+ * must establish an independent return path (see docs/watchdog.md).
  * Treat DDR as uninitialized after expiry; the normal RAM return contract
  * does not apply to a watchdog system reset.
  */

@@ -8,6 +8,7 @@
 static uint32_t registers[7], rtc_flag;
 static uintptr_t ignore_write;
 static unsigned writes, reads;
+static int enabled;
 
 static uint32_t mmio_read(uintptr_t address)
 {
@@ -28,6 +29,7 @@ static void mmio_write(uintptr_t address, uint32_t value)
         return;
     }
     assert((value >> 16) == 0x16aa);
+    if (address == 0x02050014 && (value & 1)) enabled = 1;
     registers[(address - 0x02050000) / 4] = value & 0xffff;
 }
 
@@ -41,6 +43,7 @@ static void reset_fixture(void)
     registers[6] = 7;
     rtc_flag = 0x12345678;
     writes = reads = 0;
+    enabled = 0;
     ignore_write = 0;
 }
 
@@ -75,8 +78,14 @@ int main(void)
     reset_fixture();
     ignore_write = WDT + 0x10;
     assert(!a733_watchdog_arm(&watchdog, 6));
+    assert(!enabled); // Do not start a timer with an unverified reset policy.
     assert(registers[5] == 0xa2 && registers[6] == 7 && rtc_flag == 0x12345678);
     assert(!watchdog.armed);
+    reset_fixture();
+    ignore_write = WDT + 0x18;
+    assert(!a733_watchdog_arm(&watchdog, 6));
+    assert(!enabled && !watchdog.armed);
+    assert(registers[5] == 0xa2 && registers[4] == 0x22 && rtc_flag == 0x12345678);
     reset_fixture();
     assert(a733_watchdog_arm(&watchdog, 6));
     ignore_write = WDT + 0x14;

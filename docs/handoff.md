@@ -26,6 +26,9 @@ remain unconfirmed. Pin/clock restoration and automatic ROM return passed.
 The [PMIC reader](power.md) identifies AXP8191 and reads enabled UFS rail settings.
 UFS initialization then failed to return to ROM. The [watchdog driver](watchdog.md)
 is prepared and passes host checks, but independent hardware reset remains untested.
+ROM disassembly and an instruction-model check identify a direct FEL redirect
+candidate. The watchdog's RTC flag is handled by boot0 and does not establish
+storage-independent recovery. Register retention across reset remains unknown.
 Qualify it before further new peripheral-access sequences.
 
 ## Observed host and device state
@@ -110,8 +113,11 @@ the tool hash and recovery evidence in the application document.
 
 ## Next actions
 
-1. Recover the board independently and qualify the prepared hardware watchdog
-   with a dedicated expiry test. Integrate it before further peripheral access.
+1. Recover the board independently. Establish a reset destination that cannot
+   execute unknown storage code, then qualify the prepared hardware watchdog
+   with an SRAM expiry test. The ROM redirect candidate and its unresolved
+   retention requirements are in [watchdog.md](watchdog.md).
+   Integrate recovery before further peripheral access.
    Resume UFS with the corrected capability-read ordering only after recovery
    protection passes. Implement read-only storage access and backup through the
    native transport; physical storage population is still unknown.

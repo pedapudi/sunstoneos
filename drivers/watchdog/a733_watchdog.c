@@ -24,6 +24,7 @@ int a733_watchdog_arm(struct a733_watchdog *watchdog, unsigned seconds)
     watchdog->configuration = mmio_read(WDT + 0x10) & 0xffff;
     watchdog->output = mmio_read(WDT + 0x18) & 0xffff;
     watchdog->fel_flag = mmio_read(FEL_FLAG);
+    // boot0 consumes this flag. ROM-only recovery needs a separate path.
     mmio_write(FEL_FLAG, 0x5aa5a55a);
     if (mmio_read(FEL_FLAG) != 0x5aa5a55a) {
         mmio_write(FEL_FLAG, watchdog->fel_flag);
@@ -33,13 +34,17 @@ int a733_watchdog_arm(struct a733_watchdog *watchdog, unsigned seconds)
     // the power controller. It still resets the SoC, including DDR control.
     mmio_write(WDT + 0x18, KEY | 2);
     mmio_write(WDT + 0x10, KEY | (watchdog->configuration & ~3U) | 1);
+    watchdog->armed = 1; // The saved state must now be restored on failure.
+    // Verify the reset policy before enabling a timer that could expire.
+    if ((mmio_read(WDT + 0x10) & 3) != 1 ||
+        (mmio_read(WDT + 0x18) & 0xffff) != 2) {
+        (void)a733_watchdog_disarm(watchdog);
+        return 0;
+    }
     uint32_t mode = (watchdog->mode & ~0xf1U) | (interval << 4) | 1;
     mmio_write(WDT + 0x14, KEY | mode);
     mmio_write(WDT + 0x0c, 0x14af);
-    watchdog->armed = 1;
-    if ((mmio_read(WDT + 0x14) & 0xf1) != (mode & 0xf1) ||
-        (mmio_read(WDT + 0x10) & 3) != 1 ||
-        (mmio_read(WDT + 0x18) & 0xffff) != 2) {
+    if ((mmio_read(WDT + 0x14) & 0xf1) != (mode & 0xf1)) {
         (void)a733_watchdog_disarm(watchdog);
         return 0;
     }
