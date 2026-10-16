@@ -14,9 +14,6 @@ args = parser.parse_args()
 reference = json.loads(args.reference.read_text())
 candidate = json.loads(args.candidate.read_text())
 if reference['exit'] != 0: raise SystemExit('The host reference failed.')
-rows = [json.loads(line) for line in reference['stdout'].splitlines()]
-if len(rows) != 2 or rows[1]['id'] != '#end':
-    raise SystemExit('Expected one reference recording followed by its formatting flush.')
 if 'complete' in candidate:
     if not candidate['complete']: raise SystemExit('Physical execution did not complete.')
     log = args.candidate.with_name('kernel.log').read_text()
@@ -26,6 +23,43 @@ else:
 if 'PASS mimus:' not in log: raise SystemExit('Candidate lacks its completion marker.')
 if candidate.get('ram_input_sha256', candidate.get('bundle_sha256')) != reference['bundle_sha256']:
     raise SystemExit('Candidate input bundle differs from the reference.')
+if bool(reference.get('paced', False)) != bool(candidate.get('paced', False)):
+    raise SystemExit('Reference and candidate recognition modes differ.')
+if reference.get('paced'):
+    def stable_records(text):
+        if 'ERROR ' in text or 'PASS mimus: paced utterance replay completed' not in text:
+            raise SystemExit('Paced execution did not complete successfully.')
+        records = []
+        fields_by_kind = {
+            'SEGMENT': ('id', 'begin', 'end', 'speech_begin', 'speech_end'),
+            'RESULT': ('feat_crc', 'lp_crc', 'frames', 'samples'),
+            'REPLAY': ('samples', 'segments', 'consumed', 'state'),
+        }
+        for line in text.splitlines():
+            kind, _, value = line.partition(' ')
+            if kind in fields_by_kind:
+                fields = dict(item.split('=') for item in value.split())
+                records.append((kind, tuple(fields[key] for key in fields_by_kind[kind])))
+            elif kind in ('TEXT', 'MARKS', 'CAPS', 'FORMATTED', 'FLUSH'):
+                records.append((kind, value))
+        if sum(kind == 'REPLAY' for kind, _ in records) != 1 or sum(kind == 'FLUSH' for kind, _ in records) != 1:
+            raise SystemExit('Paced output lacks its unique summary or formatting flush.')
+        return records
+    expected = stable_records(reference['stdout'])
+    actual = stable_records(log)
+    if actual != expected:
+        raise SystemExit('Paced boundaries, recognition, formatting, or completion differs.')
+    record = dict(passed=True, scope='paced segmentation and per-utterance reference parity; timing excluded',
+                  segments=sum(kind == 'SEGMENT' for kind, _ in actual),
+                  reference_sha256=hashlib.sha256(args.reference.read_bytes()).hexdigest(),
+                  candidate_sha256=hashlib.sha256(args.candidate.read_bytes()).hexdigest(),
+                  image_sha256=candidate['image_sha256'], bundle_sha256=reference['bundle_sha256'])
+    args.output.write_text(json.dumps(record, indent=2) + '\n')
+    print('PASS: paced segment boundaries, features, log probabilities, words, punctuation and formatted output match.')
+    raise SystemExit(0)
+rows = [json.loads(line) for line in reference['stdout'].splitlines()]
+if len(rows) != 2 or rows[1]['id'] != '#end':
+    raise SystemExit('Expected one reference recording followed by its formatting flush.')
 metrics = re.search(r'^RESULT (.*)$', log, re.M)
 if metrics is None: raise SystemExit('Missing recognition metrics.')
 fields = dict(item.split('=') for item in metrics[1].split())

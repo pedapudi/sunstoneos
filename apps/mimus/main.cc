@@ -16,6 +16,9 @@
 #include "service.h"
 #include "usb_service.h"
 #endif
+#if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
+#include "replay_runtime.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -79,7 +82,7 @@ static bool recognition_error(const char *message)
     platform_puts("ERROR "); platform_puts(message); platform_puts("\n");
     return false;
 }
-static bool transcribe(std::span<const uint8_t> inputs[3])
+[[maybe_unused]] static bool transcribe(std::span<const uint8_t> inputs[3])
 {
     using namespace mimus;
     auto model = asr::Model::Load(inputs[0], inputs[1], true, asr::kTargetOrangePi);
@@ -138,9 +141,11 @@ static void recognize(void *)
     std::span<const uint8_t> inputs[3];
 #ifdef SUNSTONE_MIMUS_USB
     for (;;) {
-        mimus_service_wait(inputs);
+        const bool paced = mimus_service_wait(inputs);
         application_deadline.store(counter() + 180 * COUNTER_HZ, std::memory_order_relaxed);
-        bool success = transcribe(inputs);
+        mimus::asr::SetInternalArena(internal_arena);
+        mimus::asr::SetYieldHook([] { taskYIELD(); });
+        bool success = paced ? mimus_transcribe_paced(inputs) : transcribe(inputs);
         application_deadline.store(UINT64_MAX, std::memory_order_relaxed);
         mimus_service_finish(success);
     }
@@ -157,7 +162,13 @@ static void recognize(void *)
         offset = (offset + header.sizes[i] + 63) & ~size_t(63);
         configASSERT(offset <= kAssetsLimit);
     }
+#ifdef SUNSTONE_MIMUS_PACED
+    asr::SetInternalArena(internal_arena);
+    asr::SetYieldHook([] { taskYIELD(); });
+    platform_exit(mimus_transcribe_paced(inputs) ? 0 : 1);
+#else
     platform_exit(transcribe(inputs) ? 0 : 1);
+#endif
 #endif
 }
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
@@ -169,6 +180,9 @@ extern "C" void kernel_main(void)
 {
     platform_init();
     runtime_init();
+#if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
+    mimus_replay_init();
+#endif
 #ifdef SUNSTONE_MIMUS_USB
     configASSERT(RESULT->mode == 4);
     mimus_service_init();

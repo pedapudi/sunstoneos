@@ -25,6 +25,7 @@ parser.add_argument("--evidence", type=Path, default=CACHE / "evidence" / time.s
 parser.add_argument("--inputs", type=Path, required=True, help="Directory from prepare-mimus.py")
 parser.add_argument("--wav", type=Path, action="append", help="Repeat for multiple recordings")
 parser.add_argument("--reference", type=Path, action="append", required=True, help="Matching host records, in WAV order")
+parser.add_argument("--paced", action="store_true", help="Replay on the sample clock; use references from prepare-replay.py")
 parser.add_argument("--finish", choices=("recover", "lease"), default="recover",
                     help="Return by command, or verify recovery after host requests stop")
 args = parser.parse_args()
@@ -54,6 +55,8 @@ for wav, reference in zip(wavs, args.reference):
         bundle.extend(b'\0' * (-len(bundle) % 64))
     bundle_hash = hashlib.sha256(bundle).hexdigest()
     host = json.loads(reference.read_text())
+    if bool(host.get('paced', False)) != args.paced:
+        sys.exit("Reference mode differs from the requested recognition mode.")
     if host.get('exit') != 0 or host['bundle_sha256'] != bundle_hash:
         sys.exit("Host reference failed or its inputs differ.")
     cases.append(dict(wav=str(wav.resolve()), audio_sha256=hashlib.sha256(audio).hexdigest(),
@@ -64,7 +67,7 @@ if not image or len(image) > 0x100000:
 args.evidence.mkdir(parents=True, exist_ok=False)
 record = dict(image_sha256=hashlib.sha256(image).hexdigest(),
               fel_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
-              transactions=[], cases=[], finish=args.finish, complete=False)
+              transactions=[], cases=[], finish=args.finish, paced=args.paced, complete=False)
 sequence = 0
 device = None
 spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
@@ -161,7 +164,7 @@ def upload(slot, data):
 def transcribe(index, case):
     upload(2, case['data'])
     started = time.monotonic()
-    application(0x14)
+    application(0x16 if args.paced else 0x14)
     # Recognition owns its asset buffers; concurrent writes and starts must fail.
     application(0x11, struct.pack('<3I', 2, 16, 0), expected=2)
     application(0x14, expected=2)
@@ -188,6 +191,7 @@ def transcribe(index, case):
     (directory / 'kernel.log').write_bytes(log)
     candidate = {k: v for k, v in case.items() if k != 'data'}
     candidate.update(complete=state == 2, image_sha256=record['image_sha256'],
+                     paced=args.paced,
                      generation=generation, elapsed_host_seconds=time.monotonic()-started)
     (directory / 'session.json').write_text(json.dumps(candidate, indent=2) + '\n')
     result = subprocess.run([sys.executable, str(ROOT/'checks/mimus-parity.py'),

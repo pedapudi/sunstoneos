@@ -35,11 +35,12 @@ void mimus_service_init() {
     requests = xQueueCreateStatic(1, sizeof(uint32_t), queue_storage, &queue_state);
     configASSERT(requests);
 }
-void mimus_service_wait(std::span<const uint8_t> inputs[3]) {
+bool mimus_service_wait(std::span<const uint8_t> inputs[3]) {
     uint32_t request;
     configASSERT(xQueueReceive(requests, &request, portMAX_DELAY) == pdTRUE);
     configASSERT(state.load(std::memory_order_acquire) == Busy);
     for (unsigned i = 0; i < 3; ++i) inputs[i] = {assets[i].data, assets[i].size};
+    return request != 0;
 }
 void mimus_service_finish(bool success) {
     state.store(success ? Done : Failed, std::memory_order_release);
@@ -47,7 +48,7 @@ void mimus_service_finish(bool success) {
 
 extern "C" bool usb_application_dispatch(uint32_t command, const uint8_t *input,
                                           uint32_t size, uint8_t *output, unsigned *length) {
-    if (command < 0x10 || command > 0x15) return false;
+    if (command < 0x10 || command > 0x16) return false;
     Error error = Ok;
     *length = 4;
     const State current = state.load(std::memory_order_acquire);
@@ -95,14 +96,15 @@ extern "C" bool usb_application_dispatch(uint32_t command, const uint8_t *input,
             else if (mimus::asr::Crc32({asset.data, asset.size}) != asset.crc) error = Checksum;
             else asset.valid = true;
         }
-    } else if (command == 0x14) {
+    } else if (command == 0x14 || command == 0x16) {
         if (size != 0) error = Invalid;
         else if (!assets[0].valid || !assets[1].valid || !assets[2].valid) error = Incomplete;
         else {
             RESULT->log_length = 0;
             ++generation;
             state.store(Busy, std::memory_order_release);
-            configASSERT(xQueueSend(requests, &generation, 0) == pdTRUE);
+            const uint32_t paced = command == 0x16;
+            configASSERT(xQueueSend(requests, &paced, 0) == pdTRUE);
         }
     } else if (command == 0x15) {
         if (size != 4) error = Invalid;

@@ -15,6 +15,9 @@ The [native USB application](mimus-usb.md) loads assets, accepts repeated
 recognition requests, and returns results while FreeRTOS runs. Its host lease
 returned the board to ROM with automatic access after the client stopped requests.
 [Application evidence](mimus.md) records arithmetic and performance limits.
+[Paced replay](mimus-replay.md) now passes a four-utterance FreeRTOS emulator
+comparison, including capture during recognition and formatting across utterances.
+The native service command compiles but has not run on the board.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -124,7 +127,8 @@ the tool hash and recovery evidence in the application document.
    Establish storage boot and recovery before overwriting existing contents.
 2. Extend USB with interrupt delivery, cold clock/PHY setup, and remaining roles.
    Preserve independent task and host deadlines during controller work.
-3. Continue matrix optimization and implement paced replay. Add worker cores
+3. Physically validate paced replay after recovery qualification, then continue
+   matrix optimization. Add worker cores
    with change-dependent parity checks. Keep accelerator and remaining hardware
    work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,

@@ -66,12 +66,12 @@ int main() {
         request(0x13, words({slot}));
     }
     for (unsigned generation = 1; generation <= 2; ++generation) {
-        request(0x14, {});
+        request(generation == 1 ? 0x14 : 0x16, {});
         request(0x14, {}, 2);
         request(0x11, words({0, 1, 0}), 2);
         request(0x15, words({0}), 2);
         std::span<const uint8_t> inputs[3];
-        mimus_service_wait(inputs);
+        assert(mimus_service_wait(inputs) == (generation == 2));
         for (const auto input : inputs) {
             assert(input.size() == data.size());
             assert(std::memcmp(input.data(), data.data(), data.size()) == 0);

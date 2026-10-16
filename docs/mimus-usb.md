@@ -4,8 +4,10 @@ The `a733-mimus-usb` image combines FreeRTOS, the A733 USB device driver, and th
 mimus recognition engine. The host uploads model and WAV files, starts recognition,
 polls its state, and retrieves formatted results while the OS remains running.
 The models stay in RAM between recordings. This provides a development interface;
-persistent boot, live audio capture, paced replay, cancellation, and full OS
+persistent boot, live audio capture, host cancellation, and full OS
 qualification remain outstanding.
+[Paced utterance replay](mimus-replay.md) is implemented and passes the FreeRTOS
+emulator comparison. Its native USB path still needs physical validation.
 
 The [USB driver](usb.md) defines the controller, descriptors, and transport
 framing. The [mimus application](mimus.md) defines the model, arithmetic, input
@@ -14,7 +16,8 @@ format, and performance target. Linux is not a runtime dependency.
 ## Task ownership and recovery
 
 The runtime uses a recognition task at priority 3, a USB task at priority 4, and
-a recovery task at priority 5. A static queue transfers one recognition request
+a recovery task at priority 5. The paced capture task also runs at priority 4
+and blocks between replay requests. A static queue transfers one recognition request
 from USB to the recognition task. Atomic state publication releases ownership
 only after recognition and destruction of its temporary objects finish.
 
@@ -95,6 +98,7 @@ are little-endian uint32 values. Only one USB request may be outstanding.
 | Commit asset | `0x13` | Slot | Empty |
 | Start recognition | `0x14` | Empty | Empty |
 | Read result | `0x15` | Log offset | Up to 2,044 log bytes |
+| Start paced replay | `0x16` | Empty | Empty |
 
 States are 0 for idle, 1 for busy, 2 for successful completion, and 3 for failed
 recognition. A successful start increments the generation. Status reports a
@@ -207,7 +211,9 @@ A review moved one-shot input verification inside its application deadline;
 the native image and ELF remained byte-identical. `review-artifacts.json` records
 that comparison, so another physical run was unnecessary.
 
-This establishes recorded-audio parity on the stated model and single-core
-runtime, plus a native transfer and recovery session. Other models, multicore
-execution, paced/live input, accelerated backends, power transitions, forced
+This establishes recorded-audio parity for the physical image identified above.
+The current image also includes the unqualified native paced-replay path.
+That evidence covers the single-core runtime, native transfers, and recovery.
+Other models, multicore
+execution, physical paced/live input, accelerated backends, power transitions, forced
 USB-task stalls, and long-duration or arbitrary-fault qualification remain open.
