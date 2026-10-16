@@ -47,7 +47,7 @@ int main(int argc, char **argv)
         assert(word(data + 108) == sums[fixture]);
         changed(data, bytes, 8); changed(data, bytes, bytes - 1);
         for (unsigned i = 108; i < 112; ++i) changed(data, bytes, i);
-        for (unsigned i = 0; i < NBG_SECTION_COUNT; ++i) {
+        for (unsigned i = 0; i < NBG_MODEL_FIXED_SECTION_COUNT; ++i) {
             uint32_t start = word(data + 376 + i * 8), length = word(data + 380 + i * 8);
             assert(start <= bytes && length <= bytes - start);
             if (length) {

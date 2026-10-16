@@ -77,8 +77,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Encoded ring validation](nbg-rings.md) checks complete ranges and tensor
   membership, with isolated SDK packing and saved-submission comparisons.
   The [pinned host compiler](npu-compiler.md) produces a numerical convolution
-  with matching CPU and simulator output. Native support for its format remains
-  outstanding.
+  with matching CPU and simulator output. Native decoding now supports its
+  directory format; checksum verification and assembly remain outstanding.
   Board resource integration, model admission, numerical execution,
   and physical qualification remain outstanding.
 

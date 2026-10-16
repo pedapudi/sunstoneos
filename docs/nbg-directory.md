@@ -1,7 +1,9 @@
 # Decode the compiled convolution's section directory
 
-The NBG `0x20000` directory and checksum findings are **research evidence**.
-The native decoder still refuses this format. The [compiled convolution](npu-compiler.md)
+The NBG `0x20000` directory and checksum findings provide **reference evidence**.
+The [native decoder](nbg-model.md) now supports its 32-bit-address layout;
+checksum verification and assembly support remain outstanding.
+The [compiled convolution](npu-compiler.md)
 provides a pinned numerical fixture for implementing support without weakening
 the existing `0x1001e` checks. This document assumes familiarity with binary
 formats, address relocation, and CRC checksums.
@@ -113,7 +115,8 @@ and `0x40ea8c`. Original binaries, disassembly, extracted types, comparison
 results, and identities remain under
 `~/.cache/sunstoneos/evidence/nbg-directory-20261016/`.
 
-Next, implement bounded native directory decoding and version-specific record
-accessors. Keep checksum coverage explicit and support the legitimate empty
-working pool. Model admission, cold initialization, physical execution, and
+Bounded native directory decoding and version-specific record accessors now
+have host evidence in [nbg-model.md](nbg-model.md). Next, implement the directory
+checksum rules and assembly support for the legitimate empty working pool.
+Model admission, cold initialization, physical execution, and
 the remaining hardware capabilities are still outstanding.

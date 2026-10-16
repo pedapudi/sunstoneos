@@ -1,9 +1,10 @@
 # Native decoding of compiled NPU containers
 
 The native C decoder is **implemented and host-tested** for NBG format
-`0x1001e`. It exposes bounded views of a compiled model without allocating
-memory or invoking drivers. Its decoded records reproduce the saved SDK
-command-buffer reference through the host reconstruction. The
+`0x1001e` and the 32-bit-address form of `0x20000`. It exposes bounded views
+without allocating memory or invoking drivers. The older format reproduces
+the saved SDK command-buffer reference. The compiled convolution's directory
+records match the saved SDK layout evidence. The
 [native assembler](nbg-assembly.md) now consumes these views for the observed
 neural-operation profile. Command admission and physical inference remain outstanding.
 
@@ -14,9 +15,11 @@ implemented in [nbg_model.c](../drivers/npu/nbg_model.c).
 
 ## Validate structure before publishing a view
 
-The decoder accepts files from 592 bytes through 256 MiB. It reads little-endian
-fields explicitly and permits an unaligned input buffer. A successful open
-returns the header and all 27 section descriptors. Validation covers:
+The decoder limits files to 256 MiB. Fixed-header files require at least 592
+bytes; directory files require their complete header, directory, and declared
+payloads. It reads little-endian fields explicitly and permits unaligned input.
+A successful view has 40 section slots; absent sections have zero length.
+The older format populates its original 27 slots. Validation covers:
 
 - NBG magic and version, supported neural and tensor command sizes, and
   power-of-two working-pool alignment.
@@ -43,10 +46,33 @@ does not establish that an unknown operation can execute.
 
 The header retains target, feature flags, core count, memory requirements,
 and stored checksum. The decoder does not verify checksum or hardware
-compatibility. A separate [checksum verifier](nbg-checksum.md) checks complete-file
-integrity and is required by the assembler. Names preserve the original 64 bytes and add a terminating NUL;
+compatibility. The separate [checksum verifier](nbg-checksum.md) checks
+complete-file integrity for `0x1001e` and is required by the assembler.
+The verifier and assembler still refuse `0x20000`. Names preserve the original 64 bytes and add a terminating NUL;
 they are not checked for valid UTF-8. Signed fields are decoded without
 relying on an out-of-range unsigned-to-signed conversion.
+
+## Validate directory records before decoding their payloads
+
+Directory files require one 12-byte subheader and at most 40 unique section IDs.
+The 44-byte section records must have bounded offsets and lengths, valid entry
+sizes, and zero address/reserved fields. The declared total must equal the
+supplied file length. Header, subheader, directory, and nonempty payload ranges
+must not overlap. Directory order and file placement are independent of section IDs.
+
+The [directory reference](nbg-directory.md) establishes the wire layout. Tensor
+records occupy 112 bytes; 32-bit-address patches occupy 28 bytes. Accessors
+normalize the quantization union and set absent high-address patch fields to zero.
+Forty-bit-address directory files remain unsupported. Debug and customer sections
+are retained as raw spans; their internal semantics are not validated.
+
+The network-information section supplies tensor/layer counts, command sizes,
+core count, and version-specific flag bits. The decoded operation count comes
+from the operation section's validated size. The ambiguous count at network byte
+80 remains visible through `NBG_NETWORK_INFO`; it does not control record reads.
+Memory-pool and SRAM requirements are optional bounded scalar sections. Absent
+requirements are zero. Directory pool alignment uses the SDK's 64-byte allocation
+convention; the file does not contain an alignment field for this requirement.
 
 ## Keep the file and view immutable while using accessors
 
@@ -79,34 +105,47 @@ bytes and selected file lengths. Accepted mutations are traversed through the
 accessors; refused mutations preserve the output view. This is bounded mutation
 coverage, not exhaustive fuzzing or command-safety verification.
 
-One integration check uses the native decoder for all sections, operation and
-patch records, tensor metadata, and 186 table entries. The host reconstruction
-then applies the native address encoder and matches the previously captured
-SDK descriptors, command buffer, and coefficient payload. The capture uses
-device addresses starting at `0xe0000000` and includes 659 active relocations.
-The SDK is not executed during this check. Its earlier reference evidence is
-reused because the SDK, model, feature responses, and capture contents are unchanged.
-The check verifies capture files against the existing hash manifest before reuse.
+The directory-specific ASan/UBSan check passes the compiled convolution and
+84 atomic refusals. It covers truncated allocations, malformed subheaders and
+sections, overlap, duplicate IDs, record widths, scalar memory requirements,
+quantization, reference bounds, and accessor aliases. A relocated, reversed
+directory also passes. The same check confirms that the assembler refuses the
+newly decoded format without changing its result.
 
-One AArch64 object build passed. The object contains 6,699 bytes of text and
-read-only data, no writable static data, and references only `memcpy` and
-`memset`. Its SHA-256 is
-`611e1dc51e1b5d93b792192fbb3c2483f6d4026b6b9ab6bf9f81e3aaaa1ab60d`.
-The 64-bit view occupies 376 bytes. Disassembly shows a 768-byte open frame
-and a 240-byte tensor-decoding frame, for 1,008 bytes along that call path,
-excluding memory-helper stack use. The isolated CMake target is `nbg-model`.
+One comparison with the saved directory reference matches thirteen sections,
+two operations, five patches, two tensors, and three payload ranges. Its initial
+comparison treated the serialized source index as unsigned; converting the
+`0xffffffff` sentinel to the native signed value resolved that check failure.
+Only that comparison was repeated. Native code and its successful checks were unchanged.
 
-The checks are [nbg-model.c](../checks/nbg-model.c) and
-[nbg-model.py](../checks/nbg-model.py). The Python check accepts the pinned model,
-a host shared library containing the decoder and address encoder, an existing
-successful SDK capture directory, and a new output directory. The capture's
-existing `manifest.json` must be in its parent directory. Results
-and input hashes are under `~/.cache/sunstoneos/evidence/nbg-model-20261016/`.
-No board request, kernel rebuild, or unchanged integration suite was run.
+The shared view grew, so the existing assembly sanitizer check was also run and
+passed the full fixture and 120 refusal cases. One native assembly comparison
+matches all six saved SDK buffers, including 534 descriptor and 125 command
+relocations. It verifies the capture's hashes before reuse. No SDK loader,
+compiler, simulator, kernel, or application suite was executed again.
+
+The AArch64 decoder object contains 10,816 bytes of text and read-only data,
+no writable static data, and references only `memcpy` and `memset`. Its SHA-256 is
+`bc739fb8d203f99c4152b6f4ebdacce81489844ccf41872490d1caf452956cc9`.
+The 64-bit view occupies 480 bytes. Disassembly shows a 736-byte open frame,
+192-byte directory-header frame, and 208-byte tensor frame. The open-to-tensor
+path uses 944 bytes before memory-helper stack use. The isolated CMake target
+is `nbg-model`; the affected assembler target also builds.
+
+The checks are [nbg-model.c](../checks/nbg-model.c),
+[nbg-directory.c](../checks/nbg-directory.c), and
+[nbg-directory-native.py](../checks/nbg-directory-native.py). The directory
+comparison accepts the pinned model, native shared library, saved reference
+JSON, and a new output directory. Current commands, results, artifacts, and
+input identities are under
+`~/.cache/sunstoneos/evidence/nbg-directory-native-20261016/`.
+Earlier fixed-format evidence remains under
+`~/.cache/sunstoneos/evidence/nbg-model-20261016/`.
 
 The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
 assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
-and SRAM placement remain separate admission requirements. Complete-file checksum
-verification is implemented separately and required by the assembler.
+and SRAM placement remain separate admission requirements. Directory checksum
+verification and zero-pool assembly remain required before the numerical fixture
+can reach execution admission.
 The assembler adapts the completion event and reserves the controller's full fetch span.

@@ -76,13 +76,17 @@ the saved SDK submission. Linear accesses, weight prefetch, and actual hardware
 access behavior remain unresolved.
 The [pinned host compiler](npu-compiler.md) now produces a small convolution with
 matched float and quantized simulator references. Its emitted `0x20000` format
-requires native directory, record-layout, and checksum support. Physical execution
-of this fixture remains outstanding.
+now has native directory and record-layout support; checksum verification and
+assembly support remain outstanding. Physical execution of this fixture remains
+outstanding.
 The [directory investigation](nbg-directory.md) now identifies the changed tensor
 and patch layouts and matches the payload and section checksums with the isolated
 compiler CRC routine. The payload checksum excludes the header and directory;
 native structural validation remains essential. The network-information operation
 count differs from the section's record count and needs interpretation.
+The decoder uses the checked section count and retains raw network metadata.
+The [native decoding evidence](nbg-model.md) covers the numerical fixture, malformed
+directories, and continued agreement with the older saved SDK submission.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.
@@ -228,9 +232,11 @@ the tool hash and recovery evidence in the application document.
    stride units, linear accesses, and prefetch before device admission.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
-   Extend decoding for the [compiled numerical fixture](npu-compiler.md), whose
-   format is `0x20000` and whose working pool is empty. The [NPU record](npu.md)
-   identifies references, inspection evidence, and the implementation sequence.
+   Extend checksum verification and assembly for the
+   [compiled numerical fixture](npu-compiler.md), whose format is `0x20000` and whose
+   working pool is empty. Native directory decoding now has host evidence.
+   The [NPU record](npu.md) identifies references, inspection evidence, and the
+   implementation sequence.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all

@@ -111,7 +111,7 @@ The SDK is not executed again.
 The current AArch64 object build passes. It contains 5,524 bytes of text and read-only
 data, no writable static data, and references the checksum verifier, decoder, encoder, `memcpy`,
 and `memset`. Its SHA-256 is
-`11a0f93f4d339e5abd56501a7a323dc534fdcc2d4f8ef5d7a67434ac8966da2d`.
+`0e8ca4bbf0784a891291fe3f2d8005401a82217aa0c38f5fba8a07f85cad8362`.
 Disassembly shows a 480-byte assembly frame and a 528-byte per-operation frame;
 decoder, encoder, and memory-helper frames are additional. The returned plan
 occupies 88 bytes on the 64-bit host. The isolated build target is `nbg-assembly`.
@@ -123,7 +123,10 @@ The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c) and
 The Python check takes the model, shared library, saved capture directory, and
 a new output directory. It uses [host dependencies](../checks/host-requirements.txt).
 Current results, artifacts, commands, and hashes are under
-`~/.cache/sunstoneos/evidence/nbg-rings-20261016/`. The initial implementation
+`~/.cache/sunstoneos/evidence/nbg-directory-native-20261016/`, after the decoder
+view grew to retain directory metadata. The saved SDK buffers still match.
+Ring-specific evidence remains under `~/.cache/sunstoneos/evidence/nbg-rings-20261016/`.
+The initial implementation
 evidence remains under `~/.cache/sunstoneos/evidence/nbg-assembly-20261016/`;
 checksum-specific evidence is under `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
 

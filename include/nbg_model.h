@@ -5,6 +5,9 @@
 
 #define NBG_MODEL_VERSION 0x1001eu
 #define NBG_MODEL_HEADER_BYTES 592u
+#define NBG_MODEL_FIXED_SECTION_COUNT 27u
+#define NBG_MODEL_DIRECTORY_VERSION 0x20000u
+#define NBG_MODEL_DIRECTORY_HEADER_BYTES 48u
 #define NBG_MODEL_MAX_BYTES (256u * 1024u * 1024u)
 
 /* Serialized section order, independent of SDK in-memory structure order. */
@@ -14,7 +17,10 @@ enum nbg_section_id {
     NBG_SW, NBG_HW_INIT, NBG_ICDT, NBG_ICD, NBG_PPU_PARAM, NBG_OP_SYNC,
     NBG_DMA_SBI, NBG_PPU_INSTR, NBG_DYNA_IO, NBG_LOAD_STATES, NBG_DMA_ADDI,
     NBG_COEFF_TABLE, NBG_COEFF, NBG_PPU_INSTR_TABLE, NBG_DYNA_IO_TABLE,
-    NBG_LOAD_STATES_TABLE, NBG_SECTION_COUNT
+    NBG_LOAD_STATES_TABLE, NBG_DUMP_OPERATION, NBG_DUMP_OUTPUT, NBG_DUMP_PATCH,
+    NBG_DUMP_INSTR_TABLE, NBG_DUMP_INSTR, NBG_DUMP_STATES_TABLE, NBG_DUMP_STATES,
+    NBG_NETWORK_INFO, NBG_CUSTOMER_DATA, NBG_MEMORY_POOL, NBG_VIP_SRAM,
+    NBG_AXI_SRAM, NBG_SECTION_CHECKSUM, NBG_SECTION_COUNT
 };
 
 enum nbg_decode_result {
@@ -27,7 +33,7 @@ struct nbg_section { uint32_t offset, bytes; };
 struct nbg_span { const unsigned char *data; size_t bytes; };
 
 struct nbg_model_header {
-    uint32_t version, target, flags, core_count, checksum;
+    uint32_t version, target, flags, core_count, checksum; /* Flags retain version-specific wire bits. */
     uint32_t layer_count, operation_count, input_count, output_count;
     uint32_t nn_bytes, tp_bytes;
     uint32_t pool_bytes, pool_alignment, pool_base;
@@ -63,7 +69,14 @@ struct nbg_patch {
     uint32_t high_destination, high_mask, destination_base;
 };
 
-/* Validate the 0x1001e container and publish a borrowed, immutable view.
+/* Validate a 0x1001e or 32-bit-address 0x20000 container and publish a borrowed,
+ * immutable view. Directory files require one subheader, known section IDs,
+ * zero section addresses/reserved fields, and the exact declared total size.
+ * Extra directory sections are retained as bounded raw spans. Their internal
+ * semantics, including checksum records and debug tables, remain unchecked.
+ * Directory operation_count is derived from the operation section; the network
+ * metadata's separate count remains available through NBG_NETWORK_INFO.
+ * Directory pool alignment is the 64-byte allocation convention, not a wire field.
  * Checks section ranges/overlap, record strides/counts, table-to-payload bounds,
  * tensor dimensions/logical sizes/quantization, operation state/patch ranges,
  * known NN/TP command indices, layer indices, tensor patch indices, and pool
@@ -79,7 +92,8 @@ struct nbg_patch {
  * Successful decoding is NOT model admission: checksum, target compatibility,
  * descriptor semantics, relocation destinations, complete device access sizes,
  * software operators, command permissions, and SRAM placement remain unchecked.
- * The stored checksum is reported without verification. */
+ * The stored checksum is reported without verification. The existing verifier
+ * and assembler still refuse 0x20000. */
 enum nbg_decode_result nbg_model_open(const void *data, size_t bytes,
                                       struct nbg_model *result);
 

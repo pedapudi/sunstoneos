@@ -38,7 +38,7 @@ class Header(c.Structure):
 
 class View(c.Structure):
     _fields_ = [('data', c.c_void_p), ('bytes', c.c_size_t), ('header', Header),
-                ('sections', Section * 27)]
+                ('sections', Section * 40)]
 
 
 class Tensor(c.Structure):
@@ -106,7 +106,8 @@ class Native:
 
     def patches(self):
         result = []
-        for index in range(self.view.sections[9].bytes // 40):
+        width = 28 if self.view.header.version == 0x20000 else 40
+        for index in range(self.view.sections[9].bytes // width):
             row = Patch()
             if self.lib.nbg_model_patch(c.byref(self.view), index, c.byref(row)) != 1:
                 raise RuntimeError('native patch accessor refused')

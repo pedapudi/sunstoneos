@@ -3,12 +3,13 @@
 The A733 host compiler is **downloaded and exercised**. A deterministic convolution
 compiles to a 1,928-byte NBG file and passes a simulator comparison against the
 compiler's quantized CPU reference. Its floating-point CPU inference also matches
-an exact integer calculation. These are host results; native loading and physical
+an exact integer calculation. These are host results; native assembly and physical
 NPU execution remain outstanding.
 
-The fixture introduces format `0x20000`, which the current native decoder and
-inspector refuse. It supplies a numerical workload for extending the loader and
-for eventual hardware qualification. The existing ShuffleNet fixture remains a
+The fixture uses format `0x20000`, which the [native decoder](nbg-model.md)
+now parses. The Python inspector remains limited to `0x1001e`. The convolution
+supplies a numerical workload for extending the loader and for eventual
+hardware qualification. The existing ShuffleNet fixture remains a
 reference for format `0x1001e`.
 
 ## Pin the host compiler separately from the board runtime
@@ -116,7 +117,7 @@ The initial fixture-generation attempt failed because container root lacked writ
 permission on the host-owned output directory. Assigning that directory to
 container root resolved it; model generation had not written any files.
 
-## The emitted format needs a separate decoder extension
+## Native checksum and assembly support remain outstanding
 
 The model SHA-256 is
 `db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
@@ -131,11 +132,12 @@ Its stored checksum is at byte 12; zeroing that field and applying the existing
 whole-file CRC method does not reproduce the stored value. The
 [directory investigation](nbg-directory.md) establishes the fixture's record
 layouts and matches its checksum over normalized section payloads. That checksum
-excludes the header and directory. Native support still requires bounded
-directory decoding and version-specific accessors and integrity checks.
+excludes the header and directory. Native directory decoding and version-specific
+accessors now pass host checks.
+Directory checksum verification remains unimplemented.
 
-The current host inspector returned `unsupported NBG version 0x20000`, as intended.
-Native allocation planning also needs to handle legitimate zero-pool models and
+The host inspector returned `unsupported NBG version 0x20000`, as intended.
+Native allocation planning still needs to handle legitimate zero-pool models and
 validate their commands. The small fixture enables that work without discarding
 the existing format checks. Physical inference, complete descriptor admission,
 and all other NPU capabilities remain required by [issue 9](https://github.com/pedapudi/sunstoneos/issues/9).
