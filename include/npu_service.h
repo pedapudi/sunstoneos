@@ -4,6 +4,7 @@
 #include "task.h"
 #include "queue.h"
 #include "a733_npu_controller.h"
+#include <stdatomic.h>
 
 #define NPU_SERVICE_CLIENTS 8u
 #define NPU_SERVICE_COMMANDS 32u
@@ -42,6 +43,16 @@ struct npu_service_client {
     StaticQueue_t reply_state;
     uint8_t reply_storage[sizeof(struct npu_service_reply)];
 };
+/* Copied private startup authority. prepared performs bounded metadata checks
+ * only: 1 ready, 0 pending, -1 retained. Authenticate the entire backend, MMU
+ * image and registered command descriptors against independent startup state.
+ * Neither this callback nor activation validates command-stream semantics. */
+struct npu_service_activation {
+    TaskHandle_t bootstrap;
+    int (*prepared)(void *,const struct a733_npu_ops *,void *,
+        const struct a733_npu_mmu_image *,const struct a733_npu_command *,unsigned);
+    void *context;
+};
 /* Private static storage. Public only so the platform can reserve it without
  * a heap. Application code must not inspect or modify these fields. */
 struct npu_service {
@@ -51,6 +62,8 @@ struct npu_service {
     struct a733_npu_mmu_image image;
     struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
     unsigned command_count, owner, initialized;
+    atomic_uint activation_state;
+    struct npu_service_activation activation;
     uint64_t job_ticket;
     QueueHandle_t requests;
     StaticQueue_t request_state;
@@ -76,6 +89,20 @@ struct npu_service {
 int npu_service_init(struct npu_service *, const struct a733_npu_ops *, void *cookie,
                       const struct a733_npu_mmu_image *, const struct a733_npu_command *,
                       unsigned count, UBaseType_t priority, UBaseType_t affinity);
+/* Optional deferred initialization. Init/bind remain pre-scheduler; hardware
+ * readiness is deferred to one designated privileged bootstrap task. No worker
+ * callback, including the time provider, or client send occurs before activation.
+ * Memory reservations and trusted command admission remain init prerequisites.
+ * The existing init API starts active and preserves its previous behavior. */
+int npu_service_init_deferred(struct npu_service *,const struct a733_npu_ops *,void *,
+    const struct a733_npu_mmu_image *,const struct a733_npu_command *,unsigned,
+    UBaseType_t priority,UBaseType_t affinity,const struct npu_service_activation *);
+/* Task identity precedes EL1 validation. One atomic claim serializes prepared
+ * callbacks; successful release publication precedes worker notification.
+ * BUSY means pending/already active; FAULT permanently retains inactive state.
+ * Unauthorized and duplicate calls cannot invoke prepared or change readiness.
+ * Bootstrap task, callback context and prepared resources remain live/pinned. */
+enum npu_service_result npu_service_activate(struct npu_service *);
 int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t command_mask);
 
 /* Task-only calls. Caller identity comes from FreeRTOS, never from the request.

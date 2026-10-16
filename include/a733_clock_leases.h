@@ -22,8 +22,9 @@
 #define A733_CLOCK_DMA0     (1u<<15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
 #define A733_CLOCK_PLL_NPU  (1u<<16) /* Also selectable by MBUS, DRAM0 and video clocks. */
 #define A733_CLOCK_NPU      (1u<<17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
+#define A733_POWER_DCDC2    (1u<<18) /* Stable rail or exclusive change authority; no clock parent. */
 #define A733_CLOCK_LOCALS  UINT32_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT32_C(0x3ffff)
+#define A733_CLOCK_ALL     UINT32_C(0x7ffff)
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -57,6 +58,9 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * PLL_NPU retuning requires exclusion of every parent consumer, including
  * memory/fabric consumers. NPU local ownership alone cannot authorize it.
  * Stable PCK clock and DCDC2 rail ownership remain separate platform leases.
+ * DCDC2 shared/exclusive rail authority also uses this registry. Every PMIC
+ * voltage/enable writer must acquire its exclusive scope; a mutex alone only
+ * serializes transactions. DCDC2 has no clock ancestors or audio-profile effect.
  * Granting a token precedes all caller hardware operations. An uncertain
  * operation requires retain(), never release(). All refusal outputs unchanged.
  */

@@ -96,4 +96,10 @@ enum a733_gpu_resource_result a733_gpu_resources_change_end(
  */
 enum a733_gpu_resource_result a733_gpu_resources_release(
     struct a733_gpu_resource_manager *, unsigned client, uint64_t token, uint64_t deadline);
+/* Read-only exact lease observation under the manager's nonblocking lock.
+ * Requires a healthy manager and the specified live stable lease, including
+ * client, token, mask and mode. BUSY leaves ownership unresolved. No clock
+ * sample, hardware operation, state mutation or release occurs. */
+enum a733_gpu_resource_result a733_gpu_resources_status(
+    struct a733_gpu_resource_manager *, unsigned client, const struct a733_gpu_resource_lease *);
 #endif

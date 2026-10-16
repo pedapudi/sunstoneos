@@ -1,7 +1,9 @@
 #include "npu_service.h"
+#include <string.h>
 
 static struct npu_service *instance;
 static unsigned creating_worker;
+enum { SERVICE_WAITING, SERVICE_CHECKING, SERVICE_ACTIVE, SERVICE_RETAINED };
 static void worker(void *);
 
 BaseType_t npu_service_task_privileged(TaskFunction_t entry, void *argument)
@@ -82,6 +84,10 @@ static void worker(void *argument)
     (void)stack;
 #endif
     for (;;) {
+        if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
+            (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+            continue;
+        }
         /* Keep the native counter extension current even during long idle
          * sessions. A faulted backend must not receive any further callbacks. */
         if (!active(s->controller.state) && s->controller.state != A733_NPU_FAULT)
@@ -105,16 +111,28 @@ static void worker(void *argument)
     }
 }
 
-int npu_service_init(struct npu_service *s, const struct a733_npu_ops *ops, void *cookie,
+static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, void *cookie,
                       const struct a733_npu_mmu_image *image, const struct a733_npu_command *commands,
-                      unsigned count, UBaseType_t priority, UBaseType_t affinity)
+                      unsigned count, UBaseType_t priority, UBaseType_t affinity,
+                      const struct npu_service_activation *activation)
 {
+    struct npu_service_activation saved_activation={0};
+    if(activation) {
+        memcpy(&saved_activation,activation,sizeof(saved_activation));
+        if(!saved_activation.bootstrap || !saved_activation.prepared)return 0;
+        activation=&saved_activation;
+    }
     if (!s || instance || s->initialized || !ops || !image || !commands ||
         !count || count > NPU_SERVICE_COMMANDS || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         !ops->read || !ops->write || !ops->microseconds || !ops->delay ||
         !ops->barrier || !ops->publish || !ops->finish) return 0;
+    const struct a733_npu_ops saved_ops=*ops;
+    const struct a733_npu_mmu_image saved_image=*image;
+    struct a733_npu_command saved_commands[NPU_SERVICE_COMMANDS];
+    memcpy(saved_commands,commands,count*sizeof(*commands));
+    ops=&saved_ops;image=&saved_image;commands=saved_commands;
     for (unsigned i = 0; i < count; ++i) {
         const struct a733_npu_command *c = &commands[i];
         if (!c->device || (c->device & 63) || !c->token || c->readable_bytes < A733_NPU_FETCH_BYTES ||
@@ -134,6 +152,8 @@ int npu_service_init(struct npu_service *s, const struct a733_npu_ops *ops, void
                                         c->reply_storage, &c->reply_state);
         configASSERT(c->replies);
     }
+    s->activation=activation ? *activation : (struct npu_service_activation){0};
+    atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     s->initialized = 1; instance = s; creating_worker = 1;
 #if configNUMBER_OF_CORES > 1
     s->worker = xTaskCreateStaticAffinitySet(worker, "npu-service", NPU_SERVICE_STACK_WORDS,
@@ -145,6 +165,34 @@ int npu_service_init(struct npu_service *s, const struct a733_npu_ops *ops, void
     creating_worker = 0;
     configASSERT(s->worker);
     return 1;
+}
+int npu_service_init(struct npu_service *s,const struct a733_npu_ops *ops,void *cookie,
+    const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,
+    unsigned count,UBaseType_t priority,UBaseType_t affinity)
+{return initialize(s,ops,cookie,image,commands,count,priority,affinity,NULL);}
+int npu_service_init_deferred(struct npu_service *s,const struct a733_npu_ops *ops,void *cookie,
+    const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,
+    unsigned count,UBaseType_t priority,UBaseType_t affinity,const struct npu_service_activation *activation)
+{
+    if(!activation)return 0;
+    return initialize(s,ops,cookie,image,commands,count,priority,affinity,activation);
+}
+enum npu_service_result npu_service_activate(struct npu_service *s)
+{
+    if(!s || s!=instance || !s->initialized || !s->activation.bootstrap ||
+        xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle()!=s->activation.bootstrap)return NPU_SERVICE_DENIED;
+    uint64_t level;__asm__ volatile("mrs %0,CurrentEL" : "=r"(level));
+    if(level!=4)return NPU_SERVICE_DENIED;
+    unsigned expected=SERVICE_WAITING;
+    if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_CHECKING,
+        memory_order_acq_rel,memory_order_acquire))
+        return expected==SERVICE_RETAINED ? NPU_SERVICE_FAULT : NPU_SERVICE_BUSY;
+    int ready=s->activation.prepared(s->activation.context,&s->ops,s->cookie,&s->image,s->commands,s->command_count);
+    unsigned state=ready==1 ? SERVICE_ACTIVE : ready==0 ? SERVICE_WAITING : SERVICE_RETAINED;
+    atomic_store_explicit(&s->activation_state,state,memory_order_release);
+    if(state==SERVICE_ACTIVE){xTaskNotifyGive(s->worker);return NPU_SERVICE_OK;}
+    return state==SERVICE_WAITING ? NPU_SERVICE_BUSY : NPU_SERVICE_FAULT;
 }
 int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
 {
@@ -172,7 +220,8 @@ int npu_service_send(struct npu_service *s, const struct npu_service_request *re
     if (!request || !ticket || wait == portMAX_DELAY) return 0;
     unsigned slot;
     struct npu_service_client *c = caller(s, &slot);
-    if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
+    if (!c || c->pending || c->next_ticket == UINT64_MAX ||
+        atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) return 0;
     struct npu_service_message m = {*request, c->next_ticket + 1, slot};
     c->pending = m.ticket;
     if (xQueueSend(s->requests, &m, wait) != pdTRUE) { c->pending = 0; return 0; }

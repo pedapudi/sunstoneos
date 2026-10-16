@@ -37,6 +37,18 @@ static enum a733_gpu_resource_result enter(struct a733_gpu_resource_manager *m)
 static enum a733_gpu_resource_result leave(struct a733_gpu_resource_manager *m,
                                            enum a733_gpu_resource_result result)
 { atomic_store_explicit(&m->busy, 0, memory_order_release); return result; }
+enum a733_gpu_resource_result a733_gpu_resources_status(struct a733_gpu_resource_manager *m,
+    unsigned client,const struct a733_gpu_resource_lease *token)
+{
+    if(client>=A733_GPU_RESOURCE_CLIENTS || !separate(m,sizeof(*m),token,sizeof(*token)))
+        return A733_GPU_RESOURCE_INVALID;
+    enum a733_gpu_resource_result r=enter(m);
+    if(r!=A733_GPU_RESOURCE_OK)return r;
+    const struct a733_gpu_resource_lease *held=&m->leases[client];
+    int exact=token->token && token->mode==A733_GPU_RESOURCE_STABLE &&
+        token->token==held->token && token->mask==held->mask && token->mode==held->mode;
+    return leave(m,exact ? A733_GPU_RESOURCE_OK : A733_GPU_RESOURCE_INVALID);
+}
 static int fail(struct a733_gpu_resource_manager *m, enum a733_gpu_resource_error error)
 { m->failed = 1; m->error = error; return 0; }
 static int time_ok(struct a733_gpu_resource_manager *m)
