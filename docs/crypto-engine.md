@@ -1,9 +1,11 @@
 # A733 crypto-engine random output
 
-The native crypto-engine controller implements one 32-byte hardware random-number
-request. It uses the A733 TRNG and its SHA-256 conditioner through the shared
+The native crypto-engine controller implements sequential 32-byte hardware
+random-number requests under one retained reservation. It uses the A733 TRNG and its SHA-256 conditioner through the shared
 crypto-engine DMA interface. The driver requires an existing authenticated
-hardware health profile and retains the engine and memory after completion.
+hardware health profile, can provision it while tests are disabled, and retains
+the engine and memory after completion. The [entropy service](entropy.md) composes
+repeated tasks using one allocation from the actual linker memory pool.
 Physical randomness, health-test efficacy and board operation are unqualified.
 
 The implementation is in `drivers/crypto/a733_ce.c` and
@@ -70,10 +72,14 @@ Hardware health configuration resides in the secure register bank:
 Both tests are disabled at reset. The manual's threshold calculations require
 an entropy-source bound, and the inspected A733 kernel and U-Boot paths supply
 no characterized threshold profile. The API therefore requires an authenticated
-existing profile for this silicon, supplies, RC16M and double-entropy-source
-mode. It reads the actual registers and rejects mismatches. It accepts
+profile for this silicon, supplies, RC16M and double-entropy-source mode. It reads the actual registers and rejects mismatches. It accepts
 continuous testing with the manual's 512- or 1024-sample window encodings. It
-provides no threshold defaults and writes none of these secure controls.
+provides no threshold defaults. Optional cold provisioning requires both tests
+initially disabled, writes supplied cutoffs and the window, then enables tests
+last. Native writes refuse live reconfiguration and preserve reserved bits.
+These operations establish neither startup-test completion nor entropy quality.
+Output remains unqualified for production security use; counting conditioned
+requests cannot prove successful startup testing for the current enable epoch.
 The controller enables the source-defined second entropy source at nonsecure
 offset `0xd0` bit 1 while the engine is excluded and quiescent.
 
@@ -105,19 +111,20 @@ memory release or automatic clock removal occurs.
 
 Task completion permits acquisition and copying of this task's result. It does
 not prove that all engine transactions have drained or authorize resource
-reclamation. The first API therefore has no resubmit or release operation.
-Production entropy consumers need a repeated-request service with explicit
-buffer reuse authority, a characterized health profile and physical validation.
+reclamation. Rearm observes clear status, errors and launch bits before reusing
+the same retained buffers. There is no resource-release operation. Platform
+authority must remain immutable across the complete retained lifetime, including
+all later requests. Per-request deadlines bound execution only.
 
 ## Evidence and remaining coverage
 
-The focused checks are `checks/a733-ce.c` and `checks/a733-ce.py`. The model
+The initial command checks are `checks/a733-ce.c` and `checks/a733-ce.py`. The model
 uses deterministic DMA fixtures to check descriptor decoding, complete address
 writes, error rejection, clock/health refusal, cache handoff and retained faults.
 It also covers a final deadline failure while registry retention is busy.
-The sanitizer model, pinned-source checks and native AArch64 compilation pass.
-The two native objects contain 8,336 bytes of code and no static data or BSS.
-The largest direct compiler-reported stack frame is 336 bytes; this is not a
+For the initial one-request implementation, the sanitizer model, pinned-source
+checks and native AArch64 compilation passed. Its two native objects contained 8,336 bytes of code and no static data or BSS.
+Its largest direct compiler-reported stack frame was 336 bytes; this is not a
 whole-call-chain stack bound. These fixtures provide no evidence about physical
 randomness. Exact inputs and artifacts are preserved in
 `~/.cache/sunstoneos/evidence/ce-20261016/batch1/`.
@@ -131,8 +138,9 @@ are preserved outside the repository. Linux v6.12 mainline's CE driver targets
 older variants and uses a different TRNG descriptor, so it is not the source
 for the A733 command format.
 
-Cold clock and secure health provisioning, production resource/memory binding,
-repeated requests, interrupt service and physical qualification remain required.
+Cold clock provisioning, production platform authority, startup and entropy
+qualification, interrupt service and physical qualification remain required.
+Provisioning and repeated-request evidence is recorded in [entropy.md](entropy.md).
 Full engine coverage also includes the documented symmetric cipher modes,
 hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
 The first TRNG command does not satisfy those remaining hardware requirements.

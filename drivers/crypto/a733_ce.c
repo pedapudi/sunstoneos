@@ -17,13 +17,15 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
     return a && b && an<=UINTPTR_MAX-x && bn<=UINTPTR_MAX-y && (x+an<=y || y+bn<=x);
 }
+static void zero(void *p,size_t n)
+{volatile uint8_t *b=p;while (n--) *b++=0;}
 static int extent(uint64_t a,uint64_t n)
 {return a && !(a&63) && a<(UINT64_C(1)<<40) && n<=(UINT64_C(1)<<40)-a;}
 int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a733_ce_ops *o,
     void *cookie,struct a733_clock_leases *r,const struct a733_clock_token *t,struct a733_ce_memory *m)
 {
     if (!p || p->initialized || !c || !o || !r || !t || !m || ((uintptr_t)m&63) ||
-        !c->owner || !c->handoff || !c->health_profile || !c->deadline_us ||
+        !c->owner || !c->handoff || !c->health_profile || !c->deadline_us || c->configure_health>1 ||
         !t->id || t->owner!=c->owner || !o->now_us || !o->authorize || !o->enter ||
         !o->leave || !o->retain || !o->read || !o->write || !o->sync) return 0;
     const void *objects[]={p,c,o,r,t,m};
@@ -42,7 +44,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
         if ((v&~fabric_mask[i]) || (i && !(v&BIT(31))) || !mhz ||
             (mhz*1000000u)%div || c->fabric_hz[i]!=mhz*1000000u/div) return 0;
     }
-    *p=(struct a733_ce){.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1};
+    *p=(struct a733_ce){.self=(uintptr_t)p,.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1};
     atomic_init(&p->busy,0);return 1;
 }
 static int timely(struct a733_ce *p)
@@ -88,17 +90,32 @@ static int health(struct a733_ce *p)
     for (unsigned i=0;i<4;++i) if (!bits(p,SEC+0x90+4*i,UINT32_MAX,p->config.health[i])) return 0;
     return 1;
 }
+static int provision(struct a733_ce *p)
+{
+    if (!p->config.configure_health || p->health_programmed) return health(p);
+    uint32_t control;
+    if (!rd(p,SEC+0x9c,&control) || (control&0x30000u)) return 0;
+    for (unsigned i=0;i<3;++i)
+        if (!update(p,SEC+0x90+4*i,UINT32_MAX,p->config.health[i])) return 0;
+    /* Preserve reserved fields; install the window before enabling either test. */
+    if (!update(p,SEC+0x9c,0x307ff,p->config.health[3]&2047) ||
+        !update(p,SEC+0x9c,0x307ff,p->config.health[3]) || !health(p)) return 0;
+    p->health_programmed=1;return 1;
+}
 static void little(uint8_t *p,uint64_t v,unsigned n)
 {for (unsigned i=0;i<n;++i) p[i]=(uint8_t)(v>>(8*i));}
 static int prepare(struct a733_ce *p)
 {
     uint32_t lpc;
-    if (!clocks(p) || !health(p) || !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
+    if (p->config.configure_health && !p->health_programmed &&
+        !bits(p,SEC+0x9c,0x30000,0)) return 0;
+    if (!clocks(p) || !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
         !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
         !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
         !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0) ||
         !rd(p,NS+0xd0,&lpc) || (lpc&1)) return 0;
     if (!(lpc&2) && (!wr(p,NS+0xd0,lpc|2) || !bits(p,NS+0xd0,UINT32_MAX,lpc|2))) return 0;
+    if (!provision(p)) return 0;
     for (unsigned i=0;i<256;++i) p->memory->descriptor[i]=0;
     for (unsigned i=0;i<64;++i) p->memory->output[i]=0;
     little(p->memory->descriptor,0x11002,4);
@@ -118,7 +135,7 @@ static enum a733_ce_result failed(struct a733_ce *p)
 }
 enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
 {
-    if (!p || !p->initialized || !output || !separate(p,sizeof(*p),output,32) ||
+    if (!p || !p->initialized || p->self!=(uintptr_t)p || !output || !separate(p,sizeof(*p),output,32) ||
         !separate(p->memory,sizeof(*p->memory),output,32) || !separate(p->registry,sizeof(*p->registry),output,32)) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
@@ -138,9 +155,9 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
     if (!lock) {if (!timely(p)) return failed(p);return finish(p,A733_CE_BUSY);}
     p->held=1;
     if (lock!=1 || !timely(p)) return failed(p);
-    unsigned next=p->stage;uint8_t bytes[32];unsigned ready=0;
+    unsigned next=p->stage;uint8_t bytes[32]={0};unsigned ready=0;
     if (p->stage==PREPARE) {
-        if (!prepare(p)) return failed(p);
+        if (!prepare(p)) goto fail;
         next=SUBMIT;
     } else if (p->stage==SUBMIT) {
         if (!clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
@@ -148,26 +165,61 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
             !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
             !wr(p,NS,(uint32_t)p->config.descriptor_physical) ||
             !update(p,NS+4,255,(uint32_t)(p->config.descriptor_physical>>32)) ||
-            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,0x400)) return failed(p);
+            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,0x400)) goto fail;
         next=WAIT;
     } else {
         if (!rd(p,NS+12,&p->status_ns) || !rd(p,SEC+12,&p->status_secure) ||
             !rd(p,NS+0x18,&p->error_ns) || !rd(p,SEC+0x18,&p->error_secure) ||
-            p->error_ns || p->error_secure || (p->status_ns&~0x30u) || p->status_secure) return failed(p);
+            p->error_ns || p->error_secure || (p->status_ns&~0x30u) || p->status_secure) goto fail;
         uint32_t status=(p->status_ns>>4)&3;
-        if (status>1) return failed(p);
+        if (status>1) goto fail;
         if (status==1) {
             if (!clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
-                p->ops.sync(p->cookie,p->memory,A733_CE_ACQUIRE)!=1 || !timely(p)) return failed(p);
+                p->ops.sync(p->cookie,p->memory,A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
             for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
-            if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) return failed(p);
+            if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
             ready=1;next=DONE;
         }
     }
+    if (!timely(p)) goto fail;
+    p->ops.leave(p->cookie);p->held=0;
+    if (!timely(p)) goto fail;
+    p->stage=next;
+    if (ready) {
+        for (unsigned i=0;i<32;++i) output[i]=bytes[i];
+        zero(bytes,sizeof(bytes));return finish(p,A733_CE_RANDOM);
+    }
+    zero(bytes,sizeof(bytes));return finish(p,A733_CE_PENDING);
+fail:
+    zero(bytes,sizeof(bytes));return failed(p);
+}
+
+enum a733_ce_result a733_ce_request(struct a733_ce *p,uint64_t deadline)
+{
+    if (!p || !p->initialized || p->self!=(uintptr_t)p || !deadline) return A733_CE_INVALID;
+    if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
+    if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
+    if (p->fault) return failed(p);
+    if (p->stage!=DONE && p->stage!=ADMIT) return finish(p,A733_CE_BUSY);
+    uint64_t now;
+    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now) return failed(p);
+    p->last_now=now;
+    if (deadline<=now) return finish(p,A733_CE_INVALID);
+    enum a733_clock_result token=a733_clock_token_status(p->registry,&p->token);
+    if (token==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
+    if (token!=A733_CLOCK_OK) return failed(p);
+    p->config.deadline_us=deadline;
+    if (p->stage==ADMIT) return finish(p,A733_CE_PENDING);
+    int lock=p->ops.enter(p->cookie,deadline);
+    if (!lock) {if (!timely(p)) return failed(p);return finish(p,A733_CE_BUSY);}
+    p->held=1;
+    if (lock!=1 || !timely(p) || !clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
+        !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
+        !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
+        !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
+        !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0)) return failed(p);
     if (!timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;
     if (!timely(p)) return failed(p);
-    p->stage=next;
-    if (ready) {for (unsigned i=0;i<32;++i) output[i]=bytes[i];return finish(p,A733_CE_RANDOM);}
-    return finish(p,A733_CE_PENDING);
+    p->stage=PREPARE;return finish(p,A733_CE_PENDING);
 }

@@ -33,6 +33,15 @@ int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
 {
     (void)cookie;
     uint32_t mask=0;
+    if (a>=SEC+0x90 && a<=SEC+0x9c && !(a&3)) {
+        __asm__ volatile("dsb sy" ::: "memory");
+        uint32_t control=*(volatile const uint32_t *)(SEC+0x9c);
+        /* No live reconfiguration, including a write that would disable tests. */
+        if (control&0x30000u) return 0;
+        if (a==SEC+0x9c && ((control^v)&~UINT32_C(0x307ff))) return 0;
+        *(volatile uint32_t *)a=v;
+        __asm__ volatile("dsb sy" ::: "memory");return 1;
+    }
     if (a<NS || a>NS+0xd0) return 0;
     switch (a-NS) {
     case 0:mask=UINT32_MAX;break;
@@ -69,4 +78,24 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
         __asm__ volatile("dc civac, %0" :: "r"((uintptr_t)m->output) : "memory");
     } else __asm__ volatile("dc ivac, %0" :: "r"((uintptr_t)m->output) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");return 1;
+}
+
+#include "a733_ce_entropy.h"
+#include "a733_memory_reservations.h"
+int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_config *c,
+    const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
+    const struct a733_clock_token *token)
+{
+    if (!s || s->initialized || !c || !platform || !registry || !token || !c->owner) return 0;
+    /* This constructor is serialized during boot. The initializer returns the
+     * actual singleton and verifies its linker reservation/translations once. */
+    struct device_memory_pool *pool=a733_memory_reservations_init();
+    if (!pool) return 0;
+    struct device_memory_lease lease;struct device_memory_extent extent;
+    if (!device_memory_acquire(pool,c->owner,DEVICE_MEMORY_PAGE,&lease,&extent)) return 0;
+    struct a733_ce_ops ops=*platform;
+    ops.read=a733_ce_native_read;ops.write=a733_ce_native_write;ops.sync=a733_ce_native_sync;
+    if (a733_ce_entropy_bind(s,pool,lease,c,&ops,cookie,registry,token)) return 1;
+    /* No controller/MMIO operation has occurred on a failed binding. */
+    (void)device_memory_release(pool,lease);return 0;
 }
