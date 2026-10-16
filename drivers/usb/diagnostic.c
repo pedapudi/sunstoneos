@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "boot.h"
 #include "a733_usb.h"
+#include "usb_service.h"
 #include "tusb.h"
 #include <string.h>
 
@@ -16,6 +17,17 @@ static uint32_t received, response_size, sent;
 static uint64_t commands;
 static bool recover_requested;
 static volatile bool response_complete;
+static TickType_t last_command;
+static volatile uint64_t last_progress;
+
+uint64_t usb_runtime_last_progress(void) { return last_progress; }
+
+__attribute__((weak)) bool usb_application_dispatch(uint32_t command, const uint8_t *input,
+                                                   uint32_t size, uint8_t *output, unsigned *length)
+{
+    (void)command; (void)input; (void)size; (void)output; (void)length;
+    return false;
+}
 
 static const tusb_desc_device_t device_descriptor = {
     .bLength = sizeof(tusb_desc_device_t), .bDescriptorType = TUSB_DESC_DEVICE,
@@ -103,6 +115,7 @@ static void dispatch(void)
     memcpy(response, request, 16);
     out[2] |= 0x80000000U;
     ++commands;
+    last_command = xTaskGetTickCount();
     a733_usb_trace(10, in[2], in[3]);
     switch (in[2]) {
     case 1: {
@@ -129,9 +142,11 @@ static void dispatch(void)
         recover_requested = true;
         break;
     default:
-        out[2] = 0xffffffffU;
+        if (!usb_application_dispatch(in[2], request + 16, in[3], response + 16, &length))
+            out[2] = 0xffffffffU;
         break;
     }
+    configASSERT(length <= BODY_MAX);
     out[3] = length;
     response_size = length + 16;
     sent = 0;
@@ -147,6 +162,7 @@ static void usb_task(void *argument)
     configASSERT(tusb_init(0, &init));
     platform_puts("USB runtime ready\n");
     TickType_t start = xTaskGetTickCount();
+    last_command = start;
     for (;;) {
         renew_recovery_timer();
         a733_usb_poll();
@@ -186,10 +202,21 @@ static void usb_task(void *argument)
         // Mode 2 bounds an unattended bring-up attempt; mode 3 stays resident.
         if (RESULT->mode == 2 && xTaskGetTickCount() - start > pdMS_TO_TICKS(8000))
             platform_panic("USB host check deadline", 0);
+        // Application sessions recover when their host stops sending commands.
+        if (RESULT->mode == 4 && xTaskGetTickCount() - last_command > pdMS_TO_TICKS(30000))
+            platform_panic("USB host lease expired", 0);
+        last_progress = counter();
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
+void usb_runtime_start(unsigned priority)
+{
+    last_progress = counter();
+    configASSERT(xTaskCreateStatic(usb_task, "usb", 2048, NULL, priority, task_stack, &task_state));
+}
+
+#ifndef SUNSTONE_MIMUS_USB
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 {
     (void)task;
@@ -199,7 +226,8 @@ void kernel_main(void)
 {
     platform_init();
     platform_puts("sunstoneos FreeRTOS USB diagnostics\n");
-    configASSERT(xTaskCreateStatic(usb_task, "usb", 2048, NULL, 3, task_stack, &task_state));
+    usb_runtime_start(3);
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);
 }
+#endif

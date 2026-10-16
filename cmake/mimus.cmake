@@ -9,7 +9,11 @@ option(MIMUS_AARCH64_NEON "Use AArch64 NEON integer dot products" ON)
 add_subdirectory("${MIMUS_DIR}/firmware/components/asr" mimus-asr)
 sunstone_cxx_compile(mimus_asr)
 target_compile_definitions(mimus_asr PRIVATE MIMUS_EXTERNAL_PLATFORM=1)
-foreach(target a733-mimus a733-mimus-model)
+set(mimus_targets a733-mimus a733-mimus-model)
+if(TINYUSB_DIR)
+  list(APPEND mimus_targets a733-mimus-usb)
+endif()
+foreach(target ${mimus_targets})
   add_executable(${target}
     platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
     arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
@@ -32,3 +36,13 @@ foreach(target a733-mimus a733-mimus-model)
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
 endforeach()
 target_compile_definitions(a733-mimus-model PRIVATE MONITOR_QEMU=1)
+
+if(TINYUSB_DIR)
+  target_sources(a733-mimus-usb PRIVATE apps/mimus/service.cc
+    drivers/usb/a733_usb.c drivers/usb/diagnostic.c
+    "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
+    "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/dcd_sunxi_musb.c")
+  target_include_directories(a733-mimus-usb PRIVATE drivers/usb "${TINYUSB_DIR}/src")
+  target_compile_definitions(a733-mimus-usb PRIVATE SUNSTONE_A733_USB=1 SUNSTONE_MIMUS_USB=1)
+endif()

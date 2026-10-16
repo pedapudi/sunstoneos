@@ -35,6 +35,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
   programmed-I/O implementation, inherited clock state, and remaining modes.
+  The [native mimus session](mimus-usb.md) also passes asset loading, status polling
+  during recognition, repeated results, and host-lease return with automatic access.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |

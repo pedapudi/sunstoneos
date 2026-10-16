@@ -11,6 +11,11 @@
 #include "mimus/asr/wav.h"
 #include "mimus/asr/scratch.h"
 #include "mimus/pipeline/formatter.h"
+#include <atomic>
+#ifdef SUNSTONE_MIMUS_USB
+#include "service.h"
+#include "usb_service.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -18,8 +23,9 @@
 
 static StaticTask_t tasks[2];
 static StackType_t recognition_stack[16384], recovery_stack[1024];
-static uint64_t application_deadline;
+static std::atomic<uint64_t> application_deadline{UINT64_MAX};
 alignas(64) static uint8_t internal_arena[97280];
+#ifndef SUNSTONE_MIMUS_USB
 constexpr uintptr_t kAssets = 0x43000000;
 constexpr size_t kAssetsLimit = 32 * 1024 * 1024;
 struct Assets {
@@ -27,6 +33,7 @@ struct Assets {
     uint64_t sizes[3];
     uint32_t crc[3];
 };
+#endif
 static void report_clock()
 {
 #ifndef MONITOR_QEMU
@@ -55,33 +62,32 @@ static void report_clock()
 static void keep_recovery(void *)
 {
     for (;;) {
-        if (counter() > application_deadline) platform_panic("recognition deadline", 0);
+        if (counter() > application_deadline.load(std::memory_order_relaxed)) platform_panic("recognition deadline", 0);
+#ifdef SUNSTONE_MIMUS_USB
+        // The recovery task must not keep a stalled USB task alive indefinitely.
+        if (counter() - usb_runtime_last_progress() > 5 * COUNTER_HZ)
+            platform_panic("USB task stalled", 0);
+#endif
         register uint64_t operation __asm__("x0") = 0x734;
         __asm__ volatile("smc #0" : "+r"(operation) :: "memory");
         configASSERT(operation == 0);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-static void recognize(void *)
+static bool recognition_error(const char *message)
+{
+    platform_puts("ERROR "); platform_puts(message); platform_puts("\n");
+    return false;
+}
+static bool transcribe(std::span<const uint8_t> inputs[3])
 {
     using namespace mimus;
-    const auto &header = *reinterpret_cast<const Assets *>(kAssets);
-    configASSERT(memcmp(header.magic, "SUNMIM01", 8) == 0);
-    size_t offset = 128;
-    std::span<const uint8_t> inputs[3];
-    for (unsigned i = 0; i < 3; ++i) {
-        configASSERT(header.sizes[i] && header.sizes[i] <= kAssetsLimit - offset);
-        inputs[i] = {reinterpret_cast<const uint8_t *>(kAssets + offset), size_t(header.sizes[i])};
-        configASSERT(asr::Crc32(inputs[i]) == header.crc[i]);
-        offset = (offset + header.sizes[i] + 63) & ~size_t(63);
-        configASSERT(offset <= kAssetsLimit);
-    }
     auto model = asr::Model::Load(inputs[0], inputs[1], true, asr::kTargetOrangePi);
-    if (!model) platform_panic(asr::ErrorName(model.error()), 0);
+    if (!model) return recognition_error(asr::ErrorName(model.error()));
     auto engine = asr::Recognizer::Create(*model);
-    if (!engine) platform_panic(asr::ErrorName(engine.error()), 0);
+    if (!engine) return recognition_error(asr::ErrorName(engine.error()));
     auto audio = asr::ParseWav(inputs[2]);
-    if (!audio) platform_panic(asr::ErrorName(audio.error()), 0);
+    if (!audio) return recognition_error(asr::ErrorName(audio.error()));
     asr::Arena arena({reinterpret_cast<uint8_t *>(0x46000000), 16 * 1024 * 1024});
     asr::SetInternalArena(internal_arena);
     asr::SetYieldHook([] { taskYIELD(); });
@@ -90,7 +96,7 @@ static void recognize(void *)
     uint64_t start = asr::platform::MonotonicNanos();
     auto result = engine->Recognize(*audio, arena);
     uint64_t elapsed = (asr::platform::MonotonicNanos() - start) / 1000;
-    if (!result) platform_panic(asr::ErrorName(result.error()), 0);
+    if (!result) return recognition_error(asr::ErrorName(result.error()));
     char metrics[192];
     snprintf(metrics, sizeof(metrics), "RESULT feat_crc=%08x lp_crc=%08x frames=%u samples=%u compute_us=%llu\n",
              result->feature_crc, result->log_prob_crc, unsigned(result->frames), unsigned(audio->size()),
@@ -125,7 +131,34 @@ static void recognize(void *)
              arena.peak(), runtime_heap_peak());
     platform_puts(metrics);
     platform_puts("PASS mimus: recorded audio recognized locally\n");
-    platform_exit(0);
+    return true;
+}
+static void recognize(void *)
+{
+    std::span<const uint8_t> inputs[3];
+#ifdef SUNSTONE_MIMUS_USB
+    for (;;) {
+        mimus_service_wait(inputs);
+        application_deadline.store(counter() + 180 * COUNTER_HZ, std::memory_order_relaxed);
+        bool success = transcribe(inputs);
+        application_deadline.store(UINT64_MAX, std::memory_order_relaxed);
+        mimus_service_finish(success);
+    }
+#else
+    using namespace mimus;
+    application_deadline.store(counter() + 180 * COUNTER_HZ, std::memory_order_relaxed);
+    const auto &header = *reinterpret_cast<const Assets *>(kAssets);
+    configASSERT(memcmp(header.magic, "SUNMIM01", 8) == 0);
+    size_t offset = 128;
+    for (unsigned i = 0; i < 3; ++i) {
+        configASSERT(header.sizes[i] && header.sizes[i] <= kAssetsLimit - offset);
+        inputs[i] = {reinterpret_cast<const uint8_t *>(kAssets + offset), size_t(header.sizes[i])};
+        configASSERT(asr::Crc32(inputs[i]) == header.crc[i]);
+        offset = (offset + header.sizes[i] + 63) & ~size_t(63);
+        configASSERT(offset <= kAssetsLimit);
+    }
+    platform_exit(transcribe(inputs) ? 0 : 1);
+#endif
 }
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 {
@@ -136,7 +169,11 @@ extern "C" void kernel_main(void)
 {
     platform_init();
     runtime_init();
-    application_deadline = counter() + 180 * COUNTER_HZ;
+#ifdef SUNSTONE_MIMUS_USB
+    configASSERT(RESULT->mode == 4);
+    mimus_service_init();
+    usb_runtime_start(4);
+#endif
     configASSERT(xTaskCreateStatic(keep_recovery, "recovery", 1024, nullptr, 5, recovery_stack, &tasks[0]));
     configASSERT(xTaskCreateStatic(recognize, "mimus", 16384, nullptr, 3, recognition_stack, &tasks[1]));
     vTaskStartScheduler();

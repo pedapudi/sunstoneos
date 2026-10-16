@@ -1,11 +1,14 @@
 # Local mimus transcription on A733
 
 The FreeRTOS application transcribes a recorded 16 kHz mono clip on the physical
-Orange Pi boot CPU. One bench recording matches the host’s feature checksum,
-log-probability checksum, frame count, words, punctuation, capitalization, and
-formatted text. This establishes an initial integration result. Wider recording
-parity, paced replay, persistent boot, interactive input, accelerators, and
-performance qualification remain outstanding.
+Orange Pi boot CPU. The native USB application matches the host on 32 development recordings for
+feature and log-probability checksums, frame count, words, punctuation,
+capitalization, and formatted text. Paced replay, persistent boot, live input,
+accelerators, and performance qualification remain outstanding.
+
+The [native USB application](mimus-usb.md) adds model and recording uploads,
+repeated recognition requests, and result retrieval within one running OS session.
+That document records the native asset layout and transport evidence.
 
 ## Engine and model
 
@@ -36,8 +39,10 @@ A recognition task runs sequentially on the boot Cortex-A55. A higher-priority
 recovery task renews the EL3 timer every 20 ticks and imposes a 180-second
 application deadline. If the scheduler stops, the secure timer expires; if
 recognition remains unfinished, the recovery task returns to ROM at its deadline.
-The current application runs once and returns its result through retained RAM.
-It does not yet combine recognition with the native USB runtime.
+The one-shot image runs once and returns its result through retained RAM.
+The native USB image keeps running between recordings and uses a separate
+[asset layout and ownership protocol](mimus-usb.md#ram-and-input-integrity).
+The following RAM table describes the one-shot image.
 
 | Region | Purpose |
 | --- | --- |
@@ -134,9 +139,10 @@ Raw evidence resides under `~/.cache/sunstoneos/evidence/`:
   readback, image readback, result memory, log, and source hashes.
 - `mimus-emulator-parity.json` and `mimus-physical-parity.json`: comparisons.
 
-The matching CRCs and text establish parity for this fixture only. Broader audio,
-segment boundaries, cancellation, long-duration operation, concurrent I/O, and
-resource-exhaustion behavior need separate checks. No microphone is present.
+The one-shot checks establish parity for this fixture. The native USB session
+extends that evidence to 32 recordings with status polling during recognition.
+Segment boundaries, cancellation, long-duration operation, other concurrent I/O,
+and resource-exhaustion behavior need separate checks. No microphone is present.
 I2S and Bluetooth input and full onboard hardware support remain required.
 
 ## Recognition bottlenecks and configured CPU clock
@@ -211,8 +217,8 @@ capitals, and formatted output all matched the host reference.
 | Allocator reservation peak | 105,984 bytes | 105,984 bytes |
 
 The compute-to-audio ratio is about 2.20, so the required maximum of 0.25 remains
-unmet. Broader recorded-audio parity, physical kernel boundary checks,
-repeatability, and concurrent workloads remain unqualified.
+unmet. The [native USB session](mimus-usb.md#physical-integration-evidence) adds broader recorded-audio parity. Physical kernel
+boundary checks, repeatability, and other concurrent workloads remain unqualified.
 
 The contiguous-dot implementation alone produced no meaningful bench improvement:
 39.085063 seconds with unchanged CRCs. This model primarily uses the separate

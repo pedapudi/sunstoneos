@@ -10,8 +10,11 @@ A native USB channel now passes status, packet-boundary echo, log, and commanded
 ROM return checks. [USB evidence](usb.md) records the implementation and limits.
 The [C++ runtime](runtime.md) passes a physical check for allocation, containers,
 constructors, and task-local newlib state.
-Mimus now matches the host on one recorded fixture in the emulator and on the
-physical board. [Application evidence](mimus.md) records its scope and latency.
+Mimus now matches the host on 32 development recordings in one physical boot.
+The [native USB application](mimus-usb.md) loads assets, accepts repeated
+recognition requests, and returns results while FreeRTOS runs. Its host lease
+returned the board to ROM with automatic access after the client stopped requests.
+[Application evidence](mimus.md) records arithmetic and performance limits.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -25,7 +28,9 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board returned to FEL after recorded-audio transcription. The installed
+The board returned to FEL after the native application’s host lease expired.
+Native assets now occupy `0x43000000` through the WAV slot at `0x44000000`; the
+one-shot combined input bundle must be uploaded again before one-shot execution. The installed
 [session access rule](../tools/README.md) grants access after reconnects on
 physical port `3-1`. Kernel and native USB checks regained access automatically.
 The rule lasts until host reboot and can be removed with `disable-session`.
@@ -68,7 +73,8 @@ The USB image passed one bounded physical session after corrections to control
 completion and zero-length IN submission. The monitor renewal model and focused
 compiled-driver check also passed. Their identities and limits are in the USB
 document. The runtime renews the secure deadline while its USB task runs.
-The resident mode is implemented but has not been physically tested.
+Unbounded mode 3 remains untested. The native mimus application uses mode 4
+with a tested host lease; its evidence is in the application transport document.
 
 The C++ runtime passed its secure-monitor emulator check and one physical
 session. The physical session exercised two allocating tasks for 100 rounds
@@ -80,7 +86,8 @@ physical bench run matched host CRCs, words, punctuation, capitals, and formatte
 text. Profiling found linear matrix products used 83% of portable recognition
 time. AArch64 NEON integer kernels now reduce the bench run from 39.09 to 19.48
 seconds with the same host parity. This is a single-run performance screen;
-broader recording and performance qualification remain outstanding.
+recording parity now covers 32 fixtures through native USB. Performance
+qualification and the required latency target remain outstanding.
 The configured boot CPU clock is 494 MHz;
 independent frequency measurement remains outstanding. Arena and allocator peaks
 are recorded in the application document. Compute time remains above target.
@@ -90,15 +97,14 @@ the tool hash and recovery evidence in the application document.
 
 ## Next actions
 
-1. Extend the USB transport for application loading and device diagnostics.
-   Preserve bounded recovery during controller work. Add interrupt delivery,
-   cold clock/PHY setup, and the remaining USB roles through separate checks.
-2. Identify and preserve populated storage before persistent installation.
-   Add storage access and recovery without overwriting existing contents.
-3. Expand recorded-audio parity for the NEON kernels, continue matrix optimization,
-   and implement paced replay. Add worker cores and Arm optimizations with
-   change-dependent parity checks. Keep accelerator and remaining hardware
-   work active independently of this application milestone.
+1. Identify and preserve populated storage before persistent installation.
+   Implement read-only storage access and backup through the native transport.
+   Establish storage boot and recovery before overwriting existing contents.
+2. Extend USB with interrupt delivery, cold clock/PHY setup, and remaining roles.
+   Preserve independent task and host deadlines during controller work.
+3. Continue matrix optimization and implement paced replay. Add worker cores
+   with change-dependent parity checks. Keep accelerator and remaining hardware
+   work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
    and coherence, with checks selected from each change.
 

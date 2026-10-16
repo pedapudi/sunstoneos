@@ -3,7 +3,8 @@
 The FreeRTOS runtime provides a tested USB 2 high-speed device channel on the
 attached board's recovery port. It accepts status, echo, log, and recovery
 commands. The driver transfers data through programmed I/O and runs in one
-FreeRTOS task. USB host operation, hardware interrupt delivery, DMA, USB 3,
+FreeRTOS task. The [mimus runtime](mimus-usb.md) extends this channel with asset
+uploads and repeated transcription. USB host operation, hardware interrupt delivery, DMA, USB 3,
 Type-C role changes, and complete USB qualification remain outstanding.
 
 ## Controller and runtime
@@ -27,7 +28,9 @@ Each USB task iteration renews the two-second secure recovery timer through
 SMC operation `0x734`. A stalled task stops renewing that deadline. Boot mode 2
 also imposes an eight-second application deadline, so a failed host check
 returns independently to ROM. Boot mode 3 implements a resident loop without
-that application deadline; it has no physical qualification yet.
+that application deadline; it has no physical qualification yet. The mimus
+application selects mode 4, whose [host lease and task deadlines](mimus-usb.md#task-ownership-and-recovery)
+bound its active session.
 
 The ROM and RAM runtime share USB ID `1f3a:efe8` during development. The native
 service has product string `sunstoneos RAM diagnostics` and device revision
@@ -52,6 +55,8 @@ A response preserves the sequence and sets bit 31 of the command.
 | Echo | 2 | The request payload |
 | Log | 3 | Up to 2,048 bytes of the runtime log |
 | Recover | 4 | Empty acknowledgment, followed by disconnect and ROM return |
+
+Application commands `0x10` through `0x15` add [asset loading and transcription](mimus-usb.md#application-commands).
 
 This is a development protocol. Malformed-message handling, reset during a
 transfer, cancellation, and concurrent clients need further implementation and
