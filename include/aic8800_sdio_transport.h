@@ -8,6 +8,9 @@
 struct aic8800_firmware;
 struct aic8800_runtime;
 struct aic8800_wifi;
+struct aic8800_data;
+struct aic8800_data_result;
+struct aic8800_data_frame;
 struct aic8800_wifi_scan_result;
 struct aic8800_wifi_target;
 struct aic8800_wifi_station_event;
@@ -24,7 +27,7 @@ enum aic8800_transport_error { AIC8800_TRANSPORT_NO_ERROR,
     AIC8800_TRANSPORT_HOST_ERROR, AIC8800_TRANSPORT_TIMEOUT,
     AIC8800_TRANSPORT_SETUP_ERROR, AIC8800_TRANSPORT_RX_BOUNDS,
     AIC8800_TRANSPORT_UNSUPPORTED_IRQ, AIC8800_TRANSPORT_MESSAGE_ERROR,
-    AIC8800_TRANSPORT_FIRMWARE_ERROR, AIC8800_TRANSPORT_RUNTIME_ERROR, AIC8800_TRANSPORT_WIFI_ERROR };
+    AIC8800_TRANSPORT_FIRMWARE_ERROR, AIC8800_TRANSPORT_RUNTIME_ERROR, AIC8800_TRANSPORT_WIFI_ERROR, AIC8800_TRANSPORT_DATA_ERROR };
 struct aic8800_transport_config {
     enum aic8800_transport_variant variant; /* Explicit source protocol choice. */
     enum aic8800_transport_pad pad; /* Source's conditional function-0 F1 write. */
@@ -49,6 +52,7 @@ struct aic8800_sdio_transport {
     struct aic8800_firmware *firmware;
     struct aic8800_runtime *runtime;
     struct aic8800_wifi *wifi;
+    struct aic8800_data *data;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
@@ -60,6 +64,7 @@ struct aic8800_sdio_transport {
     uint64_t deadline, wait_until, enable_deadline;
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
+    uint8_t data_tx;
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];
@@ -130,6 +135,22 @@ int aic8800_transport_peek_station(const struct aic8800_sdio_transport *, struct
  * a drained aggregate. No request/result is overwritten without consumption. */
 int aic8800_transport_peek_scan(const struct aic8800_sdio_transport *, struct aic8800_wifi_scan_result *);
 int aic8800_transport_take_scan(struct aic8800_sdio_transport *, struct aic8800_wifi_scan_summary *);
+/* Attach a fresh packet worker to the same serialized runtime. No network
+ * readiness follows. Open-port admission requires an explicit caller record and
+ * lasts only for the current open association. WPA remains EAPOL-only.
+ * Send copies a 14..1514-byte Ethernet frame. One TX and one RX are retained;
+ * ordinary TX completion means bus transfer only. EAPOL additionally waits for
+ * firmware status; its ACK bit is reported separately from transfer completion.
+ * Pending TX excludes connect/disconnect/lease renewal. Unsolicited link loss
+ * faults the owner and retains uncertain TX. No automatic retry/disposal.
+ */
+int aic8800_transport_start_data(struct aic8800_sdio_transport *, struct aic8800_data *);
+int aic8800_transport_authorize_open_data(struct aic8800_sdio_transport *, uint64_t record);
+int aic8800_transport_send_data(struct aic8800_sdio_transport *, const uint8_t *ethernet, size_t, uint64_t deadline);
+int aic8800_transport_take_data_result(struct aic8800_sdio_transport *, struct aic8800_data_result *);
+/* Copy RX before generic consume; generation identifies its association. This
+ * view remains inspectable after FAULT, but grants no current send authority. */
+int aic8800_transport_peek_data(const struct aic8800_sdio_transport *, struct aic8800_data_frame *);
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
  */

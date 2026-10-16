@@ -58,6 +58,8 @@ struct aic8800_wifi {
     struct aic8800_wifi_station_event station_event;
     enum aic8800_wifi_link link;
     const uint8_t *station_record;
+    uint64_t association_generation; /* Never reused during this lifetime. */
+    uint8_t ap_index, peer_qos;
     uint16_t disconnect_reason;
     uint8_t station_held, station_accepted, station_indicated;
     uint8_t station_payload[852];

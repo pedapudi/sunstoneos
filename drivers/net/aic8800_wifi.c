@@ -58,13 +58,13 @@ int aic8800_wifi_connect(struct aic8800_wifi *w,const void *owner,const struct a
     uint64_t now,uint64_t deadline)
 {
     if(!w||!w->initialized||w->owner!=owner||w->state!=AIC8800_WIFI_READY||w->held||w->station_held||
-        w->link!=AIC8800_WIFI_LINK_DOWN||!span(target,sizeof(*target))||
+        w->link!=AIC8800_WIFI_LINK_DOWN||w->association_generation==UINT64_MAX||!span(target,sizeof(*target))||
         overlap(w,sizeof(*w),target,sizeof(*target))||!target->connection_authority||!target->beacon_evidence||
         target->channel_index>=w->config.channel_count||!target->ssid_bytes||target->ssid_bytes>32||
         (target->security!=AIC8800_WIFI_OPEN&&target->security!=AIC8800_WIFI_WPA2_PSK_CCMP)||
         (target->bssid[0]&1)||now<w->last_now||deadline<=now)return 0;
     unsigned any=0;for(unsigned i=0;i<6;++i)any|=target->bssid[i];if(!any)return 0;
-    w->target=*target;w->last_now=now;w->deadline=deadline;w->command_deadline=0;
+    ++w->association_generation;w->target=*target;w->last_now=now;w->deadline=deadline;w->command_deadline=0;
     w->station_accepted=w->station_indicated=0;w->phase=CONNECT;w->link=AIC8800_WIFI_CONNECTING;
     w->state=AIC8800_WIFI_PREPARING;return 1;
 }
@@ -234,6 +234,7 @@ static enum aic8800_codec_result station_response(struct aic8800_wifi *w,
             const struct aic8800_wifi_channel *c=&w->config.channels[w->target.channel_index];
             for(unsigned i=0;i<6;++i)if(e.bssid[i]!=w->target.bssid[i])goto malformed;
             if(e.frequency!=c->frequency||e.band!=c->band||e.width!=0||e.ap_index>=w->max_stations)goto malformed;
+            w->ap_index=e.ap_index;w->peer_qos=e.qos;
             station_link(w,w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURITY_PENDING);
         }else station_link(w,AIC8800_WIFI_LINK_DOWN);
         completed(w);w->station_indicated=1;station_hold(w,r,&e);station_finish(w);

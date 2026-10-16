@@ -1,0 +1,134 @@
+/* Native packet worker; source ABI and supported receive profile are documented
+ * in docs/radio-data.md. No allocation, Linux code, retry loop or key handling. */
+#include "aic8800_data.h"
+static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0]|(uint16_t)p[1]<<8); }
+static uint16_t be16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0]<<8|p[1]); }
+static uint32_t le32(const uint8_t *p) { return le16(p)|(uint32_t)le16(p+2)<<16; }
+static void put16(uint8_t *p,uint16_t n) { p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8); }
+static void put32(uint8_t *p,uint32_t n) { put16(p,(uint16_t)n);put16(p+2,(uint16_t)(n>>16)); }
+static int equal(const uint8_t *a,const uint8_t *b,unsigned n)
+{ for(unsigned i=0;i<n;++i)if(a[i]!=b[i])return 0;return 1; }
+static int linked(const struct aic8800_data *d)
+{
+    const struct aic8800_wifi *w=d->wifi;
+    return w&&w->state==AIC8800_WIFI_READY&&w->association_generation&&
+        (w->link==AIC8800_WIFI_ASSOCIATED_OPEN||w->link==AIC8800_WIFI_SECURITY_PENDING);
+}
+static int active(const struct aic8800_data *d)
+{ return d->state==AIC8800_DATA_REQUEST||d->state==AIC8800_DATA_WAITING; }
+static int port_open(const struct aic8800_data *d)
+{ return linked(d)&&d->wifi->link==AIC8800_WIFI_ASSOCIATED_OPEN&&d->open_authority&&
+    d->open_generation==d->wifi->association_generation; }
+static int eapol(const uint8_t *p,size_t n)
+{ return n>=4&&be16(p+2)<=n-4; }
+int aic8800_data_init(struct aic8800_data *d)
+{
+    if(!d||d->initialized)return 0;
+    struct aic8800_data fresh={0};fresh.initialized=1;*d=fresh;return 1;
+}
+int aic8800_data_claim(struct aic8800_data *d,const void *owner,const struct aic8800_wifi *w,uint64_t now)
+{
+    if(!d||!d->initialized||d->owner||!owner||!w||w->owner!=owner||d->state!=AIC8800_DATA_IDLE)return 0;
+    d->owner=owner;d->wifi=w;d->last_now=now;return 1;
+}
+void aic8800_data_stop(struct aic8800_data *d,const void *owner,enum aic8800_data_error e)
+{ if(d&&d->initialized&&d->owner==owner&&d->state!=AIC8800_DATA_FAULT){d->error=e;d->state=AIC8800_DATA_FAULT;} }
+void aic8800_data_observe(struct aic8800_data *d,const void *owner,uint64_t now)
+{
+    if(!d||!d->initialized||d->owner!=owner||d->state==AIC8800_DATA_FAULT)return;
+    if(now<d->last_now||(active(d)&&now>=d->deadline)||
+        (d->completion_deadline&&now>=d->completion_deadline)) {
+        aic8800_data_stop(d,owner,AIC8800_DATA_TIME_ERROR);return;
+    }
+    d->last_now=now;d->completion_deadline=0;
+    if(!linked(d)||d->open_generation!=d->wifi->association_generation)d->open_authority=0;
+    if(active(d)&&(!linked(d)||d->result.generation!=d->wifi->association_generation))
+        aic8800_data_stop(d,owner,AIC8800_DATA_LINK_ERROR);
+}
+int aic8800_data_authorize_open(struct aic8800_data *d,const void *owner,uint64_t record)
+{
+    if(!d||!d->initialized||d->owner!=owner||d->state!=AIC8800_DATA_IDLE||!record||
+        !linked(d)||d->wifi->link!=AIC8800_WIFI_ASSOCIATED_OPEN)return 0;
+    d->open_authority=record;d->open_generation=d->wifi->association_generation;return 1;
+}
+int aic8800_data_send(struct aic8800_data *d,const void *owner,const uint8_t *p,size_t n,uint64_t now,uint64_t deadline)
+{
+    if(!d||!d->initialized||d->owner!=owner||d->state!=AIC8800_DATA_IDLE||!p||n<14||
+        n>AIC8800_DATA_ETHERNET_BYTES||now<d->last_now||deadline<=now||!linked(d)||!equal(p+6,d->wifi->mac,6))return 0;
+    unsigned control=be16(p+12)==0x888e;
+    const uint8_t pae[]={1,0x80,0xc2,0,0,3};
+    if(control) {
+        if(!eapol(p+14,n-14)||(!equal(p,d->wifi->target.bssid,6)&&!equal(p,pae,6))||
+            d->next_sequence>=0x80000000u)return 0;
+    }else if(!port_open(d)||be16(p+12)<1536)return 0;
+    d->result=(struct aic8800_data_result){.generation=d->wifi->association_generation,.eapol=(uint8_t)control};
+    if(control)d->result.sequence=d->next_sequence++;
+    for(unsigned i=0;i<sizeof(d->request);++i)d->request[i]=0;
+    uint8_t *q=d->request;size_t payload=n-14,length=28+payload;
+    put16(q,(uint16_t)length);q[2]=1;uint8_t crc=0;
+    for(unsigned i=0;i<3;++i){crc^=q[i];for(unsigned j=0;j<8;++j)crc=(uint8_t)((crc<<1)^((crc&128)?7:0));}q[3]=crc;
+    put16(q+4,(uint16_t)payload);if(control)put32(q+8,0x80000000u|d->result.sequence);
+    for(unsigned i=0;i<14;++i)q[12+i]=p[i];
+    q[26]=1; /* AC_BE */ q[27]=d->wifi->peer_qos?0:0xff;
+    q[28]=d->wifi->vif;q[29]=d->wifi->ap_index;
+    for(size_t i=0;i<payload;++i)q[32+i]=p[14+i];
+    size_t bytes=(4+length+3)&~(size_t)3;
+    if(bytes%512)bytes+=4;
+    d->request_bytes=(bytes+511)&~(size_t)511;
+    d->last_now=now;d->deadline=deadline;d->completion_deadline=0;d->state=AIC8800_DATA_REQUEST;return 1;
+}
+int aic8800_data_sent(struct aic8800_data *d,const void *owner)
+{
+    if(!d||d->owner!=owner||d->state!=AIC8800_DATA_REQUEST)return 0;
+    d->result.bus_transferred=1;
+    if(d->result.eapol)d->state=AIC8800_DATA_WAITING;
+    else {d->state=AIC8800_DATA_DONE;d->completion_deadline=d->deadline;}
+    return 1;
+}
+enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const void *owner,
+    const struct aic8800_sdio_response *r,uint64_t now)
+{
+    if(!d||d->owner!=owner||!r)return AIC8800_CODEC_UNRELATED;
+    aic8800_data_observe(d,owner,now);
+    if(d->state==AIC8800_DATA_FAULT)return AIC8800_CODEC_MALFORMED;
+    const uint8_t *p=r->record;
+    if((r->transport_type&0x7f)==0x12) {
+        if(!p||r->record_bytes!=12||d->state!=AIC8800_DATA_WAITING)return AIC8800_CODEC_UNRELATED;
+        uint32_t status=le32(p+4),index=le32(p+8);
+        /* Reference indexes modulo 256, which discards the hostid flag. Keep
+         * all 31 sequence bits; bit31 may be retained or stripped by firmware. */
+        if((index&0x7fffffffu)!=d->result.sequence||!status)return AIC8800_CODEC_UNRELATED;
+        d->result.raw_status=status;d->result.raw_index=index;d->result.firmware_status_valid=1;
+        d->result.tx_done=(uint8_t)(status&1);d->result.retry_required=(uint8_t)((status>>1)&1);
+        d->result.software_retry_required=(uint8_t)((status>>2)&1);d->result.acknowledged=(uint8_t)((status>>3)&1);
+        d->state=AIC8800_DATA_DONE;d->completion_deadline=d->deadline;return AIC8800_CODEC_OK;
+    }
+    if((r->transport_type&0x10)||!p||r->record_bytes<60||d->held||!linked(d))return AIC8800_CODEC_UNRELATED;
+    size_t n=le16(p);if(n!=r->record_bytes-60||n<24)return AIC8800_CODEC_UNRELATED;
+    uint32_t flags=le32(p+48),status=le32(p+36);
+    /* upload required; management, four-address, reorder, AMSDU and monitor
+     * records stay opaque. Error/decryption bits are not fabricated as success. */
+    if(!(flags&0x40)||(flags&0xa7)||p[49]!=d->wifi->vif||
+        (p[50]!=d->wifi->ap_index&&p[50]!=0xff)||(status&0x3fc))return AIC8800_CODEC_UNRELATED;
+    const uint8_t *m=p+60;uint16_t fc=le16(m);
+    if((fc&0x000f)!=8||(fc&0x0300)!=0x0200||(fc&0xc400)||
+        (le16(m+22)&15)||!equal(m+10,d->wifi->target.bssid,6)||
+        (!(m[4]&1)&&!equal(m+4,d->wifi->mac,6)))return AIC8800_CODEC_UNRELATED;
+    /* Only data or QoS data; null/CF variants are not Ethernet MSDUs. */
+    if((fc&0x00f0)!=0&&(fc&0x00f0)!=0x0080)return AIC8800_CODEC_UNRELATED;
+    size_t header=(fc&0x0080)?26:24;
+    if(n<header+8||((fc&0x0080)&&(m[24]&0x80)))return AIC8800_CODEC_UNRELATED;
+    const uint8_t snap[]={0xaa,0xaa,3,0,0,0};
+    if(!equal(m+header,snap,6))return AIC8800_CODEC_UNRELATED;
+    size_t bytes=n-header-8+14;if(bytes>AIC8800_DATA_ETHERNET_BYTES)return AIC8800_CODEC_UNRELATED;
+    unsigned control=be16(m+header+6)==0x888e;
+    if(control) {if(!eapol(m+header+8,n-header-8))return AIC8800_CODEC_UNRELATED;}
+    else if(!port_open(d)||be16(m+header+6)<1536)return AIC8800_CODEC_UNRELATED;
+    for(unsigned i=0;i<6;++i){d->ethernet[i]=m[4+i];d->ethernet[6+i]=m[16+i];}
+    for(size_t i=0;i<bytes-12;++i)d->ethernet[12+i]=m[header+6+i];
+    d->frame=(struct aic8800_data_frame){.generation=d->wifi->association_generation,.ethernet=d->ethernet,
+        .bytes=(uint16_t)bytes,.eapol=(uint8_t)control,.vif=d->wifi->vif,.ap_index=d->wifi->ap_index};
+    d->held_record=r->record;d->held=1;return AIC8800_CODEC_UNRELATED;
+}
+void aic8800_data_consumed(struct aic8800_data *d,const void *owner,const uint8_t *record)
+{ if(d&&d->owner==owner&&d->state!=AIC8800_DATA_FAULT&&d->held_record==record){d->held=0;d->held_record=0;} }

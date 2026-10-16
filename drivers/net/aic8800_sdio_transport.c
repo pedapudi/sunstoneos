@@ -4,6 +4,7 @@
 #include "aic8800_firmware.h"
 #include "aic8800_runtime.h"
 #include "aic8800_wifi.h"
+#include "aic8800_data.h"
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
@@ -21,6 +22,7 @@ static int independent(const struct aic8800_sdio_transport *t, const void *p, si
     if (!span(p, n) || overlap(t, sizeof(*t), p, n) ||
         overlap(t->card, sizeof(*t->card), p, n) ||
         overlap(t->card->host, sizeof(*t->card->host), p, n)) return 0;
+    if (t->data && overlap(t->data, sizeof(*t->data), p, n)) return 0;
     if (t->wifi && overlap(t->wifi, sizeof(*t->wifi), p, n)) return 0;
     if (t->runtime && overlap(t->runtime, sizeof(*t->runtime), p, n)) return 0;
     if (t->firmware) {
@@ -34,6 +36,8 @@ static void fail(struct aic8800_sdio_transport *t, enum aic8800_transport_error 
 {
     if (t->state == AIC8800_TRANSPORT_FAULT) return;
     t->error = e; t->state = AIC8800_TRANSPORT_FAULT;
+    if (t->data) aic8800_data_stop(t->data, t,
+        e == AIC8800_TRANSPORT_TIMEOUT ? AIC8800_DATA_TIME_ERROR : AIC8800_DATA_TRANSPORT_ERROR);
     if (t->wifi) aic8800_wifi_stop(t->wifi, t,
         e == AIC8800_TRANSPORT_TIMEOUT ? AIC8800_WIFI_TIME_ERROR : AIC8800_WIFI_TRANSPORT_ERROR);
     if (t->runtime) aic8800_runtime_stop(t->runtime, t,
@@ -59,6 +63,10 @@ static int observe(struct aic8800_sdio_transport *t, uint64_t *now)
     if (t->wifi) {
         aic8800_wifi_observe(t->wifi, t, *now);
         if (t->wifi->state == AIC8800_WIFI_FAULT) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); return 0; }
+    }
+    if (t->data) {
+        aic8800_data_observe(t->data, t, *now);
+        if (t->data->state == AIC8800_DATA_FAULT) { fail(t, AIC8800_TRANSPORT_DATA_ERROR); return 0; }
     }
     return 1;
 }
@@ -141,11 +149,13 @@ int aic8800_transport_start_runtime(struct aic8800_sdio_transport *t,
     t->runtime = r; t->deadline = deadline; t->wait_until = 0;
     t->phase = RUNTIME_STEP; t->state = AIC8800_TRANSPORT_RUNTIME; return 1;
 }
+static int data_busy(const struct aic8800_sdio_transport *t)
+{ return t->data && (t->data->state == AIC8800_DATA_REQUEST || t->data->state == AIC8800_DATA_WAITING); }
 int aic8800_transport_renew_runtime(struct aic8800_sdio_transport *t, uint64_t deadline)
 {
     if (!t || !t->initialized || t->entered || t->state != AIC8800_TRANSPORT_RUNTIME ||
         !t->runtime || t->runtime->state != AIC8800_RUNTIME_RECEIVING || t->held || t->pending ||
-        t->cursor != t->rx_bytes || t->card->host->state != SUNXI_SDIO_READY ||
+        data_busy(t) || t->cursor != t->rx_bytes || t->card->host->state != SUNXI_SDIO_READY ||
         t->card->host->last_now >= t->deadline || deadline <= t->deadline ||
         (t->wifi && t->wifi->state != AIC8800_WIFI_READY && t->wifi->state != AIC8800_WIFI_SCAN_DONE) ||
         (t->phase != RUNTIME_STEP && t->phase != RX_STATUS)) return 0;
@@ -180,7 +190,7 @@ int aic8800_transport_scan(struct aic8800_sdio_transport *t, uint64_t deadline)
 }
 int aic8800_transport_connect(struct aic8800_sdio_transport *t,const struct aic8800_wifi_target *target,uint64_t deadline)
 {
-    if(!runtime_idle(t)||!t->wifi||!independent(t,target,sizeof(*target))||deadline>t->deadline)return 0;
+    if(!runtime_idle(t)||!t->wifi||data_busy(t)||!independent(t,target,sizeof(*target))||deadline>t->deadline)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
     if(ok)ok=aic8800_wifi_connect(t->wifi,t,target,now,deadline);
     if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
@@ -188,7 +198,7 @@ int aic8800_transport_connect(struct aic8800_sdio_transport *t,const struct aic8
 }
 int aic8800_transport_disconnect(struct aic8800_sdio_transport *t,uint16_t reason,uint64_t deadline)
 {
-    if(!runtime_idle(t)||!t->wifi||deadline>t->deadline)return 0;
+    if(!runtime_idle(t)||!t->wifi||data_busy(t)||deadline>t->deadline)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
     if(ok)ok=aic8800_wifi_disconnect(t->wifi,t,reason,now,deadline);
     if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
@@ -211,6 +221,42 @@ int aic8800_transport_take_scan(struct aic8800_sdio_transport *t, struct aic8800
     if (!runtime_idle(t) || !t->wifi || t->wifi->state != AIC8800_WIFI_SCAN_DONE ||
         t->wifi->held || !independent(t, out, sizeof(*out))) return 0;
     *out = t->wifi->summary; t->wifi->state = AIC8800_WIFI_READY; return 1;
+}
+int aic8800_transport_start_data(struct aic8800_sdio_transport *t,struct aic8800_data *d)
+{
+    if(!runtime_idle(t)||!t->wifi||t->wifi->state!=AIC8800_WIFI_READY||t->data||
+        !independent(t,d,sizeof(*d))||!d->initialized||d->owner||d->state!=AIC8800_DATA_IDLE)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_data_claim(d,t,t->wifi,now);
+    if(ok)t->data=d;
+    t->entered=0;return ok;
+}
+int aic8800_transport_authorize_open_data(struct aic8800_sdio_transport *t,uint64_t record)
+{
+    if(!runtime_idle(t)||!t->data)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_data_authorize_open(t->data,t,record);
+    t->entered=0;return ok;
+}
+int aic8800_transport_send_data(struct aic8800_sdio_transport *t,const uint8_t *p,size_t n,uint64_t deadline)
+{
+    if(!runtime_idle(t)||!t->data||!independent(t,p,n)||deadline>t->deadline)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_data_send(t->data,t,p,n,now,deadline);
+    if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
+    t->entered=0;return ok;
+}
+int aic8800_transport_take_data_result(struct aic8800_sdio_transport *t,struct aic8800_data_result *out)
+{
+    if(!t||!t->initialized||t->entered||t->state!=AIC8800_TRANSPORT_RUNTIME||!t->data||
+        t->data->state!=AIC8800_DATA_DONE||!independent(t,out,sizeof(*out)))return 0;
+    *out=t->data->result;t->data->state=AIC8800_DATA_IDLE;return 1;
+}
+int aic8800_transport_peek_data(const struct aic8800_sdio_transport *t,struct aic8800_data_frame *out)
+{
+    if(!t||!t->initialized||t->entered||!t->data||!t->held||!t->data->held||
+        t->unrelated.record!=t->data->held_record||!independent(t,out,sizeof(*out)))return 0;
+    *out=t->data->frame;return 1;
 }
 static int cmd52(struct aic8800_sdio_transport *t, unsigned fn, uint32_t addr, int write, uint8_t value,
                  struct sunxi_sdio_request *r)
@@ -270,6 +316,10 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
                 t->tx_bytes = sizeof(t->wifi->request);
                 for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->wifi->request[i];
                 t->phase = CREDIT;
+            } else if(t->data && t->data->state == AIC8800_DATA_REQUEST) {
+                t->tx_bytes=t->data->request_bytes;
+                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->data->request[i];
+                t->data_tx=1;t->phase=CREDIT;
             } else t->phase = RX_STATUS;
         } else if (t->runtime->state != AIC8800_RUNTIME_VERIFYING) t->phase = RX_STATUS;
         return 1;
@@ -323,11 +373,14 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
     case FUNCTION_IRQ_READ: t->prior_function_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_WRITE: t->state = AIC8800_TRANSPORT_READY; break;
     case CREDIT:
-        if (value && t->tx_bytes < (size_t)value * 1536) t->phase = TX;
+        if (t->data_tx ? value >= 3 : (value && t->tx_bytes < (size_t)value * 1536)) t->phase = TX;
         else delay(t, now, t->config.poll_interval);
         break;
     case TX:
-        if (t->wifi && t->wifi->state == AIC8800_WIFI_REQUEST) {
+        if(t->data_tx) {
+            if(!aic8800_data_sent(t->data,t)) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);break;}
+            t->data_tx=0;
+        } else if (t->wifi && t->wifi->state == AIC8800_WIFI_REQUEST) {
             if (!aic8800_wifi_sent(t->wifi, t)) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); break; }
         } else if (t->runtime) {
             if (!aic8800_runtime_sent(t->runtime, t)) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); break; }
@@ -397,6 +450,12 @@ static void parse(struct aic8800_sdio_transport *t, uint64_t now)
             t->codec_result = aic8800_wifi_response(t->wifi, t, &r, now);
             if (t->wifi->state == AIC8800_WIFI_FAULT) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); return; }
         }
+        if(t->data && t->codec_result == AIC8800_CODEC_UNRELATED) {
+            t->codec_result=aic8800_data_response(t->data,t,&r,now);
+            if(t->data->state==AIC8800_DATA_FAULT) {
+                t->unrelated=r;t->held=1;fail(t,AIC8800_TRANSPORT_DATA_ERROR);return;
+            }
+        }
         if (t->codec_result == AIC8800_CODEC_OK) t->cursor += r.consumed;
         else if (t->codec_result == AIC8800_CODEC_UNRELATED) { t->unrelated = r; t->held = 1; }
         else fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);
@@ -463,6 +522,7 @@ int aic8800_transport_peek(const struct aic8800_sdio_transport *t, struct aic880
 int aic8800_transport_consume(struct aic8800_sdio_transport *t)
 {
     if (!t || !t->initialized || t->entered || !t->held || t->state == AIC8800_TRANSPORT_FAULT) return 0;
+    if (t->data) aic8800_data_consumed(t->data, t, t->unrelated.record);
     if (t->wifi) aic8800_wifi_consumed(t->wifi, t, t->unrelated.record);
     t->cursor += t->unrelated.consumed; t->held = 0; return 1;
 }
