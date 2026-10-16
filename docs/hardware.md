@@ -56,8 +56,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   unimplemented or untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
-  translation and permission checks. The [model inspector](npu.md) passes a
-  reference comparison and malformed-file checks. Native controller integration,
+  translation and permission checks. The [controller core](npu-controller.md)
+  passes host startup, completion, cancellation, and retained-fault checks.
+  The [model inspector](npu.md) passes a reference comparison and malformed-file
+  checks. Production FreeRTOS controller integration,
   model loading, execution, and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary

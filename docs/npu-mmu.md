@@ -135,7 +135,7 @@ cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-mmu
 ```
 
 The object target is excluded from default builds. It is not linked into a
-board image yet. The next implementation step is the native controller service
-that owns buffers, publishes tables, configures the MMU, submits commands, and
-handles completion and faults. Physical work remains gated on independent
-watchdog recovery.
+board image yet. The [controller core](npu-controller.md) supplies modeled register sequences
+and ownership transitions. The next integration step is its FreeRTOS service,
+including native buffer publication, platform resources, and fault recovery.
+Physical work remains gated on independent watchdog recovery.

@@ -1,10 +1,11 @@
 # NPU implementation and model format
 
-Native NPU execution remains **unimplemented**. The host model inspector passes
-a reference comparison, and [native page-table construction](npu-mmu.md) passes
-a host translation model. Sunstoneos does not yet initialize the NPU, submit
-commands, or execute inference. Physical access remains conditional on qualified
-independent watchdog recovery and protected ROM return.
+Native NPU execution remains **physically untested**. The host model inspector
+passes a reference comparison. [Page-table construction](npu-mmu.md) and the
+[controller core](npu-controller.md) pass host models and compile for AArch64.
+Production FreeRTOS integration, native model loading, and numerical inference
+remain outstanding. Physical access remains conditional on qualified independent
+watchdog recovery and protected ROM return.
 
 This document assumes familiarity with drivers, virtual memory, and neural
 network inference. A Network Binary Graph (NBG) contains compiled operations,

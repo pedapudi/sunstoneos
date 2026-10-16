@@ -43,7 +43,10 @@ remaining model-loader/compiler dependencies. A host inspector now matches
 compiled-model metadata and rejects malformed containers. Native [NPU page-table
 construction](npu-mmu.md) now passes a host model for translations, permissions,
 all physical-address extensions, guards, and atomic refusal. It compiles for
-AArch64. Controller integration and physical NPU execution remain outstanding.
+AArch64. The [NPU controller core](npu-controller.md) now passes host startup,
+completion, cancellation, and retained-fault checks and compiles for AArch64.
+Its FreeRTOS service, native memory publication, platform resource setup, and
+physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -173,11 +176,11 @@ the tool hash and recovery evidence in the application document.
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
 
-6. Integrate the native NPU page-table builder with a FreeRTOS controller
-   service for MMU activation, submission, buffer ownership, and fault handling.
-   Continue the available driver-core port and implement native model relocation.
-   Obtain and pin the A733 host compiler for a small numerical fixture. The [NPU record](npu.md) identifies references, container
-   inspection evidence, and the remaining implementation sequence.
+6. Bind the native NPU controller core to a FreeRTOS service with validated
+   table/buffer publication, privileged MMIO, serialization, and platform
+   power/clock setup. Implement native model relocation and obtain a pinned
+   A733 host compiler for a small numerical fixture. The [NPU record](npu.md)
+   identifies references, inspection evidence, and the implementation sequence.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
