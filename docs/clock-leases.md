@@ -1,4 +1,4 @@
-# Shared clock ownership for GPU, audio, DMA and NPU
+# Shared clock and power ownership
 
 The common clock registry prevents participating drivers from changing clocks
 that another driver holds stable. It records shared and exclusive leases in
@@ -20,7 +20,15 @@ Release requires the complete current token and verified hardware quiescence.
 The registry covers the oscillator, reference clock, peripheral PLL0, audio
 PLL1, its DIV2 and DIV5 outputs, local audio controllers, DMA0, PLL_NPU, the
 NPU controller and interconnect configuration. Local audio scopes cover I2S0 through I2S4, ASRC, OWA transmit
-and DMIC. Other hardware needs additional scopes before it can share this authority.
+and DMIC. Media scopes cover video PLLs, CSI/ISP, display engines, display
+outputs, both system IOMMUs and the video decoder. Thermal scopes cover its
+controller and the shared GPADC24M source word. DCDC2 has separate rail
+ownership without clock ancestry. Other hardware needs additional scopes
+before it can share this authority. UART0–6 and both always-on UARTs have
+independent local scopes, with shared APB_UART or APBS1 parent ownership. Each
+SPI controller also has its own local scope. The security engine reserves its
+complete shared queues and control words; its RC16M source has independent
+ownership without reference-clock ancestry.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
 the reference clock and oscillator. Peripheral PLL0 and PLL_NPU also depend on the
@@ -33,11 +41,19 @@ also protects register updates. The registry does not replace pin, regulator,
 DMA-channel or memory ownership. Its local audio scopes include module clocks,
 bus gates, reset and controller/FIFO routing.
 
-The registry has thirty-two fixed slots and a nonblocking atomic lock. A busy
+The registry has 128 fixed slots and a nonblocking atomic lock. A busy
 call returns immediately. The owner must poll against its own deadline; a
 conflicting acquisition does not call the clock callback. Successful metadata
 changes require a monotonic microsecond observation before their deadline.
 Callbacks must be bounded and non-reentrant.
+
+Scope masks are 64-bit values. Each token occupies 32 bytes; the fixed token
+array occupies 4096 bytes. Rebuild all token producers and consumers together
+after this ABI change. Older binaries cannot exchange these tokens with the
+current registry. The wider registry passed one focused sanitizer check;
+affected native images linked and existing callback fixtures compiled without
+repeating their scenarios. Evidence is retained under
+`~/.cache/sunstoneos/evidence/clock-width-20261016/`.
 
 An expired release keeps its reservation. Clock failure or regression prevents
 further registry mutations and preserves existing tokens. An owner can also
@@ -98,7 +114,7 @@ controller, its channels, dedicated bus/MBUS gates, reset and CPU/MCU routing.
 Idle channel registers cannot establish that remote firmware has relinquished
 ownership. The [startup binding](dma-startup.md) retains this scope throughout use.
 
-The fabric scope protects AHB, NSI and MBUS interconnect selectors, dividers
+The fabric scope protects AHB, NSI, MBUS and APB1 interconnect selectors, dividers
 and global source gates. Shared fabric ownership does not stabilize the
 selected PLLs: callers must also lease those parents. Dedicated peripheral
 leaf gates belong to their controller scopes; unrelated gate fields must stay
@@ -129,6 +145,25 @@ The focused NPU platform fixture checks actual registry conflicts and refuses
 shared ownership of the local NPU scope. Native compilation passes; evidence
 is in `~/.cache/sunstoneos/evidence/npu-platform-20261016/`.
 Existing registry clients retain their earlier evidence.
+
+## PLL publication transfers ownership without a release window
+
+After a trusted coordinator validates the physical profile, atomic publication
+converts its exclusive PLL_NPU or display PLL1 scope to shared ownership. A fresh
+token replaces the old identity while preserving the owner and all other scopes.
+Validation and time checks precede the metadata change. Refusal leaves the old
+reservation and output unchanged; publication itself proves no hardware state.
+
+The [NPU startup handoff](npu-clock-handoff.md) writes the replacement directly
+into persistent startup storage and transfers the source authority only after
+its actual controller completes. A late fault retains the reachable token.
+Focused emulator checks cover successful adoption and failures before and after
+publication. Display consumer adoption still requires integration.
+
+The thermal controller reserves GPADC24M and its conservative reference and
+oscillator ancestry. Changing that shared source requires exclusion of every
+ADC and thermal consumer. Local THS ownership is exclusive. Native thermal
+admission also verifies APB1 and the selected source under the register mutex.
 
 ## Focused evidence covers ownership composition
 

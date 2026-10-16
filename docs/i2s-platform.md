@@ -195,6 +195,7 @@ require either execution to repeat.
 cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -Iinclude checks/i2s-platform.c drivers/audio/a733_i2s_platform.c \
   drivers/audio/a733_i2s.c drivers/pinctrl/a733_pins.c \
+  drivers/pinctrl/a733_pin_tables.c \
   drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c \
   -o /tmp/i2s-platform-check
 /tmp/i2s-platform-check > /tmp/i2s-platform.log

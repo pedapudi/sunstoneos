@@ -1824,5 +1824,94 @@
     "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/drm/phy/sunxi_dsi_combophy.c",
     "sha256": "2e9a21ad8a02cc8f045c42b3a5fa0ecd014d41cb4ac3f6cf0a1b2fe168843de8",
     "archive": "display-pll-research/sunxi_dsi_combophy.c"
+  },
+  "thermal-sunxi_thermal-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/thermal/sunxi_thermal.c",
+    "archive": "thermal/sunxi_thermal.c",
+    "sha256": "e0b67fa2bbda72d9f226dd910560d9a31169f671b07383c95831edfbe2be2c02"
+  },
+  "thermal-sunxi_thermal-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/thermal/sunxi_thermal.h",
+    "archive": "thermal/sunxi_thermal.h",
+    "sha256": "cefbd2446b91aa36fc806545046f1c6811a445d0ca9c80d14dd41e4f9511ad62"
+  },
+  "thermal-sunxi-sid-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sid/sunxi-sid.c",
+    "archive": "thermal/sunxi-sid.c",
+    "sha256": "79190843de4dc734f56dd0c198ca75b557c83b2ee485b9667467e816f846a7f2"
+  },
+  "thermal-sunxi-sid-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/include/sunxi-sid.h",
+    "archive": "thermal/sunxi-sid.h",
+    "sha256": "5c46a704a00f9533c57ea9487d5a624e3859aa3a426bd675e8436d96936181fe"
+  },
+  "sid-kconfig": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sid/Kconfig",
+    "archive": "thermal/sid-Kconfig",
+    "sha256": "33c039efabc6bceef301a9b374ce2127d6f044e025be0cb75b8194865bbbfe05"
+  },
+  "sid-makefile": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sid/Makefile",
+    "archive": "thermal/sid-Makefile",
+    "sha256": "2b7a8e6d0223abcbd2a78be74dfa424e8bcdafb15cddd2f755d309e3c8cf69d6"
+  },
+  "a733-nonsecure-rom-reference": {
+    "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
+    "url": "https://raw.githubusercontent.com/smaeul/sunxi-blobs/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/ns-brom/blob.hex",
+    "archive": "brom/ns-brom-blob.hex",
+    "sha256": "7bd968d6323c54a457184d78e7cd6e1a851a5cceb1b504558407dd3eff7eaf15",
+    "derived_artifacts": {
+      "brom/ns-brom.bin": {
+        "bytes": 45056,
+        "sha256": "95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169",
+        "transform": "Parse each xxd hexadecimal column, excluding offset and ASCII columns."
+      }
+    }
+  },
+  "a733-spi-ng-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/spi-ng/spi-sunxi.c",
+    "archive": "spi/ng/spi-sunxi.c",
+    "sha256": "ea68e8672fe8e0c963605faf8892022c12bca25597f91953051da8ebfbfd2d47",
+    "git_blob": "bad5fc828f6474c3fd18136494f37437f6b3d05b"
+  },
+  "a733-spi-ng-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/spi-ng/spi-sunxi.h",
+    "archive": "spi/ng/spi-sunxi.h",
+    "sha256": "ba5ef54e3e97f9306f68d8fce1196adaf9cf499dbd2ddf2b82dc66c28f2aa722",
+    "git_blob": "1ce6441a04cc6d290b37e1a0ac3a341e531e7800"
+  },
+  "upstream-spi-sun6i": {
+    "revision": "70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56",
+    "url": "https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/spi/spi-sun6i.c?format=TEXT",
+    "archive": "spi/upstream-spi-sun6i.base64",
+    "sha256": "4702d4c5b5153404ef81c4986eb28b38425c5587fb050238c7821f0d0af43f68",
+    "derived_artifacts": {
+      "spi/upstream-spi-sun6i.c": {
+        "sha256": "f874ca1325aa8d93f66c364950c82a9964939e151914dd44ecab14995d280e91",
+        "transform": "Base64 decode the source response."
+      }
+    }
+  },
+  "freertos-tcp": {
+    "revision": "b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+    "version": "4.4.2",
+    "url": "https://codeload.github.com/FreeRTOS/FreeRTOS-Plus-TCP/tar.gz/b86ad086e9870099bb0ac18a75dcb7f6dd508cc7",
+    "archive": "radio/stacks/FreeRTOS-Plus-TCP-b86ad086.tar.gz",
+    "sha256": "60a2eea0de133948bb9a12f09abcba8e47800c3bbf61fe42fc7db6af453f142a",
+    "license": "MIT"
+  },
+  "board-pins-pinctrl-sun60iw2-r-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sun60iw2-r.c",
+    "archive": "board-kernel/pinctrl-sun60iw2-r.c",
+    "sha256": "431fac7b767f5be39015cdf67fdd3dec230cbc1ebeb2fa0c0de08ca0f6e223a1"
   }
 }

@@ -37,6 +37,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   interrupts. Focused checks cover inherited SIF clearing and terminal faults.
   The central image also links; it has a distinct build identity. Physical
   cache coherence, entry, interrupts and secondary scheduling remain unqualified.
+  The [USB observer](a733-smp-observe.md) publishes authenticated bounded result
+  frames from the cached diagnostic. Host and instruction checks pass. Its
+  [separate launcher](a733-smp-observe-host.md) preserves received frames before
+  observing ROM return. The exact offline bundle is prepared; physical USB
+  timing, independent recovery and complete-image execution remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
@@ -50,8 +55,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   expiry, and reset retention remain unqualified.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
-  records the register decode and its limits. Rate changes, regulator control,
-  and thermal management remain planned.
+  records the register decode and its limits. The [thermal controller](thermal.md)
+  implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
+  critical thresholds, and interrupt-status acknowledgement. Host checks, source
+  comparisons and native compilation pass. Physical temperature accuracy,
+  interrupt delivery, thermal policy, rate changes and regulator control remain
+  outstanding.
 - Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
   for the 1-bit legacy-speed profile. Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
@@ -69,6 +78,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass. Unread byte errors are preserved when receive capacity is exhausted.
   Clock/pin/GIC binding, DMA, advanced modes and physical serial operation remain
   outstanding. Bluetooth and the header UART1 route share one controller.
+- SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
+  and the always-on controller. Host checks cover wire modes, FIFO completion,
+  chip-select timing and retained failures; native compilation passes. Actual
+  resource acquisition, physical peers, DMA, advanced modes and SPIF remain
+  outstanding.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
@@ -90,7 +104,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   focused admission checks pass. The [startup adapter](dma-startup.md)
   now binds the clock registry, common counter, register mutex and deferred
   service activation. Focused two-core composition passes and the integrated
-  target links. Physical handoff remains unqualified.
+  target links. Physical handoff remains unqualified. The [native reservation
+  pool](memory-reservations.md) supplies linker-owned page allocations and binds
+  their lifetime to actual DMA controller and cache completion. Host checks and
+  native linking pass. Cached-image integration, physical memory exclusion and
+  external bus drain remain unqualified.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
@@ -100,11 +118,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
 
-- Header pin ownership: **implemented** shared leases for PB4–PB8 with verified
-  mux/pull/drive updates. Host concurrency/failure checks and pinned field
-  comparisons pass; late completion retains ownership. The restricted native
-  adapter compiles for AArch64. [Pin implementation and limits](pins.md) records
-  pending platform binding, wider pin coverage, and physical qualification.
+- Header pin ownership: **implemented** shared [bank-qualified pin leases](pins.md)
+  across 201 documented pins in banks B–M, including GPIO, mux/pull/drive,
+  interrupt configuration and shared debounce ownership. Host checks, source
+  comparisons and native compilation pass. Explicit UART routes exclude shared
+  controller conflicts. Always-on output updates require a trusted bank latch
+  shadow. Physical pin availability, interrupt delivery, unresolved signal maps
+  and platform admission remain unqualified.
 - I2S0 capture: **implemented** finite mono/stereo capture through the native
   DMA controller. Host checks cover producer shutdown before DMA drain and
   retained ownership after uncertain failures. Format encodings match pinned
@@ -258,8 +278,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   transfers and disconnect results remain retained. [L2CAP channels](bluetooth-l2cap.md)
   add bounded setup in both directions, configuration, disconnection and data
   fragmentation/reassembly. Composed host checks and native compilation pass.
-  Full retry timing and safe identity reuse remain required. Physical identity
-  and platform binding, IP networking, wider Wi-Fi security modes, SDP,
+  Response and extended-response timers, independent caller deadlines, opaque
+  channel generations and confirmed-slot reuse pass focused composed checks.
+  Wire identifiers and lower link quarantine still impose finite lifetimes.
+  [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
+  through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
+  deadlines, socket disposal and association revocation. Native linking passes.
+  Physical identity and platform binding, DHCP/DNS/IPv6, server sockets,
+  reconnection, unrelated radio-record dispatch, wider Wi-Fi security modes, SDP,
   Bluetooth pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
@@ -326,7 +352,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks do not establish inference. The [NPU PLL controller](npu-pll.md)
   implements bounded cold enable and enabled retuning, consumer exclusion and
   retained faults. Host checks, source comparisons and native compilation pass.
-  Concrete boot authority, atomic clock handoff, physical rail/PCK qualification,
+  [Atomic startup adoption](npu-clock-handoff.md) transfers the PLL reservation
+  directly into startup ownership; focused emulator checks pass without a
+  release window. Concrete boot authority, physical rail/PCK qualification,
   effective memory confinement, numerical execution,
   and physical qualification remain outstanding.
 
@@ -338,7 +366,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native platform binding](video-platform.md) now supplies register access,
   clock/domain/interrupt ownership and identity-specific reset preparation.
   Host checks and runtime instruction comparisons pass; native compilation
-  succeeds. Cold startup, actual memory/cache/drain authority, physical decoding,
+  succeeds. Cold startup now validates an immutable ROM profile, sequences
+  domain/reset/gates and performs the source-defined VCU reset before identity
+  admission. Host checks and native compilation pass. The attached board
+  ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
