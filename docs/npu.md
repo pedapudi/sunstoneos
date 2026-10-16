@@ -22,7 +22,8 @@ The assembler also validates [encoded circular-buffer ranges](nbg-rings.md),
 with host field-packing and complete-submission comparisons.
 The [pinned host compiler](npu-compiler.md) now produces a small numerical fixture
 whose simulator output matches the quantized CPU reference. Its `0x20000` format
-requires a decoder extension; native execution remains outstanding.
+requires a decoder extension. The [directory investigation](nbg-directory.md)
+records its changed layouts and checksum coverage; native execution remains outstanding.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -223,7 +224,8 @@ authorizing device execution.
 
 1. **Load the numerical fixture natively.** The pinned compiler now produces a
    small convolution with exact float and matched quantized simulator references.
-   Extend decoding and checksum verification for its `0x20000` format, then
+   Use the [directory findings](nbg-directory.md) to extend decoding and checksum
+   verification for its `0x20000` format, then
    allocation planning for its zero working pool. Keep the existing SDK network
    as the `0x1001e` format reference.
 2. **Complete driver integration.** The native controller, memory policy, CPU

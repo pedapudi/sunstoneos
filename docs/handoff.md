@@ -78,6 +78,11 @@ The [pinned host compiler](npu-compiler.md) now produces a small convolution wit
 matched float and quantized simulator references. Its emitted `0x20000` format
 requires native directory, record-layout, and checksum support. Physical execution
 of this fixture remains outstanding.
+The [directory investigation](nbg-directory.md) now identifies the changed tensor
+and patch layouts and matches the payload and section checksums with the isolated
+compiler CRC routine. The payload checksum excludes the header and directory;
+native structural validation remains essential. The network-information operation
+count differs from the section's record count and needs interpretation.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.

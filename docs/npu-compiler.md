@@ -128,9 +128,11 @@ bytes; the inspector reports a 128-byte output memory reservation.
 The image's SDK version file advertises NBG `0x10020`, but this export emits
 `0x20000`. The emitted header uses a different section-directory structure.
 Its stored checksum is at byte 12; zeroing that field and applying the existing
-whole-file CRC method does not reproduce the stored value. The new directory,
-record layouts, and checksum coverage must be established before extending
-native decoding. Changing only the accepted version would be incorrect.
+whole-file CRC method does not reproduce the stored value. The
+[directory investigation](nbg-directory.md) establishes the fixture's record
+layouts and matches its checksum over normalized section payloads. That checksum
+excludes the header and directory. Native support still requires bounded
+directory decoding and version-specific accessors and integrity checks.
 
 The current host inspector returned `unsupported NBG version 0x20000`, as intended.
 Native allocation planning also needs to handle legitimate zero-pool models and
