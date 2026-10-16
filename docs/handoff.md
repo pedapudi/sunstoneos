@@ -62,9 +62,13 @@ tensor binding, allocation padding, and the completion-event difference that
 native assembly must handle. The encoder compiles for AArch64.
 The [native container decoder](nbg-model.md) now passes malformed-input and
 borrowed-view checks, compiles for AArch64, and supplies C records that reproduce
-the saved SDK submission through the host reconstruction. Full native assembly
-and descriptor access bounds remain outstanding.
-Platform resource setup, native model loading,
+the saved SDK submission through the host reconstruction. The
+[native assembler](nbg-assembly.md) now plans allocations and constructs that
+neural-operation profile entirely in C. It passes atomic-refusal checks and a
+comparison with saved SDK bytes at page-aligned addresses. The command image
+uses the native completion event and reserves the complete fetch span.
+Descriptor access bounds and command admission remain outstanding.
+Platform resource setup, complete model admission,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -195,13 +199,12 @@ the tool hash and recovery evidence in the application document.
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
 
-6. Implement native NPU model loading, command validation, and controlled command
-   registration beyond the service's fixed startup catalogue. Resolve serialized
-   patch sources and destinations in C from the checked
-   [container views](nbg-model.md), using the
-   [host reconstruction](nbg-loader-trace.md) as a reference. Determine complete
-   descriptor access lengths, implement checksum handling, and adapt the
-   completion event and fetch reservation to the native controller.
+6. Complete native NPU model admission and controlled command registration beyond
+   the service's fixed startup catalogue. The [native assembler](nbg-assembly.md)
+   resolves the observed profile's sources and destinations from checked container
+   views and adapts the completion event and fetch reservation. Determine complete
+   descriptor access lengths, implement checksum verification and SRAM mapping,
+   and establish descriptor semantics and cold initialization equivalence.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
    Obtain a pinned

@@ -70,7 +70,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   matches complete descriptor and command buffers at two allocation bases.
   The [native container decoder](nbg-model.md) passes malformed-input checks
   and reconstructs saved SDK output through C records and the host assembler.
-  Board resource integration, native model loading, numerical execution,
+  The [native assembler](nbg-assembly.md) plans page-aligned buffers and matches
+  the saved neural-operation submission after address and completion adaptation.
+  Board resource integration, model admission, numerical execution,
   and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary

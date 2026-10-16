@@ -3,8 +3,9 @@
 The native C decoder is **implemented and host-tested** for NBG format
 `0x1001e`. It exposes bounded views of a compiled model without allocating
 memory or invoking drivers. Its decoded records reproduce the saved SDK
-command-buffer reference through the host reconstruction. Native model assembly,
-command admission, and physical inference remain outstanding.
+command-buffer reference through the host reconstruction. The
+[native assembler](nbg-assembly.md) now consumes these views for the observed
+neural-operation profile. Command admission and physical inference remain outstanding.
 
 This document assumes familiarity with binary formats and borrowed memory.
 A borrowed view refers to caller-owned model bytes; the decoder does not copy
@@ -102,8 +103,8 @@ existing `manifest.json` must be in its parent directory. Results
 and input hashes are under `~/.cache/sunstoneos/evidence/nbg-model-20261016/`.
 No board request, kernel rebuild, or unchanged integration suite was run.
 
-The next native loader step is to resolve owned allocations and assemble
-commands from these views. Descriptor access extents, device padding,
+The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
+assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
 checksum verification, and SRAM placement remain separate admission requirements.
-The controller's completion event and fetch reservation must also be respected.
+The assembler adapts the completion event and reserves the controller's full fetch span.

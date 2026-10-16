@@ -147,6 +147,11 @@ bounds, checksum handling, internal-SRAM mapping, and controlled command
 registration. Other model formats and operation types remain required.
 Numerical output, physical completion, and recovery have not been tested.
 
+The [native assembler](nbg-assembly.md) now reuses the saved capture to verify
+allocation planning and command construction in C, including the native
+completion event and full fetch reservation. It remains an offline component
+until complete command admission is implemented.
+
 The [native decoder](nbg-model.md) now supplies checked C views to this
 reconstruction. Its comparison reads these saved SDK snapshots without rerunning
 the loader library. Native allocation planning and command assembly remain outstanding.

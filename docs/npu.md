@@ -13,8 +13,10 @@ and comparison with SDK instructions. A [complete host loader trace](nbg-loader-
 reconstructs all active relocations and matches SDK command buffers at two
 allocation bases. The [native container decoder](nbg-model.md) passes bounded
 view and malformed-input checks and supplies the same reconstruction from C
-records using saved SDK evidence. Board-resource
-integration, native model loading, and numerical inference remain outstanding.
+records using saved SDK evidence. The [native assembler](nbg-assembly.md)
+now plans allocations and constructs the observed neural-operation profile,
+matching saved SDK bytes after address and completion-event adjustments.
+Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
 
@@ -149,9 +151,9 @@ execution.
 
 The published inspection tool reports a 64-byte output size despite the
 two-byte logical tensor. The [SDK loader trace](nbg-loader-trace.md) records a
-128-byte allocation request. The native loader must derive allocation and padding
-requirements from the command and memory interfaces. The host inspector does
-not infer an allocation size from tensor dimensions.
+128-byte allocation request. The native assembler reproduces that reservation
+and rounds it to a 4 KiB allocation for the memory policy. Complete descriptor
+access extents remain unresolved. The host inspector reports logical sizes.
 
 One focused check compares network metadata and tensor descriptions against
 recorded `nbinfo` reports. It also rejects 18 malformed variants covering
@@ -188,9 +190,9 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    have software evidence. Implement internal-SRAM mapping and complete fault
    reporting. Reserve model buffers and track CPU/device addresses separately.
    Qualify the complete mapping, cache, and translation-cache behavior physically.
-5. **Implement native model loading.** Decode the supported container, validate
-   every reference, allocate aligned buffers, and resolve sources and destinations
-   before applying the checked address encoder. Establish
+5. **Complete native model admission.** Container decoding, allocation planning,
+   and assembly have host evidence for the observed neural-operation profile.
+   Establish full descriptor access extents,
    checksum semantics, command permissions, supported operators, and output
    padding. Inspect `libNBGlinker.so` where published source is insufficient.
    Extend to other format versions with representative compiler output.
@@ -207,9 +209,8 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is native model assembly using the
-checked container views and host reconstruction's source mappings, complete descriptor access bounds,
-command validation, and a pinned host compiler for a numerical fixture. Physical inference
+The next independent implementation work is complete descriptor access bounds,
+checksum verification, command admission, and a pinned host compiler for a numerical fixture. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.
