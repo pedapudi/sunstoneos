@@ -6,7 +6,8 @@ enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
     PAD_F2, PAD_F1, SETTLE, BYTE_MODE, IRQ_READ, IRQ_WRITE,
     FUNCTION_IRQ_READ, FUNCTION_IRQ_WRITE, CREDIT, TX, RX_STATUS, RX_LENGTH,
-    RX, PARSE };
+    RX, PARSE, RESTORE_PAD, RESTORE_SETTLE };
+#define SETUP_OPERATION 2u
 static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int overlap(const void *a, size_t an, const void *b, size_t bn)
 {
@@ -68,7 +69,9 @@ int aic8800_transport_setup(struct aic8800_sdio_transport *t, uint64_t deadline)
 static void encode(struct aic8800_sdio_transport *t)
 {
     for (size_t i = 0; i < sizeof(t->tx); ++i) t->tx[i] = 0;
-    t->codec_result = aic8800_sdio_encode_identity_read(
+    if (t->expected == SETUP_OPERATION)
+        t->codec_result = aic8800_sdio_encode_bootstrap_setup(t->tx, sizeof(t->tx));
+    else t->codec_result = aic8800_sdio_encode_identity_read(
         (enum aic8800_identity_register)t->expected, t->tx, sizeof(t->tx));
     if (t->codec_result != AIC8800_CODEC_OK) fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);
 }
@@ -76,11 +79,12 @@ int aic8800_transport_read_identity(struct aic8800_sdio_transport *t,
                                   const struct aic8800_identity_admission *a, uint64_t deadline)
 {
     if (!t || !t->initialized || t->entered || t->state != AIC8800_TRANSPORT_READY ||
-        !independent(t, a, sizeof(*a)) || !a->record || a->address != 0x40500058 || a->value != 0x40 ||
-        a->awake != 1 || a->no_outstanding_debug_reads != 1 ||
+        !independent(t, a, sizeof(*a)) || !a->record || a->address != AIC8800_SDIO_SETUP_ADDRESS || a->value != AIC8800_SDIO_SETUP_VALUE ||
+        a->awake != 1 || a->no_outstanding_debug_operations != 1 ||
         t->card->host->state != SUNXI_SDIO_READY || deadline <= t->card->host->last_now) return 0;
     t->admission = *a; t->deadline = deadline; t->wait_until = 0;
-    t->state = AIC8800_TRANSPORT_IDENTITY; t->phase = CREDIT; encode(t); return 1;
+    t->expected = SETUP_OPERATION; t->state = AIC8800_TRANSPORT_IDENTITY;
+    t->phase = CREDIT; encode(t); return 1;
 }
 static int cmd52(struct aic8800_sdio_transport *t, unsigned fn, uint32_t addr, int write, uint8_t value,
                  struct sunxi_sdio_request *r)
@@ -107,6 +111,8 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     case PAD_F2: ok = cmd52(t, 0, 0xf2, 1, 0x7f, &r); break;
     case PAD_F1: ok = cmd52(t, 0, 0xf1, 1, 0x80, &r); break;
     case SETTLE: t->phase = BYTE_MODE; return 1;
+    case RESTORE_PAD: ok = cmd52(t, 0, 0xf1, 1, 0, &r); break;
+    case RESTORE_SETTLE: t->expected = 0; t->phase = CREDIT; encode(t); return 1;
     case BYTE_MODE: ok = cmd52(t, 1, 7, 1, 1, &r); break;
     case IRQ_READ: ok = cmd52(t, 0, 4, 0, 0, &r); break;
     case IRQ_WRITE: ok = cmd52(t, 0, 4, 1, t->prior_irq | 7, &r); break;
@@ -157,6 +163,7 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         else { t->phase = SETTLE; delay(t, now, t->config.ticks_per_ms); }
         break;
     case PAD_F1: t->phase = SETTLE; delay(t, now, t->config.ticks_per_ms); break;
+    case RESTORE_PAD: t->phase = RESTORE_SETTLE; delay(t, now, t->config.ticks_per_ms); break;
     case IRQ_READ: t->prior_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_READ: t->prior_function_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_WRITE: t->state = AIC8800_TRANSPORT_READY; break;
@@ -183,6 +190,12 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
 static void aggregate_done(struct aic8800_sdio_transport *t)
 {
     t->cursor = t->rx_bytes;
+    if (t->expected == SETUP_OPERATION) {
+        if (!t->setup_confirmed) t->phase = RX_STATUS;
+        else if (t->config.pad == AIC8800_PAD_WRITE_80) t->phase = RESTORE_PAD;
+        else { t->expected = 0; t->phase = CREDIT; encode(t); }
+        return;
+    }
     if (!t->have[t->expected]) { t->phase = RX_STATUS; return; }
     if (!t->expected) { t->expected = 1; t->phase = CREDIT; encode(t); return; }
     t->codec_result = aic8800_sdio_identity(&t->confirmations[0], &t->confirmations[1], &t->identity);
@@ -194,13 +207,25 @@ static void parse(struct aic8800_sdio_transport *t)
     if (t->held) return;
     if (t->cursor == t->rx_bytes) { aggregate_done(t); return; }
     struct aic8800_sdio_response r;
-    t->codec_result = aic8800_sdio_decode_identity_response(t->rx + t->cursor,
+    if (t->expected == SETUP_OPERATION)
+        t->codec_result = aic8800_sdio_decode_bootstrap_setup_response(t->rx + t->cursor,
+            t->rx_bytes - t->cursor, &r);
+    else t->codec_result = aic8800_sdio_decode_identity_response(t->rx + t->cursor,
         t->rx_bytes - t->cursor, (enum aic8800_identity_register)t->expected, &r);
     if (t->codec_result == AIC8800_CODEC_END) { aggregate_done(t); return; }
-    if (t->codec_result == AIC8800_CODEC_OK && !t->have[t->expected]) {
-        t->confirmations[t->expected] = (struct aic8800_sdio_response){ .is_memory_read = 1,
-            .address = r.address, .value = r.value };
-        t->have[t->expected] = 1; t->cursor += r.consumed;
+    int have = t->expected == SETUP_OPERATION ? t->setup_confirmed : t->have[t->expected];
+    if (t->codec_result == AIC8800_CODEC_OK && !have) {
+        if (t->expected == SETUP_OPERATION) {
+            t->setup_confirmation = (struct aic8800_sdio_response){ .is_memory_write = 1,
+                .message_id = r.message_id, .parameter_bytes = r.parameter_bytes,
+                .address = r.address, .value = r.value };
+            t->setup_confirmed = 1;
+        } else {
+            t->confirmations[t->expected] = (struct aic8800_sdio_response){ .is_memory_read = 1,
+                .address = r.address, .value = r.value };
+            t->have[t->expected] = 1;
+        }
+        t->cursor += r.consumed;
     } else if (t->codec_result == AIC8800_CODEC_OK || t->codec_result == AIC8800_CODEC_UNRELATED) {
         t->unrelated = r; t->held = 1;
     } else fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);

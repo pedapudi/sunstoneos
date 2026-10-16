@@ -1,6 +1,6 @@
 # Bounded SDIO bootstrap transport
 
-SunstoneOS implements function setup and an asynchronous identity-read
+SunstoneOS implements function setup and an asynchronous bootstrap identification
 transaction for the published AIC8800D80 SDIO bootstrap protocol. The transport
 uses the native [controller and card APIs](sdio.md) and the existing
 [identity codec](radio-codec.md). An integrated host register model passes;
@@ -12,7 +12,7 @@ filesystem, network stack, allocator, or firmware-image dependency.
 [include/aic8800_sdio_transport.h](../include/aic8800_sdio_transport.h) defines
 its admission, polling, and message-consumption API.
 
-## Protocol selection and earlier writes require explicit admission
+## Protocol selection and the fixed setup write require explicit admission
 
 The caller selects the AIC8800D80 bootstrap variant explicitly. Completed SDIO
 enumeration must report function 1 as `c8a1:0182`, at least two functions,
@@ -20,26 +20,33 @@ enumeration must report function 1 as `c8a1:0182`, at least two functions,
 compatibility with the selected source protocol. They do not establish the
 installed silicon revision or choose a firmware image.
 
-The [published bootstrap sequence][bootstrap] writes `0x40` to radio memory
-address `0x40500058` before reading `0x40500000` and `0x00000004`. The identity
-transaction requires trusted caller evidence that this separate write completed
-in the current power/reset lifetime. The admission contains that exact address
-and value, a nonzero evidence-record identifier, and assertions that the bootstrap
-processor is awake and no earlier debug reads or stale confirmations remain.
-When the explicit pad-write path was selected, the same source then restores
-function-0 `0xf1` to zero and waits one millisecond before reading identity.
-The trusted evidence must also cover that restore and settling interval.
+The identification admission authorizes exactly one radio-memory write:
+`0x40` to address `0x40500058`, as required by the [published sequence][bootstrap].
+A nonzero admission-record identifier tracks that authorization. The address and
+value must match the allowlist; the encoder itself accepts no arbitrary address
+or value. Admission also requires an awake bootstrap processor, no outstanding
+debug operations or stale confirmations, and continuous exclusive ownership.
 
-The transport validates those fields but cannot establish their truth. It
-neither encodes nor executes the earlier memory write. A caller must implement
-and admit that operation separately before using this transaction on hardware.
-The complete identification sequence therefore includes writes; calling it
-read-only would be inaccurate. Address correlation alone cannot distinguish a
-stale confirmation from an earlier outstanding read of the same address.
-Exclusive bootstrap ownership must remain continuous across the earlier setup
-operation and both reads. Power/reset or ownership changes invalidate admission.
-External recovery must quiesce and dispose of the complete transport/card lifetime;
-it cannot clear an owned object and retry initialization.
+Polling sends the setup write and waits for its confirmation before advancing.
+The [published message definitions][messages] declare write request `0x0402`
+and confirmation `0x0403`, each with eight parameter bytes. The confirmation
+contains fields named `memaddr` and `memdata`. The [source sender][sender] waits
+for the confirmation ID and discards its fields; it does not establish an echo
+rule or read the register back. The native decoder therefore requires the
+exact eight-byte layout and retains both fields without comparing their values.
+
+One outstanding operation and exclusive bootstrap ownership establish response
+correlation. The returned fields are diagnostic data, not independently verified
+register readback. Message ID or address matching cannot distinguish a stale
+confirmation from an earlier operation. A reset, power change, or ownership loss
+invalidates admission; external recovery must quiesce and dispose of the complete
+transport/card lifetime before reuse.
+
+After the write confirmation and any remaining aggregate records are consumed,
+the explicit pad-write path restores function-0 `0xf1` to zero and waits at
+least one millisecond. The preservation path does not modify that register.
+The transport then reads `0x40500000` and `0x00000004` in order. It implements
+the published identification sequence within its documented protocol limits.
 
 ## Setup retains card ownership and preserves unrelated enable bits
 
@@ -81,10 +88,11 @@ when the controller callback reports failure. Such a failure retains the request
 prior settings, and card ownership for external recovery. Clearing the object
 would erase that ownership and is forbidden.
 
-## Identity requests use bounded FIFO transfers
+## Bootstrap requests use bounded FIFO transfers
 
-Each identity request uses the existing codec to produce 20 bytes. The transport
-zeros the complete 512-byte transmit buffer before encoding the request, leaving
+The setup-write request contains 24 bytes; each identity-read request contains
+20 bytes. The transport zeros the complete 512-byte transmit buffer before
+encoding each request, leaving
 the source's required zero tail and block padding. It reads the function-1 credit
 register at `0x03` and waits until one 512-byte request fits within the available
 credits. The source defines each credit as 1,536 bytes and uses a strict less-than
@@ -118,8 +126,9 @@ not install an ISR or acquire interrupt ownership from another worker.
 ## Unrelated messages apply backpressure without disappearing
 
 A poll parses at most one control record from the receive aggregate. The first
-matching confirmation for each requested address is copied into owned scalar
-storage. Both reads complete before the codec derives revision, H-variant status,
+matching confirmation for the setup-write message ID or requested read address
+is copied into owned scalar storage. Both reads complete before the codec derives
+revision, H-variant status,
 and subrevision. Unknown revision codes remain visible, with no firmware choice.
 
 A valid unrelated response, including a duplicate confirmation, remains in the
@@ -128,7 +137,7 @@ parameters. The consumer must copy any asynchronous work into its own storage
 before calling `aic8800_transport_consume`. Until consumption, polling does not
 advance that record, overwrite the aggregate, or submit another transfer.
 
-The remaining aggregate is parsed before the next identity request. A zero outer
+The remaining aggregate is parsed before the next bootstrap operation. A zero outer
 length marks the source-defined end of the aggregate. Malformed or unsupported
 records retain the aggregate and cursor in a terminal fault. No unimplemented
 message is silently acknowledged or dropped.
@@ -136,8 +145,9 @@ message is silently acknowledged or dropped.
 The operation deadline continues during backpressure. On expiry, the held view
 remains available through `peek`; `consume` is refused. Partial FIFO reads retain
 the received bytes, transfer count, and controller request. Terminal polls make
-no further backend calls. After successful completion, the owned identity and
-confirmation scalars remain available in the transport object.
+no further backend calls. After successful completion, the owned identity,
+write-confirmation fields, and read-confirmation scalars remain available in
+the transport object.
 
 ## Integrated evidence and remaining work
 
@@ -155,29 +165,35 @@ without running that model's independent test suite. The integrated fixture cove
 - Deadline expiry while waiting for credit or holding an unrelated message,
   with retained state and no backend access after fault.
 
-The integrated fixture passed. Raw evidence, commands, source/header hashes,
-and executable identity are under
+The function-setup and receive-boundary evidence remains under
 `~/.cache/sunstoneos/evidence/radio-transport-20261016/model-corrected/`.
-The controller, card, and codec component evidence remains applicable because
-those implementations were unchanged. The fixture supplies trusted admission
-assertions; it does not validate the separate memory-write or pad-restore operation.
-Freestanding AArch64 compilation passed once; `aarch64/results.json` records
-the command and object identity. Its only runtime dependency beyond the native
-SDIO and codec APIs is `memset`. No board operation, firmware selection,
-performance run, or unchanged component-suite rerun was performed.
+A focused bootstrap integration case passed after adding the fixed memory write:
+it exercises an unrelated response, a write confirmation with non-echo fields,
+conditional pad restoration, settling, and both identity reads. Additional cases
+cover malformed/truncated write confirmations, missing confirmation after a
+modeled write effect, an uncertain pad write, and partial transmit failure.
+
+The focused result, commands, source/header hashes, and executable identity are
+under `~/.cache/sunstoneos/evidence/radio-bootstrap-20261016/model/`. Controller,
+card, and unaffected codec-path evidence is reused. The changed codec and
+transport compile for freestanding AArch64; `aarch64/results.json` records both
+object identities. Their runtime dependency beyond the native SDIO/codec APIs
+is `memset`. No board operation, firmware selection, performance run, or unchanged
+component-suite rerun was performed.
 
 ```sh
 python3 checks/aic8800-sdio-transport.py \
   --reference-dir /path/to/pinned/radio-transport-references \
-  --evidence /path/outside/repository/radio-transport-evidence
+  --evidence /path/outside/repository/radio-bootstrap-evidence \
+  --case bootstrap
 ```
 
-The reference directory contains `aicsdio.c`, `aicsdio.h`, and `sdio_io.c` with
-the hashes below. Physical execution still needs shared-resource admission,
-qualified recovery, controller bindings, and a separately implemented memory
-setup write. Soft-interrupt handling, normal data traffic, sleep/wake management,
-firmware loading, and network/HCI integration remain outstanding. There is no
-board executable to submit to the physical test queue.
+The runner verifies its pinned reference files, including the message header
+and sender. Physical execution still needs shared-resource admission, qualified
+recovery, controller bindings, and verified current bootstrap ownership.
+Soft-interrupt handling, normal data traffic, sleep/wake management, firmware
+loading, and network/HCI integration remain outstanding. There is no board
+executable to submit to the physical test queue.
 
 ## Pinned references
 
@@ -189,9 +205,14 @@ Downloaded files and raw artifacts remain outside Git.
 | --- | --- |
 | `bsp/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c` | `f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c` |
 | `bsp/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.h` | `af520385376df1843a6e24c01cc7128a151b148fea18d73c0d20f1a345bc6571` |
+| `bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.c` | `43439d69cd1c3f537ee90f50d4bc52d2a54379f41092f625ded080daacf7de6e` |
+| `bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.h` | `9f72ebdd743ac0af134df50ebc36ea25876b9a361a89b82e17a4a8c2e4d918b3` |
 | `drivers/mmc/core/sdio_io.c` | `2f9db1b81f01d359faa689fb7609c04d6a9fdd7d833d16e201f74d7201e51e44` |
 | `bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_8800d80.c` | `fcf647395a7f007f22cd19f4e15dcc821e924da55b72528395a9972e5c6290e8` |
 
 [sdio]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c
 [io]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sdio_io.c
 [bootstrap]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_8800d80.c
+
+[messages]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.h
+[sender]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_driver.c

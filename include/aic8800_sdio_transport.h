@@ -21,27 +21,25 @@ struct aic8800_transport_config {
     uint64_t ticks_per_ms, command_timeout, poll_interval;
 };
 struct aic8800_identity_admission {
-    /* Trusted caller evidence for an earlier, separately admitted and completed
-     * radio-memory write in the current power/reset lifetime. The transport cannot
-     * verify this evidence. An opaque nonzero record identifies the caller's retained evidence. Address/value
-     * must be 0x40500058/0x40. No such write is encoded or executed here.
-     * For PAD_WRITE_80, evidence also covers the source's subsequent function-0
-     * F1=0 restore and >=1 ms settling before these reads. Caller attests awake
-     * bootstrap state, no outstanding debug reads or stale confirmations, and
-     * continuous exclusive ownership across prior setup and this transaction.
+    /* Explicit authorization for the fixed bootstrap write, not evidence that
+     * it already happened. The nonzero record identifies the caller's admission;
+     * address/value must be 0x40500058/0x40. The transport performs this write,
+     * conditional pad restore/settle, then both identity reads.
+     * Caller attests awake bootstrap state, no outstanding debug operations or
+     * stale confirmations, and continuous exclusive ownership for this lifetime.
      * A reset, power change, or ownership loss invalidates admission; dispose
      * externally after quiescence, never clear/reinitialize an owned object.
      */
     uint64_t record;
     uint32_t address, value;
-    uint8_t awake, no_outstanding_debug_reads;
+    uint8_t awake, no_outstanding_debug_operations;
 };
 struct aic8800_sdio_transport {
     struct sdio_card *card;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
-    struct aic8800_sdio_response confirmations[2], unrelated;
+    struct aic8800_sdio_response confirmations[2], unrelated, setup_confirmation;
     struct aic8800_radio_identity identity;
     enum aic8800_transport_state state;
     enum aic8800_transport_error error;
@@ -49,7 +47,7 @@ struct aic8800_sdio_transport {
     uint64_t deadline, wait_until, enable_deadline;
     size_t rx_bytes, cursor;
     uint16_t prior_block_bytes;
-    uint8_t initialized, entered, pending, phase, expected, have[2], held;
+    uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];
 };
@@ -70,8 +68,11 @@ int aic8800_transport_init(struct aic8800_sdio_transport *, struct sdio_card *,
  * Other IOEx/IEN bits survive read-modify-write. No automatic rollback exists.
  */
 int aic8800_transport_setup(struct aic8800_sdio_transport *, uint64_t deadline);
-/* Pure admission, once only. Requires READY and trusted setup evidence above.
- * Two address-correlated reads; no firmware choice/upload or memory write.
+/* Pure admission, once only. Requires READY and explicit authorization above.
+ * Poll executes the fixed memory write and conditional F0 F1=0 pad restore,
+ * waits >=1 ms after restoring, then performs two address-correlated reads.
+ * Write completion is an exact-layout CFM matched by ID, not echoed field values.
+ * No firmware choice/upload or arbitrary memory-write API.
  */
 int aic8800_transport_read_identity(struct aic8800_sdio_transport *,
                                   const struct aic8800_identity_admission *, uint64_t deadline);

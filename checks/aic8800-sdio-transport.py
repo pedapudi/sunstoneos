@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REFERENCES = {
     "aicsdio.c": "f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c",
     "aicsdio.h": "af520385376df1843a6e24c01cc7128a151b148fea18d73c0d20f1a345bc6571",
+    "aic_bsp_driver.c": "43439d69cd1c3f537ee90f50d4bc52d2a54379f41092f625ded080daacf7de6e",
+    "aic_bsp_driver.h": "9f72ebdd743ac0af134df50ebc36ea25876b9a361a89b82e17a4a8c2e4d918b3",
     "sdio_io.c": "2f9db1b81f01d359faa689fb7609c04d6a9fdd7d833d16e201f74d7201e51e44",
 }
 SOURCES = ["checks/aic8800-sdio-transport.c", "drivers/net/aic8800_sdio_transport.c", "drivers/storage/sunxi_sdio.c",
@@ -26,6 +28,7 @@ def main():
     parser.add_argument("--reference-dir", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--cc", default="cc")
+    parser.add_argument("--case", choices=["all", "bootstrap"], default="all")
     args = parser.parse_args()
     evidence = args.evidence.resolve()
     if evidence == ROOT or ROOT in evidence.parents:
@@ -41,11 +44,11 @@ def main():
     build = subprocess.run(command, text=True, capture_output=True)
     (evidence / "build.log").write_text(build.stdout + build.stderr)
     build.check_returncode()
-    run_command = [str(executable)]
+    run_command = [str(executable)] + ([args.case] if args.case != "all" else [])
     run = subprocess.run(run_command, text=True, capture_output=True)
     (evidence / "run.log").write_text(run.stdout + run.stderr)
     result = {"result": "passed" if run.returncode == 0 else "failed", "command": command,
-              "exit_code": run.returncode, "run_command": run_command,
+              "exit_code": run.returncode, "run_command": run_command, "case": args.case,
               "compiler": subprocess.check_output([args.cc, "--version"], text=True).splitlines()[0],
               "sources": {p: digest(ROOT / p) for p in SOURCES + HEADERS},
               "runner_sha256": digest(Path(__file__).resolve()), "references": REFERENCES,

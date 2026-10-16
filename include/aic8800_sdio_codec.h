@@ -5,6 +5,10 @@
 #include <stdint.h>
 
 #define AIC8800_SDIO_IDENTITY_REQUEST_BYTES 20u
+#define AIC8800_SDIO_SETUP_REQUEST_BYTES 24u
+#define AIC8800_SDIO_SETUP_ADDRESS UINT32_C(0x40500058)
+#define AIC8800_SDIO_SETUP_VALUE UINT32_C(0x00000040)
+#define AIC8800_SDIO_WRITE_CONFIRM_ID 0x0403u
 #define AIC8800_SDIO_CHIP_ADDRESS UINT32_C(0x40500000)
 #define AIC8800_SDIO_SUBREV_ADDRESS UINT32_C(0x00000004)
 #define AIC8800_SDIO_READ_CONFIRM_ID 0x0401u
@@ -50,6 +54,7 @@ struct aic8800_sdio_response {
     uint16_t parameter_bytes;
     uint32_t address;
     uint32_t value;
+    uint8_t is_memory_write; /* Set only by the bootstrap-setup decoder. */
 };
 
 /* Decode one control record from an SDIO receive aggregate.
@@ -65,6 +70,23 @@ struct aic8800_sdio_response {
 enum aic8800_codec_result aic8800_sdio_decode_identity_response(
     const void *input, size_t available, enum aic8800_identity_register expected,
     struct aic8800_sdio_response *output);
+
+/* Fixed bootstrap operation only: encode DBG_MEM_WRITE_REQ for
+ * 0x40500058=0x40. No caller-selected address/value or hardware access. Exactly
+ * 24 bytes; destination tail and rejected output remain unchanged.
+ */
+enum aic8800_codec_result aic8800_sdio_encode_bootstrap_setup(void *output, size_t capacity);
+
+/* Decode one control record for the single outstanding bootstrap write.
+ * Write CFM requires exactly eight parameters. Address/data fields are retained,
+ * not compared: the published sender ignores them and establishes no echo rule.
+ * OK correlates by message ID under the caller's exclusive, no-stale-message
+ * admission. It is not register readback or independent proof of the write.
+ * Other valid control messages remain UNRELATED. Borrowing, padding and rejected
+ * output rules match the identity decoder above.
+ */
+enum aic8800_codec_result aic8800_sdio_decode_bootstrap_setup_response(
+    const void *input, size_t available, struct aic8800_sdio_response *output);
 
 struct aic8800_radio_identity {
     uint32_t chip_word;

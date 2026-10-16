@@ -130,6 +130,39 @@ enum aic8800_codec_result aic8800_sdio_decode_identity_response(
     return result.address == expected_address ? AIC8800_CODEC_OK : AIC8800_CODEC_UNRELATED;
 }
 
+enum aic8800_codec_result aic8800_sdio_encode_bootstrap_setup(void *output, size_t capacity)
+{
+    uint8_t bytes[AIC8800_SDIO_SETUP_REQUEST_BYTES] = {
+        0x14, 0x00, 0x11, 0x00, /* 20 bytes after the outer header. */
+        0, 0, 0, 0, 0x02, 0x04, 0x01, 0x00, /* DBG_MEM_WRITE_REQ, TASK_DBG. */
+        0x64, 0x00, 0x08, 0x00, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+    if (!span(output, sizeof(bytes))) return AIC8800_CODEC_INVALID;
+    if (capacity < sizeof(bytes)) return AIC8800_CODEC_TRUNCATED;
+    bytes[3] = header_crc(bytes);
+    put32(bytes + 16, AIC8800_SDIO_SETUP_ADDRESS);
+    put32(bytes + 20, AIC8800_SDIO_SETUP_VALUE);
+    for (size_t i = 0; i < sizeof(bytes); ++i) ((uint8_t *)output)[i] = bytes[i];
+    return AIC8800_CODEC_OK;
+}
+
+enum aic8800_codec_result aic8800_sdio_decode_bootstrap_setup_response(
+    const void *input, size_t available, struct aic8800_sdio_response *output)
+{
+    struct aic8800_sdio_response r;
+    if (!span(input, available) || !span(output, sizeof(*output)) ||
+        overlap(input, available, output, sizeof(*output))) return AIC8800_CODEC_INVALID;
+    enum aic8800_codec_result result = aic8800_sdio_decode_identity_response(
+        input, available, AIC8800_IDENTITY_CHIP, &r);
+    if (result != AIC8800_CODEC_OK && result != AIC8800_CODEC_UNRELATED) return result;
+    if (r.has_message && r.message_id == AIC8800_SDIO_WRITE_CONFIRM_ID) {
+        if (r.parameter_bytes != 8) return AIC8800_CODEC_MALFORMED;
+        r.is_memory_write = 1; r.address = le32(r.parameters); r.value = le32(r.parameters + 4);
+        *output = r; return AIC8800_CODEC_OK;
+    }
+    *output = r; return AIC8800_CODEC_UNRELATED;
+}
+
 enum aic8800_codec_result aic8800_sdio_identity(
     const struct aic8800_sdio_response *chip,
     const struct aic8800_sdio_response *subrevision,

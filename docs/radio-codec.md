@@ -1,16 +1,18 @@
 # SDIO radio identity codec
 
-The native AIC8800D80 codec serializes identity-read commands and validates
-individual control responses from an SDIO receive buffer. It is implemented
-and checked on the host. SDC1 enumeration, register access, interrupts,
-firmware loading, and physical radio identification remain unimplemented.
+The native AIC8800D80 codec serializes fixed bootstrap-write and identity-read
+commands and validates control responses from an SDIO receive buffer. It is
+implemented and checked on the host. The [SDIO transport](radio-transport.md)
+uses the codec with native card enumeration and controller transfers. Physical
+radio identification, firmware loading, and interrupt delivery remain unqualified.
 The [radio dependency report](radio.md) describes the board wiring and
 bootstrap requirements.
 
 The two encoded requests target radio addresses `0x40500000` and `0x00000004`.
 Encoding only writes a caller-owned byte buffer. The full board identification
-sequence also needs the reference's write of `0x40` to `0x40500058` and SDIO
-setup operations. That later hardware sequence cannot be described as read-only.
+sequence starts with the reference's write of `0x40` to `0x40500058` and SDIO
+setup operations. The native transport performs that sequence under explicit
+admission; the complete hardware sequence includes writes.
 
 ## Commands and responses have different layouts
 
@@ -35,7 +37,7 @@ use little-endian byte order; input and output buffers need no word alignment.
 The [D80 header CRC][sdio] uses polynomial `0x107`, initial value zero,
 no bit reflection, and no final XOR. The encoder produces exactly 20 bytes
 and preserves the remainder of the destination buffer. CMD53 block padding,
-FIFO credit accounting, and transfer submission belong to the future transport.
+FIFO credit accounting, and transfer submission belong to the native transport.
 
 | Control response offset | Field |
 | --- | --- |
@@ -59,6 +61,29 @@ Receive byte 3, dummy routing fields, and the pattern word are also
 uninterpreted. Applying the transmit CRC rule to receive packets would impose
 an unsupported constraint. Physical qualification must establish any stronger
 receive-integrity rule before it becomes a rejection condition.
+
+## The bootstrap encoder permits one fixed write
+
+`aic8800_sdio_encode_bootstrap_setup` emits a 24-byte request for
+`0x40500058=0x40`. It accepts no address or value arguments. The layout matches
+the read request except for outer length 20, message ID `0x0402`, parameter
+length eight, and two little-endian parameters: the fixed address followed by
+the fixed value. The header uses the same CRC rule. Failure leaves output
+unchanged, and successful encoding leaves the destination tail untouched.
+
+`aic8800_sdio_decode_bootstrap_setup_response` shares the bounded control-record
+parser. It recognizes write confirmation ID `0x0403` only with exactly eight
+parameter bytes, as declared in the pinned message header. It retains those
+bytes as address/data fields and marks the result as a write confirmation.
+The source sender discards the fields; their names do not establish echo
+semantics. The decoder therefore accepts non-echo values and does not claim
+that a successful confirmation is independently verified register readback.
+
+All other valid control records remain unrelated, including read confirmations.
+The transport correlates a write confirmation by ID under its explicit exclusive
+bootstrap admission, with one outstanding operation and no stale confirmations.
+The identity-read decoder retains its original behavior; a write confirmation
+received through that API remains an unrelated control message.
 
 ## The caller owns buffers and decides what to do with unrelated responses
 
@@ -84,8 +109,9 @@ without interpreting its bytes as a message header.
 
 All record and parameter pointers borrow the caller's receive storage. Copy
 bytes into owned storage before deferring dispatch or reusing that buffer.
-A future worker must retain unrelated records; advancing by `consumed` and
-dropping them would lose events. The codec itself never advances a queue.
+The native transport retains unrelated records until the consumer accepts them.
+Advancing by `consumed` and dropping them would lose events. The codec itself
+never advances a queue.
 Input and output objects must not overlap.
 
 The identity helper combines two address-correlated confirmations. It retains
@@ -116,8 +142,12 @@ The fixture passed with address and undefined-behavior sanitizers. Evidence is
 in `~/.cache/sunstoneos/evidence/radio-codec-20261016/`; `results.json` records
 the compiler, command, input hashes, executable hash, and result. No board
 operation, emulator run, performance measurement, or existing suite rerun was
-needed for this byte codec. There is no board executable to submit to the test
-queue until SDC1 and the shared radio lifecycle have concrete bindings.
+needed for the read codec. The write extension is covered by the focused
+[bootstrap integration check](radio-transport.md), including non-echo confirmation
+fields, malformed/truncated write confirmations, and unchanged rejected output.
+Existing read-path evidence is reused; the complete read-codec suite was not
+rerun. There is no board executable until the shared radio lifecycle has concrete
+bindings.
 
 ```sh
 python3 checks/aic8800-sdio-codec.py \
