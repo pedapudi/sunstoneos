@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
+#include "runtime.h"
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,6 +11,9 @@
 
 extern char __heap_start[], __heap_end[];
 static uintptr_t heap_break;
+static size_t heap_peak;
+
+size_t runtime_heap_peak(void) { return heap_peak; }
 
 // The allocator serializes calls to _sbrk through these recursive locks.
 // This port currently schedules tasks on one CPU; it does not permit ISR allocation.
@@ -38,6 +42,8 @@ void *_sbrk(ptrdiff_t change)
         return (void *)-1;
     }
     heap_break = change < 0 ? heap_break - magnitude : heap_break + magnitude;
+    size_t used = heap_break - (uintptr_t)__heap_start;
+    if (used > heap_peak) heap_peak = used;
     return (void *)previous;
 }
 

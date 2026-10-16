@@ -51,11 +51,13 @@ overlay, and WAV bytes follow in that order, each starting on a 64-byte boundary
 The bench bundle contains 14,346,688 bytes. The application uses a separate
 97,280-byte internal arena to match the host’s portable execution configuration.
 
-The physical image contains 396,768 bytes. ELF sections contain 393,088 bytes
-of text/read-only data, 3,664 bytes of initialized data, and 4,489,664 bytes of
+The physical profiling image contains 397,744 bytes. ELF sections contain 394,064 bytes
+of text/read-only data, 3,664 bytes of initialized data, and 4,489,728 bytes of
 reserved RAM, including the heap. Input, result, and recognition-arena regions
-are additional reservations. These are image and reservation sizes; peak
-application allocation has not yet been measured on the board.
+are additional reservations. The bench recording uses a peak of 1,761,840 bytes
+in the recognition arena, matching the host. The allocator obtains at most
+105,984 bytes from the runtime heap through `_sbrk`. That figure includes free
+allocator blocks and overhead; it does not measure live object sizes.
 
 ## Build and execute
 
@@ -117,8 +119,7 @@ The physical image SHA-256 is
 its ELF hash begins `d1deb6dbc3a0d919`. Compute time was 39.086 seconds in this
 single run, about 4.41 times the audio duration. There is no repeatability range.
 The required compute target is at most 0.25 times audio duration. This initial
-portable result does not meet that target. CPU clock configuration and bottleneck
-measurements must precede performance claims or optimization.
+portable result does not meet that target.
 
 The board returned to ROM with stage 5, status 0, and automatic USB access.
 Raw evidence resides under `~/.cache/sunstoneos/evidence/`:
@@ -132,6 +133,55 @@ The matching CRCs and text establish parity for this fixture only. Broader audio
 segment boundaries, cancellation, long-duration operation, concurrent I/O, and
 resource-exhaustion behavior need separate checks. No microphone is present.
 I2S and Bluetooth input and full onboard hardware support remain required.
+
+## Recognition bottlenecks and configured CPU clock
+
+The application reports existing engine stage counters after recognition,
+without adding timers inside arithmetic loops. Stages nest, so their times and
+multiply-accumulate counts must not be summed as exclusive work.
+
+One physical profiling run on the same bench recording took 39.086250 seconds.
+Its checksums, words, punctuation, capitals, and formatted output matched the
+existing host reference. The board returned to ROM with automatic USB access.
+This check covers the added diagnostics and memory accounting; unchanged USB
+and kernel checks retain their earlier evidence.
+
+| Stage | Time | Interpretation |
+| --- | --- | --- |
+| Linear matrix products and output scaling | 32.430 s | 83.0% of recognition time; 4,167,910,560 useful multiply-accumulates |
+| Attention matrix products | 3.709 s | 9.5% of recognition time |
+| Linear input quantization | 1.603 s | Includes work nested in recognition stages |
+| Linear weight expansion | 0.111 s | Small relative to matrix products |
+| Audio frontend | 0.168 s | Small relative to matrix products |
+
+The linear kernels are the first optimization target. Arithmetic-preserving Arm
+implementations require focused kernel comparisons and recorded-audio parity.
+Broader audio qualification, multicore execution, and GPU/NPU backends remain
+separate requirements.
+
+The runtime reads the oscillator selection, little-core PLL control, and CPU
+selection registers without modifying them. Values were `0x983fb0f7`,
+`0xf8802600`, and `0x03010000`, respectively. The
+[pinned kernel clock driver](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-cpupll.c)
+and its RTC driver decode a 26 MHz reference, multiplier 38, and divisor 2:
+`26 MHz × 38 ÷ 2 = 494 MHz`. This is the configured rate inferred from registers;
+an independent frequency measurement remains outstanding. The diagnostic emits
+zero for a selected PLL it cannot decode or whose required enable/lock bits are
+absent.
+
+The architectural timer uses the existing 24 MHz declaration from the board
+device tree. The oscillator selection describes the PLL reference; it does not
+establish the architectural timer frequency. Voltage,
+frequency transitions, and thermal control remain unimplemented.
+
+The profiling image SHA-256 is
+`4bf68ba1c04cf26d7fd0fe1be3044d63b9de37bb44949e9e8989ea7255804bc8`;
+its ELF SHA-256 is
+`d9c2e7aae44a913f2c1b3843d27e91466117f685943ef2bcf7d3fada5096c55c`.
+Raw transactions, output, source/reference hashes, and readbacks reside in
+`~/.cache/sunstoneos/evidence/mimus-profile-20261016/`. The comparison is
+`~/.cache/sunstoneos/evidence/mimus-profile-parity.json`. The two physical runs
+establish integration and profiling results, without a timing repeatability study.
 
 ## Bounded FEL reads and recovery
 

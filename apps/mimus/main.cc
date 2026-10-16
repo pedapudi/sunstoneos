@@ -2,6 +2,7 @@
 #include "task.h"
 #include "platform.h"
 #include "boot.h"
+#include "runtime.h"
 #include "mimus/asr/model.h"
 #include "mimus/asr/recognizer.h"
 #include "mimus/asr/parallel.h"
@@ -15,7 +16,6 @@
 #include <span>
 #include <string>
 
-extern "C" void runtime_init(void);
 static StaticTask_t tasks[2];
 static StackType_t recognition_stack[16384], recovery_stack[1024];
 static uint64_t application_deadline;
@@ -27,6 +27,31 @@ struct Assets {
     uint64_t sizes[3];
     uint32_t crc[3];
 };
+static void report_clock()
+{
+#ifndef MONITOR_QEMU
+    // Read-only decode of the pinned A733 kernel's RTC mux and CPU-L NKMP PLL.
+    const uint32_t oscillator = *reinterpret_cast<volatile uint32_t *>(0x07090160);
+    const uint32_t pll = *reinterpret_cast<volatile uint32_t *>(0x08871000);
+    const uint32_t select = *reinterpret_cast<volatile uint32_t *>(0x0887101c);
+    constexpr uint32_t references[] = {24000000, 19200000, 26000000, 24000000};
+    const uint32_t reference = references[(oscillator >> 14) & 3];
+    const unsigned source = (select >> 24) & 7;
+    const unsigned multiplier = (pll >> 8) & 255;
+    const unsigned divider = 1u << ((select >> 16) & 3);
+    uint64_t configured_hz = 0;
+    if (source <= 2) configured_hz = reference;
+    else if (source == 3 && multiplier && (pll & 0xf8000000u) == 0xf8000000u)
+        configured_hz = uint64_t(reference) * multiplier / divider;
+    char line[192];
+    snprintf(line, sizeof(line),
+             "CLOCK rtc=%08x pll_l=%08x select_l=%08x reference_hz=%u configured_cpu_hz=%llu counter_hz=%llu\n",
+             oscillator, pll, select, reference,
+             static_cast<unsigned long long>(configured_hz),
+             static_cast<unsigned long long>(COUNTER_HZ));
+    platform_puts(line);
+#endif
+}
 static void keep_recovery(void *)
 {
     for (;;) {
@@ -60,6 +85,8 @@ static void recognize(void *)
     asr::Arena arena({reinterpret_cast<uint8_t *>(0x46000000), 16 * 1024 * 1024});
     asr::SetInternalArena(internal_arena);
     asr::SetYieldHook([] { taskYIELD(); });
+    report_clock();
+    asr::ResetProfile();
     uint64_t start = asr::platform::MonotonicNanos();
     auto result = engine->Recognize(*audio, arena);
     uint64_t elapsed = (asr::platform::MonotonicNanos() - start) / 1000;
@@ -87,6 +114,16 @@ static void recognize(void *)
     std::string typed = sequence.Add(words, audio->size(), result->punct_context, nullptr, nullptr);
     typed += sequence.Finish();
     platform_puts("FORMATTED "); platform_puts(typed.c_str()); platform_puts("\n");
+    for (int i = 0; i < static_cast<int>(asr::Stage::kCount); ++i) {
+        snprintf(metrics, sizeof(metrics), "PROFILE stage=%s us=%llu macs=%llu\n",
+                 asr::StageName(static_cast<asr::Stage>(i)),
+                 static_cast<unsigned long long>(asr::Profile()[i]),
+                 static_cast<unsigned long long>(asr::ProfileMacs()[i]));
+        platform_puts(metrics);
+    }
+    snprintf(metrics, sizeof(metrics), "MEMORY arena_peak=%zu heap_reserved_peak=%zu\n",
+             arena.peak(), runtime_heap_peak());
+    platform_puts(metrics);
     platform_puts("PASS mimus: recorded audio recognized locally\n");
     platform_exit(0);
 }

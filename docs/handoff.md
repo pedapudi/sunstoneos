@@ -77,7 +77,11 @@ source identities, library dependencies, memory use, and limits.
 
 The isolated mimus port is at the revision in `apps/mimus/source.json`. Its
 physical bench run matched host CRCs, words, punctuation, capitals, and formatted
-text. Compute time remains above target. The FEL receive tool now bounds reads;
+text. A physical profiling run preserved that parity and found linear matrix
+products use 83% of recognition time. The configured boot CPU clock is 494 MHz;
+independent frequency measurement remains outstanding. Arena and allocator peaks
+are recorded in the application document. Compute time remains above target.
+The FEL receive tool now bounds reads;
 a diagnosed oversized receive was completed without resetting the board. Use
 the tool hash and recovery evidence in the application document.
 
@@ -88,7 +92,7 @@ the tool hash and recovery evidence in the application document.
    cold clock/PHY setup, and the remaining USB roles through separate checks.
 2. Identify and preserve populated storage before persistent installation.
    Add storage access and recovery without overwriting existing contents.
-3. Measure CPU clocks and recognition bottlenecks, expand recorded-audio parity,
+3. Optimize the measured linear-matrix bottleneck, expand recorded-audio parity,
    and implement paced replay. Add worker cores and Arm optimizations with
    change-dependent parity checks. Keep accelerator and remaining hardware
    work active independently of this application milestone.
