@@ -30,11 +30,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   supplies per-core interrupt preparation, translation tables and fault vectors.
   Host and instruction checks pass. The [eight-core diagnostic](a733-smp.md)
   links with bounded startup and scheduler checks, but the complete image has
-  not executed. [Cached CPU preparation](cpu-coherence.md) supplies revision-specific
-  controls and matching EL3/nonsecure EL1 RAM mappings. Host and instruction
-  checks pass, including 40-bit physical-address admission. Integration into
-  coordinated startup and exception handling remains required. Physical cached
-  coherence, entry, interrupts and secondary scheduling remain unqualified.
+  not executed. The separate [cached eight-core image](a733-smp-cached.md)
+  integrates revision-specific controls, coordinated EL3/EL1 memory transitions
+  and exception handling. Its instruction-model scheduler completes 32
+  floating-point context rounds on every core, with timer and inter-core
+  interrupts. Focused checks cover inherited SIF clearing and terminal faults.
+  The central image also links; it has a distinct build identity. Physical
+  cache coherence, entry, interrupts and secondary scheduling remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
@@ -83,7 +85,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   shutdown ordering. Its root build target links successfully.
   [DMA0 platform preparation](dma-platform.md) now validates inherited fabric
   clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
-  Host/reference checks and native compilation pass. The [startup adapter](dma-startup.md)
+  Host/reference checks and native compilation pass. Selected parent branches
+  require forced-on control, software enable and effective-gate readback;
+  focused admission checks pass. The [startup adapter](dma-startup.md)
   now binds the clock registry, common counter, register mutex and deferred
   service activation. Focused two-core composition passes and the integrated
   target links. Physical handoff remains unqualified.
@@ -107,7 +111,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   source functions. [Audio implementation and limits](i2s.md) records formats,
   header routes, and evidence. The [clock/reset/pin binding](i2s-platform.md)
   passes host resource/deadline checks, pinned CCU comparison, and AArch64
-  compilation. The [common clock registry](clock-leases.md) passes host
+  compilation. Cold AUDIO1 preparation waits for effective output gates before
+  publishing its stable lease; focused clock-admission checks pass.
+  The [common clock registry](clock-leases.md) passes host
   composition with I2S and the existing GPU manager; its runtime files compile
   for AArch64. The privileged DMA service schedules finite capture. Production
   startup wiring, continuous streaming, playback, Bluetooth PCM and physical
@@ -189,7 +195,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   for XRGB8888 through one UI channel into DE1 and LCD1/DSI1. Host checks,
   source comparisons and native compilation pass. Preparation defers producer enable;
   stop and faults retain the framebuffer and resource leases. Memory reuse
-  requires independent drain evidence. Actual platform binding, physical scanout, live frame
+  requires independent drain evidence. The [scanout coordinator](display-scanout.md)
+  composes the actual PHY, panel-command, DSI, LCD1 and display-engine controllers.
+  Host checks cover start/stop ordering, authenticated frame/resource receipts and
+  retained failures; native compilation passes. Actual platform binding,
+  shutdown/release, physical scanout, live frame
   updates, composition, additional formats and synchronization remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
@@ -202,7 +212,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [LCD1 timing controller](tcon-lcd.md) supplies DSI1 timing, authenticated
   start and bounded stop after producer drain. Source-profile and fault checks
   pass; native compilation passes. Cold PLL setup, clock/pin ownership,
-  display-engine integration, scanout, panel configuration, read transactions and
+  native scanout binding, panel configuration, read transactions and
   physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
@@ -233,9 +243,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained receive ownership, command credits and controller identification.
   Host checks and native compilation pass, including exclusion of unread stale
   replies before transmission. It requires fresh firmware/UART generations and
-  scheduled polling with the UART interrupt masked. Physical identity and
+  scheduled polling with the UART interrupt masked. [Bluetooth ACL/link ownership](bluetooth-acl.md)
+  adds outbound BR/EDR connections, bounded packet transmission and controller
+  credit accounting. Host checks and native compilation pass; uncertain partial
+  transfers and disconnect results remain retained. Physical identity and
   platform binding, authentication/keys, secure receive, network-stack integration,
-  Bluetooth links/data transmission, pairing and headset audio remain outstanding.
+  L2CAP, SDP, pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
@@ -292,8 +305,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ownership, native PMIC reads and deferred service activation. Focused two-core
   checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
-  release. Physical rail/PCK qualification, cold PLL provisioning, model admission, numerical execution,
+  release. [Fixed convolution registration](npu-convolution.md) authenticates
+  the complete compiled model, private allocations and commands before startup
+  and publication. Copied inputs, matching output completion and explicit result
+  reaping pass focused emulator checks. The output bytes are modeled, so these
+  checks do not establish inference. Physical rail/PCK qualification, cold PLL
+  provisioning, effective memory confinement, numerical execution,
   and physical qualification remain outstanding.
+
+- Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
+  for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
+  and native compilation pass. Identity admission precedes reset/engine setup;
+  decoded output requires independent drain and cache synchronization. Part of
+  the historical malformed-input evidence lacks preserved inputs and its runner.
+  Native platform binding, physical decoding, remaining decode formats and all
+  encoder paths remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

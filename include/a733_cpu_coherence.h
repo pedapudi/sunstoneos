@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* A cold-entry component. No image currently calls these operations. */
+/* Cold-entry primitives used by the dedicated cached eight-core diagnostic. */
 #define A733_CPU_COHERENCE_MAIR UINT64_C(0x44ff00)
 #define A733_CPU_COHERENCE_TCR UINT64_C(0x200803019)
 #define A733_CPU_COHERENCE_TCR_EL3 UINT64_C(0x80823019)
