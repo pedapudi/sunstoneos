@@ -1,4 +1,4 @@
-# DMA descriptor encoding and remaining controller work
+# DMA controller implementation and qualification requirements
 
 The native [descriptor encoder](../drivers/dma/a733_dma.c) builds finite DMA
 chains for incrementing memory and fixed peripheral FIFO ports. Its
@@ -6,10 +6,15 @@ chains for incrementing memory and fixed peripheral FIFO ports. Its
 FIFO streams, address-boundary checks, and refusal without output mutation.
 The encoder compiles for AArch64. It has not executed on physical hardware.
 
-The controller service, channel allocation, cache synchronization, interrupt
-delivery, cancellation, and peripheral integration remain unimplemented.
-Calling the encoder performs no hardware access and does not transfer buffer
-ownership to a device. Before physical DMA experiments, qualify the independent
+The [polled controller core](../drivers/dma/a733_dma_controller.c) implements
+channel claims, mapped-buffer ownership, cache-operation callbacks, completion,
+and bounded cancellation. Its host model passes noncoherent memory/FIFO transfers
+and fault handling checks. Board-specific mapping validation, cache/MMIO adapters,
+FreeRTOS serialization, interrupt delivery, and clock/reset setup remain unimplemented.
+The controller has not executed on physical hardware.
+
+Calling the encoder alone performs no hardware access and does not transfer
+buffer ownership to a device. Before physical DMA experiments, qualify the independent
 watchdog and a reset path that returns to ROM without executing storage code.
 See [recovery requirements](watchdog.md).
 
@@ -104,39 +109,84 @@ The future mapping service must reject those conflicts and establish valid RAM,
 peripheral, and descriptor mappings. The encoder does not validate the I/O memory
 management unit (IOMMU), cache ownership, or conflicts with other active channels.
 
-## Required controller and ownership behavior
+## Controller ownership and completion
 
-The controller service must serialize channel allocation and establish an
-exclusive lease before changing channel registers. CPU interrupt routing alone
-is insufficient ownership evidence. Initialization must preserve channels used
-by the always-on processor and coordinate shared clocks, resets, and autogating.
+The [controller interface](../include/a733_dma_controller.h) requires serialized
+calls and an exclusive platform lease for its authorized channel mask.
+CPU interrupt routing alone is insufficient ownership evidence.
+The platform must prepare clocks, resets, and autogating before claiming channels.
+The current polled implementation requires the DMA interrupt to remain masked
+at the GIC. Per-channel queue-end and timeout interrupt bits are enabled so the
+service can inspect and acknowledge their pending events.
 
-Submission must retain the descriptor chain and every data mapping until DMA
-has stopped. Before enabling a channel, clean source data and descriptors,
-prepare destination cache lines, and issue the required memory barriers.
-Cache maintenance must operate on privately owned lines without damaging
-concurrent CPU writes. Integration with the SMP runtime requires a privileged
-service because its application tasks run at the unprivileged exception level,
-EL0.
+Claims require CPU routing without always-on processor routing, a disabled idle
+channel, no pending or enabled interrupts, and zero pause, mode, and descriptor-high
+registers. Claiming a channel saves its descriptor pointer without writing hardware.
+The implementation never changes controller-global registers or processor routing.
 
-Completion must distinguish queue end from package completion and timeout.
-The service must acknowledge only its channel's pending bits. Queue completion
+A transfer provides a descriptor allocation, segments, and RAM mappings with
+explicit CPU addresses, bus addresses, sizes, and DMA read/write directions.
+Each allocation owns complete 64-byte cache lines. The platform callback must
+validate canonical RAM mappings and reject reserved or aliased memory.
+A separate callback validates each FIFO's request ID, address, access width,
+burst length, and direction against its peripheral.
+
+The core rejects buffer overlap with descriptors, controller state, or transfer
+metadata. Concurrent transfers can share read-only source allocations.
+Any overlap involving a writable allocation is rejected, including disjoint
+written byte ranges within the same owned cache lines. Two channels cannot use
+the same FIFO port concurrently. CPU writes to leased allocations are forbidden.
+
+Submission retains the immutable transfer metadata and its allocations before
+cache preparation. It cleans source and descriptor lines, cleans and invalidates
+destination lines, and invokes the platform barrier before enabling the channel.
+Configuration readback and the transfer deadline must pass before enable.
+Cache preparation that exhausts the deadline causes failure without starting DMA.
+
+Polling distinguishes queue end from half/package events and timeout.
+It acknowledges only the selected channel's pending bits. Queue completion
 or a stop-register write alone does not prove that outstanding writes drained.
-Require the channel to be disabled and its busy bit to clear before invalidating
-destination cache lines and returning buffers to the CPU.
+The core requires the channel to be disabled and its busy bit to clear.
+It then verifies restored channel settings, invalidates destination lines, and
+invokes a final barrier before releasing allocations. Timeout takes precedence
+over queue completion when both events are observed.
 
-Cancellation must use bounded polling. If a channel cannot stop, retain its
-buffers and require independent recovery; do not report reusable memory.
-The watchdog must bound a stalled CPU or bus even when normal polling cannot
-continue. Channel restoration and recovery require physical checks.
+Cancellation issues one pause/disable/resume sequence. Each poll performs a
+bounded amount of work and never waits internally. The caller schedules polls
+against a monotonic 64-bit tick source; elapsed-time arithmetic handles counter
+wrap. Transfer and stop durations must be nonzero and below half the counter range.
+
+| Returned state | Allocation ownership and next action |
+| --- | --- |
+| `ACTIVE` | Buffers remain leased; continue polling or request cancellation |
+| `STOPPING` | Stop or failed submission is draining; continue polling |
+| `COMPLETE` | Queue end, quiescence, and restoration observed; buffers released |
+| `CANCELED` or `FAILED` | Quiescence and restoration observed; buffers released, contents may be partial |
+| `RECOVERY` | Independent recovery required; retain every transfer for which `a733_dma_owns()` remains true |
+
+Ignored stop writes, uncleared pending events, failed restoration, or unexpected
+processor routing can leave a channel in recovery state. The core provides no
+forced-release or live-context reinitialization operation. Failed transfers remain
+in conflict checks so another channel cannot reuse their buffers.
+The platform must invoke independent recovery when required. An independent
+watchdog must also bound MMIO accesses that stall before a poll can return.
+
+Platform integration must provide actual cache instructions and memory barriers,
+canonical mapping validation, and serialization through the FreeRTOS service.
+The SMP runtime runs application tasks at the unprivileged exception level, EL0,
+so controller access requires a privileged service. Physical tests must establish
+that enable/busy observations and cache operations provide the assumed drain
+and visibility guarantees.
 
 Pause, cyclic transfers, hardware timeout modes, burst mode, IOspeed mode,
 request handshakes, DMA1, interrupt delivery, IOMMU integration, and concurrent
 peripheral workloads remain required.
+Bidirectional peripheral ports that share one register address need a
+peripheral-aware FIFO lease extension; the current core serializes those ports.
 Data addresses crossing 4 GiB boundaries and transfers near the upper address
 limit need physical tests; software representation does not establish bus behavior.
 
-## Focused evidence and reproduction
+## Descriptor evidence and reproduction
 
 One host session passed under AddressSanitizer and UndefinedBehaviorSanitizer.
 The execution model follows descriptor links and moves bytes through simulated
@@ -170,4 +220,41 @@ clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
   --target=aarch64-none-elf -march=armv8-a -mstrict-align \
   -ffreestanding -fno-builtin -c drivers/dma/a733_dma.c \
   -o ~/.cache/sunstoneos/build/dma-a733.o
+```
+
+## Controller evidence and reproduction
+
+The [controller host model](../checks/dma-controller.c) maintains separate CPU and
+device copies of RAM. Descriptor execution reads device-visible memory; CPU
+results change only through cache invalidation. This exposes missing source or
+descriptor cleaning and preserves destination bytes outside the requested ranges.
+
+The final candidate passed one session under AddressSanitizer and
+UndefinedBehaviorSanitizer. Cases cover memory and FIFO streams, two channels
+sharing source data, conflicts between writable cache lines, and completion
+before bus drain. Faults cover ignored start/stop writes, descriptor configuration
+and restoration failures, uncleared events, and changed processor routing.
+The model also checks cancellation, timeout precedence, counter wrap, and a
+deadline consumed by cache preparation. It rejects writes to global registers
+or channels assigned to the always-on processor.
+
+The AArch64 object compiles with warnings treated as errors. Its code occupies
+5,124 bytes, with no static data or BSS. The object references the descriptor
+encoder and `memcpy`; final platform linkage remains outstanding.
+Commands, results, input hashes, compiler identity, and artifacts are in
+`~/.cache/sunstoneos/evidence/dma-controller-20261016/final/`.
+The unchanged descriptor encoder retains its separate evidence above.
+No physical device requests were issued.
+
+```sh
+mkdir -p ~/.cache/sunstoneos/build
+clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  checks/dma-controller.c drivers/dma/a733_dma_controller.c \
+  drivers/dma/a733_dma.c -o ~/.cache/sunstoneos/build/dma-controller-check
+~/.cache/sunstoneos/build/dma-controller-check
+clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
+  --target=aarch64-none-elf -march=armv8-a -mstrict-align \
+  -ffreestanding -fno-builtin -c drivers/dma/a733_dma_controller.c \
+  -o ~/.cache/sunstoneos/build/dma-controller-a733.o
 ```

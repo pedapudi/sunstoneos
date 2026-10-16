@@ -47,9 +47,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   before further new peripheral-access sequences.
 - DMA: **tested** finite descriptor encoding in a host execution model, including
   memory/FIFO streams, 35-bit addresses, and invalid-chain refusal.
-  [DMA implementation and limits](dma.md) record the evidence. Controller
-  execution, both DMA controllers, buffer ownership, cache coherence, and physical
-  transfers remain unimplemented or untested.
+  The polled controller core also passes host checks for noncoherent transfers,
+  concurrent ownership, bounded cancellation, and retained buffers after faults.
+  [DMA implementation and limits](dma.md) record the evidence. Board integration,
+  both physical controllers, cache coherence, and physical transfers remain
+  unimplemented or untested.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
