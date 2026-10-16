@@ -11,7 +11,8 @@
 #define COUNT(a) (sizeof(a)/sizeof((a)[0]))
 struct step { uint16_t off; uint8_t region, special; uint32_t mask, value; };
 /* special: 1 caller settle, 2 caller deskew, 3 lane map, 4 port-0 debounce,
- * 5 W1C status (no read/verification), 6 direct write + verification. */
+ * 5 W1C status (no read/verification), 6 direct write + verification,
+ * 7 parser capture mode (SCAP for image, VCAP for existing video API). */
 static const struct step configure[] = {
     {0x118,A733_CSI_PORT,5,0,0x1fff},
     {0x044,A733_CSI_PARSER,5,0,7},
@@ -47,7 +48,7 @@ static const struct step configure[] = {
     {0x028,A733_CSI_PARSER,0,0x1fff1fff,640u<<16},
     {0x02c,A733_CSI_PARSER,0,0x1fff1fff,480u<<16},
     {0x00c,A733_CSI_PARSER,0,0x3c3c3c3c,0},
-    {0x00c,A733_CSI_PARSER,0,3,2},
+    {0x00c,A733_CSI_PARSER,7,3,2},
     /* Port enable is last, after all local setup and downstream admission. */
     {0x000,A733_CSI_PORT,0,1,1}
 };
@@ -114,6 +115,12 @@ int a733_csi_open(struct a733_csi_receiver *s,uint64_t d)
     if (!s || !s->initialized || s->state!=A733_CSI_NEW) return -1;
     return begin(s,A733_CSI_ADMIT,d);
 }
+int a733_csi_open_image(struct a733_csi_receiver *s,uint64_t d)
+{
+    int r=a733_csi_open(s,d);
+    if(r==1)s->image_mode=1;
+    return r;
+}
 int a733_csi_sample(struct a733_csi_receiver *s,uint64_t d)
 {
     if (!s || !s->initialized || s->state!=A733_CSI_ARMED) return -1;
@@ -144,6 +151,7 @@ static int program(struct a733_csi_receiver *s,const struct step *plan,size_t co
     if(e->special==1)value|=(uint32_t)s->config.settle<<16;
     if(e->special==2)value|=(uint32_t)s->config.deskew<<20;
     if(e->special==3)value=s->config.port ? 0x54 : 0x10;
+    if(e->special==7)value=s->image_mode?1:2;
     /* The source enables debounce only for PHY0; PHY1 stays at reset. */
     if(e->special==4 && !s->config.port)value=0x10000;
     if(e->special==5) {

@@ -62,11 +62,15 @@ struct a733_csi_receiver {
     uint32_t saved, mipi_events, parser_events;
     enum a733_csi_state state;
     uint16_t index;
-    uint8_t phase, initialized;
+    uint8_t phase, initialized, image_mode;
 };
 int a733_csi_init(struct a733_csi_receiver *, const struct a733_csi_ops *,
                   void *context, const struct a733_csi_config *);
 int a733_csi_open(struct a733_csi_receiver *, uint64_t deadline);
+/* Prepare SCAP instead of continuous video. Producer must stay quiet through
+ * ARMED. SCAP captures one frame and self-clears; never re-arm automatically.
+ */
+int a733_csi_open_image(struct a733_csi_receiver *, uint64_t deadline);
 /* One status sample latches observed packet/parser flags. Any documented
  * packet error (including corrected ECC warning) or parser error faults.
  * A frame-end flag alone does not count or complete a DMA frame.
