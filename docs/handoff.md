@@ -18,6 +18,9 @@ returned the board to ROM with automatic access after the client stopped request
 [Paced replay](mimus-replay.md) now passes a four-utterance FreeRTOS emulator
 comparison, including capture during recognition and formatting across utterances.
 The native service command compiles but has not run on the board.
+The separate [SMP emulator target](smp.md) passes three bounded two-core trials
+with queues, mutexes, preemption, affinity, and floating-point register checks.
+Physical secondary-core startup and multicore mimus remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -132,7 +135,9 @@ the tool hash and recovery evidence in the application document.
    with change-dependent parity checks. Keep accelerator and remaining hardware
    work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
-   and coherence, with checks selected from each change.
+   and coherence, with checks selected from each change. The SMP emulator target
+   now provides a starting point; add migration and complete register-state checks
+   before physical integration. Its current evidence is in [smp.md](smp.md).
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all

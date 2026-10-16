@@ -126,3 +126,4 @@ endif()
 
 include(cmake/cxx-runtime.cmake)
 include(cmake/mimus.cmake)
+include(cmake/smp.cmake)

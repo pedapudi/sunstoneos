@@ -1,0 +1,11 @@
+--- portmacro.h
++++ portmacro.h
+@@ -293,7 +293,7 @@
+ 
+ #endif /* configNUMBER_OF_CORES > 1 */
+ 
+-#define portMEMORY_BARRIER()    __asm volatile ( "" ::: "memory" )
++#define portMEMORY_BARRIER()    __asm volatile ( "dmb ish" ::: "memory" )
+ 
+ /**
+  * @brief MPU specific constants.

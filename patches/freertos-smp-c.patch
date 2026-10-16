@@ -1,0 +1,65 @@
+--- port.c
++++ port.c
+@@ -1228,8 +1228,8 @@
+         /* Start the timer that generates the tick ISR. */
+         configSETUP_TICK_INTERRUPT();
+         ucPrimaryCoreInitDoneFlag = 1;
+-        __asm volatile ( "SEV                       \n"
+-                         "DSB SY                    \n"
++        __asm volatile ( "DSB SY                    \n"
++                         "SEV                       \n"
+                          "ISB SY                    \n"
+                          ::: "memory" );
+         /* Hold the primary core here until all the secondary cores are ready, this would be achieved only when
+@@ -1413,9 +1413,10 @@
+     }
+     else
+     {
++        register uint64_t ullMask __asm( "x0" ) = uxNewMaskValue;
+         __asm volatile (
+-            "SVC %0 \n"
+-            :
++            "SVC %1 \n"
++            : "+r" ( ullMask )
+             : "i" ( portSVC_UNMASK_INTERRUPTS )
+             : "memory"
+         );
+@@ -1474,7 +1475,7 @@
+                          "MSR DAIFCLR, #2        \n"
+                          "DSB SY                 \n"
+                          "ISB SY                 \n"
+-                         ::"r" ( configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
++                         ::"r" ( ( uint64_t ) configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
+     }
+ 
+     return ullPMRValue;
+@@ -1570,8 +1571,8 @@
+             "dmb sy         \n"
+             "mov w1, #0     \n"
+             "str w1, [%x0]  \n"
++            "dsb sy         \n"
+             "sev            \n"
+-            "dsb sy         \n"
+             "isb sy         \n"
+             :
+             : "r" ( ulLock )
+@@ -1661,10 +1662,6 @@
+                     return;
+                 }
+ 
+-                /* Preload the gate word into the cache. */
+-                uint32_t dummy = ulGateWord[ eLockNum ];
+-                dummy++;
+-
+                 while( prvSpinTrylock( &ulGateWord[ eLockNum ] ) != 0 )
+                 {
+                    /* Follow Arm's recommended way of sleeping
+@@ -1740,7 +1737,7 @@
+     uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
+     {
+         uint64_t ullMpidrEl1;
+-        __asm volatile ( "MRS %0, MPIDR_EL1" : "=r" ( ullMpidrEl1 ) );
++        __asm volatile ( "MRS %0, tpidr_el1" : "=r" ( ullMpidrEl1 ) );
+ 
+         return ( uint8_t ) ( ullMpidrEl1 & 0xff );
+     }

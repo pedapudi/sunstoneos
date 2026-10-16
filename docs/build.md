@@ -58,3 +58,7 @@ The checker writes raw output and input identities to
 `~/.cache/sunstoneos/evidence/kernel-check.json`. It reuses a successful result
 when the image, emulator, linked host libraries, command, and checker match.
 Documentation edits and commits do not require another emulator run.
+
+The separate [SMP target](smp.md) tests two-core scheduling with shared memory,
+queues, and mutexes. Select `smp-kernel-model` explicitly to build it; the original
+single-core check and physical board images retain their own ports.
