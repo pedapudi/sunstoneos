@@ -84,3 +84,17 @@ named-user entries can consequently gain permissions that the old mask limited.
 Revoke restores the original mask. The script requires a fresh device node if
 a stale backup matches a reused USB address; unplugging and reconnecting usually
 assigns a new address.
+
+## Native runtime access
+
+The [native USB diagnostic runtime](../docs/usb.md) uses the recovery USB ID
+with a distinct product string and device revision. The session rule grants
+access across both transitions. FEL loaders require the verified ROM revision
+`02b3`; they refuse the native runtime revision `0100` before sending requests.
+This protocol check runs on the host and does not require reinstalling the
+session helper.
+
+`usb-diagnostic.py` loads the bounded RAM runtime, checks its native protocol,
+and requests ROM return. `read-returned-result.py` retrieves diagnostics after
+a failed session only when host metadata identifies an independently returned
+ROM instance. The USB document records prerequisites, commands, and evidence.

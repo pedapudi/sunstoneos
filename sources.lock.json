@@ -25,5 +25,12 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex",
     "archive": "board-boot/boot0_sdcard_orangepizero3w.fex",
     "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
+  },
+  "tinyusb": {
+    "revision": "d668b0abb7219b9ce324fa88d46604bb9e869973",
+    "url": "https://codeload.github.com/hathach/tinyusb/tar.gz/d668b0abb7219b9ce324fa88d46604bb9e869973",
+    "archive": "tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973.tar.gz",
+    "directory": "tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
+    "sha256": "cbb1f9e5d64c7115a86078cfb485c9d06a585a4a500374aa870b6e3b7d17e215"
   }
 }

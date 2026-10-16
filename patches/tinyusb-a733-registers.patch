@@ -1,0 +1,25 @@
+--- a/musb_def.h
++++ b/musb_def.h
+@@ -13,11 +13,11 @@
+ 
+ #define  USBC_Readb(reg)	                    (*(volatile unsigned char *)(reg))
+ #define  USBC_Readw(reg)	                    (*(volatile unsigned short *)(reg))
+-#define  USBC_Readl(reg)	                    (*(volatile unsigned long *)(reg))
++#define  USBC_Readl(reg)	                    (*(volatile uint32_t *)(reg))
+ 
+ #define  USBC_Writeb(value, reg)                (*(volatile unsigned char *)(reg) = (value))
+ #define  USBC_Writew(value, reg)	            (*(volatile unsigned short *)(reg) = (value))
+-#define  USBC_Writel(value, reg)	            (*(volatile unsigned long *)(reg) = (value))
++#define  USBC_Writel(value, reg)	            (*(volatile uint32_t *)(reg) = (value))
+ 
+ 
+ #define USBC_SetBit_Mask_b(reg,mask)	do {																		\
+@@ -70,7 +70,7 @@
+ //---------------------------------------------------------------
+ //   reg base
+ //---------------------------------------------------------------
+-#define  USBC0_BASE                 0x01c13000
++#define  USBC0_BASE                 0x04100000
+ #define  USBC1_BASE                 0x01c14000
+ #define  USBC2_BASE                 0x01c1E000
+ 

@@ -7,13 +7,18 @@ if(NOT EXISTS "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE/port.c")
 endif()
 
 set(PORT "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
-execute_process(COMMAND patch --silent --output
-  "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/port.c"
-  "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-aarch64-clang.patch"
-  RESULT_VARIABLE patch_status)
-if(NOT patch_status EQUAL 0)
-  message(FATAL_ERROR "Could not apply the pinned FreeRTOS Clang compatibility patch")
-endif()
+function(apply_build_patch output source patch_file)
+  execute_process(COMMAND patch --silent --output "${output}.tmp" "${source}" "${patch_file}"
+    RESULT_VARIABLE patch_status)
+  if(NOT patch_status EQUAL 0)
+    message(FATAL_ERROR "Could not apply ${patch_file}")
+  endif()
+  # Preserve the generated source timestamp when patch output is unchanged.
+  configure_file("${output}.tmp" "${output}" COPYONLY)
+  file(REMOVE "${output}.tmp")
+endfunction()
+apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/port.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-aarch64-clang.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${PORT}/port.c" patches/freertos-aarch64-clang.patch)
 add_executable(kernel-check
@@ -43,11 +48,15 @@ set_target_properties(kernel-check PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-virt/link.ld")
 
 # The physical platform and its secure QEMU model share the monitor and kernel.
-foreach(target a733-kernel-check a733-kernel-model)
+foreach(target a733-kernel-check a733-kernel-model a733-monitor-model)
+  set(check_source checks/kernel.c)
+  if(target STREQUAL "a733-monitor-model")
+    set(check_source checks/monitor-renew.c)
+  endif()
   add_executable(${target}
     platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
     arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
-    runtime/memory.c checks/kernel.c checks/fp-context.S
+    runtime/memory.c "${check_source}" checks/fp-context.S
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
   target_include_directories(${target} PRIVATE
@@ -65,3 +74,41 @@ foreach(target a733-kernel-check a733-kernel-model)
 endforeach()
 set_source_files_properties(platform/a733/monitor.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
 target_compile_definitions(a733-kernel-model PRIVATE MONITOR_QEMU=1)
+target_compile_definitions(a733-monitor-model PRIVATE MONITOR_QEMU=1 SUNSTONE_USB_RUNTIME=1)
+
+set(TINYUSB_DIR "" CACHE PATH "Pinned TinyUSB source directory")
+if(TINYUSB_DIR)
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733")
+  foreach(pair "dcd_sunxi_musb.c|tinyusb-a733-dcd.patch" "musb_def.h|tinyusb-a733-registers.patch")
+    string(REPLACE "|" ";" parts "${pair}")
+    list(GET parts 0 source)
+    list(GET parts 1 patch_file)
+    apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/${source}"
+      "${TINYUSB_DIR}/src/portable/sunxi/${source}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/patches/${patch_file}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${TINYUSB_DIR}/src/portable/sunxi/${source}" "patches/${patch_file}")
+  endforeach()
+  add_executable(a733-usb-runtime
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S runtime/memory.c
+    drivers/usb/a733_usb.c drivers/usb/diagnostic.c
+    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S"
+    "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
+    "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/tinyusb-a733/dcd_sunxi_musb.c")
+  target_include_directories(a733-usb-runtime PRIVATE include runtime/include platform/a733
+    drivers/usb "${FREERTOS_DIR}/include" "${PORT}" "${TINYUSB_DIR}/src")
+  target_compile_definitions(a733-usb-runtime PRIVATE
+    GUEST=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_USB_RUNTIME=1 SUNSTONE_A733_USB=1)
+  target_compile_options(a733-usb-runtime PRIVATE
+    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
+    -fno-unwind-tables -fno-asynchronous-unwind-tables
+    -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra)
+  target_link_options(a733-usb-runtime PRIVATE -nostdlib -static -Wl,--gc-sections
+    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld"
+    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-usb-runtime.map")
+  set_target_properties(a733-usb-runtime PROPERTIES SUFFIX ".elf"
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
+endif()

@@ -230,6 +230,12 @@ def require_session(node, uid=None):
         raise ValueError("Current FEL node is not accessible.")
 
 
+def require_rom(node):
+    device = target(node)
+    if (device / "bcdDevice").read_text().strip() != "02b3":
+        raise ValueError("USB device is not the verified A733 ROM service; do not send FEL requests.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("status", "grant", "revoke", "remove-user",

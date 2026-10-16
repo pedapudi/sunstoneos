@@ -65,6 +65,7 @@ try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         node = access.discover()
         access.require_session(node)
+        access.require_rom(node)
         node_identity = access.identity(node)
         port = access.target(node)
         config = dict(port=port.name, sysfs=str(port.resolve()))

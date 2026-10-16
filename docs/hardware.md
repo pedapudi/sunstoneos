@@ -28,6 +28,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
 
+- USB0 device channel: **tested** at high speed for status, packet-boundary
+  echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
+  programmed-I/O implementation, inherited clock state, and remaining modes.
+
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |
 | Boot ROM and boot firmware | Recovery, image loading, repeatable boot | Confirm SoC identity, DDR firmware, entry contract, storage preservation |

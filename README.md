@@ -6,8 +6,9 @@ of the first application, mimus speech transcription.
 
 The attached board runs a FreeRTOS kernel check with timer preemption, queues,
 and floating-point context preservation. An EL3 monitor recovers from a forced
-EL1 stall and returns results through FEL. Native USB diagnostics, persistent
-boot, mimus execution, and complete hardware qualification remain outstanding.
+EL1 stall and returns results through FEL. A native USB device channel passes
+status, echo, log, and recovery checks. Persistent boot, mimus execution, and
+complete hardware qualification remain outstanding.
 
 - [Accepted goal](docs/goal.md)
 - [Hardware inventory and qualification](docs/hardware.md)
@@ -17,6 +18,7 @@ boot, mimus execution, and complete hardware qualification remain outstanding.
 - [Build and kernel check](docs/build.md)
 - [Boot investigation and physical evidence](docs/boot.md)
 - [Physical FreeRTOS and recovery check](docs/a733-kernel.md)
+- [Native USB diagnostics](docs/usb.md)
 - [Project issues](https://github.com/pedapudi/sunstoneos/issues)
 
 The next application milestone is reproducing host transcription of recorded

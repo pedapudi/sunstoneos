@@ -65,6 +65,7 @@ try:
     with open("/tmp/mimus-board.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         device = access.discover()
+        access.require_rom(device)
         identity = access.identity(device)
         record.update(device=str(device), node_identity=identity)
         version = transaction("version")

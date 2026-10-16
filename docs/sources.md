@@ -9,6 +9,7 @@ implementations; physical support on this board requires qualification evidence.
 | [Board bootloader](https://github.com/orangepi-xunlong/u-boot-orangepi/tree/b791be842935b27268ae3d00e943a9075495f30a) | `b791be842935b27268ae3d00e943a9075495f30a` | Boot package and application handoff |
 | [FreeRTOS kernel](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2) | `97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2` | AArch64 system-register interrupt port and scheduler |
 | [FEL tools](https://github.com/linux-sunxi/sunxi-tools/tree/b92f4ed3115a520e3ec406697d268239e3f29488) | `b92f4ed3115a520e3ec406697d268239e3f29488` | Recovery protocol and tested local A733 patches |
+| [TinyUSB](https://github.com/hathach/tinyusb/tree/d668b0abb7219b9ce324fa88d46604bb9e869973) | `d668b0abb7219b9ce324fa88d46604bb9e869973` | Device stack and sunxi MUSB driver adapted for A733 |
 | [A733 datasheet](https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf) | Version 0.93 | Hardware inventory and documented limits |
 | [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-15 | Candidate GPU runtime; exact BVNC match pending |
 | [OV5640 driver](https://github.com/torvalds/linux/blob/master/drivers/media/i2c/ov5640.c) | Revision pin pending | Sensor programming reference |
@@ -57,3 +58,10 @@ Group 0 serves EL3 and nonsecure Group 1 serves EL1. The [Arm GIC architecture
 specification](https://documentation-service.arm.com/static/67eaa4d098aa3c3b6eea7351)
 defines the nonsecure priority view and system-register interface. The monitor
 implementation is local code; its physical evidence is in [a733-kernel.md](a733-kernel.md).
+
+The TinyUSB patches retain the downloaded source and its MIT notices. They
+apply A733 register/clock definitions, AArch64 register widths, task polling,
+control-transfer completion handling, and zero-length IN submission. The
+[USB implementation and evidence](usb.md) distinguish tested behavior from
+remaining controller modes. Clock and PHY setup follows the pinned board
+bootloader’s `clock_sun60iw2.c`, `board_sun60iw2.c`, and USB register definitions.

@@ -1,0 +1,254 @@
+--- a/dcd_sunxi_musb.c
++++ b/dcd_sunxi_musb.c
+@@ -10,10 +10,10 @@
+ #include <stdint.h>
+ #include "tusb_option.h"
+ 
+-#if CFG_TUD_ENABLED && CFG_TUSB_MCU == OPT_MCU_F1C100S
++#if CFG_TUD_ENABLED && defined(SUNSTONE_A733_USB)
+ 
+ #include "osal/osal.h"
+-#include <f1c100s-irq.h>
++#include "a733_usb.h"
+ #include <device/dcd.h>
+ #include "musb_def.h"
+ 
+@@ -50,71 +50,13 @@
+  * SUNXI FUNCTION
+  *------------------------------------------------------------------*/
+ 
+-static void usb_phy_write(int addr, int data, int len)
+-{
+-	int j = 0, usbc_bit = 0;
+-	void *dest = (void *)USBC_REG_CSR(USBC0_BASE);
+-
+-	usbc_bit = 1 << (0 * 2);
+-	for (j = 0; j < len; j++)
+-	{
+-		/* set the bit address to be written */
+-		USBC_ClrBit_Mask_l(dest, 0xff << 8);
+-		USBC_SetBit_Mask_l(dest, (addr + j) << 8);
+-
+-		USBC_ClrBit_Mask_l(dest, usbc_bit);
+-		/* set data bit */
+-		if (data & 0x1)
+-			USBC_SetBit_Mask_l(dest, 1 << 7);
+-		else
+-			USBC_ClrBit_Mask_l(dest, 1 << 7);
+-
+-		USBC_SetBit_Mask_l(dest, usbc_bit);
+-
+-		USBC_ClrBit_Mask_l(dest, usbc_bit);
+-
+-		data >>= 1;
+-	}
+-}
+-
+ static void USBC_HardwareReset(void)
+ {
+-  // Reset phy and controller
+-  USBC_REG_set_bit_l(USBPHY_CLK_RST_BIT, USBPHY_CLK_REG);
+-	USBC_REG_set_bit_l(BUS_RST_USB_BIT, BUS_CLK_RST_REG);
+-  tusb_time_delay_ms_api(2);
+-
+-	USBC_REG_set_bit_l(USBPHY_CLK_GAT_BIT, USBPHY_CLK_REG);
+-  USBC_REG_set_bit_l(USBPHY_CLK_RST_BIT, USBPHY_CLK_REG);
+-
+-	USBC_REG_set_bit_l(BUS_CLK_USB_BIT, BUS_CLK_GATE0_REG);
+-	USBC_REG_set_bit_l(BUS_RST_USB_BIT, BUS_CLK_RST_REG);
+-}
+-
+-static void USBC_PhyConfig(void)
+-{
+-	/* Regulation 45 ohms */
+-	usb_phy_write(0x0c, 0x01, 1);
+-
+-	/* adjust PHY's magnitude and rate */
+-	usb_phy_write(0x20, 0x14, 5);
+-
+-	/* threshold adjustment disconnect */
+-	usb_phy_write(0x2a, 3, 2);
+-
+-	return;
+-}
+-
+-static void USBC_ConfigFIFO_Base(void)
+-{
+-	u32 reg_value;
+-
+-	/* config usb fifo, 8kb mode */
+-	reg_value = USBC_Readl(SUNXI_SRAMC_BASE + 0x04);
+-	reg_value &= ~(0x03 << 0);
+-	reg_value |= (1 << 0);
+-	USBC_Writel(reg_value, SUNXI_SRAMC_BASE + 0x04);
+-}
++  a733_usb_prepare();
++}
++
++static void USBC_PhyConfig(void) {}
++static void USBC_ConfigFIFO_Base(void) {}
+ 
+ static unsigned int USBC_WakeUp_ClearChangeDetect(unsigned int reg_val)
+ {
+@@ -388,8 +330,8 @@
+ #define print_block_list(a,b)
+ #endif
+ 
+-#if CFG_TUSB_MCU == OPT_MCU_F1C100S
+-#define USB_FIFO_SIZE_KB 4
++#if defined(SUNSTONE_A733_USB)
++#define USB_FIFO_SIZE_KB 8
+ #else
+ #error "Unsupported MCU"
+ #endif
+@@ -533,6 +475,7 @@
+   uint32_t *p = (uint32_t*)(uintptr_t) &_dcd.setup_packet;
+   p[0]        = USBC_Readl(USBC_REG_EPFIFO0(USBC0_BASE));
+   p[1]        = USBC_Readl(USBC_REG_EPFIFO0(USBC0_BASE));
++  a733_usb_trace(1, p[0], p[1]);
+ 
+   _dcd.pipe0.buf       = NULL;
+   _dcd.pipe0.length    = 0;
+@@ -542,6 +485,9 @@
+   const unsigned len    = _dcd.setup_packet.wLength;
+   _dcd.remaining_ctrl   = len;
+   const unsigned dir_in = tu_edpt_dir(_dcd.setup_packet.bmRequestType);
++  // A new SETUP supersedes the previous control transfer, including a
++  // status completion coalesced with this request during task polling.
++  _dcd.status_out = 0;
+   /* Clear RX FIFO and reverse the transaction direction */
+   if (len && dir_in) __USBC_Dev_ep0_ReadDataHalf();
+ }
+@@ -562,7 +508,7 @@
+   uint8_t          *buf = pipe->buf;
+   // TU_LOG1("   %p mps %d len %d rem %d\r\n", buf, mps, len, rem);
+   if (len) {
+-    volatile void* addr = (volatile void*)(USBC_REG_EPFIFO1(USBC0_BASE) + (epnum_minus1 << 2));
++    volatile void* addr = (volatile void*)(uintptr_t)(USBC_REG_EPFIFO1(USBC0_BASE) + (epnum_minus1 << 2));
+     if (_dcd.pipe_buf_is_fifo[TUSB_DIR_IN] & TU_BIT(epnum_minus1)) {
+       pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t) buf, addr, len, TUSB_DIR_IN);
+     } else {
+@@ -587,10 +533,11 @@
+   const unsigned mps = USBC_Readw(USBC_REG_RXMAXP(USBC0_BASE));
+   const unsigned rem = pipe->remaining;
+   const unsigned vld = USBC_Readw(USBC_REG_RXCOUNT(USBC0_BASE));
++  a733_usb_trace(7, ((uint32_t)ep_addr << 16) | vld, rem);
+   const unsigned len = TU_MIN(TU_MIN(rem, mps), vld);
+   uint8_t          *buf = pipe->buf;
+   if (len) {
+-    volatile void* addr = (volatile void*)(USBC_REG_EPFIFO1(USBC0_BASE) + (epnum_minus1 << 2));
++    volatile void* addr = (volatile void*)(uintptr_t)(USBC_REG_EPFIFO1(USBC0_BASE) + (epnum_minus1 << 2));
+     if (_dcd.pipe_buf_is_fifo[TUSB_DIR_OUT] & TU_BIT(epnum_minus1)) {
+       pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t )buf, addr, len, TUSB_DIR_OUT);
+     } else {
+@@ -615,6 +562,7 @@
+   unsigned dir_in       = tu_edpt_dir(ep_addr);
+ 
+   pipe_state_t *pipe = &_dcd.pipe[dir_in][epnum_minus1];
++  a733_usb_trace(6, ((uint32_t)ep_addr << 16) | total_bytes, 0);
+   pipe->buf          = buffer;
+   pipe->length       = total_bytes;
+   pipe->remaining    = total_bytes;
+@@ -622,7 +570,10 @@
+   USBC_SelectActiveEp(tu_edpt_number(ep_addr));
+ 
+   if (dir_in) {
+-    handle_xfer_in(ep_addr);
++    if (total_bytes == 0)
++      __USBC_Dev_Tx_WriteDataComplete(); // Arm the required zero-length packet.
++    else
++      handle_xfer_in(ep_addr);
+   } else {
+     if (__USBC_Dev_Rx_IsReadDataReady())
+       __USBC_Dev_Rx_ReadDataComplete();
+@@ -636,6 +587,7 @@
+   TU_ASSERT(total_bytes <= 64); /* Current implementation supports for only up to 64 bytes. */
+ 
+   const unsigned req = _dcd.setup_packet.bmRequestType;
++  a733_usb_trace(3, ((uint32_t)ep_addr << 16) | total_bytes, req | ((uint32_t)_dcd.status_out << 8));
+   TU_ASSERT(req != REQUEST_TYPE_INVALID || total_bytes == 0);
+ 
+   USBC_SelectActiveEp(0);
+@@ -712,6 +664,7 @@
+   }
+ 
+   unsigned req = _dcd.setup_packet.bmRequestType;
++  a733_usb_trace(2, csrl | (USBC_Readw(USBC_REG_COUNT0(USBC0_BASE)) << 16), req);
+   if (csrl & USB_CSRL0_SETEND) {
+     // TU_LOG1("   ABORT by the next packets\r\n");
+     USBC_Dev_Ctrl_ClearSetupEnd();
+@@ -728,6 +681,15 @@
+     if (!(csrl & USB_CSRL0_RXRDY)) return; /* Received SETUP packet */
+   }
+ 
++  if ((csrl & USB_CSRL0_RXRDY) && req != REQUEST_TYPE_INVALID &&
++      !tu_edpt_dir(req) && !_dcd.pipe0.buf && _dcd.remaining_ctrl == 0) {
++    // A completed STATUS IN and the next SETUP can share one polling pass.
++    if (*(const uint16_t *)(uintptr_t)&_dcd.setup_packet == 0x0500)
++      USBC_Dev_SetAddress((uint8_t)_dcd.setup_packet.wValue);
++    _dcd.setup_packet.bmRequestType = REQUEST_TYPE_INVALID;
++    req = REQUEST_TYPE_INVALID;
++    dcd_event_xfer_complete(rhport, TUSB_DIR_IN_MASK, 0, XFER_RESULT_SUCCESS, true);
++  }
+   if (csrl & USB_CSRL0_RXRDY) {
+     /* Received SETUP or DATA OUT packet */
+     if (req == REQUEST_TYPE_INVALID) {
+@@ -830,10 +792,6 @@
+ /*------------------------------------------------------------------
+  * Device API
+  *------------------------------------------------------------------*/
+-
+-static void usb_isr_handler(void) {
+-	dcd_int_handler(0);
+-}
+ 
+ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
+   (void) rh_init;
+@@ -860,8 +818,9 @@
+     | (1 << USBC_BP_INTUSBE_EN_SOF)
+     | (1 << USBC_BP_INTUSBE_EN_DISCONNECT)
+     , USBC_REG_INTUSBE(USBC0_BASE));
+-  f1c100s_intc_clear_pend(F1C100S_IRQ_USBOTG);
+-  f1c100s_intc_set_isr(F1C100S_IRQ_USBOTG, usb_isr_handler);
++  USBC_Writeb(0xff, USBC_REG_INTUSB(USBC0_BASE));
++  USBC_Writew(0xffff, USBC_REG_INTTx(USBC0_BASE));
++  USBC_Writew(0xffff, USBC_REG_INTRx(USBC0_BASE));
+ 
+   dcd_connect(rhport);
+ 
+@@ -893,23 +852,23 @@
+ void dcd_int_enable(uint8_t rhport)
+ {
+   (void)rhport;
+-  f1c100s_intc_enable_irq(F1C100S_IRQ_USBOTG);
++  a733_usb_poll_enable(true);
+ }
+ 
+ static void musb_int_mask(void)
+ {
+-  f1c100s_intc_mask_irq(F1C100S_IRQ_USBOTG);
++  /* The device stack and polling execute in one FreeRTOS task. */
+ }
+ 
+ void dcd_int_disable(uint8_t rhport)
+ {
+   (void)rhport;
+-  f1c100s_intc_disable_irq(F1C100S_IRQ_USBOTG);
++  a733_usb_poll_enable(false);
+ }
+ 
+ static void musb_int_unmask(void)
+ {
+-  f1c100s_intc_unmask_irq(F1C100S_IRQ_USBOTG);
++  /* No controller ISR runs concurrently with the stack. */
+ }
+ 
+ // Receive Set Address request, mcu port must also include status IN response
+@@ -1176,6 +1135,7 @@
+     /* ep0 FADDR must be 0 when (re)entering peripheral mode */
+     USBC_SelectActiveEp(0);
+     USBC_Dev_SetAddress(0);
++    a733_usb_trace(4, is, txis);
+     process_bus_reset(rhport);
+   }
+   if (is & USBC_INTUSB_RESUME) {

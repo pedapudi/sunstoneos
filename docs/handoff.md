@@ -6,7 +6,9 @@ floating-point context checks. An EL3 secure-timer timeout recovers a forced
 EL1 stall and returns to FEL. [Physical kernel evidence](a733-kernel.md) records
 the image, resources, measurements, and limitations.
 
-Persistent boot, native USB diagnostics, mimus execution, other CPU cores, and
+A native USB channel now passes status, packet-boundary echo, log, and commanded
+ROM return checks. [USB evidence](usb.md) records the implementation and limits.
+Persistent boot, mimus execution, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
 `/home/sunil/git/sunstoneos-worktrees/bringup` worktree.
@@ -19,9 +21,9 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board returned to FEL after the kernel check. The installed
+The board returned to FEL after the native USB check. The installed
 [session access rule](../tools/README.md) grants access after reconnects on
-physical port `3-1`. Both physical kernel cases regained access automatically.
+physical port `3-1`. Kernel and native USB checks regained access automatically.
 The rule lasts until host reboot and can be removed with `disable-session`.
 Rediscover the node and run `python3 tools/usb-access.py check-session` before
 an intentional reconnect.
@@ -33,7 +35,8 @@ The host has Clang 21, CMake, and LLVM object tools. LLD 21, ARM system emulatio
 and USB/FDT development headers are extracted under `~/.cache/sunstoneos/host`.
 Pinned sources, builds, packages, and raw evidence are under `~/.cache/sunstoneos`.
 The [build instructions](build.md) describe the emulator configuration.
-The local Python environment has Unicorn 2.1.4 for the DDR wrapper check.
+The local Python environment supplies the dependencies in
+`checks/host-requirements.txt` for USB transport and compiled-code checks.
 
 ## Reusable validation evidence
 
@@ -57,11 +60,17 @@ by a separate build definition; the original configuration remains in the
 other preprocessor branch. The physical and secure-model results cover the
 new startup and configuration.
 
+The USB image passed one bounded physical session after corrections to control
+completion and zero-length IN submission. The monitor renewal model and focused
+compiled-driver check also passed. Their identities and limits are in the USB
+document. The runtime renews the secure deadline while its USB task runs.
+The resident mode is implemented but has not been physically tested.
+
 ## Next actions
 
-1. Establish native USB diagnostics and a persistent runtime loop. The current
-   monitor arms a two-second recovery timer for bounded kernel checks; a running
-   OS needs an explicit policy for servicing or disarming it.
+1. Extend the USB transport for application loading and device diagnostics.
+   Preserve bounded recovery during controller work. Add interrupt delivery,
+   cold clock/PHY setup, and the remaining USB roles through separate checks.
 2. Identify and preserve populated storage before persistent installation.
    Add storage access and recovery without overwriting existing contents.
 3. Inspect mimus model/storage requirements and implement its isolated FreeRTOS
