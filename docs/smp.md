@@ -130,10 +130,12 @@ The emulator's CPU_ON service does not implement those board operations.
 
 The separate [SMP C/C++ runtime](smp-runtime.md) supplies task-local library
 state and passes concurrent allocation and shared-stream checks in QEMU.
-Integrating mimus still requires application parity checks with that library.
+[Mimus now passes reference parity](mimus-smp.md) with that library and a second
+inference worker.
 The original single-core library remains unsuitable for concurrent use.
 
 Further checks must cover interrupt priorities and nesting, all eight physical
 cores, and concurrent device activity. QEMU does not establish physical cache
 coherence, weak-memory behavior, performance, or power transitions. Mimus still
-uses the physical single-core runtime; multicore recognition remains outstanding.
+uses the physical single-core runtime; physical multicore recognition remains
+outstanding.

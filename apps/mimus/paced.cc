@@ -26,8 +26,10 @@ bool consume(void *context, std::span<const int16_t> pcm,
              const sunstone::ReplaySegment &segment, uint64_t start_ns) {
     using namespace mimus;
     auto &state = *static_cast<Recognition *>(context);
+#ifndef SUNSTONE_SMP_NEWLIB
     if (RESULT->log_length > RESULT_SIZE - LOG_OFFSET - 2048)
         return error("paced result capacity exhausted");
+#endif
     const uint64_t start = asr::platform::MonotonicNanos();
     state.arena.Reset();
     auto result = state.engine.Recognize(pcm, state.arena);
@@ -63,11 +65,13 @@ bool consume(void *context, std::span<const int16_t> pcm,
     }
     std::string formatted = state.formatter.Format(words, timing, result->punct_context, boundary);
     if (!released.empty()) formatted = released + (formatted.empty() ? "" : " ") + formatted;
+#ifndef SUNSTONE_SMP_NEWLIB
     // Reserve headers and the final replay/formatting summary before any part
     // of this segment is written. The platform log otherwise truncates writes.
     const size_t needed = result->text.size() + marks.size() + capitals.size() + formatted.size() + 1024;
     if (needed > RESULT_SIZE - LOG_OFFSET - 1 - RESULT->log_length)
         return error("paced result capacity exhausted");
+#endif
     const uint64_t complete_us = (asr::platform::MonotonicNanos() - start_ns) / 1000;
     const uint64_t speech_end_us = uint64_t(segment.speech_end) * 1000000 / 16000;
     char line[320];

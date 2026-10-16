@@ -19,6 +19,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
   A separate [two-core emulator target](smp.md) tests concurrent scheduling.
+  [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons there.
   Physical secondary-core startup remains planned.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.

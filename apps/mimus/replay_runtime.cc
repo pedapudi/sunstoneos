@@ -37,7 +37,12 @@ void mimus_replay_init() {
     jobs = xQueueCreateStatic(1, sizeof(Job), job_storage, &job_state);
     done = xQueueCreateStatic(1, sizeof(uint32_t), done_storage, &done_state);
     configASSERT(jobs && done);
+#ifdef SUNSTONE_SMP_NEWLIB
+    configASSERT(xTaskCreateStaticAffinitySet(capture, "replay", 4096, nullptr, 4,
+                                              stack, &task_state, 2));
+#else
     configASSERT(xTaskCreateStatic(capture, "replay", 4096, nullptr, 4, stack, &task_state));
+#endif
 }
 bool mimus_replay_run(std::span<const int16_t> pcm, ReplayConsumer consumer, void *context) {
     sunstone::Replay replay(pcm);

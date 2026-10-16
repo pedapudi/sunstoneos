@@ -3,7 +3,9 @@
 The FreeRTOS application transcribes a recorded 16 kHz mono clip on the physical
 Orange Pi boot CPU. The native USB application matches the host on 32 development recordings for
 feature and log-probability checksums, frame count, words, punctuation,
-capitalization, and formatted text. Paced replay, persistent boot, live input,
+capitalization, and formatted text. A separate [multicore emulator target](mimus-smp.md)
+also passes whole-recording and paced-reference comparisons with two inference
+workers. Physical paced replay, persistent boot, live input,
 accelerators, and performance qualification remain outstanding.
 
 The [native USB application](mimus-usb.md) adds model and recording uploads,

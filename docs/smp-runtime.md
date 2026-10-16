@@ -3,7 +3,8 @@
 The separate SMP runtime target runs C++ containers, newlib allocation, and
 memory streams on two emulated Cortex-A55 cores. Task-local library state
 survives migration between cores. This implementation is **tested in QEMU**;
-physical multicore operation and mimus integration remain untested.
+physical multicore operation remains untested. [Mimus integration](mimus-smp.md)
+passes whole-recording and paced-reference checks with a second inference worker.
 
 ## Library state belongs to the running task
 

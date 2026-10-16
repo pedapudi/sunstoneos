@@ -19,6 +19,10 @@
 #if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
 #include "replay_runtime.h"
 #endif
+#ifdef SUNSTONE_SMP_NEWLIB
+extern "C" void runtime_smp_init(void);
+#include "parallel_runtime.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -71,9 +75,11 @@ static void keep_recovery(void *)
         if (counter() - usb_runtime_last_progress() > 5 * COUNTER_HZ)
             platform_panic("USB task stalled", 0);
 #endif
+#ifndef SUNSTONE_SMP_NEWLIB
         register uint64_t operation __asm__("x0") = 0x734;
         __asm__ volatile("smc #0" : "+r"(operation) :: "memory");
         configASSERT(operation == 0);
+#endif
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -138,6 +144,9 @@ static bool recognition_error(const char *message)
 }
 static void recognize(void *)
 {
+#ifdef SUNSTONE_SMP_NEWLIB
+    mimus_parallel_bind();
+#endif
     std::span<const uint8_t> inputs[3];
 #ifdef SUNSTONE_MIMUS_USB
     for (;;) {
@@ -165,10 +174,14 @@ static void recognize(void *)
 #ifdef SUNSTONE_MIMUS_PACED
     asr::SetInternalArena(internal_arena);
     asr::SetYieldHook([] { taskYIELD(); });
-    platform_exit(mimus_transcribe_paced(inputs) ? 0 : 1);
+    const bool success = mimus_transcribe_paced(inputs);
 #else
-    platform_exit(transcribe(inputs) ? 0 : 1);
+    const bool success = transcribe(inputs);
 #endif
+#ifdef SUNSTONE_SMP_NEWLIB
+    mimus_parallel_report();
+#endif
+    platform_exit(success ? 0 : 1);
 #endif
 }
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
@@ -179,7 +192,13 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 extern "C" void kernel_main(void)
 {
     platform_init();
+#ifdef SUNSTONE_SMP_NEWLIB
+    runtime_smp_init();
+#endif
     runtime_init();
+#ifdef SUNSTONE_SMP_NEWLIB
+    mimus_parallel_init();
+#endif
 #if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
     mimus_replay_init();
 #endif
@@ -189,7 +208,12 @@ extern "C" void kernel_main(void)
     usb_runtime_start(4);
 #endif
     configASSERT(xTaskCreateStatic(keep_recovery, "recovery", 1024, nullptr, 5, recovery_stack, &tasks[0]));
+#ifdef SUNSTONE_SMP_NEWLIB
+    configASSERT(xTaskCreateStaticAffinitySet(recognize, "mimus", 16384, nullptr, 3,
+                                              recognition_stack, &tasks[1], 1));
+#else
     configASSERT(xTaskCreateStatic(recognize, "mimus", 16384, nullptr, 3, recognition_stack, &tasks[1]));
+#endif
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);
 }

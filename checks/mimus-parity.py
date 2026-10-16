@@ -19,7 +19,7 @@ if 'complete' in candidate:
     log = args.candidate.with_name('kernel.log').read_text()
 else:
     if candidate['exit'] != 0: raise SystemExit('Emulated execution failed.')
-    log = candidate['stderr']
+    log = candidate.get('stdout', '') + candidate['stderr']
 if 'PASS mimus:' not in log: raise SystemExit('Candidate lacks its completion marker.')
 if candidate.get('ram_input_sha256', candidate.get('bundle_sha256')) != reference['bundle_sha256']:
     raise SystemExit('Candidate input bundle differs from the reference.')
