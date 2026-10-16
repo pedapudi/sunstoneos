@@ -17,7 +17,7 @@ static int readable(uintptr_t a)
     if (a == UINT32_C(0x07090160)) return 1;
     if (a < CCU) return 0;
     switch (a-CCU) {
-    case 0: case 0x280: case 0x288: case 0x28c: case 0x191c:
+    case 0: case 0x280: case 0x288: case 0x28c: case 0x191c: case 0x199c:
     case 0x1200: case 0x120c: case 0x1210: case 0x1220: case 0x1224:
     case 0x1230: case 0x1240: case 0x1280: case 0x12c0: return 1;
     default: return 0;

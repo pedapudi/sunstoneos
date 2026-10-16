@@ -12,12 +12,14 @@
 #define MODULE_MASK (BIT(31)|UINT32_C(0x07000000)|UINT32_C(31))
 #define MODULE_VALUE (UINT32_C(2)<<24 | UINT32_C(24))
 #define BUS_MASK (BIT(16)|BIT(0))
+#define AUDIO_GATE_MODE (BIT(1)|BIT(2))
+#define AUDIO_GATE_ENABLE (BIT(17)|BIT(18))
 #define READY A733_I2S_RESOURCE_READY
 #define BUSY A733_I2S_RESOURCE_BUSY
 #define PENDING A733_I2S_RESOURCE_PENDING
 #define RETAINED A733_I2S_RESOURCE_RETAINED
 /* Stages are private; zero is a fresh object. */
-enum { P_REF, P_AUDIO, P_CHECK, P_LOCK, P_SETTLE, P_PUBLISH, P_READY };
+enum { P_REF, P_AUDIO, P_CHECK, P_LOCK, P_SETTLE, P_GATES, P_PUBLISH, P_READY };
 enum { L_IDLE, L_LEASE, L_CHECK, L_PINS, L_RESET_WAIT, L_ENABLE, L_READY,
        L_STOP, L_UNPIN, L_RELEASE };
 
@@ -66,15 +68,33 @@ static int reference(struct a733_audio_parent *p)
         ((ref >> 8) & 255) >= 79 && ((ref >> 8) & 255) <= 115 &&
         ((ref >> 8) & 255) == ((ref >> 16) & 127);
 }
+static int gate_control(struct a733_audio_parent *p)
+{
+    uint32_t value;
+    /* Manual 4.1.6.254: low bits set mean No-Auto; upper bits enable
+     * the outputs. Preserve the existing policy covering DIV2 and DIV5. */
+    return rd(p,p->deadline,CCU+0x191c,&value) &&
+        (value & (AUDIO_GATE_MODE|AUDIO_GATE_ENABLE)) == (AUDIO_GATE_MODE|AUDIO_GATE_ENABLE);
+}
+static int gate_status(struct a733_audio_parent *p, unsigned *enabled)
+{
+    uint32_t value;
+    if (!rd(p,p->deadline,CCU+0x199c,&value)) return 0;
+    *enabled = (value & AUDIO_GATE_ENABLE) == AUDIO_GATE_ENABLE;
+    return 1;
+}
 static int baseline(struct a733_audio_parent *p)
 {
-    uint32_t x, y, auto_gate;
+    uint32_t x, y;
     if (!reference(p) || !rd(p, p->deadline, AUDIO, &p->audio_value) ||
         (p->audio_value & BIT(24)) || !rd(p, p->deadline, CCU+0x288, &x) || (x & BIT(31)) ||
         !rd(p, p->deadline, CCU+0x28c, &y) || (y & BIT(27)) ||
-        !rd(p, p->deadline, CCU+0x191c, &auto_gate) || (auto_gate & 6)) return 0;
-    if (!p->cold) return (p->audio_value & (CONTROLS|BIT(28)|RATE_MASK)) ==
-                         (CONTROLS|BIT(28)|RATE_VALUE);
+        !gate_control(p)) return 0;
+    if (!p->cold) {
+        unsigned enabled;
+        return (p->audio_value & (CONTROLS|BIT(28)|RATE_MASK)) ==
+            (CONTROLS|BIT(28)|RATE_VALUE) && gate_status(p,&enabled) && enabled;
+    }
     if (p->audio_value & CONTROLS) return 0;
     static const unsigned consumers[] = {0x1200,0x1210,0x1220,0x1224,0x1230,0x1240,0x1280,0x12c0};
     for (unsigned i=0; i<sizeof(consumers)/sizeof(*consumers); ++i)
@@ -156,7 +176,13 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
         uint32_t v;
         ok = rd(p,p->deadline,AUDIO,&v) && (v & BIT(28)) &&
              update(p,p->deadline,AUDIO,BIT(27),BIT(27));
-        if (ok) p->stage = P_PUBLISH;
+        if (ok) p->stage = P_GATES;
+    } else if (p->stage == P_GATES) {
+        unsigned enabled;
+        /* Effective status is meaningful here after PLL output enable.
+         * Keep the change lease while propagation is pending. */
+        ok = gate_control(p) && gate_status(p,&enabled);
+        if (ok && enabled) p->stage = P_PUBLISH;
     }
     p->ops.leave(p->cookie);
     if (!ok || !time_ok(p,p->deadline)) return parent_fail(p);

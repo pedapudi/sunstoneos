@@ -65,15 +65,33 @@ so the reference remains 24 MHz. It never programs that shared reference.
 | Optional MCLK | Capture core divider code 2 | Divide module clock by 2; 12.288 MHz |
 
 The multiplier is within the source range 75–129 and the PLL range
-1.8–3.096 GHz. The initial binding requires modulation disabled in the AUDIO1
-control and pattern words. It also requires both AUDIO1 auto-gating bits clear
-at CCU offset `0x191c`. It refuses other profiles without changing them.
+1.8–3.096 GHz. The binding requires modulation disabled in the AUDIO1
+control and pattern words. Admission conservatively checks both AUDIO1 outputs,
+although I2S0 selects DIV5. At CCU offset `0x191c`, bits 1 and 2 must be set
+to select No-Auto mode, and software-enable bits 17 and 18 must also be set.
+Bits 17 and 18 at offset `0x199c` report the effective gate state. An inherited
+active PLL requires both status bits set before adoption. These checks preserve
+all unrelated fields and never write either gate register. The selected DIV5
+path remains protected by its stability lease; admission of both outputs does
+not reserve DIV2 for the I2S0 lifetime.
+
+The A733 manual defines these fields in sections 4.1.6.254 and 4.1.6.263.
+Section 4.1.4.6 specifies software enable, No-Auto selection, then effective
+status observation. The source names ending in `-auto` do not describe the
+low bits' active-high No-Auto polarity; the ordinary source gate helper sets
+these bits when enabled. The pinned manual is
+`~/.cache/sunstoneos/sources/camera-research/A733_User_Manual_V1.00.pdf`, SHA-256
+`cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`.
 
 Cold preparation programs the multiplier and DIV5 while the PLL is disabled,
 then enables the LDO, PLL and lock detection in source order. Polls require
 three consecutive lock observations at least three microseconds apart and a
 further 20-microsecond settling interval. A final lock observation precedes
-output enable. Every poll is bounded; expiry retains the leases and state.
+output enable. Effective gate status is checked only after output enable.
+Cold preparation polls pending gate propagation under the same deadline and
+retains the exclusive change lease until both outputs report enabled.
+Control fields are rechecked during those polls. No stable lease is published
+before effective status succeeds. Every poll is bounded; expiry retains the leases and state.
 These delays follow the source helper and require physical qualification.
 
 ## Local setup preserves other register fields and pins
@@ -129,7 +147,7 @@ An unfinished open has no cancellation API and can reach retained recovery
 at its deadline. It cannot silently discard partially acquired resources.
 
 The native adapter permits only the required clock and I2S registers. Reference,
-consumer, modulation and auto-gating registers are read-only. It checks that
+consumer, modulation, gate-control and gate-status registers are read-only. It checks that
 clock writes preserve unowned fields and uses AArch64 device barriers.
 Stable Device mappings and watchdog protection are prerequisites. A synchronous
 MMIO access can still stall the bus; software deadlines alone do not establish
@@ -157,9 +175,21 @@ AArch64 freestanding compilation covers the capture core, platform binding
 and native adapter. Native MMIO has not executed on the board. Raw evidence is
 stored under `~/.cache/sunstoneos/evidence/i2s-platform-20261016/`.
 
+The focused `--audio-gates` fixture checks inherited adoption, missing No-Auto
+or software-enable bits, disabled effective gates, and delayed cold gate
+propagation. Status-read failures, late status observations, lost control bits
+and propagation timeout retain the parent leases and prevent publication.
+The fixture requires every cold status read to follow PLL output enable and
+refuses gate-register writes. This change reuses the earlier local I2S, pin,
+DMA and clock-rate evidence; it does not repeat those lifecycles.
+Its results and affected native objects are recorded under
+`~/.cache/sunstoneos/evidence/audio-clock-admission-20261016/`.
+
 The checks can be reproduced from the repository root with an external build
-directory. Run them when these paths change; a clean integration does not
-require a repeat.
+directory. Select the case affected by the change. After compilation, use
+`/tmp/i2s-platform-check --audio-gates` for gate admission alone. The default
+execution below covers the broader lifecycle; a clean integration does not
+require either execution to repeat.
 
 ```sh
 cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

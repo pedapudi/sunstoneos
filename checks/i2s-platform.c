@@ -24,6 +24,7 @@ static uintptr_t failure_address;
 static unsigned regress_after_enable, regression_phase;
 static uint32_t saved_div2, pll_trace[8];
 static unsigned pll_count;
+static unsigned gate_status_reads, gate_status_hold, gate_status_fail, gate_status_late;
 static int enter(void *cookie, uint64_t deadline)
 {
     assert(cookie == &parent && !mutex && now < deadline);
@@ -55,6 +56,13 @@ static int read_word(void *cookie, uintptr_t a, uint32_t *out)
 {
     assert(cookie == &parent && mutex);
     ++reads;
+    if (a == C+0x199c) {
+        ++gate_status_reads;
+        /* Cold status must not be sampled before PLL output enable. */
+        assert(!parent.cold || (ccu[0x280/4] & B(27)));
+        if (gate_status_late) now=parent.deadline;
+        if (gate_status_fail) return 0;
+    }
     *out=*word(a);
     return 1;
 }
@@ -70,6 +78,7 @@ static int write_word(void *cookie, uintptr_t a, uint32_t value)
             assert((value & 0x700000) == saved_div2);
             assert(!(value & B(27)) || (ccu[0x280/4] & B(28)));
             if ((value & B(31)) && !lock_never) value |= B(28);
+            if ((value & B(27)) && !gate_status_hold) ccu[0x199c/4] |= B(17)|B(18);
         } else assert(held[A733_AUDIO_LOCAL]);
     }
     *word(a)=value;
@@ -96,6 +105,8 @@ static enum a733_i2s_resource_result publish_lease(void *cookie,
     assert(cookie == &parent && !mutex && old->scope == A733_AUDIO_CHANGE);
     assert((ccu[0x280/4] & 0xf807ff00u) == 0xf8047f00u);
     assert(held[A733_AUDIO_CHANGE]);
+    assert((ccu[0x191c/4] & 0x60006) == 0x60006);
+    assert((ccu[0x199c/4] & 0x60000) == 0x60000 && gate_status_reads);
     ++publish_count; held[A733_AUDIO_CHANGE]=0; held[A733_AUDIO_STABLE]=1;
     *new_token=(struct a733_audio_token){900,A733_AUDIO_STABLE};
     if (late_publish) now=deadline;
@@ -121,9 +132,12 @@ static void setup(unsigned cold)
     lease_pending=write_failure=lock_never=late_pin_release=late_write=0; failure_address=0;
     osc=0; saved_div2=2u<<20; pll_count=0;
     regress_after_enable=regression_phase=0;
+    gate_status_reads=gate_status_hold=gate_status_fail=gate_status_late=0;
     ccu[0]=(0xf8000000u | (99u<<8) | (99u<<16));
     ccu[0x280/4]=saved_div2 | B(7); /* Unowned field survives. */
     ccu[0x1200/4]=B(12); ccu[0x120c/4]=B(8);
+    ccu[0x191c/4]=0x70007; /* AUDIO0 fields are unrelated and preserved. */
+    ccu[0x199c/4]=cold ? B(16) : 0x70000;
     if (!cold) ccu[0x280/4] |= 0xf8047f00u;
     struct a733_audio_operations ops={acquire_lease,publish_lease,release_lease,
                                       enter,leave,time_now,read_word,write_word};
@@ -209,10 +223,61 @@ static void monotonic_core_case(void)
     failed_local_stays_quiet();
     puts("I2S acquisition: core rejects time below parent's latest observation before DMA or controller access");
 }
+static void audio_gate_cases(void)
+{
+    setup(0); ready_parent();
+    assert(!writes && !publish_count && gate_status_reads == 1);
+    /* Either automatic gating or a disabled software gate is inadmissible,
+     * even when the effective-status register currently reports enabled. */
+    const unsigned control_bits[]={1,2,17,18};
+    for (unsigned cold=0;cold<2;++cold) for (unsigned i=0;i<4;++i) {
+        setup(cold); ccu[0x191c/4] &= ~B(control_bits[i]); ccu[0x199c/4]=0x70000;
+        assert(a733_audio_parent_poll(&parent) == PENDING);
+        assert(a733_audio_parent_poll(&parent) == PENDING);
+        assert(a733_audio_parent_poll(&parent) == RETAINED);
+        assert(!writes && !gate_status_reads && !publish_count && parent.audio.id && parent.reference.id);
+        failed_parent_stays_quiet();
+    }
+    for (unsigned bit=17;bit<=18;++bit) {
+        setup(0); ccu[0x199c/4] &= ~B(bit);
+        assert(a733_audio_parent_poll(&parent) == PENDING);
+        assert(a733_audio_parent_poll(&parent) == PENDING);
+        assert(a733_audio_parent_poll(&parent) == RETAINED && !writes && !publish_count);
+        failed_parent_stays_quiet();
+    }
+    /* A cold output can take time to propagate. No status access occurs before
+     * output enable, and no stable lease is published while either gate is off. */
+    setup(1); gate_status_hold=1;
+    for (unsigned i=0;!gate_status_reads;++i) {
+        assert(i<15 && a733_audio_parent_poll(&parent) == PENDING); now+=10;
+    }
+    assert(!mutex && !publish_count && held[A733_AUDIO_CHANGE] && !held[A733_AUDIO_STABLE]);
+    ccu[0x199c/4] |= B(17);
+    assert(a733_audio_parent_poll(&parent) == PENDING && !publish_count);
+    ccu[0x199c/4] |= B(18);
+    assert(a733_audio_parent_poll(&parent) == PENDING && !publish_count);
+    assert(a733_audio_parent_poll(&parent) == READY && publish_count == 1);
+    assert(ccu[0x191c/4] == 0x70007 && ccu[0x199c/4] == 0x70000);
+    for (unsigned failure=0;failure<4;++failure) {
+        setup(1); gate_status_hold=1;
+        for (unsigned i=0;!gate_status_reads;++i) {
+            assert(i<15 && a733_audio_parent_poll(&parent) == PENDING); now+=10;
+        }
+        if (failure == 0) now=parent.deadline;
+        if (failure == 1) gate_status_fail=1;
+        if (failure == 2) gate_status_late=1;
+        if (failure == 3) ccu[0x191c/4] &= ~B(2);
+        assert(a733_audio_parent_poll(&parent) == RETAINED);
+        assert(!mutex && !publish_count && held[A733_AUDIO_CHANGE] && parent.audio.id && parent.reference.id);
+        failed_parent_stays_quiet();
+    }
+    puts("AUDIO1 gate admission: manual/software bits, effective status, cold propagation and retained failures passed; no gate writes");
+}
 int main(int argc, char **argv)
 {
     if (argc == 2) {
-        if (strcmp(argv[1],"--monotonic-core") == 0) monotonic_core_case();
+        if (strcmp(argv[1],"--audio-gates") == 0) audio_gate_cases();
+        else if (strcmp(argv[1],"--monotonic-core") == 0) monotonic_core_case();
         else { assert(strcmp(argv[1],"--clock-faults") == 0); clock_failure_cases(); }
         return 0;
     }
