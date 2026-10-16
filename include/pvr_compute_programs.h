@@ -38,10 +38,10 @@ struct pvr_compute_program_config {
     uint64_t admission_token;
     void *admission_context;
     /* Required pure, bounded privileged check. Return 1 only while the token
-     * proves single-core execution, the selected profile, private ownership,
+     * proves the selected MC1 construction profile, private ownership,
      * mappings, permissions, and all backing/reservation exclusions. Retain
      * that proof and every buffer until independent cleanup authorizes reuse.
-     * No physical implementation of this proof is supplied by the producer. */
+     * Physical core-count admission is a separate post-power requirement. */
     int (*admit)(void *, const struct pvr_compute_program_config *);
 };
 struct pvr_compute_program_result {
@@ -58,7 +58,8 @@ struct pvr_compute_program_result {
  * The admission callback/context must remain stable and disjoint from outputs;
  * it must not mutate inputs, publish buffers, or claim an unproven core mode.
  *
- * Requires an unattached private context and proven single-core execution.
+ * Requires an unattached private context and the MC1 construction profile.
+ * Execution requires native post-power core-count/capability admission.
  * Multicore addressing is unimplemented, despite the profile's multicore
  * capability. This is not a reduction of required hardware coverage.
  * Publishing/cache maintenance, heap register programming, firmware attachment,

@@ -293,12 +293,21 @@ static int read_output(void *ctx,void *out,size_t bytes)
     for(size_t i=0;i<bytes;++i)output[i]=input[i];
     __asm__ volatile("dsb sy":::"memory");return 1;
 }
+int pvr_compute_service_admit_mode(struct pvr_compute_service *s)
+{
+    if(!s||s->phase!=PVR_COMPUTE_SERVICE_READY||s->epoch!=s->service->epoch)return 0;
+    if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
+    if(!s->service->config.compute_mode||s->service->config.compute_mode(s->service->config.context)!=1)
+        return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
+    if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
+    return 1;
+}
 int pvr_compute_service_begin(struct pvr_compute_service *s,uint64_t deadline)
 {
     if(!s||s->phase!=PVR_COMPUTE_SERVICE_READY||s->service->phase!=PVR_GPU_SERVICE_READY||
        s->epoch!=s->service->epoch)return 0;
     s->deadline=deadline;
-    if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
+    if(pvr_compute_service_admit_mode(s)!=1)return 0;
     if(s->config->job->admit(s->config->job->admission_context,s->config->job)!=1)
         return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
     if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);

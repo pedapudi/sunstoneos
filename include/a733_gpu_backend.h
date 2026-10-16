@@ -4,6 +4,7 @@
 #include "a733_gpu_memory.h"
 #include "a733_gpu_platform.h"
 #include "gicv3_spi.h"
+#include "pvr_compute_mode.h"
 #include <stdatomic.h>
 
 #define A733_GPU_REGISTERS UINT32_C(0x01800000)
@@ -26,7 +27,8 @@ enum a733_gpu_backend_phase { A733_GPU_BACKEND_NEW, A733_GPU_BACKEND_BOUND,
 enum a733_gpu_backend_error { A733_GPU_BACKEND_OK, A733_GPU_BACKEND_STATE,
     A733_GPU_BACKEND_MAPPING, A733_GPU_BACKEND_CLOCK, A733_GPU_BACKEND_IDENTITY,
     A733_GPU_BACKEND_ACCESS, A733_GPU_BACKEND_MEMORY, A733_GPU_BACKEND_POWER,
-    A733_GPU_BACKEND_ISOLATION, A733_GPU_BACKEND_INTERRUPT, A733_GPU_BACKEND_EVENT };
+    A733_GPU_BACKEND_ISOLATION, A733_GPU_BACKEND_INTERRUPT, A733_GPU_BACKEND_EVENT,
+    A733_GPU_BACKEND_COMPUTE_MODE };
 struct a733_gpu_backend {
     struct pvr_gpu_service *service;
     struct a733_gpu_memory *memory;
@@ -35,6 +37,7 @@ struct a733_gpu_backend {
     struct pvr_free_list_ops free_list_ops;
     void *free_list_context;
     struct gicv3_spi irq;
+    struct pvr_compute_mode mode;
     atomic_uint error;
     uint64_t deadline, last_now, identity;
     uint32_t identity_step, legacy_revision, initialized;
@@ -49,7 +52,10 @@ struct a733_gpu_backend {
  * backend/device backing. Refusal preserves backend and config. Only translations and
  * CPU register reads occur; no GPU/GIC access or power operation occurs.
  *
- * All allowlisted GPU and GIC pages need pinned identity Device-nGnRnE mappings.
+ * All allowlisted GPU and GIC pages, including 0x0180f000 for core count and
+ * capabilities, need pinned identity Device-nGnRnE mappings. Post-power reads
+ * admit only the documented A733 MC1 profile before firmware startup. A count
+ * above one faults with MULTICORE_REQUIRED and performs no secondary-bank reads.
  * Backend/service/memory/power/control storage, firmware and page lists must
  * remain private and mutually disjoint from device backing. One service worker
  * serializes lifecycle callbacks. IRQ callbacks use the service's critical

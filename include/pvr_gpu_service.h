@@ -99,6 +99,11 @@ struct pvr_gpu_service_config {
     struct pvr_gpu_service_enable_ops power;
     struct pvr_gpu_service_free_list_config free_lists;
     struct pvr_compute_service *compute; /* Optional fixed native numerical job. */
+    /* Mandatory with compute. Bounded worker callback, returning exactly 1
+     * only for freshly checked powered MC1 identity, capabilities and retained
+     * lifecycle/token. No GPU access: observation occurs during power enable.
+     * Called after enable before firmware start, and before each COMPUTE. */
+    int (*compute_mode)(void *);
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;

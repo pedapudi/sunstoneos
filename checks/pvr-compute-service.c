@@ -22,7 +22,15 @@ static struct a733_gpu_vm_memory vm;
 static struct pvr_gpu_mapping maps[PVR_COMPUTE_SERVICE_MAPS];
 static uint64_t backing_pages[128],table_pages[PVR_COMPUTE_SERVICE_TABLE_PAGES];
 static uint32_t job_kicks,peer_checked,allow_complete,event_forwarded;
-static unsigned backing_used;
+static unsigned backing_used,mode_calls;
+static int observed_mode(void *ctx)
+{
+    callback(ctx); ++mode_calls;
+    configASSERT(get(&enabled)&&vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.phase==PVR_COMPUTE_SERVICE_READY);
+    if(compute_service_case==4)return 0;
+    if(compute_service_case==5&&mode_calls==2)return -1;
+    return 1;
+}
 static int admit_program(void *ctx,const struct pvr_compute_program_config *c)
 { (void)ctx;return c==&programs&&c->execution_cores==1&&c->admission_token==17; }
 static int admit_job(void *ctx,const struct pvr_compute_job_config *c)
@@ -146,9 +154,32 @@ static void compute_owner(void *unused)
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; partial publication fault retains backing before GPU startup\n");platform_exit(0);
     }
+    if(compute_service_case==4) {
+        r=wait_phase(PVR_GPU_SERVICE_FAILED);
+        configASSERT(r.owns_session&&compute.error==PVR_COMPUTE_SERVICE_ADMISSION&&mode_calls==1);
+        configASSERT(get(&enabled)&&!get(&published)&&!job_kicks);
+        unsigned before=get(&calls);vTaskDelay(5);configASSERT(get(&calls)==before);
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; mode refusal retains backing before firmware startup\n");platform_exit(0);
+    }
     r=wait_phase(PVR_GPU_SERVICE_READY);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_READY);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
+    if(compute_service_case==5) {
+        configASSERT(mode_calls==1);
+        r=request(PVR_GPU_SERVICE_COMPUTE,500000);
+        configASSERT(r.result==PVR_GPU_SERVICE_FAULT&&r.owns_session&&mode_calls==2&&!job_kicks);
+        configASSERT(compute.error==PVR_COMPUTE_SERVICE_ADMISSION&&vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+        unsigned before=get(&calls);vTaskDelay(5);configASSERT(get(&calls)==before);
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; renewed mode refusal precedes client-ring writes\n");platform_exit(0);
+    }
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE,500000).result==PVR_GPU_SERVICE_OK);
+    if(compute_service_case==6) {
+        wait_flag(&job_kicks,1);
+        configASSERT(mode_calls==2&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; fresh mode admission precedes startup and COMPUTE\n");platform_exit(0);
+    }
     wait_flag(&job_kicks,1);wait_flag(&peer_checked,1);
     r=request(PVR_GPU_SERVICE_STATUS,0);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(request(PVR_GPU_SERVICE_CLOSE,100000).result==PVR_GPU_SERVICE_BUSY);
@@ -195,7 +226,9 @@ void kernel_main(void)
         byte+=n+4096;
     }
     configASSERT(a733_gpu_memory_init(&memory,config.firmware_buffers,config.resources));
-    workload();configASSERT(pvr_gpu_service_init(&service,&config,4,1));
+    workload();configASSERT(!pvr_gpu_service_init(&service,&config,4,1));
+    config.compute_mode=observed_mode;
+    configASSERT(pvr_gpu_service_init(&service,&config,4,1));
     TaskHandle_t a=xTaskCreateStaticAffinitySet(compute_owner,"compute-owner",4096,NULL,5,stacks[0],&tasks[0],1);
     TaskHandle_t b=xTaskCreateStaticAffinitySet(compute_peer,"compute-peer",4096,NULL,5,stacks[1],&tasks[1],2);
     configASSERT(a&&b&&pvr_gpu_service_bind(&service,0,a)&&pvr_gpu_service_bind(&service,1,b));

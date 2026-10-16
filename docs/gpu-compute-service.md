@@ -19,7 +19,9 @@ context builder, program producer, and job producer to construct private offline
 records. It then binds the compute component before initializing the GPU service.
 Binding validates native CPU translations and physical-page exclusions. A required
 privileged admission callback supplies the remaining ownership, heap, table/map
-provenance, and single-core proof. Binding does not construct or install CPU
+provenance, and offline MC1 profile selection. The mandatory `compute_mode`
+callback validates the native post-power core-count observation before firmware
+startup and again before COMPUTE. Binding does not construct or install CPU
 mappings, enable GPU cores, publish memory, or access GPU registers.
 
 The allocation descriptors distinguish two device address spaces:
@@ -62,7 +64,8 @@ OPEN covers publication and firmware startup under one absolute deadline. The
 service validates admission again, then publishes one data page per advance and
 passes table publication to the existing native VM adapter. Firmware power and
 startup begin only after that publication completes. READY therefore requires
-both compute-memory publication and the existing firmware health check.
+compute-memory publication, current core-mode admission, and the existing
+firmware health check.
 
 COMPUTE rechecks admission, formats the private client control record, and drives
 the fixed job through the same privileged worker. Its final publication callback
@@ -83,7 +86,8 @@ CLOSE returns BUSY while a compute operation is pending. After numerical
 completion it can use the existing shutdown protocol and independently proven
 isolation callback. Compute backing remains retained afterward, and OPEN refuses
 to reuse that session. Explicit context cleanup, resource disposal, repeated jobs,
-and multicore context state remain required work. Power OFF alone does not prove
+remain required work. An unexpected multicore observation also requires per-core
+context state and command support; the documented A733 GPU is MC1. Power OFF alone does not prove
 that outstanding memory transactions have drained.
 
 With `config.compute == NULL`, existing requests use their previous lifecycle.
@@ -114,7 +118,10 @@ and retained backing. The reset case faults after KICK and observes no subsequen
 backend callbacks. The partial-publication case changes a retained physical-page
 descriptor after OPEN; native translation validation faults before GPU startup.
 Initialization checks also refuse incorrect physical correspondence, workload
-aliases of firmware memory, and misaligned service records.
+aliases of firmware memory, misaligned service records, and a missing mode callback.
+The focused mode cases cover refusal after power, refusal before client-ring
+formatting, and successful fresh admission before startup and COMPUTE.
+Run those cases with `--cases 4 5 6`; prior completion/reset evidence remains valid.
 
 The compiler and emulator execute the native translation and cache instructions.
 The fixture supplies simulated firmware acceptance, timeline writes, and numerical
@@ -127,8 +134,9 @@ executed artifact.
 
 Physical qualification still requires a bootable integration image, qualified
 independent recovery, native power/register/interrupt service binding, reserved
-CPU/GPU mappings, and a proven single-core mode with matching heap bases. The
-coordinator can then submit one fixed job and record the timeline, numerical
+CPU/GPU mappings, physical confirmation of the observed MC1 mode, and matching
+heap bases. The coordinator can then submit one fixed job and record the timeline, numerical
 results, guards, and retained shutdown state. No board request is queued until
 that image and its inputs exist. General applications, repeated submissions,
-multicore execution, and performance qualification remain outstanding.
+unexpected multicore execution modes, and performance qualification remain
+outstanding.

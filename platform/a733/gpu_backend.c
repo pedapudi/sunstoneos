@@ -28,7 +28,7 @@ static int device_page(uintptr_t address)
 }
 static int device_pages(void)
 {
-    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x03400000};
+    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x0180f000, 0x03400000};
     for (unsigned i = 0; i < sizeof(pages) / sizeof(*pages); ++i) {
         if (!device_page(pages[i]) || !device_page(pages[i] + 4092)) return 0;
     }
@@ -104,6 +104,7 @@ static int power_begin(void *context, uint64_t deadline)
     if ((b->phase != A733_GPU_BACKEND_BOUND && b->phase != A733_GPU_BACKEND_ISOLATED) ||
         b->memory->phase != A733_GPU_MEMORY_OFFLINE || !before(b, deadline)) return fail(b, A733_GPU_BACKEND_STATE);
     b->deadline = deadline; b->identity = 0; b->identity_step = 0;
+    b->mode = (struct pvr_compute_mode){0};
     b->phase = A733_GPU_BACKEND_POWERING;
     return a733_gpu_platform_begin(b->power, deadline) || fail(b, A733_GPU_BACKEND_POWER);
 }
@@ -124,25 +125,49 @@ static int power_poll(void *context)
     if (b->phase != A733_GPU_BACKEND_IDENTIFY || b->power->phase != A733_GPU_PLATFORM_ON ||
         !b->power->token || !b->power->delegated) return fail(b, A733_GPU_BACKEND_STATE), -1;
     uint64_t value;
-    if (b->identity_step == 0) {
-        if (!raw_read(b, 0x20, 8, &value)) return -1;
-        b->identity = value;
-        b->identity_step = value >> 48 ? 3 : 1;
-    } else if (b->identity_step == 1) {
-        if (!raw_read(b, 0x20, 4, &value)) return -1;
-        b->legacy_revision = (uint32_t)value; b->identity_step = 2;
-    } else if (b->identity_step == 2) {
-        if (!raw_read(b, 0x18, 4, &value)) return -1;
-        b->identity = (uint64_t)((b->legacy_revision >> 16) & 255) << 48 |
-                      (uint64_t)((b->legacy_revision >> 8) & 255) << 32 |
-                      (uint64_t)((value >> 8) & 255) << 16 | (value & 255);
-        b->identity_step = 3;
+    if (b->identity_step < 3) {
+        if (b->identity_step == 0) {
+            if (!raw_read(b, 0x20, 8, &value)) return -1;
+            b->identity = value;
+            b->identity_step = value >> 48 ? 3 : 1;
+        } else if (b->identity_step == 1) {
+            if (!raw_read(b, 0x20, 4, &value)) return -1;
+            b->legacy_revision = (uint32_t)value; b->identity_step = 2;
+        } else {
+            if (!raw_read(b, 0x18, 4, &value)) return -1;
+            b->identity = (uint64_t)((b->legacy_revision >> 16) & 255) << 48 |
+                          (uint64_t)((b->legacy_revision >> 8) & 255) << 32 |
+                          (uint64_t)((value >> 8) & 255) << 16 | (value & 255);
+            b->identity_step = 3;
+        }
+        if (!before(b, b->deadline)) return -1;
+        if (b->identity_step == 3 && b->identity != PVR_FW_A733_BVNC)
+            return fail(b, A733_GPU_BACKEND_IDENTITY), -1;
+        return 0;
     }
-    if (!before(b, b->deadline)) return -1;
-    if (b->identity_step != 3) return 0;
-    if (b->identity != PVR_FW_A733_BVNC) return fail(b, A733_GPU_BACKEND_IDENTITY), -1;
+    if (b->identity_step == 3) {
+        if (!raw_read(b, PVR_COMPUTE_MODE_SYSTEM, 4, &value) || !before(b, b->deadline)) return -1;
+        if (!pvr_compute_mode_count(&b->mode, b->identity, b->power->token,
+                                   b->service->epoch, (uint32_t)value))
+            return fail(b, A733_GPU_BACKEND_COMPUTE_MODE), -1;
+        b->identity_step = 4;
+        return 0;
+    }
+    if (b->identity_step != 4 || !raw_read(b, PVR_COMPUTE_MODE_CAPABILITIES, 8, &value) ||
+        !before(b, b->deadline)) return -1;
+    if (!pvr_compute_mode_capabilities(&b->mode, value) ||
+        !pvr_compute_mode_valid(&b->mode, b->identity, b->power->token, b->service->epoch))
+        return fail(b, A733_GPU_BACKEND_COMPUTE_MODE), -1;
     b->phase = A733_GPU_BACKEND_ACTIVE; return 1;
 }
+static int compute_mode(void *context)
+{
+    struct a733_gpu_backend *b = context;
+    if (!active(b)) return 0;
+    return pvr_compute_mode_valid(&b->mode, b->identity, b->power->token, b->service->epoch) ||
+        fail(b, A733_GPU_BACKEND_COMPUTE_MODE);
+}
+
 static int read_allowed(uint32_t off, uint32_t width, int stopping)
 {
     if (off == 0x100 && width == 8) return 1;
@@ -399,6 +424,6 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
     if (c->free_lists.count) c->free_lists.ops = (struct pvr_free_list_ops){free_allocate, free_page,
         free_read, free_write, free_publish, free_recover};
-    c->enable = NULL; c->context = b;
+    c->enable = NULL; c->context = b; c->compute_mode = compute_mode;
     return 1;
 }

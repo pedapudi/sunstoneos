@@ -88,6 +88,8 @@ static int setup(void)
     config.state = (struct pvr_fw_state_config){PVR_FW_A733_BVNC, 400000000, 1, 16};
     operation_deadline = until();
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = PVR_FW_A733_BVNC;
+    *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + PVR_COMPUTE_MODE_SYSTEM) = 1;
+    *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + PVR_COMPUTE_MODE_CAPABILITIES) = 0x78;
     *(volatile uint32_t *)(uintptr_t)(A733_GPU_GICD) = 0;
     observe = 1;
     return 0;
@@ -96,7 +98,7 @@ static int bind(void)
 {
     CHECK(a733_gpu_backend_bind(&backend, &service, &config, &memory, &power, &external));
     CHECK(config.context == &backend && !config.enable && config.power.begin && config.irq.mask);
-    service.config = config; service.initialized = 1;
+    service.config = config; service.initialized = 1; service.epoch = 1;
     CHECK(!mmio_count && !power_enabled);
     return 0;
 }
@@ -106,7 +108,7 @@ static int enabled(void)
     CHECK(!config.power.poll(&backend) && !power_enabled && !mmio_count);
     CHECK(!config.power.poll(&backend) && power_enabled && !mmio_count);
     int result = 0;
-    for (unsigned i = 0; i < 3 && !result; ++i) result = config.power.poll(&backend);
+    for (unsigned i = 0; i < 5 && !result; ++i) result = config.power.poll(&backend);
     CHECK(result == 1 && backend.identity == PVR_FW_A733_BVNC);
     identity_confirmed = 1; return 0;
 }
@@ -188,11 +190,11 @@ unsigned backend_check(void)
     CHECK(memory.phase == A733_GPU_MEMORY_OFFLINE && backend.phase == A733_GPU_BACKEND_ISOLATED && !power.token);
     mmio_count = 0; CHECK(!enabled());
 
-    /* Legacy identity uses one 64-bit and two 32-bit reads after power ON. */
+    /* Legacy identity uses three reads, then count/capabilities add two. */
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = 0x243800;
     *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x18) = 0x68b7;
-    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 3);
+    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 5);
 
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = PVR_FW_A733_BVNC + 1;

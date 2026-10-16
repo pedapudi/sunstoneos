@@ -2,7 +2,7 @@
 
 The native producer constructs the code and register images needed to save and
 restore a private A733 compute context. It is implemented and checked against
-pinned Mesa output. GPU execution and single-core admission remain unqualified.
+pinned Mesa output. Physical GPU execution and core-count observation remain unqualified.
 The public interface is [pvr_compute_programs.h](../include/pvr_compute_programs.h).
 
 The Unified Shading Cluster (USC) executes two embedded shared-register programs.
@@ -12,7 +12,7 @@ A fifth PDS program terminates the context task and frees shared partitions.
 
 ## Programs and allocation requirements
 
-The producer accepts only BVNC 36.56.104.183 and proven single-core execution.
+The producer accepts only BVNC 36.56.104.183 and the single-core construction profile.
 BVNC identifies the GPU hardware revision. Its selected feature branch uses
 conditional USC dispatch, ordinary compute barriers, and no compute Morton mode.
 The driver does not offer unchecked feature switches.
@@ -63,8 +63,8 @@ These logical checks cannot detect physical aliases or prove VM permissions.
 A required privileged admission callback validates a nonzero lifetime token.
 It must prove all of the following before returning success:
 
-- The active device and feature profile match the selected branch.
-- Only one GPU core can execute this context for the token's lifetime.
+- The selected device and MC1 construction profile match the supported branch.
+- The caller requires physical mode admission before executing this context.
 - The context is unattached, and all supplied storage is exclusively owned.
 - CPU views and GPU mappings describe the same backing with suitable permissions.
 - Heap bases match the eventual USC/PDS hardware configuration.
@@ -76,11 +76,11 @@ storage until independent completion and cleanup authorize reuse. Publication,
 cache maintenance, firmware attachment, submission, completion, and isolation
 remain separate operations. Power OFF does not prove memory transactions drained.
 
-No production implementation of the single-core proof exists in this component.
-Mesa's runtime placeholder of one core does not establish that proof. Both the
-published PDS setup and USC kernels lack per-core state addressing. Multicore
-program generation and physical qualification remain required for full hardware
-support. The 512-byte resume allocation preserves the profile's maximum-core
+The [native mode observer](gpu-compute-mode.md) checks the powered GPU count and
+capabilities before execution. A733 is documented as BXM-4-64 MC1. Mesa's runtime
+placeholder of one core does not establish the physical count. Both the published
+PDS setup and USC kernels lack per-core state addressing; an unexpected multicore
+observation therefore requires additional program generation and qualification. The 512-byte resume allocation preserves the profile's maximum-core
 layout; it does not make shared-register programs multicore-safe.
 
 ## Compiler reproduction and source comparison
@@ -147,4 +147,5 @@ hashes, exact check commands, comparison hashes, and final target inputs.
 Link `drivers/gpu/pvr_compute_programs.c` into the eventual privileged GPU owner;
 its only executable dependency is the caller's admission callback. Physical
 recovery, admission, memory publication, context attachment, job completion,
-shutdown integration, and multicore addressing remain prerequisites.
+and shutdown integration remain prerequisites for physical execution. An
+unexpected multicore observation also requires per-core addressing support.

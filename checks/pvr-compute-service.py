@@ -24,7 +24,7 @@ def main():
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=(1, 2, 3), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=(1, 2, 3, 4, 5, 6), default=[1, 2, 3])
     parser.add_argument('--build-only', action='store_true')
     a = parser.parse_args()
     root = Path(__file__).resolve().parents[1]

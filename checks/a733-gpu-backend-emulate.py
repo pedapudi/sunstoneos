@@ -14,7 +14,7 @@ mode.add_argument('--event-only', action='store_true')
 a = p.parse_args()
 u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
 for address, size in [(0x40000000, 0x400000), (0x00200000, 0x1000),
-                      (0x01800000, 0xb000), (0x03400000, 0x10000)]:
+                      (0x01800000, 0x10000), (0x03400000, 0x10000)]:
     u.mem_map(address, size)
 with a.elf.open('rb') as f:
     elf = ELFFile(f)
@@ -58,7 +58,7 @@ def instruction(uc, address, size, context):
         value = 0x04040000
     elif masked in (0xd5087800, 0xd5087820):  # AT S1E1R/W
         virtual = uc.reg_read(UC_ARM64_REG_X0 + register)
-        device = 0x01800000 <= virtual < 0x0180b000 or 0x03400000 <= virtual < 0x03410000
+        device = 0x01800000 <= virtual < 0x01810000 or 0x03400000 <= virtual < 0x03410000
         attributes = 0 if device else 0x44 if symbols['resource_arena'] <= virtual < symbols['resource_arena'] + 64*4096 else 0xff
         mode = word('mapping_mode')
         physical = virtual
@@ -78,7 +78,7 @@ def instruction(uc, address, size, context):
 def access(uc, operation, address, size, value, context):
     if not word('observe'):
         return
-    if 0x01800000 <= address < 0x0180b000:
+    if 0x01800000 <= address < 0x01810000:
         assert word('power_enabled'), f'GPU access before power ON at PC {uc.reg_read(UC_ARM64_REG_PC):#x}, address {address:#x}, operation {operation}'
         writing = operation == UC_MEM_WRITE
         if writing:

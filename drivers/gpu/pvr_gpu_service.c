@@ -215,6 +215,9 @@ static int opening_clock(struct pvr_gpu_service *s)
 }
 static int start_firmware(struct pvr_gpu_service *s)
 {
+    if (s->config.compute && pvr_compute_service_admit_mode(s->config.compute) != 1) {
+        fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
+    }
     if (pvr_gpu_start_begin(&s->start, s->deadline) != PVR_GPU_START_AGAIN ||
         s->start.last_now < s->last_now) { fail(s, PVR_GPU_SERVICE_START); return 0; }
     s->last_now = s->start.last_now; s->phase = PVR_GPU_SERVICE_STARTING; return 1;
@@ -486,6 +489,7 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
     if (!s || instance || s->initialized || !c || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
+        (c->compute && !c->compute_mode) ||
         (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||
         !c->start.now || !c->start.read || !c->start.write || !c->start.started || !c->start.publish ||

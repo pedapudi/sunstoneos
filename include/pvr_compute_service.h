@@ -23,8 +23,9 @@ struct pvr_gpu_service_config;
  * extra aliases. Firmware objects are never mapped into the workload VM.
  * Native translation checks establish CPU/PA correspondence, not reservation
  * ownership or GPU visibility. job.admit must also prove the table/map binding,
- * physical exclusions of all other platform users, heap bases and single-core
- * execution for the retained token's lifetime. */
+ * physical exclusions of all other platform users and heap bases. The offline
+ * producer selects the MC1 address layout. Physical core-mode admission occurs
+ * after power enable and before computation through service.compute_mode. */
 struct pvr_compute_service_config {
     const struct pvr_compute_job_config *job;
     const struct pvr_compute_job_image *image;
@@ -57,7 +58,7 @@ struct pvr_compute_service {
  * and cache. Bind to a zero/uninitialized service. Refusal preserves outputs.
  * Validates complete CPU/PA spans and aliases against service firmware/resources,
  * VM backing, private state, descriptors and page lists. Caller supplies the
- * remaining reservation/core-mode proof through job.admit. No buffer writes,
+ * remaining reservation proof through job.admit. No buffer writes,
  * cache maintenance or GPU access. Success sets config.compute. */
 int pvr_compute_service_bind(struct pvr_compute_service *, struct pvr_gpu_service *,
     struct pvr_gpu_service_config *, const struct pvr_compute_service_config *);
@@ -66,6 +67,9 @@ int pvr_compute_service_bind(struct pvr_compute_service *, struct pvr_gpu_servic
  * one data page or one VM table page per poll. READY requires complete admission
  * and publication. begin admits one fixed job for that epoch. No second job,
  * reinitialization or resource release is supported. */
+/* Post-power admission before the first firmware register write. Rechecked at
+ * COMPUTE; no observation survives a failed or replaced lifecycle. */
+int pvr_compute_service_admit_mode(struct pvr_compute_service *);
 int pvr_compute_service_prepare(struct pvr_compute_service *, uint64_t deadline);
 int pvr_compute_service_begin(struct pvr_compute_service *, uint64_t deadline);
 int pvr_compute_service_poll(struct pvr_compute_service *);
