@@ -14,6 +14,9 @@ all six page sizes and prepare firmware memory-context records.
 The [startup controller](gpu-start.md) now passes host checks for ordered reset
 release, cache/wrapper setup, minimum delays, and bounded firmware readiness.
 Its complete register traces match the original startup functions.
+The [firmware control worker](gpu-control.md) checks published compatibility,
+requires a health-command result, and services interrupts/events in bounded
+batches. It has host integration and ABI-reference evidence.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -154,8 +157,10 @@ The next implementation steps are:
 
 1. Integrate the prepared GPU memory contexts and firmware resources.
    Connect the checked startup controller and command transport to shared
-   allocations, cache publication, FreeRTOS serialization, interrupt/event handling, and bounded
-   start/stop behavior. GPU job completion needs separate synchronization.
+   allocations, cache publication, and FreeRTOS serialization. Integrate the
+   checked control worker with physical interrupt delivery and event-specific
+   resource handlers. Implement verified shutdown. GPU job completion needs
+   separate synchronization.
    Use the checked MIPS preparation component for firmware mappings and boot data;
    interpret additional feature parameters as initialization requires them.
 2. Integrate platform power, clocks, reset, and identity checks after independent

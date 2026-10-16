@@ -108,9 +108,17 @@ command. Source hashes are checked against the pinned download manifest.
 The host check passed before and after strengthening its publication-order
 assertions. Only that affected check was repeated. The native implementation,
 reference comparison, and AArch64 compilation were unchanged and their evidence
-was reused. Clang 21 produced 3,320 bytes of code/read-only data and no writable
-static data with freestanding and strict-alignment options.
+was reused. That queue revision compiled to 3,320 bytes of code/read-only data
+and no writable static data with freestanding and strict-alignment options.
 
 Commands, logs, shared-memory snapshots, source copies, hashes, and compiled
 objects are in `~/.cache/sunstoneos/evidence/gpu-ccb-20261016/`. No physical
 device access, broader OS regression run, or performance measurement occurred.
+
+The [firmware control worker](gpu-control.md) uses the added `pvr_ccb_abort()`
+operation to stop queue I/O after external faults. Abort preserves recorded
+results and retains all device backing. Its integration evidence supplements
+the unchanged queue publication and completion checks above.
+With abort included, the current queue component compiles to 3,372 bytes of
+code/read-only data and no writable static data; its object and input identities
+are recorded with the control-worker evidence.

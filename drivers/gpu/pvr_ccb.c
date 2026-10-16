@@ -217,3 +217,10 @@ enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *q, void *event)
     }
     return PVR_CCB_OK;
 }
+
+enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *q)
+{
+    if (!range(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
+        q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED)) return PVR_CCB_INVALID;
+    return fail(q);
+}

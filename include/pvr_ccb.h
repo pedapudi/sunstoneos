@@ -89,4 +89,8 @@ enum pvr_ccb_result pvr_ccb_collect(struct pvr_ccb *, struct pvr_ccb_token, uint
  * last_event retains a copied event even if acknowledging its slot fails.
  */
 enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *, void *event);
+/* Stop further queue I/O after an external device/service fault. No device
+ * access or buffer release. Already recorded results remain collectable.
+ * NEW is refused; PREPARED/ACTIVE/FAILED become or remain FAILED. */
+enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *);
 #endif

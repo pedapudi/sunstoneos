@@ -73,7 +73,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   match the pinned entry encoders and firmware context initializer. These
   components compile for AArch64. The [startup controller](gpu-start.md) passes
   host ordering, deadline, and retained-failure checks; complete register traces
-  match the reference startup functions. Physical identity,
+  match the reference startup functions. The [control worker](gpu-control.md)
+  passes host compatibility, health-command, bounded event, and retained-failure
+  checks. Physical identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host

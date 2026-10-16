@@ -116,6 +116,10 @@ The [startup controller](gpu-start.md) now publishes firmware resources, perform
 ordered register setup through callbacks, and waits for readiness with an absolute
 deadline. Complete traces match the original startup functions. Host checks cover
 minimum delays, 42 retained-failure cases, and 40 atomic input refusals.
+The [firmware control worker](gpu-control.md) now checks published compatibility,
+requires one successful health command, and services bounded interrupt/event
+batches. Its queue integration passes 78 retained-failure cases. ABI and interrupt
+operations match pinned references; the health-command reference was reused.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -291,9 +295,13 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement GPU interrupt/event handling, firmware compatibility and health
-   checks, and a verified shutdown protocol. Integrate the startup controller
-   with platform resources and FreeRTOS serialization. Native [startup](gpu-start.md)
+7. Implement verified GPU shutdown, resource-specific firmware event handlers,
+   and physical interrupt delivery. Integrate startup and control with platform
+   resources and FreeRTOS serialization. The [control worker](gpu-control.md)
+   now gates queue activation on compatibility and a health-command result,
+   bounds event batches, and aborts queue I/O after faults; reuse
+   `gpu-control-20261016`. Actual compatibility publication and health completion
+   remain untested. Native [startup](gpu-start.md)
    now has host/reference evidence for the MIPS register sequence, minimum
    delays, readiness, and retained failures; reuse `gpu-start-20261016`.
    Physical startup remains blocked on independent watchdog recovery.

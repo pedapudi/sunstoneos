@@ -67,7 +67,8 @@ The GPU now has native [firmware decoding and staging](gpu.md) and
 [MIPS memory/boot preparation](gpu-mips.md) with host evidence.
 [Command transport](gpu-queues.md), [initialization records](gpu-fw-state.md),
 [GPU workload tables](gpu-vm.md), and [startup sequencing](gpu-start.md)
-also have host reference evidence.
+also have host reference evidence. [Compatibility, health, and event service](gpu-control.md)
+have host integration evidence; physical interrupt delivery remains outstanding.
 Its firmware boot, graphics/compute runtime, and physical identity remain
 unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is
