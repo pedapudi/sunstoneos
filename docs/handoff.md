@@ -34,6 +34,7 @@ software behavior; physical operation remains unqualified.
 | Component | Implemented scope and evidence | Next dependency |
 | --- | --- | --- |
 | [Secondary CPU continuation](cpu-continue.md) | Per-core interrupt preparation, translation tables, exception vectors; host and instruction checks pass | Coherent cached runtime and physical all-core startup |
+| [Cached CPU preparation](cpu-coherence.md) | Revision-specific controls and matching EL3/EL1 RAM attributes; host/instruction checks pass | Coordinated continuation, exception/power obligations and physical coherence |
 | [Eight-core diagnostic](a733-smp.md) | Dedicated scheduler image links; admission, selected instructions and layout checks pass | Independent recovery and bounded launcher; complete image has never executed |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Native reservations, handoff authority, physical transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
@@ -41,9 +42,12 @@ software behavior; physical operation remains unqualified.
 | [GPU compute](gpu-compute-service.md) | Native workload publication, compiled fixed shader, command stream and output checking; service model passes | Physical firmware startup and numerical execution |
 | [GPU core mode](gpu-compute-mode.md) | Observed single-core capability required before startup/submission; instruction/service checks pass | Physical identity and wider core modes |
 | [GPU isolation](gpu-isolation.md) | Only exact provider success permits reclamation; focused instruction check passes | Proven request blocking and completion of all accepted external writes |
-| [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Association/security/data paths and physical radio binding |
-| [Camera analog startup](camera-platform.md) | Cold shared PHY setup and calibration readback; source/model checks pass | Complete capture composition and actual memory/drain providers |
-| [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Timing controller, display engine, panel and physical scanout |
+| [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Security/data paths and physical radio binding |
+| [Wi-Fi association](radio-association.md) | Open/WPA2 association and disconnect control; source/model checks pass; unresolved roaming remains retained | EAPOL, authentication/keys and data transport; WPA2 is still security-pending |
+| [Camera analog startup](camera-platform.md) | Cold shared PHY setup and calibration readback; source/model checks pass | Native resource binding and actual memory/drain providers |
+| [Camera capture](camera-capture.md) | All six native controllers compose in both port models; one NV16 frame becomes CPU-owned after shutdown, drain and fault scan | Actual providers, global mapping disposal and concurrent device ownership |
+| [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Display engine, panel and physical scanout |
+| [LCD1 timing](tcon-lcd.md) | DSI1 pixel-feed timing, authenticated start and bounded stop; source/model checks and native compilation pass | Display-engine framebuffer feed and real producer-drain evidence |
 | [I2S capture](i2s.md) | Finite capture, DMA ownership and clock/reset/header-pin binding; host/emulator checks pass | Continuous capture, playback, Bluetooth PCM and attached microphone |
 
 The camera path also has [OV5640 control](camera.md), [local CSI control](csi-receiver.md),
@@ -57,10 +61,11 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | Worktree | Assigned work |
 | --- | --- |
 | `a733-smp` | SRAM launcher and host transaction for the eight-core diagnostic |
-| `cpu-coherence` | Cached CPU/EL3 mappings, architecture workarounds and bounded transition primitives |
-| `camera-capture` | Composition of sensor, analog, receiver, route, frame DMA and IOMMU |
-| `display` | LCD1 timing-controller feed to DSI1 |
-| `radio-sdio` | Wi-Fi association and disconnect; security remains a separate dependency |
+| CPU worker, separate worktree | Full cached eight-core image using the integrated CPU/EL3 primitives |
+| Display worker, separate worktree | Display-engine framebuffer scanout feeding LCD1/DSI1 |
+| `radio-sdio` | Wi-Fi data frames and EAPOL transport; authentication and keys remain separate dependencies |
+| UART worker, separate worktree | Native UART configuration, FIFO transfers, flow control and interrupt service |
+| Storage worker, separate worktree | Read-only SD/MMC identification, capacity and block transfers |
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -110,8 +115,9 @@ The local Python environment supplies the dependencies in
 
 Component documents link their source identities, selected checks, artifacts and
 limitations. Raw evidence lives under `~/.cache/sunstoneos/evidence/`.
-The central integration records `hardware-integration-20261016f` and
-`hardware-integration-20261016g` preserve source comparisons, build artifacts
+The central integration records `hardware-integration-20261016f`,
+`hardware-integration-20261016g` and `hardware-integration-20261016h`
+preserve source comparisons, build artifacts
 and source-pin verification. Integration reused component execution evidence;
 no unchanged emulator or physical workload was repeated.
 
@@ -141,7 +147,9 @@ The dashboard requires no separate status maintenance or recurring browser tests
    [expiry checks](watchdog-expiry.md) with current target identity and reconnect
    access. Protected ROM return alone does not establish reset cause or recovery
    from a stalled interconnect. Preserve the inserted microSD and all storage.
-2. Finish the bounded eight-core launcher and cached CPU integration. Qualify
+2. Finish the bounded eight-core launcher and cached CPU integration. The launcher
+   remains under review: pre-mutation refusals need a safe FEL return, and upload
+   readback must match the already validated artifact identities. Qualify
    physical startup, per-core interrupts, coherent memory, affinity and context
    preservation after recovery passes. Keep the complete diagnostic's execution
    status explicit; selected instruction checks do not establish scheduler operation.
@@ -149,12 +157,13 @@ The dashboard requires no separate status maintenance or recurring browser tests
    GPU and NPU. Account for remote firmware, all shared-memory users, cache
    attributes and outstanding bus traffic. Supply real admission/drain evidence
    before device commands or buffer reuse.
-4. Complete the camera capture composition and DSI timing-controller feed.
-   Add display-engine scanout, panel-specific sequencing and wider camera modes.
+4. Bind the integrated camera capture coordinator to native platform providers
+   and complete the display-engine framebuffer feed
+   through the integrated LCD1/DSI1 controllers. Add panel-specific sequencing and wider camera modes.
    OV5640 module availability remains unconfirmed; the DSI panel is undecided.
    Keep Hawkeye 64 MP feasibility separate from the first camera implementation.
-5. Complete Wi-Fi association, authentication/key management, data networking,
-   interrupts, sleep and reconnect. Implement Bluetooth HCI, pairing, hands-free
+5. Extend the integrated Wi-Fi association control with authentication/key
+   management, data networking, interrupts, sleep and reconnect. Implement Bluetooth HCI, pairing, hands-free
    control and voice transport. Establish actual SDIO/UART/power/pin bindings and
    radio identity before physical use. No microphone is available; recorded input
    remains the application fixture while I2S and headset support proceed.

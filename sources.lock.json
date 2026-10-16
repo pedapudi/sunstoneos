@@ -1204,5 +1204,95 @@
     "url": "https://documentation-service.arm.com/static/61fa619e2dd99944d0514955",
     "archive": "gpu-isolation/pck600-trm.pdf",
     "sha256": "32bd49afc93c0ecdb2b11663f73fbe90742203ac296a1d4aabb8172c3988e6ac"
+  },
+  "display-tcon-lcd": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd.c",
+    "sha256": "299eebcaf1f90ae08470569c41a5ed5a6151042c54a6aee8b36ed688a67e6f9e"
+  },
+  "display-tcon-lcd-header": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd.h",
+    "sha256": "bb1ab5c77f35f98b1598609f4b8fbfbd1cdd52ac789e9ac2c793b6dc2ea82de6"
+  },
+  "display-tcon-lcd-registers": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/tcon_lcd_type.h",
+    "sha256": "f7fb71db0c0962e5c054d79d0e1cc8adbe9afdd68eba4803237470c39606b763"
+  },
+  "display-tcon-top-registers": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top_type.h",
+    "sha256": "d6cf833f14f7830af3d6ef5ff2369c5cf98c813638333b63057b5825bcc08810"
+  },
+  "tfa-cpu-coherence-dsu_macros-S": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/dsu_macros.S",
+    "sha256": "c9d3e2117a4b7530582750920ef5ab3970a82ded2d30182b273a8611fe9ec233",
+    "archive": "cpu-coherence/include/lib/cpus/aarch64/dsu_macros.S"
+  },
+  "tfa-cpu-coherence-dsu_def-h": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/dsu_def.h",
+    "sha256": "66f40bc7816d40b181fae74a6794698022c5a24b99d616a5e92dabc9397a2a44",
+    "archive": "cpu-coherence/include/lib/cpus/aarch64/dsu_def.h"
+  },
+  "tfa-cpu-coherence-cpu_macros-S": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/cpu_macros.S",
+    "sha256": "bbf349033687b98df73d63d5b2a8ea7d130314f0605bfdaf4266a1ec5419d1d5",
+    "archive": "cpu-coherence/include/lib/cpus/aarch64/cpu_macros.S"
+  },
+  "tfa-cpu-coherence-xlat_tables_defs-h": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/xlat_tables/xlat_tables_defs.h",
+    "sha256": "89bb66f3f97714819c49423a89801f9341682ecce97ff1f53a71090ad99707eb",
+    "archive": "cpu-coherence/include/lib/xlat_tables/xlat_tables_defs.h"
+  },
+  "tfa-cpu-coherence-asm_macros-S": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/arch/aarch64/asm_macros.S",
+    "sha256": "3950f583fd8bb64c5735ed02de2f223edcf7f4763cdd74ed5375d9f48b1033b7",
+    "archive": "cpu-coherence/include/arch/aarch64/asm_macros.S"
+  },
+  "tfa-cpu-coherence-xlat_tables_core-c": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/xlat_tables_v2/xlat_tables_core.c",
+    "sha256": "b8accbfef481cb081e77403f369cebe804bf4355f2f46cff29ffcb7eb46769cb",
+    "archive": "cpu-coherence/lib/xlat_tables_v2/xlat_tables_core.c"
+  },
+  "tfa-cpu-coherence-xlat_tables_arch-c": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/xlat_tables_v2/aarch64/xlat_tables_arch.c",
+    "sha256": "415d8a7a8b33304302e233ef9eb449d92f6918ff7ef21c19f5ee24fb4ef23864",
+    "archive": "cpu-coherence/lib/xlat_tables_v2/aarch64/xlat_tables_arch.c"
+  },
+  "tfa-cpu-coherence-errata_common-c": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/cpus/errata_common.c",
+    "sha256": "966ef0d93a7e62b1729e2e177f32d7fdd7c00553f8380346573195efc445b38e",
+    "archive": "cpu-coherence/lib/cpus/errata_common.c"
+  },
+  "tfa-cpu-coherence-wa_cve_2022_23960_bhb-S": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/cpus/helpers/aarch64/wa_cve_2022_23960_bhb.S",
+    "sha256": "e462ee07c598402e37f172f3c9febe1e059af1ca9a85a771e587a130658e670f",
+    "archive": "cpu-coherence/lib/cpus/helpers/aarch64/wa_cve_2022_23960_bhb.S"
+  },
+  "tfa-cpu-coherence-build-options-rst": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/docs/getting_started/build-options.rst",
+    "sha256": "af225e9409a3f7f6c7324d4381788e352979c5dce7dcdbf454ef9866d4451dbe",
+    "archive": "cpu-coherence/docs/getting_started/build-options.rst"
+  },
+  "tfa-cpu-coherence-cpu-specific-build-macros-rst": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/docs/design/cpu-specific-build-macros.rst",
+    "sha256": "bdeb09db084177087678db8388743ff0c4d4e13dfb610ff85aabb1def3a25cb8",
+    "archive": "cpu-coherence/docs/design/cpu-specific-build-macros.rst"
   }
 }

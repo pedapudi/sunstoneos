@@ -30,8 +30,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   supplies per-core interrupt preparation, translation tables and fault vectors.
   Host and instruction checks pass. The [eight-core diagnostic](a733-smp.md)
   links with bounded startup and scheduler checks, but the complete image has
-  not executed. Cached coherence, physical entry, interrupts and secondary
-  scheduling remain unqualified.
+  not executed. [Cached CPU preparation](cpu-coherence.md) supplies revision-specific
+  controls and matching EL3/nonsecure EL1 RAM mappings. Host and instruction
+  checks pass, including 40-bit physical-address admission. Integration into
+  coordinated startup and exception handling remains required. Physical cached
+  coherence, entry, interrupts and secondary scheduling remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
@@ -179,8 +182,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source comparisons and focused admission checks pass. The [video transmitter](dsi-video.md)
   implements four-lane RGB888 and loose RGB666 with continuous clocks and bounded
   engine stop. Source-register comparisons and host lifecycle checks pass.
-  Cold PLL setup, clock/pin ownership, timing-controller and display-engine
-  integration, scanout, panel configuration, read transactions and
+  The [LCD1 timing controller](tcon-lcd.md) supplies DSI1 timing, authenticated
+  start and bounded stop after producer drain. Source-profile and fault checks
+  pass; native compilation passes. Cold PLL setup, clock/pin ownership,
+  display-engine integration, scanout, panel configuration, read transactions and
   physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
@@ -199,8 +204,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Host composition and native compilation pass. [Wi-Fi initialization and scan](radio-wifi.md)
   implement the source-defined RF setup and firmware startup sequence, explicit
   channel policy and bounded passive scanning. Source-packet comparisons and
-  host lifecycle checks pass. Physical binding and silicon identity,
-  power/reset bindings, association, security, data networking,
+  host lifecycle checks pass. [Station association](radio-association.md) adds
+  copied targets, explicit transmission authority and separate command/connection
+  completion. Source and focused host checks pass. WPA2 remains security-pending;
+  unresolved roaming blocks replacement operations. Physical binding and silicon
+  identity, power/reset bindings, authentication/keys, data networking,
   pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
@@ -215,8 +223,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   now supports single-image mode. Host/source checks and native compilation
   pass. The [shared analog controller](camera-platform.md) implements cold PHY
   startup with exclusive common-register ownership and calibration readback.
-  Source/model checks and native compilation pass. Complete capture composition,
-  module electrical binding, actual DMA mapping/drain,
+  Source/model checks and native compilation pass. The [capture coordinator](camera-capture.md)
+  composes the sensor, analog controls, receiver, route, frame DMA and IOMMU.
+  Both port models pass one-frame NV16 delivery and guarded CPU ownership
+  transfer after path shutdown, drain and fault scan. Global mappings and all
+  other IOMMU masters remain reserved; concurrent device use and disposal are
+  not established. Module electrical binding, actual DMA mapping/drain,
   additional modes and physical qualification remain outstanding.
   Module availability remains unconfirmed.
 
