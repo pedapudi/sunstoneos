@@ -39,6 +39,10 @@ The [native container record](nbg-model.md) uses the same pinned format evidence
 and reuses saved SDK output for a comparison driven by C-decoded records.
 The [native assembly record](nbg-assembly.md) reuses that capture for allocation
 padding, address resolution, and command construction.
+The [checksum record](nbg-checksum.md) pins two published models and compares
+the native verifier with the isolated SDK CRC primitive. The
+[descriptor investigation](npu.md#descriptor-field-compatibility-is-a-research-result)
+pins Mesa's candidate neural-command fields and records compatibility limits.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

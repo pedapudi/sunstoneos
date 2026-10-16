@@ -25,14 +25,15 @@ struct nbg_assembly_buffer {
  * Requires an immutable successful nbg_model_open view and file. Supports one
  * UINT8 input/output, INIT followed by 1..1024 sequential 192-byte NN records,
  * the observed load-state templates, and patch sources 0/1/2/3/5/8. Other
- * layouts are refused. Full profile validation precedes publishing requirements.
+ * layouts are refused. The complete file checksum must match. Full profile
+ * validation precedes publishing requirements.
  * Minimum sizes reproduce observed SDK padding; allocation sizes round to 4 KiB
  * and reserve the controller's complete command fetch. Total <= 256 MiB.
  * Returns 1 on success, 0 on refusal. Result must not overlap view or file.
  * Refusal leaves result unchanged. No allocation, MMIO, cache, or locking.
  *
  * SUCCESS IS NOT SUBMISSION AUTHORIZATION. Descriptor data references check
- * one addressed byte only; full access extents, checksum, SRAM mapping, and
+ * one addressed byte only; full access extents, SRAM mapping, and
  * descriptor semantics remain unverified. No controller token is produced. */
 int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan *);
 

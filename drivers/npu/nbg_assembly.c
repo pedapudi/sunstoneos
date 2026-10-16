@@ -1,5 +1,6 @@
 #include "nbg_assembly.h"
 #include "nbg_relocation.h"
+#include "nbg_checksum.h"
 #include "a733_npu_controller.h"
 #include <string.h>
 
@@ -72,6 +73,8 @@ static int patch_fields(const struct nbg_patch *p)
 static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
 {
     const struct nbg_model_header *h = &m->header;
+    struct nbg_checksum checksum;
+    if (nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
     if (h->version != NBG_MODEL_VERSION || h->target != 0x1000003b ||
         h->flags != 0x02d00027 || h->core_count != 1 || h->nn_bytes != 192 ||
         h->input_count != 1 || h->output_count != 1 ||

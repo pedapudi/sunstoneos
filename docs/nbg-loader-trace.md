@@ -143,9 +143,11 @@ The tool refuses an existing output directory to preserve captured evidence.
 The reconstruction checks most descriptor references as one-byte addresses.
 It does **not** establish the complete access extent of each neural operation.
 Native model admission still requires descriptor semantics, padded access
-bounds, checksum handling, internal-SRAM mapping, and controlled command
+bounds, internal-SRAM mapping, and controlled command
 registration. Other model formats and operation types remain required.
 Numerical output, physical completion, and recovery have not been tested.
+The separate [checksum verifier](nbg-checksum.md) now validates the complete
+`0x1001e` file before native assembly.
 
 The [native assembler](nbg-assembly.md) now reuses the saved capture to verify
 allocation planning and command construction in C, including the native

@@ -43,7 +43,8 @@ does not establish that an unknown operation can execute.
 
 The header retains target, feature flags, core count, memory requirements,
 and stored checksum. The decoder does not verify checksum or hardware
-compatibility. Names preserve the original 64 bytes and add a terminating NUL;
+compatibility. A separate [checksum verifier](nbg-checksum.md) checks complete-file
+integrity and is required by the assembler. Names preserve the original 64 bytes and add a terminating NUL;
 they are not checked for valid UTF-8. Signed fields are decoded without
 relying on an out-of-range unsigned-to-signed conversion.
 
@@ -106,5 +107,6 @@ No board request, kernel rebuild, or unchanged integration suite was run.
 The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
 assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
-checksum verification, and SRAM placement remain separate admission requirements.
+and SRAM placement remain separate admission requirements. Complete-file checksum
+verification is implemented separately and required by the assembler.
 The assembler adapts the completion event and reserves the controller's full fetch span.

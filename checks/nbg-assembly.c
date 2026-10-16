@@ -1,4 +1,5 @@
 #include "nbg_assembly.h"
+#include "nbg_checksum.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,10 @@ static void reset(void)
 static void bad_word(size_t offset, uint32_t value)
 {
     reset(); put(image + offset, value);
+    /* Keep integrity valid so these cases continue to exercise assembly policy. */
+    struct nbg_checksum checksum;
+    assert(nbg_checksum_verify(image, image_bytes, &checksum) != NBG_CHECKSUM_INVALID);
+    put(image + 108, checksum.computed);
     assert(nbg_model_open(image, image_bytes, &view) == NBG_DECODE_OK);
     struct nbg_assembly_plan out, before;
     memset(&out, 0xa5, sizeof(out)); memcpy(&before, &out, sizeof(out));
@@ -114,6 +119,20 @@ int main(int argc, char **argv)
     bad_word(patches + 200 + 12, UINT32_MAX); bad_word(patches + 200 + 12, 60);
     bad_word(patches + 200 + 16, UINT32_MAX);
     bad_word(patches + 659 * 40 + 4, 192); /* Failure after all earlier operations. */
+    reset();
+
+    /* Corruption is refused before assembly; checksum verification is mandatory. */
+    const size_t corrupt[] = {108, view.sections[NBG_COEFF].offset, image_bytes - 1};
+    for (unsigned i = 0; i < sizeof(corrupt) / sizeof(corrupt[0]); ++i) {
+        reset(); image[corrupt[i]] ^= 1;
+        assert(nbg_model_open(image, image_bytes, &view) == NBG_DECODE_OK);
+        struct nbg_assembly_plan requirements;
+        memset(&requirements, 0xa5, sizeof(requirements));
+        struct nbg_assembly_plan before = requirements;
+        assert(!nbg_assembly_requirements(&view, &requirements));
+        assert(!memcmp(&requirements, &before, sizeof(requirements)));
+        refuse(&out);
+    }
     reset();
 
     for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i) {

@@ -67,6 +67,9 @@ the saved SDK submission through the host reconstruction. The
 neural-operation profile entirely in C. It passes atomic-refusal checks and a
 comparison with saved SDK bytes at page-aligned addresses. The command image
 uses the native completion event and reserves the complete fetch span.
+The [checksum verifier](nbg-checksum.md) now matches two published models and
+the isolated SDK CRC routine. Native assembly requires a matching complete-file
+checksum before publishing requirements or modifying buffers.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.
@@ -203,8 +206,12 @@ the tool hash and recovery evidence in the application document.
    the service's fixed startup catalogue. The [native assembler](nbg-assembly.md)
    resolves the observed profile's sources and destinations from checked container
    views and adapts the completion event and fetch reservation. Determine complete
-   descriptor access lengths, implement checksum verification and SRAM mapping,
+   descriptor access lengths, implement SRAM mapping,
    and establish descriptor semantics and cold initialization equivalence.
+   The [descriptor research](npu.md#descriptor-field-compatibility-is-a-research-result)
+   maps all observed relocation destinations to candidate Mesa fields but exposes
+   stride differences and an additional descriptor word. Resolve those differences
+   before using the layout for access validation.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
    Obtain a pinned

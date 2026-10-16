@@ -15,6 +15,7 @@ provides the allocation and command reference.
 
 ## Restrict assembly to the observed command format
 
+The complete file must pass [checksum verification](nbg-checksum.md).
 The supported profile requires target `0x1000003b`, format `0x1001e`, feature
 word `0x02d00027`, one core, and one asymmetrically quantized UINT8 input and
 output. One initialization operation precedes 1–1,024 sequential neural
@@ -88,9 +89,11 @@ space contains END pairs. The reservation covers the controller's fixed
 ## Host evidence covers assembly and refusal
 
 One final ASan/UBSan check passed the complete fixture, buffer guards, padding,
-event adaptation, deterministic reassembly, and 104 refusal cases. Cases include
+event adaptation, deterministic reassembly, and 107 refusal cases. Cases include
 unsupported profiles, malformed relocations, a late-operation failure, CPU and
-device aliases, metadata aliases, misalignment, overflow, and undersized buffers.
+device aliases, metadata aliases, misalignment, overflow, undersized buffers,
+and checksum or payload corruption. Malformed-profile cases receive repaired
+checksums so that they continue to exercise the intended assembly validation.
 A valid final allocation ending at the 32-bit address-space boundary also passes.
 
 One integration check starts from the hash-verified SDK submission capture at
@@ -100,21 +103,26 @@ all 534 descriptor relocations, 125 command-pointer relocations, complete
 descriptor and command images, coefficients, allocation padding, and guards.
 The SDK is not executed again.
 
-One AArch64 object build passed. It contains 5,016 bytes of text and read-only
-data, no writable static data, and references the decoder, encoder, `memcpy`,
+The current AArch64 object build passes. It contains 5,000 bytes of text and read-only
+data, no writable static data, and references the checksum verifier, decoder, encoder, `memcpy`,
 and `memset`. Its SHA-256 is
-`fafb86b2e3e3dda29dd8b7efd197dbcd4e1fb3ffc4bb4c4fdb885e5aa78520e9`.
+`10aae4b5c3170b8bb27734676c035c9a7f0e68feaa8ad0669e0677913b508b4b`.
 Disassembly shows a 480-byte assembly frame and a 1,872-byte per-operation frame;
 decoder, encoder, and memory-helper frames are additional. The returned plan
 occupies 88 bytes on the 64-bit host. The isolated build target is `nbg-assembly`.
 
 The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c) and
 [nbg-assembly.py](../checks/nbg-assembly.py). Build the host shared library from
-`nbg_assembly.c`, `nbg_model.c`, and `nbg_relocation.c` with `-shared -fPIC -Iinclude`.
+`nbg_assembly.c`, `nbg_model.c`, `nbg_relocation.c`, and `nbg_checksum.c` with
+`-shared -fPIC -Iinclude`.
 The Python check takes the model, shared library, saved capture directory, and
 a new output directory. It uses [host dependencies](../checks/host-requirements.txt).
 Raw results, artifacts, commands, and hashes are under
-`~/.cache/sunstoneos/evidence/nbg-assembly-20261016/`.
+`~/.cache/sunstoneos/evidence/nbg-assembly-20261016/`. The current sanitizer check
+and AArch64 object, including mandatory checksum verification, are under
+`~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`. The earlier complete SDK-byte
+comparison remains reusable because command construction is unchanged and the
+reference model passes the added integrity requirement.
 
 The evidence directory retains an initial fixture refusal caused by an incorrect
 interpretation of the second auxiliary operation word. A separate build failure
@@ -126,7 +134,7 @@ Unchanged kernel, controller, service, DMA, and mimus suites were not repeated.
 
 Descriptor data references currently check one addressed byte. Command-pointer
 references check the complete 192-byte descriptor. Full data-access extents,
-checksum coverage, internal-SRAM mapping, auxiliary-field semantics, and cold
+internal-SRAM mapping, auxiliary-field semantics, and cold
 initialization equivalence remain unresolved. Arbitrary descriptor contents
 can therefore pass offline assembly without being safe to execute.
 

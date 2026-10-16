@@ -16,6 +16,8 @@ view and malformed-input checks and supplies the same reconstruction from C
 records using saved SDK evidence. The [native assembler](nbg-assembly.md)
 now plans allocations and constructs the observed neural-operation profile,
 matching saved SDK bytes after address and completion-event adjustments.
+The [checksum verifier](nbg-checksum.md) matches two published models and is
+required before assembly.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -119,13 +121,12 @@ selected operation references, relocation tensor indices, and pool alignment.
 It accepts only disjoint nonempty sections. Other legitimate layouts may require
 an extension supported by a compiled fixture.
 
-Successful inspection does not authorize hardware submission. The separate
-[address encoder](nbg-relocation.md) implements three checked 32-bit relocation
-encodings. Complete relocation source/destination resolution, command encoding,
-software-operation semantics, SRAM
-placement, device identity, and the stored checksum remain unvalidated. Unknown
-operation and relocation-source values appear explicitly in the inventory.
-The output reports `checksum_verified: false`.
+Successful inspection does not authorize hardware submission. The host inspector
+does not resolve relocations, validate command semantics or SRAM placement, check
+device identity, or verify integrity. Unknown operation and relocation-source
+values appear explicitly in its inventory. Its output reports
+`checksum_verified: false`; the native assembler uses the separate
+[checksum verifier](nbg-checksum.md) before constructing commands.
 
 ## Reference comparison and malformed-file checks
 
@@ -173,6 +174,38 @@ and an input hash manifest. Download manifests under
 `~/.cache/sunstoneos/sources/npu/` record source URLs, revisions, sizes, and
 SHA-256 values. Retrieved files were also checked against Git blob identities.
 
+## Descriptor field compatibility is a research result
+
+Mesa's [neural-command implementation](https://gitlab.freedesktop.org/mesa/mesa/-/blob/45b86c99242b3dbf8bdaec7d5f90084106338a63/src/gallium/drivers/etnaviv/etnaviv_ml_nn.c)
+provides a candidate field layout at revision
+`45b86c99242b3dbf8bdaec7d5f90084106338a63`. Its MIT-licensed source is cached
+with the original notices, download URLs, Git blob identities, and SHA-256 values
+under `~/.cache/sunstoneos/sources/npu/mesa-45b86c99242b3dbf8bdaec7d5f90084106338a63/`.
+
+All 534 descriptor relocations in the pinned A733 fixture fall at candidate
+weight, tensor-address, or circular-buffer-end fields:
+
+| Byte offset | Candidate meaning | Relocations |
+| ---: | --- | ---: |
+| 20 | Weight address, shifted by six | 77 |
+| 24 | Input tensor address | 125 |
+| 28 | Output tensor address | 125 |
+| 76 | Output circular-buffer end plus one, shifted by six | 102 |
+| 84 | Input circular-buffer end plus one, shifted by six | 105 |
+
+This correspondence is an inference. Mesa's structure occupies 136 bytes;
+the A733 descriptors occupy 192 bytes. Word 35 is nonzero in 77 descriptors,
+beyond that structure. Mesa assigns image heights to its named Y-stride fields,
+while the A733 fixture contains values resembling per-channel image area.
+The first descriptor reports an input width and height of 224 but a Y-stride
+value of 50,176. These differences prevent direct adoption as an access validator.
+
+The saved inventory is `descriptor-research.json` under
+`~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`. It includes every decoded
+candidate field, relocation correspondence, and descriptor tail. Resolve stride
+units, circular-buffer boundaries, the extra word, and prefetch extents before
+replacing one-byte address checks with complete device-access validation.
+
 ## Native implementation sequence
 
 1. **Compile a small numerical fixture.** Obtain and pin the A733 host compiler.
@@ -193,7 +226,7 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
 5. **Complete native model admission.** Container decoding, allocation planning,
    and assembly have host evidence for the observed neural-operation profile.
    Establish full descriptor access extents,
-   checksum semantics, command permissions, supported operators, and output
+   command permissions, supported operators, and output
    padding. Inspect `libNBGlinker.so` where published source is insufficient.
    Extend to other format versions with representative compiler output.
 6. **Execute and recover.** Submit a bounded job, synchronize completion, and
@@ -210,7 +243,7 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    establish full NPU support.
 
 The next independent implementation work is complete descriptor access bounds,
-checksum verification, command admission, and a pinned host compiler for a numerical fixture. Physical inference
+command admission, and a pinned host compiler for a numerical fixture. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.

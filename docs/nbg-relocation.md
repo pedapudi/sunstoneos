@@ -110,5 +110,5 @@ The isolated AArch64 CMake target is `nbg-relocation`.
 
 The next loader work must map every serialized patch to an owned command or
 state allocation, resolve source kinds and allocation lengths, and validate
-every command before publication. Checksums, internal-SRAM mapping, output
+every command before publication. Internal-SRAM mapping, output
 padding, dynamic command registration, and numerical inference remain required.

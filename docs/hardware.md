@@ -72,6 +72,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and reconstructs saved SDK output through C records and the host assembler.
   The [native assembler](nbg-assembly.md) plans page-aligned buffers and matches
   the saved neural-operation submission after address and completion adaptation.
+  [Complete-file integrity](nbg-checksum.md) passes two published model checks
+  and is required before native assembly.
   Board resource integration, model admission, numerical execution,
   and physical qualification remain outstanding.
 
