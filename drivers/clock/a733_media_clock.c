@@ -53,7 +53,7 @@ int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clo
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry),sizeof(*manager),sizeof(*pck)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
         if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
-    uint32_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC|A733_POWER_DCDC2,exclusive=0;
+    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC|A733_POWER_DCDC2,exclusive=0;
     unsigned selected[3];
     for (unsigned i=0;i<3;++i) {
         if ((c->fabric[i]&~fabric_masks[i]) || (i && !(c->fabric[i]&BIT(31)))) return 0;

@@ -95,7 +95,7 @@ int main(int argc,char **argv)
             .pck={token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE},
             .module=0x80000001,.module_hz=234000000,.fabric={0,0x80000000,0x80000000},
             .fabric_hz={24000000,24000000,24000000},.start=A733_VIDEO_COLD_NS_ROM};
-        uint32_t scopes;assert(a733_video_platform_scopes(&config,&scopes));
+        a733_clock_mask_t scopes;assert(a733_video_platform_scopes(&config,&scopes));
         assert(a733_clock_acquire(&clocks,99,scopes,A733_CLOCK_VE_DEC,100000,&config.clock)==A733_CLOCK_OK);
         struct a733_clock_token conflict={0};
         assert(a733_clock_acquire(&clocks,100,scopes,A733_CLOCK_VE_DEC,100000,&conflict)!=A733_CLOCK_OK);

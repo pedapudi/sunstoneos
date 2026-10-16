@@ -70,13 +70,14 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
     uint64_t token,deadline,last_now,version,reset_until;
-    uint32_t shared,selected_mhz[3],identity_high;
+    a733_clock_mask_t shared;
+    uint32_t selected_mhz[3],identity_high;
     unsigned initialized,admitted,checked,mapped,prepared,step,failed,locked,cold_step;
 };
 /* Pure scope derivation; requires exclusive VE_DEC and exact shared result.
  * Preparation never releases, powers down, or claims physical qualification.
  */
-int a733_video_platform_scopes(const struct a733_video_platform_config *,uint32_t *);
+int a733_video_platform_scopes(const struct a733_video_platform_config *,a733_clock_mask_t *);
 int a733_video_platform_init(struct a733_video_platform *,
     const struct a733_video_platform_config *,const struct a733_video_platform_ops *,void *);
 /* Immutable adapter table for a733_video_jpeg_begin(...,p,...). */

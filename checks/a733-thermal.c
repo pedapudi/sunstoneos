@@ -78,7 +78,7 @@ static void setup(struct model *m,unsigned cold,unsigned peri)
     for (unsigned i=0;i<5;++i) m->ths[(0x40+4*i)/4]=0xf000f000;
     const unsigned codes[]={2420,2400,2500,1769,1770};pack(m->sid,250,codes);
     assert(a733_clock_leases_init(&m->registry,now,m));
-    uint32_t stable=A733_CLOCK_FABRIC|(peri ? A733_CLOCK_PERI0 : 0),exclusive=A733_CLOCK_THS;
+    a733_clock_mask_t stable=A733_CLOCK_FABRIC|(peri ? A733_CLOCK_PERI0 : 0),exclusive=A733_CLOCK_THS;
     if (cold) exclusive|=A733_CLOCK_GPADC24M;else stable|=A733_CLOCK_GPADC24M;
     struct a733_clock_token token;
     assert(a733_clock_acquire(&m->registry,23,stable,exclusive,100000,&token)==A733_CLOCK_OK);

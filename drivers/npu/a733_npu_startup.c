@@ -136,9 +136,9 @@ static void publish(struct a733_npu_startup *b,struct a733_npu_platform_resource
     out->supply_uv=b->stage==RESOURCES_READY ? A733_NPU_INITIAL_UV : 0;
 }
 static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platform_config *c,
-    uint32_t shared,struct a733_npu_platform_resources *out)
+    a733_clock_mask_t shared,struct a733_npu_platform_resources *out)
 {
-    struct a733_npu_startup *b=v;uint32_t expected;
+    struct a733_npu_startup *b=v;a733_clock_mask_t expected;
     if(!b || !b->initialized)return RETAINED;
     if(!task_owner(b) || b->register_held || b->i2c_held || !c || !out ||
         !exact_config(c,&b->handoff.allowed) || !a733_npu_platform_scopes(c,&expected) || shared!=expected ||
@@ -248,7 +248,7 @@ static int valid_backend(const struct a733_npu_handoff *h)
 int a733_npu_startup_init(struct a733_npu_startup *b,const struct a733_npu_handoff *h,
     struct a733_npu_startup_resources *s,struct a733_clock_leases *registry)
 {
-    uint32_t shared;
+    a733_clock_mask_t shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !b || b->initialized ||
         !h || !s || !s->initialized || !registry || !registry->initialized ||
         !separate(b,sizeof(*b),h,sizeof(*h)) || !separate(b,sizeof(*b),s,sizeof(*s)) ||
@@ -270,7 +270,7 @@ int a733_npu_startup_init(struct a733_npu_startup *b,const struct a733_npu_hando
 }
 int a733_npu_startup_bind_pll(struct a733_npu_startup *b,struct a733_npu_pll *p)
 {
-    uint32_t shared,exclusive,platform_shared;
+    a733_clock_mask_t shared,exclusive,platform_shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
         !b || !b->initialized || b->failed || b->pll_source || b->stage!=CLOCK || b->platform.stage ||
         b->clock_token.id || b->rail_token.id || b->pck_token.token || b->platform.resources.clock.id ||

@@ -33,7 +33,7 @@ struct a733_npu_platform_operations {
      * but never replace them. Never enter while holding the register mutex.
      * Reservations survive both READY and failure for platform lifetime. */
     enum a733_npu_platform_result (*acquire)(void *,
-        const struct a733_npu_platform_config *, uint32_t shared,
+        const struct a733_npu_platform_config *, a733_clock_mask_t shared,
         struct a733_npu_platform_resources *);
     /* One common mutex serializes every register writer. enter returns 1 when
      * held, 0 for effect-free BUSY, -1 for uncertainty. leave returns exactly
@@ -54,12 +54,13 @@ struct a733_npu_platform {
     struct a733_npu_platform_resources resources, observed;
     void *cookie;
     uint64_t last_now, settle_until;
-    uint32_t shared, parent_hz, divisor, selected_mhz[3];
+    a733_clock_mask_t shared;
+    uint32_t parent_hz, divisor, selected_mhz[3];
     unsigned initialized, stage, step, failed, wrote;
 };
 /* Pure validation; refusal preserves output. Unsupported fabric parents and
  * fractional rates are refused. Parent leases are separate from FABRIC. */
-int a733_npu_platform_scopes(const struct a733_npu_platform_config *, uint32_t *);
+int a733_npu_platform_scopes(const struct a733_npu_platform_config *, a733_clock_mask_t *);
 /* Zero private storage once, initialize before use, serialize all polls.
  * Callbacks/context and admitted resources remain live for platform lifetime. */
 int a733_npu_platform_init(struct a733_npu_platform *,

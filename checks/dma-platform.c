@@ -21,7 +21,7 @@ struct model {
 };
 static int now(void *cookie,uint64_t *v) {*v=((struct model *)cookie)->now;return 1;}
 static enum a733_dma_platform_result acquire(void *cookie,
-    const struct a733_dma_platform_config *c,uint32_t shared,struct a733_clock_token *token)
+    const struct a733_dma_platform_config *c,a733_clock_mask_t shared,struct a733_clock_token *token)
 {
     struct model *m=cookie;assert(!m->locked);++m->acquire_calls;
     if (m->bad_handoff || c->handoff!=0x1234) return RETAINED;
@@ -177,7 +177,7 @@ int main(int argc, char **argv)
     c.rate_hz[1]=c.rate_hz[2]=480000000;
     setup(&m,&p,c);assert(finish(&m,&p)==READY && !m.writes);
     setup(&m,&p,c);m.ccu[0x1908/4]&=~(1u<<7);assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
-    c=config(1);uint32_t scopes=0x12345678;
+    c=config(1);a733_clock_mask_t scopes=0x12345678;
     c.fabric[1]=0x81000000;assert(!a733_dma_platform_scopes(&c,&scopes) && scopes==0x12345678);
     c=config(1);c.route_change_mask=0;assert(!a733_dma_platform_scopes(&c,&scopes));
     setup(&m,&p,config(1));m.bad_handoff=1;assert(finish(&m,&p)==RETAINED && !m.reads && !p.token.id);retained(&m,&p);

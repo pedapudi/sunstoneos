@@ -32,7 +32,7 @@ static int now(void *v,uint64_t *out)
     m->floor=m->now;*out=m->now;return 1;
 }
 static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platform_config *c,
-    uint32_t shared,struct a733_npu_platform_resources *r)
+    a733_clock_mask_t shared,struct a733_npu_platform_resources *r)
 {
     struct model *m=v;++m->calls;++m->acquires;assert(!m->lock);
     if(memcmp(c,&m->config,sizeof(*c)) || m->refuse){m->acquire_failed=1;return RETAINED;}
@@ -144,7 +144,7 @@ static void success(void)
 static void scopes(void)
 {
     struct model m;setup(&m,2);struct a733_clock_token t={0},out={0};
-    uint32_t shared;assert(a733_npu_platform_scopes(&m.config,&shared));
+    a733_clock_mask_t shared;assert(a733_npu_platform_scopes(&m.config,&shared));
     assert(shared==(A733_CLOCK_PLL_NPU|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_CLOCK_PERI0));
     assert(a733_clock_acquire(&m.clocks,8,A733_CLOCK_NPU,0,10000,&t)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&m.clocks,8,A733_CLOCK_PLL_NPU,0,10000,&t)==A733_CLOCK_OK);
@@ -158,7 +158,7 @@ static void scopes(void)
     assert(a733_npu_platform_poll(&m.p)==PENDING);
     assert(a733_clock_acquire(&m.clocks,9,0,A733_CLOCK_FABRIC,10000,&out)==A733_CLOCK_BUSY);
     assert(a733_clock_acquire(&m.clocks,9,0,A733_CLOCK_PERI0,10000,&out)==A733_CLOCK_BUSY);
-    uint32_t unchanged=123;m.config.fabric[2]=0x85000000;
+    a733_clock_mask_t unchanged=123;m.config.fabric[2]=0x85000000;
     assert(!a733_npu_platform_scopes(&m.config,&unchanged) && unchanged==123);
 }
 static void refusal(void)

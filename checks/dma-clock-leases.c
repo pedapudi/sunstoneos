@@ -13,7 +13,7 @@ int main(void)
     assert(a733_clock_acquire(&m,1,A733_CLOCK_FABRIC|A733_CLOCK_PERI0,
         A733_CLOCK_DMA0,20,&dma)==A733_CLOCK_OK);
     assert(dma.shared==(A733_CLOCK_FABRIC|A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC));
-    const uint32_t writers[]={A733_CLOCK_DMA0,A733_CLOCK_FABRIC,A733_CLOCK_PERI0,
+    const a733_clock_mask_t writers[]={A733_CLOCK_DMA0,A733_CLOCK_FABRIC,A733_CLOCK_PERI0,
         A733_CLOCK_REF,A733_CLOCK_OSC};
     for(unsigned i=0;i<sizeof(writers)/sizeof(*writers);++i) {
         assert(a733_clock_acquire(&m,2,0,writers[i],20,&other)==A733_CLOCK_BUSY);

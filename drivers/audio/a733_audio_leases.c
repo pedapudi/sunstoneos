@@ -17,9 +17,9 @@ static enum a733_i2s_resource_result acquire(void *ctx,enum a733_audio_scope sco
         !separate(b->registry,sizeof(*b->registry),out,sizeof(*out)))return fault(b);
     struct a733_clock_token *t=&b->tokens[scope-1];
     if(out->id || t->id)return fault(b); /* No asynchronous registry acquisition. */
-    uint32_t shared=scope==A733_AUDIO_REFERENCE ? A733_CLOCK_REF :
+    a733_clock_mask_t shared=scope==A733_AUDIO_REFERENCE ? A733_CLOCK_REF :
                     scope==A733_AUDIO_STABLE ? A733_CLOCK_AUDIO5 : 0;
-    uint32_t exclusive=scope==A733_AUDIO_CHANGE ? A733_CLOCK_AUDIO_CHANGE :
+    a733_clock_mask_t exclusive=scope==A733_AUDIO_CHANGE ? A733_CLOCK_AUDIO_CHANGE :
                        scope==A733_AUDIO_LOCAL ? A733_CLOCK_I2S0 : 0;
     enum a733_clock_result r=a733_clock_acquire(b->registry,b->owner,shared,exclusive,deadline,t);
     if(r==A733_CLOCK_BUSY || r==A733_CLOCK_EXPIRED)return A733_I2S_RESOURCE_BUSY;

@@ -11,9 +11,9 @@ static struct a733_npu_pll_config pll_authority;
 static unsigned handoff_mode,pll_reads,pll_writes,publication_count;
 static struct a733_clock_token previous;
 enum a733_clock_result __real_a733_clock_publish_stable(struct a733_clock_leases *,
-    const struct a733_clock_token *,uint32_t,uint64_t,struct a733_clock_token *);
+    const struct a733_clock_token *,a733_clock_mask_t,uint64_t,struct a733_clock_token *);
 enum a733_clock_result __wrap_a733_clock_publish_stable(struct a733_clock_leases *r,
-    const struct a733_clock_token *old,uint32_t parents,uint64_t d,struct a733_clock_token *out)
+    const struct a733_clock_token *old,a733_clock_mask_t parents,uint64_t d,struct a733_clock_token *out)
 {
     enum a733_clock_result result=__real_a733_clock_publish_stable(r,old,parents,d,out);
     if(result==A733_CLOCK_OK) {
@@ -26,7 +26,7 @@ enum a733_clock_result __wrap_a733_clock_publish_stable(struct a733_clock_leases
     return result;
 }
 static enum a733_npu_pll_result pll_acquire(void *cookie,const struct a733_npu_pll_config *c,
-    uint32_t shared,uint32_t exclusive,struct a733_npu_pll_resources *out)
+    a733_clock_mask_t shared,a733_clock_mask_t exclusive,struct a733_npu_pll_resources *out)
 {
     configASSERT(cookie==&pll_authority && !memcmp(c,&pll_authority,sizeof(*c)));
     configASSERT(xTaskGetCurrentTaskHandle()==bootstrap_task);

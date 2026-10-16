@@ -24,7 +24,7 @@ static int now(void *v,uint64_t *out)
     *out=m->regress ? m->now-1 : m->now;return 1;
 }
 static enum a733_npu_pll_result acquire(void *v,const struct a733_npu_pll_config *c,
-    uint32_t shared,uint32_t exclusive,struct a733_npu_pll_resources *r)
+    a733_clock_mask_t shared,a733_clock_mask_t exclusive,struct a733_npu_pll_resources *r)
 {
     struct model *m=v;++m->calls;++m->acquire_calls;
     assert(!m->locked);

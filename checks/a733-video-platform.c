@@ -106,7 +106,7 @@ int main(int argc,char**argv)
             m.ccu[0xa0/4]=0xfe000000|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
             m.ccu[0x1908/4]=0x0fff0fff;m.ccu[0x1988/4]=0x0fff0000;
         }
-        uint32_t scopes;assert(a733_video_platform_scopes(&c,&scopes));
+        a733_clock_mask_t scopes;assert(a733_video_platform_scopes(&c,&scopes));
         assert(a733_clock_acquire(&clocks,99,scopes,A733_CLOCK_VE_DEC,100000,&c.clock)==A733_CLOCK_OK);
         struct a733_video_platform_ops ops={now,admit,memory,drain,enter,leave,read_reg,write_reg};
         struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&c,&ops,&m));

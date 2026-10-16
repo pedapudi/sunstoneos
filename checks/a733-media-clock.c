@@ -123,7 +123,7 @@ static void terminal(struct model *m,enum a733_media_clock_result result)
 static void registry_cases(void)
 {
     struct model m;setup(&m,A733_MEDIA_ALL);
-    const uint32_t parents[]={A733_CLOCK_PLL_VIDEO0,A733_CLOCK_PLL_DE,A733_CLOCK_PLL_VE0,A733_CLOCK_PLL_VE1};
+    const a733_clock_mask_t parents[]={A733_CLOCK_PLL_VIDEO0,A733_CLOCK_PLL_DE,A733_CLOCK_PLL_VE0,A733_CLOCK_PLL_VE1};
     struct a733_clock_token t,u;
     for (unsigned i=0;i<4;++i) {
         assert(a733_clock_acquire(&m.registry,10,parents[i],0,999999,&t)==A733_CLOCK_OK);

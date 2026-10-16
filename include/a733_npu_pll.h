@@ -42,7 +42,7 @@ struct a733_npu_pll_operations {
      * tokens; subsequent calls may add but never replace an admitted token.
      * Callback metadata, all storage and reservations have platform lifetime. */
     enum a733_npu_pll_result (*acquire)(void *, const struct a733_npu_pll_config *,
-        uint32_t shared, uint32_t exclusive, struct a733_npu_pll_resources *);
+        a733_clock_mask_t shared, a733_clock_mask_t exclusive, struct a733_npu_pll_resources *);
     /* One common register mutex covers all writers, including remote writers
      * through the authenticated handoff. enter: 1 held, 0 effect-free BUSY,
      * other values uncertain. leave: exactly 1 confirms release. */
@@ -71,12 +71,13 @@ struct a733_npu_pll {
     void *successor; /* Exact private startup object; permanent after binding. */
     unsigned transferred;
     uint64_t last_now, next_sample, settle_until;
-    uint32_t shared, expected_control;
+    a733_clock_mask_t shared;
+    uint32_t expected_control;
     unsigned initialized, stage, step, samples, consecutive, failed, wrote, lock_state;
 };
 /* Pure validation. Outputs are unchanged on refusal. Initial supported fabric
  * parents are SYS24 and PERI0; DDR/DE/NPU-selected fabric is refused. */
-int a733_npu_pll_scopes(const struct a733_npu_pll_config *, uint32_t *shared, uint32_t *exclusive);
+int a733_npu_pll_scopes(const struct a733_npu_pll_config *, a733_clock_mask_t *shared, a733_clock_mask_t *exclusive);
 /* Zero once; metadata copied before mutating p. Serialize every poll. */
 int a733_npu_pll_init(struct a733_npu_pll *, const struct a733_npu_pll_config *,
     const struct a733_npu_pll_operations *, void *);

@@ -25,7 +25,7 @@ static const struct a733_npu_ops *check_native=&__real_a733_npu_native_operation
 static int check_resource_time(void *cookie,uint64_t *out)
 {(void)cookie;*out=check_native->microseconds(&convolution.native);return 1;}
 static enum a733_npu_platform_result check_acquire(void *cookie,
-    const struct a733_npu_platform_config *config,uint32_t shared,
+    const struct a733_npu_platform_config *config,a733_clock_mask_t shared,
     struct a733_npu_platform_resources *resources)
 {
     (void)cookie;(void)config;(void)shared;++check_resource_calls;

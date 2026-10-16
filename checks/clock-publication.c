@@ -23,7 +23,7 @@ static int same(const struct a733_clock_token *a,const struct a733_clock_token *
 static void setup(struct fixture *f,struct a733_clock_token *t,unsigned display)
 {
     *f=(struct fixture){.now=1};assert(a733_clock_leases_init(&f->registry,now,f));
-    uint32_t exclusive=display ? A733_CLOCK_DISPLL1|A733_CLOCK_VO0 : A733_CLOCK_PLL_NPU|A733_CLOCK_NPU;
+    a733_clock_mask_t exclusive=display ? A733_CLOCK_DISPLL1|A733_CLOCK_VO0 : A733_CLOCK_PLL_NPU|A733_CLOCK_NPU;
     assert(a733_clock_acquire(&f->registry,7,A733_CLOCK_FABRIC|A733_CLOCK_PERI0,exclusive,100,t)==A733_CLOCK_OK);
 }
 int main(void)
@@ -31,7 +31,7 @@ int main(void)
     struct fixture f;struct a733_clock_token old,next;
     for(unsigned display=0;display<2;++display) {
         setup(&f,&old,display);f.contend=1;
-        uint32_t parent=display ? A733_CLOCK_DISPLL1 : A733_CLOCK_PLL_NPU;
+        a733_clock_mask_t parent=display ? A733_CLOCK_DISPLL1 : A733_CLOCK_PLL_NPU;
         assert(a733_clock_publish_stable(&f.registry,&old,parent,100,&next)==A733_CLOCK_OK);
         assert(next.id!=old.id && next.owner==old.owner && next.shared==(old.shared|parent) &&
             next.exclusive==(old.exclusive&~parent));
@@ -47,7 +47,7 @@ int main(void)
     }
     for(unsigned reason=0;reason<8;++reason) {
         setup(&f,&old,0);struct a733_clock_token output={.id=999},saved=old;
-        uint32_t parent=A733_CLOCK_PLL_NPU;uint64_t deadline=100;
+        a733_clock_mask_t parent=A733_CLOCK_PLL_NPU;uint64_t deadline=100;
         enum a733_clock_result expected=A733_CLOCK_INVALID;
         switch(reason) {
         case 0:parent=0;break;

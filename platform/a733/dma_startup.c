@@ -26,9 +26,9 @@ static int task_owner(struct a733_dma_startup *b)
         xTaskGetSchedulerState()==taskSCHEDULER_RUNNING && xTaskGetCurrentTaskHandle()==b->task;
 }
 static enum a733_dma_platform_result acquire(void *cookie,const struct a733_dma_platform_config *c,
-    uint32_t shared,struct a733_clock_token *out)
+    a733_clock_mask_t shared,struct a733_clock_token *out)
 {
-    struct a733_dma_startup *b=cookie;uint32_t expected;
+    struct a733_dma_startup *b=cookie;a733_clock_mask_t expected;
     if(!task_owner(b) || b->register_held || !c || !out || !exact(c,&b->handoff.allowed) ||
         !a733_dma_platform_scopes(&b->handoff.allowed,&expected) || shared!=expected ||
         b->handoff.controller!=0x04601000 || b->handoff.evidence!=c->handoff ||
@@ -77,7 +77,7 @@ static int write_reg(void *cookie,uintptr_t address,uint32_t value)
 int a733_dma_startup_init(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
     struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks)
 {
-    uint32_t shared;
+    a733_clock_mask_t shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !b || b->initialized ||
         !h || !clock || !registry || !locks || !clock->initialized || !registry->initialized || !locks->initialized ||
         !separate(b,sizeof(*b),h,sizeof(*h)) || !separate(b,sizeof(*b),clock,sizeof(*clock)) ||

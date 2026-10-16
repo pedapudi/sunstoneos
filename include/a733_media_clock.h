@@ -53,7 +53,8 @@ struct a733_media_clock {
     void *cookie;
     atomic_uint busy;
     uint64_t last_now;
-    uint32_t shared, exclusive, selected_mhz[3];
+    a733_clock_mask_t shared, exclusive;
+    uint32_t selected_mhz[3];
     unsigned pck_client, stage, step;
     unsigned initialized, fault, held, wrote;
 };

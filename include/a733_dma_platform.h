@@ -26,7 +26,7 @@ struct a733_dma_platform_operations {
      * Repeated PENDING calls preserve identity. Tokens remain held for platform
      * lifetime, including failure; this component has no release/reset API. */
     enum a733_dma_platform_result (*acquire)(void *,
-        const struct a733_dma_platform_config *, uint32_t shared,
+        const struct a733_dma_platform_config *, a733_clock_mask_t shared,
         struct a733_clock_token *);
     /* All callbacks bounded, serialized, non-reentrant. enter: 1 owns the ONE
      * common register mutex, 0 busy with no effects, -1 uncertain failure.
@@ -45,14 +45,15 @@ struct a733_dma_platform {
     struct a733_clock_token token;
     void *cookie;
     uint64_t last_now, reset_since;
-    uint32_t shared, selected_mhz[3];
+    a733_clock_mask_t shared;
+    uint32_t selected_mhz[3];
     unsigned initialized, stage, failed, wrote;
 };
 /* Pure profile validation; output untouched on refusal. FABRIC stabilizes the
  * AHB/NSI/MBUS source/divisor/global-gate fields. DMA0 exclusively owns its bus
  * and MBUS leaf gates. Other critical gate bits must already be set and survive
  * every update. Selected parent leases remain separate from FABRIC. */
-int a733_dma_platform_scopes(const struct a733_dma_platform_config *, uint32_t *shared);
+int a733_dma_platform_scopes(const struct a733_dma_platform_config *, a733_clock_mask_t *shared);
 /* Zero once, then initialize before concurrent use. All state and callbacks
  * are private privileged platform-lifetime storage; caller serializes polls. */
 int a733_dma_platform_init(struct a733_dma_platform *,

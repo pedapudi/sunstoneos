@@ -13,13 +13,13 @@ static const uint32_t mhz[3][8]={
 };
 static int known(uint64_t v)
 {return v==UINT64_C(0x3332100021321)||v==UINT64_C(0x3331000021320)||v==UINT64_C(0x3052000012011);}
-int a733_video_platform_scopes(const struct a733_video_platform_config *c,uint32_t *out)
+int a733_video_platform_scopes(const struct a733_video_platform_config *c,a733_clock_mask_t *out)
 {
     if(!c||!out||!c->clocks||!c->power||!c->owner||!c->handoff||!c->module_hz||
        (c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM)||
        c->module_hz>720000000u||(c->module&~0x8700001fu)||!(c->module&BIT(31))||
        ((c->module>>24)&7)>1)return 0;
-    uint32_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|
+    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|
         ((c->module&BIT(24))?A733_CLOCK_PLL_VE0:A733_CLOCK_PLL_VE1);
     for(unsigned i=0;i<3;++i) {
         unsigned rate=mhz[i][(c->fabric[i]>>24)&7],div=(c->fabric[i]&31)+1;
@@ -32,7 +32,7 @@ int a733_video_platform_scopes(const struct a733_video_platform_config *c,uint32
 int a733_video_platform_init(struct a733_video_platform *p,
  const struct a733_video_platform_config *c,const struct a733_video_platform_ops *o,void *cookie)
 {
-    uint32_t shared;
+    a733_clock_mask_t shared;
     if(!p||p->initialized||!o||!o->now_us||!o->admit||!o->memory||!o->drain||
        !o->enter||!o->leave||!o->read||!o->write||!a733_video_platform_scopes(c,&shared)||
        !c->clock.id||c->clock.owner!=c->owner||c->clock.shared!=shared||

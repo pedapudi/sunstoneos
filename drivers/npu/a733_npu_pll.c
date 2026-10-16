@@ -13,12 +13,12 @@ enum { ACQUIRE, BASELINE, PROGRAM, LOCK_WAIT, SETTLE, OUTPUT, COMPLETE };
 static const uint32_t offsets[A733_NPU_PLL_SNAPSHOTS]={
     0x500,0x580,0x588,0xa80,0xa88,0xa8c,0xb00,0xb04,0xc00,0xc0c,0x1b10,0x1b14,0x1b1c
 };
-int a733_npu_pll_scopes(const struct a733_npu_pll_config *c,uint32_t *shared,uint32_t *exclusive)
+int a733_npu_pll_scopes(const struct a733_npu_pll_config *c,a733_clock_mask_t *shared,a733_clock_mask_t *exclusive)
 {
     if (!c || !shared || !exclusive || shared==exclusive || !c->owner || !c->handoff || !c->deadline_us ||
         (c->mode!=A733_NPU_PLL_COLD_ENABLE && c->mode!=A733_NPU_PLL_ENABLED_RETUNE)) return 0;
     const uint32_t *s=c->consumers;
-    uint32_t parents=A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
+    a733_clock_mask_t parents=A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
     /* Supported parent selectors: AHB SYS24/PERI0_600, NSI SYS24/PERI0_800,
      * 600/480, MBUS SYS24/PERI0_600/480/400. Pending DFS updates are refused. */
     static const unsigned allowed[]={0x9,0x1d,0x1b};
@@ -43,7 +43,7 @@ int a733_npu_pll_scopes(const struct a733_npu_pll_config *c,uint32_t *shared,uin
 int a733_npu_pll_init(struct a733_npu_pll *p,const struct a733_npu_pll_config *c,
     const struct a733_npu_pll_operations *o,void *cookie)
 {
-    uint32_t shared,exclusive;
+    a733_clock_mask_t shared,exclusive;
     if (!p || p->initialized || !o || !o->acquire || !o->enter || !o->leave || !o->retain ||
         !o->now_us || !o->read || !o->write || !a733_npu_pll_scopes(c,&shared,&exclusive)) return 0;
     const struct a733_npu_pll_config config=*c;

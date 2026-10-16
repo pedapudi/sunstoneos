@@ -18,7 +18,7 @@ static const uint32_t parent_mhz[3][8]={
     {24,0,0,600,0,0,0,0}, {24,0,800,600,480,0,0,0}, {24,600,0,480,400,0,0,0}
 };
 
-int a733_dma_platform_scopes(const struct a733_dma_platform_config *c,uint32_t *out)
+int a733_dma_platform_scopes(const struct a733_dma_platform_config *c,a733_clock_mask_t *out)
 {
     if (!c || !out || !c->owner || !c->handoff || !c->deadline_us || c->cold>1 ||
         ((c->expected_cpu|c->expected_mcu|c->desired_cpu|c->desired_mcu|
@@ -26,7 +26,7 @@ int a733_dma_platform_scopes(const struct a733_dma_platform_config *c,uint32_t *
         (c->desired_cpu&c->desired_mcu) ||
         (((c->expected_cpu^c->desired_cpu)|(c->expected_mcu^c->desired_mcu))&~c->route_change_mask) ||
         (!c->cold && (c->expected_cpu!=c->desired_cpu || c->expected_mcu!=c->desired_mcu))) return 0;
-    uint32_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC;
+    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC;
     for (unsigned i=0;i<3;++i) {
         if ((c->fabric[i]&~fabric_masks[i]) || (i && !(c->fabric[i]&BIT(31)))) return 0;
         unsigned mhz=parent_mhz[i][(c->fabric[i]>>24)&7];
@@ -39,7 +39,7 @@ int a733_dma_platform_scopes(const struct a733_dma_platform_config *c,uint32_t *
 int a733_dma_platform_init(struct a733_dma_platform *p,
     const struct a733_dma_platform_config *c,const struct a733_dma_platform_operations *o,void *cookie)
 {
-    uint32_t shared;
+    a733_clock_mask_t shared;
     if (!p || p->initialized || !o || !o->acquire || !o->enter || !o->leave ||
         !o->now_us || !o->read || !o->write || !a733_dma_platform_scopes(c,&shared)) return 0;
     p->config=*c;p->ops=*o;p->cookie=cookie;p->shared=shared;

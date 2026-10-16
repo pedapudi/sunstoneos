@@ -56,7 +56,7 @@ int a733_thermal_init(struct a733_thermal *p,const struct a733_thermal_config *c
         if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     unsigned parent=c->apb1>>24,div=(c->apb1&31)+1;
     uint32_t hz=parent==0 ? 24000000u : parent==3 ? 600000000u : 0;
-    uint32_t stable=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_CLOCK_GPADC24M;
+    a733_clock_mask_t stable=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_CLOCK_GPADC24M;
     if (parent==3) stable|=A733_CLOCK_PERI0;
     if (!hz || hz%div || c->apb1_hz!=hz/div ||
         ((token->shared|token->exclusive)&stable)!=stable || !(token->exclusive&A733_CLOCK_THS) ||
