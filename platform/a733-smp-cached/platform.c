@@ -3,6 +3,9 @@
 #include "platform.h"
 #include "a733_cpu_continue.h"
 #include "cached.h"
+#ifdef SUNSTONE_A733_CACHED_DEVICES
+#include "a733_cached_devices.h"
+#endif
 static uint64_t tick_interval,next_tick,diagnostic_deadline;
 static uint32_t probe_lock,probe_count,probe_arrived[8],probe_finished[8],probe_release;
 struct a733_smp_core_result a733_smp_core_results[8] __attribute__((aligned(128)));
@@ -50,6 +53,26 @@ int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
         if(a733_smp_counter()/24>=deadline)return 0;
     return 1;
 }
+#ifdef SUNSTONE_A733_CACHED_DEVICES
+int a733_smp_device_preparation_admitted(void)
+{
+    uint64_t el, mpidr, control, flags; unsigned index;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    if (el != 4) return 0;
+    __asm__ volatile("mrs %0, mpidr_el1\n mrs %1, sctlr_el1\n mrs %2, daif"
+        : "=r"(mpidr), "=r"(control), "=r"(flags));
+    extern volatile uint8_t ucPrimaryCoreInitDoneFlag;
+    if (!a733_cpu_index(mpidr, &index) || index || core() ||
+        (control & 0x1005) != 0x1005 || (flags & 0x3c0) != 0x3c0 ||
+        __atomic_load_n(&ucPrimaryCoreInitDoneFlag, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&probe_release, __ATOMIC_ACQUIRE) ||
+        a733_smp_counter() >= a733_cached_runtime[0].startup_deadline) return 0;
+    for (unsigned c = 0; c < 8; ++c)
+        if (!__atomic_load_n(&probe_arrived[c], __ATOMIC_ACQUIRE) ||
+            !__atomic_load_n(&probe_finished[c], __ATOMIC_ACQUIRE)) return 0;
+    return 1;
+}
+#endif
 uint64_t a733_smp_sgi_value(unsigned interrupt,unsigned target)
 {
     uint64_t value;
@@ -81,6 +104,10 @@ _Noreturn void platform_panic(const char *file,unsigned line)
 }
 void a733_smp_primary_el1(void)
 {
+#ifdef SUNSTONE_A733_CACHED_DEVICES
+    if (!a733_cached_devices_prepare(&a733_cached_device_inputs))
+        a733_smp_exit_privileged(4, 0x206);
+#endif
     uintptr_t r=a733_cached_runtime[0].redistributor,g=r+0x10000;
     *(volatile uint8_t *)(g+0x400+30)=portLOWEST_USABLE_INTERRUPT_PRIORITY<<portPRIORITY_SHIFT;
     *(volatile uint32_t *)(g+0x100)=1u<<30;

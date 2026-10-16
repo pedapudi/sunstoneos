@@ -1,0 +1,48 @@
+#include "a733_cached_memory.h"
+#include "a733_cpu_coherence.h"
+#include "a733_cpu_start.h"
+#define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
+#define BIT(n) (UINT64_C(1) << (n))
+uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
+uint64_t a733_cached_el3_l3[512] TABLE;
+uint64_t a733_cached_el1_l1[512] TABLE, a733_cached_el1_l2[512] TABLE;
+extern unsigned char __tables_start[], __tables_end[], __bss_end[], __heap_end[];
+extern unsigned char __device_pool_start[], __device_pool_end[];
+extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
+
+int a733_cached_memory_prepare(void)
+{
+    uint64_t el, sctlr3, sctlr1, daif, mpidr; unsigned core;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    if (el != 12) return 0;
+    __asm__ volatile("mrs %0, sctlr_el3\n mrs %1, sctlr_el1\n mrs %2, daif\n mrs %3, mpidr_el1"
+        : "=r"(sctlr3), "=r"(sctlr1), "=r"(daif), "=r"(mpidr));
+    if (((sctlr3 | sctlr1) & UINT64_C(0x02001005)) || (daif & 0x3c0) != 0x3c0 ||
+        !a733_cpu_index(mpidr, &core) || core) return 0;
+    uintptr_t wb = (uintptr_t)__device_pool_start, we = (uintptr_t)__device_pool_end;
+    uintptr_t nc = (uintptr_t)__uncached_pool_start, ne = (uintptr_t)__uncached_pool_end;
+    if ((uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > wb || we < wb ||
+        (we != wb && ((wb | we) & 4095 || we - wb > 2097152 || we > 0x41f00000)) ||
+        (ne != nc && (nc != 0x41c00000 || ne != 0x41e00000 || we > nc))) return 0;
+    if (a733_cpu_coherence_tables(a733_cached_el3_l1, a733_cached_el3_l2,
+            (uintptr_t)a733_cached_el3_l2, 3) != 1 ||
+        a733_cpu_coherence_tables(a733_cached_el1_l1, a733_cached_el1_l2,
+            (uintptr_t)a733_cached_el1_l2, 1) != 1) return 0;
+    if (ne != nc) {
+        /* Change both aliases before any cache adoption; preserve NS/AP/XN. */
+        a733_cached_el3_l2[14] = (a733_cached_el3_l2[14] & ~UINT64_C(28)) | 8;
+        a733_cached_el1_l2[14] = (a733_cached_el1_l2[14] & ~UINT64_C(28)) | 8;
+    }
+    for (unsigned i = 0; i < 512; ++i) {
+        uintptr_t a = 0x42000000 + (uintptr_t)i * 4096;
+        uint64_t v = a | BIT(54) | BIT(10) | BIT(6) | 3;
+        if (a >= (uintptr_t)__tables_start && a < (uintptr_t)__tables_end) {
+            v |= 8 | (UINT64_C(3) << 8);
+            if (a == (uintptr_t)a733_cached_el1_l1 || a == (uintptr_t)a733_cached_el1_l2) v |= BIT(5);
+        }
+        a733_cached_el3_l3[i] = v;
+    }
+    a733_cached_el3_l2[16] = (uintptr_t)a733_cached_el3_l3 | 3;
+    a733_cached_el1_l2[16] = 0; /* Secure monitor and tables remain inaccessible at EL1. */
+    return 1;
+}

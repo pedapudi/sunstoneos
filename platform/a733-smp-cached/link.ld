@@ -34,6 +34,34 @@ SECTIONS {
         __bss_start = .; *(.bss*) *(COMMON)
         . = ALIGN(16); __bss_end = .;
     } > RAM
+    __heap_end = __bss_end;
+    /* An absent pool preserves the previous image extent and section layout. */
+    .device_pool (NOLOAD) : {
+        . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;
+        __device_pool_start = .;
+        . += DEFINED(__device_pool_size) ? __device_pool_size : 0;
+        __device_pool_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__device_pool_size) || (__device_pool_size % 4096) == 0,
+           "device pool must contain complete pages")
+    ASSERT(!DEFINED(__device_pool_size) || __device_pool_size <= 2097152,
+           "device pool exceeds allocation registry capacity")
+    ASSERT(__device_pool_start == __device_pool_end || __device_pool_end <= 0x41f00000,
+           "device pool exceeds image RAM reservation")
+    /* Optional complete L2 block: never share cached and uncached aliases. */
+    .uncached_pool (DEFINED(__uncached_pool_size) && __uncached_pool_size ?
+                    0x41c00000 : .) (NOLOAD) : {
+        __uncached_pool_start = .;
+        . += DEFINED(__uncached_pool_size) ? __uncached_pool_size : 0;
+        __uncached_pool_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__uncached_pool_size) || !__uncached_pool_size ||
+           __uncached_pool_size == 2097152,
+           "uncached pool requires one complete 2 MiB block")
+    ASSERT(__uncached_pool_start == __uncached_pool_end ||
+           (__device_pool_end <= 0x41c00000 && __uncached_pool_start == 0x41c00000 &&
+            __uncached_pool_end == 0x41e00000),
+           "uncached pool overlaps image state or write-back pool")
     ASSERT(__bss_end <= 0x42000000, "EL1 allocations exceed RAM")
     ASSERT(__a733_smp_boot_stack_top <= 0x421f0000, "monitor allocations exceed RAM")
     ASSERT(__tables_end <= 0x42200000, "tables exceed reservation")

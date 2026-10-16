@@ -1,15 +1,12 @@
 #include "cached.h"
+#include "a733_cached_memory.h"
 #include <stddef.h>
 #define MONITOR __attribute__((section(".bss.a733_smp_monitor"),aligned(128)))
-#define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
 #define BIT(n) (UINT64_C(1)<<(n))
 volatile struct a733_cached_record a733_cached_records[8] MONITOR;
 static struct a733_cpu_coherence coherence[8] MONITOR;
 /* Explicit section placement is required for every mutable pre-cache object. */
 static uint64_t boot_values[4] MONITOR;
-uint64_t a733_cached_el3_l1[512] TABLE,a733_cached_el3_l2[512] TABLE;
-uint64_t a733_cached_el3_l3[512] TABLE;
-uint64_t a733_cached_el1_l1[512] TABLE,a733_cached_el1_l2[512] TABLE;
 struct a733_cached_runtime a733_cached_runtime[8] __attribute__((aligned(128)));
 unsigned char a733_cpu_el1_stacks[8*A733_CONTINUE_STACK_BYTES] __attribute__((aligned(4096)));
 _Static_assert(sizeof(struct a733_cached_record)==128,"assembly record layout");
@@ -73,22 +70,7 @@ void a733_cached_prepare(uint64_t epoch,uint64_t startup,uint64_t diagnostic,uin
     if(native_core()!=0 || !epoch || !token || a733_smp_counter()>=startup || startup>=diagnostic)
         a733_smp_stop(2,0x100);
     boot_values[0]=epoch;boot_values[1]=startup;boot_values[2]=diagnostic;boot_values[3]=token;
-    if(a733_cpu_coherence_tables(a733_cached_el3_l1,a733_cached_el3_l2,(uintptr_t)a733_cached_el3_l2,3)!=1 ||
-       a733_cpu_coherence_tables(a733_cached_el1_l1,a733_cached_el1_l2,(uintptr_t)a733_cached_el1_l2,1)!=1)
-        a733_smp_stop(2,0x101);
-    /* MMU-off and translated EL3 share Secure Device flags and stacks. Immutable
-     * table pages are NC; table walk PAS matches the corresponding page alias. */
-    for(unsigned i=0;i<512;++i) {
-        uintptr_t a=0x42000000+(uintptr_t)i*4096;
-        uint64_t v=a|BIT(54)|BIT(10)|BIT(6)|3;
-        if(a>=(uintptr_t)__tables_start && a<(uintptr_t)__tables_end) {
-            v|=8|(UINT64_C(3)<<8);
-            if(a==(uintptr_t)a733_cached_el1_l1 || a==(uintptr_t)a733_cached_el1_l2)v|=BIT(5);
-        }
-        a733_cached_el3_l3[i]=v;
-    }
-    a733_cached_el3_l2[16]=(uintptr_t)a733_cached_el3_l3|3;
-    a733_cached_el1_l2[16]=0; /* EL1 never accesses secure boot records or tables. */
+    if(!a733_cached_memory_prepare())a733_smp_stop(2,0x101);
     /* The source image and initial RAM are immutable/idle under external cold-boot
      * ownership. Clean publication is not a substitute for that admission. */
     sync_memory();
