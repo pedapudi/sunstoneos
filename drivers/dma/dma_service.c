@@ -1,0 +1,311 @@
+#include "dma_service.h"
+
+static struct dma_service *instance;
+static unsigned creating_worker;
+static void worker(void *);
+BaseType_t dma_service_task_privileged(TaskFunction_t entry, void *argument)
+{ return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
+static int duration(uint64_t value) { return value && value <= INT64_MAX; }
+static int overlap(uint64_t a, uint64_t bytes, uint64_t b, uint64_t other)
+{ return a < b+other && b < a+bytes; }
+static int mapping_valid(const struct a733_dma_mapping *m, const struct dma_service *s)
+{
+    return m->cpu && m->bytes && !((uintptr_t)m->cpu & 63) && !(m->bus & 63) && !(m->bytes & 63) &&
+        m->bytes <= UINTPTR_MAX-(uintptr_t)m->cpu && m->bus < (UINT64_C(1)<<35) &&
+        m->bytes <= (UINT64_C(1)<<35)-m->bus && (unsigned)m->access <= A733_DMA_DESCRIPTORS &&
+        !overlap((uintptr_t)m->cpu,m->bytes,(uintptr_t)s,sizeof(*s));
+}
+static int mapping_overlap(const struct a733_dma_mapping *a,const struct a733_dma_mapping *b)
+{ return overlap((uintptr_t)a->cpu,a->bytes,(uintptr_t)b->cpu,b->bytes) || overlap(a->bus,a->bytes,b->bus,b->bytes); }
+static int conflict(const struct a733_dma_transfer *a,const struct a733_dma_transfer *b)
+{
+    if (mapping_overlap(&a->descriptors,&b->descriptors)) return 1;
+    for (size_t i=0;i<a->mapping_count;++i) {
+        if (mapping_overlap(&a->mappings[i],&b->descriptors)) return 1;
+        for (size_t j=0;j<b->mapping_count;++j)
+            if ((a->mappings[i].access != A733_DMA_READ || b->mappings[j].access != A733_DMA_READ) &&
+                mapping_overlap(&a->mappings[i],&b->mappings[j])) return 1;
+    }
+    for (size_t j=0;j<b->mapping_count;++j)
+        if (mapping_overlap(&a->descriptors,&b->mappings[j])) return 1;
+    return 0;
+}
+static int job_valid(const struct dma_service_job *j,const struct dma_service *s,uint16_t channels)
+{
+    const struct a733_dma_transfer *t=&j->transfer;
+    if ((j->kind != DMA_SERVICE_RAM && j->kind != DMA_SERVICE_I2S) || j->channel >= A733_DMA_CHANNELS ||
+        !(channels & (1u<<j->channel)) || !t->segments || !t->mappings ||
+        !t->count || t->count > DMA_SERVICE_SEGMENTS ||
+        !t->mapping_count || t->mapping_count > DMA_SERVICE_MAPPINGS ||
+        (uintptr_t)t->segments % _Alignof(struct a733_dma_segment) ||
+        (uintptr_t)t->mappings % _Alignof(struct a733_dma_mapping) ||
+        (uintptr_t)t->segments > UINTPTR_MAX-t->count*sizeof(*t->segments) ||
+        (uintptr_t)t->mappings > UINTPTR_MAX-t->mapping_count*sizeof(*t->mappings) ||
+        !mapping_valid(&t->descriptors,s) || t->descriptors.access != A733_DMA_DESCRIPTORS ||
+        t->descriptors.bytes/64 < t->count) return 0;
+    if (j->kind == DMA_SERVICE_I2S ? !dma_service_i2s_profile_valid(j->i2s) : j->i2s != NULL) return 0;
+    for (size_t i=0;i<t->mapping_count;++i)
+        if (!mapping_valid(&t->mappings[i],s) || t->mappings[i].access == A733_DMA_DESCRIPTORS) return 0;
+    for (size_t i=0;i<t->count;++i) {
+        const struct a733_dma_segment *segment=&t->segments[i];
+        if (!segment->bytes) return 0;
+        if (j->kind == DMA_SERVICE_RAM && (segment->source.request || segment->destination.request)) return 0;
+    }
+    return 1;
+}
+static int progressing(enum dma_service_phase phase)
+{ return phase == DMA_SERVICE_OPENING || phase == DMA_SERVICE_RUNNING ||
+         phase == DMA_SERVICE_DRAINING || phase == DMA_SERVICE_CLOSING; }
+static void closed(struct dma_service_channel *c)
+{
+    c->owner=DMA_SERVICE_CLIENTS; c->profile=c->job=DMA_SERVICE_NO_JOB;
+    c->phase=DMA_SERVICE_CLOSED; c->job_ticket=0; c->outcome=DMA_SERVICE_NO_RESULT;
+}
+static void i2s_state(struct dma_service_channel *c)
+{
+    switch (c->capture.status) {
+    case A733_I2S_CLOSED: closed(c); break;
+    case A733_I2S_OPENING: c->phase=DMA_SERVICE_OPENING; break;
+    case A733_I2S_READY: c->phase=DMA_SERVICE_READY; break;
+    case A733_I2S_PREPARING: case A733_I2S_ACTIVE: c->phase=DMA_SERVICE_RUNNING; break;
+    case A733_I2S_STOPPING: c->phase=DMA_SERVICE_DRAINING; break;
+    case A733_I2S_CLOSING: c->phase=DMA_SERVICE_CLOSING; break;
+    case A733_I2S_COMPLETE: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_COMPLETE; break;
+    case A733_I2S_CANCELED: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_CANCELED; break;
+    case A733_I2S_FAILED: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_FAILED; break;
+    default: c->phase=DMA_SERVICE_RECOVERY; break;
+    }
+}
+static void dma_state(struct dma_service_channel *c,enum a733_dma_control_status status)
+{
+    switch (status) {
+    case A733_DMA_ACTIVE: c->phase=DMA_SERVICE_RUNNING; break;
+    case A733_DMA_STOPPING: c->phase=DMA_SERVICE_DRAINING; break;
+    case A733_DMA_COMPLETE: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_COMPLETE; break;
+    case A733_DMA_CANCELED: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_CANCELED; break;
+    case A733_DMA_FAILED: c->phase=DMA_SERVICE_RESULT; c->outcome=DMA_SERVICE_FAILED; break;
+    default: c->phase=DMA_SERVICE_RECOVERY; break;
+    }
+}
+static enum dma_service_result execute(struct dma_service *s,const struct dma_service_message *m)
+{
+    const struct dma_service_request *r=&m->request;
+    if ((unsigned)r->operation > DMA_SERVICE_CLOSE || r->job >= s->job_count) return DMA_SERVICE_INVALID;
+    if (!(s->clients[m->client].jobs & (UINT32_C(1)<<r->job))) return DMA_SERVICE_DENIED;
+    struct dma_service_private_job *j=&s->jobs[r->job];
+    struct dma_service_channel *c=&s->channels[j->channel];
+    int timed=r->operation == DMA_SERVICE_SUBMIT ||
+        (j->kind == DMA_SERVICE_I2S && (r->operation == DMA_SERVICE_OPEN || r->operation == DMA_SERVICE_CLOSE));
+    if (timed ? !duration(r->timeout) : r->timeout != 0) return DMA_SERVICE_INVALID;
+    if (r->operation == DMA_SERVICE_STATUS)
+        return c->phase == DMA_SERVICE_RECOVERY ? DMA_SERVICE_FAULT : DMA_SERVICE_OK;
+    if (r->operation == DMA_SERVICE_OPEN) {
+        if (c->phase != DMA_SERVICE_CLOSED) return DMA_SERVICE_BUSY;
+        c->owner=m->client; c->profile=r->job;
+        if (j->kind == DMA_SERVICE_RAM) {
+            enum a733_dma_control_status d=a733_dma_claim(&s->controller,j->channel);
+            if (d != A733_DMA_CONTROL_OK) { closed(c); return DMA_SERVICE_BUSY; }
+            c->phase=DMA_SERVICE_READY;
+        } else {
+            enum a733_i2s_status status=dma_service_i2s_open(&c->capture,&j->i2s,&s->controller,j->channel,r->timeout);
+            i2s_state(c);
+            if (status == A733_I2S_CONFLICT && c->phase == DMA_SERVICE_CLOSED) return DMA_SERVICE_BUSY;
+            if (status == A733_I2S_INVALID) { closed(c); return DMA_SERVICE_INVALID; }
+        }
+        return c->phase == DMA_SERVICE_RECOVERY ? DMA_SERVICE_FAULT : DMA_SERVICE_OK;
+    }
+    if (c->owner != m->client) return DMA_SERVICE_DENIED;
+    if (c->phase == DMA_SERVICE_RECOVERY) return DMA_SERVICE_FAULT;
+    if (s->jobs[c->profile].kind != j->kind ||
+        (j->kind == DMA_SERVICE_I2S && !dma_service_i2s_profile_equal(&s->jobs[c->profile].i2s,&j->i2s)))
+        return DMA_SERVICE_DENIED;
+    switch (r->operation) {
+    case DMA_SERVICE_SUBMIT: {
+        if (c->phase != DMA_SERVICE_READY || c->holds_buffers ||
+            (j->kind == DMA_SERVICE_I2S && c->capture.status != A733_I2S_READY)) return DMA_SERVICE_BUSY;
+        for (unsigned i=0;i<A733_DMA_CHANNELS;++i) {
+            const struct dma_service_channel *other=&s->channels[i];
+            if (other->holds_buffers && conflict(&j->transfer,&s->jobs[other->job].transfer)) return DMA_SERVICE_BUSY;
+        }
+        c->holds_buffers=1; c->job=r->job; c->job_ticket=m->ticket;
+        if (j->kind == DMA_SERVICE_RAM) {
+            enum a733_dma_control_status status=a733_dma_submit(&s->controller,j->channel,&j->transfer,r->timeout);
+            if (status == A733_DMA_INVALID || status == A733_DMA_CONFLICT) {
+                c->holds_buffers=0; c->job=DMA_SERVICE_NO_JOB; c->job_ticket=0;
+                return status == A733_DMA_CONFLICT ? DMA_SERVICE_BUSY : DMA_SERVICE_INVALID;
+            }
+            dma_state(c,status);
+        } else {
+            enum a733_i2s_status status=a733_i2s_start(&c->capture,&j->transfer,r->timeout);
+            if (status == A733_I2S_INVALID) {
+                c->holds_buffers=0; c->job=DMA_SERVICE_NO_JOB; c->job_ticket=0;
+                return DMA_SERVICE_INVALID;
+            }
+            i2s_state(c);
+        }
+        break;
+    }
+    case DMA_SERVICE_CANCEL:
+        if (c->phase != DMA_SERVICE_RUNNING) return DMA_SERVICE_BUSY;
+        if (j->kind == DMA_SERVICE_RAM) dma_state(c,a733_dma_cancel(&s->controller,j->channel));
+        else { (void)a733_i2s_cancel(&c->capture); i2s_state(c); }
+        break;
+    case DMA_SERVICE_REAP:
+        if (c->phase != DMA_SERVICE_RESULT || !c->holds_buffers ||
+            a733_dma_owns(&s->controller,&s->jobs[c->job].transfer) ||
+            (j->kind == DMA_SERVICE_I2S && a733_i2s_owns(&c->capture))) return DMA_SERVICE_BUSY;
+        /* Reply snapshots the terminal outcome/ticket before worker clears it. */
+        c->holds_buffers=0; c->phase=DMA_SERVICE_READY;
+        break;
+    case DMA_SERVICE_CLOSE:
+        if (c->phase != DMA_SERVICE_READY || c->holds_buffers) return DMA_SERVICE_BUSY;
+        if (j->kind == DMA_SERVICE_RAM) {
+            if (a733_dma_release(&s->controller,j->channel) != A733_DMA_CONTROL_OK) c->phase=DMA_SERVICE_RECOVERY;
+            else closed(c);
+        } else {
+            if (dma_service_i2s_close(&c->capture,r->timeout) == A733_I2S_RECOVERY) c->phase=DMA_SERVICE_RECOVERY;
+            else i2s_state(c);
+        }
+        break;
+    default: return DMA_SERVICE_INVALID;
+    }
+    return c->phase == DMA_SERVICE_RECOVERY ? DMA_SERVICE_FAULT : DMA_SERVICE_OK;
+}
+static void worker(void *argument)
+{
+    struct dma_service *s=argument;
+    uint64_t level,stack;
+    __asm__ volatile("mrs %0,CurrentEL\n mrs %1,spsel" : "=r"(level),"=r"(stack));
+    configASSERT(level == 4);
+#if configNUMBER_OF_CORES > 1
+    configASSERT(stack == 0);
+#else
+    (void)stack;
+#endif
+    for (;;) {
+        unsigned active=0;
+        for (unsigned i=0;i<A733_DMA_CHANNELS;++i) {
+            struct dma_service_channel *c=&s->channels[i];
+            if (!progressing(c->phase)) continue;
+            if (s->jobs[c->profile].kind == DMA_SERVICE_I2S) {
+                /* Capture owns the producer and the DMA stop/drain sequence. */
+                (void)a733_i2s_poll(&c->capture); i2s_state(c);
+            } else dma_state(c,a733_dma_poll(&s->controller,i));
+            active |= progressing(c->phase);
+        }
+        struct dma_service_message message;
+        if (xQueueReceive(s->requests,&message,active ? 1 : portMAX_DELAY) != pdTRUE) continue;
+        configASSERT(message.client < DMA_SERVICE_CLIENTS && message.ticket);
+        struct dma_service_reply reply={.ticket=message.ticket};
+        reply.result=execute(s,&message);
+        if (message.request.job < s->job_count &&
+            (s->clients[message.client].jobs & (UINT32_C(1)<<message.request.job))) {
+            struct dma_service_channel *c=&s->channels[s->jobs[message.request.job].channel];
+            reply.phase=c->phase; reply.outcome=c->outcome; reply.job_ticket=c->job_ticket;
+            reply.owns_session=c->owner == message.client; reply.holds_buffers=c->holds_buffers;
+            if (message.request.operation == DMA_SERVICE_REAP && reply.result == DMA_SERVICE_OK) {
+                c->job=DMA_SERVICE_NO_JOB; c->job_ticket=0; c->outcome=DMA_SERVICE_NO_RESULT;
+            }
+        }
+        configASSERT(xQueueSend(s->clients[message.client].replies,&reply,0) == pdTRUE);
+    }
+}
+int dma_service_init(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
+    uintptr_t base,uint16_t channels,uint64_t drain,const struct dma_service_job *jobs,
+    unsigned count,const struct dma_service_protected *protected,unsigned protected_count,
+    UBaseType_t priority,UBaseType_t affinity)
+{
+    if (!s || instance || s->initialized || !ops || !jobs || !count || count > DMA_SERVICE_JOBS ||
+        !protected || !protected_count || protected_count > 32 ||
+        !priority || priority >= configMAX_PRIORITIES || !affinity || (affinity >> configNUMBER_OF_CORES) ||
+        base != UINT32_C(0x04601000) || !channels || !duration(drain) ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    unsigned covered=0;
+    for (unsigned n=0;n<protected_count;++n) {
+        const struct dma_service_protected *g=&protected[n];
+        if (!g->bytes || g->bytes > UINTPTR_MAX-g->cpu || g->bytes > UINT64_MAX-g->physical) return 0;
+        if (g->cpu <= (uintptr_t)s && (uintptr_t)s-g->cpu <= g->bytes &&
+            sizeof(*s) <= g->bytes-((uintptr_t)s-g->cpu)) covered=1;
+    }
+    if (!covered) return 0;
+    unsigned i2s_channel=A733_DMA_CHANNELS;
+    for (unsigned i=0;i<count;++i) {
+        if (!job_valid(&jobs[i],s,channels)) return 0;
+        const struct a733_dma_transfer *t=&jobs[i].transfer;
+        for (unsigned n=0;n<protected_count;++n) {
+            const struct dma_service_protected *g=&protected[n];
+            for (size_t k=0;k<=t->mapping_count;++k) {
+                const struct a733_dma_mapping *m=k == t->mapping_count ? &t->descriptors : &t->mappings[k];
+                if (overlap((uintptr_t)m->cpu,m->bytes,g->cpu,g->bytes) ||
+                    overlap(m->bus,m->bytes,g->physical,g->bytes)) return 0;
+            }
+        }
+        if (jobs[i].kind == DMA_SERVICE_I2S) {
+            if (i2s_channel != A733_DMA_CHANNELS && i2s_channel != jobs[i].channel) return 0;
+            i2s_channel=jobs[i].channel;
+        }
+    }
+    if (a733_dma_controller_init(&s->controller,ops,cookie,base,channels,drain) != A733_DMA_CONTROL_OK) return 0;
+    for (unsigned i=0;i<count;++i) {
+        struct dma_service_private_job *j=&s->jobs[i];
+        j->kind=jobs[i].kind; j->channel=jobs[i].channel; j->transfer=jobs[i].transfer;
+        for (size_t n=0;n<j->transfer.count;++n) j->segments[n]=jobs[i].transfer.segments[n];
+        for (size_t n=0;n<j->transfer.mapping_count;++n) j->mappings[n]=jobs[i].transfer.mappings[n];
+        j->transfer.segments=j->segments; j->transfer.mappings=j->mappings;
+        if (jobs[i].i2s) j->i2s=*jobs[i].i2s;
+    }
+    s->job_count=count;
+    for (unsigned i=0;i<A733_DMA_CHANNELS;++i) closed(&s->channels[i]);
+    s->requests=xQueueCreateStatic(DMA_SERVICE_CLIENTS,sizeof(struct dma_service_message),s->request_storage,&s->request_queue);
+    configASSERT(s->requests);
+    for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) {
+        struct dma_service_client *c=&s->clients[i];
+        c->replies=xQueueCreateStatic(1,sizeof(struct dma_service_reply),c->storage,&c->queue);
+        configASSERT(c->replies);
+    }
+    s->initialized=1; instance=s; creating_worker=1;
+#if configNUMBER_OF_CORES > 1
+    s->worker=xTaskCreateStaticAffinitySet(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,
+        s->worker_stack,&s->worker_state,affinity);
+#else
+    s->worker=xTaskCreateStatic(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,s->worker_stack,&s->worker_state);
+#endif
+    creating_worker=0; configASSERT(s->worker); return 1;
+}
+int dma_service_bind(struct dma_service *s,unsigned slot,TaskHandle_t task,uint32_t jobs)
+{
+    if (!s || s != instance || !s->initialized || slot >= DMA_SERVICE_CLIENTS || !task || task == s->worker ||
+        s->clients[slot].task || !jobs || (jobs >> s->job_count) ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) return 0;
+    s->clients[slot].task=task; s->clients[slot].jobs=jobs; return 1;
+}
+static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
+{
+    if (!s || s != instance || !s->initialized || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NULL;
+    TaskHandle_t task=xTaskGetCurrentTaskHandle();
+    for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) { *slot=i; return &s->clients[i]; }
+    return NULL;
+}
+int dma_service_send(struct dma_service *s,const struct dma_service_request *request,TickType_t wait,uint64_t *ticket)
+{
+    if (!request || !ticket || wait == portMAX_DELAY) return 0;
+    unsigned slot;
+    struct dma_service_client *c=caller(s,&slot);
+    if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
+    struct dma_service_message m={*request,c->next_ticket+1,slot};
+    c->pending=m.ticket;
+    if (xQueueSend(s->requests,&m,wait) != pdTRUE) { c->pending=0; return 0; }
+    c->next_ticket=m.ticket; *ticket=m.ticket; return 1;
+}
+int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)
+{
+    if (!out || !ticket || wait == portMAX_DELAY) return 0;
+    unsigned slot;
+    struct dma_service_client *c=caller(s,&slot);
+    (void)slot;
+    if (!c || c->pending != ticket) return 0;
+    struct dma_service_reply reply;
+    if (xQueueReceive(c->replies,&reply,wait) != pdTRUE) return 0;
+    configASSERT(reply.ticket == ticket); c->pending=0; *out=reply; return 1;
+}
