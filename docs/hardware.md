@@ -60,6 +60,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
+- I2S0 capture: **implemented** finite mono/stereo capture through the native
+  DMA controller. Host checks cover producer shutdown before DMA drain and
+  retained ownership after uncertain failures. Format encodings match pinned
+  source functions. [Audio implementation and limits](i2s.md) records formats,
+  header routes, and evidence. Platform clock/reset/pin callbacks, continuous
+  streaming, playback, Bluetooth PCM, and physical qualification remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an

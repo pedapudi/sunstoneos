@@ -46,6 +46,12 @@ The [native DMA memory adapter](dma-memory.md) now passes a FreeRTOS emulator
 check for translations, permissions, cache instructions, and two serialized EL1
 callers. Its RAM/FIFO admission policy also passes host checks. Board reservations,
 clock/reset setup, and a production privileged service remain outstanding.
+Native [I2S0 capture](i2s.md) now configures finite mono/stereo reception through
+the DMA controller. Host checks pass shutdown ordering, deadlines, and retained
+faults; format plans match pinned audio functions. Reuse `i2s-20261016` evidence:
+integrated source and DMA dependency hashes match the tested inputs. Platform
+clock/reset/pin ownership, allocation, continuous streaming, and physical audio
+remain outstanding. No microphone is attached.
 The [NPU investigation](npu.md) identifies available driver source and the
 remaining model-loader/compiler dependencies. A host inspector now matches
 compiled-model metadata and rejects malformed containers. Native [NPU page-table
@@ -362,8 +368,9 @@ the tool hash and recovery evidence in the application document.
    deferred responses are assigned to `gpu-freelist`.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
-   records. A separate worker is developing I2S support in `i2s`. Inspect live
-   agent state before reassigning their files.
+   records. Finite I2S0 capture is integrated; its worker is investigating shared
+   pin ownership for the exposed header. Inspect live agent state before
+   reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic

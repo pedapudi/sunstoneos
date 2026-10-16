@@ -154,5 +154,35 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_mult.h",
     "archive": "gpu-resources/drivers/clk/sunxi-ng/ccu_mult.h",
     "sha256": "1ecf95b5e4d35807b4b8fa5dca3b454af5b0924991fcee276e730b8e528d7c79"
+  },
+  "board-audio-snd-sunxi-i2s-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/snd_sunxi_i2s.c",
+    "archive": "i2s/snd_sunxi_i2s.c",
+    "sha256": "d3446ec1e11a3fd69d53161f5612a0155e43391ee14569f1fecf942d7daec3a3"
+  },
+  "board-audio-snd-sunxi-i2s-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/snd_sunxi_i2s.h",
+    "archive": "i2s/snd_sunxi_i2s.h",
+    "sha256": "f5eeda49997321150059b1c87cb016c7e2f3ed2e68a9c0abe3d0f5349b9b2a02"
+  },
+  "board-audio-snd-sun60iw2-i2s-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/platforms/snd_sun60iw2_i2s.c",
+    "archive": "i2s/snd_sun60iw2_i2s.c",
+    "sha256": "0dc8d0c0912fced3dac450ffd98f5694bf0146e7608c922e6a562e6e7ed795d5"
+  },
+  "board-audio-snd-sunxi-pcm-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/common/snd_sunxi_pcm.c",
+    "archive": "i2s/snd_sunxi_pcm.c",
+    "sha256": "ce06fa49f38ccba2185030754548a41420e1e82ddc36e9ff326fc694a5cd64d6"
+  },
+  "board-audio-pcm-dmaengine-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/sound/core/pcm_dmaengine.c",
+    "archive": "i2s/pcm_dmaengine.c",
+    "sha256": "017b8aca7246ffdf786f9e20a38f3e9c2b62f1f6115cfc6e23d20052ba999620"
   }
 }
