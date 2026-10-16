@@ -56,6 +56,11 @@ handoff, or final response does not invalidate successful test evidence.
 
 ## Evidence and completion
 
+The [progress dashboard](docs/progress-ui.md) derives its contents from the hardware
+matrix, handoff, application evidence, validation policy, Git activity and test
+queue. Update those canonical records during normal work. Do not maintain a
+second status summary in UI code or regenerate the UI for progress updates.
+
 Record the changed behavior, selected check, result, and relevant input identities.
 Use concise summaries in the repository and keep raw evidence in the local cache.
 No driver is qualified merely because it compiles. Completion requires the entire

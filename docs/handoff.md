@@ -410,7 +410,8 @@ the tool hash and recovery evidence in the application document.
 
 The following isolated commits have preserved component evidence. Review their
 runtime contracts before integration; a local commit does not establish physical
-qualification. The progress dashboard is the immediate user-requested task.
+qualification. The [local progress dashboard](progress-ui.md) is implemented and reads these
+canonical records automatically.
 
 | Component | Worktree | Commit | Evidence directory under `~/.cache/sunstoneos/evidence/` |
 | --- | --- | --- | --- |
@@ -418,11 +419,13 @@ qualification. The progress dashboard is the immediate user-requested task.
 | Eight-core diagnostic image | `a733-smp` | `f9a1a93` | `a733-smp-image-20261016/` |
 | System IOMMU | `iommu` | `e864a59c81df4dfc62ac36c4e78424755c7a95b0` | `iommu-20261016/` |
 | NPU startup and deferred activation | `npu-startup` | `02f4fb2` | `npu-startup-20261016/` |
+| Wi-Fi initialization and passive scan | `radio-sdio` | `671c03cd9f817626bd6d685855e4273fd69990a8` | `radio-wifi-20261016/` |
+| DSI video transmission | `display` | `94f76d80948dbd8062d6f0b999728a80617ef63a` | `dsi-video-20261016/` |
+| Shared camera analog startup | `camera` | `c701156` | `camera-platform-20261016/` |
+| GPU core-mode observation | `gpu-compute-mode` | `6899ede85c0c578b91223966bc938094f0b298cb` | `gpu-compute-mode-20261016/` |
 
 The diagnostic image depends on the continuation. Native memory admission and
-independent recovery remain prerequisites for physical execution. Active workers
-are also completing Wi-Fi initialization, DSI video, camera analog startup and
-GPU core-mode observation. Their files remain owned by those workers.
+independent recovery remain prerequisites for physical execution. Inspect live worker state before assigning follow-up changes.
 
 ## Next actions
 

@@ -119,5 +119,10 @@ conditional requests. Temporary SQLite files and a loopback HTTP server are
 confined to the fixture. No board access occurs.
 
 Backend evidence is retained outside Git under
-`~/.cache/sunstoneos/evidence/progress-server-20261016/`. Frontend interaction and
-visual evidence are recorded separately by the dashboard integration work.
+`~/.cache/sunstoneos/evidence/progress-server-20261016/`. The integrated browser check passes search and filters, expanded-state retention,
+source-table/raw views, linked-document navigation, queue/activity views, and
+mobile layout. Desktop and mobile screenshots and results are retained in
+`~/.cache/sunstoneos/evidence/progress-ui-browser-20261016/`.
+The first browser harness used a string-evaluation wait prohibited by the page's
+content policy. Locator assertions replaced that wait; only the remaining
+interaction checks continued. No application change or hardware test was needed.

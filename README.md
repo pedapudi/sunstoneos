@@ -8,9 +8,10 @@ The attached board runs a FreeRTOS kernel check with timer preemption, queues,
 and floating-point context preservation. An EL3 monitor recovers from a forced
 EL1 stall and returns results through FEL. A native USB device channel passes
 status, echo, log, and recovery checks. Persistent boot, application qualification, and
-complete hardware qualification remain outstanding. A recorded mimus fixture
-now matches host transcription on the board; performance remains below target.
+complete hardware qualification remain outstanding. Mimus
+now matches the host on 32 development recordings; performance remains below target.
 
+- [Interactive progress dashboard](docs/progress-ui.md)
 - [Accepted goal](docs/goal.md)
 - [Hardware inventory and qualification](docs/hardware.md)
 - [Validation policy](docs/validation.md)
@@ -24,5 +25,11 @@ now matches host transcription on the board; performance remains below target.
 - [Local mimus transcription](docs/mimus.md)
 - [Project issues](https://github.com/pedapudi/sunstoneos/issues)
 
-The next application work is broader recording parity, paced input, and measured
-performance improvements. Complete hardware support remains required.
+Run the local progress dashboard with Python 3:
+
+```sh
+python3 tools/progress.py
+```
+
+Open `http://127.0.0.1:8765`. It reads the existing project records and board-test
+queue automatically. Performance optimization follows complete hardware functionality.
