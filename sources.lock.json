@@ -32,5 +32,12 @@
     "archive": "tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973.tar.gz",
     "directory": "tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973",
     "sha256": "cbb1f9e5d64c7115a86078cfb485c9d06a585a4a500374aa870b6e3b7d17e215"
+  },
+  "aarch64-newlib-toolchain": {
+    "revision": "14.3.rel1",
+    "url": "https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf.tar.xz",
+    "archive": "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf.tar.xz",
+    "directory": "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf",
+    "sha256": "ebaf2d47f2e7f7b645864c5c8cf839e526daed83a2e675a3525d03f5ba3d2be9"
   }
 }

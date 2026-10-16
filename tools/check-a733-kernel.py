@@ -20,6 +20,8 @@ parser.add_argument("--image", type=Path, default=CACHE / "build/qemu-virt/a733-
 parser.add_argument("--evidence", type=Path,
                     default=CACHE / "evidence" / time.strftime("kernel-%Y%m%d-%H%M%S"))
 parser.add_argument("--mode", choices=("kernel", "timeout"), default="kernel")
+parser.add_argument("--expect", default="PASS kernel:",
+                    help="Required success text for a bounded runtime check")
 args = parser.parse_args()
 image = args.image.read_bytes()
 if not image or len(image) > 0x100000:
@@ -27,7 +29,7 @@ if not image or len(image) > 0x100000:
 args.evidence.mkdir(parents=True, exist_ok=False)
 record = dict(image_sha256=hashlib.sha256(image).hexdigest(),
               tool_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
-              mode=args.mode, transactions=[], complete=False)
+              mode=args.mode, expected_text=args.expect, transactions=[], complete=False)
 spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
@@ -87,11 +89,11 @@ try:
         struct.pack_into("<Q", blank, 80, args.mode == "timeout")
         (args.evidence / "blank.bin").write_bytes(blank)
         transaction("write", "0x41000000", args.image,
-                    "write", "0x42000000", args.evidence / "blank.bin",
                     "read", "0x41000000", len(image), args.evidence / "uploaded.bin")
         if (args.evidence / "uploaded.bin").read_bytes() != image:
             raise RuntimeError("Kernel upload differs; execution refused.")
         with usb_guard.reenumeration("sunstoneos-a733", "FreeRTOS check and forced-FEL return", 2):
+            transaction("write", "0x42000000", args.evidence / "blank.bin")
             transaction("reset64", "0x41000000")
             deadline = time.monotonic() + 10
             # Poll only host device metadata. Do not send protocol requests until
@@ -110,6 +112,7 @@ try:
             node = candidate
             node_identity = access.identity(node)
             access.require_session(node)
+            access.require_rom(node)
             record.update(returned_node=str(node), returned_identity=node_identity,
                           automatic_access=True)
             save()
@@ -131,7 +134,7 @@ try:
         expected_status = 2 if args.mode == "timeout" else 0
         if values[:3] != (0x534b4552, 5, expected_status):
             raise RuntimeError(f"Unexpected kernel result: {record['result']}")
-        if args.mode == "kernel" and "PASS kernel:" not in log:
+        if args.mode == "kernel" and args.expect not in log:
             raise RuntimeError("Kernel did not report successful completion.")
         if args.mode == "timeout" and (values[7] != 29 or "CHECK recovery:" not in log):
             raise RuntimeError("Recovery was not the expected secure timer interrupt.")

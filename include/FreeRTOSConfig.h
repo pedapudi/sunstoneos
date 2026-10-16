@@ -2,9 +2,22 @@
 #define SUNSTONE_FREERTOS_CONFIG_H
 
 #ifndef __ASSEMBLER__
+#ifdef __cplusplus
+extern "C" {
+#define _Noreturn [[noreturn]]
+#endif
 void platform_tick_setup(void);
 void platform_tick_ack(void);
 _Noreturn void platform_panic(const char *file, unsigned line);
+#ifdef __cplusplus
+#undef _Noreturn
+}
+#endif
+#endif
+
+#ifdef SUNSTONE_NEWLIB
+#define configUSE_NEWLIB_REENTRANT 1
+#define INCLUDE_xTaskGetSchedulerState 1
 #endif
 
 #define configUSE_PREEMPTION 1

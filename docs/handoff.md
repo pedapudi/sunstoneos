@@ -8,6 +8,8 @@ the image, resources, measurements, and limitations.
 
 A native USB channel now passes status, packet-boundary echo, log, and commanded
 ROM return checks. [USB evidence](usb.md) records the implementation and limits.
+The [C++ runtime](runtime.md) passes a physical check for allocation, containers,
+constructors, and task-local newlib state.
 Persistent boot, mimus execution, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -21,7 +23,7 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board returned to FEL after the native USB check. The installed
+The board returned to FEL after the C++ runtime check. The installed
 [session access rule](../tools/README.md) grants access after reconnects on
 physical port `3-1`. Kernel and native USB checks regained access automatically.
 The rule lasts until host reboot and can be removed with `disable-session`.
@@ -66,6 +68,12 @@ compiled-driver check also passed. Their identities and limits are in the USB
 document. The runtime renews the secure deadline while its USB task runs.
 The resident mode is implemented but has not been physically tested.
 
+The C++ runtime passed its secure-monitor emulator check and one physical
+session. The physical session exercised two allocating tasks for 100 rounds
+each and returned to ROM automatically. [Runtime evidence](runtime.md) records
+source identities, library dependencies, memory use, and limits. Mimus itself
+has not been modified or executed on the A733.
+
 ## Next actions
 
 1. Extend the USB transport for application loading and device diagnostics.
@@ -73,9 +81,10 @@ The resident mode is implemented but has not been physically tested.
    cold clock/PHY setup, and the remaining USB roles through separate checks.
 2. Identify and preserve populated storage before persistent installation.
    Add storage access and recovery without overwriting existing contents.
-3. Inspect mimus model/storage requirements and implement its isolated FreeRTOS
-   port using recorded audio. Keep accelerator and remaining hardware driver
-   investigations active independently of this application milestone.
+3. Add mimus clock and task-identity adapters, an explicit Orange Pi model
+   profile, and model/audio loading. Run recorded-audio parity before optimizing
+   arithmetic or adding workers. Keep accelerator and remaining driver work
+   active independently of this application milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
    and coherence, with checks selected from each change.
 

@@ -19,6 +19,7 @@ complete hardware qualification remain outstanding.
 - [Boot investigation and physical evidence](docs/boot.md)
 - [Physical FreeRTOS and recovery check](docs/a733-kernel.md)
 - [Native USB diagnostics](docs/usb.md)
+- [C and C++ runtime](docs/runtime.md)
 - [Project issues](https://github.com/pedapudi/sunstoneos/issues)
 
 The next application milestone is reproducing host transcription of recorded

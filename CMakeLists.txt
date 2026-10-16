@@ -112,3 +112,5 @@ if(TINYUSB_DIR)
   set_target_properties(a733-usb-runtime PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
 endif()
+
+include(cmake/cxx-runtime.cmake)

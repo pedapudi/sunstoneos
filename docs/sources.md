@@ -65,3 +65,10 @@ control-transfer completion handling, and zero-length IN submission. The
 [USB implementation and evidence](usb.md) distinguish tested behavior from
 remaining controller modes. Clock and PHY setup follows the pinned board
 bootloader’s `clock_sun60iw2.c`, `board_sun60iw2.c`, and USB register definitions.
+
+The optional [C++ runtime](runtime.md) uses the static libraries and headers from
+the [AArch64 bare-metal distribution](https://developer.arm.com/-/media/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf.tar.xz),
+release `14.3.rel1`. Its downloaded SHA-256 matches the publisher’s companion
+checksum and is pinned in the dependency manifest. Project sources still use
+Clang 21. The distribution retains its library license notices and GCC runtime
+library exception; downloaded files remain outside tracked source.
