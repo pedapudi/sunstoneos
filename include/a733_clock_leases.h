@@ -18,8 +18,8 @@
 #define A733_CLOCK_ASRC     (1u<<11)
 #define A733_CLOCK_OWA_TX   (1u<<12)
 #define A733_CLOCK_DMIC     (1u<<13)
-#define A733_CLOCK_FABRIC   (1u<<14) /* AHB/NSI/MBUS selectors, divisors and gates. */
-#define A733_CLOCK_DMA0     (1u<<15) /* Controller, bus/reset, global routes; exclusive. */
+#define A733_CLOCK_FABRIC   (1u<<14) /* AHB/NSI/MBUS source configuration and global gates. */
+#define A733_CLOCK_DMA0     (1u<<15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
 #define A733_CLOCK_LOCALS  UINT32_C(0x3fc0)
 #define A733_CLOCK_ALL     UINT32_C(0xffff)
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
