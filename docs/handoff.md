@@ -1,21 +1,26 @@
 # Current work
 
-The active objective is [goal.md](goal.md). A FreeRTOS kernel-check image runs in
-emulation, and a small SRAM probe has executed on the board. No physical OS image
-boots yet and no complete hardware subsystem is qualified. Development is on branch `bringup` in the isolated
+The active objective is [goal.md](goal.md). DDR initialization and an AArch64
+EL1 handoff probe work on the board. The probe returns to FEL with its DRAM result
+intact. FreeRTOS passes the emulator kernel check; physical FreeRTOS startup
+and mimus execution remain outstanding. No complete hardware subsystem is
+qualified. Development uses branch `bringup` in the isolated
 `/home/sunil/git/sunstoneos-worktrees/bringup` worktree.
 
 ## Observed host and device state
 
-On 2026-10-15, USB enumeration reports an Allwinner FEL device, ID `1f3a:efe8`,
-at bus 003 device 029. The FEL query identifies A733, and a returning SRAM probe
-identifies the boot Cortex-A55 r2p0. [Boot evidence](boot.md) records the registers,
-SRAM restoration and recovery-tool limitations. Board revision, RAM, and populated
-storage remain unconfirmed.
-The device node is owned by root and the session lacks passwordless sudo.
-The owner granted a per-user ACL; read/write access is confirmed. The temporary
-access helper and undo commands are documented in [tools](../tools/README.md).
-USB addresses can change; identify the device again before access.
+The attached FEL device (`1f3a:efe8`) identifies A733. The boot CPU identifies
+as Cortex-A55 r2p0. DDR firmware reports 12 GiB LPDDR5, with transfers checked
+at two distinct pages. [Boot evidence](boot.md) records the layout, registers,
+artifact identities, and limitations. Board revision and populated storage
+remain unconfirmed; no persistent-storage writes have been issued.
+
+The latest observed node is `/dev/bus/usb/003/031`. The installed
+[session access rule](../tools/README.md) grants access after FEL reconnects on
+physical port `3-1`. The EL1 handoff check physically verified this behavior.
+The rule lasts until host reboot and can be removed with `disable-session`.
+Before another intentional reconnect, verify the rule and current permissions
+with `python3 tools/usb-access.py check-session`.
 
 The separate `mimus keyboard` device is an existing ESP32 board. It must not be
 used as the Orange Pi console. No Orange Pi UART adapter is currently visible.
@@ -23,33 +28,42 @@ used as the Orange Pi console. No Orange Pi UART adapter is currently visible.
 The host has Clang 21, CMake, and LLVM object tools. LLD 21, ARM system emulation,
 and USB/FDT development headers are extracted under `~/.cache/sunstoneos/host`.
 Pinned sources, builds, packages, and raw evidence are under `~/.cache/sunstoneos`.
-The [build instructions](build.md) describe the working configuration.
+The [build instructions](build.md) describe the emulator configuration.
+The local Python environment has Unicorn 2.1.4 for the DDR wrapper check.
 
 ## Reusable validation evidence
 
-On 2026-10-15, the USB access helper passed one focused check using real ACLs on
-temporary host files. The check covered repeated grants, original ACL restoration,
-and refusal to restore after an ACL change or device-node replacement. File
-identity replaced character-device identity in this fixture. A read-only status
-check confirmed access to the actual FEL node; its ACL was not modified by tests.
+The [kernel check](build.md) passed 100 exchanges in 100 ticks. Its inputs remain
+unchanged. Reuse this result for the emulator platform.
 
-The [kernel check](build.md) passed 100 exchanges in 100 ticks on the final
-emulator image. It covers timer preemption, blocking queue traffic and
-floating-point context preservation. The [physical SRAM result](boot.md) is
-separate evidence and does not establish FreeRTOS operation on the board.
+The DDR wrapper check passed simulated success and failure returns, register and
+FEL code preservation, parameter copying, and the logging trampoline. The
+physical loader then initialized DDR and verified both RAM pages. The builder's
+explicit compatibility guards produced identical payloads with Python `-O`.
+
+The AArch64 probe completed at EL3 and returned to forced FEL. Its saved result
+was read after access was restored; no repeat execution was needed. The EL1
+handoff check then configured the counter frequency declaration to 24 MHz,
+entered nonsecure EL1, read the counter, and returned through EL3 using SMC.
+It passed once in QEMU and once on the board.
+
+The USB session helper passed a focused test with real ACLs on temporary files.
+It covers adoption of the previous grant, reconnect grants, unrelated-event
+refusal, changed-ACL refusal, and undo with the device present or absent.
+`udevadm verify` accepted the generated rule. During the EL1 check, the physical
+board re-enumerated and the helper granted access automatically. The host read
+the result through the new node without user intervention.
 
 ## Next actions
 
-1. Review the larger A733 SRAM layout against the 240 KiB board boot0 image.
-   The original FEL patch's scratch and return code overlap this image.
-2. Establish a DDR-only entry with return to FEL, instruction-cache maintenance,
-   and no unknown storage boot path. The public FEL write bypasses its cache fix.
-3. Establish the monitor/AArch64 handoff and adapt the kernel foundation to the
-   board's interrupt controller, UART and memory layout.
-4. Inspect mimus model/storage requirements and start its isolated port alongside
+1. Extend the tested EL3-to-EL1 handoff with physical GIC setup and FreeRTOS
+   startup. Adapt the kernel check to record results in DRAM and return to FEL.
+2. Preserve storage before any persistent installation, and establish native
+   USB diagnostics so continued operation does not depend on test-return code.
+3. Inspect mimus model/storage requirements and start its isolated port alongside
    the remaining hardware investigations.
 
-Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) now track
+Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
 hardware and final qualification independently of mimus.
 

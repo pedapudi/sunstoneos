@@ -13,9 +13,13 @@ Every row below has **no qualification evidence**. Unless stated below, its
 implementation is **planned**. Partial results apply only to the stated scope:
 
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
-  and restoration of the modified SRAM bytes. See [boot evidence](boot.md).
-- CPU: **tested** for instruction execution on the boot A55 in AArch32 mode.
-  AArch64 tasks, all other cores, and physical scheduler operation remain planned.
+  restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
+  See [boot evidence](boot.md).
+- CPU: **tested** for instruction execution on the boot A55 in AArch32 and
+  AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
+  Tasks, all other cores, and physical scheduler operation remain planned.
+- DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
+  Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory management, interrupt dispatch, and task scheduling: **implemented**
   for QEMU's single-core virtual platform and covered by the [kernel check](build.md).
   This result does not qualify the board's controllers or memory system.

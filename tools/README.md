@@ -1,9 +1,53 @@
-# Temporary USB recovery access
+# USB recovery access
 
 `usb-access.py` grants a user read/write access to the single attached Allwinner
 FEL recovery device (`1f3a:efe8`). It discovers the current USB address each time
 and refuses to select among multiple matching devices. Python 3 and the host
 `getfacl` and `setfacl` commands are required.
+
+## Access across board resets
+
+For autonomous bring-up, install a session rule from this worktree:
+
+```sh
+sudo python3 tools/usb-access.py enable-session
+python3 tools/usb-access.py check-session
+```
+
+The rule grants the selected user access whenever the FEL device reconnects on
+its current physical USB port. It matches both the port and USB ID, and checks
+the controller path before changing permissions. Keep the board on that port.
+FEL has no verified unique serial number; another FEL device plugged into the
+same port would also match. Other USB device IDs require separate configuration.
+
+The root-owned helper, ACL backups, and rule reside under `/run`. They survive
+board resets and disappear on host reboot. Repository edits cannot change the
+installed helper; rerun `enable-session` to install an updated copy. An earlier
+`grant` command supplies the existing ACL backup when present.
+
+Undo the session rule and restore the attached device's original ACL with:
+
+```sh
+sudo python3 tools/usb-access.py disable-session
+```
+
+Disable also works with the board unplugged. Removed device nodes no longer
+carry permissions to restore. If another process changed the attached device's
+ACL, disable removes the reconnect rule but refuses to overwrite those changes.
+Its saved state remains available for inspection and a later restoration attempt.
+
+Before an intentional reconnect, `check-session` verifies the rule's ownership,
+port, user, and current device access. Host discovery after a reset must wait
+for udev permission handling before issuing the next USB request. A missing
+permission is a host precondition failure and must not trigger another reset.
+
+The focused check in `checks/usb-session.py` uses real ACLs on temporary files
+and validates the rule with `udevadm verify`. It covers adoption of an existing
+grant, reconnect grants, unrelated events, ACL conflicts, and undo with the
+board attached or absent. A physical EL1 handoff check then reset the board and
+read its result through the recreated USB node without another permission grant.
+
+## Access to one device node
 
 Run these commands from this worktree:
 
@@ -20,9 +64,9 @@ ACL and removes its backup. Repeated grants preserve the original backup.
 Restoration refuses a changed device identity or an unexpected ACL change.
 
 An ACL on a USB device node lasts until the node is removed or recreated,
-normally on disconnect or reboot. This script installs no udev rule, and its
-backup directory disappears on reboot. A firmware transition that reconnects
-the device may require a fresh grant.
+normally on disconnect or reboot. The `grant` command installs no udev rule, and its
+backup directory disappears on reboot. Use `enable-session` for firmware
+transitions that reconnect the device.
 
 For access previously granted with a manual `setfacl` command, use:
 

@@ -33,6 +33,9 @@ handoff, or final response does not invalidate successful test evidence.
   and establish recovery before persistent writes.
 - Stop device communication at the first transport failure or disappearance.
   Do not loop resets, downloads, or reconnections around an unresolved failure.
+- Before intentional USB re-enumeration, require a reconnect access rule for the
+  target port and user. Wait for udev permissions before the next protocol request.
+  Do not reset again to work around missing host permissions.
 - Do not transmit keyboard events into the user's desktop during tests.
 - Document missing peripherals as qualification blockers and continue independent
   work. Do not count source inspection or emulation as physical qualification.

@@ -5,8 +5,9 @@ in the proposed recovery-tool support. The successful identity response on
 2026-10-15 reported protocol version 1 and scratchpad address `0x000ee800`.
 USB bus/address was `003:029`; rediscover the device before each session.
 
-Board revision, RAM capacity, populated storage, and boot-security configuration
-remain unconfirmed. FEL identity alone cannot establish these properties.
+Board revision, populated storage, and boot-security configuration remain
+unconfirmed. DDR initialization reports 12 GiB; full capacity testing remains
+outstanding.
 
 ## SRAM probe result
 
@@ -41,20 +42,130 @@ Raw files and register results are under
 The recovery executable SHA-256 is
 `0003ca317ce471ef8911cfb89e5c8322e28164f5c968d5e474f0d5e3befee491`.
 
-## DDR initialization remains the next physical dependency
+## DDR initialization and RAM transfer
 
-The board-specific boot0 binary is pinned in the source manifest. Its header
-declares load and entry address `0x47000` and length `0x3c000` (240 KiB).
-Its parameters identify LPDDR5, and its strings include DDR training and storage
-boot paths. These observations do not prove the attached board's RAM configuration.
+The wrapper in [boot/a733/ddr-entry.S](../boot/a733/ddr-entry.S) calls selected
+functions from the pinned board boot0 binary. It runs board power/clock setup,
+copies the selected DRAM parameters, and invokes DDR training. It replaces UART
+character output with a bounded SRAM log. It does not enter the normal boot
+function or its storage-loading paths.
 
-The original A733 recovery patch reserves only 180 KiB and places its scratch
-and return code inside the larger boot0 image range. Loading boot0 with that
-layout would overwrite the recovery code. Review the larger SRAM layout and
-the boot0 storage/return behavior before execution. A DDR-only entry that returns
-to FEL is preferable to allowing unknown storage boot paths to run.
+The binary occupies `0x47000` through `0x82fff`; its BSS ends at `0x83c28`.
+The wrapper executes at `0x85000`, with a stack ending at `0x8d000`. It swaps the
+12 KiB overlapping live FEL code with a shadow at `0x8e000`, then restores that
+code before returning. A separate entry disables and invalidates instruction
+caching before the loader replaces previously executable SRAM.
 
-Once DDR initialization and recovery are established, inspect the monitor's
-AArch64 handoff and provide the FreeRTOS EL1 entry contract. Preserve existing
-storage before any persistent installation. Issue
-[1](https://github.com/pedapudi/sunstoneos/issues/1) tracks these requirements.
+On 2026-10-15, this path returned to FEL with stage 5, board setup result 0, and
+DDR size 12,288 MiB. Firmware identified LPDDR5 and reported successful training
+at 2040, 1165, 816, and 408 MHz. Its simple memory check passed. Host transfers
+then wrote distinct 4 KiB patterns at `0x41000000` and `0x42000000`; both matched
+after both writes. These observations establish usable DDR at those addresses.
+They do not qualify the reported capacity, stability, or every frequency.
+
+Raw evidence is under `~/.cache/sunstoneos/evidence/ddr-20261015-223537`.
+Its manifest identifies each payload and the recovery executable. The wrapper
+SHA-256 is `a401ce2b7f0581bf1c8712cdc30d8a8d28a00b5b934e577b39ddeef4c1dafb8d`.
+No persistent-storage writes were issued.
+
+Build the reviewed payloads with `python3 tools/prepare-ddr.py`. The script binds
+its function addresses to the reviewed boot0 hash and checks the header, BSS,
+patch bytes, and payload bounds. These checks remain active under Python `-O`.
+The resulting files are RAM payloads, not standalone flashable boot images.
+
+The host loader requires the patched recovery tool:
+
+```sh
+python3 tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel
+```
+
+Run the loader only when DDR initialization is needed. It records SRAM backups,
+checks complete uploads before execution, and stops at the first failure.
+The separate wrapper check uses Unicorn 2.1.4:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python checks/ddr-wrapper.py ~/.cache/sunstoneos/build/a733-ddr
+```
+
+That check passed success and failure returns, FEL register/code preservation,
+parameter selection, and the logging trampoline. It substitutes the blob calls
+and therefore does not simulate DDR, clocks, or power hardware.
+
+## AArch64 entry and return to FEL
+
+The 136-byte probe in [checks/a733-aarch64.S](../checks/a733-aarch64.S) executes
+at `0x41000000` and writes eight 64-bit values at `0x42000000`. It then sets the
+reset vector to the ROM's forced-FEL entry at `0x20` and requests an AArch32 warm
+reset. Before execution, five ROM instruction words matched the reference dump.
+The board re-enumerated in FEL, and the saved DRAM result remained readable.
+
+| Register or value | Physical result | Meaning |
+| --- | --- | --- |
+| Signature | `0x41363450` | The AArch64 probe completed its stores |
+| CurrentEL | `0xc` | Execution at EL3 |
+| MIDR_EL1 | `0x412fd050` | Cortex-A55 r2p0 |
+| MPIDR_EL1 | `0x81000000` | Boot CPU affinity |
+| CNTFRQ_EL0 | `0` | Software must initialize the frequency declaration |
+| CNTPCT_EL0 | `0x18510c0faa` | Physical counter value at capture |
+| RVBAR_EL3 | `0x41000000` | Probe reset entry |
+| SCTLR_EL3 | `0x00c50838` | MMU and caches disabled |
+
+The counter value alone does not establish its frequency. The EL1 handoff below configures access and timer metadata.
+Physical interrupt-controller setup remains outstanding before FreeRTOS startup.
+
+Raw evidence is under `~/.cache/sunstoneos/evidence/a733-aarch64`. Probe SHA-256:
+`2726fbc07cc6882749b28a13fa0462d04567fbe0a75ce8283a7cf0bf76093e49`.
+DDR and AArch64 execution used recovery executable SHA-256
+`148109fa5fe7ed8f89281f83f7d440b978a7c85af2813217e5dc7da13b8ba37e`.
+
+USB re-enumeration replaces the device node and its per-node ACL. Install the
+[session access rule](../tools/README.md) before further intentional reconnects.
+The rule supplies permissions on the selected physical port until host reboot.
+
+Issue [1](https://github.com/pedapudi/sunstoneos/issues/1) tracks recovery and
+storage preservation. Issue [2](https://github.com/pedapudi/sunstoneos/issues/2)
+tracks physical FreeRTOS startup and the remaining CPU platform work.
+
+## EL1 handoff and automatic reconnect access
+
+The probe in [checks/a733-el1.S](../checks/a733-el1.S) configures nonsecure
+AArch64 EL1 with MMU and caches disabled. It declares the device tree's 24 MHz
+counter frequency, permits EL1 counter/timer access, and installs exception
+vectors. EL1 records its state and uses a secure monitor call (SMC) to return
+to EL3. The handler requests the tested forced-FEL warm reset. Unexpected
+synchronous exceptions also record their state and enter the recovery path.
+
+The probe passed once in QEMU with its semihosting exit and once on the physical
+board. Hardware returned CurrentEL `4`, CNTFRQ_EL0 `24000000`, stage `4`, and
+status `0`. No EL1 exception was recorded. The counter advanced between the
+EL1 capture and EL3 return. Frequency calibration and timer interrupts remain
+untested.
+
+During this same physical check, the USB node changed from `003:030` to `003:031`.
+The installed session rule granted access to the new node. The host identified
+A733 and read the successful result without another user command. The runner
+checks the reconnect rule before reset and polls only host metadata while
+waiting for the new node and its permissions. It never retries a failed USB
+protocol request or resets again to repair permissions.
+
+Raw evidence is under `~/.cache/sunstoneos/evidence/el1-20261015-225620`.
+The 6144-byte physical image SHA-256 is
+`b3bf6aeaa9d75b2c0b3ec2d3c8d46c33d84dd0d603a7c31d7dce8ef95eda49dc`.
+Build from the worktree with Clang and the locally extracted LLD:
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+mkdir -p "$cache/build/a733-el1"
+clang --target=aarch64-none-elf -c checks/a733-el1.S -o "$cache/build/a733-el1/probe.o"
+"$cache/host/usr/lib/llvm-21/bin/ld.lld" -Ttext=0x41000000 -e _start \
+  "$cache/build/a733-el1/probe.o" -o "$cache/build/a733-el1/probe.elf"
+/usr/lib/llvm-21/bin/llvm-objcopy -O binary \
+  "$cache/build/a733-el1/probe.elf" "$cache/build/a733-el1/probe.bin"
+python3 tools/check-a733-el1.py --fel "$cache/build/sunxi-a733/sunxi-fel"
+```
+
+The runner requires initialized DDR containing a prior AArch64 probe signature.
+For emulator validation, assemble with `-DQEMU_CHECK`, link at the same address,
+and load that ELF with QEMU's loader device. Use `virt,secure=on,virtualization=on,gic-version=3`,
+one Cortex-A55, 128 MiB RAM, and semihosting. Only the final recovery operation
+changes: QEMU exits through semihosting, while the board resets into ROM.
