@@ -16,6 +16,7 @@ static int known(uint64_t v)
 int a733_video_platform_scopes(const struct a733_video_platform_config *c,uint32_t *out)
 {
     if(!c||!out||!c->clocks||!c->power||!c->owner||!c->handoff||!c->module_hz||
+       (c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM)||
        c->module_hz>720000000u||(c->module&~0x8700001fu)||!(c->module&BIT(31))||
        ((c->module>>24)&7)>1)return 0;
     uint32_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|
@@ -153,6 +154,67 @@ static int baseline(struct a733_video_platform *p)
         check(p,GIC+0x208,BIT(17),0)&&check(p,GIC+0x308,BIT(17),0)&&
         check(p,GIC+0xc14,3u<<2,0); /* IRQ81 level, no pending/active state. */
 }
+/* NS_BROM at0x17000, published sun60iw2p1 revision. These instruction
+ * observations bind the literal to the FEL identity constructor. Never execute
+ * ROM code or accept caller-provided bytes as native identity evidence. */
+static const struct {uint32_t address,word;} rom_identity[]={
+    {0x19a88,0xe3a02008},{0x19a8c,0xe28f1c02},
+    {0x19a90,0xe28d0004},{0x19a94,0xebfff6ca},
+    {0x19a98,0xe59f0200},{0x19a9c,0xe58d000c},
+    {0x19aa0,0xe3a00001},{0x19aa4,0xe58d0010},
+    {0x19aa8,0xe1cd01b4},{0x19abc,0xe59f01e0},
+    {0x19ac0,0xe58d0018},{0x19c94,0x53555741},
+    {0x19c98,0x58454642},{0x19ca0,0x00190300},
+    {0x19ca4,0x000ee800}
+};
+static int cold_entry(struct a733_video_platform *p)
+{
+    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
+        if(!check(p,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
+    for(unsigned i=0;i<3;++i)
+        if(!check(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
+    return parents(p)&&check(p,R_CCU+0x1ac,1,1)&&
+        check(p,PCK,15,0)&&check(p,PCK+8,15,0)&&
+        check(p,CCU+0xa88,0x8700001f,p->config.module&~BIT(31))&&
+        check(p,CCU+0xa8c,BIT(18)|BIT(2),0)&&
+        check(p,CCU+0x5c0,1,0)&&check(p,CCU+0x5e0,BIT(14),0)&&
+        check(p,CCU+0x5e4,BIT(18),0)&&check(p,CCU+0x1b10,0x30001,0x10000)&&
+        check(p,GIC,BIT(31),0)&&check(p,GIC+0x108,BIT(17),0)&&
+        check(p,GIC+0x208,BIT(17),0)&&check(p,GIC+0x308,BIT(17),0)&&
+        check(p,GIC+0xc14,3u<<2,0);
+}
+/* One bounded action per acquire call. Reset remains asserted through the PCK
+ * ON acknowledgement. Preserve all unrelated gates: the BSP's key-OR aliases
+ * conflict with ordinary gate fields documented in manual4.1.6.82-84. */
+static int cold(struct a733_video_platform *p)
+{
+    switch(p->cold_step) {
+    case 0:return cold_entry(p);
+    case 1:return update(p,PCK+0x170,UINT32_MAX,0x1f1f1f);
+    case 2:return update(p,PCK+0x174,UINT32_MAX,0x1f1f);
+    case 3:return update(p,PCK+0xc00,UINT32_MAX,0x08080808);
+    case 4:return update(p,PCK+0xc04,UINT32_MAX,0x0808);
+    case 5:return update(p,PCK+0xc10,UINT32_MAX,8);
+    case 6:return update(p,PCK,15,8);
+    case 7: {
+        uint32_t status;
+        if(rd(p,PCK+8,&status)!=1)return 0;
+        return (status&15)==8?1:2; /* Bounded by the common deadline. */
+    }
+    case 8:return update(p,CCU+0xa8c,BIT(18),BIT(18));
+    case 9:return update(p,CCU+0x5c0,1,1);
+    case 10:return update(p,CCU+0x5e0,BIT(14),BIT(14));
+    case 11:return update(p,CCU+0x5e4,BIT(18),BIT(18));
+    case 12:return update(p,CCU+0xa8c,BIT(2),BIT(2));
+    case 13:return update(p,CCU+0xa88,BIT(31),BIT(31));
+    case 14:return baseline(p);
+    /* A733 kernel cold startup always pulses VCU before any compound-ID
+     * lookup. Immutable ROM/resource admission authorizes only this reset. */
+    case 15:return update(p,VE+0x804,0x11,0x11);
+    case 16:return update(p,VE+0x804,0x11,0);
+    default:return 0;
+    }
+}
 static int acquire(void *v,const struct a733_video_jpeg_job *j,uint64_t d,uint64_t *token)
 {
     struct a733_video_platform *p=v;
@@ -170,8 +232,16 @@ static int acquire(void *v,const struct a733_video_jpeg_job *j,uint64_t d,uint64
     *token=p->token;
     if(p->checked)return 1;
     int r=lock(p);if(r!=1)return r;
-    if(!baseline(p))return fail(p);
-    if(unlock(p)!=1)return -1;
+    if(p->config.start==A733_VIDEO_COLD_NS_ROM) {
+        int c=cold(p);
+        if(!c)return fail(p);
+        if(c==1)++p->cold_step;
+        if(unlock(p)!=1)return -1;
+        if(p->cold_step<17)return 0;
+    }else {
+        if(!baseline(p))return fail(p);
+        if(unlock(p)!=1)return -1;
+    }
     p->checked=1;return 1;
 }
 static int identity(struct a733_video_platform *p)
@@ -283,7 +353,10 @@ const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void)
 }
 static int readable(uintptr_t a)
 {
-    if(a==0x07090160||a==R_CCU+0x1ac||a==PCK||a==PCK+8)return 1;
+    for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
+        if(a==rom_identity[i].address)return 1;
+    if(a==0x07090160||a==R_CCU+0x1ac||a==PCK||a==PCK+8||
+       a==PCK+0x170||a==PCK+0x174||a==PCK+0xc00||a==PCK+0xc04||a==PCK+0xc10)return 1;
     if(a>=CCU&&a<CCU+0x2000) switch(a-CCU) {
     case 0:case 0xa0:case 0xa8:case 0xac:case 0x220:case 0x228:case 0x22c:
     case 0x240:case 0x248:case 0x24c:case 0x500:case 0x580:case 0x588:
@@ -313,7 +386,16 @@ int a733_video_platform_native_read(void *cookie,uintptr_t a,uint32_t *out)
 int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uint32_t value)
 {
     (void)cookie;
-    int allowed=a==CCU+0xa8c&&width==4;
+    uint32_t mask=0;
+    if(a==CCU+0xa8c)mask=BIT(18)|BIT(2);
+    if(a==CCU+0xa88)mask=BIT(31);
+    if(a==CCU+0x5c0)mask=1;
+    if(a==CCU+0x5e0)mask=BIT(14);
+    if(a==CCU+0x5e4)mask=BIT(18);
+    if(a==PCK)mask=15;
+    int delay=(a==PCK+0x170&&value==0x1f1f1f)||(a==PCK+0x174&&value==0x1f1f)||
+        (a==PCK+0xc00&&value==0x08080808)||(a==PCK+0xc04&&value==0x0808)||(a==PCK+0xc10&&value==8);
+    int allowed=(mask||delay)&&width==4;
     if(a>=VE&&a<VE+0x1000) {
         uint32_t off=(uint32_t)(a-VE);
         allowed=codec_write(off,width)||(width==4&&(off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
@@ -321,7 +403,7 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
     if(!allowed)return -1;
 #if defined(__aarch64__)
     __asm__ volatile("dsb sy":::"memory");
-    if(a==CCU+0xa8c&&((*(volatile const uint32_t *)a^value)&~BIT(18)))return -1;
+    if(mask&&((*(volatile const uint32_t *)a^value)&~mask))return -1;
     if(width==1)*(volatile uint8_t *)a=(uint8_t)value;
     else *(volatile uint32_t *)a=value;
     __asm__ volatile("dsb sy":::"memory");return 1;

@@ -14,6 +14,7 @@
  * The authority callback must validate the board rail and operating point at
  * module_hz: a caller-supplied number does not establish electrical validity.
  */
+enum a733_video_start { A733_VIDEO_INHERITED = 0, A733_VIDEO_COLD_NS_ROM = 1 };
 struct a733_video_platform_config {
     struct a733_clock_leases *clocks;
     struct a733_clock_token clock;
@@ -22,13 +23,17 @@ struct a733_video_platform_config {
     unsigned power_client;
     uint64_t owner, handoff;
     uint32_t module, module_hz, fabric[3], fabric_hz[3];
+    enum a733_video_start start;
 };
 struct a733_video_platform_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate startup authority, reserve both masters and IRQ81, freeze
      * job input and aliases, and establish quiet/drained inherited state plus
      * independent recovery. Require PCK domain2 ON and an identity-readable
-     * reset-deasserted decoder; this callback must not change hardware or
+     * reset-deasserted decoder in INHERITED mode. COLD_NS_ROM instead requires
+     * genuine, fixed, readable NS-ROM mapping, decoder OFF/reset held, and
+     * exclusive cold-start authority. ROM bytes are observed by this binding;
+     * caller claims alone never identify silicon. This callback must not change hardware or
      * translations. Nonzero stable token BEFORE any admission; retain always.
      * Also validate rail/operating point, Device mappings and common mutex.
      * Return1 complete,0 pending,-1 uncertain. No native authority provider yet.
@@ -66,7 +71,7 @@ struct a733_video_platform {
     void *cookie;
     uint64_t token,deadline,last_now,version,reset_until;
     uint32_t shared,selected_mhz[3],identity_high;
-    unsigned initialized,admitted,checked,mapped,prepared,step,failed,locked;
+    unsigned initialized,admitted,checked,mapped,prepared,step,failed,locked,cold_step;
 };
 /* Pure scope derivation; requires exclusive VE_DEC and exact shared result.
  * Preparation never releases, powers down, or claims physical qualification.

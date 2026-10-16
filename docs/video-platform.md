@@ -5,11 +5,12 @@ AArch64 register accesses, authenticated clock and power leases, and a common
 register mutex. A composed host model reaches JPEG completion only after a
 separate drain callback succeeds. Physical execution remains unqualified.
 
-The first binding accepts an authenticated, quiet handoff in which the decoder
-is already powered, clocked and out of external reset. It observes the compound
-VE identity before changing reset or engine selection. Cold power-on remains a
-required boot-platform follow-on: the available sources do not establish that
-VE identity registers are readable while external reset is asserted.
+The binding accepts an authenticated, quiet handoff with an accessible decoder,
+or an admitted cold state identified through immutable nonsecure ROM. Cold
+startup powers and clocks the decoder before reading its compound identity.
+Cold mode performs the source-defined VCU reset after ROM admission; both paths
+admit compound identity before codec configuration or decode. The sources
+do not establish that VE identity registers are readable during external reset.
 
 The implementation is in `include/a733_video_platform.h` and
 `drivers/video/a733_video_platform.c`. It supplies
@@ -34,9 +35,8 @@ clock; using it does not acquire GPU-local hardware.
 | Both decoder memory masters and interrupt 81 | Authenticated platform admission covering all conflicting users |
 | Input, outputs, physical aliases and electrical operating point | Separate platform admission and memory services |
 
-The media clock registry change, commit `532fa6a`, supplies the PLL parent
-closure and exclusive local-scope rule. The VE binding requires that dependency before central build
-integration. Every platform writer must honor the same registries and mutex.
+The common media clock registry supplies PLL parent closure and the exclusive
+local-scope rule. Every platform writer must honor the same registries and mutex.
 A mutex serializes writes but does not replace a lifetime reservation.
 
 The binding validates tokens through `a733_clock_token_status()` and
@@ -79,9 +79,10 @@ The binding verifies selected divisors and resulting rates. Peripheral paths
 also require the relevant No-Auto and software-enable bits at `0x1908` and the
 effective output status at `0x1988`.
 
-The decoder's AHB gate, memory master gate, memory clock, bus gate, module clock
-and deasserted external reset must already be enabled. PCK policy and status must
-both report ON. Autonomous VE power control at CCU `0x1b10` must be disabled,
+In inherited mode, the decoder's AHB gate, memory master gate, memory clock, bus
+gate and module clock must already be enabled, with external reset deasserted.
+PCK policy and status must both report ON. Cold mode establishes these states
+after ROM admission. Autonomous VE power control at CCU `0x1b10` must be disabled,
 and its effective state must report ON. Unsupported or inaccessible entry states
 retain reservations without attempting reset or power repair.
 
@@ -136,8 +137,10 @@ The native read and write functions use explicit physical-address allowlists,
 volatile 32-bit accesses, the JPEG byte-write locations, and AArch64 `DSB SY`
 barriers. They require identity-mapped Device-nGnRnE pages at EL1.
 Non-AArch64 builds refuse these native functions; host models use explicit
-substitute callbacks. The CCU write path permits only decoder reset bit 18 and
-preserves every other field in the shared word.
+substitute callbacks. The CCU write path permits decoder reset and bus bits,
+module enable and the three decoder-local gates listed below. Every other field
+in each shared word is preserved. Cold mode also permits the fixed domain-local
+PCK timing values and policy field.
 
 Every operation has monotonic absolute-deadline checks. An uncertain register
 operation retains the common mutex, resource tokens and memory reservations.
@@ -187,21 +190,98 @@ The earlier JPEG parser check's historical archival gap remains documented in
 current native parser source. Its result establishes the composed software path;
 it does not reconstruct the earlier malformed-input run or qualify hardware.
 
-## Cold startup and memory authority remain required
-
-The next platform stage must establish a cold identity-readable state without
-assuming that powered-off VE registers are accessible. Immutable SoC identity
-and published resource mapping may permit initial admission before VE reset
-release; that design still needs source-backed checks and native implementation.
-
-The Linux startup sequence powers PCK on, deasserts reset, enables the decoder's
-AHB and memory gates, enables bus/module clocks, then pulses the VCU register
-fields. PCK initialization uses domain-local delays at offsets `0x170`, `0x174`,
-`0xc00`, `0xc04` and `0xc10`, followed by policy eight and status acknowledgement.
-The adopted-handoff binding does not perform this cold sequence.
+## Memory authority and physical qualification remain required
 
 Actual memory translations, full input/output burst extents, cache maintenance,
 independent recovery and accepted-transaction drain remain required before a
 bounded physical decode. The physical compound identity is still unknown.
-Full codec support, including cold startup, additional decode families and
-encoders, remains part of the hardware objective.
+Physical cold-start qualification, additional decode families and encoders
+remain part of the hardware objective.
+
+## Cold startup identifies a fixed ROM profile before power-on
+
+`A733_VIDEO_COLD_NS_ROM` implements decoder startup from an admitted OFF state.
+The selected PLL, fabric and shared PCK clock must already be stable under the
+existing leases. This mode does not initialize those shared resources.
+The admission service must establish exclusive decoder ownership, both master
+reservations, prior transaction drain, independent recovery and genuine fixed
+ROM mappings. The binding then observes ROM bytes itself.
+
+The manual maps nonsecure boot ROM to `0x17000..0x21fff`. The [published A733 ROM](https://github.com/smaeul/sunxi-blobs/blob/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/ns-brom/blob.hex) constructs
+its FEL descriptor at ROM offset `0x2a68`. Instructions at `0x2a88..0x2ac0`
+copy the signature and load the identity and scratch-address literals.
+The binding compares fifteen selected instruction and data words, including
+signature `AWUSBFEX`, identity literal `0x00190300` and scratch address
+`0x000ee800`. FEL tools extract SoC ID `0x1903` from that identity word.
+These observations identify one published ROM profile. Other revisions refuse.
+
+This check depends on privileged mappings actually reaching immutable ROM.
+A copied buffer, caller boolean, build target or cached host descriptor cannot
+establish that condition. The currently captured board image covers fixed boot
+ROM at `0..0x10fff`, not the nonsecure ROM region. Its hash is
+`a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa`;
+it differs from the published fixed-ROM image. A physical match for this
+nonsecure ROM profile remains unobserved.
+
+The board kernel's `sunxi-sid.c` reads SYSCTRL offset `0x24` only after setting
+bit 15 and masks the result with `0xffff0007`. Its device tree provides the
+revision field but no expected immutable family value. The captured ROM also
+contains a SID read helper at `0x29fc`, addressing `0x03006200 + offset`.
+Neither path establishes a sourced read-only A733 family predicate here.
+The binding therefore does not read or write SYSCTRL or SID.
+
+After ROM admission, the binding requires decoder PCK policy and status OFF,
+external reset asserted, module and local gates disabled, and autonomous module
+gating disabled with effective module status OFF. It also checks the selected
+parents and masked, inactive interrupt. Each poll performs one bounded step:
+
+| Step | Physical register and operation |
+| --- | --- |
+| Power delays | Write and verify `0x07062170 = 0x1f1f1f`, `0x07062174 = 0x1f1f`, `0x07062c00 = 0x08080808`, `0x07062c04 = 0x0808`, `0x07062c10 = 8` |
+| Request power | Update PCK `0x07062000`, mask `0xf`, value `8` |
+| Wait for power | Poll `0x07062008 & 0xf == 8` under the job deadline; reset remains asserted |
+| Release external reset | Set CCU `0xa8c` bit 18 |
+| Enable local paths | Set CCU `0x5c0` bit 0, `0x5e0` bit 14, `0x5e4` bit 18, then `0xa8c` bit 2 |
+| Enable module | Set CCU `0xa88` bit 31, preserving admitted source/divider |
+| Validate accessible state | Recheck the inherited-state admission conditions, including effective clock status |
+| Cold VCU reset | At decoder `0x01c0e804`, set bits 0 and 4, then clear them, preserving other fields |
+
+The timing values and policy transition follow `pck600_domains.c`'s
+`SUN60IW2_PCK_VE_DEC` entry and power-on function. Reset release and gate order
+follow `cedar_ve.c`'s decoder enable path. Register access completes with `dsb sy`.
+The native writer admits only these local masks and the exact timing values.
+There is no rollback or power-down on an uncertain operation; leases remain
+held, and an uncertain register access also retains the mutex.
+
+The BSP gate macro assigns its “key” register to the gate register itself.
+Its helper ORs `0x010000ff`, `0x41055800` or `0x40302` into the three gate
+registers. Those constants overlap unrelated writable gate fields in manual
+sections 4.1.6.82–84. The native binding follows the manual's owned-bit
+read-modify-write semantics and preserves every other field. Readback verifies
+register values; it does not qualify the physical clock path.
+
+The A733 kernel performs the cold VCU pulse without inspecting compound identity.
+Its `CONFIG_ARCH_SUN60IW2` path applies before any of the three runtime policies
+can be selected. The source specifies two read-modify-write operations with no
+explicit delay or completion poll. The binding performs them on separate bounded
+polls with access barriers; they do not establish external drain.
+
+After this cold reset, the JPEG executor reads and admits compound VE identity
+before codec configuration. Unsupported
+identity leaves the powered resources retained. The existing memory service
+must still establish translations, physical alias exclusion, complete burst
+extents and cache publication before codec preparation. Cold power-on occurs
+before JPEG parsing because it is part of the executor's acquisition phase.
+It does not trigger decode or grant memory access by itself.
+
+The focused composed check in `checks/a733-video-cold.c` uses the published ROM
+bytes, real clock/PCK ownership managers and the existing JPEG fixture. It
+covers successful completion with an independently pending drain, ROM mismatch,
+missing effective PLL output, power acknowledgement timeout, uncertain write,
+and unsupported compound identity. A focused changed-order case uses identity
+`0x0003331000021320`: the mandatory cold VCU pulse precedes identity reads,
+while its later package reset still uses decoder offset `0x04`.
+The check verifies external reset remains asserted during
+power transition and unrelated gate values survive startup. Sanitizer execution
+and native AArch64 compilation pass. These are source/model results; native
+memory/cache/drain authority and physical decoder output remain unqualified.
