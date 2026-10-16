@@ -46,7 +46,8 @@ int bt_hci_request(struct bt_hci *h, uint16_t opcode, const uint8_t *p, size_t n
                    uint64_t deadline)
 {
     if(!h || !deadline || !p || ((opcode!=0x0405 || n!=13) &&
-       (opcode!=0x0406 || n!=3)) || overlaps(h,sizeof(*h),p,n)) return -1;
+       (opcode!=0x0406 || n!=3) && (opcode!=0x0409 || n!=7) &&
+       (opcode!=0x040a || n!=7)) || overlaps(h,sizeof(*h),p,n)) return -1;
     if(h->state!=BT_HCI_IDENTIFIED) return -1;
     if(h->command!=BT_HCI_IDLE || !h->credits ||
        h->transport.tx_offset<h->transport.tx_length) return 0;

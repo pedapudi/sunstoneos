@@ -9,16 +9,18 @@
 enum bt_acl_link_state { BT_ACL_UNUSED, BT_ACL_CONNECT_QUEUED,
     BT_ACL_CONNECT_STATUS, BT_ACL_CONNECTING, BT_ACL_CONNECTED,
     BT_ACL_DISCONNECT_QUEUED, BT_ACL_DISCONNECT_STATUS, BT_ACL_DISCONNECTING,
-    BT_ACL_CLOSED };
+    BT_ACL_CLOSED, BT_ACL_WAIT_REQUEST, BT_ACL_ACCEPT_QUEUED,
+    BT_ACL_ACCEPT_STATUS, BT_ACL_ACCEPTING, BT_ACL_REJECT_QUEUED,
+    BT_ACL_REJECT_STATUS, BT_ACL_REJECTING };
 enum bt_acl_tx_state { BT_ACL_TX_FREE, BT_ACL_QUEUED, BT_ACL_PARTIAL,
     BT_ACL_SENT, BT_ACL_CREDIT_RETIRED, BT_ACL_FLUSHED, BT_ACL_NOT_SENT };
 struct bt_acl_peer { uint8_t address[6], page_scan_mode, role_switch; uint16_t clock_offset; };
 struct bt_acl_link {
     struct bt_acl_peer peer;
-    uint64_t generation, deadline, command_tag, acknowledgement;
+    uint64_t generation, deadline, command_tag, acknowledgement, request_serial;
     uint16_t handle;
-    uint8_t status, reason, encryption;
-    unsigned flush_seen;
+    uint8_t status, reason, encryption, class_of_device[3];
+    unsigned flush_seen, incoming;
     enum bt_acl_link_state state;
 };
 struct bt_acl_packet {
@@ -34,7 +36,7 @@ struct bt_acl {
     struct bt_hci *hci;
     struct bt_acl_link links[BT_ACL_LINKS];
     struct bt_acl_packet packets[BT_ACL_TX_SLOTS];
-    uint64_t next_link, next_packet, seen_record;
+    uint64_t next_link, next_packet, seen_record, incoming_timeout_us;
     unsigned capacity, credits, mtu, active_tx, command_link;
     enum bt_acl_state state;
 };
@@ -50,6 +52,22 @@ int bt_acl_init(struct bt_acl *, struct bt_hci *);
  * Output pointers must be disjoint from every owned object and buffer. */
 int bt_acl_connect(struct bt_acl *, const struct bt_acl_peer *, uint64_t deadline,
                    uint64_t *link_generation);
+/* Enable incoming ACL handling once, before any attempt. Requires controller
+ * Accept/Reject support. The external controller owner must already establish
+ * page scan, unmasked Request/Status/Complete events, no automatic acceptance,
+ * and an accept timeout exceeding bounded RX latency plus response_timeout_us.
+ * This scalar bounds classification through terminal completion; it is not a
+ * controller setting. Unknown peers are rejected with reason0x0e. Exhaustion,
+ * repeated peer requests and uncertain command outcomes retain a fault. */
+int bt_acl_incoming(struct bt_acl *, uint64_t response_timeout_us);
+/* Reserve one copied peer address and a generation for incoming connection
+ * admission. This permits baseband connection only: the address and received
+ * class are unauthenticated. Real pairing/key/encryption and PSM/service policy
+ * remain mandatory at their owners. The absolute bound includes waiting for
+ * Request and terminal completion. No automatic expiry/reuse or cancellation.
+ * A matched request sends Accept with role1 (remain peripheral). */
+int bt_acl_listen(struct bt_acl *, const uint8_t address[6], uint64_t deadline,
+                  uint64_t *link_generation);
 /* Only reason0x13 (local user termination) is currently emitted. */
 int bt_acl_disconnect(struct bt_acl *, uint64_t link_generation, uint64_t deadline);
 /* One already-fragmented unicast ACL payload, PB1 continuation or PB2 start.

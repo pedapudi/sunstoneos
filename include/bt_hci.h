@@ -31,7 +31,9 @@ int bt_hci_init(struct bt_hci *, const struct bt_h4_binding *,
                 const struct bt_h4_storage *, unsigned count,
                 uint64_t initialization_deadline, uint64_t command_timeout_us);
 /* Post-identification leaf commands: Create Connection (0x0405,13 bytes) and
- * Disconnect (0x0406,3 bytes). Exact1 accepted,0 busy/no credit,-1 refused/fault.
+ * Disconnect (0x0406,3 bytes), Accept Connection Request (0x0409,7 bytes),
+ * Reject Connection Request (0x040a,7 bytes). Exact1 accepted,0 busy/no credit,
+ * -1 refused/fault. Accept and Reject require prior matching Request.
  * The exclusive link owner validates semantics and owns final link events.
  * Acknowledgement records remain OWNED; matching tag is command_tag after
  * acceptance. Successful Status only returns the command slot, never proves a

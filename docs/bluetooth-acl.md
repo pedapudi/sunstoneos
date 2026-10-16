@@ -1,7 +1,8 @@
-# Bluetooth ACL credits and outbound BR/EDR links
+# Bluetooth ACL credits and BR/EDR links
 
 The native Bluetooth link worker implements outbound BR/EDR connection requests,
-disconnection and ACL packet transmission through the [HCI worker](bluetooth-hci.md).
+[incoming peer admission](bluetooth-incoming.md), disconnection and ACL packet
+transmission through the [HCI worker](bluetooth-hci.md).
 ACL is the controller's asynchronous data transport. Applications supply complete
 HCI ACL fragments; a later L2CAP layer must construct and reassemble its packets.
 This component does not establish authenticated links or headset audio.
@@ -31,9 +32,9 @@ slot even when refused, so their addresses, status and handles remain inspectabl
 A previously attempted peer address and a successful handle cannot be assigned
 again during that lifetime. A repeated peer address is refused. A repeated
 handle faults the worker before it becomes usable. This bounded quarantine keeps
-late credit events from being assigned to another connection. Exhaustion returns
-busy without changing the caller's output; larger capacity or reconnection policy
-requires a separate implementation change.
+late credit events from being assigned to another connection. Explicit reservation exhaustion returns busy without changing the caller's output.
+An incoming request without a free or matching reserved slot faults and retains
+ownership. Larger capacity or reconnection policy requires a separate change.
 
 Sixteen packet descriptors hold immutable borrowed payloads. Terminal descriptors
 remain owned until the caller releases their serial. All payloads, receive slots,
@@ -59,8 +60,10 @@ commands preserve the reported status. An unknown-command error may arrive as
 Command Complete instead of Status; a successful Complete cannot substitute for
 the required terminal link event.
 
-Only one terminal link operation is pending at a time. Existing connections may
-continue transmitting while another connection is being established. A local
+Explicit outbound and disconnect requests serialize terminal link operations.
+Incoming requests may coexist with those operations and each other; HCI commands
+remain serialized. Existing connections may continue transmitting while another
+connection is being established. A local
 disconnect waits for an admitted ACL frame to finish entering the UART before
 its command can be transmitted. A remote disconnect during partial frame output
 faults and retains that frame. A remote disconnect before a local Disconnect

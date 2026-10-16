@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Original implementation of Bluetooth Core HCI packet flow control and
- * outbound BR/EDR link commands. Reference structures remain external. */
+ * BR/EDR link commands. Reference structures remain external. */
 #include "bt_acl.h"
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static int span(const void *p,size_t n) { return p && n && (uintptr_t)p<=UINTPTR_MAX-(n-1); }
@@ -36,7 +36,7 @@ static int equal(const uint8_t *a,const uint8_t *b)
 static int live(enum bt_acl_link_state s)
 { return s>=BT_ACL_CONNECTED && s<=BT_ACL_DISCONNECTING; }
 static int pending(enum bt_acl_link_state s)
-{ return s!=BT_ACL_UNUSED && s!=BT_ACL_CONNECTED && s!=BT_ACL_CLOSED; }
+{ return s!=BT_ACL_UNUSED && s!=BT_ACL_CONNECTED && s!=BT_ACL_CLOSED && s!=BT_ACL_WAIT_REQUEST; }
 int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
 {
     if(!a || !h || a->state!=BT_ACL_OFF || h->state!=BT_HCI_IDENTIFIED ||
@@ -72,6 +72,36 @@ int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadlin
         a->links[i]=(struct bt_acl_link){.peer=*p,.generation=a->next_link++,
             .deadline=deadline,.handle=0xffff,.state=BT_ACL_CONNECT_QUEUED};
         *generation=a->links[i].generation;return 1;
+    }
+    return 0;
+}
+int bt_acl_incoming(struct bt_acl *a,uint64_t timeout)
+{
+    if(!a || a->state!=BT_ACL_ACTIVE || !timeout || a->incoming_timeout_us ||
+       a->next_link!=1 || a->hci->command!=BT_HCI_IDLE ||
+       a->hci->transport.staged || a->hci->transport.assembling!=a->hci->transport.count ||
+       (a->hci->identity.supported_commands[1]&3u)!=3u ||
+       timeout>UINT64_MAX-a->hci->transport.now) return -1;
+    for(unsigned i=0;i<a->hci->transport.count;++i)
+        if(a->hci->transport.records[i].owner!=BT_H4_FREE) return -1;
+    a->incoming_timeout_us=timeout;return 1;
+}
+int bt_acl_listen(struct bt_acl *a,const uint8_t address[6],uint64_t deadline,uint64_t *generation)
+{
+    if(!a || a->state!=BT_ACL_ACTIVE || !a->incoming_timeout_us ||
+       !private(a,address,6) || !private(a,generation,sizeof(*generation)) ||
+       overlap(address,6,generation,sizeof(*generation)) || deadline<=a->hci->transport.now ||
+       equal(address,a->hci->identity.address)) return -1;
+    unsigned any=0;for(unsigned i=0;i<6;++i) any|=address[i];
+    if(!any) return -1;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i)
+        if(a->links[i].state!=BT_ACL_UNUSED && equal(address,a->links[i].peer.address)) return -1;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) if(a->links[i].state==BT_ACL_UNUSED) {
+        struct bt_acl_link *l=&a->links[i];
+        *l=(struct bt_acl_link){.generation=a->next_link++,.deadline=deadline,
+            .handle=0xffff,.incoming=1,.state=BT_ACL_WAIT_REQUEST};
+        for(unsigned j=0;j<6;++j) l->peer.address[j]=address[j];
+        *generation=l->generation;return 1;
     }
     return 0;
 }
@@ -133,21 +163,59 @@ static int credit_event(struct bt_acl *a,const struct bt_h4_record *r)
     }
     a->credits+=total;return release_record(a,r);
 }
+static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
+{
+    const uint8_t *p=r->storage.bytes;
+    if(p[1]!=10 || p[11]>2) return fault(a);
+    /* Synchronous requests belong to their own protocol owner. */
+    if(p[11]!=1 || !a->incoming_timeout_us) return 1;
+    unsigned any=0;for(unsigned j=0;j<6;++j) any|=p[2+j];
+    if(!any || a->hci->transport.now>UINT64_MAX-a->incoming_timeout_us) return fault(a);
+    uint64_t deadline=a->hci->transport.now+a->incoming_timeout_us;
+    struct bt_acl_link *l=0,*unused=0;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) {
+        struct bt_acl_link *candidate=&a->links[i];
+        if(candidate->state==BT_ACL_UNUSED) {if(!unused) unused=candidate;}
+        else if(equal(candidate->peer.address,p+2)) l=candidate;
+    }
+    if(l) {
+        if(l->state!=BT_ACL_WAIT_REQUEST || l->deadline<=a->hci->transport.now) return fault(a);
+        if(l->deadline>deadline) l->deadline=deadline;
+        l->state=BT_ACL_ACCEPT_QUEUED;
+    } else {
+        if(!unused) return fault(a);
+        l=unused;
+        *l=(struct bt_acl_link){.generation=a->next_link++,.deadline=deadline,
+            .handle=0xffff,.incoming=1,.reason=0x0e,.state=BT_ACL_REJECT_QUEUED};
+        if(equal(p+2,a->hci->identity.address)) l->reason=0x0f;
+        for(unsigned j=0;j<6;++j) l->peer.address[j]=p[2+j];
+    }
+    for(unsigned j=0;j<3;++j) l->class_of_device[j]=p[8+j];
+    l->request_serial=r->serial;
+    return release_record(a,r);
+}
 static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 {
     if(r->type!=4) return 1;
     const uint8_t *p=r->storage.bytes;unsigned event=p[0],n=p[1];
+    if(event==0x04) return incoming_request(a,r);
     if(event==0x13) { if(n<1) return fault(a);return credit_event(a,r); }
     if(event==0x0f || event==0x0e) {
         if(a->command_link==BT_ACL_LINKS) return 1;
         struct bt_acl_link *l=&a->links[a->command_link];
         unsigned op=le16(p+(event==0x0f ? 4 : 3));
-        unsigned expected=l->state==BT_ACL_CONNECT_STATUS ? 0x0405 : 0x0406;
+        unsigned expected=l->state==BT_ACL_CONNECT_STATUS ? 0x0405 :
+            l->state==BT_ACL_ACCEPT_STATUS ? 0x0409 :
+            l->state==BT_ACL_REJECT_STATUS ? 0x040a : 0x0406;
         if(op!=expected || r->tag!=l->command_tag) return 1;
         if(a->hci->command!=BT_HCI_IDLE) return fault(a);
         l->status=p[event==0x0f ? 2 : 5];l->acknowledgement=r->serial;
         if(l->state==BT_ACL_CONNECT_STATUS)
             l->state=l->status ? BT_ACL_CLOSED : BT_ACL_CONNECTING;
+        else if(l->state==BT_ACL_ACCEPT_STATUS)
+            l->state=l->status ? BT_ACL_CLOSED : BT_ACL_ACCEPTING;
+        else if(l->state==BT_ACL_REJECT_STATUS)
+            l->state=l->status ? BT_ACL_CLOSED : BT_ACL_REJECTING;
         else if(l->state==BT_ACL_DISCONNECT_STATUS)
             l->state=l->status ? BT_ACL_CONNECTED : BT_ACL_DISCONNECTING;
         else return fault(a);
@@ -157,12 +225,16 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
         if(n!=11) return fault(a);
         struct bt_acl_link *l=0;
         for(unsigned i=0;i<BT_ACL_LINKS;++i) if(equal(a->links[i].peer.address,p+5) &&
-            (a->links[i].state==BT_ACL_CONNECTING || a->links[i].state==BT_ACL_CONNECT_STATUS)) l=&a->links[i];
+            (a->links[i].state==BT_ACL_CONNECTING || a->links[i].state==BT_ACL_CONNECT_STATUS ||
+             a->links[i].state==BT_ACL_ACCEPTING || a->links[i].state==BT_ACL_ACCEPT_STATUS ||
+             a->links[i].state==BT_ACL_REJECTING || a->links[i].state==BT_ACL_REJECT_STATUS)) l=&a->links[i];
         if(!l) return p[2] ? 1 : fault(a);
-        if(l->state!=BT_ACL_CONNECTING || r->serial<=l->acknowledgement) return fault(a);
+        if((l->state!=BT_ACL_CONNECTING && l->state!=BT_ACL_ACCEPTING &&
+            l->state!=BT_ACL_REJECTING) || r->serial<=l->acknowledgement) return fault(a);
+        if(l->state==BT_ACL_REJECTING && !p[2]) return fault(a);
         if(p[2]) {l->status=p[2];l->state=BT_ACL_CLOSED;return release_record(a,r);}
         unsigned h=le16(p+3);
-        if(h>0xeff || handle(a,h) || p[11]!=1 || p[12]>2) return fault(a);
+        if(h>0xeff || handle(a,h) || p[11]!=1 || p[12]>1) return fault(a);
         l->handle=(uint16_t)h;l->encryption=p[12];l->state=BT_ACL_CONNECTED;
         return release_record(a,r);
     }
@@ -199,7 +271,8 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
 {
     if(!a || a->state!=BT_ACL_ACTIVE || !deadline || !budget || budget>BT_H4_BUDGET) return -1;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i) if(pending(a->links[i].state) && deadline>a->links[i].deadline)
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) if((pending(a->links[i].state) ||
+        a->links[i].state==BT_ACL_WAIT_REQUEST) && deadline>a->links[i].deadline)
         deadline=a->links[i].deadline;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].state>=BT_ACL_QUEUED &&
         a->packets[i].state<=BT_ACL_SENT && deadline>a->packets[i].deadline) deadline=a->packets[i].deadline;
@@ -214,20 +287,27 @@ int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
            (!r || candidate->serial<r->serial)) r=candidate;
     }
     if(r) {a->seen_record=r->serial;if(dispatch(a,r)!=1) return -1;}
-    if(a->active_tx<BT_ACL_TX_SLOTS || a->hci->command!=BT_HCI_IDLE) return 1;
+    if(a->active_tx<BT_ACL_TX_SLOTS || a->hci->command!=BT_HCI_IDLE ||
+       a->command_link<BT_ACL_LINKS) return 1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) {
         struct bt_acl_link *l=&a->links[i];
-        if(l->state!=BT_ACL_CONNECT_QUEUED && l->state!=BT_ACL_DISCONNECT_QUEUED) continue;
+        if(l->state!=BT_ACL_CONNECT_QUEUED && l->state!=BT_ACL_DISCONNECT_QUEUED &&
+           l->state!=BT_ACL_ACCEPT_QUEUED && l->state!=BT_ACL_REJECT_QUEUED) continue;
         uint8_t params[13]={0};size_t n;unsigned opcode;
         if(l->state==BT_ACL_CONNECT_QUEUED) {
             for(unsigned j=0;j<6;++j) params[j]=l->peer.address[j];
             params[6]=0x06;params[7]=0x33;params[8]=l->peer.page_scan_mode;
             params[10]=(uint8_t)l->peer.clock_offset;params[11]=(uint8_t)(l->peer.clock_offset>>8);
             params[12]=l->peer.role_switch;n=13;opcode=0x0405;
+        } else if(l->state==BT_ACL_ACCEPT_QUEUED || l->state==BT_ACL_REJECT_QUEUED) {
+            for(unsigned j=0;j<6;++j) params[j]=l->peer.address[j];
+            params[6]=l->state==BT_ACL_ACCEPT_QUEUED ? 1 : l->reason;
+            n=7;opcode=l->state==BT_ACL_ACCEPT_QUEUED ? 0x0409 : 0x040a;
         } else {params[0]=(uint8_t)l->handle;params[1]=(uint8_t)(l->handle>>8);params[2]=0x13;n=3;opcode=0x0406;}
         int accepted=bt_hci_request(a->hci,(uint16_t)opcode,params,n,l->deadline);
         if(accepted<0) return fault(a);
-        if(accepted==1) {l->state=opcode==0x0405 ? BT_ACL_CONNECT_STATUS : BT_ACL_DISCONNECT_STATUS;
+        if(accepted==1) {l->state=opcode==0x0405 ? BT_ACL_CONNECT_STATUS :
+            opcode==0x0409 ? BT_ACL_ACCEPT_STATUS : opcode==0x040a ? BT_ACL_REJECT_STATUS : BT_ACL_DISCONNECT_STATUS;
             l->command_tag=a->hci->command_tag;a->command_link=i;}
         return 1;
     }

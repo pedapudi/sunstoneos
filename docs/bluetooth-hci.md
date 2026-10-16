@@ -6,6 +6,11 @@ and native compilation pass. Physical Bluetooth communication remains
 unqualified. Pairing, connections, profiles and headset audio are not implemented
 by this component. This document is for driver and platform developers.
 
+Incoming ACL handling adds Accept and Reject Connection Request to the bounded
+post-identification command set. Both require Command Status and a separate
+Connection Complete owned by the [ACL admission worker](bluetooth-incoming.md).
+Neither command implements pairing or service authorization.
+
 ## The worker requires a live radio and UART generation
 
 [bt_h4.h](../include/bt_h4.h) defines transport storage and ownership.
@@ -151,10 +156,11 @@ composition; it does not establish a working radio or measure throughput.
 
 Physical qualification requires independent watchdog recovery, verified radio
 firmware, native resource binding and a coordinator-owned serial test.
-Further implementation includes interrupt-driven worker scheduling, outbound
-ACL/SCO/ISO credit accounting, link management, security, L2CAP, SDP, RFCOMM,
-Bluetooth profiles and headset control/voice transport. LE and ISO capability
-queries and negotiation also remain required before using those features.
+Link management and ACL credits are implemented by the [ACL worker](bluetooth-acl.md);
+upper protocol workers provide L2CAP, SDP and RFCOMM. Further implementation
+includes interrupt-driven scheduling, SCO/ISO credit accounting, security and
+headset voice transport. LE and ISO capability queries and negotiation remain
+required before using those features.
 
 [h4-spec]: https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/uart-transport-layer.html
 [hci-spec]: https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-60/out/en/host-controller-interface/host-controller-interface-functional-specification.html
