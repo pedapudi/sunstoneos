@@ -26,8 +26,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   writes for all seven secondary cores and compiles for AArch64. The
   [secondary entry and mailbox](cpu-entry.md) waits for verified power cleanup
   before releasing a core to its continuation. Host composition and instruction
-  emulation pass; native objects compile. Physical entry,
-  coherence, per-core interrupts and secondary scheduling remain unqualified.
+  emulation pass; native objects compile. The [EL3-to-EL1 continuation](cpu-continue.md)
+  supplies per-core interrupt preparation, translation tables and fault vectors.
+  Host and instruction checks pass. The [eight-core diagnostic](a733-smp.md)
+  links with bounded startup and scheduler checks, but the complete image has
+  not executed. Cached coherence, physical entry, interrupts and secondary
+  scheduling remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
@@ -73,6 +77,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
+  The [system IOMMU](iommu.md) implements shared translation-table construction,
+  cold installation and non-destructive fault observation for both banks.
+  Source comparisons and host checks pass, including refusal of inherited
+  page-walk faults before publication. Native exclusion of all affected masters,
+  bus drain, memory binding and physical translation remain unqualified.
 
 - Header pin ownership: **implemented** shared leases for PB4–PB8 with verified
   mux/pull/drive updates. Host concurrency/failure checks and pinned field
@@ -155,15 +164,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   publishes native workload memory and firmware records before startup, then
   runs owner-only jobs with timeline and guarded-output checks. Focused FreeRTOS
   emulator cases pass; central compute, lifecycle and IRQ targets link.
-  Proven single-core admission, multicore addressing, repeated-job resource
-  disposal and physical execution remain outstanding.
+  The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
+  capability after power-up and before submission. Instruction and focused
+  service checks pass; physical identity remains unobserved. The
+  [isolation contract](gpu-isolation.md) requires exact callback success before
+  memory reclamation; uncertain results retain memory. A physical request-block
+  and transaction-drain protocol, multicore addressing, repeated-job resource
+  disposal and actual GPU execution remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
   compilation passes. The [PHY controller](dsi-phy.md) verifies inherited PLL
   factors and lock, prepares analog controls and composes with command transport.
-  Source comparisons and focused admission checks pass. Cold PLL setup,
-  clock/pin ownership, scanout, panel configuration, read transactions and
+  Source comparisons and focused admission checks pass. The [video transmitter](dsi-video.md)
+  implements four-lane RGB888 and loose RGB666 with continuous clocks and bounded
+  engine stop. Source-register comparisons and host lifecycle checks pass.
+  Cold PLL setup, clock/pin ownership, timing-controller and display-engine
+  integration, scanout, panel configuration, read transactions and
   physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
@@ -179,8 +196,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   artifacts, uploads Bluetooth patches and Wi-Fi firmware, and waits for start
   confirmation. The [runtime worker](radio-runtime.md) computes binding replies,
   checks status and preserves continuously received data/control records.
-  Host composition and native compilation pass. Physical binding and silicon
-  identity, power/reset bindings, networking,
+  Host composition and native compilation pass. [Wi-Fi initialization and scan](radio-wifi.md)
+  implement the source-defined RF setup and firmware startup sequence, explicit
+  channel policy and bounded passive scanning. Source-packet comparisons and
+  host lifecycle checks pass. Physical binding and silicon identity,
+  power/reset bindings, association, security, data networking,
   pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
@@ -193,7 +213,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [route controller](camera-route.md) configures pass-through ISP1 and
   unity-scale VIPP0, with exclusive shared-selector ownership. The receiver
   now supports single-image mode. Host/source checks and native compilation
-  pass. Module electrical binding, global PHY startup, actual DMA mapping/drain,
+  pass. The [shared analog controller](camera-platform.md) implements cold PHY
+  startup with exclusive common-register ownership and calibration readback.
+  Source/model checks and native compilation pass. Complete capture composition,
+  module electrical binding, actual DMA mapping/drain,
   additional modes and physical qualification remain outstanding.
   Module availability remains unconfirmed.
 
@@ -227,7 +250,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and leased supply, programs local clock/reset state, and powers domain 4.
   Source/model checks and native compilation pass. It preserves shared SRAM
   reset and requires exclusive ownership of that memory's existing users.
-  Actual rail/PCK binding, cold PLL provisioning, model admission, numerical execution,
+  The [startup adapter](npu-startup.md) binds shared clocks, stable DCDC2 supply
+  ownership, native PMIC reads and deferred service activation. Focused two-core
+  checks pass with modeled device registers and real FreeRTOS locks; the central
+  target links. Uncertain register operations retain mutex ownership before
+  release. Physical rail/PCK qualification, cold PLL provisioning, model admission, numerical execution,
   and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary

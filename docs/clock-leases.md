@@ -113,7 +113,12 @@ handoff, clock/reset setup and production composition remain platform work.
 The [NPU platform controller](npu-platform.md) acquires stable PLL_NPU,
 reference, oscillator and fabric scopes together with exclusive NPU ownership.
 The NPU scope includes its local clock, resets and power domain. Separate
-PCK-clock and DCDC2 rail leases remain prerequisites for production startup.
+PCK-clock and DCDC2 rail leases are acquired by the [startup adapter](npu-startup.md).
+DCDC2 has a separate stable-supply scope in the common registry. Every PMIC
+writer must acquire exclusive rail authority; the PMIC mutex alone only
+serializes register transactions. DCDC2 ownership has no clock ancestors and
+does not alter audio-profile publication. Physical supply and clock qualification
+remain prerequisites for production startup.
 
 PLL_NPU can also supply memory, fabric and video clocks. Retuning it requires
 exclusion of every consumer; an idle NPU does not establish that exclusion.

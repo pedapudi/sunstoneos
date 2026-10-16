@@ -1066,5 +1066,143 @@
     "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c",
     "sha256": "16cf3c5e09a4613ebbebd6c5efc0182dbf54ff3b37dfbb88e42d629bd45ca07b",
     "archive": "camera-research/allwinner-bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c"
+  },
+  "gpu-mode-rgxmulticore-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rgxmulticore.h",
+    "archive": "gpu-mode/rgxmulticore.h",
+    "sha256": "fb600fdd8d4937cd303038e231cf9d3a2794538466780289ca9caf8a19b55abc"
+  },
+  "gpu-mode-multicore-defs-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/include/multicore_defs.h",
+    "archive": "gpu-mode/multicore_defs.h",
+    "sha256": "e909a279f9cbf830fd1bf8bd0d68a397702cd87e12e03dc97688c3004c836071"
+  },
+  "gpu-mode-rgx-cr-defs-km-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/hwdefs/rogue/km/rgx_cr_defs_km.h",
+    "archive": "gpu-mode/rgx_cr_defs_km.h",
+    "sha256": "c0cc256dfecdebbf2d4d828d04a47df795354bf238f892176b171b2e19731e36"
+  },
+  "gpu-mode-rgx-bvnc-table-km-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/hwdefs/rogue/km/rgx_bvnc_table_km.h",
+    "archive": "gpu-mode/rgx_bvnc_table_km.h",
+    "sha256": "615f031c278faaee2e0f82599a9ea82d7e984a545bd0110f24d5033e719a0c49"
+  },
+  "gpu-mode-rgx-bvnc-defs-km-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/hwdefs/rogue/km/rgx_bvnc_defs_km.h",
+    "archive": "gpu-mode/rgx_bvnc_defs_km.h",
+    "sha256": "9c714b5fdb3e1f4aefb3ff6bac14cd7fec78854bcc0b252921a590a6667d1f60"
+  },
+  "a733-iommu-v2-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/iommu/sunxi-iommu-v2.c",
+    "sha256": "2cfa66d29a1223d259486c29ef6722fc6eb3679990f39592c8c4d4b11442e31d",
+    "archive": "iommu/sunxi-iommu-v2.c"
+  },
+  "a733-iommu-pgtable-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/iommu/sunxi-iommu-pgtable.c",
+    "sha256": "c48d2f4c80f3d15455e811eaddbea0ab485af217654f9823e927fe299f329b76",
+    "archive": "iommu/sunxi-iommu-pgtable.c"
+  },
+  "a733-iommu-pgtable-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/iommu/sunxi-iommu-pgtable.h",
+    "sha256": "93ff578b4632306c9403f1edd9c5e1841558d465ecc112caf07346d47373eba3",
+    "archive": "iommu/sunxi-iommu-pgtable.h"
+  },
+  "cpu-continue-lib-cpus-aarch64-cortex_a55-s": {
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/cpus/aarch64/cortex_a55.S",
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "sha256": "9524c34f27e1d55dc962a01022680fd8cf2d604bc5007a31dc08de73d6b5150f",
+    "archive": "cpu-continue/lib/cpus/aarch64/cortex_a55.S"
+  },
+  "cpu-continue-lib-cpus-aarch64-cortex_a76-s": {
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/cpus/aarch64/cortex_a76.S",
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "sha256": "bd2a75fb4e5308083959ef4b112e2e9e434cda48a48da901a7434d0a8f54d99e",
+    "archive": "cpu-continue/lib/cpus/aarch64/cortex_a76.S"
+  },
+  "cpu-continue-drivers-arm-gic-v3-gicv3_main-c": {
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_main.c",
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "sha256": "8abc69e937da97fc6ce87e977540d8cff6436ed39e150c6c541bcb4151837809",
+    "archive": "cpu-continue/drivers/arm/gic/v3/gicv3_main.c"
+  },
+  "cpu-continue-drivers-arm-gic-v3-gicv3_helpers-c": {
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_helpers.c",
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "sha256": "0b24c473cbd1c4dab16cbc14470d2c683ca10f40292182247ed589df9c5d8a65",
+    "archive": "cpu-continue/drivers/arm/gic/v3/gicv3_helpers.c"
+  },
+  "cpu-continue-include-drivers-arm-gicv3-h": {
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/drivers/arm/gicv3.h",
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "sha256": "0aa7cd1c4deaa39e4efa3691577cc6e4cee7d342792b81e8639fe3fab5b26100",
+    "archive": "cpu-continue/include/drivers/arm/gicv3.h"
+  },
+  "radio-wifi-aicwf_8800d80-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_8800d80.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_8800d80.c",
+    "sha256": "b102320fe7ffd98f51c04bd419e9359f78fd181bd3e71e0aaa2d3a6bcf5b2cb5"
+  },
+  "radio-wifi-rwnx_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_platform.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_platform.c",
+    "sha256": "39611e9107beaf67be408fe6c249ab60b7bf75583190d6bd851f9c41027d795e"
+  },
+  "radio-wifi-rwnx_cfgfile-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_cfgfile.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_cfgfile.c",
+    "sha256": "d327c0e155e23fec097637a2992167dafcf6ebb38456c7807790e2197adae7f2"
+  },
+  "gpu-isolation-drivers-bus-sunxi-nsi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi.c",
+    "archive": "gpu-isolation/drivers/bus/sunxi-nsi.c",
+    "sha256": "322ef7a142521760c081d092c8f5193f688144cd6ec842f93bbf457e27814c71"
+  },
+  "gpu-isolation-drivers-bus-sunxi-nsi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi.h",
+    "archive": "gpu-isolation/drivers/bus/sunxi-nsi.h",
+    "sha256": "42db94da3e3ac2d072363550f637d41027988ac58154c753c1090c8fadcfc64c"
+  },
+  "gpu-isolation-include-sunxi-nsi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/include/sunxi-nsi.h",
+    "archive": "gpu-isolation/include/sunxi-nsi.h",
+    "sha256": "c48b1d8dd33f976019390dda81538ad259413e3d89c48ea7f2302067eb8ed204"
+  },
+  "gpu-isolation-drivers-bus-sunxi-nsi-bw-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/bus/sunxi-nsi-bw.c",
+    "archive": "gpu-isolation/drivers/bus/sunxi-nsi-bw.c",
+    "sha256": "8d256ef58e5dc2668c6b3026ce670e6dcf99cdf2b289e137b28e19a761ab183b"
+  },
+  "gpu-isolation-linux-rogue-km-services-server-devices-rgxpower-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rgxpower.c",
+    "archive": "gpu-isolation/linux/rogue_km/services/server/devices/rgxpower.c",
+    "sha256": "77cf1473092ed28a56b2f9bdfcf7b585d96a92a06d865bd46d1bc51ae327ed55"
+  },
+  "gpu-isolation-linux-rogue-km-services-server-devices-rogue-rgxstartstop-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rogue/rgxstartstop.c",
+    "archive": "gpu-isolation/linux/rogue_km/services/server/devices/rogue/rgxstartstop.c",
+    "sha256": "ee224fc5ca44f1931e21a687d43bedb6532e17199ded642d5ffe37859eb0668a"
+  },
+  "gpu-isolation-pck600-trm-pdf": {
+    "revision": "101150_0005_01_en-r0p5-issue01",
+    "url": "https://documentation-service.arm.com/static/61fa619e2dd99944d0514955",
+    "archive": "gpu-isolation/pck600-trm.pdf",
+    "sha256": "32bd49afc93c0ecdb2b11663f73fbe90742203ac296a1d4aabb8172c3988e6ac"
   }
 }

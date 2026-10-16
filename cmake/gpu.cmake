@@ -17,6 +17,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/gpu-service-port.c" PROPERTIES
     COMPILE_DEFINITIONS "npu_service_task_privileged=pvr_gpu_service_task_privileged")
   set(gpu_compute_sources
+    drivers/gpu/pvr_compute_mode.c
     drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_job.c
     drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
     drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
