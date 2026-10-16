@@ -331,7 +331,7 @@ static int isolate(void *context)
     if (!active(b)) return 0;
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE || !before(b, deadline) ||
-        !b->external.isolate(b->external.context, b->power, deadline) ||
+        b->external.isolate(b->external.context, b->power, deadline) != 1 ||
         b->power->phase != A733_GPU_PLATFORM_OFF || b->power->token || b->power->delegated || !before(b, deadline))
         return fail(b, A733_GPU_BACKEND_ISOLATION);
     if (!memory_result(b, a733_gpu_memory_reclaim(b->memory)) || !before(b, deadline)) return 0;
