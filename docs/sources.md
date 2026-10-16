@@ -33,6 +33,8 @@ The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and
 identifies the isolated instructions used for encoding comparisons.
+The [complete loader trace](nbg-loader-trace.md) identifies synthetic HAL inputs,
+source resolution, allocation padding, and the intercepted submission boundary.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

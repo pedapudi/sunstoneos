@@ -7,7 +7,8 @@
 
 enum nbg_address_encoding {
     NBG_ADDRESS_WORD = 0,
-    NBG_ADDRESS_SHIFT6 = 1
+    NBG_ADDRESS_SHIFT6 = 1,
+    NBG_ADDRESS_FLAGS6 = 2
 };
 
 /* Resolved address reference, not a serialized NBG patch record. The loader
@@ -26,7 +27,8 @@ struct nbg_relocation {
 /* Patch an OFFLINE, exclusively owned byte buffer for a 32-bit device address
  * space. Destination words are little-endian and have four-byte offsets. The
  * CPU buffer itself need not be aligned. SHIFT6 requires a 64-byte-aligned
- * address and preserves destination bits 31:26. WORD replaces all 32 bits.
+ * address and preserves destination bits 31:26. FLAGS6 requires a 64-byte-
+ * aligned address and preserves destination bits 5:0. WORD replaces all 32 bits.
  *
  * Refuse empty/out-of-range allocations and accesses, address zero, unknown
  * encodings, duplicate destinations, metadata/buffer aliases, wrapping CPU

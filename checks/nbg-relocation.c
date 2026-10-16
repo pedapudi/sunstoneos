@@ -48,8 +48,9 @@ int main(void)
     baseline(); p[1].referenced_bytes = 4096; refuse(32, 2);
     baseline(); p[1].referenced_bytes = UINT64_MAX; refuse(32, 2);
     baseline(); p[1].source_offset = 1; refuse(32, 2);
-    baseline(); p[1].encoding = (enum nbg_address_encoding)2; refuse(32, 2);
+    baseline(); p[1].encoding = (enum nbg_address_encoding)3; refuse(32, 2);
     baseline(); p[1].encoding = (enum nbg_address_encoding)-1; refuse(32, 2);
+    baseline(); p[1].encoding = NBG_ADDRESS_FLAGS6; p[1].source_offset = 1; refuse(32, 2);
     assert(!nbg_relocate(NULL, 32, p, 2));
     assert(!nbg_relocate(storage, 32, NULL, 2));
     assert(!nbg_relocate((void *)(UINTPTR_MAX - 3), 4, p, 2));
@@ -69,6 +70,16 @@ int main(void)
     const unsigned char last_shifted[] = {0xff, 0xff, 0xff, 0xa7};
     assert(!memcmp(storage + 1, last, 4));
     assert(!memcmp(storage + 29, last_shifted, 4));
+
+    for (unsigned flags = 0; flags < 64; ++flags) {
+        baseline();
+        storage[1] = (unsigned char)(0xc0 | flags);
+        p[0] = (struct nbg_relocation){64, 64, 0xffffffc0, 0, 0, NBG_ADDRESS_FLAGS6};
+        assert(nbg_relocate(storage + 1, 32, p, 1));
+        assert(storage[1] == (0xc0 | flags));
+        assert(storage[2] == 0xff && storage[3] == 0xff && storage[4] == 0xff);
+        assert(!memcmp(storage + 5, original + 5, sizeof(storage) - 5));
+    }
 
     /* The cap and quadratic duplicate check are exercised on a full batch. */
     static struct nbg_relocation many[NBG_RELOCATION_MAX_PATCHES];

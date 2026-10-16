@@ -66,7 +66,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   EL0 clients and a preemptible EL1 worker.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
   checks. The [address encoder](nbg-relocation.md) passes host bounds checks and
-  comparison with SDK pool/SRAM relocation instructions.
+  comparison with SDK relocation instructions. The [host loader reconstruction](nbg-loader-trace.md)
+  matches complete descriptor and command buffers at two allocation bases.
   Board resource integration, native model loading, numerical execution,
   and physical qualification remain outstanding.
 

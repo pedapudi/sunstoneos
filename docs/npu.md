@@ -9,7 +9,9 @@ table validation, cache publication, and retained faults. The
 The [FreeRTOS service](npu-service.md) passes a two-core check with EL0 clients,
 a preemptible EL1 worker, task ownership, and retained faults. The checked
 [address relocation component](nbg-relocation.md) passes host bounds checks
-and comparison with isolated SDK instructions. Board-resource
+and comparison with SDK instructions. A [complete host loader trace](nbg-loader-trace.md)
+reconstructs all active relocations and matches SDK command buffers at two
+allocation bases. Board-resource
 integration, native model loading, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -114,7 +116,7 @@ It accepts only disjoint nonempty sections. Other legitimate layouts may require
 an extension supported by a compiled fixture.
 
 Successful inspection does not authorize hardware submission. The separate
-[address encoder](nbg-relocation.md) implements two checked 32-bit relocation
+[address encoder](nbg-relocation.md) implements three checked 32-bit relocation
 encodings. Complete relocation source/destination resolution, command encoding,
 software-operation semantics, SRAM
 placement, device identity, and the stored checksum remain unvalidated. Unknown
@@ -143,8 +145,9 @@ execution.
 | Input | UINT8, dimensions `[224, 224, 3, 1]`, 150,528 logical bytes |
 | Output | UINT8, dimensions `[2, 1]`, two logical bytes |
 
-The published inspection tool reports a 64-byte output allocation despite the
-two-byte logical tensor. The native loader must derive allocation and padding
+The published inspection tool reports a 64-byte output size despite the
+two-byte logical tensor. The [SDK loader trace](nbg-loader-trace.md) records a
+128-byte allocation request. The native loader must derive allocation and padding
 requirements from the command and memory interfaces. The host inspector does
 not infer an allocation size from tensor dimensions.
 
@@ -202,8 +205,9 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is model loading, relocation, command
-validation, and a pinned host compiler for a numerical fixture. Physical inference
+The next independent implementation work is a native container loader using the
+host reconstruction's source mappings, complete descriptor access bounds,
+command validation, and a pinned host compiler for a numerical fixture. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.

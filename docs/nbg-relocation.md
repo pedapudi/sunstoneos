@@ -24,6 +24,7 @@ unaligned. The supported encodings are:
 | --- | --- | --- |
 | Full word | Resolved device address | One byte |
 | Shifted address | Existing bits 31:26 followed by address bits 31:6 | 64 bytes |
+| Address with flags | Aligned address with existing bits 5:0 | 64 bytes |
 
 The complete source allocation must lie in the 32-bit device address space,
 with a nonzero base and length. The requested access must have nonzero length
@@ -70,12 +71,13 @@ uses only format `0x1001e` and 32-bit device addresses.
 
 ## Focused evidence and remaining loader work
 
-One ASan/UBSan host check passed encoding examples, source and destination
+One updated ASan/UBSan host check passed encoding examples, all low-six-bit flag
+patterns, source and destination
 bounds, guards, a full 4,096-entry batch, and atomic refusal with an invalid
-last entry. Nineteen parameter-refusal cases check unchanged destination bytes;
+last entry. Twenty parameter-refusal cases check unchanged destination bytes;
 additional cases cover null pointers, wrapping CPU ranges, and metadata aliases.
 
-One reference comparison passed all 241 memory-pool and 215 internal-SRAM
+The initial isolated reference comparison passed all 241 memory-pool and 215 internal-SRAM
 records in the pinned ShuffleNetV2 fixture. It also passed 264 constructed
 cases covering address carry, the final device byte, address alignment, and
 all upper-six-bit patterns. Each comparison checks the entire destination
@@ -83,13 +85,18 @@ buffer against the SDK instruction result.
 
 These comparisons use synthetic destination contents and allocation bases.
 They establish address encoding for those records, not operation placement,
-access sizes, tensor binding, or a runnable model. The fixture's other 204
-relocations require separate source resolution and validation.
+access sizes, tensor binding, or a runnable model. The subsequent
+[complete loader trace](nbg-loader-trace.md) resolves all 659 active relocations,
+including command pointers, weights, and deferred tensor bindings. Its full-buffer
+comparison passes at two allocation bases. The model's one initialization
+relocation is omitted by the SDK and remains explicit in the report.
 
-One AArch64 object build passed. The object contains 380 bytes of code, no
+One AArch64 object build passed. The current object contains 400 bytes of code, no
 static data, and no undefined symbols. Its SHA-256 is
-`5a882361ad0078b4797fbe4d701360398726d95a9d9dc3fbfb2bffa2665ad109`.
-Raw evidence and input hashes are under
+`beb793b3f796b45e12af05fd9997012aa268cc150a6424a0ad8c4dedaed744f4`.
+Current native and complete-loader evidence is under
+`~/.cache/sunstoneos/evidence/nbg-loader-20261016/`.
+The initial isolated comparison remains under
 `~/.cache/sunstoneos/evidence/npu-relocation-20261016/`.
 Existing kernel, service, DMA, and application evidence was reused; no board
 request or kernel rebuild occurred.

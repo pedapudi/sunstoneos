@@ -55,7 +55,12 @@ two-core check with EL0 clients, a preemptible EL1 worker, full register retenti
 through worker migration, task ownership, timed replies, and autonomous
 completion/cancellation/deadlines. The [address relocation component](nbg-relocation.md)
 passes host bounds and atomic-refusal checks and comparison with isolated SDK
-pool/SRAM patch instructions. It compiles for AArch64. Platform resource setup, native model loading,
+pool/SRAM patch instructions. The [complete loader trace](nbg-loader-trace.md)
+now matches all active relocations and full SDK command buffers at two allocation
+bases, using the native encoder's command-pointer mode. It records deferred
+tensor binding, allocation padding, and the completion-event difference that
+native assembly must handle. The encoder compiles for AArch64.
+Platform resource setup, native model loading,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -188,8 +193,10 @@ the tool hash and recovery evidence in the application document.
 
 6. Implement native NPU model loading, command validation, and controlled command
    registration beyond the service's fixed startup catalogue. Resolve serialized
-   patch sources and destinations before using the checked
-   [address encoder](nbg-relocation.md); determine complete device access lengths.
+   patch sources and destinations in C using the
+   [host reconstruction](nbg-loader-trace.md) as a reference. Determine complete
+   descriptor access lengths, implement checksum handling, and adapt the
+   completion event and fetch reservation to the native controller.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
    Obtain a pinned
