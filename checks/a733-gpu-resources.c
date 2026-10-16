@@ -6,9 +6,10 @@
 
 struct reg { uintptr_t address; uint32_t value; };
 struct model {
-    struct reg regs[11];
+    struct reg regs[13];
     struct a733_gpu_resource_rail rail;
     uint64_t now;
+    uintptr_t fail_address, late_address;
     unsigned calls, fail_at, late_at, updates, partial, corrupt;
     atomic_uint pause, entered;
 };
@@ -24,7 +25,7 @@ static int now(void *context, uint64_t *out)
 { struct model *m = context; if (!callback(m)) return 0; *out = m->now; return 1; }
 static uint32_t *reg(struct model *m, uintptr_t address)
 {
-    for (unsigned i = 0; i < 11; ++i) if (m->regs[i].address == address) return &m->regs[i].value;
+    for (unsigned i = 0; i < 13; ++i) if (m->regs[i].address == address) return &m->regs[i].value;
     assert(0); return 0;
 }
 static int read32(void *context, uintptr_t address, uint32_t *out)
@@ -35,7 +36,9 @@ static int read32(void *context, uintptr_t address, uint32_t *out)
         while (atomic_load(&m->pause)) { }
     }
     if (!callback(m)) return 0;
-    *out = *reg(m, address); return 1;
+    *out = *reg(m, address);
+    if(address==m->late_address)m->now=100000;
+    return address!=m->fail_address;
 }
 static int update32(void *context, uintptr_t address, uint32_t required,
                      uint32_t set, uint64_t deadline)
@@ -64,6 +67,7 @@ static void fresh(void)
     const struct reg regs[] = {
         {0x07090160, 0}, {0x02002000, 0xf8000000u | (99u << 16) | (99u << 8)},
         {0x020020a0, 0xfe000000u | (1u << 20) | (99u << 8)},
+        {0x02003908, 0x8fff0fff}, {0x02003988, 0x0fff0000},
         {0x020020a8, 0}, {0x020020ac, 0}, {0x070101ac, 0x40},
         {0x020025c0, 0x1100007f}, {0x020025e0, 0x61045802},
         {0x02002b20, 0x10200100}, {0x02002b24, 0x24680000}, {0x07065008, 0},
@@ -103,6 +107,30 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     fresh(); uint64_t token = 0, shared = 0, change = 0;
+    if (!strcmp(argv[1], "--parent-gates-only")) {
+        const uint32_t low=0x806,high=low<<16;
+        *reg(&model,0x02003908)=low|high;*reg(&model,0x02003988)=high;
+        assert(acquire(0,A733_GPU_RESOURCE_PARENT,&token)==A733_GPU_RESOURCE_OK && !model.updates);
+        for(unsigned bit=0;bit<12;++bit) if(low&(1u<<bit)) {
+            for(unsigned kind=0;kind<3;++kind) {
+                fresh();*reg(&model,0x02003908)=low|high;*reg(&model,0x02003988)=high;
+                *reg(&model,kind==2?0x02003988:0x02003908)&=~(1u<<(bit+(kind?16:0)));
+                assert(acquire(0,A733_GPU_RESOURCE_PARENT,&token)==A733_GPU_RESOURCE_FAULT);
+                assert(manager.error==A733_GPU_RESOURCE_PLL && !model.updates);
+                assert(manager.leases[0].mode==A733_GPU_RESOURCE_RETAINED);terminal();
+            }
+        }
+        for(unsigned i=0;i<2;++i) for(unsigned late=0;late<2;++late) {
+            fresh();uintptr_t address=i?0x02003988:0x02003908;
+            if(late)model.late_address=address;else model.fail_address=address;
+            assert(acquire(0,A733_GPU_RESOURCE_PARENT,&token)==A733_GPU_RESOURCE_FAULT && !model.updates);
+            assert(manager.leases[0].mode==A733_GPU_RESOURCE_RETAINED);terminal();
+        }
+        fresh();model.fail_address=0x02003908;
+        assert(acquire(0,A733_GPU_RESOURCE_OSC,&token)==A733_GPU_RESOURCE_OK && !model.updates);
+        puts("PASS GPU PERI0 400MHz branch: No-Auto/software/effective gates, unselected branches, failed/late reads and retained ownership");
+        return 0;
+    }
     if (!strcmp(argv[1], "--pll-input-only")) {
         assert(acquire(0, A733_GPU_RESOURCE_PARENT, &token) == A733_GPU_RESOURCE_OK);
         assert(!model.updates);
@@ -124,7 +152,7 @@ int main(int argc, char **argv)
     assert(a733_gpu_resources_release(&manager, 0, token, 10000) == A733_GPU_RESOURCE_OK);
     unsigned total_calls = model.calls;
     FILE *f = fopen(argv[1], "w"); assert(f);
-    for (unsigned i = 0; i < 11; ++i) fprintf(f, "%lx %08x\n", (unsigned long)model.regs[i].address, model.regs[i].value);
+    for (unsigned i = 0; i < 13; ++i) fprintf(f, "%lx %08x\n", (unsigned long)model.regs[i].address, model.regs[i].value);
     assert(!fclose(f));
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_OK && token == 2);
     assert(model.updates == 3); /* Adopt already enabled gates without a write. */

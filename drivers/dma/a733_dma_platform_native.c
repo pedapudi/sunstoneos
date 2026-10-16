@@ -7,7 +7,7 @@ static int readable(uintptr_t address)
     if (address>=CCU && address<CCU+0x2000) {
         switch (address-CCU) {
         case 0: case 0xa0: case 0xa8: case 0xac: case 0x500: case 0x580:
-        case 0x588: case 0x5e4: case 0x704: case 0x1908: return 1;
+        case 0x588: case 0x5e4: case 0x704: case 0x1908: case 0x1988: return 1;
         default:return 0;
         }
     }

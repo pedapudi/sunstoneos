@@ -72,7 +72,7 @@ static int update(struct a733_dma_platform *p,uintptr_t address,uint32_t mask,
 }
 static int parents_stable(struct a733_dma_platform *p)
 {
-    uint32_t osc,ref,peri,a,b,autogate;
+    uint32_t osc,ref,peri,a,b,gate_config,gate_status;
     if (!rd(p,OSC,&osc) || (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3)) return 0;
     if (!(p->shared&A733_CLOCK_PERI0)) return 1;
     if (!rd(p,CCU,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000)) return 0;
@@ -81,20 +81,25 @@ static int parents_stable(struct a733_dma_platform *p)
     /* User Manual 4.1.6.6: input divisor M1 is bit 1 plus one. */
     if (!rd(p,CCU+0xa0,&peri) || (peri&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) ||
         (peri&(BIT(24)|BIT(1))) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
-        !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&autogate)) return 0;
+        !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&gate_config) ||
+        !rd(p,CCU+0x1988,&gate_status)) return 0;
     n=((peri>>8)&255)+1;
     if (n<53 || n>105) return 0;
     for (unsigned i=0;i<3;++i) {
-        unsigned mhz=p->selected_mhz[i], divisor, automatic;
+        unsigned mhz=p->selected_mhz[i], divisor, branches;
         switch (mhz) {
         case 24: continue;
-        case 600: divisor=(((peri>>20)&7)+1)*2;automatic=BIT(11)|BIT(9);break;
-        case 400: divisor=(((peri>>20)&7)+1)*3;automatic=BIT(11)|BIT(2)|BIT(1);break;
-        case 800: divisor=((peri>>16)&7)+1;automatic=BIT(10);break;
-        case 480: divisor=((peri>>2)&7)+1;automatic=BIT(8)|BIT(7);break;
+        case 600: divisor=(((peri>>20)&7)+1)*2;branches=BIT(11)|BIT(9);break;
+        case 400: divisor=(((peri>>20)&7)+1)*3;branches=BIT(11)|BIT(2)|BIT(1);break;
+        case 800: divisor=((peri>>16)&7)+1;branches=BIT(10);break;
+        case 480: divisor=((peri>>2)&7)+1;branches=BIT(8)|BIT(7);break;
         default: return 0;
         }
-        if ((autogate&automatic) || 24u*n!=mhz*divisor) return 0;
+        /* Manual 4.1.6.249/258: low bits set mean No-Auto; upper
+         * bits enable each selected branch and report its effective gate. */
+        uint32_t enabled=branches<<16, required=branches|enabled;
+        if ((gate_config&required)!=required || (gate_status&enabled)!=enabled ||
+            24u*n!=mhz*divisor) return 0;
     }
     return 1;
 }

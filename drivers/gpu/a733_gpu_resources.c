@@ -93,7 +93,7 @@ static int gate(struct a733_gpu_resource_manager *m, uintptr_t address, uint32_t
 static int clocks(struct a733_gpu_resource_manager *m, uint32_t mask,
                   struct a733_gpu_power_resources *ready)
 {
-    uint32_t osc, ref, peri, sdm0, sdm1;
+    uint32_t osc, ref, peri, sdm0, sdm1, gate_config, gate_status;
     if (!(mask & A733_GPU_RESOURCE_OSC)) return 1;
     if (!read32(m, RTC + 0x160, &osc)) return 0;
     /* The board's 24 MHz oscillator is selected by mux values zero and three. */
@@ -101,7 +101,14 @@ static int clocks(struct a733_gpu_resource_manager *m, uint32_t mask,
     if (mux != 0 && mux != 3) return fail(m, A733_GPU_RESOURCE_OSCILLATOR);
     if (!(mask & A733_GPU_RESOURCE_PARENT)) return 1;
     if (!read32(m, CCU, &ref) || !read32(m, CCU + 0xa0, &peri) ||
-        !read32(m, CCU + 0xa8, &sdm0) || !read32(m, CCU + 0xac, &sdm1)) return 0;
+        !read32(m, CCU + 0xa8, &sdm0) || !read32(m, CCU + 0xac, &sdm1) ||
+        !read32(m, CCU + 0x1908, &gate_config) || !read32(m, CCU + 0x1988, &gate_status)) return 0;
+    /* Manual 4.1.6.249/258: PERI0 2X, 400M-all and 400M must each
+     * remain No-Auto, software enabled, and effectively enabled. */
+    const uint32_t branches = (1u << 11) | (1u << 2) | (1u << 1);
+    const uint32_t enabled = branches << 16, required = branches | enabled;
+    if ((gate_config & required) != required || (gate_status & enabled) != enabled)
+        return fail(m, A733_GPU_RESOURCE_PLL);
     /* User Manual 4.1.6.6: inherited rate calculation requires M1=1. */
     if ((ref & 0xf8000000) != 0xf8000000 || (peri & 0xfe000000) != 0xfe000000 ||
         (peri & 2) || (sdm0 & 0x80000000) || (sdm1 & 0x08000000))

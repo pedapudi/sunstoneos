@@ -15,7 +15,7 @@ struct model {
     uint64_t now, deadline;
     unsigned locked, reads, writes, acquire_calls, leaves, parent_reads;
     unsigned busy_once, pending_once, bad_handoff, late_acquire, regress_acquire;
-    uintptr_t fail_write, late_write, late_read;
+    uintptr_t fail_write, late_write, late_read, fail_read;
     unsigned late_leave;
     uintptr_t addresses[16];uint32_t values[16];
 };
@@ -50,7 +50,7 @@ static int read_reg(void *cookie,uintptr_t a,uint32_t *v)
     struct model *m=cookie;assert(m->locked);++m->reads;
     if (a>=CCU && a<=CCU+0xac) ++m->parent_reads;
     if (a>=DMA && a<DMA+0x500) assert((m->ccu[0x704/4]&0x10001)==0x10001 && (m->ccu[0x5e4/4]&1));
-    *v=*reg(m,a);if(a==m->late_read)m->now=m->deadline;return 1;
+    *v=*reg(m,a);if(a==m->late_read)m->now=m->deadline;return a!=m->fail_read;
 }
 static int write_reg(void *cookie,uintptr_t a,uint32_t v)
 {
@@ -77,6 +77,7 @@ static void setup(struct model *m,struct a733_dma_platform *p,struct a733_dma_pl
     for(unsigned i=0;i<3;++i) m->ccu[(unsigned[]){0x500/4,0x580/4,0x588/4}[i]]=c.fabric[i]|0x00400000;
     m->ccu[0]=0xf8000000|(99<<16)|(99<<8);
     m->ccu[0xa0/4]=0xfe000000|(1<<20)|(2<<16)|(99<<8)|(4<<2);
+    m->ccu[0x1908/4]=0x8fff0fff; m->ccu[0x1988/4]=0x0fff0000;
     m->ccu[0x704/4]=0x200002|(c.cold?0:0x10001);
     m->ccu[0x5e4/4]=0x40302|0x1000|(c.cold?0:1);
     m->dma[0x28/4]=c.cold?0:4;
@@ -107,6 +108,39 @@ static void retained(struct model *m,struct a733_dma_platform *p)
 int main(int argc, char **argv)
 {
     struct model m;struct a733_dma_platform p;struct a733_dma_platform_config c=config(1);
+    if(argc==2 && !strcmp(argv[1],"--parent-gates-only")) {
+        const unsigned mhz[]={600,400,800,480};
+        const uint32_t masks[]={0xa00,0x806,0x400,0x180};
+        for(unsigned branch=0;branch<4;++branch) {
+            c=config(0);c.fabric[0]=0;c.fabric[1]=c.fabric[2]=0x80000000;
+            c.rate_hz[0]=c.rate_hz[1]=c.rate_hz[2]=24000000;
+            unsigned slot=branch==1?2:1;
+            unsigned selector=branch==0?3:branch==1?4:branch==2?2:4;
+            c.fabric[slot]=0x80000000u|(selector<<24);c.rate_hz[slot]=mhz[branch]*1000000u;
+            uint32_t low=masks[branch],high=low<<16;
+            setup(&m,&p,c);m.ccu[0x1908/4]=low|high;m.ccu[0x1988/4]=high;
+            assert(finish(&m,&p)==READY && !m.writes);
+            for(unsigned bit=0;bit<12;++bit) if(low&(1u<<bit)) {
+                for(unsigned kind=0;kind<3;++kind) {
+                    setup(&m,&p,c);m.ccu[0x1908/4]=low|high;m.ccu[0x1988/4]=high;
+                    unsigned offset=kind==2?0x1988:0x1908;
+                    m.ccu[offset/4]&=~(1u<<(bit+(kind?16:0)));
+                    assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
+                }
+            }
+        }
+        for(unsigned i=0;i<2;++i) for(unsigned late=0;late<2;++late) {
+            setup(&m,&p,config(0));uintptr_t address=CCU+(i?0x1988:0x1908);
+            if(late)m.late_read=address;else m.fail_read=address;
+            assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
+        }
+        c=config(0);c.fabric[0]=0;c.fabric[1]=c.fabric[2]=0x80000000;
+        c.rate_hz[0]=c.rate_hz[1]=c.rate_hz[2]=24000000;
+        setup(&m,&p,c);m.ccu[0x1908/4]=m.ccu[0x1988/4]=0;m.fail_read=CCU+0x1908;
+        assert(finish(&m,&p)==READY && !m.writes && !m.parent_reads);
+        puts("PASS DMA selected PERI0 branches: No-Auto/software/effective gates, unselected branches, failed/late reads and retained ownership");
+        return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--pll-input-only")) {
         setup(&m,&p,config(0));
         assert(finish(&m,&p)==READY && !m.writes);
@@ -142,7 +176,7 @@ int main(int argc, char **argv)
     c=config(0);c.fabric[1]=c.fabric[2]=0x84000000;c.fabric[2]=0x83000000;
     c.rate_hz[1]=c.rate_hz[2]=480000000;
     setup(&m,&p,c);assert(finish(&m,&p)==READY && !m.writes);
-    setup(&m,&p,c);m.ccu[0x1908/4]=1<<7;assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
+    setup(&m,&p,c);m.ccu[0x1908/4]&=~(1u<<7);assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
     c=config(1);uint32_t scopes=0x12345678;
     c.fabric[1]=0x81000000;assert(!a733_dma_platform_scopes(&c,&scopes) && scopes==0x12345678);
     c=config(1);c.route_change_mask=0;assert(!a733_dma_platform_scopes(&c,&scopes));

@@ -11,7 +11,7 @@ static int allowed(uintptr_t address)
 {
     switch (address) {
     case 0x07090160: case 0x02002000: case 0x020020a0:
-    case 0x020020a8: case 0x020020ac: case 0x070101ac:
+    case 0x020020a8: case 0x020020ac: case 0x02003908: case 0x02003988: case 0x070101ac:
     case 0x020025c0: case 0x020025e0: case 0x02002b20:
     case 0x02002b24: case 0x07065008: case 0x0708300c:
     case 0x07083010: case 0x07083020: return 1;

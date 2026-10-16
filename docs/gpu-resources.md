@@ -74,6 +74,14 @@ stage. Peripheral PLL input-divider bit 1 must be zero, selecting division by
 one. Enabled modulation is refused. These checks establish programmed settings;
 they do not measure oscillator or output frequency.
 
+The PERI0 2X, 400M-all and 400M branches must each remain enabled without
+automatic gating. CCU `+0x1908` requires bits 11, 2 and 1 set for No-Auto,
+and bits 27, 18 and 17 set for software enable. The same upper bits must be
+set in effective status at `+0x1988`. Other branches do not affect this
+400 MHz profile. These registers are read-only. A733 manual sections
+4.1.6.249 and 4.1.6.258 define the polarity; vendor clock names ending in
+`-auto` use ordinary gate helpers and do not imply that zero disables auto-gating.
+
 The rail snapshot holds the common PMIC/I²C lock while reading address `0x36`:
 
 | Register | Required interpretation |
@@ -164,6 +172,14 @@ and refuses divide-by-two before writes, retaining ownership. It passes with
 sanitizers; the changed runtime compiles for AArch64. Evidence is in
 `~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`.
 Earlier gate, lifetime and native-adapter checks remain reusable.
+
+The focused `--parent-gates-only` case checks each required No-Auto, software
+enable and effective-status bit, failed or late reads, unrelated branches, and
+retained ownership without writes. Evidence is in
+`~/.cache/sunstoneos/evidence/peri0-gates-20261016/`. The focused host check passes with address
+and undefined-behavior sanitizers; both affected native units compile for AArch64. The native harness
+fixture now supplies enabled inherited PERI0 gates. Its earlier I²C, lock and
+resource lifecycle results remain applicable; those paths were not repeated.
 
 The [AArch64 harness](../checks/a733-gpu-resources-native.c) and
 [emulator runner](../checks/a733-gpu-resources-emulate.py) execute the native

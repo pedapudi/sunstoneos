@@ -81,7 +81,15 @@ PLL N and M must be equal within the source's multiplier limits, producing
 produce its nominal rate. For example, N=100 and divisors 2, 3, and 5 produce
 the 1.2 GHz, 800 MHz, and 480 MHz outputs; fixed division produces 600 and 400 MHz.
 
-The component refuses enabled modulation and selected-output automatic gating.
+The component refuses enabled modulation. For each selected PERI0 branch,
+CCU `+0x1908` must report No-Auto in its low bit and software enable in
+the corresponding bit 16 positions higher. CCU `+0x1988` must report that
+upper bit enabled. The required low-bit masks are `0xa00` for 600 MHz,
+`0x806` for 400 MHz, `0x400` for 800 MHz, and `0x180` for 480 MHz.
+Unselected branches do not affect admission. The A733 manual sections
+4.1.6.249 and 4.1.6.258 define these controls; a low bit of one disables
+automatic gating. The vendor clock names ending in `-auto` do not reverse
+that polarity. These registers remain read-only.
 It preserves unselected divider fields. Clock checks establish programmed
 settings; physical frequency remains unmeasured. The clock reference labels DMA0's leaf gates
 with `dcxo`; that bookkeeping does not establish that DMA transfers run at
@@ -158,6 +166,14 @@ profile and refuses divide-by-two before writes, retaining ownership.
 Sanitizers and native compilation pass. Evidence is in
 `~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`;
 unchanged platform and service behavior retains its earlier evidence.
+
+The focused `--parent-gates-only` check covers each required No-Auto, software
+enable and effective-status bit, failed or late gate reads, unselected branches,
+and retained ownership without writes. Its source comparison and artifacts are
+in `~/.cache/sunstoneos/evidence/peri0-gates-20261016/`. The focused host check passes with address
+and undefined-behavior sanitizers; both affected native units compile for AArch64. The DMA startup
+fixture supplies the enabled inherited gate values; its unchanged lifecycle
+evidence remains applicable and was not repeated.
 
 Raw evidence is in `~/.cache/sunstoneos/evidence/dma-platform-20261016/`.
 The separate `clock-evidence.json` covers registry extension checks;

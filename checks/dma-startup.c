@@ -214,6 +214,7 @@ void kernel_main(void)
     configASSERT(a733_dma_startup_init(&bad_time,&handoff,&bad_clock,&bad_registry,&bad_locks));
     ccu[0]=0xf8000000|(99<<16)|(99<<8);
     ccu[0xa0/4]=0xfe000000|(1<<20)|(2<<16)|(99<<8)|(4<<2);
+    ccu[0x1908/4]=0x8fff0fff;ccu[0x1988/4]=0x0fff0000;
     ccu[0x500/4]=handoff.allowed.fabric[0];ccu[0x580/4]=handoff.allowed.fabric[1];ccu[0x588/4]=handoff.allowed.fabric[2];
     ccu[0x5e4/4]=0x40302;
     /* Destroy the caller's authority metadata after its private copy. */
