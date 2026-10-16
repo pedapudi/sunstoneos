@@ -14,7 +14,7 @@ implementations; physical support on this board requires qualification evidence.
 | [A733 datasheet](https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf) | Version 0.93 | Hardware inventory and documented limits |
 | [Board schematic and position drawing](https://drive.google.com/drive/folders/199S7SkbqVDjMpPT7tkcbBX6kmbfnz94r) | V1.2; PDF hashes in `sources.lock.json` | Physical recovery pads, connector routing, and component references |
 | [Board user manual](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view) | V1.0; PDF hash in `sources.lock.json` | Recovery-pad photograph, power-on procedure, and advertised interfaces |
-| [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-15 | Candidate GPU runtime; exact BVNC match pending |
+| [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-16 | Candidate GPU runtime; board software selects BVNC 36.56.104.183, listed under active development; physical identity pending |
 | [OV5640 driver](https://github.com/torvalds/linux/blob/master/drivers/media/i2c/ov5640.c) | Revision pin pending | Sensor programming reference |
 
 The inspected upstream Linux Allwinner device-tree directory at
@@ -56,6 +56,10 @@ The [directory investigation](nbg-directory.md) pins the inspector's debug
 information and compiler CRC instructions used to establish the emitted layout.
 The [convolution loader trace](nbg-conv-loader.md) reuses the pinned A733 loader
 and synthetic HAL to capture preparation of that numerical fixture.
+The [GPU firmware record](gpu.md) identifies the board driver's configured BVNC,
+matching published MIPS firmware, source hashes, native staging, and remaining
+runtime requirements. The firmware and its license are pinned in the source
+manifest. Driver-source adaptations retain their MIT notice.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

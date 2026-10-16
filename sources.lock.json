@@ -64,5 +64,17 @@
     "url": "https://drive.google.com/uc?export=download&id=1R1MC9erKTztd87GvJ_UFE132x6KgPATe",
     "archive": "board-documents/manual-v1.0.pdf",
     "sha256": "a4593068bf885296ea204529b880e874acb8f060bb21735c833f63305adb8cdf"
+  },
+  "gpu-firmware": {
+    "revision": "8a58f81883f7be458daa34e418cc4079f995b279",
+    "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/powervr/rogue_36.56.104.183_v1.fw",
+    "archive": "gpu/rogue_36.56.104.183_v1.fw",
+    "sha256": "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2"
+  },
+  "gpu-firmware-license": {
+    "revision": "8a58f81883f7be458daa34e418cc4079f995b279",
+    "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/LICENSE.powervr",
+    "archive": "gpu/LICENSE.powervr",
+    "sha256": "1c9aa6bd6703a7ce1cdb879542fa1d8aca115a327bd819b193c971de9c53f402"
   }
 }

@@ -60,6 +60,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
+- GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
+  board software's target revision. A sanitizer check covers bounds, guards,
+  malformed-image refusal, and buffer aliasing; staged allocations match an
+  independent ELF reader. The component compiles for AArch64. Physical identity,
+  firmware boot, graphics/compute execution, and recovery remain untested.
+
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
   passes host startup, completion, cancellation, and retained-fault checks.

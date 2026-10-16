@@ -98,7 +98,13 @@ directory sanitizer check passes fourteen atomic refusals; the existing 120-case
 assembly check and older SDK comparison also pass. The AArch64 assembler builds.
 Reuse this evidence under `~/.cache/sunstoneos/evidence/nbg-directory-assembly-20261016/`.
 Descriptor access bounds and command admission remain outstanding.
-Platform resource setup, complete model admission,
+The [GPU firmware component](gpu.md) now decodes and stages the published
+MIPS image for the board software's target BVNC, 36.56.104.183. Its two
+allocations match an independent ELF reader. One sanitizer check passes
+malformed-image and buffer refusal cases; the component compiles for AArch64.
+Firmware boot, graphics/compute execution, and physical GPU qualification remain
+outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
+NPU platform resource setup, complete model admission,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -270,6 +276,13 @@ the tool hash and recovery evidence in the application document.
    additional operation classes and address widths as their semantics are resolved.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
+
+7. Extend the [GPU firmware component](gpu.md) with MIPS page tables, boot
+   configuration, and required device features. Add native power/startup,
+   shared firmware queues, completion, and recovery. Confirm physical identity
+   and boot firmware after watchdog recovery passes, then execute compute and
+   offscreen graphics through an adapted compiler/runtime. Keep display support
+   and the remaining hardware matrix in scope independently of NPU progress.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all

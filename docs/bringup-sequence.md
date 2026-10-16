@@ -63,9 +63,9 @@ Controller implementation can proceed before those accessories are available.
 
 ## Functional coverage precedes performance optimization
 
-The GPU currently has no native implementation or physical execution evidence.
-Its compiler/runtime compatibility, firmware, and exact hardware revision still
-need resolution. The NPU has implemented components with host/emulator evidence,
+The GPU now has native [firmware decoding and staging](gpu.md) with host evidence.
+Its firmware boot, graphics/compute runtime, and physical identity remain
+unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is
 fully functional in SunstoneOS.
 
