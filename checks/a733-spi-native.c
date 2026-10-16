@@ -16,11 +16,15 @@ static void map(uintptr_t a,size_t n)
 static void put(uintptr_t a,uint32_t v){*(volatile uint32_t*)a=v;}
 int main(void)
 {
-    map(0x02001000,0x1000);map(0x07010000,0x1000);map(0x03400000,0x1000);
+    map(0x02002000,0x1000);map(0x07010000,0x1000);map(0x03400000,0x1000);
     for(unsigned port=0;port<6;port++) {
         struct a733_spi_native n={.format={port,0,0,0,0,500000,3,5},
             .lease=17,.provider=(void*)1,.authenticate=authority,.now_us=now};
         assert(!a733_spi_plan(port,500000,&n.plan));
+        static const uintptr_t clocks[6]={0x02002f00,0x02002f08,0x02002f10,
+            0x02002f20,0x02002f28,0x07010150};
+        assert(n.plan.clock==clocks[port]);
+        assert(n.plan.reset==clocks[port]+(port==5?12u:4u));
         put(n.plan.clock,n.plan.clock_word);put(n.plan.reset,0x10001);
         struct a733_spi_ops ops;assert(!a733_spi_native_ops(&n,&ops));
         assert(ops.admit(&n,&n.format,&n.plan)==1);

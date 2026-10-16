@@ -17,7 +17,7 @@ remains unqualified.
 | SPI4 | `0x02544000` | 60 | Main CCU `0x0f28` / `0x0f2c` |
 | S_SPI | `0x07092000` | 242 | R_CCU `0x0150` / `0x015c` |
 
-Main CCU is at `0x02001000`; R_CCU is at `0x07010000`. Every listed bus word
+Main CCU is at `0x02002000`; R_CCU is at `0x07010000`. Every listed bus word
 has gate bit 0 and reset-deassertion bit 16. The module word contains gate bit
 31, source bits 24–26, and linear divider fields at bits 0–4 and 8–12.
 
@@ -88,13 +88,17 @@ the A733 byte-transfer path.
 
 Evidence is stored under `~/.cache/sunstoneos/evidence/spi-20261016/`:
 
-- `batch1` preserves the passing source comparison and sanitized host model.
+- `batch1` preserves the passing register-offset comparison and sanitized host model.
   Cases cover wire data, repeated transfers, CS timing, full receive capacity,
   combined completion/error status, uncertain accesses and retained ownership.
 - `native-correction` preserves passing native authorization, CCU/GIC admission
   and access-allowlist checks, plus both AArch64 objects. The initial native
   harness had an unsigned-loop overflow; only the corrected check and previously
   unrun compilation were executed afterward.
+- `ccu-base-correction` verifies absolute clock/reset addresses against the
+  device tree, native admission at those addresses and the corrected AArch64
+  core object. The main CCU base is `0x02002000`. Wire-transfer evidence and
+  the unchanged native access object are reused.
 
 The native C check uses anonymous host mappings and replaces four `dsb sy`
 statements with compiler memory barriers. Its archive records both source

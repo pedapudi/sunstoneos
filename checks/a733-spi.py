@@ -19,6 +19,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--steps', nargs='+', choices=['reference','host','native','compile'],
                         default=['reference','host','native','compile'])
+    parser.add_argument('--compile-units', nargs='+', choices=['a733_spi','a733_spi_native'],
+                        default=['a733_spi','a733_spi_native'])
     parser.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -49,6 +51,11 @@ def main():
             assert a==b,(local,a,b)
             facts[local]=a
         dtsi=refs[4].read_text()
+        ccu_node=re.search(r'ccu: ccu@[^}]+}',dtsi)[0]
+        ccu_base=int(re.search(r'reg = <0x0 (0x[0-9a-f]+)',ccu_node)[1],16)
+        runtime_base=int(re.search(r'p->clock=\(port==5\?0x07010000u:(0x[0-9a-f]+)u\)',runtime)[1],16)
+        assert runtime_base==ccu_base==0x02002000
+        facts['main_ccu_base']=ccu_base
         for port in range(6):
             node=f'spi{port}' if port<5 else 'r_spi'
             body=re.search(r'\b'+node+r': spi@[^}]+}',dtsi)[0]
@@ -84,11 +91,11 @@ def main():
         run('native-host-build',flags+[str(inputs[2]),str(out/'native-host.c'),str(inputs[5]),'-o',str(out/'native-host')])
         run('native-host',[str(out/'native-host')])
     if 'compile' in args.steps:
-        for name in ['a733_spi','a733_spi_native']:
+        for name in args.compile_units:
             run(name+'-compile',[clang,'--target=aarch64-none-elf','-mcpu=cortex-a55','-ffreestanding',
                 '-std=c11','-Wall','-Wextra','-Werror','-O2','-fstack-usage','-I'+str(root/'include'),
                 '-c',str(root/'drivers/spi'/(name+'.c')),'-o',str(out/(name+'.o'))])
-    results=dict(result='pass',steps=args.steps,scope='source comparison, host wire/FIFO/fault model, native C admission guards, AArch64 objects',
+    results=dict(result='pass',steps=args.steps,compile_units=args.compile_units if 'compile' in args.steps else [],scope='source comparison, host wire/FIFO/fault model, native C admission guards, AArch64 objects',
         physical=False,barrier_execution=False,native_host_transform='Only four dsb sy statements become compiler memory barriers.',
         native_original_sha256=digest(inputs[3]),native_host_sha256=digest(out/'native-host.c') if (out/'native-host.c').exists() else None,
         artifacts={p.name:digest(p) for p in out.iterdir() if p.is_file() and not p.name.startswith('input-')})

@@ -33,7 +33,7 @@ int a733_spi_plan(unsigned port, uint32_t hz, struct a733_spi_plan *p)
     }
     if (best>1024 || 24000000u/best<24000u) return -1;
     p->base=port==5?0x07092000u:0x02540000u+port*0x1000u;
-    p->clock=(port==5?0x07010000u:0x02001000u)+clocks[port];
+    p->clock=(port==5?0x07010000u:0x02002000u)+clocks[port];
     p->reset=p->clock+(port==5?12u:4u);
     p->clock_word=0x80000000u | (bm-1) | ((bn-1)<<8);
     p->divisor=best;p->actual_hz=24000000u/best;p->intid=port==5?242u:56u+port;
