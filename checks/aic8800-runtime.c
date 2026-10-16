@@ -105,7 +105,10 @@ static void algorithm_vectors(const char *path)
     }
     assert(feof(f)&&rows==8);assert(!fclose(f));
 }
-int main(int argc,char **argv)
+#ifndef AIC8800_RUNTIME_FIXTURE_MAIN
+#define AIC8800_RUNTIME_FIXTURE_MAIN main
+#endif
+int AIC8800_RUNTIME_FIXTURE_MAIN(int argc,char **argv)
 {
     assert(argc==2);
     if(!strcmp(argv[1],"--invalid-platform")) {

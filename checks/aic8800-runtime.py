@@ -15,10 +15,10 @@ REFERENCES = {
     "aic8800_fdrv/aicwf_txrxif.c": "2c22a400aa25e38fa908d0f43313081811aa8b988641464555ed1643585e8ce4",
     "aic8800_fdrv/aicwf_txrxif.h": "d70fb2f1382b5612d1efccb04fb59a7a56183765d05b731637c2c241587ad69a",
 }
-SOURCES = ["checks/aic8800-runtime.c", "drivers/net/aic8800_runtime.c",
+SOURCES = ["checks/aic8800-runtime.c", "drivers/net/aic8800_runtime.c", "drivers/net/aic8800_wifi.c",
            "drivers/net/aic8800_firmware.c", "drivers/net/aic8800_sdio_transport.c",
            "drivers/net/aic8800_sdio_codec.c", "drivers/storage/sunxi_sdio.c", "drivers/storage/sdio_card.c"]
-INCLUDES = ["include/aic8800_runtime.h", "include/aic8800_firmware.h", "include/aic8800_sdio_transport.h",
+INCLUDES = ["include/aic8800_runtime.h", "include/aic8800_wifi.h", "include/aic8800_firmware.h", "include/aic8800_sdio_transport.h",
             "include/aic8800_sdio_codec.h", "include/sdio_card.h", "include/sunxi_sdio.h",
             "checks/aic8800-sdio-transport.c", "checks/sdio-controller.c"]
 SEEDS = [bytes.fromhex(x) for x in ["00000000", "ffffffff", "12345678", "00010203",

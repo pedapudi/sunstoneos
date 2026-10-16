@@ -7,6 +7,9 @@
 #define AIC8800_TRANSPORT_TX_BYTES 1536u
 struct aic8800_firmware;
 struct aic8800_runtime;
+struct aic8800_wifi;
+struct aic8800_wifi_scan_result;
+struct aic8800_wifi_scan_summary;
 
 enum aic8800_transport_variant { AIC8800_TRANSPORT_D80_BOOTSTRAP = 1 };
 enum aic8800_transport_pad { AIC8800_PAD_KEEP = 1, AIC8800_PAD_WRITE_80 };
@@ -19,7 +22,7 @@ enum aic8800_transport_error { AIC8800_TRANSPORT_NO_ERROR,
     AIC8800_TRANSPORT_HOST_ERROR, AIC8800_TRANSPORT_TIMEOUT,
     AIC8800_TRANSPORT_SETUP_ERROR, AIC8800_TRANSPORT_RX_BOUNDS,
     AIC8800_TRANSPORT_UNSUPPORTED_IRQ, AIC8800_TRANSPORT_MESSAGE_ERROR,
-    AIC8800_TRANSPORT_FIRMWARE_ERROR, AIC8800_TRANSPORT_RUNTIME_ERROR };
+    AIC8800_TRANSPORT_FIRMWARE_ERROR, AIC8800_TRANSPORT_RUNTIME_ERROR, AIC8800_TRANSPORT_WIFI_ERROR };
 struct aic8800_transport_config {
     enum aic8800_transport_variant variant; /* Explicit source protocol choice. */
     enum aic8800_transport_pad pad; /* Source's conditional function-0 F1 write. */
@@ -43,6 +46,7 @@ struct aic8800_sdio_transport {
     struct sdio_card *card;
     struct aic8800_firmware *firmware;
     struct aic8800_runtime *runtime;
+    struct aic8800_wifi *wifi;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
@@ -104,13 +108,25 @@ int aic8800_transport_start_runtime(struct aic8800_sdio_transport *,
  * revived: renewal checks the old deadline against the shared clock.
  */
 int aic8800_transport_renew_runtime(struct aic8800_sdio_transport *, uint64_t deadline);
+/* Normal D80 management initialization, then separately admitted passive scan.
+ * Both admissions require idle runtime ownership and a deadline within its lease.
+ * A late binding challenge runs before the next Wi-Fi command; an outstanding
+ * Wi-Fi confirmation is drained first. No RF permission follows from these APIs.
+ */
+int aic8800_transport_start_wifi(struct aic8800_sdio_transport *, struct aic8800_wifi *, uint64_t deadline);
+int aic8800_transport_scan(struct aic8800_sdio_transport *, uint64_t deadline);
+/* Scan view is valid until generic consume. Copy before asynchronous use.
+ * Summary take acknowledges completion and permits the next scan; it requires
+ * a drained aggregate. No request/result is overwritten without consumption. */
+int aic8800_transport_peek_scan(const struct aic8800_sdio_transport *, struct aic8800_wifi_scan_result *);
+int aic8800_transport_take_scan(struct aic8800_sdio_transport *, struct aic8800_wifi_scan_summary *);
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
  */
 void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining
  * asynchronous work. Peek works after FAULT; consume refuses in FAULT. Output
- * must not alias transport/card/host, runtime, firmware or immutable blobs. No callbacks or hardware access occur.
+ * must not alias transport/card/host, runtime, Wi-Fi worker, firmware or immutable blobs. No callbacks or hardware access occur.
  */
 int aic8800_transport_peek(const struct aic8800_sdio_transport *, struct aic8800_sdio_response *);
 int aic8800_transport_consume(struct aic8800_sdio_transport *);
