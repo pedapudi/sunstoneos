@@ -16,17 +16,22 @@ target_compile_definitions(mimus_asr_smp PRIVATE MIMUS_EXTERNAL_PLATFORM=1)
 if(MIMUS_AARCH64_NEON)
   target_compile_definitions(mimus_asr_smp PRIVATE MIMUS_AARCH64_NEON=1)
 endif()
-foreach(target IN ITEMS smp-mimus-model smp-mimus-replay-model)
+foreach(target IN ITEMS smp-mimus-model smp-mimus-replay-model smp-mimus-linear-model)
+  if(target STREQUAL "smp-mimus-linear-model")
+    set(mimus_entry checks/mimus-linear.cc)
+  else()
+    set(mimus_entry apps/mimus/main.cc)
+  endif()
   add_executable(${target} EXCLUDE_FROM_ALL
     platform/qemu-smp/start.S platform/qemu-smp/platform.c
     runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc
     runtime/cxx_terminate.cc
-    apps/mimus/platform.cc apps/mimus/main.cc apps/mimus/parallel_runtime.cc
+    apps/mimus/platform.cc ${mimus_entry} apps/mimus/parallel_runtime.cc
     "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc"
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${smp_build}/port.c" "${smp_build}/portASM.S")
   sunstone_smp_compile(${target})
-  target_include_directories(${target} PRIVATE "${MIMUS_DIR}/firmware/components/pipeline/include")
+  target_include_directories(${target} PRIVATE apps/mimus "${MIMUS_DIR}/firmware/components/pipeline/include")
   target_compile_definitions(${target} PRIVATE MONITOR_QEMU=1)
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections -Wl,--wrap=_impure_ptr
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/runtime.ld"

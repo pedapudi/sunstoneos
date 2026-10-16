@@ -28,8 +28,39 @@ requires coherent CPU memory; it does not synchronize noncoherent DMA.
 Only the bound recognition task may submit work, and calls cannot nest.
 Assertions verify the caller on core 0 and the worker on core 1. A final
 `WORKERS` record reports completed jobs; the acceptance tool requires a
-nonzero count. This adapter has no asynchronous job interface. Additional
-matrix-kernel parallelization and use of all eight physical cores remain open.
+nonzero count. This adapter has no asynchronous job interface. Execution on all
+eight physical cores remains outstanding.
+
+## Packed matrix products share rows between workers
+
+The AArch64 engine also splits eligible packed int16 matrix products across
+both workers. Expanded weights and quantized inputs remain read-only until the
+join. Integer sums are local to each worker. Residual accumulation uses a
+private float buffer of at most 256 outputs per worker.
+
+The split requires at least 16 activation rows, complete packed groups, an
+output stride of at least 64 bytes, and no shared staging or active input
+handoff. Blocks with split-K accumulation, narrow activations, or larger residual
+scratch requirements retain their existing path. Each output keeps its serial
+arithmetic order.
+
+If the row boundary can share a cache line, one row separates the workers'
+writes. The caller computes that row after the join. The focused matrix check
+covers 12 shapes in both plain and residual modes, comparing all output bytes
+with serial execution. It checks the 16-row admission threshold, unaligned
+bases and strides, padding, partial packed groups, and the private-scratch bound.
+It also covers multiple weight blocks, grouped weights, and narrow activations.
+Input checksums and output guards pass. One bounded session completed 45 worker
+jobs. The portable host kernel preprocesses to the same tokens as the previous
+revision, so its arithmetic evidence remains applicable.
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+cmake --build "$cache/build/qemu-virt" --target smp-mimus-linear-model -j 8
+python3 tools/check-smp.py "$cache/build/qemu-virt/smp-mimus-linear-model.elf" \
+  --case linear --qemu "$cache/host/usr/bin/qemu-system-aarch64" \
+  --evidence "$cache/evidence/mimus-smp-linear.json"
+```
 
 ## The application uses the rebuilt C library
 
@@ -83,33 +114,35 @@ reused. Each new case runs once and stops on failure.
 ## Functional evidence and resource use
 
 On 2026-10-16, one whole-recording session passed the 141,920-sample bench
-fixture with 344 completed worker jobs. Feature and log-probability CRCs,
+fixture with 1,115 completed worker jobs. Feature and log-probability CRCs,
 frames, words, punctuation, capitalization, and formatted text match the host.
 The inference arena peak was 1,761,840 bytes; the allocator reservation peak
 was 106,944 bytes.
 
 One paced session passed a 347,957-sample fixture with four utterances and
-1,047 completed worker jobs. Segment boundaries, both CRCs, frame counts, words,
+3,427 completed worker jobs. Segment boundaries, both CRCs, frame counts, words,
 marks, capitals, formatted fragments, and the final punctuation flush match.
 Capture completed without queue overflow. The inference arena peak was
 1,594,864 bytes; the allocator reservation peak was 106,112 bytes.
 
-These cases first passed with sequential inference on the rebuilt runtime,
-then passed after the worker was added. That comparison isolates library
-compatibility from parallel execution. Emulator timings are retained in the
-raw output and do not establish board throughput or latency.
+The initial runtime integration passed these cases with sequential inference
+and then with a worker. The matrix-row extension passed each case once on its
+final candidate. Emulator timings are retained in the raw output and do not
+establish board throughput or latency.
 
 | Image | Code/read-only bytes | Initialized data bytes | Reserved RAM bytes | ELF SHA-256 |
 | --- | ---: | ---: | ---: | --- |
-| Whole-recording recognition | 348,212 | 3,072 | 4,591,136 | `4d70834caf54e58bb6bda25319f314fb37703e4c355fdee89e650aaaa756c061` |
-| Paced recognition | 356,404 | 3,072 | 4,624,720 | `11e52cca068e51354c121da16a900318d561250462f3dce1e84bf58069849bcf` |
+| Whole-recording recognition | 350,004 | 3,072 | 4,591,136 | `1792f4483b2554a4b716034be0d8bcc3504bfdeb1dbe6452234c07e0c0488b29` |
+| Paced recognition | 358,196 | 3,072 | 4,624,720 | `bf7559104a6150a840008b6b487db3862f1fd68d085964b3e9da579712472ffd` |
 
 Reserved RAM includes the heap and static stacks; inputs and the inference
 arena occupy separate address ranges. Raw evidence is under
-`~/.cache/sunstoneos/evidence/mimus-smp-20261016/`. The `batch` and `paced`
-directories contain final images, `model.json`, and `parity.json`; files named
-`sequential` retain the earlier baseline. `manifest.json` records compiled
-source, header, library, and tool identities.
+`~/.cache/sunstoneos/evidence/mimus-smp-matrix-20261016/`. The `batch` and `paced`
+directories contain final images, `model.json`, and `parity.json`.
+`linear.json` records the matrix check; `portable-source.json` records the host
+preprocessing comparison. `manifest.json` records compiled source, header,
+library, and tool identities. The initial runtime and worker integration remains
+under `~/.cache/sunstoneos/evidence/mimus-smp-20261016/`.
 
 The existing runtime-check image remains byte-identical, so its evidence is
 reused. The affected physical USB application also compiles; it has not been

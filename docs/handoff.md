@@ -25,7 +25,8 @@ condition flags, stack position, and floating-point control/status preserved.
 The [SMP runtime](smp-runtime.md) now passes concurrent C++ allocation, shared
 memory-stream locking, and newlib task-state preservation through 256 migrations.
 [Multicore mimus](mimus-smp.md) now matches the host for one full recording and
-four paced utterances in QEMU, with inference work on both cores.
+four paced utterances in QEMU, including packed matrix rows on both cores.
+A focused matrix check also passes serial parity and guards across 12 shapes.
 Physical secondary-core startup and multicore application qualification remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
