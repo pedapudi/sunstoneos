@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DEVICE_MEMORY_PAGE 4096u
-#define DEVICE_MEMORY_MAX_PAGES 256u
+#define DEVICE_MEMORY_MAX_PAGES 512u
 #define DEVICE_MEMORY_MAX_ALLOCATIONS 32u
 
 enum device_memory_state { DEVICE_MEMORY_FREE, DEVICE_MEMORY_CPU,

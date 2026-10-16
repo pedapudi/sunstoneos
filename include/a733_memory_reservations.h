@@ -3,7 +3,7 @@
 #include "device_memory_pool.h"
 #include "a733_dma_native.h"
 /* Single-core A733 image only. Optional __device_pool_size is a multiple of
- * 4096, at most 1 MiB. Linker owns the entire range inside its 15 MiB image.
+ * 4096, at most 2 MiB. Linker owns the entire range inside its 15 MiB image.
  * Call once at EL1 after platform_init and before concurrent users. No writes
  * to pool backing occur here. All device users and remote firmware must already
  * be excluded; stage-1 identity mappings must remain pinned without aliases.

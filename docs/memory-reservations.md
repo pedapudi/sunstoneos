@@ -12,7 +12,7 @@ The generation changes whenever an allocation slot is reused.
 
 ## The linker fixes the complete pool extent
 
-Set the linker symbol `__device_pool_size` to a multiple of 4 KiB, at most 1 MiB.
+Set the linker symbol `__device_pool_size` to a multiple of 4 KiB, at most 2 MiB.
 For example, `-Wl,--defsym=__device_pool_size=65536` reserves 64 KiB.
 The default reserves no bytes and preserves existing allocated sections and
 load-segment extents. The linker refuses partial pages, excessive pool capacity
@@ -48,7 +48,7 @@ isolate allocations from arbitrary privileged writes or all ordinary task access
 ## Allocations retain full pages through device ownership
 
 The [pool implementation](../runtime/device_memory_pool.c) tracks at most
-32 live allocations across 256 pages. These are bounded software capacities.
+32 live allocations across 512 pages. These are bounded software capacities.
 It rounds requested sizes up to whole pages and returns CPU address, physical
 address and complete byte extent. It searches reusable free extents without
 moving existing allocations.
@@ -66,9 +66,9 @@ not authorize reuse.
 
 The native pool currently uses write-back mappings. GPU firmware resources that
 require uncached shared pages need a separate linker reservation and matching
-page-table attributes. NPU commands, IOMMU tables, camera frames and video
-buffers need their own concrete consumer bindings and device-address policies.
-These remain required integration work. The cached multicore image has a
+page-table attributes. [NPU convolution](npu-reserved.md) binds one complete session to this pool.
+IOMMU tables, camera frames and video buffers still need concrete consumer
+bindings and device-address policies. The cached multicore image has a
 separate linker layout and does not use this reservation yet.
 
 ## DMA completion controls return to CPU ownership
@@ -146,6 +146,6 @@ Run only the mode affected by a later change:
   --mode all --output ~/.cache/sunstoneos/evidence/memory-reservations-local
 ```
 
-The runner accepts `host`, `native` and `link` separately and refuses to overwrite
+The runner accepts `host`, `native`, `link` and the focused `capacity` mode separately and refuses to overwrite
 an evidence directory. It saves source inputs before execution, the executed
 host binary identity, commands, native objects and result records.

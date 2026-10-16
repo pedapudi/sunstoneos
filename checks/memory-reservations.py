@@ -41,7 +41,7 @@ def elf(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--mode', choices=('all', 'host', 'native', 'link'), default='all')
+    parser.add_argument('--mode', choices=('all', 'host', 'native', 'link', 'capacity'), default='all')
     parser.add_argument('--baseline-revision', default='a44566a42e3c2b21dda3f1eae2744bb13d4a06aa')
     args = parser.parse_args()
     out = args.output.resolve()
@@ -88,7 +88,7 @@ def main():
                     '-c', source, '-o', str(obj)])
                 objects.append({'source': source, 'object': str(obj), 'sha256': digest(obj)})
             results['native_objects'] = objects
-        if args.mode in ('all', 'link'):
+        if args.mode in ('all', 'link', 'capacity'):
             fixture = out / 'layout.S'
             fixture.write_text('''.section .text.boot.monitor,"ax"
 .global monitor_entry
@@ -114,26 +114,34 @@ monitor_entry: ret
                     cmd.append('--defsym=__device_pool_size=' + str(pool))
                 return run(name, cmd, success)
             current = ROOT / 'platform/a733/link.ld'
-            link('baseline', baseline)
-            link('default', current)
-            old_sections, old_symbols, old_loads = elf(out / 'baseline.elf')
-            sections, symbols, loads = elf(out / 'default.elf')
-            assert sections == old_sections, (old_sections, sections)
-            assert old_loads == loads, (old_loads, loads)
-            assert all(symbols[k] == v for k, v in old_symbols.items()), 'existing symbol moved'
-            link('reserved', current, 65536)
-            reserved_sections, reserved_symbols, _ = elf(out / 'reserved.elf')
-            start, end = reserved_symbols['__device_pool_start'], reserved_symbols['__device_pool_end']
-            assert not (start & 4095) and end - start == 65536
-            assert start >= reserved_symbols['__heap_end'] and end <= 0x41f00000
-            assert reserved_sections.pop('.device_pool')['type'] == 'SHT_NOBITS'
-            assert reserved_sections == old_sections, 'existing allocated sections changed'
-            assert 'complete pages' in link('partial-page', current, 4097, success=False)
-            assert 'registry capacity' in link('too-large', current, 1048576 + 4096, success=False)
-            assert 'reservation' in link('outside-image', current, 1048576, heap=15 * 1024 * 1024, success=False)
-            results['link'] = {'default_matches_baseline': args.baseline_revision,
-                               'start': start, 'end': end, 'pool_bytes': end - start,
-                               'default_loads': loads, 'baseline_linker_sha256': digest(baseline)}
+            if args.mode == 'capacity':
+                link('capacity', current, 2097152)
+                _, symbols, _ = elf(out / 'capacity.elf')
+                assert symbols['__device_pool_end'] - symbols['__device_pool_start'] == 2097152
+                assert symbols['__device_pool_end'] <= 0x41f00000
+                assert 'registry capacity' in link('too-large', current, 2097152 + 4096, success=False)
+                results['capacity'] = {'accepted_bytes': 2097152, 'rejected_bytes': 2097152 + 4096}
+            else:
+                link('baseline', baseline)
+                link('default', current)
+                old_sections, old_symbols, old_loads = elf(out / 'baseline.elf')
+                sections, symbols, loads = elf(out / 'default.elf')
+                assert sections == old_sections, (old_sections, sections)
+                assert old_loads == loads, (old_loads, loads)
+                assert all(symbols[k] == v for k, v in old_symbols.items()), 'existing symbol moved'
+                link('reserved', current, 65536)
+                reserved_sections, reserved_symbols, _ = elf(out / 'reserved.elf')
+                start, end = reserved_symbols['__device_pool_start'], reserved_symbols['__device_pool_end']
+                assert not (start & 4095) and end - start == 65536
+                assert start >= reserved_symbols['__heap_end'] and end <= 0x41f00000
+                assert reserved_sections.pop('.device_pool')['type'] == 'SHT_NOBITS'
+                assert reserved_sections == old_sections, 'existing allocated sections changed'
+                assert 'complete pages' in link('partial-page', current, 4097, success=False)
+                assert 'registry capacity' in link('too-large', current, 2097152 + 4096, success=False)
+                assert 'reservation' in link('outside-image', current, 1048576, heap=15 * 1024 * 1024, success=False)
+                results['link'] = {'default_matches_baseline': args.baseline_revision,
+                                   'start': start, 'end': end, 'pool_bytes': end - start,
+                                   'default_loads': loads, 'baseline_linker_sha256': digest(baseline)}
         assert inputs == {name: digest(ROOT / name) for name in SOURCES}, 'inputs changed during check'
         results['status'] = 'pass'
     finally:
