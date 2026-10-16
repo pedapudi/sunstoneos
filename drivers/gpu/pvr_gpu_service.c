@@ -57,8 +57,54 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
     }
     return 1;
 }
+/* Interrupt state is shared with an ISR that may run on another core.
+ * FreeRTOS SMP critical sections mask local API-safe interrupts and hold the
+ * kernel lock, preventing a rearm from passing an in-flight mask operation. */
+static int interrupt_mask(struct pvr_gpu_service *s)
+{
+    if (!s->config.irq.mask) return 1;
+    taskENTER_CRITICAL();
+    if (!s->irq_masked && !s->irq_fault) {
+        s->irq_masked = 1;
+        if (!s->config.irq.mask(s->config.context)) s->irq_fault = 1;
+    }
+    int ok = !s->irq_fault;
+    taskEXIT_CRITICAL();
+    return ok;
+}
+static int interrupt_rearm(struct pvr_gpu_service *s)
+{
+    if (!s->config.irq.rearm) return 1;
+    taskENTER_CRITICAL();
+    if (s->irq_masked && !s->irq_fault) {
+        int result = s->config.irq.rearm(s->config.context);
+        if (result < 0) s->irq_fault = 1;
+        else if (result == 1) { s->irq_masked = 0; s->irq_deferred = 0; }
+        else if (result != 0 || ++s->irq_deferred >= PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS) s->irq_fault = 1;
+    }
+    int ok = !s->irq_fault;
+    taskEXIT_CRITICAL();
+    return ok;
+}
+int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
+{
+    if (!s || s != instance || !s->initialized || !s->config.irq.mask || !woken) return 0;
+    UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
+    if (!s->irq_masked && !s->irq_fault) {
+        s->irq_masked = 1;
+        if (!s->config.irq.mask(s->config.context)) s->irq_fault = 1;
+    }
+    if (!s->irq_wake_pending) {
+        const struct pvr_gpu_service_message wake = {.client = PVR_GPU_SERVICE_CLIENTS};
+        if (xQueueSendFromISR(s->requests, &wake, woken) == pdTRUE) s->irq_wake_pending = 1;
+    }
+    int ok = !s->irq_fault;
+    taskEXIT_CRITICAL_FROM_ISR(saved);
+    return ok;
+}
 static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
 {
+    if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
@@ -96,7 +142,10 @@ static int prepare(struct pvr_gpu_service *s)
 }
 static void advance(struct pvr_gpu_service *s)
 {
+    if (s->phase == PVR_GPU_SERVICE_FAILED) return;
+    if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return; }
     uint64_t now = s->last_now;
+    int rearm = 0;
     switch (s->phase) {
     case PVR_GPU_SERVICE_STARTING: {
         enum pvr_gpu_start_result r = pvr_gpu_start_poll(&s->start);
@@ -114,7 +163,7 @@ static void advance(struct pvr_gpu_service *s)
     case PVR_GPU_SERVICE_READY: {
         enum pvr_gpu_control_result r = pvr_gpu_control_poll(&s->control, 4);
         now = s->control.last_now;
-        if (r == PVR_GPU_CONTROL_OK) s->phase = PVR_GPU_SERVICE_READY;
+        if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
         else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
         break;
     }
@@ -131,6 +180,7 @@ static void advance(struct pvr_gpu_service *s)
     if (now < s->last_now) { fail(s, PVR_GPU_SERVICE_CLOCK); return; }
     s->last_now = now;
     if (s->phase == PVR_GPU_SERVICE_STOPPED) s->owner = PVR_GPU_SERVICE_CLIENTS;
+    if (rearm && !interrupt_rearm(s)) fail(s, PVR_GPU_SERVICE_INTERRUPT);
 }
 static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
@@ -153,6 +203,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;
     if (s->phase == PVR_GPU_SERVICE_FAILED) return PVR_GPU_SERVICE_FAULT;
     if (s->phase != PVR_GPU_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
+    if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return PVR_GPU_SERVICE_FAULT; }
     if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
     if (!pvr_gpu_stop_init(&s->stop, &s->control, s->config.firmware,
             s->config.firmware_bytes, &s->config.stop, s->config.context, s->deadline)) {
@@ -176,6 +227,10 @@ static void worker(void *argument)
         int active = s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING;
         struct pvr_gpu_service_message message;
         if (xQueueReceive(s->requests, &message, active ? 1 : portMAX_DELAY) != pdTRUE) continue;
+        if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
+            taskENTER_CRITICAL(); s->irq_wake_pending = 0; taskEXIT_CRITICAL();
+            continue;
+        }
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
         reply.result = execute(s, &message);
@@ -196,8 +251,9 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
         !c->start.now || !c->start.read || !c->start.write || !c->start.started || !c->start.publish ||
         c->control.now != c->start.now || !c->control.read32 || !c->control.write32 || !c->control.compat ||
         c->stop.now != c->start.now || !c->stop.read || !c->stop.write ||
-        !c->stop.sync_write || !c->stop.sync_read || !c->stop.isolate || !allocations(s, c)) return 0;
-    s->config = *c; s->owner = PVR_GPU_SERVICE_CLIENTS;
+        !c->stop.sync_write || !c->stop.sync_read || !c->stop.isolate ||
+        (!!c->irq.mask != !!c->irq.rearm) || !allocations(s, c)) return 0;
+    s->config = *c; s->owner = PVR_GPU_SERVICE_CLIENTS; s->irq_masked = 1;
     s->requests = xQueueCreateStatic(PVR_GPU_SERVICE_CLIENTS, sizeof(struct pvr_gpu_service_message),
                                      s->request_storage, &s->request_state);
     configASSERT(s->requests);

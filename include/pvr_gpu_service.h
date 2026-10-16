@@ -8,6 +8,7 @@
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
+#define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
 enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED };
@@ -17,7 +18,22 @@ enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
     PVR_GPU_SERVICE_PREPARATION, PVR_GPU_SERVICE_ENABLE, PVR_GPU_SERVICE_START,
-    PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP };
+    PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP, PVR_GPU_SERVICE_INTERRUPT };
+
+/* Optional shared peripheral interrupt delivery. Both callbacks or neither.
+ * mask issues a disable command and completes CPU writes; it returns 1 on
+ * success. It must not wait for distributor propagation in interrupt context.
+ * rearm returns 1 when enabled, 0 while a prior disable is still propagating,
+ * and -1 on failure. Failure must leave delivery disabled or require immediate
+ * platform recovery. Both callbacks run under FreeRTOS critical sections and
+ * must be bounded, nonblocking, and safe at EL1t/EL1h on any service/IRQ core.
+ * The platform configures the interrupt disabled before init, routes it to an
+ * online core at an API-safe priority, and retains exclusive ownership.
+ */
+struct pvr_gpu_service_irq_ops {
+    int (*mask)(void *);
+    int (*rearm)(void *);
+};
 
 /* Private platform configuration, copied at init; pointed-to storage stays
  * pinned and exclusively owned throughout the service lifetime. No filesystem
@@ -44,6 +60,7 @@ struct pvr_gpu_service_config {
     struct pvr_gpu_stop_ops stop;
     int (*enable)(void *);
     void *context;
+    struct pvr_gpu_service_irq_ops irq;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -82,6 +99,7 @@ struct pvr_gpu_service {
     enum pvr_gpu_service_phase phase;
     enum pvr_gpu_service_error error;
     unsigned owner, initialized;
+    unsigned irq_masked, irq_fault, irq_wake_pending, irq_deferred;
     QueueHandle_t requests;
     StaticQueue_t request_state;
     uint8_t request_storage[PVR_GPU_SERVICE_CLIENTS * sizeof(struct pvr_gpu_service_message)];
@@ -116,5 +134,13 @@ int pvr_gpu_service_send(struct pvr_gpu_service *, const struct pvr_gpu_service_
                          TickType_t wait, uint64_t *ticket);
 int pvr_gpu_service_collect(struct pvr_gpu_service *, uint64_t ticket,
                             struct pvr_gpu_service_reply *, TickType_t wait);
+/* Only the dispatcher for the configured interrupt may call this at an
+ * API-safe priority. Masking and notification precede the dispatcher's EOI.
+ * Return 0 requires platform recovery if delivery cannot remain disabled.
+ * The caller supplies a pdFALSE-initialized wake flag, performs the port's
+ * yield-from-ISR operation, and owns GIC acknowledge/end-of-interrupt.
+ * Queue saturation is safe: an existing request already wakes the worker.
+ */
+int pvr_gpu_service_interrupt(struct pvr_gpu_service *, BaseType_t *woken);
 BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t, void *);
 #endif
