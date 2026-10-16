@@ -56,6 +56,7 @@ int a733_npu_startup_resources_init(struct a733_npu_startup_resources *s,
     if(!a733_gpu_resources_native_init(&s->native,&locks->callbacks))return 0;
     const struct a733_gpu_resource_ops ops={resource_now,resource_read,resource_update,resource_rail};
     if(!a733_gpu_resources_init(&s->manager,&ops,s))return 0;
+    s->native.manager=&s->manager;s->native.manager_operations=ops;s->native.manager_context=s;
     s->initialized=1;return 1;
 }
 static int exact_config(const struct a733_npu_platform_config *a,const struct a733_npu_platform_config *b)
@@ -106,6 +107,7 @@ static int pll_integrity(const struct a733_npu_startup *b)
 }
 static int rail_snapshot(struct a733_npu_startup *b)
 {
+    if(b->shared->native.pmic)return 0;
     struct a733_platform_locks *locks=b->shared->locks;
     if(!timely(b,0) || !a733_platform_lock_enter(locks,A733_PLATFORM_I2C_LOCK,b->handoff.allowed.deadline_us))return 0;
     b->i2c_held=1;b->rail_step=0;
@@ -132,7 +134,7 @@ static int rail_snapshot(struct a733_npu_startup *b)
 }
 static void publish(struct a733_npu_startup *b,struct a733_npu_platform_resources *out)
 {
-    out->clock=b->clock_token;out->rail=b->rail_token.id;out->pck=b->pck_token.token;
+    out->clock=b->clock_token;out->rail=b->pmic.self ? b->pmic.rail.id : b->rail_token.id;out->pck=b->pck_token.token;
     out->supply_uv=b->stage==RESOURCES_READY ? A733_NPU_INITIAL_UV : 0;
 }
 static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platform_config *c,
@@ -142,7 +144,8 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
     if(!b || !b->initialized)return RETAINED;
     if(!task_owner(b) || b->register_held || b->i2c_held || !c || !out ||
         !exact_config(c,&b->handoff.allowed) || !a733_npu_platform_scopes(c,&expected) || shared!=expected ||
-        !same_clock(&out->clock,&b->clock_token) || out->rail!=b->rail_token.id || out->pck!=b->pck_token.token ||
+        !same_clock(&out->clock,&b->clock_token) ||
+        out->rail!=(b->pmic.self ? b->pmic.rail.id : b->rail_token.id) || out->pck!=b->pck_token.token ||
         b->handoff.evidence!=c->handoff || b->handoff.established!=A733_NPU_HANDOFF_REQUIRED)return fault(b);
     if(!timely(b,0) || !pll_integrity(b))return fault(b);
     enum a733_clock_result cr;
@@ -167,6 +170,13 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
         if(!timely(b,0))return fault(b);
         return PENDING;
     }
+    if(b->stage==RAIL && b->pmic.self) {
+        int r=a733_pmic_consumer_reserve(&b->pmic,c->deadline_us);
+        publish(b,out);
+        if(r<0)return fault(b);
+        if(r==1)++b->stage;
+        return PENDING;
+    }
     if(b->stage==CLOCK || b->stage==RAIL) {
         cr=a733_clock_acquire(b->registry,c->owner,b->stage==CLOCK ? shared : A733_POWER_DCDC2,
             b->stage==CLOCK ? A733_CLOCK_NPU : 0,c->deadline_us,
@@ -189,14 +199,25 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
         ++b->stage;return PENDING;
     }
     if(b->stage==FIRST_SNAPSHOT || b->stage==SECOND_SNAPSHOT) {
-        if(!rail_snapshot(b))return fault(b);
+        if(b->pmic.self) {
+            int r=a733_pmic_consumer_sample(&b->pmic,c->deadline_us);
+            if(r<0)return fault(b);
+            if(!r)return PENDING;
+        } else if(!rail_snapshot(b))return fault(b);
         if(b->stage==FIRST_SNAPSHOT) {
             uint64_t now;if(!timely(b,&now) || now>UINT64_MAX-A733_NPU_RAIL_SETTLE_US)return fault(b);
             b->settle_until=now+A733_NPU_RAIL_SETTLE_US;++b->stage;
         } else b->stage=RESOURCES_READY;
     } else if(b->stage==SETTLE) {
         uint64_t now;if(!timely(b,&now))return fault(b);
-        if(now>=b->settle_until)++b->stage;
+        if(now>=b->settle_until) {
+            if(b->pmic.self) {
+                int r=a733_pmic_consumer_refresh(&b->pmic,c->deadline_us);
+                if(r<0)return fault(b);
+                if(!r)return PENDING;
+            }
+            ++b->stage;
+        }
     }
     publish(b,out);
     return b->stage==RESOURCES_READY ? READY : PENDING;
@@ -292,6 +313,18 @@ int a733_npu_startup_bind_pll(struct a733_npu_startup *b,struct a733_npu_pll *p)
     b->pll_operations=p->ops;b->pll_cookie=p->cookie;p->successor=b;
     return 1;
 }
+int a733_npu_startup_bind_pmic(struct a733_npu_startup *b,struct a733_pmic *p,
+    const struct a733_pmic_lifetime *life)
+{
+    if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
+        !b || !b->initialized || b->failed || b->stage!=CLOCK || b->pmic.self || b->task ||
+        b->clock_token.id || b->rail_token.id || b->pck_token.token || !p || p->self!=p || !life ||
+        p->clocks!=b->registry || p->rails->binding.gpu!=&b->shared->manager ||
+        !a733_pmic_consumer_storage(p,b,sizeof(*b)) ||
+        !a733_gpu_resources_native_use_pmic(&b->shared->native,&b->shared->manager,p))return 0;
+    const struct a733_pmic_consumer_config config={p,*life,b->handoff.allowed.owner,A733_RAIL_DCDC2};
+    return a733_pmic_consumer_init(&b->pmic,&config);
+}
 int a733_npu_startup_bind_task(struct a733_npu_startup *b,TaskHandle_t task)
 {
     if(!b || !b->initialized || b->failed || b->task || !task || !privileged() ||
@@ -301,6 +334,17 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *b,TaskHandle_t task)
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
 {
     if(!task_owner(b))return RETAINED;
+    if(!a733_npu_platform_ready(&b->platform) && !timely(b,0))return fault(b);
+    if(b->shared->native.pmic) {
+        if(b->pmic.self!=&b->pmic || b->pmic.config.provider!=b->shared->native.pmic ||
+            b->shared->native.pmic_manager!=&b->shared->manager ||
+            !a733_gpu_resources_native_use_pmic(&b->shared->native,&b->shared->manager,b->pmic.config.provider))return fault(b);
+        if(b->stage==RESOURCES_READY) {
+            int r=a733_pmic_consumer_health(&b->pmic);
+            if(r<0)return fault(b);
+            if(!r)return BUSY;
+        }
+    } else if(b->pmic.self)return fault(b);
     if(!pll_integrity(b))return fault(b);
     if(b->pll_transferred) {
         enum a733_clock_result health=a733_clock_token_status(b->registry,&b->clock_token);
@@ -309,6 +353,11 @@ enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
     }
     enum a733_npu_platform_result r=a733_npu_platform_poll(&b->platform);
     if(r==RETAINED)(void)fault(b);
+    if(r==READY && b->pmic.self) {
+        int health=a733_pmic_consumer_health(&b->pmic);
+        if(health<0)return fault(b);
+        if(!health)return BUSY;
+    }
     return r;
 }
 int a733_npu_startup_ready(const struct a733_npu_startup *b)
@@ -335,7 +384,17 @@ int a733_npu_startup_prepared(void *v,const struct a733_npu_ops *o,void *cookie,
         if(commands[i].device!=h->commands[i].device || commands[i].readable_bytes!=h->commands[i].readable_bytes ||
             commands[i].token!=h->commands[i].token){fault(b);return -1;}
     const struct a733_npu_platform_resources *r=&b->platform.resources;
-    if(!same_clock(&r->clock,&b->clock_token) || r->rail!=b->rail_token.id || r->pck!=b->pck_token.token){fault(b);return -1;}
+    if(!same_clock(&r->clock,&b->clock_token) ||
+        r->rail!=(b->pmic.self ? b->pmic.rail.id : b->rail_token.id) || r->pck!=b->pck_token.token){fault(b);return -1;}
+    if(b->shared->native.pmic) {
+        if(b->pmic.self!=&b->pmic || b->pmic.config.provider!=b->shared->native.pmic ||
+            b->shared->native.pmic_manager!=&b->shared->manager ||
+            !a733_gpu_resources_native_use_pmic(&b->shared->native,&b->shared->manager,b->pmic.config.provider))
+            {fault(b);return -1;}
+        int health=a733_pmic_consumer_health(&b->pmic);
+        if(health<0){fault(b);return -1;}
+        if(!health)return 0;
+    } else if(b->pmic.self){fault(b);return -1;}
     const struct a733_clock_token *tokens[]={&b->clock_token,&b->rail_token};
     for(unsigned i=0;i<2;++i)if(tokens[i]->id) {
         enum a733_clock_result status=a733_clock_token_status(b->registry,tokens[i]);

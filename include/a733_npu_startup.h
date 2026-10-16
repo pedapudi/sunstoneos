@@ -50,6 +50,7 @@ struct a733_npu_startup {
     struct a733_npu_platform platform;
     struct a733_npu_platform_operations operations;
     struct a733_clock_token clock_token,rail_token;
+    struct a733_pmic_consumer pmic;
     struct a733_npu_pll *pll_source;
     const struct a733_npu_startup *pll_binding_self;
     struct a733_npu_pll_config pll_config;
@@ -74,6 +75,13 @@ int a733_npu_startup_resources_init(struct a733_npu_startup_resources *,
     struct a733_counter_clock *,struct a733_platform_locks *);
 int a733_npu_startup_init(struct a733_npu_startup *,const struct a733_npu_handoff *,
     struct a733_npu_startup_resources *,struct a733_clock_leases *);
+/* Shared runtime mode, EL1 before scheduling and before any manager acquisition.
+ * Disables the shared native GPU legacy reader even without a GPU view. Both
+ * consumers must bind this same provider/ledger/global manager. NPU owns a
+ * stable DCDC2 parent and keeps the final observation ticket for service life.
+ * An unbound startup is incompatible with a shared-provider native adapter. */
+int a733_npu_startup_bind_pmic(struct a733_npu_startup *,struct a733_pmic *,
+    const struct a733_pmic_lifetime *);
 /* Optional, EL1 pre-scheduler binding before any startup poll. Source registry,
  * owner, handoff and fabric must match. The source may already be prepared by
  * cold boot, or the designated bootstrap task must serialize source polling
@@ -91,8 +99,9 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);
 /* One designated EL1 bootstrap task after scheduler start. Acquisition and rail
  * snapshots never nest platform mutexes. Failure retains every admitted lease;
  * uncertain I/O retains its mutex and blocks later shared transactions.
- * The legacy I2C transaction has its own bounded physical-counter timeout;
- * startup checks its absolute deadline before and after each transaction.
+ * Shared mode queues actual asynchronous observations on the provider task.
+ * Isolated legacy I2C has its own bounded physical-counter timeout; startup
+ * checks its absolute deadline before and after each transaction.
  * No PMIC data write, bus reset, automatic retry or resource release occurs. */
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *);
 int a733_npu_startup_ready(const struct a733_npu_startup *);

@@ -1,6 +1,8 @@
 #ifndef SUNSTONE_A733_GPU_PLATFORM_H
 #define SUNSTONE_A733_GPU_PLATFORM_H
 #include "a733_gpu_resources.h"
+#include "a733_pmic_consumer.h"
+struct a733_gpu_resource_native;
 
 /* Bounded, ordered operations; all mutations use the common register lock.
  * The clock is the same monotonic microsecond clock used by the manager.
@@ -24,18 +26,27 @@ struct a733_gpu_platform {
     unsigned client, initialized, delegated;
     enum a733_gpu_platform_phase phase;
     enum a733_gpu_resource_result resource_result;
+    struct a733_pmic_consumer pmic;
+    struct a733_gpu_resource_native *pmic_native;
+    unsigned pmic_observed;
 };
 /* Zero storage, initialize once, then serialize all calls through one privileged
  * task. Register this client exclusively; manager/context outlive the platform.
  * No I/O. Ops and manager storage must be disjoint from platform storage. */
 int a733_gpu_platform_init(struct a733_gpu_platform *, struct a733_gpu_resource_manager *,
     unsigned client, const struct a733_gpu_platform_ops *, void *);
+/* Optional pre-concurrency binding. The adapter must actually back this global
+ * manager; its private identity, provider and view stay immutable. A completed
+ * DCDC4 observation and rail lease remain held through OFF and later starts. */
+int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *,struct a733_gpu_resource_native *,
+    struct a733_pmic *,const struct a733_pmic_lifetime *,uint64_t owner);
 /* Direct service callback signatures. Begin returns 1 accepted, 0 refused.
  * Poll returns 0 pending, 1 ready, -1 fault. BUSY admission stays pending with
  * no controller acquire call. Faults latch and preserve any resource token.
- * Resource admission includes the existing bounded synchronous rail snapshot;
- * one legacy I2C transaction can overrun the absolute deadline. Late success
- * is rejected. Schedule polls without spinning; retain the task after faults. */
+ * Shared-provider binding polls actual asynchronous rail admission first. The
+ * isolated legacy mode uses a synchronous I2C snapshot that can overrun the
+ * deadline. Late success is rejected in both modes. Schedule polls without
+ * spinning; retain the task after faults. */
 int a733_gpu_platform_begin(void *, uint64_t absolute_deadline);
 int a733_gpu_platform_poll(void *);
 /* Separate deadline, ON only. Require completed firmware shutdown, closed job

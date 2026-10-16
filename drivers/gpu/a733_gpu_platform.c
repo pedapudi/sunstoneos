@@ -1,4 +1,5 @@
 #include "a733_gpu_platform.h"
+#include "a733_gpu_resources_native.h"
 #include <stddef.h>
 
 static int fail(struct a733_gpu_platform *p)
@@ -77,16 +78,47 @@ int a733_gpu_platform_begin(void *context, uint64_t deadline)
     p->phase = A733_GPU_PLATFORM_ADMIT;
     return 1;
 }
+int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *p,struct a733_gpu_resource_native *n,
+    struct a733_pmic *provider,const struct a733_pmic_lifetime *life,uint64_t owner)
+{
+    if(!p || !p->initialized || p->phase!=A733_GPU_PLATFORM_NEW || p->pmic_native ||
+        !n || !life || !provider || provider->self!=provider || provider->rails->binding.gpu!=p->manager ||
+        !disjoint(p,sizeof(*p),n,sizeof(*n)) ||
+        !a733_pmic_consumer_storage(provider,p,sizeof(*p)) ||
+        !a733_gpu_resources_native_use_pmic(n,p->manager,provider))return 0;
+    const struct a733_pmic_consumer_config config={provider,*life,owner,A733_RAIL_DCDC4};
+    if(!a733_pmic_consumer_init(&p->pmic,&config) || !a733_gpu_resources_native_bind_view(n,&p->pmic,p->client))return 0;
+    p->pmic_native=n;return 1;
+}
+static int pmic_health(struct a733_gpu_platform *p)
+{
+    if(!p->pmic_native)return 1;
+    if(p->pmic_native->pmic_view!=&p->pmic || p->pmic_native->pmic_manager!=p->manager ||
+        p->pmic_native->pmic_client!=p->client ||
+        p->pmic_native->pmic!=p->pmic.config.provider ||
+        !a733_gpu_resources_native_use_pmic(p->pmic_native,p->manager,p->pmic.config.provider))return fail(p);
+    int r=a733_pmic_consumer_health(&p->pmic);return r<0 ? fail(p) : r;
+}
 int a733_gpu_platform_poll(void *context)
 {
     struct a733_gpu_platform *p = context;
     if (!p || !p->initialized || p->phase == A733_GPU_PLATFORM_FAILED) return -1;
-    if (p->phase == A733_GPU_PLATFORM_ON) return 1;
+    if (p->phase == A733_GPU_PLATFORM_ON) return pmic_health(p);
     if (p->phase != A733_GPU_PLATFORM_ADMIT && p->phase != A733_GPU_PLATFORM_STARTING) return -1;
     if (!clock_ok(p)) return -1;
     if (p->phase == A733_GPU_PLATFORM_ADMIT) {
+        if(p->pmic_native) {
+            int r=p->pmic_observed ? pmic_health(p) : a733_pmic_consumer_sample(&p->pmic,p->deadline);
+            if(r<0)return fail(p);
+            if(!r)return 0;
+            p->pmic_observed=1;
+            r=a733_pmic_consumer_arm(&p->pmic,p->deadline);
+            if(r<0)return fail(p);
+            if(!r)return 0;
+        }
         p->resource_result = a733_gpu_resources_acquire(p->manager, p->client, A733_GPU_RESOURCE_ALL,
                                                        p->deadline, &p->token, &p->ready);
+        if(p->pmic_native)p->pmic.armed=0;
         if (!clock_ok(p)) return -1;
         if (p->resource_result == A733_GPU_RESOURCE_BUSY) return 0;
         if (p->resource_result != A733_GPU_RESOURCE_OK) return fail(p);
@@ -94,10 +126,12 @@ int a733_gpu_platform_poll(void *context)
         if (a733_gpu_power_on(&p->power, p->deadline) != A733_GPU_POWER_AGAIN) return fail(p);
         return 0;
     }
+    int health=pmic_health(p);if(health!=1)return health;
     enum a733_gpu_power_result result = a733_gpu_power_poll(&p->power);
     if (!clock_ok(p)) return -1;
     if (result == A733_GPU_POWER_AGAIN) return 0;
     if (result != A733_GPU_POWER_OK) return fail(p);
+    health=pmic_health(p);if(health!=1)return health;
     p->phase = A733_GPU_PLATFORM_ON;
     return 1;
 }
@@ -116,6 +150,7 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *p)
     if (p->phase == A733_GPU_PLATFORM_OFF) return 1;
     if (p->phase != A733_GPU_PLATFORM_STOPPING && p->phase != A733_GPU_PLATFORM_RELEASE) return -1;
     if (!clock_ok(p)) return -1;
+    int health=pmic_health(p);if(health!=1)return health;
     if (p->phase == A733_GPU_PLATFORM_STOPPING) {
         enum a733_gpu_power_result result = a733_gpu_power_poll(&p->power);
         if (!clock_ok(p)) return -1;

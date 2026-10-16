@@ -52,6 +52,16 @@ static int native_rail(void *context, struct a733_gpu_resource_rail *out, uint64
 {
     struct a733_gpu_resource_native *n = context;
     uint64_t now;
+    if (n->pmic) {
+        native_now(n, &now);
+        const struct a733_gpu_resource_lease *lease=n->pmic_manager && n->pmic_client<A733_GPU_RESOURCE_CLIENTS ?
+            &n->pmic_manager->leases[n->pmic_client] : 0;
+        return now < deadline && n->pmic_view && lease && lease->token &&
+            lease->mode==A733_GPU_RESOURCE_STABLE && lease->mask==A733_GPU_RESOURCE_ALL &&
+            atomic_load_explicit(&n->pmic_manager->busy,memory_order_relaxed)==1 &&
+            n->pmic_view->config.provider == n->pmic &&
+            a733_pmic_consumer_take(n->pmic_view,n,deadline,out);
+    }
     if (n->i2c_held) return 0;
     native_now(n, &now);
     if (now >= deadline || !n->locks.i2c_enter(n->locks.context, deadline)) return 0;
@@ -102,4 +112,29 @@ int a733_gpu_resources_native_init(struct a733_gpu_resource_native *n,
         .operations = {native_now, native_read, native_update, native_rail},
         .locks = *locks, .initialized = 1};
     return 1;
+}
+int a733_gpu_resources_native_use_pmic(struct a733_gpu_resource_native *n,
+    struct a733_gpu_resource_manager *m,struct a733_pmic *p)
+{
+    if(!n || !n->initialized || !m || !m->initialized || m->failed ||
+        !p || p->self!=p || p->rails->binding.gpu!=m || n->i2c_held || n->rail_step || n->bus.opened)return 0;
+    if(!n->manager) {
+        if(m->context!=n || m->ops.now!=n->operations.now || m->ops.read32!=n->operations.read32 ||
+            m->ops.update32!=n->operations.update32 || m->ops.rail!=n->operations.rail)return 0;
+        n->manager=m;n->manager_operations=m->ops;n->manager_context=m->context;
+    }
+    if(n->manager!=m || m->context!=n->manager_context ||
+        m->ops.now!=n->manager_operations.now || m->ops.read32!=n->manager_operations.read32 ||
+        m->ops.update32!=n->manager_operations.update32 || m->ops.rail!=n->manager_operations.rail)return 0;
+    if(n->pmic)return n->pmic==p && n->pmic_manager==m;
+    for(unsigned i=0;i<A733_GPU_RESOURCE_SLOTS;++i)
+        if(m->leases[i].mode!=A733_GPU_RESOURCE_FREE)return 0;
+    n->pmic=p;n->pmic_manager=m;return 1;
+}
+int a733_gpu_resources_native_bind_view(struct a733_gpu_resource_native *n,struct a733_pmic_consumer *c,unsigned client)
+{
+    if(!n || !n->initialized || !n->pmic || n->pmic_view || !c || c->self!=c ||
+        c->failed || c->stage || c->recipient || c->config.provider!=n->pmic ||
+        c->config.rail!=A733_RAIL_DCDC4 || client>=A733_GPU_RESOURCE_CLIENTS)return 0;
+    c->recipient=n;c->destination=&n->pmic_manager->rail;n->pmic_view=c;n->pmic_client=client;return 1;
 }
