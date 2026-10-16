@@ -5,13 +5,13 @@
 
 enum pvr_gpu_control_phase { PVR_GPU_CONTROL_NEW, PVR_GPU_CONTROL_COMPAT,
     PVR_GPU_CONTROL_SUBMIT_HEALTH, PVR_GPU_CONTROL_WAIT_HEALTH,
-    PVR_GPU_CONTROL_READY, PVR_GPU_CONTROL_FAILED };
+    PVR_GPU_CONTROL_READY, PVR_GPU_CONTROL_FAILED, PVR_GPU_CONTROL_RETIRED };
 enum pvr_gpu_control_result { PVR_GPU_CONTROL_OK, PVR_GPU_CONTROL_AGAIN,
     PVR_GPU_CONTROL_INVALID, PVR_GPU_CONTROL_FAULT };
 enum pvr_gpu_control_error { PVR_GPU_CONTROL_NO_ERROR, PVR_GPU_CONTROL_IO,
     PVR_GPU_CONTROL_CLOCK, PVR_GPU_CONTROL_TIMEOUT, PVR_GPU_CONTROL_INCOMPATIBLE,
     PVR_GPU_CONTROL_QUEUE, PVR_GPU_CONTROL_RESTART, PVR_GPU_CONTROL_EVENT,
-    PVR_GPU_CONTROL_HEALTH };
+    PVR_GPU_CONTROL_HEALTH, PVR_GPU_CONTROL_EXTERNAL };
 
 /* Callbacks return 1 on success, 0 on failure, and must be bounded and
  * non-reentrant. now uses the same monotonic clock as the queue, in microseconds.
@@ -63,4 +63,10 @@ int pvr_gpu_control_init(struct pvr_gpu_control *, const struct pvr_gpu_start *,
  * Known event handlers and physical IRQ/GIC integration remain platform work.
  */
 enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *, unsigned event_budget);
+/* Close READY control/queue service after the owner's power-off handshake.
+ * No I/O, device isolation, or buffer release. Polls then return INVALID. */
+enum pvr_gpu_control_result pvr_gpu_control_retire(struct pvr_gpu_control *);
+/* Retain an external shutdown/platform fault and stop future control/queue I/O.
+ * No hardware access; valid after initialization, including RETIRED. */
+enum pvr_gpu_control_result pvr_gpu_control_abort(struct pvr_gpu_control *);
 #endif

@@ -15,7 +15,8 @@ enum pvr_ccb_region { PVR_CCB_HOST_CONTROL, PVR_CCB_HOST_COMMANDS,
 enum pvr_ccb_barrier { PVR_CCB_ACQUIRE, PVR_CCB_RELEASE, PVR_CCB_DEVICE_COMPLETE };
 enum pvr_ccb_result { PVR_CCB_OK, PVR_CCB_AGAIN, PVR_CCB_INVALID,
     PVR_CCB_EXPIRED, PVR_CCB_FAULT, PVR_CCB_RESTART };
-enum pvr_ccb_phase { PVR_CCB_NEW, PVR_CCB_PREPARED, PVR_CCB_ACTIVE, PVR_CCB_FAILED };
+enum pvr_ccb_phase { PVR_CCB_NEW, PVR_CCB_PREPARED, PVR_CCB_ACTIVE, PVR_CCB_FAILED,
+    PVR_CCB_RETIRED };
 
 /* Operations return 1 on success and 0 on failure. They must be bounded,
  * non-reentrant, and preserve byte order. Four-byte control/return accesses
@@ -91,6 +92,10 @@ enum pvr_ccb_result pvr_ccb_collect(struct pvr_ccb *, struct pvr_ccb_token, uint
 enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *, void *event);
 /* Stop further queue I/O after an external device/service fault. No device
  * access or buffer release. Already recorded results remain collectable.
- * NEW is refused; PREPARED/ACTIVE/FAILED become or remain FAILED. */
+ * NEW is refused; PREPARED/ACTIVE/RETIRED/FAILED become or remain FAILED. */
 enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *);
+/* Close a PREPARED/ACTIVE transport after its owner has finished firmware
+ * handshakes. No I/O or proof of hardware shutdown. Recorded results remain
+ * collectable; unresolved results return FAULT. New I/O is refused. */
+enum pvr_ccb_result pvr_ccb_retire(struct pvr_ccb *);
 #endif

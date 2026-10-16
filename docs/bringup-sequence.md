@@ -68,7 +68,8 @@ The GPU now has native [firmware decoding and staging](gpu.md) and
 [Command transport](gpu-queues.md), [initialization records](gpu-fw-state.md),
 [GPU workload tables](gpu-vm.md), and [startup sequencing](gpu-start.md)
 also have host reference evidence. [Compatibility, health, and event service](gpu-control.md)
-have host integration evidence; physical interrupt delivery remains outstanding.
+have host integration evidence. [Shutdown](gpu-stop.md) has host handshake and
+idle/reset evidence; physical interrupt delivery and isolation remain outstanding.
 Its firmware boot, graphics/compute runtime, and physical identity remain
 unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is

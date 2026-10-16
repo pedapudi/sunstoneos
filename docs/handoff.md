@@ -120,6 +120,11 @@ The [firmware control worker](gpu-control.md) now checks published compatibility
 requires one successful health command, and services bounded interrupt/event
 batches. Its queue integration passes 78 retained-failure cases. ABI and interrupt
 operations match pinned references; the health-command reference was reused.
+[Bounded shutdown](gpu-stop.md) now sends two power requests, waits for separate
+firmware acknowledgements, retires control/queue I/O, and performs idle/reset
+checks before requiring platform isolation. Host integration passes 115 retained
+faults, and the affected control regression passes. Commands and register plans
+match the pinned functions. The isolation callback remains unimplemented on the board.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -295,9 +300,14 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement verified GPU shutdown, resource-specific firmware event handlers,
-   and physical interrupt delivery. Integrate startup and control with platform
-   resources and FreeRTOS serialization. The [control worker](gpu-control.md)
+7. Integrate GPU preparation, startup, control, and shutdown under one privileged
+   FreeRTOS worker with platform allocation/cache operations. Implement
+   resource-specific firmware event handlers and physical interrupt delivery.
+   Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
+   `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic
+   and drain outstanding transactions before resources can be reused. Implement
+   that callback with shared platform power/reset services and qualify it after
+   independent watchdog recovery. The [control worker](gpu-control.md)
    now gates queue activation on compatibility and a health-command result,
    bounds event batches, and aborts queue I/O after faults; reuse
    `gpu-control-20261016`. Actual compatibility publication and health completion

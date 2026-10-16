@@ -63,7 +63,7 @@ static enum pvr_ccb_result fail(struct pvr_ccb *q)
 static enum pvr_ccb_result active(struct pvr_ccb *q)
 {
     if (!range(q, sizeof(*q))) return PVR_CCB_INVALID;
-    if (q->phase == PVR_CCB_FAILED) return PVR_CCB_FAULT;
+    if (q->phase == PVR_CCB_FAILED || q->phase == PVR_CCB_RETIRED) return PVR_CCB_FAULT;
     return q->phase == PVR_CCB_ACTIVE ? PVR_CCB_OK : PVR_CCB_INVALID;
 }
 
@@ -180,12 +180,12 @@ enum pvr_ccb_result pvr_ccb_poll(struct pvr_ccb *q, uint64_t now)
 enum pvr_ccb_result pvr_ccb_collect(struct pvr_ccb *q, struct pvr_ccb_token token, uint32_t *out)
 {
     if (!outside(q, out, sizeof(*out)) ||
-        (q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED) ||
+        (q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED && q->phase != PVR_CCB_RETIRED) ||
         token.epoch != q->epoch || !token.serial || token.slot >= PVR_CCB_HOST_SLOTS)
         return PVR_CCB_INVALID;
     struct pvr_ccb_slot *slot = &q->slots[token.slot];
     if (slot->state == FREE || slot->serial != token.serial) return PVR_CCB_INVALID;
-    if (slot->state != DONE) return q->phase == PVR_CCB_FAILED ? PVR_CCB_FAULT : PVR_CCB_AGAIN;
+    if (slot->state != DONE) return q->phase == PVR_CCB_ACTIVE ? PVR_CCB_AGAIN : PVR_CCB_FAULT;
     *out = slot->status;
     slot->state = FREE;
     return PVR_CCB_OK;
@@ -221,6 +221,15 @@ enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *q, void *event)
 enum pvr_ccb_result pvr_ccb_abort(struct pvr_ccb *q)
 {
     if (!range(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
-        q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED)) return PVR_CCB_INVALID;
+        q->phase != PVR_CCB_ACTIVE && q->phase != PVR_CCB_FAILED &&
+        q->phase != PVR_CCB_RETIRED)) return PVR_CCB_INVALID;
     return fail(q);
+}
+
+enum pvr_ccb_result pvr_ccb_retire(struct pvr_ccb *q)
+{
+    if (!range(q, sizeof(*q)) || (q->phase != PVR_CCB_PREPARED &&
+        q->phase != PVR_CCB_ACTIVE)) return PVR_CCB_INVALID;
+    q->phase = PVR_CCB_RETIRED;
+    return PVR_CCB_OK;
 }

@@ -126,3 +126,19 @@ enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *s, unsi
     }
     return s->phase == PVR_GPU_CONTROL_READY && !more ? PVR_GPU_CONTROL_OK : PVR_GPU_CONTROL_AGAIN;
 }
+
+enum pvr_gpu_control_result pvr_gpu_control_retire(struct pvr_gpu_control *s)
+{
+    if (!s || s->phase != PVR_GPU_CONTROL_READY) return PVR_GPU_CONTROL_INVALID;
+    if (pvr_ccb_retire(s->queue) != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
+    s->phase = PVR_GPU_CONTROL_RETIRED;
+    return PVR_GPU_CONTROL_OK;
+}
+
+enum pvr_gpu_control_result pvr_gpu_control_abort(struct pvr_gpu_control *s)
+{
+    if (!s || s->phase < PVR_GPU_CONTROL_COMPAT || s->phase > PVR_GPU_CONTROL_RETIRED)
+        return PVR_GPU_CONTROL_INVALID;
+    if (s->phase == PVR_GPU_CONTROL_FAILED) return PVR_GPU_CONTROL_FAULT;
+    return fail(s, PVR_GPU_CONTROL_EXTERNAL);
+}

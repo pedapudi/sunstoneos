@@ -117,8 +117,8 @@ matches the saved queue-publication reference, whose hash is checked before reus
 Source hashes are verified against the pinned board-source manifest.
 
 Clang 21 compiled the worker and changed queue component for AArch64 with strict
-alignment and freestanding options. The worker contains 1,868 bytes of code/read-only
-data, and the queue contains 3,372 bytes. Neither has writable static data.
+alignment and freestanding options. That checked revision contains 1,868 bytes of code/read-only
+data, and its queue contains 3,372 bytes. Neither has writable static data.
 The worker's individual frames are 64 bytes for initialization, 144 for polling,
 and 32 for each clock/status helper. Total stack accounting must also include
 nested queue operations and platform callbacks.
@@ -128,3 +128,9 @@ and objects are under `~/.cache/sunstoneos/evidence/gpu-control-20261016/`.
 Existing queue internals are unchanged apart from the added abort API; their
 publication, cache, and malformed-input evidence was reused. No broader OS,
 mimus, accelerator, or performance checks were repeated. No device access occurred.
+
+[Shutdown integration](gpu-stop.md) adds retirement and external-abort APIs.
+Retirement closes the READY control component and its transport without I/O;
+it does not establish device isolation. The current control component compiles
+to 2,060 bytes of code/read-only data, with no writable static data. Its affected
+integration check and current artifacts are recorded with shutdown evidence.

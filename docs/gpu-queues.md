@@ -119,6 +119,9 @@ The [firmware control worker](gpu-control.md) uses the added `pvr_ccb_abort()`
 operation to stop queue I/O after external faults. Abort preserves recorded
 results and retains all device backing. Its integration evidence supplements
 the unchanged queue publication and completion checks above.
-With abort included, the current queue component compiles to 3,372 bytes of
-code/read-only data and no writable static data; its object and input identities
-are recorded with the control-worker evidence.
+With abort included, that queue revision compiled to 3,372 bytes of
+code/read-only data and no writable static data. The current component also
+supports [retirement during shutdown](gpu-stop.md), which closes I/O while
+preserving recorded results. It compiles to 3,440 bytes of code/read-only data
+and no writable static data; current object and input identities are recorded
+with the shutdown evidence.

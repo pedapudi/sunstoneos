@@ -75,7 +75,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   host ordering, deadline, and retained-failure checks; complete register traces
   match the reference startup functions. The [control worker](gpu-control.md)
   passes host compatibility, health-command, bounded event, and retained-failure
-  checks. Physical identity,
+  checks. [Shutdown](gpu-stop.md) also passes host handshakes, idle/reset ordering,
+  retirement, and retained-failure checks. Physical isolation, identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
