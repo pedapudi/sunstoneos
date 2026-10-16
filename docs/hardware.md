@@ -55,6 +55,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
+- NPU: **research-only**. Driver source, compiler dependencies, and the compiled
+  model format are identified. The [model inspector](npu.md) passes a host
+  reference comparison and malformed-file checks. Native loading, execution,
+  and physical qualification remain outstanding.
+
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
   programmed-I/O implementation, inherited clock state, and remaining modes.

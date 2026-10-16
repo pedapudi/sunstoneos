@@ -111,3 +111,11 @@ The [watchdog recovery work](../docs/watchdog.md) records the current limitation
 and requests ROM return. `read-returned-result.py` retrieves diagnostics after
 a failed session only when host metadata identifies an independently returned
 ROM instance. The USB document records prerequisites, commands, and evidence.
+
+## NPU model inspection
+
+`inspect-nbg.py MODEL` emits JSON metadata for the inspected NBG `0x1001e`
+format. It checks container structure and selected references without executing
+commands. [NPU format and evidence](../docs/npu.md) describe its limits and
+the pinned compiled fixture. Successful inspection does not establish that a
+model is safe to submit or compatible with the physical device.

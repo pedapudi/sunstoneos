@@ -38,6 +38,10 @@ The [native DMA memory adapter](dma-memory.md) now passes a FreeRTOS emulator
 check for translations, permissions, cache instructions, and two serialized EL1
 callers. Its RAM/FIFO admission policy also passes host checks. Board reservations,
 clock/reset setup, and a production privileged service remain outstanding.
+The [NPU investigation](npu.md) identifies available driver source and the
+remaining model-loader/compiler dependencies. A host inspector now matches
+compiled-model metadata and rejects malformed containers. Native NPU execution
+remains unimplemented and physically untested.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -166,6 +170,11 @@ the tool hash and recovery evidence in the application document.
    recovery physically after watchdog protection passes. Resolve DMA1 resources
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
+
+6. Port the available NPU driver core to FreeRTOS and implement native model
+   relocation handling. Obtain and pin the A733 host compiler for a small
+   numerical fixture. The [NPU record](npu.md) identifies references, container
+   inspection evidence, and the remaining implementation sequence.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
