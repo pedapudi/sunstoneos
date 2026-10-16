@@ -18,8 +18,10 @@
 #define A733_CLOCK_ASRC     (1u<<11)
 #define A733_CLOCK_OWA_TX   (1u<<12)
 #define A733_CLOCK_DMIC     (1u<<13)
+#define A733_CLOCK_FABRIC   (1u<<14) /* AHB/NSI/MBUS selectors, divisors and gates. */
+#define A733_CLOCK_DMA0     (1u<<15) /* Controller, bus/reset, global routes; exclusive. */
 #define A733_CLOCK_LOCALS  UINT32_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT32_C(0x3fff)
+#define A733_CLOCK_ALL     UINT32_C(0xffff)
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -47,6 +49,9 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * exclusive only; their selected parent must be leased separately. I2S/ASRC/
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO
  * route writers. Pins, voltage, DMA channels and memory are separate leases.
+ * FABRIC stability does not imply parent stability: callers must also lease
+ * each selected PLL/reference parent. DMA0 requires a platform handoff covering
+ * all channels and remote-MCU/routing writers; idle bits cannot establish it.
  * Granting a token precedes all caller hardware operations. An uncertain
  * operation requires retain(), never release(). All refusal outputs unchanged.
  */
