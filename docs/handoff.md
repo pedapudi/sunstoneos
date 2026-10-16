@@ -33,24 +33,27 @@ software behavior; physical operation remains unqualified.
 
 | Component | Implemented scope and evidence | Next dependency |
 | --- | --- | --- |
-| [Secondary CPU continuation](cpu-continue.md) | Per-core interrupt preparation, translation tables, exception vectors; host and instruction checks pass | Coherent cached runtime and physical all-core startup |
+| [Secondary CPU continuation](cpu-continue.md) | Per-core interrupt preparation, translation tables, exception vectors; host and instruction checks pass | Physical cached coherence and all-core startup |
 | [Cached eight-core image](a733-smp-cached.md) | Coordinated cache adoption and full native-instruction scheduler checks on all cores; central build links | Physical coherence, observable results and separate launcher admission |
 | [Eight-core diagnostic and launcher](a733-smp.md) | Scheduler image links; bounded watchdog launch, clean FEL refusal and immutable upload checks pass | Physical independent recovery, observable scheduler results and full image execution |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Native reservations, handoff authority, physical transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
+| [NPU PLL](npu-pll.md) | Source-backed cold enable and enabled retuning; focused host checks and native compilation pass | Concrete boot authority, atomic clock handoff and physical qualification |
 | [NPU startup and convolution](npu-convolution.md) | Fixed model authentication, private commands, guarded startup and copied input/output ownership; focused emulator checks pass | Physical confinement, supply/domain qualification and numerical execution |
 | [GPU compute](gpu-compute-service.md) | Native workload publication, compiled fixed shader, command stream and output checking; service model passes | Physical firmware startup and numerical execution |
 | [GPU core mode](gpu-compute-mode.md) | Observed single-core capability required before startup/submission; instruction/service checks pass | Physical identity and wider core modes |
 | [GPU isolation](gpu-isolation.md) | Only exact provider success permits reclamation; focused instruction check passes | Proven request blocking and completion of all accepted external writes |
-| [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Security/data paths and physical radio binding |
-| [Wi-Fi association and data](radio-data.md) | Association control, owned Ethernet packets, EAPOL confirmations and open-port authorization; host/source checks pass | Authentication/keys, secure receive and network-stack integration; WPA2 is security-pending |
-| [Bluetooth transport and links](bluetooth-acl.md) | UART framing, identification, outbound BR/EDR links and ACL credits; host checks and native compilation pass | Native binding, L2CAP/SDP, security and headset profiles |
+| [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Native radio binding and physical radio operation |
+| [Wi-Fi association, data and WPA2](radio-security.md) | Real RSN handshakes, confirmed keys, controlled-port authorization and CCMP replay checks; host checks and native link pass | Native radio/entropy binding, IP networking and wider security modes |
+| [Bluetooth channels](bluetooth-l2cap.md) | UART/HCI/ACL and bounded L2CAP negotiation/data compose in host checks; native compilation passes | Full retries/identity reuse, native binding, SDP, security and headset profiles |
+| [Media clocks](media-clock.md) | Native CSI/ISP/DE/DSI gates and inherited-parent admission; host checks and native compilation pass | Complete electrical, pin, memory and drain binding |
 | [Camera analog startup](camera-platform.md) | Cold shared PHY setup and calibration readback; source/model checks pass | Native resource binding and actual memory/drain providers |
 | [Camera capture](camera-capture.md) | All six native controllers compose in both port models; one NV16 frame becomes CPU-owned after shutdown, drain and fault scan | Actual providers, global mapping disposal and concurrent device ownership |
 | [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Display engine, panel and physical scanout |
+| [Display PLL](display-pll.md) | Source-backed enable/retune, intermediate-rate checks and retained faults; host checks and native compilation pass | Qualified initial analog profile and atomic consumer handoff |
 | [Display scanout](display-scanout.md) | Actual PHY, command, DSI, LCD1 and display-engine composition; host checks and native compilation pass | Platform binding, cold PLL, panel, independent drain and shutdown/release |
 | [I2S capture](i2s.md) | Finite capture, DMA ownership and clock/reset/header-pin binding; host/emulator checks pass | Continuous capture, playback, Bluetooth PCM and attached microphone |
-| [JPEG decode control](video-codecs.md) | Baseline parser, tables and executor match recorded runtime instructions; host checks and native compilation pass | Native platform binding, physical output and remaining codec families |
+| [JPEG decode and native binding](video-platform.md) | Parser/executor, resource admission and per-identity reset match recorded runtime instructions; host checks and native compilation pass | Cold startup, actual memory/cache/drain authority, physical output and remaining codec families |
 | [SD/eMMC reads](mmc.md) | Cold identification, capacity and bounded block reads; host/source checks and native compilation pass | Actual card presence, platform binding, physical reads and wider storage modes |
 | [UART](uart.md) | Bounded FIFO transfers, configuration, flow control, interrupt service and drain; source/model checks and native compile pass | Native resource binding, advanced modes and physical peer tests |
 
@@ -64,12 +67,14 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 
 | Worktree | Assigned work |
 | --- | --- |
-| Display PLL worker, separate worktree | Source-backed cold display PLL preparation |
-| Wi-Fi security worker, separate worktree | WPA2 authentication, key installation and secure receive |
-| Bluetooth worker, separate worktree | L2CAP channels and signaling, then service discovery |
-| NPU platform worker, separate worktree | Cold NPU PLL provisioning |
-| Video platform worker, separate worktree | Concrete decoder resource/clock/reset/IRQ binding |
-| Platform resource worker | Concrete camera/display leaf clocks and shared registry scopes |
+| Display PLL worker | Review of shared clock publication and NPU startup adoption |
+| Wi-Fi worker | Native FreeRTOS TCP/UDP networking |
+| Bluetooth worker | L2CAP retry timing and safe channel identity reuse, then service discovery |
+| NPU platform worker | Atomic clock publication and startup adoption |
+| Video platform worker | Cold decoder startup |
+| Pin worker | Shared B–M pin ownership, GPIO and interrupts |
+| CPU worker | Cached eight-core diagnostic with observable USB results |
+| Thermal worker | Native sensor calibration, temperature and interrupt support |
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -120,8 +125,9 @@ The local Python environment supplies the dependencies in
 Component documents link their source identities, selected checks, artifacts and
 limitations. Raw evidence lives under `~/.cache/sunstoneos/evidence/`.
 The central integration records `hardware-integration-20261016f`,
-`hardware-integration-20261016g`, `hardware-integration-20261016h`
-`hardware-integration-20261016i` and `hardware-integration-20261016j`
+`hardware-integration-20261016g`, `hardware-integration-20261016h`,
+`hardware-integration-20261016i`, `hardware-integration-20261016j` and
+`hardware-integration-20261016k`
 preserve source comparisons, build artifacts
 and source-pin verification. Integration reused component execution evidence;
 no unchanged emulator or physical workload was repeated. The JPEG record explicitly
@@ -169,13 +175,15 @@ The dashboard requires no separate status maintenance or recurring browser tests
    attributes and outstanding bus traffic. Supply real admission/drain evidence
    before device commands or buffer reuse.
 4. Bind the integrated camera capture and display scanout coordinators to native
-   platform providers. Implement cold display PLL setup and safe shutdown/release.
+   platform providers. Qualify the display PLL initial analog profile and bind
+   atomic clock handoff, then implement safe shutdown/release. The PLL sequence
+   and media gate/rate controllers are integrated with software evidence.
    Add panel-specific sequencing, live frame updates and wider camera modes.
    OV5640 module availability remains unconfirmed; the DSI panel is undecided.
    Keep Hawkeye 64 MP feasibility separate from the first camera implementation.
-5. Extend the integrated Wi-Fi association and packet transport with
-   authentication/key management, secure receive, network-stack integration,
-   interrupts, sleep and reconnect. Extend Bluetooth HCI with links, pairing, hands-free
+5. Bind the integrated WPA2 handshake and secure packet transport to native
+   entropy and radio resources. Add IP networking, wider security modes, interrupts,
+   sleep and reconnect. Extend Bluetooth links with pairing, hands-free
    control and voice transport. Establish actual SDIO/UART/power/pin bindings and
    radio identity before physical use. No microphone is available; recorded input
    remains the application fixture while I2S and headset support proceed.

@@ -198,8 +198,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   requires independent drain evidence. The [scanout coordinator](display-scanout.md)
   composes the actual PHY, panel-command, DSI, LCD1 and display-engine controllers.
   Host checks cover start/stop ordering, authenticated frame/resource receipts and
-  retained failures; native compilation passes. Actual platform binding,
-  shutdown/release, physical scanout, live frame
+  retained failures; native compilation passes. Native [media clock preparation](media-clock.md)
+  supplies real shared-register ownership and inherited-parent checks. Host checks
+  and native compilation pass, including finalization fault retention. Complete
+  platform binding, shutdown/release, physical scanout, live frame
   updates, composition, additional formats and synchronization remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
@@ -211,7 +213,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   engine stop. Source-register comparisons and host lifecycle checks pass.
   The [LCD1 timing controller](tcon-lcd.md) supplies DSI1 timing, authenticated
   start and bounded stop after producer drain. Source-profile and fault checks
-  pass; native compilation passes. Cold PLL setup, clock/pin ownership,
+  pass; native compilation passes. [Display PLL activation and retuning](display-pll.md)
+  now follows the source sequence with intermediate-rate bounds, filtered lock
+  checks and retained ownership. Host checks and native compilation pass.
+  Qualified initial analog provisioning, atomic clock handoff, pin ownership,
   native scanout binding, panel configuration, read transactions and
   physical qualification remain outstanding.
 
@@ -233,12 +238,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel policy and bounded passive scanning. Source-packet comparisons and
   host lifecycle checks pass. [Station association](radio-association.md) adds
   copied targets, explicit transmission authority and separate command/connection
-  completion. Source and focused host checks pass. WPA2 remains security-pending;
-  unresolved roaming blocks replacement operations. [Data transport](radio-data.md)
+  completion. Source and focused host checks pass. Unresolved roaming blocks
+  replacement operations. [Data transport](radio-data.md)
   adds owned Ethernet packets, reserved transmit credits and EAPOL authentication
   frames with firmware confirmations. Open-network access requires an explicit
   association-bound authorization. Host checks, source comparisons and native compilation
-  pass. Encrypted, reordered and unsupported receive records remain retained.
+  pass. [WPA2 station security](radio-security.md) now composes the real RSN
+  handshake with confirmed keys, group renewal, controlled-port authorization
+  and CCMP receive replay checks. Host checks and freestanding native linking
+  pass. Unsupported receive records remain retained. Actual firmware encryption,
+  integrity and entropy quality remain unqualified.
   [Bluetooth H4/HCI](bluetooth-hci.md) implements bounded UART packet framing,
   retained receive ownership, command credits and controller identification.
   Host checks and native compilation pass, including exclusion of unread stale
@@ -246,9 +255,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   scheduled polling with the UART interrupt masked. [Bluetooth ACL/link ownership](bluetooth-acl.md)
   adds outbound BR/EDR connections, bounded packet transmission and controller
   credit accounting. Host checks and native compilation pass; uncertain partial
-  transfers and disconnect results remain retained. Physical identity and
-  platform binding, authentication/keys, secure receive, network-stack integration,
-  L2CAP, SDP, pairing and headset audio remain outstanding.
+  transfers and disconnect results remain retained. [L2CAP channels](bluetooth-l2cap.md)
+  add bounded setup in both directions, configuration, disconnection and data
+  fragmentation/reassembly. Composed host checks and native compilation pass.
+  Full retry timing and safe identity reuse remain required. Physical identity
+  and platform binding, IP networking, wider Wi-Fi security modes, SDP,
+  Bluetooth pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
@@ -267,7 +279,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Both port models pass one-frame NV16 delivery and guarded CPU ownership
   transfer after path shutdown, drain and fault scan. Global mappings and all
   other IOMMU masters remain reserved; concurrent device use and disposal are
-  not established. Module electrical binding, actual DMA mapping/drain,
+  not established. Native [media clocks](media-clock.md) prepare CSI/ISP gates
+  and rates under actual registry and domain leases. Host checks and native
+  compilation pass. Module electrical binding, actual DMA mapping/drain,
   additional modes and physical qualification remain outstanding.
   Module availability remains unconfirmed.
 
@@ -309,8 +323,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the complete compiled model, private allocations and commands before startup
   and publication. Copied inputs, matching output completion and explicit result
   reaping pass focused emulator checks. The output bytes are modeled, so these
-  checks do not establish inference. Physical rail/PCK qualification, cold PLL
-  provisioning, effective memory confinement, numerical execution,
+  checks do not establish inference. The [NPU PLL controller](npu-pll.md)
+  implements bounded cold enable and enabled retuning, consumer exclusion and
+  retained faults. Host checks, source comparisons and native compilation pass.
+  Concrete boot authority, atomic clock handoff, physical rail/PCK qualification,
+  effective memory confinement, numerical execution,
   and physical qualification remain outstanding.
 
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
@@ -318,8 +335,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and native compilation pass. Identity admission precedes reset/engine setup;
   decoded output requires independent drain and cache synchronization. Part of
   the historical malformed-input evidence lacks preserved inputs and its runner.
-  Native platform binding, physical decoding, remaining decode formats and all
-  encoder paths remain outstanding.
+  The [native platform binding](video-platform.md) now supplies register access,
+  clock/domain/interrupt ownership and identity-specific reset preparation.
+  Host checks and runtime instruction comparisons pass; native compilation
+  succeeds. Cold startup, actual memory/cache/drain authority, physical decoding,
+  remaining decode formats and all encoder paths remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

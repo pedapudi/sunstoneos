@@ -1740,5 +1740,89 @@
     "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/docs/design/firmware-design.rst",
     "sha256": "010026c96299cac483822e99aae74f253c8334c0192d265a53964fd86135cce1",
     "archive": "cpu-coherence/docs/design/firmware-design.rst"
+  },
+  "board-video-platform-ccu-reset-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_reset.c",
+    "sha256": "d74d49ad45c05efcb834fd803fe4a134b2ad80b1e801b4d8cbda05dda61a337f",
+    "archive": "gpu-power/drivers/clk/sunxi-ng/ccu_reset.c"
+  },
+  "board-radio-security-lmac-msg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/lmac_msg.h",
+    "sha256": "916df5d5a2346a6504b35bad2fc221233e959a4a68de3d1bd61b1df6dfaf12d3",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/lmac_msg.h"
+  },
+  "board-radio-security-rwnx-msg-tx-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_msg_tx.c",
+    "sha256": "755c5c635cbf157f0f5363550ca1023c7f05eeca1b0cb2e0db53dcf9d38dbd91",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_msg_tx.c"
+  },
+  "board-radio-security-rwnx-main-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_main.c",
+    "sha256": "c33c214992334186b4857090600c8f86a0bb92ca62b923c40f3cc51f48966cf8",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_main.c"
+  },
+  "wpa-supplicant": {
+    "revision": "2.12",
+    "url": "https://w1.fi/releases/wpa_supplicant-2.12.tar.gz",
+    "archive": "radio/stacks/wpa_supplicant-2.12.tar.gz",
+    "sha256": "08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6"
+  },
+  "board-bluetooth-l2cap-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/net/bluetooth/l2cap.h",
+    "sha256": "e9419d18ce803ba930520bc0b7011da51df48c7e93d2760fde4e1e65035f2d4a",
+    "archive": "bluetooth-l2cap/include/net/bluetooth/l2cap.h"
+  },
+  "board-bluetooth-l2cap-core-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/l2cap_core.c",
+    "sha256": "d3e75877517dceb37016b4181b56dcd078b319a73d7a8d31d7c4b789f75a05bf",
+    "archive": "bluetooth-l2cap/net/bluetooth/l2cap_core.c"
+  },
+  "display-pll-uboot-drivers-video-drm-phys-sunxi-dsi-combophy-reg-h": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/video/drm/phys/sunxi_dsi_combophy_reg.h",
+    "sha256": "7c60400f9a19177f077e81eba871358fd791517d86778b4916cfc1b03c66abdd",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/video/drm/phys/sunxi_dsi_combophy_reg.h"
+  },
+  "display-pll-uboot-drivers-video-drm-phys-sunxi-dsi-combophy-c": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/video/drm/phys/sunxi_dsi_combophy.c",
+    "sha256": "6e202c643c786dfca044e3c6f74e8ca99f5e7c6d9a2f9c1a7dfcd66b8718bbbf",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/video/drm/phys/sunxi_dsi_combophy.c"
+  },
+  "display-pll-uboot-drivers-video-sunxi-disp2-disp-Makefile": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/video/sunxi/disp2/disp/Makefile",
+    "sha256": "c31829517990fbf9719897d472d9945c317b62245c7e706cbb46df49e0f5cf91",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/video/sunxi/disp2/disp/Makefile"
+  },
+  "display-pll-uboot-drivers-video-sunxi-disp2-disp-de-lowlevel-v35x-tcon-de-dsi-c": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/video/sunxi/disp2/disp/de/lowlevel_v35x/tcon/de_dsi.c",
+    "sha256": "450b39ebc46e3b6550c9a3a7bc3968e0b3f1da6bf62740d51458fa76f6afa421",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/video/sunxi/disp2/disp/de/lowlevel_v35x/tcon/de_dsi.c"
+  },
+  "display-pll-reference-sunxi-dsi-combophy-reg-c": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/drm/phy/sunxi_dsi_combophy_reg.c",
+    "sha256": "3353bde71c31a43258cae12e5049ee41eed89047092c5606d3801cb13799e7b0",
+    "archive": "display-pll-research/sunxi_dsi_combophy_reg.c"
+  },
+  "display-pll-reference-sunxi-dsi-combophy-reg-h": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/drm/phy/sunxi_dsi_combophy_reg.h",
+    "sha256": "a4ccdf0efdf9f79ef555edd000b49665062ed6b881220c3c8099bc632e277350",
+    "archive": "display-pll-research/sunxi_dsi_combophy_reg.h"
+  },
+  "display-pll-reference-sunxi-dsi-combophy-c": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/drm/phy/sunxi_dsi_combophy.c",
+    "sha256": "2e9a21ad8a02cc8f045c42b3a5fa0ecd014d41cb4ac3f6cf0a1b2fe168843de8",
+    "archive": "display-pll-research/sunxi_dsi_combophy.c"
   }
 }
