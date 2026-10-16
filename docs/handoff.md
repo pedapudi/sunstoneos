@@ -47,8 +47,11 @@ AArch64. The [NPU controller core](npu-controller.md) now passes host startup,
 completion, cancellation, and retained-fault checks and compiles for AArch64.
 The [NPU memory policy](npu-memory.md) now passes a host integration check for
 private buffer mappings, canonical table validation, noncoherent publication,
-and retained faults. It compiles for AArch64. Native cache callbacks, a FreeRTOS
-service, platform resource setup, and physical execution remain outstanding.
+and retained faults. It compiles for AArch64. The [native NPU adapter](npu-native.md)
+now passes a FreeRTOS emulator check for CPU translation/cache operations, MMIO,
+deadlines, and retained failure. DMA passes its focused emulator check with the
+shared CPU operations. A production FreeRTOS service, platform resource setup,
+and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -178,9 +181,10 @@ the tool hash and recovery evidence in the application document.
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
 
-6. Bind the native NPU controller core and memory policy to a FreeRTOS service
-   with native translation/cache callbacks, privileged MMIO, serialization, and platform
-   power/clock setup. Implement native model relocation and obtain a pinned
+6. Bind the native NPU controller and adapter to a production FreeRTOS service.
+   Serialize calls and enforce task ownership, including privileged CPU operations
+   for EL0 SMP applications. Integrate board power/clock setup. Implement native
+   model relocation and obtain a pinned
    A733 host compiler for a small numerical fixture. The [NPU record](npu.md)
    identifies references, inspection evidence, and the implementation sequence.
 

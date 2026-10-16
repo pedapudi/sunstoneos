@@ -1,0 +1,158 @@
+#include "a733_npu_native.h"
+#include "aarch64_device_memory.h"
+
+static int overlap(uint64_t a, uint64_t an, uint64_t b, uint64_t bn)
+{ return an && bn && (a <= b ? b - a < an : a - b < bn); }
+static int ready(const struct a733_npu_native *n)
+{ return n && n->initialized && !n->failed && aarch64_device_cache_stride(); }
+static int refuse(struct a733_npu_native *n)
+{
+    if (n) {
+        n->failed = 1;
+        if (n->initialized) n->memory.state = A733_NPU_MEMORY_FAULT;
+    }
+    return 0;
+}
+static _Noreturn void fatal(struct a733_npu_native *n)
+{
+    refuse(n);
+    if (n && n->fatal) n->fatal(n->fatal_cookie);
+    __builtin_trap();
+}
+static int translate(void *unused, uintptr_t cpu, int write, struct a733_npu_translation *out)
+{
+    (void)unused;
+    struct aarch64_translation t;
+    if (!out || !aarch64_device_translate(cpu, write, &t)) return 0;
+    *out = (struct a733_npu_translation){t.physical, t.attributes, t.shareability};
+    return 1;
+}
+static int cache(void *cookie, enum a733_npu_cache_op operation, uintptr_t cpu, size_t bytes)
+{
+    struct a733_npu_native *n = cookie;
+    enum aarch64_cache_op op;
+    switch (operation) {
+    case A733_NPU_CACHE_CLEAN: op = AARCH64_CACHE_CLEAN; break;
+    case A733_NPU_CACHE_CLEAN_INVALIDATE: op = AARCH64_CACHE_CLEAN_INVALIDATE; break;
+    case A733_NPU_CACHE_INVALIDATE: op = AARCH64_CACHE_INVALIDATE; break;
+    default: return refuse(n);
+    }
+    return ready(n) && aarch64_device_cache(op, cpu, bytes) ? 1 : refuse(n);
+}
+static void barrier(void *cookie)
+{
+    struct a733_npu_native *n = cookie;
+    if (!ready(n)) fatal(n);
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+static uint64_t frequency(void)
+{
+    uint64_t value;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+    return value;
+}
+static uint64_t counter(void)
+{
+    uint64_t value;
+    __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(value) :: "memory");
+    return value;
+}
+static int device_mapping(uintptr_t cpu, uint64_t physical, int write)
+{
+    struct aarch64_translation t;
+    return aarch64_device_translate(cpu, write, &t) && t.physical == physical &&
+           (t.attributes == 0 || t.attributes == 4);
+}
+
+int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu,
+                         uint64_t register_physical, void *arena, size_t capacity,
+                         uint64_t arena_physical, const struct a733_npu_buffer *buffers,
+                         size_t count, void (*on_fatal)(void *), void *cookie)
+{
+    if (!n || n->initialized || n->failed || !on_fatal || !buffers || !count ||
+        count > A733_NPU_MEMORY_MAX_BUFFERS || (uintptr_t)n > UINTPTR_MAX - sizeof(*n) ||
+        (uintptr_t)buffers > UINTPTR_MAX - count * sizeof(*buffers) ||
+        !register_cpu || (register_cpu & 4095) || register_cpu > UINTPTR_MAX - 4096 ||
+        (register_physical & 4095) || register_physical > (UINT64_C(1) << 40) - 4096 ||
+        !aarch64_device_cache_stride()) return 0;
+    if (overlap((uintptr_t)n, sizeof(*n), (uintptr_t)arena, capacity) ||
+        overlap((uintptr_t)n, sizeof(*n), (uintptr_t)buffers, count * sizeof(*buffers)) ||
+        overlap((uintptr_t)n, sizeof(*n), register_cpu, 4096) ||
+        overlap((uintptr_t)arena, capacity, register_cpu, 4096) ||
+        overlap(arena_physical, capacity, register_physical, 4096)) return 0;
+    for (size_t i = 0; i < count; ++i) {
+        const struct a733_npu_buffer *b = &buffers[i];
+        if (overlap(b->cpu, b->bytes, (uintptr_t)n, sizeof(*n)) ||
+            overlap(b->cpu, b->bytes, register_cpu, 4096) ||
+            overlap(b->physical, b->bytes, register_physical, 4096)) return 0;
+    }
+    if (!device_mapping(register_cpu, register_physical, 0) ||
+        !device_mapping(register_cpu, register_physical, 1)) return 0;
+    uint64_t hz = frequency();
+    struct counter_clock clock = {0};
+    if (!hz || hz > UINT32_MAX || !counter_clock_start(&clock, (uint32_t)hz, counter())) return 0;
+    const struct a733_npu_memory_ops ops = {translate, cache, barrier};
+    if (!a733_npu_memory_init(&n->memory, arena, capacity, arena_physical, buffers, count, &ops, n)) return 0;
+    n->clock = clock; n->registers = register_cpu; n->register_physical = register_physical;
+    n->fatal = on_fatal; n->fatal_cookie = cookie; n->initialized = 1;
+    return 1;
+}
+
+static int register_access(struct a733_npu_native *n, unsigned offset, int write)
+{
+    if (!ready(n) || (offset & 3) || offset >= 4096) return refuse(n);
+    return device_mapping(n->registers + offset, n->register_physical + offset, write) ?
+           1 : refuse(n);
+}
+static int read32(void *cookie, unsigned offset, uint32_t *out)
+{
+    struct a733_npu_native *n = cookie;
+    if (!out) return refuse(n);
+    if (!register_access(n, offset, 0)) return 0;
+    uint32_t value = *(volatile uint32_t *)(n->registers + offset);
+    __asm__ volatile("dsb sy" ::: "memory");
+    *out = value;
+    return 1;
+}
+static int write32(void *cookie, unsigned offset, uint32_t value)
+{
+    struct a733_npu_native *n = cookie;
+    if (!register_access(n, offset, 1)) return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    *(volatile uint32_t *)(n->registers + offset) = value;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 1;
+}
+static uint64_t microseconds(void *cookie)
+{
+    struct a733_npu_native *n = cookie;
+    if (!ready(n) || frequency() != n->clock.frequency ||
+        !counter_clock_sample(&n->clock, counter())) fatal(n);
+    return n->clock.microseconds;
+}
+static void delay(void *cookie, unsigned us)
+{
+    struct a733_npu_native *n = cookie;
+    if (us > 1000) fatal(n);
+    uint64_t start = microseconds(n);
+    for (unsigned samples = 0; samples < 1048576; ++samples) {
+        if (microseconds(n) - start >= us) return;
+        __asm__ volatile("yield" ::: "memory");
+    }
+    fatal(n);
+}
+static int publish(void *cookie, const struct a733_npu_mmu_image *image,
+                   const struct a733_npu_command *cmd, int bootstrap)
+{
+    struct a733_npu_native *n = cookie;
+    return ready(n) && a733_npu_memory_publish(&n->memory, image, cmd, bootstrap) ? 1 : refuse(n);
+}
+static int finish(void *cookie, const struct a733_npu_command *cmd, int canceled)
+{
+    (void)canceled; /* Both completion paths already require full bus idle. */
+    struct a733_npu_native *n = cookie;
+    return ready(n) && a733_npu_memory_finish(&n->memory, cmd) ? 1 : refuse(n);
+}
+const struct a733_npu_ops a733_npu_native_operations = {
+    read32, write32, microseconds, delay, barrier, publish, finish
+};

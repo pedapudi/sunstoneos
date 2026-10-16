@@ -5,6 +5,9 @@ platform-reserved RAM windows. The [native EL1 adapter](../platform/a733/dma_nat
 validates CPU translations, maintains data caches, reads the physical counter,
 and performs ordered 32-bit register accesses. These components implement the
 callbacks used by the [DMA controller core](dma.md).
+Translation and cache instructions use the shared
+[AArch64 implementation](../arch/aarch64/device_memory.c), also used by the
+[NPU adapter](npu-native.md).
 
 The policy passes a host check. The adapter also runs from two serialized
 FreeRTOS callers in QEMU. No physical DMA controller was accessed.
@@ -118,11 +121,16 @@ visibility, bus drain, cross-core coherence, or watchdog recovery. The earlier
 controller model remains the evidence for descriptor execution and channel
 ownership. Its unchanged sources and results were reused.
 
-The emulator image contains 22,864 bytes of code/read-only data, 8 bytes of
+The emulator image contains 23,120 bytes of code/read-only data, 8 bytes of
 initialized data, and 97,536 bytes of BSS/reserved stacks. Its SHA-256 is
-`5fe6dd3f5d4eaae14f3d82bf7c3dce76c9c70f10b1691e5f2bdfb47e397560e5`.
-Commands, results, the image, and 131 source/dependency/tool/artifact identities
-are retained under `~/.cache/sunstoneos/evidence/dma-native-20261016/`.
+`464c049a5d08adb17d0c8abe13cb1906b9118a38edea14e5fb36a18a4a9d5f84`.
+One emulator run passed after extraction of the shared CPU operations.
+Current native evidence is under
+`~/.cache/sunstoneos/evidence/npu-native-20261016/`.
+The earlier host admission evidence remains under
+`~/.cache/sunstoneos/evidence/dma-native-20261016/`; its admission logic is
+unchanged. The extracted cache-geometry calculation also passes the
+[host counter/geometry check](../checks/counter-clock.c).
 
 Reproduce after relevant inputs change, using the configured development build:
 

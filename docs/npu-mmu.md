@@ -138,6 +138,7 @@ The object target is excluded from default builds. It is not linked into a
 board image yet. The [controller core](npu-controller.md) supplies modeled register
 sequences and ownership transitions. The [memory policy](npu-memory.md) validates
 private buffers and table contents before ordering cache operations through
-callbacks. The next integration step is a FreeRTOS service with native cache
-callbacks, platform resources, and fault recovery.
+callbacks. The [native adapter](npu-native.md) supplies CPU translation and cache
+operations. The next integration step is a FreeRTOS service with platform
+resources and fault recovery.
 Physical work remains gated on independent watchdog recovery.

@@ -1,8 +1,9 @@
 # Reserved NPU memory and cache publication
 
 The NPU memory policy is **implemented** and passes a host check with separate
-CPU and device memory. It compiles for AArch64. Native cache callbacks, FreeRTOS
-serialization, board integration, and physical memory transfers remain
+CPU and device memory. It compiles for AArch64. The [native adapter](npu-native.md)
+also passes a FreeRTOS emulator check. Production service serialization,
+board integration, and physical memory transfers remain
 unimplemented or untested. The policy performs no MMIO and is excluded from
 default builds.
 
@@ -83,9 +84,9 @@ other CPU or device access during publication and execution.
 
 The policy validates memory relationships, not command semantics. A native model
 loader and privileged service must still validate commands, relocations,
-register permissions, and termination. Native CPU translation/cache callbacks,
-bounded timekeeping, FreeRTOS ownership, power/clocks, and watchdog recovery
-remain integration requirements.
+register permissions, and termination. The native adapter supplies CPU
+translation/cache callbacks and bounded timekeeping. FreeRTOS service ownership,
+power/clocks, and watchdog recovery remain integration requirements.
 
 ## Focused evidence
 

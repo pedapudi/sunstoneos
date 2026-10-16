@@ -60,6 +60,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   passes host startup, completion, cancellation, and retained-fault checks.
   The [memory policy](npu-memory.md) passes host integration for private mappings,
   table validation, cache publication, and retained faults.
+  The [native CPU adapter](npu-native.md) passes a FreeRTOS emulator check for
+  translation, cache maintenance, MMIO, deadlines, and retained failure.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
   checks. Production FreeRTOS controller integration,
   model loading, execution, and physical qualification remain outstanding.

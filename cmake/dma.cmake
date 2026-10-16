@@ -2,6 +2,7 @@
 add_executable(dma-native-model EXCLUDE_FROM_ALL
   arch/aarch64/start.S arch/aarch64/vectors.S platform/qemu-virt/platform.c
   runtime/memory.c checks/dma-native.c drivers/dma/dma_memory.c platform/a733/dma_native.c
+  arch/aarch64/device_memory.c
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
 target_include_directories(dma-native-model PRIVATE

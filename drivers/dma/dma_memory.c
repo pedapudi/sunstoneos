@@ -1,4 +1,5 @@
 #include "dma_memory.h"
+#include "aarch64_device_memory.h"
 
 #define LIMIT (UINT64_C(1) << 35)
 #define ROLES (DMA_MEMORY_ROLE(A733_DMA_READ) | DMA_MEMORY_ROLE(A733_DMA_WRITE) | DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS))
@@ -10,9 +11,7 @@ static int overlap(uint64_t a, uint64_t n, uint64_t b, uint64_t m)
 
 unsigned dma_cache_stride(uint64_t ctr)
 {
-    unsigned line = (unsigned)(ctr >> 16) & 15, granule = (unsigned)(ctr >> 24) & 15;
-    if (!granule || granule > 4 || line > granule) return 0;
-    return 4u << line;
+    return aarch64_cache_stride_from_ctr(ctr);
 }
 
 int dma_memory_init(struct dma_memory_policy *p, const struct dma_memory_window *windows,

@@ -18,10 +18,11 @@ the hashes of these files and the inspected feature database.
 
 ## Platform and memory requirements
 
-A privileged FreeRTOS service must serialize every call and supply bounded
-register, clock, delay, barrier, and memory-publication callbacks. The service
+A privileged FreeRTOS service must serialize every call. The
+[native adapter](npu-native.md) supplies register, clock, delay, barrier, and
+memory-publication callbacks and passes an emulator check. The service
 must establish power, clocks, reset ownership, and independent watchdog recovery
-before opening the controller. These platform operations remain unimplemented.
+before opening the controller. This platform integration remains unimplemented.
 A synchronous bus stall can prevent a software deadline from running; the
 independent watchdog requirement still applies.
 
@@ -37,7 +38,8 @@ It must also validate the trusted command stream, clean device-read buffers,
 and clean and invalidate device-written buffers. Publication must finish before
 command submission. The [memory policy](npu-memory.md) implements private buffer
 admission, table validation, and cache-operation ordering through callbacks.
-Native callbacks and command-semantic validation remain outstanding.
+The native adapter binds those callbacks to CPU operations. Command-semantic
+validation remains outstanding.
 
 The controller borrows the MMU image, bootstrap allocation, and associated
 resource bundle until successful close. Each application job remains borrowed
@@ -168,7 +170,7 @@ cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-controller
 ```
 
-The next work is the FreeRTOS service and its native translation/cache callbacks,
-platform power/clock integration, and model relocation. Numerical inference and
+The next work is the FreeRTOS service, platform power/clock integration, and
+model relocation. Numerical inference and
 physical error recovery remain separate qualification requirements. No hardware
 request occurred during these checks.

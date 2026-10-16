@@ -4,8 +4,9 @@ Native NPU execution remains **physically untested**. The host model inspector
 passes a reference comparison. [Page-table construction](npu-mmu.md) and the
 [controller core](npu-controller.md) pass host models and compile for AArch64.
 The [memory policy](npu-memory.md) passes host integration for private mappings,
-table validation, cache publication, and retained faults. Native cache callbacks
-and FreeRTOS service integration remain outstanding.
+table validation, cache publication, and retained faults. The
+[native CPU adapter](npu-native.md) passes a FreeRTOS emulator check.
+Production service and platform-resource integration remain outstanding.
 Production FreeRTOS integration, native model loading, and numerical inference
 remain outstanding. Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -196,7 +197,7 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is native translation/cache callbacks,
-FreeRTOS service integration, and model relocation. Physical inference remains untested, and
+The next independent implementation work is FreeRTOS service integration and
+model relocation. Physical inference remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.
