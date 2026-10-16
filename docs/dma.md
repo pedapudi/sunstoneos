@@ -9,8 +9,10 @@ The encoder compiles for AArch64. It has not executed on physical hardware.
 The [polled controller core](../drivers/dma/a733_dma_controller.c) implements
 channel claims, mapped-buffer ownership, cache-operation callbacks, completion,
 and bounded cancellation. Its host model passes noncoherent memory/FIFO transfers
-and fault handling checks. Board-specific mapping validation, cache/MMIO adapters,
-FreeRTOS serialization, interrupt delivery, and clock/reset setup remain unimplemented.
+and fault handling checks. The [RAM admission policy and native cache/MMIO
+adapter](dma-memory.md) now pass host and FreeRTOS emulator checks.
+Board RAM/FIFO registration, production service serialization, interrupt delivery,
+and clock/reset setup remain unimplemented.
 The controller has not executed on physical hardware.
 
 Calling the encoder alone performs no hardware access and does not transfer
@@ -171,8 +173,9 @@ in conflict checks so another channel cannot reuse their buffers.
 The platform must invoke independent recovery when required. An independent
 watchdog must also bound MMIO accesses that stall before a poll can return.
 
-Platform integration must provide actual cache instructions and memory barriers,
-canonical mapping validation, and serialization through the FreeRTOS service.
+The [native adapter](dma-memory.md) provides cache instructions, memory barriers,
+and page-translation validation. Platform integration must supply dedicated RAM
+reservations, verified FIFO routes, and serialization through the FreeRTOS service.
 The SMP runtime runs application tasks at the unprivileged exception level, EL0,
 so controller access requires a privileged service. Physical tests must establish
 that enable/busy observations and cache operations provide the assumed drain

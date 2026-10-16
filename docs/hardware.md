@@ -49,6 +49,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   memory/FIFO streams, 35-bit addresses, and invalid-chain refusal.
   The polled controller core also passes host checks for noncoherent transfers,
   concurrent ownership, bounded cancellation, and retained buffers after faults.
+  [Native memory operations](dma-memory.md) pass a FreeRTOS emulator check for
+  translation, permissions, cache instructions, and serialized callers.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
