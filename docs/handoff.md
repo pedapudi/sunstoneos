@@ -124,6 +124,10 @@ one host check integrates their mappings with firmware staging and queue formatt
 Native [GPU workload tables](gpu-vm.md) now prepare all six page sizes and a
 firmware memory-context record. Complete bytes match pinned entry encoders;
 one sanitizer check passes translation boundaries and 34 atomic refusals.
+Native [workload table publication](gpu-vm-memory.md) now passes one FreeRTOS
+emulator session using CPU translation/cache instructions, per-page publication
+and reclamation, and retained mapping failure. Reuse `gpu-vm-memory-20261016`.
+Device context attachment and physical cache visibility remain unqualified.
 The [startup controller](gpu-start.md) now publishes firmware resources, performs
 ordered register setup through callbacks, and waits for readiness with an absolute
 deadline. Complete traces match the original startup functions. Host checks cover
@@ -150,8 +154,11 @@ GPU clock/reset and power-domain transitions. The [resource manager](gpu-resourc
 now has host and AArch64 adapter evidence for lease ownership, inherited settings,
 and retained I2C restoration failures. The service's asynchronous power interface
 passes power-controller integration, timeout, and partial-acquisition failures
-in QEMU. Native shared locks, service binding, cold initialization, and physical
-register operations remain outstanding. [Interrupt delivery](gpu-interrupts.md)
+in QEMU. The [native platform binding](gpu-platform.md) now connects resource
+admission to power transitions and shared task mutexes. Instruction-model and
+two-core FreeRTOS checks pass; reuse `gpu-platform-20261016`. Board composition,
+cold initialization, and physical operations remain outstanding.
+[Interrupt delivery](gpu-interrupts.md)
 now wakes the privileged worker through a bounded GIC mask/notification/rearm
 path. Two QEMU cases pass cross-core delivery, backlog handling, reopen, and
 retained failures. One native-memory lifecycle case also passes with the updated
@@ -367,7 +374,8 @@ the tool hash and recovery evidence in the application document.
    memory isolation. Reuse `gpu-resources-20261016` for shared leases and the
    native register/I2C adapter, and `gpu-power-service-20261016` for asynchronous
    service sequencing. Native platform binding and shared FreeRTOS locks are
-   assigned to `gpu-platform`. Free-list backing, growth/reconstruction, and
+   integrated; reuse `gpu-platform-20261016`. Its worker is developing native
+   register/backend composition in `gpu-backend`. Free-list backing, growth/reconstruction, and
    deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
    Its worker is preparing concrete lifecycle-service integration in
    `gpu-freelist-service`; shared service edits require coordinator agreement.
@@ -392,8 +400,9 @@ the tool hash and recovery evidence in the application document.
    Native [GPU workload tables](gpu-vm.md) now have host and reference evidence
    for six page sizes; reuse `gpu-vm-20261016`. The bounded
    [invalidation component](gpu-flush.md) now has host integration and reference
-   evidence in `gpu-flush-20261016`. Allocation, platform cache publication,
-   live mapping changes, service integration, and device attachment remain outstanding.
+   evidence in `gpu-flush-20261016`. Native workload-table publication and
+   reclamation have evidence in `gpu-vm-memory-20261016`. Allocation, live mapping
+   changes, invalidation integration, and device attachment remain outstanding.
    Native [initialization records](gpu-fw-state.md) now connect queues and firmware
    resources; reuse `gpu-fw-state-20261016` evidence. The pinned driver's
    `pvr_fw_startstop.c` describes startup sequencing; `pvr_mmu.c` describes

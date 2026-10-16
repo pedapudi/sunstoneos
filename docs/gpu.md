@@ -30,9 +30,10 @@ The [power controller](gpu-power.md) has bounded clock/reset/domain sequencing
 with host/reference evidence. [Interrupt delivery](gpu-interrupts.md) now connects
 the worker to GIC mask/rearm operations and passes actual QEMU interrupt delivery.
 The [resource manager](gpu-resources.md) now arbitrates leases and verifies
-inherited clock/rail settings through a native register/I2C adapter. Shared
-scheduling locks, service binding, cold initialization, and physical qualification
-remain outstanding. The [lifecycle service](gpu-service.md) can drive bounded
+inherited clock/rail settings through a native register/I2C adapter. Native
+[power binding and shared FreeRTOS locks](gpu-platform.md) now have instruction-model
+and scheduler evidence. Cold initialization and physical qualification remain
+outstanding. The [lifecycle service](gpu-service.md) can drive bounded
 asynchronous power steps; its power-controller integration passes in QEMU.
 The [translation-cache invalidation protocol](gpu-flush.md) now publishes changed
 tables and waits for a checked firmware command result in the host model.

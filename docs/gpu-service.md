@@ -118,11 +118,11 @@ reused. Evidence is in `~/.cache/sunstoneos/evidence/gpu-power-service-20261016/
 These checks do not exercise the native PMIC backend, physical power, GPU
 firmware instructions, or device isolation.
 
-The shared [resource manager and native adapter](gpu-resources.md) still need
-scheduling-aware platform locks and a binding to these service callbacks.
-Resource contention must remain pending before the power controller's Boolean
-acquire callback is invoked. Cold clock/regulator initialization and physical
-qualification remain required.
+The [native platform binding](gpu-platform.md) now connects resource admission
+to the power controller and supplies shared FreeRTOS locks. Contention remains
+pending before the controller's acquisition callback. A board backend must
+forward these operations through the service's common context. Cold clock/regulator
+initialization and physical qualification remain required.
 
 ## Emulator evidence covers integration and retained failure
 

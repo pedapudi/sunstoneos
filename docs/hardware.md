@@ -76,7 +76,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained failures. Native [initialization records](gpu-fw-state.md) match the
   reference initializers and pass integration with queue formatting and MIPS
   mappings. Native [GPU workload tables](gpu-vm.md) support six page sizes and
-  match the pinned entry encoders and firmware context initializer. These
+  match the pinned entry encoders and firmware context initializer. Native
+  [workload table publication](gpu-vm-memory.md) passes a FreeRTOS emulator check
+  for CPU mappings, cache operations, reclamation, and retained mapping faults. These
   components compile for AArch64. The [startup controller](gpu-start.md) passes
   host ordering, deadline, and retained-failure checks; complete register traces
   match the reference startup functions. The [control worker](gpu-control.md)
@@ -95,8 +97,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [power controller](gpu-power.md) has host/reference evidence for GPU
   clock/reset and domain transitions. The [resource manager](gpu-resources.md)
   has host/native-adapter evidence for leases, inherited settings, and retained
-  I2C restoration failures. Its service binding and cold initialization remain
-  required. Asynchronous power sequencing passes in the FreeRTOS service model.
+  I2C restoration failures. The [native platform binding](gpu-platform.md) now has
+  instruction-model evidence for admission, power transitions, and release;
+  shared mutexes pass a two-core FreeRTOS check. Cold initialization and physical
+  composition remain required. Asynchronous power sequencing passes in the service model.
   [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
   cores, queue saturation, backlog draining, deferred rearm, and retained failures.
   Physical GPU power and interrupt behavior remain unqualified.

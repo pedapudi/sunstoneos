@@ -131,8 +131,10 @@ Connect successful all-resource admission to the
 from the returned resource record. Admission contention should be queued before
 power sequencing; the power controller's Boolean callback cannot express
 `BUSY`. Shared settings must stay reserved through firmware shutdown and the
-controller's release callback. Native lock binding and that service integration
-are still required.
+controller's release callback. The [native platform binding](gpu-platform.md)
+now implements pending admission/release and shared FreeRTOS locks. Its callbacks
+fit the asynchronous service interface; concrete board composition and physical
+qualification remain required.
 
 ## Focused checks cover ownership and native binding
 

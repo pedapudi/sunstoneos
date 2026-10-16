@@ -4,8 +4,9 @@ Native GPU page-table construction is **implemented and host-tested** for the
 A733 firmware profile. It prepares mappings for command buffers, shader code,
 and workload data. These tables have not been attached to a physical GPU.
 The [translation-cache invalidation protocol](gpu-flush.md) has host integration
-evidence. Allocation, platform cache publication, live mapping changes, job
-submission, and physical recovery remain outstanding.
+evidence. [Native table publication](gpu-vm-memory.md) now has FreeRTOS emulator
+evidence for CPU mappings, cache maintenance, and retained faults. Allocation,
+live mapping changes, job submission, and physical recovery remain outstanding.
 
 This document assumes familiarity with device drivers and virtual memory.
 The [API](../include/pvr_gpu_vm.h) accepts sorted virtual spans with physically
