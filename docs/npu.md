@@ -20,6 +20,9 @@ The [checksum verifier](nbg-checksum.md) matches two published models and is
 required before assembly.
 The assembler also validates [encoded circular-buffer ranges](nbg-rings.md),
 with host field-packing and complete-submission comparisons.
+The [pinned host compiler](npu-compiler.md) now produces a small numerical fixture
+whose simulator output matches the quantized CPU reference. Its `0x20000` format
+requires a decoder extension; native execution remains outstanding.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -94,10 +97,11 @@ The [compiler setup guide](https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/c
 identifies the A733 host package as `ubuntu-npu:v2.0.10.2`.
 The [compilation example](https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-acuity-usage)
 selects hardware version `v3` and runtime version `v2.0` for A733.
-The host compiler has not been downloaded or qualified. Its binary, target
-configuration, dependencies, and license information need pinned identities
-before compiling a qualification workload. Host-side Linux tools are compatible
-with the FreeRTOS requirement; the board runtime must remain native.
+The [compiler record](npu-compiler.md) pins the downloaded image, target,
+dependencies, and original license information. A small convolution now compiles
+and passes a host simulator comparison. Its emitted `0x20000` format differs from
+the existing decoder profile. Host-side Linux tools are compatible with the
+FreeRTOS requirement; the board runtime remains native.
 
 ## Structural inspection is implemented
 
@@ -217,10 +221,11 @@ authorizing device execution.
 
 ## Native implementation sequence
 
-1. **Compile a small numerical fixture.** Obtain and pin the A733 host compiler.
-   Compile a small supported operation with known input and expected output.
-   Record compiler settings and quantization. Keep the existing SDK network as
-   a format reference; its current inspection does not provide a numerical oracle.
+1. **Load the numerical fixture natively.** The pinned compiler now produces a
+   small convolution with exact float and matched quantized simulator references.
+   Extend decoding and checksum verification for its `0x20000` format, then
+   allocation planning for its zero working pool. Keep the existing SDK network
+   as the `0x1001e` format reference.
 2. **Complete driver integration.** The native controller, memory policy, CPU
    adapter, and FreeRTOS service have software evidence. Add interrupt delivery,
    controlled model/command registration, and recovery. Retain required source
@@ -229,9 +234,12 @@ authorizing device execution.
    clocks, resets, and interrupt route. Confirm identity after watchdog recovery
    is qualified. Derive safe operating points from board-specific power data.
 4. **Complete device-memory integration.** Ordinary RAM mappings and ownership
-   have software evidence. Implement internal-SRAM mapping and complete fault
+   have software evidence. Qualify internal-SRAM routing and complete fault
    reporting. Reserve model buffers and track CPU/device addresses separately.
    Qualify the complete mapping, cache, and translation-cache behavior physically.
+   The [memory policy](npu-memory.md) records the reference driver's separate SRAM
+   window and the native bootstrap's existing base-address command. Do not add
+   ordinary RAM page-table entries for this window without contrary hardware evidence.
 5. **Complete native model admission.** Container decoding, allocation planning,
    and assembly have host evidence for the observed neural-operation profile.
    Establish full descriptor access extents,
@@ -251,8 +259,8 @@ authorizing device execution.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is complete descriptor access bounds,
-command admission, and a pinned host compiler for a numerical fixture. Physical inference
+The next independent implementation work is decoding the numerical fixture,
+complete descriptor access bounds, and command admission. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.

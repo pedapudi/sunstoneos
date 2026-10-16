@@ -139,7 +139,7 @@ Linear tensor and weight references currently check one addressed byte. Encoded
 rings are checked as complete spans with tensor addresses inside them.
 Command-pointer references check the complete 192-byte descriptor. Actual device
 accesses, including prefetch, are not established by those ring checks. Full access extents,
-internal-SRAM mapping, auxiliary-field semantics, and cold
+internal-SRAM routing, auxiliary-field semantics, and cold
 initialization equivalence remain unresolved. Arbitrary descriptor contents
 can therefore pass offline assembly without being safe to execute.
 

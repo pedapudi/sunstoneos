@@ -1,0 +1,34 @@
+{
+  "source_page": "https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-acuity-env",
+  "sharing_url": "https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq",
+  "download_url": "https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip",
+  "archive": {
+    "name": "docker_images_v2.0.x.zip",
+    "bytes": 2903273080,
+    "sha256": "d876a96a74905b92d09ae5681256dd5fc6c430b0ebbd612097142473ec87e287"
+  },
+  "inner_archive": {
+    "path": "ubuntu-npu_v2.0.10.2.tar.zip",
+    "bytes": 2898787419,
+    "sha256": "c804d08e6499883b51b32443c7e470fbf03eb894e08946e7326fcca0c628f5f8"
+  },
+  "image_archive": {
+    "path": "ubuntu-npu_v2.0.10.2.tar",
+    "bytes": 7883452416,
+    "sha256": "7d150a626e588cdae872e700a1616f9ce831c97ce57765e1c3baf0a7591641d6"
+  },
+  "archive_config_sha256": "724759a03c224d102768586c3a051891a2281c56d838c0abf87fc2499637ba99",
+  "loaded_image_id": "sha256:36b2a89e016f2cf10821b2434ebc1abb95269d15a930c53301630406c0b9c5df",
+  "docker_version": "29.1.3",
+  "architecture": "amd64",
+  "acuity_version": "6.30.22",
+  "ide_version": "5.11.0",
+  "target": "VIP9000NANODI_PLUS_PID0X1000003B",
+  "shader_core_count": 1,
+  "emitted_nbg_version": "0x20000",
+  "license_paths": [
+    "/root/acuity-toolkit-whl-6.30.22/LICENSE",
+    "/root/acuity-toolkit-whl-6.30.22/COPYRIGHTS",
+    "/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools/LICENSE.txt"
+  ]
+}

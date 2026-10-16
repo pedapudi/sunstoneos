@@ -74,6 +74,10 @@ The assembler now checks [complete encoded rings](nbg-rings.md), including
 tensor membership and exclusive ends at allocation boundaries. It still matches
 the saved SDK submission. Linear accesses, weight prefetch, and actual hardware
 access behavior remain unresolved.
+The [pinned host compiler](npu-compiler.md) now produces a small convolution with
+matched float and quantized simulator references. Its emitted `0x20000` format
+requires native directory, record-layout, and checksum support. Physical execution
+of this fixture remains outstanding.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.
@@ -210,7 +214,7 @@ the tool hash and recovery evidence in the application document.
    the service's fixed startup catalogue. The [native assembler](nbg-assembly.md)
    resolves the observed profile's sources and destinations from checked container
    views and adapts the completion event and fetch reservation. Determine complete
-   descriptor access lengths, implement SRAM mapping,
+   descriptor access lengths, qualify SRAM routing,
    and establish descriptor semantics and cold initialization equivalence.
    The [descriptor research](npu.md#descriptor-field-compatibility-is-a-research-result)
    maps all observed relocation destinations to candidate Mesa fields but exposes
@@ -219,8 +223,8 @@ the tool hash and recovery evidence in the application document.
    stride units, linear accesses, and prefetch before device admission.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
-   Obtain a pinned
-   A733 host compiler for a small numerical fixture. The [NPU record](npu.md)
+   Extend decoding for the [compiled numerical fixture](npu-compiler.md), whose
+   format is `0x20000` and whose working pool is empty. The [NPU record](npu.md)
    identifies references, inspection evidence, and the implementation sequence.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track

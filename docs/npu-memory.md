@@ -44,7 +44,13 @@ before building tables. Refusal leaves the memory object and arena unchanged.
 
 The broader MMU builder supports larger pages and read-only physical aliases.
 This publication policy currently accepts only disjoint buffers with 4 KiB pages.
-Internal SRAM translation requires separate implementation.
+Internal SRAM uses a separate command-programmed address window in the reference
+driver. Its `mmu_map_vip_sram` function reserves device addresses but does not
+populate RAM page-table entries for SRAM. The device bootstrap writes that base
+through load-state register `0x0e4e`; the native bootstrap already supplies
+`0x400000`. This source evidence supports keeping the window absent from ordinary
+RAM tables. It does not establish physical routing, access permissions, retention,
+or isolation. Those properties still require qualification.
 
 ## Publication and completion retain ownership on failure
 

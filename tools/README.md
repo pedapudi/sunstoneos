@@ -119,3 +119,9 @@ format. It checks container structure and selected references without executing
 commands. [NPU format and evidence](../docs/npu.md) describe its limits and
 the pinned compiled fixture. Successful inspection does not establish that a
 model is safe to submit or compatible with the physical device.
+
+`npu-conv-fixture.py` generates a small ONNX convolution and an exact arithmetic
+reference. `npu-conv-pipeline.sh` runs its compiler and simulator workflow inside
+the pinned host image. [Compiler setup and evidence](../docs/npu-compiler.md)
+record image identities, execution conditions, results, and the emitted format's
+current native-loader limitation.

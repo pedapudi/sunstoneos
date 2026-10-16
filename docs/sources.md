@@ -45,6 +45,8 @@ the native verifier with the isolated SDK CRC primitive. The
 pins Mesa's candidate neural-command fields and records compatibility limits.
 The [ring validation record](nbg-rings.md) pins the SDK HAL library and restricts
 its instruction comparison to the isolated transpose descriptor encoder.
+The [compiler record](npu-compiler.md) pins the downloaded host image and records
+the generated convolution, original license locations, and numerical comparisons.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

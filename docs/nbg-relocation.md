@@ -118,5 +118,5 @@ The isolated AArch64 CMake target is `nbg-relocation`.
 
 The native assembler resolves the observed profile's sources and validates
 encoded ring ranges. Complete access extents and command semantics still require
-validation before publication. Internal-SRAM mapping, output
+validation before publication. Internal-SRAM routing, output
 padding, dynamic command registration, and numerical inference remain required.
