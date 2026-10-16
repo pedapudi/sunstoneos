@@ -114,6 +114,8 @@ python3 tools/check-a733-smp.py prepare \
 The image manifest's `final_elf` field is the reviewed ELF SHA-256.
 Preparation uses Clang 21, the cached LLVM 21 linker and LLVM 21 objcopy.
 It records source copies, commands, build output and payload hashes.
+Prepared schema 2 and request version 2 bind the expanded SRAM layout; the host
+rejects earlier bundles before board access.
 
 A physical launch requires a claimed queue item and four reviewed prerequisites:
 
@@ -159,7 +161,12 @@ It reads the queue without changing its claim or completion state.
 
 The adapter saves and flushes SRAM backups, then uploads every file-backed ELF
 segment, a zeroed result reservation, the unpublished contract, request, report
-and launcher. Every transfer receives an exact readback comparison; watchdog
+and launcher. The adapter verifies each source against its admitted length and SHA-256, then
+copies those bytes into a Linux memory file sealed against writes and resizing.
+FEL inherits that descriptor and reads its `/proc/self/fd` path. Ordinary source
+replacement or growth cannot change the transferred bytes or extent.
+Device readback must match the admitted identity. SRAM restoration uses the same
+sealed transfer mechanism and the original backup hashes. Watchdog
 MODE must remain disabled before each upload and before execution.
 After four low-input samples and a second queue review, it flushes the execution
 intent and issues one `exe 0x52000` request. It never invokes the FEL tool's
@@ -169,11 +176,11 @@ intent and issues one `exe 0x52000` request. It never invokes the FEL tool's
 
 | SRAM range | Purpose |
 | --- | --- |
-| `0x52000..0x52800` | Launcher code; the linker rejects overflow |
-| `0x52800..0x52880` | Immutable 128-byte request |
-| `0x52900..0x52980` | Transient launcher report |
-| `0x53000..0x54000` | Private launcher stack |
-| `0x71000..0x71080` | Saved FEL helper scratch |
+| `[0x52000,0x52c00)` | Launcher code; the linker rejects overflow |
+| `[0x52c00,0x52c80)` | Immutable 128-byte request |
+| `[0x52d00,0x52d80)` | Transient launcher report |
+| `[0x53000,0x54000)` | Private launcher stack |
+| `[0x71000,0x71080)` | Saved FEL helper scratch |
 
 The request contains its magic, version and size; session epoch; generation and
 inverse generation; resource lease; build-identity address; 32-byte build identity;
@@ -208,20 +215,45 @@ This follows `aw_rmr_request` in the pinned sunxi-tools source revision
 The A733 RVBAR location is `0x08001004`; the high word is cleared.
 The watchdog register sequence and protected-ROM prerequisites are documented in
 [watchdog expiry](watchdog-expiry.md) and the A733 manual's watchdog section 8.3.6.
-Any refusal parks without an alternate branch, retry, feed or disarm.
-A refusal before arming can leave the board parked without an active watchdog;
-the coordinator retains ownership for intervention.
+Request, contract, image-identity, BOOT-input, clock-source and counter-frequency
+refusals return to FEL when the architectural context is valid and the watchdog
+is disabled. The entry wrapper saves `r0`–`r12`, LR, CPSR and the incoming stack
+pointer before masking interrupts. The clean-return epilogue restores that state
+and uses `bx lr`, including the caller's ARM or Thumb instruction state.
+It follows the returning wrapper in `checks/a733-watchdog-expiry.S`.
+
+Before returning, the launcher publishes a refusal reason and the request's
+epoch, generation and lease in the report, followed by its refusal marker.
+The first device write ends the clean-return phase. Post-mutation failures,
+an unexpectedly active watchdog and unsafe architectural contexts still park.
+They do not retry, feed, disarm or branch to an alternate image.
 
 ## ROM observation does not establish a scheduler result
 
-After execution, the host makes no requests to the old USB instance.
-It waits up to 20 seconds for a distinct instance on the same physical port and
-requires restored permissions and ROM access before sending a version request.
-A successful response records `scheduler_result: unobserved` and `complete: false`.
-The process exits with status 2 and leaves queue completion to the coordinator.
+After execution, the host passively observes the physical port for up to
+20 seconds. A distinct instance must regain permissions and satisfy ROM access
+checks before receiving a version request. A successful response records
+`scheduler_result: unobserved` and `complete: false`.
 The reset cause, launcher entry and scheduler result remain unobserved.
-Neither the transient SRAM report nor the previous DRAM result is read after reset.
-DDR must be initialized again before reuse.
+Neither the transient SRAM report nor the previous DRAM result is read after
+reset. DDR must be initialized again before reuse.
+
+If no departure was observed and the original identity remains accessible, the
+host permits one bounded refusal-report probe after that window.
+This probe is permitted only if the execution request completed without a
+transport failure. Unchanged USB metadata does not prove that the CPU returned
+to ROM; the probe can fail while the CPU is still stalled.
+The captured ROM ends before the FEL execution dispatcher, so the execution
+acknowledgement is not treated as proof of callback completion.
+
+A successful report transfer must contain the fresh epoch, generation, lease,
+pre-mutation reason and refusal marker, with zero arm times and reserved fields.
+The host then confirms the disabled watchdog and restores each saved SRAM region
+with a readback comparison. It records a clean refusal and `sram_restored: true`.
+The DDR reservation stays with the coordinator. Both a clean refusal and a
+new-instance observation exit with status 2; neither completes the queue item or
+reports a scheduler success. A failed or mismatched probe retains ownership and
+receives no retry.
 
 The first transport failure ends device communication. There is no automatic
 retry, host USB reset or second execution request. If an attempted launch has
@@ -299,10 +331,26 @@ python3 checks/a733-smp-host.py \
 
 Reusable evidence is in
 `~/.cache/sunstoneos/evidence/a733-smp-launch-20261016`.
-The linked 2,036-byte launcher passed 28 instruction cases; the host adapter passed
+The earlier 2,036-byte launcher passed 28 instruction cases; its host adapter passed
 41 protocol cases. Focused host checks also cover ownership retention when
 evidence flushing or quarantine fails. Host checks were repeated for durable
 backup flushes, source-identical evidence after integration and failure retention.
 The successful launcher cases were reused. These checks do not model oscillators,
 interconnect stalls, warm reset completion, AArch64 entry or physical scheduling.
 The earlier image, SGI and CPU-entry evidence remains valid and was not rerun.
+
+The current 2,220-byte launcher and refusal adapter have separate evidence in
+`~/.cache/sunstoneos/evidence/a733-smp-refusal-20261016`.
+Sixteen focused instruction cases verify caller-state restoration, ARM and Thumb
+returns, pre-mutation refusals, unsafe-context parking and the first-write boundary.
+Seventeen focused host cases verify fresh refusal reports, failure stopping,
+SRAM restoration, obsolete-layout refusal and upload changes after admission.
+Use `--focus-refusal` with either checker to select those cases.
+The unchanged reset, deadline and scheduler evidence was reused; the current
+launcher received a native compile and link. No physical request occurred.
+
+Six additional host cases cover source growth and replacement before and after
+sealing, replacement of restoration backups, and descriptor inheritance by an
+actual child process. Select them with `--focus-freeze`.
+Their evidence is `freeze-results.json` in the refusal evidence directory.
+The passing native and refusal-protocol cases were reused for this host-only change.

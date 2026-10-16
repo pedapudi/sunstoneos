@@ -1,5 +1,5 @@
 ENTRY(a733_smp_launch)
-MEMORY { SRAM (rwx) : ORIGIN = 0x52000, LENGTH = 0x800 }
+MEMORY { SRAM (rwx) : ORIGIN = 0x52000, LENGTH = 0xc00 }
 SECTIONS {
     .text : { KEEP(*(.text.entry)) *(.text*) *(.rodata*) } > SRAM
     .data : { *(.data*) } > SRAM

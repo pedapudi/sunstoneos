@@ -5,6 +5,7 @@ Preparation is host-only. Launch cannot establish scheduler success: no result
 channel survives the independent watchdog reset under the current contract.
 """
 import argparse
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import importlib.util
@@ -23,8 +24,8 @@ FEL_HASH = '4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e'
 ROM_HASH = 'a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa'
 REQUEST_MAGIC = 0x415337334c4e4331
 CONTRACT = 0x42004000
-REGIONS = [('launcher', 0x52000, 0x800), ('request', 0x52800, 128),
-           ('report', 0x52900, 128), ('stack', 0x53000, 0x1000), ('scratch', 0x71000, 128)]
+REGIONS = [('launcher', 0x52000, 0xc00), ('request', 0x52c00, 128),
+           ('report', 0x52d00, 128), ('stack', 0x53000, 0x1000), ('scratch', 0x71000, 128)]
 PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel', 'ddr-reservation', 'smp-launcher-software'}
 
 
@@ -105,7 +106,7 @@ def image_parts(path):
 
 def request_bytes(build_address, build_id, epoch, generation, lease):
     require(len(build_id) == 32 and all(type(x) is int and 0 < x < 2**64 for x in (epoch, generation, lease)), 'Invalid launch identity.')
-    request = struct.pack('<8Q', REQUEST_MAGIC, 1, 128, epoch, generation, generation ^ (2**64-1), lease, build_address) + build_id + bytes(32)
+    request = struct.pack('<8Q', REQUEST_MAGIC, 2, 128, epoch, generation, generation ^ (2**64-1), lease, build_address) + build_id + bytes(32)
     contract = struct.pack('<6Q', 0, 1, 224, epoch, generation, generation ^ (2**64-1)) + build_id
     contract += struct.pack('<18Q', 0, 0, 0, 0, lease, 0x41, 1, 2, 0x5aa5a55a, 0xfa50392f, 0x20, 0, *([0]*6))
     require(len(request) == 128 and len(contract) == 224, 'Internal ABI mismatch.')
@@ -127,7 +128,7 @@ def prepare(image, manifest_path, output, clang, lld):
     for source, target in [('launch.S', 'entry.o'), ('launch.c', 'launch.o')]: run([clang, *flags, '-c', output / source, '-o', output / target])
     run([lld, '-T', output / 'launch.ld', output / 'entry.o', output / 'launch.o', '-o', output / 'launch.elf'])
     run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', output / 'launch.elf', output / 'launch.bin'])
-    require(0 < (output / 'launch.bin').stat().st_size <= 0x800, 'Launcher exceeds SRAM reservation.')
+    require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
     shutil.copy2(image, output / 'image.elf'); shutil.copy2(manifest_path, output / 'image-input-manifest.json')
     payloads = []
     for index, segment in enumerate(segments):
@@ -137,7 +138,7 @@ def prepare(image, manifest_path, output, clang, lld):
     epoch, generation, lease = (secrets.randbits(64) or 1 for _ in range(3))
     request, contract = request_bytes(build_address, build_id, epoch, generation, lease)
     for name, data in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]: (output / name).write_bytes(data)
-    record = {'schema': 1, 'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'), 'build_id': build_id.hex(),
+    record = {'schema': 2, 'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'), 'build_id': build_id.hex(),
               'epoch': epoch, 'generation': generation, 'lease': lease, 'segments': payloads,
               'reservations': [{k:v for k,v in s.items() if k != 'data'} for s in segments],
               'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False}
@@ -147,9 +148,13 @@ def prepare(image, manifest_path, output, clang, lld):
 
 def validate_bundle(bundle):
     prepared = json.loads((bundle / 'prepared.json').read_text())
-    require(prepared.get('schema') == 1 and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
+    require(prepared.get('schema') == 2 and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
+    sizes = {}
     for name, expected in prepared['files'].items():
-        require(Path(name).name == name and digest(bundle / name) == expected, 'Prepared input changed.')
+        require(Path(name).name == name, 'Invalid prepared filename.')
+        data = (bundle / name).read_bytes()
+        require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
+        sizes[name] = len(data)
     segments, address, identity = image_parts(bundle / 'image.elf')
     expected_segments = []
     for index, segment in enumerate(segments):
@@ -162,7 +167,8 @@ def validate_bundle(bundle):
     request, contract = request_bytes(address, identity, prepared['epoch'], prepared['generation'], prepared['lease'])
     for name, expected in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]:
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
-    require(0 < (bundle / 'launch.bin').stat().st_size <= 0x800 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
+    require(0 < (bundle / 'launch.bin').stat().st_size <= 0xc00 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
+    prepared['_sizes'] = sizes
     return prepared
 
 
@@ -208,6 +214,24 @@ def sync_file(path):
     with path.open('rb') as stream: os.fsync(stream.fileno())
 
 
+@contextmanager
+def sealed_source(data):
+    """Give FEL a fixed extent that cannot change when an ordinary path changes."""
+    descriptor = os.memfd_create('a733-smp-transfer', os.MFD_ALLOW_SEALING | os.MFD_CLOEXEC)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0, 'Incomplete immutable transfer source.')
+            view = view[written:]
+        seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+        fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
+        require(fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) == seals, 'Transfer source is not sealed.')
+        yield Path(f'/proc/self/fd/{descriptor}'), descriptor
+    finally:
+        os.close(descriptor)
+
+
 def preload(transaction, bundle, prepared, evidence):
     """No enabling writes: all transfers finish and match before the sole exe."""
     for name,address,length in REGIONS:
@@ -215,13 +239,19 @@ def preload(transaction, bundle, prepared, evidence):
         transaction('read', hex(address), length, backup)
         require(backup.stat().st_size == length, 'SRAM backup is incomplete.')
         sync_file(backup)
+        prepared.setdefault('_backup_hashes', {})[name] = digest(backup)
     uploads = [(item['name'],item['address']) for item in prepared['segments']]
-    uploads += [('result-zero.bin',0x42000000),('contract.bin',CONTRACT),('request.bin',0x52800),('report-zero.bin',0x52900),('launch.bin',0x52000)]
+    uploads += [('result-zero.bin',0x42000000),('contract.bin',CONTRACT),('request.bin',0x52c00),('report-zero.bin',0x52d00),('launch.bin',0x52000)]
     for name,address in uploads:
         require(int(transaction('readl','0x02050014').strip(),16)&1 == 0, 'Watchdog enabled during preload.')
         source = bundle / name; destination = evidence / ('readback-' + name)
-        transaction('write',hex(address),source,'read',hex(address),source.stat().st_size,destination)
-        require(destination.read_bytes() == source.read_bytes(), 'Upload readback differs; launch refused.')
+        require(name in prepared['files'] and name in prepared['_sizes'], 'Upload lacks a validated identity.')
+        size = prepared['_sizes'][name]
+        data = source.read_bytes()
+        require(len(data) == size and hashlib.sha256(data).hexdigest() == prepared['files'][name], 'Upload changed after validation.')
+        with sealed_source(data) as (frozen, descriptor):
+            transaction('write',hex(address),frozen,'read',hex(address),size,destination,pass_fds=(descriptor,))
+        require(destination.stat().st_size == size and digest(destination) == prepared['files'][name], 'Upload differs from admitted bytes; launch refused.')
         sync_file(destination)
 
 
@@ -232,12 +262,43 @@ def launch_once(transaction, wait_return, bundle, prepared, evidence, record, sa
     require(int(transaction('readl','0x02050014').strip(),16)&1 == 0, 'Watchdog became enabled before execution.')
     ready()
     record['execution_intent'] = {'entry':0x52000,'epoch':prepared['epoch'],'generation':prepared['generation'],'native_elapsed_limit_ticks':24000}
+    record['backup_sha256'] = prepared['_backup_hashes'].copy()
     record['launch_attempted'] = True; save()
     transaction('exe','0x52000')
-    wait_return()
+    outcome = wait_return()
+    if outcome == 'refused':
+        record.update(launch_protocol_complete=True, scheduler_result='unobserved', complete=False, clean_refusal=True,
+                      result_limit='Fresh refusal report from the original ROM instance; diagnostic entry was refused before device mutation.')
+        save(); return
     record.update(launch_protocol_complete=True, scheduler_result='unobserved', complete=False,
                   result_limit='A distinct ROM instance does not prove watchdog cause, launcher entry or scheduler completion. No old DRAM or SRAM result was read.')
     save()
+
+
+def observe_refusal(transaction, evidence, prepared, record, save):
+    """One report probe; a successful response must precede further inspection."""
+    path = evidence / 'refusal-report.bin'
+    transaction('read','0x52d00',128,path)
+    data = path.read_bytes()
+    require(len(data) == 128, 'Incomplete original-instance refusal report.')
+    words = struct.unpack('<16Q',data)
+    require(words[0] in (1,2,3,4,5,6,13) and words[1:3] == (0,0) and
+            words[3:6] == (prepared['epoch'],prepared['generation'],prepared['lease']) and
+            words[6] == 0x4153373352454631 and not any(words[7:]), 'No matching clean-refusal report; ownership retained.')
+    sync_file(path)
+    require(int(transaction('readl','0x02050014').strip(),16)&1 == 0, 'Refusal returned with an active watchdog.')
+    record['refusal_reason'] = words[0]; save()
+    for name,address,length in REGIONS:
+        source = evidence / f'before-{name}.bin'; destination = evidence / f'restored-{name}.bin'
+        data = source.read_bytes()
+        expected = prepared.get('_backup_hashes', {}).get(name)
+        require(len(data) == length and hashlib.sha256(data).hexdigest() == expected, 'SRAM backup changed; restoration refused.')
+        with sealed_source(data) as (frozen, descriptor):
+            transaction('write',hex(address),frozen,'read',hex(address),length,destination,pass_fds=(descriptor,))
+        require(destination.stat().st_size == length and digest(destination) == expected, 'SRAM restoration differs; ownership retained.')
+        sync_file(destination)
+    record['sram_restored'] = True; save()
+    return 'refused'
 
 
 def hold_ownership():
@@ -289,13 +350,16 @@ def main(argv=None):
         for item in ddr.get('evidence',[]): artifact(item)
         require(ddr.get('evidence'), 'DDR initialization and reservation evidence is missing.')
         record.update(initial_node=str(node),initial_identity=identity,port=port.name, host_tool_sha256=digest(Path(__file__)), usb_access_sha256=digest(ROOT/'tools/usb-access.py'), usb_guard_sha256=digest(Path(usb_guard.__file__))); save()
-        def transaction(*arguments):
+        def transaction(*arguments, pass_fds=()):
             nonlocal failed
             require(not failed,'Transport failure forbids all further requests.')
-            entry={'arguments':[str(a) for a in arguments]}; record['transactions'].append(entry); save()
+            entry={'arguments':[str(a) for a in arguments]}
+            if pass_fds:
+                entry['sealed_sources'] = [{'fd':fd,'bytes':os.fstat(fd).st_size,'sha256':hashlib.sha256(os.pread(fd,os.fstat(fd).st_size,0)).hexdigest(),'seals':fcntl.fcntl(fd,fcntl.F_GET_SEALS)} for fd in pass_fds]
+            record['transactions'].append(entry); save()
             try:
                 require(access.identity(node)==identity,'USB identity changed before a request.')
-                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=15)
+                result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=15,pass_fds=pass_fds)
                 entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr)
                 require(result.returncode==0,'FEL request failed.')
             except (OSError,ValueError,subprocess.TimeoutExpired) as error:
@@ -303,18 +367,25 @@ def main(argv=None):
             save(); return result.stdout
         def wait_return():
             nonlocal node,identity
-            old=identity; deadline=time.monotonic()+20
+            old=identity; deadline=time.monotonic()+20; departure=False
             while time.monotonic()<deadline:
                 candidate=access.session_node(port_config)
-                if candidate is not None:
+                if candidate is None:
+                    departure=True
+                else:
                     try:
                         new=access.identity(candidate)
+                        if new!=old: departure=True
                         if new!=old and os.access(candidate,os.R_OK|os.W_OK):
                             access.require_session(candidate); access.require_rom(candidate); node,identity=candidate,new
                             record.update(returned_node=str(node),returned_identity=identity); save()
                             require('soc=00001903(A733)' in transaction('version'),'Returned ROM is not A733.'); return
-                    except FileNotFoundError: pass
+                    except FileNotFoundError: departure=True
                 time.sleep(.05)
+            candidate=access.session_node(port_config)
+            if not departure and candidate is not None and access.identity(candidate)==old and os.access(candidate,os.R_OK|os.W_OK):
+                access.require_session(candidate); access.require_rom(candidate)
+                return observe_refusal(transaction,args.evidence,prepared,record,save)
             raise ValueError('No distinct accessible ROM instance in 20 seconds; ownership remains held.')
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
@@ -326,7 +397,10 @@ def main(argv=None):
             stop_after_failure(record,save,
                 lambda: access.quarantine_instance(node,'SMP launch stopped; no further device communication or automatic retry.',identity),error)
             raise
-    print('A new accessible ROM instance was observed. Scheduler result remains unobserved; DDR must be reinitialized. Queue claim remains with the coordinator.')
+    if record.get('clean_refusal'):
+        print('Original ROM reported a clean launch refusal; SRAM was restored. Scheduler result remains unobserved. Queue claim remains with the coordinator.')
+    else:
+        print('A new accessible ROM instance was observed. Scheduler result remains unobserved; DDR must be reinitialized. Queue claim remains with the coordinator.')
     return 2
 
 
