@@ -1,0 +1,11 @@
+--- a/newlib/libc/reent/reent.c
++++ b/newlib/libc/reent/reent.c
+@@ -31,7 +31,7 @@
+ _reclaim_reent (struct _reent *ptr)
+ {
+ #ifndef _REENT_THREAD_LOCAL
+-  if (ptr != _impure_ptr)
++  if (ptr != _GLOBAL_REENT)
+ #endif
+     {
+       /* used by mprec routines. */

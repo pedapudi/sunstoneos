@@ -17,6 +17,7 @@ size_t runtime_heap_peak(void) { return heap_peak; }
 
 // The allocator serializes calls to _sbrk through these recursive locks.
 // This port currently schedules tasks on one CPU; it does not permit ISR allocation.
+#ifndef SUNSTONE_SMP_NEWLIB
 void __malloc_lock(struct _reent *context)
 {
     (void)context;
@@ -30,15 +31,16 @@ void __malloc_unlock(struct _reent *context)
     if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
         (void)xTaskResumeAll();
 }
+#endif
 
-void *_sbrk(ptrdiff_t change)
+static void *adjust_heap(struct _reent *context, ptrdiff_t change)
 {
     if (!heap_break) heap_break = (uintptr_t)__heap_start;
     uintptr_t previous = heap_break;
     uintptr_t magnitude = change < 0 ? (uintptr_t)(-(change + 1)) + 1 : (uintptr_t)change;
     if ((change >= 0 && magnitude > (uintptr_t)__heap_end - heap_break) ||
         (change < 0 && magnitude > heap_break - (uintptr_t)__heap_start)) {
-        errno = ENOMEM;
+        context->_errno = ENOMEM;
         return (void *)-1;
     }
     heap_break = change < 0 ? heap_break - magnitude : heap_break + magnitude;
@@ -46,6 +48,10 @@ void *_sbrk(ptrdiff_t change)
     if (used > heap_peak) heap_peak = used;
     return (void *)previous;
 }
+void *_sbrk(ptrdiff_t change) { return adjust_heap(_REENT, change); }
+#ifdef SUNSTONE_SMP_NEWLIB
+void *_sbrk_r(struct _reent *context, ptrdiff_t change) { return adjust_heap(context, change); }
+#endif
 
 ssize_t _write(int descriptor, const void *buffer, size_t count)
 {

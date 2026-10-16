@@ -22,6 +22,8 @@ The separate [SMP emulator target](smp.md) passes three bounded two-core trials
 with queues, mutexes, preemption, affinity, and floating-point register checks.
 A separate session passes 64 task migrations with general/vector registers,
 condition flags, stack position, and floating-point control/status preserved.
+The [SMP runtime](smp-runtime.md) now passes concurrent C++ allocation, shared
+memory-stream locking, and newlib task-state preservation through 256 migrations.
 Physical secondary-core startup and multicore mimus remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -138,10 +140,11 @@ the tool hash and recovery evidence in the application document.
    work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
    and coherence, with checks selected from each change. The SMP emulator target
-   now passes migration and register-state checks. Replace the C library's global
-   task-state pointer and qualify multicore allocator locking before application
-   integration. Interrupt nesting and physical startup remain outstanding.
-   Current evidence is in [smp.md](smp.md) and [runtime.md](runtime.md).
+   now passes migration and register-state checks. The separate C/C++ runtime
+   passes concurrent library checks; integrate mimus with that runtime and compare
+   application results before adding parallel inference workers. Task-deletion
+   cleanup, interrupt nesting, and physical startup remain outstanding.
+   Current evidence is in [smp.md](smp.md) and [smp-runtime.md](smp-runtime.md).
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all

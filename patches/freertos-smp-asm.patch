@@ -201,7 +201,30 @@
  MSR ICC_SGI1R_EL1, X0                     /* X0 contains the value to write to ICC_SGI1R_EL1 */
  MSR ELR_EL1, X4
  MSR SPSR_EL1, X5
-@@ -834,8 +833,8 @@
+@@ -807,6 +806,22 @@
+ ERET
+ 
+ 12:
++#ifdef SUNSTONE_SMP_NEWLIB
++/* Resolve the current task's C library state without a migration race.
++ * C helpers in this target use general registers only. */
++CMP X2, #118
++B.NE 13f
++savefuncontextgpregs
++BL runtime_current_reent
++restorefuncontextgpregexceptx0
++MSR ELR_EL1, X4
++MSR SPSR_EL1, X5
++LDP X4, X5, [SP], #0x10
++LDP X2, X3, [SP], #0x10
++LDP XZR, X1, [SP], #0x10
++ERET
++13:
++#endif
+ #if ( configENABLE_MPU == 1 )
+    /* ---------- SystemCallEnter? ---------------------------------*/
+    LDR     X3, =NUM_SYSTEM_CALLS
+@@ -834,8 +849,8 @@
        adrp    X0, pxCurrentTCBs
        add     X0, X0, :lo12:pxCurrentTCBs  /* X0 = &pxCurrentTCBs */
        /* Get the core ID to index the TCB correctly. */
@@ -212,7 +235,7 @@
        LSL X1, X1, # 3    /* Scale the core ID to the size of a pointer (64-bit system) */
        ADD X0, X0, X1     /* Add the offset for the current core's TCB pointer */
     #endif
-@@ -914,8 +913,8 @@
+@@ -914,8 +929,8 @@
  #if ( configNUMBER_OF_CORES > 1 )
     adrp X0, ullCriticalNestings
     add  X0, X0, :lo12:ullCriticalNestings      /* X0 = &ullCriticalNestings */
@@ -223,7 +246,7 @@
     LSL  X1, X1, # 3                            /* Multiply core ID by pointer size (8 bytes). */
     ADD  X0, X0, X1                             /* Add offset to base address. */
     LDR  X1, [ X0 ]                             /* Load ullCriticalNesting for this core. */
-@@ -929,7 +928,7 @@
+@@ -929,7 +944,7 @@
  portSAVE_CONTEXT
  savefuncontextgpregs
  #if ( configNUMBER_OF_CORES > 1 )
@@ -232,7 +255,7 @@
     AND x0, x0, 255
  #endif
  BL vTaskSwitchContext
-@@ -1008,8 +1007,8 @@
+@@ -1008,8 +1023,8 @@
  #else
     adrp    X5, ullPortInterruptNestings
     add     X5, X5, :lo12:ullPortInterruptNestings  /* X5 = &ullPortInterruptNestings */
@@ -243,7 +266,7 @@
     LSL X2, X2, # 3    /* Scale core ID to the size of a pointer (assuming 64-bit system). */
  
     /* Calculate offset for the current core's ullPortYieldRequired and load its address. */
-@@ -1058,8 +1057,8 @@
+@@ -1058,8 +1073,8 @@
  adrp    X0, ullPortYieldRequired
  add     X0, X0, :lo12:ullPortYieldRequired  /* X0 = &ullPortYieldRequired */
  #if ( configNUMBER_OF_CORES > 1 )
@@ -254,7 +277,7 @@
     LSL X2, X2, # 3    /* Scale core ID to the size of a pointer (assuming 64-bit system). */
  /* Calculate offset for the current core's ullPortYieldRequired and load its address. */
     ADD X0, X0, X2     /* Add offset for the current core's ullPortYieldRequired. */
-@@ -1070,13 +1069,13 @@
+@@ -1070,13 +1085,13 @@
  
  /* Check if the task is in a critical section by inspecting ullCriticalNesting. */
  #if ( configNUMBER_OF_CORES > 1 )
@@ -274,7 +297,7 @@
     CBNZ X1, Exit_IRQ_No_Context_Switch         /* Skip context switch if in a critical section. */
  #endif
  
-@@ -1098,7 +1097,7 @@
+@@ -1098,7 +1113,7 @@
  /* Save the context of the current task and select a new task to run. */
  portSAVE_CONTEXT
  #if configNUMBER_OF_CORES > 1

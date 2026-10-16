@@ -128,9 +128,10 @@ reset sequencing, logical-to-hardware affinity translation, and per-core monitor
 state. The current physical monitor and startup remain single-core.
 The emulator's CPU_ON service does not implement those board operations.
 
-The [C/C++ runtime](runtime.md) requires task-local library state and qualified
-multicore locking before linking mimus with this port. The existing library's
-global reentrancy pointer cannot select two concurrent tasks' state correctly.
+The separate [SMP C/C++ runtime](smp-runtime.md) supplies task-local library
+state and passes concurrent allocation and shared-stream checks in QEMU.
+Integrating mimus still requires application parity checks with that library.
+The original single-core library remains unsuitable for concurrent use.
 
 Further checks must cover interrupt priorities and nesting, all eight physical
 cores, and concurrent device activity. QEMU does not establish physical cache

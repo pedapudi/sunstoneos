@@ -39,5 +39,12 @@
     "archive": "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf.tar.xz",
     "directory": "arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-elf",
     "sha256": "ebaf2d47f2e7f7b645864c5c8cf839e526daed83a2e675a3525d03f5ba3d2be9"
+  },
+  "newlib": {
+    "revision": "4.5.0.20241231",
+    "url": "https://sourceware.org/pub/newlib/newlib-4.5.0.20241231.tar.gz",
+    "archive": "newlib-4.5.0.20241231.tar.gz",
+    "directory": "newlib-4.5.0.20241231",
+    "sha256": "33f12605e0054965996c25c1382b3e463b0af91799001f5bb8c0630f2ec8c852"
   }
 }
