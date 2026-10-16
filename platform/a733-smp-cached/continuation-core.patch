@@ -1,0 +1,11 @@
+--- a/cpu_continue.c
++++ b/cpu_continue.c
+@@ -111,7 +111,7 @@
+ out:s->entered=0;return s->state;
+ }
+ 
+-#if defined(__aarch64__)
++#if 0 /* Native continuation supplied by cached image. */
+ #include "FreeRTOSConfig.h"
+ #if !defined(SUNSTONE_A733_SMP_DIAGNOSTIC) || configNUMBER_OF_CORES != 8
+ #error "CPU continuation requires the dedicated eight-core diagnostic image"
