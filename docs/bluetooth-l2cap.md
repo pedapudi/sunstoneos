@@ -45,52 +45,111 @@ its fragment sequence while the ACL link remains usable, then reports failure.
 This preserves framing for later packets on that link. Its backing remains owned
 through every outstanding ACL fragment.
 
+## Protocol timers and caller deadlines preserve separate ownership
+
+The request timer (RTX) starts when the complete request has entered UART. Its
+configured interval is 1–60 seconds. The first matching Pending response replaces
+RTX with the extended response timer (ERTX), whose interval is 60–300 seconds.
+Repeated Pending responses preserve the first ERTX deadline. A valid final
+response stops the timer even when packet-pool pressure delays the next action.
+
+The admitted profile uses infinite flush timeout: the controller keeps transmitting
+an ACL packet until delivery or link failure. Core section 6.2 recommends zero
+L2CAP retransmissions for this profile, which is the implemented policy.
+Finite-flush retransmissions require an actual HCI flush-configuration and
+readback path before they can be admitted.
+
+A local open or close retains the caller's absolute deadline independently of
+RTX and ERTX. The caller can end its wait before the protocol timer expires.
+Incoming channel setup has an ERTX-duration operation bound. Caller expiry,
+RTX expiry and ERTX expiry have distinct completion reasons and put the channel
+in `BT_L2CAP_QUARANTINED`. They prevent further application use while preserving
+unresolved request identities and backing.
+
+Each signaling packet has a separate ERTX-duration transport deadline. Partial
+receive reassembly uses the RTX duration. A protocol timeout cannot release a
+controller-owned fragment or return its credit. Later controller completion can
+release fragment backing, while the uncertain channel remains quarantined.
+Transport deadline expiry faults the worker and retains all remaining ownership.
+
+## Confirmed closure permits host storage reuse with fresh wire identities
+
+Channel handles are opaque 64-bit generations returned by `bt_l2cap_open`.
+A received packet exposes the same generation in its `channel` field. Local and
+remote wire CIDs remain available in the channel record for protocol inspection.
+An old host handle cannot operate on a subsequently allocated channel.
+
+A confirmed Connection refusal, matched Disconnection exchange or confirmed ACL
+link closure marks the channel `BT_L2CAP_CLOSED`. The owner may then call
+`bt_l2cap_release_channel`. Release requires every associated receive and
+transmit buffer to be released and no partial reassembly on that link.
+Timeout alone cannot satisfy those conditions or authorize release.
+
+Released host slots receive fresh wire CIDs. The worker allocates CIDs
+monotonically from `0x0040` through `0xffff`, for at most 65,472 channel attempts.
+It does not reuse a wire CID within its lifetime. Host generation and packet
+serial overflow also cause explicit exhaustion. These finite bounds require
+normal recovery or reconnection; indefinite operation is not qualified.
+The ACL layer separately retains its four-attempt limit and quarantines
+successful handles and attempted peer addresses until controller recovery.
+
+## Identifier rotation separates valid reuse from ambiguous replies
+
+Local requests cycle through identifiers 1–255 in order. Reuse requires a complete
+rotation, no pending request or packet with that identifier, and a different wire
+CID. Canceling a request before lower submission leaves a hole in the observed
+wire rotation. Such cancellation permanently prevents identifier wrap for that
+link lifetime; an enqueue does not prove that the peer received an identifier.
+An already-started packet continues through its lower ownership and framing rules.
+
+A request records when its last byte entered UART. A response is eligible only
+when the worker acquired its first ACL fragment afterward. Link generation,
+response type and valid endpoint fields must also match. This is an acquisition
+ordering rule; it does not supply physical arrival timestamps or a generation
+field absent from the wire protocol.
+
+Core section 4.3 permits invalid CIDs in non-success Connection Responses.
+First-use identifiers therefore accept Pending or refusal without checking those
+fields. On reused identifiers, such responses and CID-less Command Rejects are
+ambiguous and fault with retained ownership. Successful responses still check
+the fresh local CID, so an old endpoint cannot complete a new channel request.
+
+The peer request cache has one entry for every nonzero identifier on each ACL
+link. An exact duplicate receives the saved response without repeating channel
+creation or configuration. If the response is still owned, its existing copy
+remains scheduled. A changed request may replace an entry only after every other
+identifier has appeared more recently and the previous response has retired.
+
+This rule derives from Core section 4's full-rotation requirement. It assumes
+compliant identifier rotation and the ordered ACL transport, without inventing
+a packet-age limit. A changed request before full rotation faults and retains
+its bytes. Cache entries retain response bytes and host generations independently
+of reusable channel slots. Response copies still associated with a channel block
+its release until lower ownership ends.
+
 ## Bounds are part of the public contract
 
 | Resource | Implemented bound |
 | --- | --- |
-| Channel attempts | Four local CIDs per worker lifetime, beginning at `0x0040` |
+| Concurrent channel records | Four, reusable after confirmed closure and backing release |
+| Wire CIDs | 65,472 per worker lifetime, without reuse |
 | Data receive limit | Configurable 48–1,024 bytes; the protocol default is 672 |
 | Signaling receive limit | 64 bytes per signaling packet |
 | Outgoing signaling commands | At most 48 bytes, compatible with the mandatory peer minimum |
 | Configuration option accumulation | 64 bytes per channel |
 | Transmit and receive storage | Eight complete packet buffers in each direction |
 | Outstanding ACL fragments | Sixteen descriptors, matching the lower transmit pool |
-| Cached peer requests | Sixteen distinct requests per worker lifetime |
-| Locally issued signaling identifiers | 1–255 per ACL link, without reuse |
-| Peer-operation bound | Configurable 1–60 seconds, shortened by an explicit caller deadline |
+| Cached peer requests | 255 per ACL link, with four link slots and fixed storage |
+| Locally issued signaling identifiers | 1–255, with full-rotation and ambiguity restrictions |
+| RTX and ERTX | 1–60 seconds and 60–300 seconds, respectively |
+| Local retransmissions | Zero for the admitted infinite-flush profile |
 
-Channel slots and remote CIDs are quarantined for this lifetime. Closed channels
-remain inspectable. The ACL layer additionally quarantines successful handles
-and attempted peer addresses. Reinitializing structures cannot establish a new
-controller generation or make an old identity reusable.
-
-Local channel or identifier exhaustion returns `BT_L2CAP_EXHAUSTED` without
-admitting a new operation. Exhausting the peer request cache faults with the
-separate capacity reason and retains the unprocessed packet. Temporary packet
-pool exhaustion applies backpressure. These bounds support a limited set of
-concurrent channels; repeated reconnection and sustained signaling require a
-broader identity/cache policy before they can be claimed as supported.
-
-The peer-operation bound is an ownership deadline. Pending responses do not
-extend it, and no automatic retransmission occurs. Expiry faults and retains the
-operation. Full RTX/ERTX retry timing, including an extended pairing wait, remains
-future work; this implementation does not claim complete timeout conformance.
-
-## Signaling identities and retained replies prevent duplicate side effects
-
-Each local request has a unique identifier and records when its last byte entered
-UART. A matching response is eligible only when its first ACL fragment was
-acquired afterward. The worker also checks the link generation, response type
-and channel endpoints. Early, duplicate and unmatched responses cannot create
-channels or complete another request.
-
-A peer request cache retains the complete command and its response. An exact
-duplicate receives the cached response without allocating another channel or
-reapplying configuration. A duplicate arriving while the original response is
-still owned does not enqueue a second copy. The original remains scheduled.
-Changing a cached request while reusing its identifier faults the lifetime.
-The cache exhausts before a compliant peer can cycle through every identifier.
+Replay storage has 1,020 fixed entries and needs approximately 168 KiB on AArch64,
+before other worker fields. No dynamic allocation occurs. Each peer-cache walk
+examines at most 255 entries. Local channel or identity exhaustion returns
+`BT_L2CAP_EXHAUSTED` without admitting a new operation. Temporary packet-pool
+exhaustion applies backpressure. Faulted or uncertain owners require externally
+proven recovery before their storage is reused.
 
 The worker validates a signaling packet's entire command-length structure before
 processing its first command. Each poll then processes at most one command.
@@ -130,8 +189,8 @@ record and relies on the established UART backpressure and scheduling contract.
 Every poll performs one bounded lower-stack step, processes at most one ACL
 record and one signaling command, and admits at most one ACL fragment. Copies
 and table walks have the fixed limits above. Malformed ownership, framing loss,
-expired deadlines and lower faults retain buffers, channel state, packet serials
-and fragment leases. Public releases are refused after fault. External recovery
+transport deadline expiry and lower faults retain buffers, channel state, packet
+serials and fragment leases. Public releases are refused after fault. External recovery
 must resolve the lower controller/UART lifetime before backing is reused.
 
 The implementation remains unqualified on the board. It requires completed
@@ -145,9 +204,12 @@ basic-mode component's implemented scope.
 
 The protocol reference is Bluetooth Core 5.4, Volume 3, Part A:
 [basic framing and signaling](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html).
-Sections 4.4–4.5 define configuration continuation; section 4 defines identifier
-reuse. These primary rules take precedence where the inspected kernel path uses
-a different continuation strategy or cycles a smaller identifier range.
+Section 4 defines identifier rotation and duplicate replies. Section 4.3 defines
+non-success endpoint validity; sections 4.4–4.7 define configuration and
+disconnection. Sections 6.2.1–6.2.2 define RTX and ERTX, including the
+infinite-flush recommendation. These primary rules take precedence where the
+inspected kernel path cycles a smaller identifier range or uses a different
+configuration continuation strategy.
 
 The published kernel reference is
 [linux-orangepi revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`](https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f).
@@ -156,16 +218,20 @@ Its `include/net/bluetooth/l2cap.h` supplies reference structures, while
 original notices remain in the external cache. Runtime code is original; the
 reference fixture preserves the copied header's license notice.
 
-The [composed model](../checks/bt-l2cap.c) passed with address and
-undefined-behavior sanitizers. It uses the actual UART, H4, HCI and ACL workers,
-compares full protocol bytes, and exercises setup in both directions, fragment
-credit recycling, split-header receive and retained security events. It also
-covers duplicates, early responses, close, unknown options, malformed command
-lists, bounded deadlines and request-cache exhaustion.
+The [timer and identity model](../checks/bt-l2cap-retry.c) passed with address and
+undefined-behavior sanitizers against the actual UART, H4, HCI and ACL workers.
+It covers timer transitions, caller expiry, retained credits, cancellation after
+confirmed close, host-slot reuse, stale endpoint refusal and full identifier
+rotations. The 255-command cases exercise the finite identifier boundary.
+A negative Configuration Response under a full transmit pool also stops its
+timer while its next action waits for capacity.
 
-The native L2CAP object compiled for AArch64. The
-[runner](../checks/bt-l2cap.py) archived executed source and artifacts under
-`~/.cache/sunstoneos/evidence/bluetooth-l2cap-20261016/model2/`. An earlier compile
-stopped at a reference-header ordering error in the fixture; no runtime executed
-before that correction. Existing lower-layer evidence was reused without
-replaying its separate suites. No board or performance measurements were run.
+The [runner](../checks/bt-l2cap-retry.py) archived executed inputs, executable and
+native AArch64 object under
+`~/.cache/sunstoneos/evidence/bluetooth-l2cap-retry-20261016/model/`.
+Existing channel, fragmentation and wire-byte evidence remains in
+`~/.cache/sunstoneos/evidence/bluetooth-l2cap-20261016/model2/`.
+The earlier fixture has mechanical API adaptations; its obsolete lifetime-bound
+case is replaced by the timer and identity model. It was compiled as a helper
+source, and its earlier suite was not executed again. No board qualification or
+performance measurements are claimed by these models.

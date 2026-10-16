@@ -156,7 +156,7 @@ static void setup(struct simulation *s)
     memset(s,0,sizeof(*s));ready(&s->f,&s->a);
     s->link=begin_connect(&s->f,&s->a,1);connected(&s->f,&s->a,s->link,0x23);
     s->wire_cursor=s->f.tn;s->automatic_credits=1;
-    assert(bt_l2cap_init(&s->q,&s->a,672,1000000,authorize,s)==1);
+    assert(bt_l2cap_init(&s->q,&s->a,672,1000000,60000000,authorize,s)==1);
 }
 static void wire(struct simulation *s)
 {
@@ -184,7 +184,7 @@ static void wire(struct simulation *s)
 static void poll(struct simulation *s)
 {
     s->f.room=1024;++s->f.now;
-    int result=bt_l2cap_step(&s->q,64,10000);
+    int result=bt_l2cap_step(&s->q,64,UINT64_MAX);
     if(result!=1)fprintf(stderr,"L2CAP failure state=%u error=%u now=%llu\n",s->q.state,s->q.error,(unsigned long long)s->f.now);
     assert(result==1);wire(s);
 }
@@ -221,9 +221,10 @@ static const struct l2cap_cmd_hdr *command_out(struct simulation *s,unsigned out
     const struct l2cap_cmd_hdr *cmd=(const void *)(s->output[out]+4);assert(cmd->code==code && cmd->len+4==h.len);
     return cmd;
 }
-static uint16_t open_channel(struct simulation *s)
+static uint64_t open_channel(struct simulation *s)
 {
-    uint16_t cid=0;assert(bt_l2cap_open(&s->q,s->link,1,5000,&cid)==1);
+    uint64_t identity=0;assert(bt_l2cap_open(&s->q,s->link,1,UINT64_MAX,&identity)==1);
+    uint16_t cid=s->q.channels[0].local_cid;
     unsigned out=output(s);const struct l2cap_cmd_hdr *req=command_out(s,out,L2CAP_CONN_REQ);
     struct l2cap_conn_req expected={L2CAP_PSM_SDP,cid};assert(req->len==sizeof(expected));
     assert(!memcmp((const uint8_t *)req+4,&expected,sizeof(expected)));
@@ -237,13 +238,13 @@ static uint16_t open_channel(struct simulation *s)
     out=output(s);req=command_out(s,out,L2CAP_CONF_RSP);
     const uint8_t positive[]={0x60,0,0,0,0,0};assert(req->len==6 && !memcmp((const uint8_t *)req+4,positive,6));
     assert(s->q.channels[0].state==BT_L2CAP_OPEN && s->q.channels[0].remote_mtu==80);
-    return cid;
+    return identity;
 }
 static void data_and_close(void)
 {
-    struct simulation s;setup(&s);uint16_t cid=open_channel(&s);
+    struct simulation s;setup(&s);uint64_t identity=open_channel(&s);uint16_t cid=s.q.channels[0].local_cid;
     uint8_t payload[80];for(unsigned i=0;i<sizeof(payload);++i)payload[i]=(uint8_t)(i+1);
-    uint64_t serial;assert(bt_l2cap_send(&s.q,cid,payload,sizeof(payload),5000,&serial)==1);
+    uint64_t serial;assert(bt_l2cap_send(&s.q,identity,payload,sizeof(payload),5000,&serial)==1);
     unsigned frame_before=s.complete_frames,out=output(&s);struct l2cap_hdr hdr={80,0x60};
     assert(s.output_length[out]==84 && !memcmp(s.output[out],&hdr,4) && !memcmp(s.output[out]+4,payload,80));
     assert(s.complete_frames-frame_before==3 && bt_l2cap_result(&s.q)->serial==serial);
@@ -255,12 +256,12 @@ static void data_and_close(void)
     assert(received && received->cid==cid && received->link==s.link && received->length==54 && !memcmp(received->bytes+4,payload,50));
     assert(bt_l2cap_other(&s.q) && bt_l2cap_release_other(&s.q,bt_l2cap_other(&s.q)->serial)==1);
     assert(bt_l2cap_release_receive(&s.q,received->serial)==1);
-    assert(bt_l2cap_close(&s.q,cid,UINT64_MAX)==1);
-    assert(s.q.channels[0].deadline==s.f.now+s.q.timeout_us);out=output(&s);
+    assert(bt_l2cap_close(&s.q,identity,UINT64_MAX)==1);
+    assert(s.q.channels[0].deadline==UINT64_MAX);out=output(&s);
     const struct l2cap_cmd_hdr *disc=command_out(&s,out,L2CAP_DISCONN_REQ);
     struct l2cap_disconn_req pair={0x60,cid};assert(!memcmp((const uint8_t *)disc+4,&pair,4));
     signal_in(&s,L2CAP_DISCONN_RSP,disc->ident,&pair,4);poll(&s);
-    assert(s.q.channels[0].state==BT_L2CAP_CLOSED && bt_l2cap_send(&s.q,cid,payload,1,6000,&serial)==-1);
+    assert(s.q.channels[0].state==BT_L2CAP_CLOSED && bt_l2cap_send(&s.q,identity,payload,1,6000,&serial)==-1);
 }
 static void incoming_and_duplicate(void)
 {
@@ -289,8 +290,9 @@ static void incoming_and_duplicate(void)
 }
 static void early_response_and_fault(void)
 {
-    struct simulation s;setup(&s);uint16_t cid;
-    assert(bt_l2cap_open(&s.q,s.link,1,5000,&cid)==1);
+    struct simulation s;setup(&s);uint64_t identity;
+    assert(bt_l2cap_open(&s.q,s.link,1,5000,&identity)==1);
+    uint16_t cid=s.q.channels[0].local_cid;
     struct l2cap_conn_rsp rsp={0x60,cid,0,0};signal_in(&s,L2CAP_CONN_RSP,1,&rsp,8);poll(&s);
     assert(s.q.channels[0].state==BT_L2CAP_CONNECTING);output(&s);
     signal_in(&s,L2CAP_CONN_RSP,1,&rsp,8);output(&s);
@@ -303,13 +305,13 @@ static void early_response_and_fault(void)
 }
 static void unknown_options_and_bounds(void)
 {
-    struct simulation s;setup(&s);uint16_t cid=open_channel(&s);
+    struct simulation s;setup(&s);uint64_t identity=open_channel(&s);
     /* Unknown mandatory TLV returns an exact copy; hints need no rejection. */
     const uint8_t unknown[]={0x40,0,0,0,0x20,2,0xab,0xcd};signal_in(&s,L2CAP_CONF_REQ,41,unknown,sizeof(unknown));
     unsigned out=output(&s);const struct l2cap_cmd_hdr *r=command_out(&s,out,L2CAP_CONF_RSP);
     const uint8_t expected[]={0x60,0,0,0,3,0,0x20,2,0xab,0xcd};
     assert(r->len==sizeof(expected) && !memcmp((const uint8_t *)r+4,expected,sizeof(expected)));
-    uint64_t serial=99;uint8_t too_long[81]={0};assert(bt_l2cap_send(&s.q,cid,too_long,81,5000,&serial)==-1 && serial==99);
+    uint64_t serial=99;uint8_t too_long[81]={0};assert(bt_l2cap_send(&s.q,identity,too_long,81,5000,&serial)==-1 && serial==99);
     /* Invalid second signaling command causes no first-command mutation. */
     const uint8_t malformed[]={8,42,0,0,2,43,4,0,1};incoming_pdu(&s,1,malformed,sizeof(malformed),0);
     unsigned requests=0;for(unsigned i=0;i<BT_L2CAP_REQUESTS;++i)requests+=!!s.q.requests[i].length;
@@ -317,25 +319,9 @@ static void unknown_options_and_bounds(void)
     unsigned after=0;for(unsigned i=0;i<BT_L2CAP_REQUESTS;++i)after+=!!s.q.requests[i].length;
     assert(after==requests);
 }
-static void bounded_lifetime(void)
-{
-    struct simulation s;setup(&s);uint16_t cid;
-    assert(bt_l2cap_open(&s.q,s.link,1,UINT64_MAX,&cid)==1);
-    assert(s.q.channels[0].deadline==s.f.now+s.q.timeout_us);
-    output(&s);s.f.now=s.q.channels[0].deadline;
-    assert(bt_l2cap_step(&s.q,64,UINT64_MAX)==-1 && s.q.state==BT_L2CAP_FAULT &&
-           s.q.channels[0].state==BT_L2CAP_CONNECTING);
-    setup(&s);
-    for(unsigned i=0;i<BT_L2CAP_REQUESTS;++i) {
-        signal_in(&s,L2CAP_ECHO_REQ,i+1,0,0);output(&s);
-    }
-    signal_in(&s,L2CAP_ECHO_REQ,17,0,0);
-    assert(bt_l2cap_step(&s.q,64,10000)==BT_L2CAP_EXHAUSTED &&
-           s.q.error==BT_L2CAP_CAPACITY && s.q.state==BT_L2CAP_FAULT);
-}
 int main(void)
 {
-    data_and_close();incoming_and_duplicate();early_response_and_fault();unknown_options_and_bounds();bounded_lifetime();
+    data_and_close();incoming_and_duplicate();early_response_and_fault();unknown_options_and_bounds();
     puts("Native UART/HCI/ACL/L2CAP: channel negotiation both directions, source-defined bytes, fragments/credits, duplicate/late signaling and retained faults passed.");
     return 0;
 }

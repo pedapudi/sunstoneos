@@ -38,6 +38,18 @@ static struct bt_l2cap_channel *channel(struct bt_l2cap *q,unsigned cid,uint64_t
        q->channels[i].local_cid==cid && (!link || q->channels[i].link==link))return &q->channels[i];
     return 0;
 }
+static struct bt_l2cap_channel *owned_channel(struct bt_l2cap *q,uint64_t generation)
+{
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(generation && q->channels[i].state!=BT_L2CAP_UNUSED &&
+        q->channels[i].generation==generation)return &q->channels[i];
+    return 0;
+}
+static int waiting(const struct bt_l2cap_channel *c)
+{return c->state==BT_L2CAP_CONNECTING || c->state==BT_L2CAP_CONFIGURING || c->state==BT_L2CAP_DISCONNECTING;}
+static void confirmed(struct bt_l2cap_channel *c)
+{c->state=BT_L2CAP_CLOSED;c->completion=BT_L2CAP_CONFIRMED;c->timer=BT_L2CAP_TIMER_NONE;c->request_id=0;}
+static void quarantine(struct bt_l2cap_channel *c,enum bt_l2cap_channel_result reason)
+{c->state=BT_L2CAP_QUARANTINED;c->completion=reason;c->timer=BT_L2CAP_TIMER_NONE;}
 static struct bt_l2cap_pdu *pdu(struct bt_l2cap_pdu *pool,uint64_t serial)
 {
     for(unsigned i=0;i<BT_L2CAP_PDUS;++i)if(pool[i].state!=BT_L2CAP_FREE && pool[i].serial==serial)return &pool[i];
@@ -50,6 +62,12 @@ static int deadline(struct bt_l2cap *q,uint64_t *d)
     uint64_t now=q->acl->hci->transport.now;
     if(now>UINT64_MAX-q->timeout_us)return fault(q,BT_L2CAP_TIMEOUT);
     *d=now+q->timeout_us;return 1;
+}
+static int transport_deadline(struct bt_l2cap *q,uint64_t *d)
+{
+    uint64_t now=q->acl->hci->transport.now;
+    if(now>UINT64_MAX-q->ertx_us)return fault(q,BT_L2CAP_TIMEOUT);
+    *d=now+q->ertx_us;return 1;
 }
 static int emit(struct bt_l2cap *q,uint64_t link,unsigned cid,const uint8_t *bytes,size_t n,
                 uint64_t bound,unsigned application,uint64_t *serial)
@@ -72,12 +90,24 @@ static int command(struct bt_l2cap *q,uint64_t link,unsigned code,unsigned id,
 }
 static int request(struct bt_l2cap *q,struct bt_l2cap_channel *c,unsigned code,const uint8_t *p,unsigned n)
 {
-    unsigned li=link_index(q,c->link);
-    if(li==BT_ACL_LINKS || q->next_id[li]>255)return BT_L2CAP_EXHAUSTED;
-    uint64_t serial;unsigned id=q->next_id[li];
-    int r=command(q,c->link,code,id,p,n,c->deadline,&serial);
-    if(r==1) {++q->next_id[li];c->request_code=code;c->request_id=id;
-        c->request_serial=serial;c->request_sent=0;c->request_after=0;}
+    unsigned li=link_index(q,c->link);if(li==BT_ACL_LINKS)return -1;
+    unsigned id=q->next_id[li];
+    /* An ID is reused only after the complete sequential identifier rotation.
+     * Do not reuse it on the same CID: a response carries no host generation. */
+    if(c->used_ids[id/8]&(1u<<(id%8)))return BT_L2CAP_EXHAUSTED;
+    if(q->rotation_broken[li] && (q->local_used[li][id/8]&(1u<<(id%8))))return BT_L2CAP_EXHAUSTED;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].link==c->link && q->channels[i].request_id==id)return 0;
+    for(unsigned i=0;i<BT_L2CAP_PDUS;++i)if(q->tx[i].state!=BT_L2CAP_FREE &&
+        q->tx[i].link==c->link && q->tx[i].request_id==id)return 0;
+    uint64_t serial,bound;if(transport_deadline(q,&bound)!=1)return -1;
+    int r=command(q,c->link,code,id,p,n,bound,&serial);
+    if(r==1) {
+        q->next_id[li]=id==255 ? 1 : id+1;c->request_reused=!!(q->local_used[li][id/8]&(1u<<(id%8)));
+        q->local_used[li][id/8]|=(uint8_t)(1u<<(id%8));c->used_ids[id/8]|=(uint8_t)(1u<<(id%8));
+        c->request_code=code;c->request_id=id;c->timer=BT_L2CAP_TIMER_NONE;
+        c->request_serial=serial;c->request_sent=0;c->request_after=0;
+        struct bt_l2cap_pdu *out=pdu(q->tx,serial);out->channel=c->generation;out->request_id=id;
+    }
     return r;
 }
 static int configure(struct bt_l2cap *q,struct bt_l2cap_channel *c,unsigned empty)
@@ -92,11 +122,11 @@ static int disconnect(struct bt_l2cap *q,struct bt_l2cap_channel *c)
     uint8_t bytes[4];put16(bytes,c->remote_cid);put16(bytes+2,c->local_cid);
     int r=request(q,c,6,bytes,4);if(r==1)c->state=BT_L2CAP_DISCONNECTING;return r;
 }
-int bt_l2cap_init(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,
+int bt_l2cap_init(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,uint64_t ertx,
                   int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context)
 {
     if(!q || !a || q->state!=BT_L2CAP_OFF || a->state!=BT_ACL_ACTIVE || !authorize ||
-       mtu<48 || mtu>BT_L2CAP_MTU || timeout<1000000 || timeout>60000000 ||
+       mtu<48 || mtu>BT_L2CAP_MTU || timeout<1000000 || timeout>60000000 || ertx<60000000 || ertx>300000000 ||
        overlaps(q,sizeof(*q),a,sizeof(*a)) || overlaps(q,sizeof(*q),a->hci,sizeof(*a->hci)) ||
        overlaps(q,sizeof(*q),a->hci->transport.binding.uart,sizeof(struct a733_uart)))return -1;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)if(a->packets[i].state!=BT_ACL_TX_FREE)return -1;
@@ -109,44 +139,54 @@ int bt_l2cap_init(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t time
        a->hci->command!=BT_HCI_IDLE)return -1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(a->links[i].state!=BT_ACL_UNUSED &&
        a->links[i].state!=BT_ACL_CONNECTED && a->links[i].state!=BT_ACL_CLOSED)return -1;
-    *q=(struct bt_l2cap){.acl=a,.timeout_us=timeout,.local_mtu=mtu,
+    *q=(struct bt_l2cap){.acl=a,.timeout_us=timeout,.ertx_us=ertx,.local_mtu=mtu,.next_channel=1,.next_cid=0x40,
         .authorize=authorize,.context=context,.next_serial=1,.state=BT_L2CAP_ACTIVE};
     for(unsigned i=0;i<BT_ACL_LINKS;++i){q->next_id[i]=1;q->assembling[i]=BT_L2CAP_PDUS;}
     return 1;
 }
-int bt_l2cap_open(struct bt_l2cap *q,uint64_t link,uint16_t psm,uint64_t bound,uint16_t *cid)
+int bt_l2cap_open(struct bt_l2cap *q,uint64_t link,uint16_t psm,uint64_t bound,uint64_t *identity)
 {
-    if(!q || q->state!=BT_L2CAP_ACTIVE || !cid || !outside(q,cid,sizeof(*cid)) ||
+    if(!q || q->state!=BT_L2CAP_ACTIVE || !identity || !outside(q,identity,sizeof(*identity)) ||
        !live(q,link) || !(psm&1) || (psm&0x100) || bound<=q->acl->hci->transport.now)return -1;
-    unsigned li=link_index(q,link),slot=BT_L2CAP_CHANNELS;
-    if(q->next_id[li]>255)return BT_L2CAP_EXHAUSTED;
+    unsigned slot=BT_L2CAP_CHANNELS;
+    if(q->next_cid>0xffff || q->next_channel==UINT64_MAX)return BT_L2CAP_EXHAUSTED;
     for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].state==BT_L2CAP_UNUSED){slot=i;break;}
     if(slot==BT_L2CAP_CHANNELS)return BT_L2CAP_EXHAUSTED;
     if(!free_pdu(q->tx))return 0;
-    uint64_t limit;if(deadline(q,&limit)!=1)return -1;if(bound>limit)bound=limit;
     if(q->authorize(q->context,link,psm,0)!=1)return -1;
-    struct bt_l2cap_channel c={.link=link,.deadline=bound,.local_cid=(uint16_t)(0x40+slot),
+    struct bt_l2cap_channel c={.generation=q->next_channel,.link=link,.deadline=bound,.local_cid=(uint16_t)q->next_cid,
         .psm=psm,.local_mtu=q->local_mtu,.remote_mtu=672,.state=BT_L2CAP_CONNECTING};
     uint8_t bytes[4];put16(bytes,psm);put16(bytes+2,c.local_cid);
     int r=request(q,&c,2,bytes,4);
-    if(r==1){q->channels[slot]=c;*cid=c.local_cid;}return r;
+    if(r==1){q->channels[slot]=c;*identity=c.generation;++q->next_channel;++q->next_cid;}return r;
 }
-int bt_l2cap_close(struct bt_l2cap *q,uint16_t cid,uint64_t bound)
+int bt_l2cap_close(struct bt_l2cap *q,uint64_t identity,uint64_t bound)
 {
     if(!q || q->state!=BT_L2CAP_ACTIVE || bound<=q->acl->hci->transport.now)return -1;
-    struct bt_l2cap_channel *c=channel(q,cid,0);
+    struct bt_l2cap_channel *c=owned_channel(q,identity);
     if(!c || c->state!=BT_L2CAP_OPEN || !live(q,c->link))return -1;
-    uint64_t limit;if(deadline(q,&limit)!=1)return -1;if(bound>limit)bound=limit;
     uint64_t old=c->deadline;c->deadline=bound;int r=disconnect(q,c);if(r!=1)c->deadline=old;return r;
 }
-int bt_l2cap_send(struct bt_l2cap *q,uint16_t cid,const uint8_t *p,size_t n,uint64_t bound,uint64_t *serial)
+int bt_l2cap_send(struct bt_l2cap *q,uint64_t identity,const uint8_t *p,size_t n,uint64_t bound,uint64_t *serial)
 {
     if(!q || q->state!=BT_L2CAP_ACTIVE || !serial || !outside(q,serial,sizeof(*serial)) ||
        !outside(q,p,n) || overlaps(p,n,serial,sizeof(*serial)) || n>BT_L2CAP_MTU ||
        bound<=q->acl->hci->transport.now)return -1;
-    struct bt_l2cap_channel *c=channel(q,cid,0);
+    struct bt_l2cap_channel *c=owned_channel(q,identity);
     if(!c || c->state!=BT_L2CAP_OPEN || !live(q,c->link) || n>c->remote_mtu)return -1;
-    return emit(q,c->link,c->remote_cid,p,n,bound,1,serial);
+    int result=emit(q,c->link,c->remote_cid,p,n,bound,1,serial);
+    if(result==1)pdu(q->tx,*serial)->channel=c->generation;return result;
+}
+int bt_l2cap_release_channel(struct bt_l2cap *q,uint64_t identity)
+{
+    if(!q || q->state!=BT_L2CAP_ACTIVE)return -1;
+    struct bt_l2cap_channel *c=owned_channel(q,identity);
+    if(!c || c->state!=BT_L2CAP_CLOSED || c->completion!=BT_L2CAP_CONFIRMED)return -1;
+    unsigned li=link_index(q,c->link);
+    if(li==BT_ACL_LINKS || q->assembling[li]!=BT_L2CAP_PDUS)return 0;
+    for(unsigned i=0;i<BT_L2CAP_PDUS;++i)if((q->tx[i].state!=BT_L2CAP_FREE && q->tx[i].channel==identity) ||
+        (q->rx[i].state!=BT_L2CAP_FREE && q->rx[i].channel==identity))return 0;
+    *c=(struct bt_l2cap_channel){0};return 1;
 }
 /* Parse complete TLVs before updating either direction's negotiated MTU.
  * Mandatory unknown options are echoed; hints are ignored. */
@@ -191,49 +231,71 @@ static int options(const uint8_t *p,unsigned n,unsigned *mtu,uint8_t *reply,unsi
 }
 static void ready(struct bt_l2cap_channel *c)
 {if(c->state==BT_L2CAP_CONFIGURING && c->input_done && c->output_done)c->state=BT_L2CAP_OPEN;}
+static int start_timer(struct bt_l2cap *q,struct bt_l2cap_channel *c,enum bt_l2cap_timer timer)
+{
+    uint64_t now=q->acl->hci->transport.now,interval=timer==BT_L2CAP_RTX ? q->timeout_us : q->ertx_us;
+    if(now>UINT64_MAX-interval)return fault(q,BT_L2CAP_TIMEOUT);
+    c->timer=timer;c->timer_deadline=now+interval;return 1;
+}
+static int pending_response(struct bt_l2cap *q,struct bt_l2cap_channel *c)
+{
+    /* Repeated Pending cannot extend an already-running ERTX indefinitely. */
+    return c->timer==BT_L2CAP_ERTX ? 1 : start_timer(q,c,BT_L2CAP_ERTX);
+}
 static int response(struct bt_l2cap *q,struct bt_l2cap_pdu *rx,const uint8_t *cmd,unsigned n)
 {
     unsigned code=cmd[0],id=cmd[1];const uint8_t *p=cmd+4;
     struct bt_l2cap_channel *c=0;
-    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].link==rx->link &&
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(waiting(&q->channels[i]) && q->channels[i].link==rx->link &&
        q->channels[i].request_id==id && q->channels[i].request_sent &&
        rx->first_record>q->channels[i].request_after){c=&q->channels[i];break;}
     if(!c)return 1; /* Invalid, duplicate or late identifier: silently discard. */
-    if(code==1) {if(n<2)return fault(q,BT_L2CAP_PROTOCOL);c->result=get16(p);
+    if(code==1) {if(c->request_reused)return fault(q,BT_L2CAP_OWNERSHIP);
+        if(n<2)return fault(q,BT_L2CAP_PROTOCOL);c->result=get16(p);
         if(c->request_code==6)return fault(q,BT_L2CAP_PROTOCOL);
+        c->timer=BT_L2CAP_TIMER_NONE;
         if(c->remote_cid) {int r=disconnect(q,c);return r<0 ? fault(q,BT_L2CAP_CAPACITY) : r;}
-        c->state=BT_L2CAP_CLOSED;c->request_id=0;return 1;}
+        confirmed(c);return 1;}
     if(code!=c->request_code+1)return 1;
     if(code==3) {
-        if(n!=8 || get16(p+2)!=c->local_cid || c->state!=BT_L2CAP_CONNECTING)return fault(q,BT_L2CAP_PROTOCOL);
-        unsigned result=get16(p+4);if(result==1)return 1;
-        if(result){c->result=(uint16_t)result;c->state=BT_L2CAP_CLOSED;c->request_id=0;return 1;}
+        if(n!=8)return fault(q,BT_L2CAP_PROTOCOL);
+        if(c->state!=BT_L2CAP_CONNECTING)return 1;
+        unsigned result=get16(p+4);
+        /* Non-success endpoints may be invalid (Core Vol3A4.3). A reused
+         * identifier then has no endpoint with which to exclude an old reply. */
+        if(result && c->request_reused)return fault(q,BT_L2CAP_OWNERSHIP);
+        if(result==1)return pending_response(q,c);
+        if(result){c->result=(uint16_t)result;confirmed(c);return 1;}
+        if(get16(p+2)!=c->local_cid)return 1;
         unsigned remote=get16(p);if(remote<0x40 || get16(p+6))return fault(q,BT_L2CAP_PROTOCOL);
         for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].state!=BT_L2CAP_UNUSED &&
            q->channels[i].link==c->link && q->channels[i].remote_cid==remote)return fault(q,BT_L2CAP_PROTOCOL);
-        c->remote_cid=(uint16_t)remote;c->state=BT_L2CAP_CONFIGURING;c->request_id=0;c->need_config=1;return 1;
+        c->remote_cid=(uint16_t)remote;c->state=BT_L2CAP_CONFIGURING;c->request_id=0;c->timer=BT_L2CAP_TIMER_NONE;c->need_config=1;return 1;
     }
     if(code==5) {
-        if(n<6 || get16(p)!=c->local_cid || (get16(p+2)&~1u) || c->state!=BT_L2CAP_CONFIGURING)return fault(q,BT_L2CAP_PROTOCOL);
+        if(n<6 || (get16(p+2)&~1u))return fault(q,BT_L2CAP_PROTOCOL);
+        if(get16(p)!=c->local_cid || c->state!=BT_L2CAP_CONFIGURING)return 1;
         unsigned result=get16(p+4),mtu=c->local_mtu,outn;uint8_t out[BT_L2CAP_SIGNAL_MTU];
         int parsed=options(p+6,n-6,&mtu,out,&outn);
         if(parsed<0 || (result==0 && parsed))return fault(q,BT_L2CAP_PROTOCOL);
-        if(result==4)return 1;
+        if(result==4)return pending_response(q,c);
+        c->timer=BT_L2CAP_TIMER_NONE;
         if(result==0 && mtu<=c->local_mtu && mtu>=48) {
             c->local_mtu=(uint16_t)mtu;
-            if(get16(p+2)&1) {c->need_config=2;c->request_id=0;return 1;}
-            c->input_done=1;c->request_id=0;ready(c);return 1;
+            if(get16(p+2)&1) {c->need_config=2;c->request_id=0;c->timer=BT_L2CAP_TIMER_NONE;return 1;}
+            c->input_done=1;c->request_id=0;c->timer=BT_L2CAP_TIMER_NONE;ready(c);return 1;
         }
         c->result=(uint16_t)result;
         if(result==1 && mtu>=48 && mtu<=c->local_mtu && c->config_retries<2) {
-            ++c->config_retries;c->local_mtu=(uint16_t)mtu;c->need_config=1;c->request_id=0;return 1;
+            ++c->config_retries;c->local_mtu=(uint16_t)mtu;c->need_config=1;c->request_id=0;c->timer=BT_L2CAP_TIMER_NONE;return 1;
         }
         int r=disconnect(q,c);return r<0 ? fault(q,BT_L2CAP_CAPACITY) : r;
     }
     if(code==7) {
-        if(n!=4 || get16(p)!=c->remote_cid || get16(p+2)!=c->local_cid ||
-           c->state!=BT_L2CAP_DISCONNECTING)return fault(q,BT_L2CAP_PROTOCOL);
-        c->state=BT_L2CAP_CLOSED;c->request_id=0;return 1;
+        if(n!=4)return fault(q,BT_L2CAP_PROTOCOL);
+        if(get16(p)!=c->remote_cid || get16(p+2)!=c->local_cid ||
+           c->state!=BT_L2CAP_DISCONNECTING)return 1;
+        confirmed(c);return 1;
     }
     return 1;
 }
@@ -246,23 +308,28 @@ static unsigned reject(uint8_t *reply,unsigned id,unsigned reason,unsigned local
 }
 static int peer_request(struct bt_l2cap *q,struct bt_l2cap_pdu *rx,const uint8_t *cmd,unsigned n)
 {
-    struct bt_l2cap_request *cache=0;
-    for(unsigned i=0;i<BT_L2CAP_REQUESTS;++i) {
-        struct bt_l2cap_request *v=&q->requests[i];
-        if(v->length && v->link==rx->link && v->request[1]==cmd[1]) {
-            if(v->length!=n+4 || !equal(v->request,cmd,n+4))return fault(q,BT_L2CAP_PROTOCOL);
-            if(pdu(q->tx,v->reply_serial))return 1;
-            uint64_t bound;if(deadline(q,&bound)!=1)return -1;
-            return emit(q,rx->link,1,v->reply,v->reply_length,bound,0,&v->reply_serial);
+    unsigned li=link_index(q,rx->link);if(li==BT_ACL_LINKS)return fault(q,BT_L2CAP_OWNERSHIP);
+    unsigned base=li*BT_L2CAP_IDENTIFIERS;
+    struct bt_l2cap_request *cache=&q->requests[base+cmd[1]-1];
+    if(cache->length) {
+        unsigned rotated=1;
+        for(unsigned i=0;i<BT_L2CAP_IDENTIFIERS;++i)if(i!=cmd[1]-1 &&
+            q->requests[base+i].sequence<=cache->sequence)rotated=0;
+        if(!rotated) {
+            if(cache->length!=n+4 || !equal(cache->request,cmd,n+4))return fault(q,BT_L2CAP_PROTOCOL);
+            if(pdu(q->tx,cache->reply_serial))return 1;
+            uint64_t bound;if(transport_deadline(q,&bound)!=1)return -1;
+            int result=emit(q,rx->link,1,cache->reply,cache->reply_length,bound,0,&cache->reply_serial);
+            if(result==1)pdu(q->tx,cache->reply_serial)->channel=cache->channel;return result;
         }
-        if(!v->length && !cache)cache=v;
+        if(pdu(q->tx,cache->reply_serial))return 0;
     }
-    if(!cache)return fault(q,BT_L2CAP_CAPACITY);
+    if(q->peer_sequence[li]==UINT64_MAX)return fault(q,BT_L2CAP_CAPACITY);
     if(!free_pdu(q->tx))return 0;
     unsigned code=cmd[0],id=cmd[1],rn=0;const uint8_t *p=cmd+4;
     uint8_t reply[BT_L2CAP_SIGNAL_MTU]={0};reply[0]=(uint8_t)(code+1);reply[1]=(uint8_t)id;
     struct bt_l2cap_channel *c=0,updated={0};unsigned slot=BT_L2CAP_CHANNELS;
-    uint64_t bound;if(deadline(q,&bound)!=1)return -1;
+    uint64_t bound;if(transport_deadline(q,&bound)!=1)return -1;
     if(code==2) {
         if(n!=4)return fault(q,BT_L2CAP_PROTOCOL);
         unsigned psm=get16(p),remote=get16(p+2),result=0;
@@ -275,11 +342,11 @@ static int peer_request(struct bt_l2cap *q,struct bt_l2cap_pdu *rx,const uint8_t
         if(!(psm&1) || (psm&0x100))result=2;
         if(!result) {int allow=q->authorize(q->context,rx->link,(uint16_t)psm,1);
             if(allow!=1)result=allow<0 ? 3 : 2;}
-        if(!result && slot==BT_L2CAP_CHANNELS)result=4;
+        if(!result && (slot==BT_L2CAP_CHANNELS || q->next_cid>0xffff || q->next_channel==UINT64_MAX))result=4;
         unsigned local=0;
         if(!result) {
-            local=0x40+slot;c=&q->channels[slot];updated=(struct bt_l2cap_channel){
-                .link=rx->link,.deadline=bound,.local_cid=(uint16_t)local,.remote_cid=(uint16_t)remote,
+            local=q->next_cid;c=&q->channels[slot];updated=(struct bt_l2cap_channel){
+                .generation=q->next_channel,.link=rx->link,.deadline=bound,.local_cid=(uint16_t)local,.remote_cid=(uint16_t)remote,
                 .psm=(uint16_t)psm,.local_mtu=q->local_mtu,.remote_mtu=672,
                 .need_config=1,.state=BT_L2CAP_CONFIGURING};
         }
@@ -314,7 +381,7 @@ static int peer_request(struct bt_l2cap *q,struct bt_l2cap_pdu *rx,const uint8_t
         c=channel(q,get16(p),rx->link);
         if(!c || c->remote_cid!=get16(p+2) || c->state==BT_L2CAP_CLOSED) {
             rn=reject(reply,id,2,get16(p),get16(p+2));c=0;
-        } else {copy(reply+4,p,4);rn=8;updated=*c;updated.state=BT_L2CAP_CLOSED;updated.request_id=0;}
+        } else {copy(reply+4,p,4);rn=8;updated=*c;confirmed(&updated);}
     } else if(code==8) {unsigned echoed=n<=44 ? n : 0;copy(reply+4,p,echoed);rn=echoed+4;}
     else if(code==10) {
         if(n!=2)return fault(q,BT_L2CAP_PROTOCOL);
@@ -328,9 +395,10 @@ static int peer_request(struct bt_l2cap *q,struct bt_l2cap_pdu *rx,const uint8_t
     if(r!=1)return r;
     if(c) {
         if(code==4 && !(get16(p+2)&1) && !get16(reply+8))updated.output_serial=serial;
-        *c=updated;
+        *c=updated;pdu(q->tx,serial)->channel=c->generation;
+        if(code==2){++q->next_channel;++q->next_cid;}
     }
-    cache->link=rx->link;cache->reply_serial=serial;cache->length=n+4;cache->reply_length=rn;
+    cache->channel=c ? c->generation : 0;cache->link=rx->link;cache->reply_serial=serial;cache->sequence=++q->peer_sequence[li];cache->length=n+4;cache->reply_length=rn;
     copy(cache->request,cmd,n+4);copy(cache->reply,reply,rn);return 1;
 }
 static int response_code(unsigned code)
@@ -349,7 +417,7 @@ static int signal(struct bt_l2cap *q,struct bt_l2cap_pdu *r)
             for(size_t at=4;at<r->length;at+=4+get16(r->bytes+at+2)) {
                 if(r->bytes[at+1] && !response_code(r->bytes[at])) {
                     uint8_t reply[10];unsigned n=reject(reply,r->bytes[at+1],1,0,0);
-                    uint64_t bound;if(deadline(q,&bound)!=1)return -1;
+                    uint64_t bound;if(transport_deadline(q,&bound)!=1)return -1;
                     int result=emit(q,r->link,1,reply,n,bound,0,0);if(result!=1)return result;break;
                 }
             }
@@ -397,7 +465,7 @@ static int receive_acl(struct bt_l2cap *q,const struct bt_h4_record *record)
                 struct bt_l2cap_channel *c=channel(q,r->cid,r->link);
                 if(!c || c->state!=BT_L2CAP_OPEN)r->state=BT_L2CAP_FREE;
                 else if(r->length-4>c->local_mtu)return fault(q,BT_L2CAP_PROTOCOL);
-                else r->state=BT_L2CAP_RECEIVED;
+                else {r->state=BT_L2CAP_RECEIVED;r->channel=c->generation;}
             }
         }
     }
@@ -415,9 +483,10 @@ static int lower_results(struct bt_l2cap *q)
             if(!f->accepted && (state==BT_ACL_SENT || state==BT_ACL_CREDIT_RETIRED || state==BT_ACL_FLUSHED)) {
                 p->accepted+=f->length;f->accepted=1;
                 if(p->accepted==p->length)for(unsigned k=0;k<BT_L2CAP_CHANNELS;++k) {
-                    if(q->channels[k].request_serial==p->serial) {
+                    if(q->channels[k].request_serial==p->serial && waiting(&q->channels[k])) {
                         q->channels[k].request_sent=1;
                         q->channels[k].request_after=q->acl->hci->transport.next_serial-1;
+                        if(start_timer(q,&q->channels[k],BT_L2CAP_RTX)!=1)return -1;
                     }
                     if(q->channels[k].output_serial==p->serial) {
                         q->channels[k].output_done=1;ready(&q->channels[k]);
@@ -442,7 +511,7 @@ static int lower_results(struct bt_l2cap *q)
         if(!live(q,p->link)) {p->failed=1;p->cursor=p->length;}
         if(p->application)for(unsigned k=0;k<BT_L2CAP_CHANNELS;++k) {
             const struct bt_l2cap_channel *c=&q->channels[k];
-            if(c->link==p->link && c->remote_cid==p->cid && c->state!=BT_L2CAP_OPEN) {
+            if(c->generation==p->channel && c->state!=BT_L2CAP_OPEN) {
                 p->failed=1;if(!p->cursor)p->cursor=p->length;
             }
         }
@@ -460,9 +529,20 @@ static int transmit(struct bt_l2cap *q)
     for(unsigned i=0;i<BT_L2CAP_PDUS;++i)if(q->tx[i].state==BT_L2CAP_TRANSMITTING &&
        q->tx[i].cursor<q->tx[i].length && (!p || q->tx[i].serial<p->serial))p=&q->tx[i];
     if(!p || !live(q,p->link))return 1;
+    if(p->request_id && !p->cursor) {
+        struct bt_l2cap_channel *c=owned_channel(q,p->channel);
+        unsigned li=link_index(q,p->link);
+        if(li==BT_ACL_LINKS)return fault(q,BT_L2CAP_OWNERSHIP);
+        if(!c || !waiting(c) || c->request_id!=p->request_id || c->request_serial!=p->serial) {
+            /* This ID never reached the lower owner. Do not count its enqueue
+             * as evidence of the complete wire rotation required for reuse. */
+            q->rotation_broken[li]=1;p->state=BT_L2CAP_FREE;return 1;
+        }
+        if(c->request_reused && q->rotation_broken[li])return fault(q,BT_L2CAP_CAPACITY);
+    }
     if(p->application)for(unsigned k=0;k<BT_L2CAP_CHANNELS;++k) {
         const struct bt_l2cap_channel *c=&q->channels[k];
-        if(c->link==p->link && c->remote_cid==p->cid && c->state!=BT_L2CAP_OPEN) {
+        if(c->generation==p->channel && c->state!=BT_L2CAP_OPEN) {
             p->failed=1;
             if(!p->cursor){p->cursor=p->length;p->state=BT_L2CAP_FAILED;return 1;}
         }
@@ -480,9 +560,6 @@ static int transmit(struct bt_l2cap *q)
 int bt_l2cap_step(struct bt_l2cap *q,unsigned budget,uint64_t bound)
 {
     if(!q || q->state!=BT_L2CAP_ACTIVE || !bound || !budget || budget>BT_H4_BUDGET)return -1;
-    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].state!=BT_L2CAP_UNUSED &&
-       q->channels[i].state!=BT_L2CAP_OPEN && q->channels[i].state!=BT_L2CAP_CLOSED && bound>q->channels[i].deadline)
-        bound=q->channels[i].deadline;
     for(unsigned i=0;i<BT_L2CAP_PDUS;++i) {
         if(q->tx[i].state==BT_L2CAP_TRANSMITTING && bound>q->tx[i].deadline)bound=q->tx[i].deadline;
         if((q->rx[i].state==BT_L2CAP_PARTIAL || q->rx[i].state==BT_L2CAP_SIGNAL) && bound>q->rx[i].deadline)bound=q->rx[i].deadline;
@@ -490,8 +567,19 @@ int bt_l2cap_step(struct bt_l2cap *q,unsigned budget,uint64_t bound)
     if(q->acl->hci->transport.now>=bound)return fault(q,BT_L2CAP_TIMEOUT);
     if(bt_acl_step(q->acl,budget,bound)!=1)return fault(q,BT_L2CAP_LOWER);
     if(lower_results(q)!=1)return -1;
-    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(q->channels[i].state!=BT_L2CAP_UNUSED &&
-       q->channels[i].state!=BT_L2CAP_CLOSED && !live(q,q->channels[i].link))q->channels[i].state=BT_L2CAP_CLOSED;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i) {
+        struct bt_l2cap_channel *c=&q->channels[i];if(c->state==BT_L2CAP_UNUSED)continue;
+        unsigned li=link_index(q,c->link);
+        if(li==BT_ACL_LINKS)return fault(q,BT_L2CAP_OWNERSHIP);
+        if(q->acl->links[li].state==BT_ACL_CLOSED)confirmed(c);
+        else if(!live(q,c->link))quarantine(c,BT_L2CAP_LINK_UNCERTAIN);
+        else if(waiting(c)) {
+            uint64_t now=q->acl->hci->transport.now;
+            if(now>=c->deadline)quarantine(c,BT_L2CAP_CALLER_EXPIRED);
+            else if(c->timer!=BT_L2CAP_TIMER_NONE && now>=c->timer_deadline)
+                quarantine(c,c->timer==BT_L2CAP_RTX ? BT_L2CAP_RTX_EXPIRED : BT_L2CAP_ERTX_EXPIRED);
+        }
+    }
     const struct bt_h4_record *record=0;
     for(unsigned i=0;i<q->acl->hci->transport.count;++i) {
         const struct bt_h4_record *v=&q->acl->hci->transport.records[i];
