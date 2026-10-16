@@ -1,0 +1,28 @@
+--- port.c
++++ port.c
+@@ -28,6 +28,7 @@
+ 
+ /* Standard includes. */
+ #include <stdlib.h>
++#include <string.h>
+ 
+ /* Scheduler includes. */
+ #include "FreeRTOS.h"
+@@ -302,7 +303,7 @@
+ 
+ BaseType_t xPortStartScheduler( void )
+ {
+-    uint32_t ulAPSR;
++    uint64_t ulAPSR;
+ 
+     __asm volatile ( "MRS %0, CurrentEL" : "=r" ( ulAPSR ) );
+ 
+@@ -400,7 +401,7 @@
+     /* Interrupts should not be enabled before this point. */
+     #if ( configASSERT_DEFINED == 1 )
+     {
+-        uint32_t ulMaskBits;
++        uint64_t ulMaskBits;
+ 
+         __asm volatile ( "MRS %0, DAIF" : "=r" ( ulMaskBits )::"memory" );
+         configASSERT( ( ulMaskBits & portDAIF_I ) != 0 );

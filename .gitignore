@@ -53,3 +53,9 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Local Python and CMake output
+__pycache__/
+build/
+CMakeFiles/
+CMakeCache.txt

@@ -1,0 +1,29 @@
+{
+  "freertos": {
+    "revision": "97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+    "url": "https://codeload.github.com/FreeRTOS/FreeRTOS-Kernel/tar.gz/97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+    "archive": "freertos-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2.tar.gz",
+    "directory": "FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2",
+    "sha256": "5500321673fb2d6e394f268b40804045037ac670ddf3fc9996ee5ae96cb1c1f0"
+  },
+  "sunxi-tools": {
+    "revision": "b92f4ed3115a520e3ec406697d268239e3f29488",
+    "url": "https://codeload.github.com/linux-sunxi/sunxi-tools/tar.gz/b92f4ed3115a520e3ec406697d268239e3f29488",
+    "archive": "sunxi-tools-b92f4ed3115a520e3ec406697d268239e3f29488.tar.gz",
+    "directory": "sunxi-tools-b92f4ed3115a520e3ec406697d268239e3f29488",
+    "sha256": "50d2cf99715381af7ec8aac0c5e823e44c0b49f51651f3094b20b4b1e84dce59"
+  },
+  "board-uboot": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://codeload.github.com/orangepi-xunlong/u-boot-orangepi/tar.gz/b791be842935b27268ae3d00e943a9075495f30a",
+    "archive": "u-boot-b791be842935b27268ae3d00e943a9075495f30a.tar.gz",
+    "directory": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a",
+    "sha256": "e719ccdb7c14b9ac8189c3e5a3fa64dd040aee1efec0adb22f86cb55cebd0ea9"
+  },
+  "board-boot0": {
+    "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex",
+    "archive": "board-boot/boot0_sdcard_orangepizero3w.fex",
+    "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
+  }
+}
