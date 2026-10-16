@@ -5,20 +5,23 @@
 #include "queue.h"
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
+#include "pvr_free_list.h"
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
 enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
-    PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING };
+    PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
+    PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
     PVR_GPU_SERVICE_PREPARATION, PVR_GPU_SERVICE_ENABLE, PVR_GPU_SERVICE_START,
-    PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP, PVR_GPU_SERVICE_INTERRUPT };
+    PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP, PVR_GPU_SERVICE_INTERRUPT,
+    PVR_GPU_SERVICE_FREE_LISTS };
 
 /* Optional shared peripheral interrupt delivery. Both callbacks or neither.
  * mask issues a disable command and completes CPU writes; it returns 1 on
@@ -51,6 +54,21 @@ struct pvr_gpu_service_enable_ops {
     int (*poll)(void *);
 };
 
+/* Optional native free-list service. count=0 disables it. Configuration and
+ * metadata are immutable to other callers after init. The manager owns metadata
+ * writes and all admitted leases. Ops use the service's common context. Initial
+ * construction precedes power/start; the OPEN deadline bounds every step.
+ * operation_timeout_us separately bounds construction and admitted firmware work.
+ * Protected GPU table/record mappings and linked-target recovery belong to the
+ * platform. Reopen after STOPPED is refused until lease disposal is implemented.
+ */
+struct pvr_gpu_service_free_list_config {
+    const struct pvr_free_list_config *lists;
+    unsigned count, minimum_pages;
+    uint64_t operation_timeout_us;
+    struct pvr_free_list_ops ops;
+};
+
 /* Private platform configuration, copied at init; pointed-to storage stays
  * pinned and exclusively owned throughout the service lifetime. No filesystem
  * or allocator is required: the platform reserves these exact buffers once.
@@ -78,6 +96,7 @@ struct pvr_gpu_service_config {
     void *context;
     struct pvr_gpu_service_irq_ops irq;
     struct pvr_gpu_service_enable_ops power;
+    struct pvr_gpu_service_free_list_config free_lists;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -89,6 +108,7 @@ struct pvr_gpu_service_reply {
     enum pvr_gpu_service_phase phase;
     enum pvr_gpu_service_error error;
     uint32_t owns_session, start_error, control_error, stop_error;
+    uint32_t free_list_error, free_list_pending;
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
@@ -110,6 +130,8 @@ struct pvr_gpu_service {
     struct pvr_gpu_start start;
     struct pvr_gpu_control control;
     struct pvr_gpu_stop stop;
+    struct pvr_free_lists free_lists;
+    struct pvr_gpu_events free_list_events;
     struct pvr_mips_boot boot;
     struct pvr_mips_object mappings[PVR_FW_RESOURCE_COUNT];
     uint64_t epoch, deadline, last_now;
@@ -145,7 +167,10 @@ int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
  * admission immediately; STOPPED releases ownership only after isolation.
  * Failure retains ownership, diagnostics and all resources; no further backend
  * callback or automatic restart occurs. Reopening after successful stop uses a
- * fresh epoch and prepares all backing again. No application GPU jobs yet.
+ * fresh epoch and prepares all backing again when free lists are disabled.
+ * With free lists enabled, CLOSE drains retained firmware actions before stop
+ * and preserves all leases after verified isolation. Reopen then returns BUSY
+ * until explicit resource disposal exists. No application GPU jobs yet.
  */
 int pvr_gpu_service_send(struct pvr_gpu_service *, const struct pvr_gpu_service_request *,
                          TickType_t wait, uint64_t *ticket);
