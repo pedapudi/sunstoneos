@@ -30,8 +30,9 @@ If disabling fails, the driver retains the FEL request and reports failure.
 The RTC flag is volatile boot state; this operation does not program storage.
 
 The RTC flag is handled by boot0. It does not establish recovery independent
-of the installed storage bootloader. Hardware register access, timer expiry,
-reset scope, and register retention remain untested. Treat DDR as uninitialized after
+of the installed storage bootloader. Register reads now pass on the physical
+board. Watchdog programming, timer expiry, reset scope, and register retention
+remain untested. Treat DDR as uninitialized after
 watchdog reset. The existing warm CPU-reset loader cannot establish this reset
 path by reading an old DDR result.
 
@@ -43,7 +44,7 @@ branches to ROM entry `0x20` through the routine at `0x48ec6`. This path depends
 on boot0 being loaded and executing. The boot0 hash and provenance are in
 [sources.lock.json](../sources.lock.json) and [sources.md](sources.md).
 
-The pinned A733 ROM contains another route that executes before storage boot:
+The captured board ROM contains another route that executes before storage boot:
 
 | ROM address | Observed behavior |
 | --- | --- |
@@ -51,16 +52,17 @@ The pinned A733 ROM contains another route that executes before storage boot:
 | `0xcc` | On a match, load the program counter from `0x070501c4` |
 | `0x20` | Forced-FEL entry: initialize RTC access, clear SRAM, select FEL |
 | `0x1f0` | Check a separate dispatch flag at `0x070501d4`; low bits `0xefe8` redirect through `0x070501d8` |
-| `0x22c` | Branch to the FEL dispatcher at `0x2330` when forced FEL is selected |
+| `0x22c` | Branch to the FEL dispatcher at `0x2514` when forced FEL is selected |
 
 The reference bootloader names the block at `0x07050000` CPUIDLE. Setting its
 CPU0 redirect entry to `0x20` is a candidate for recovery without executing
-boot0. The flag and entry must survive the selected reset. That retention,
-register accessibility, and reset entry behavior have not been established.
+boot0. The flag and entry must survive the selected reset. Reads of these
+registers pass; write behavior, retention, and reset entry remain untested.
 The separate dispatch flag must also be inactive; it can override this route.
 
-[checks/a733-rom-recovery.py](../checks/a733-rom-recovery.py) executes the actual
-ROM prefix in Unicorn and stops at the boot or FEL dispatcher. Normal reset
+[checks/a733-rom-recovery.py](../checks/a733-rom-recovery.py) accepts pinned
+hashes for the published ROM and the captured board ROM. It executes each
+selected ROM prefix in Unicorn and stops at the boot or FEL dispatcher. Normal reset
 and normal reset with the bootloader's RTC flag both reach the boot dispatcher.
 Explicit entry at `0x20` and CPU0 redirection to that entry reach the FEL
 dispatcher. An active alternate dispatch flag overrides CPU0 redirection.
@@ -71,7 +73,7 @@ effects remain outside this check. No subsequent branch in the tested prefix
 reads it. The check does not simulate watchdog expiry, register retention,
 security permissions, clocks, or USB initialization.
 
-The check passed with decoded ROM SHA-256
+The earlier published-ROM check passed with decoded ROM SHA-256
 `3a2a7d289951f61095afdabe7813b067295223ce588c422d64200fc7e4431eb1`.
 Raw output is in
 `~/.cache/sunstoneos/evidence/rom-recovery-20261016/control-flow.json`.
@@ -87,6 +89,63 @@ the original register values on the host. It must write and verify the entry
 before enabling the redirect flag. Restoration after reconnect must disable
 the redirect before restoring its entry. A watchdog expiry test also needs a
 verified way to prevent unintended storage boot if the redirect is lost.
+
+## Captured board ROM and reset ownership
+
+The reconnected board answered the A733 identity request on USB instance
+`003:064`, with automatic access on port `3-1`. A direct FEL read at address
+zero returned rejection status `0x01`. The tool consumed the error status and
+its USB transaction response; this was not a transport timeout or disappearance.
+
+The FEL tool's `memmove` command executes a CPU copy through SRAM and can read
+ROM. The capture saved and restored the helper workspace at `0x71000` and the
+destination at `0x52000`, with matching readback after restoration. It first
+copied 1,024 bytes, then captured the remaining bytes through `0x10fff` after
+the prefix comparison found a different ROM revision. No reset was issued.
+
+The 69,632-byte physical capture has SHA-256
+`a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa`.
+Thirteen words in its first 1,024 bytes differ from the published reference.
+The reset and redirect instructions through `0x228` match. The instruction at
+`0x22c` branches to `0x2514`; the published ROM branches to `0x2330`.
+Earlier five-word checks of forced-FEL entry remain valid but did not establish
+complete ROM identity. Use the captured image for further board-specific analysis.
+
+A read-only reset-register snapshot found the CPU redirect flag, CPU0 entry,
+alternate flag, and alternate entry all zero. Watchdog configuration was `1`,
+mode was `0` (disabled), and reset-output configuration was `0x1f`. The
+bootloader FEL flag was zero. These values establish the observed ownership
+state; a loader must check again before modifying registers.
+
+The physical ROM's boot-input routine at `0x10134` samples bit 8 of
+`0x03000024` four times. Four low samples select FEL before the normal storage
+path, even without a CPU redirect. Any high sample continues toward storage
+boot. The live register value was `0x101`, so the sampled bit was high.
+Its relationship to a board button and its state across watchdog reset remain
+unqualified. Do not rely on this input until physical wiring and assertion are
+established.
+
+The user confirmed automatic FEL entry after disconnecting and reattaching USB,
+with a microSD card inserted and no button held. This establishes the observed
+power-cycle outcome. It does not establish watchdog-reset behavior or prove
+that the card cannot boot under a different initialization state. Preserve the
+card and its contents while establishing a protected reset destination.
+
+One focused instruction-model run passed nine cases on the physical capture:
+the five reset/redirect cases above, low boot input, high boot input, one mixed
+sample, and low boot input with the secure indicator set. The secure case leaves
+the separate security-policy bits clear; it does not cover every secure-boot
+configuration. The model executes the inspected boot-input code and preceding
+initialization without substituting function calls. NSACR remains the sole
+skipped instruction. MMIO values are synthetic, so these results do not prove
+electrical behavior, register retention, or physical watchdog recovery.
+
+Raw captures, transaction logs, register values, the focused model result, and
+input hashes reside under
+`~/.cache/sunstoneos/evidence/rom-copy-20261016-084055/`.
+The prior direct-read rejection is recorded separately under
+`~/.cache/sunstoneos/evidence/reconnected-rom-20261016-083552/`.
+The unchanged watchdog, kernel, application, and NPU suites were not repeated.
 
 ## Focused host evidence
 
@@ -112,7 +171,7 @@ check contacts no USB device.
 
 ## Required next validation
 
-After independent board recovery, verify a new ROM instance. Build the isolated
+ROM communication is restored. Build the isolated
 watchdog diagnostic entirely in SRAM, with saved host state and RTC results;
 it must not require DDR to report a system reset. Review ownership and preserve
 the original RTC values before using them for results.

@@ -106,9 +106,10 @@ remain unconfirmed. Pin/clock restoration and automatic ROM return passed.
 The [PMIC reader](power.md) identifies AXP8191 and reads enabled UFS rail settings.
 UFS initialization then failed to return to ROM. The [watchdog driver](watchdog.md)
 is prepared and passes host checks, but independent hardware reset remains untested.
-ROM disassembly and an instruction-model check identify a direct FEL redirect
-candidate. The watchdog's RTC flag is handled by boot0 and does not establish
-storage-independent recovery. Register retention across reset remains unknown.
+The captured board ROM and an instruction-model check identify a direct FEL
+redirect and a boot-input path before storage boot. The watchdog's RTC flag is
+handled by boot0 and does not establish storage-independent recovery. Register
+retention across reset and physical assertion of the boot input remain unknown.
 Qualify it before further new peripheral-access sequences.
 
 ## Observed host and device state
@@ -119,13 +120,14 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The user reconnected the board. The new node `003:064` has automatic access
-and answered the A733 ROM identity request. A direct ROM read at address zero
-returned FEL rejection status `0x01`; the tool consumed the status and USB
-transaction response without a transport error. Device requests stopped for
-source review. Earlier ROM checks used CPU loads through an SRAM helper.
-The next ROM comparison must use that path and preserve its SRAM workspace.
-Evidence is under `~/.cache/sunstoneos/evidence/reconnected-rom-20261016-083552/`.
+The reconnected board at `003:064` has automatic access and answers ROM requests.
+The [physical ROM capture](watchdog.md) differs from the published dump and now
+supplies the board-specific reset reference. SRAM workspace restoration passed.
+Read-only recovery-register inspection found no redirect owner and a disabled
+watchdog. The boot input was high, so it cannot currently protect a reset from
+storage boot. The user confirmed automatic FEL entry after disconnecting and
+reattaching USB, with a microSD card inserted and no button held. Preserve that
+card. No watchdog was armed and no reset was issued.
 The failed UFS instance `003:063` remains quarantined. DDR must be reinitialized;
 do not reuse previous RAM assets or signatures.
 No new peripheral probe may run before independent watchdog recovery passes.
@@ -197,7 +199,7 @@ the tool hash and recovery evidence in the application document.
 
 ## Next actions
 
-1. Finish ROM comparison on the reconnected board. Establish a reset destination that cannot
+1. Establish a reset destination that cannot
    execute unknown storage code, then qualify the prepared hardware watchdog
    with an SRAM expiry test. The ROM redirect candidate and its unresolved
    retention requirements are in [watchdog.md](watchdog.md).

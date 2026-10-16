@@ -65,6 +65,10 @@ through the [RAM wrapper](boot.md); the normal storage boot path has not.
 
 The forced-FEL ROM entry was inspected in the [A733 ROM dump](https://github.com/smaeul/sunxi-blobs/blob/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/fixs-brom/blob.hex).
 Five instruction words matched on the attached board before the warm-reset probe.
+The [physical ROM capture](watchdog.md) now identifies a different revision with
+matching forced-entry words and a relocated FEL dispatcher. Board-specific
+recovery analysis uses that captured image; the published dump remains a
+separate reference.
 The [Cortex-A55 technical reference manual](https://documentation-service.arm.com/static/5e7e1405b471823cb9de57ae)
 describes the reset vector and execution-state controls.
 
