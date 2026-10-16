@@ -10,7 +10,8 @@ services, complete device functionality, qualification, and performance work.
 Parallel workers now use separate worktrees and build directories. One coordinator
 owns physical board tests through the [submission queue](board-test-queue.md)
 and the existing exclusive board lock. The shared queue is initialized; the
-physical FEL-input check is pending on confirmed pad connection and current
+physical FEL-input check and the separate [watchdog enable/disarm and expiry
+checks](watchdog-expiry.md) are pending on confirmed pad connection and current
 target/access conditions. No new physical request has run.
 
 A native USB channel now passes status, packet-boundary echo, log, and commanded
@@ -145,6 +146,10 @@ now wakes the privileged worker through a bounded GIC mask/notification/rearm
 path. Two QEMU cases pass cross-core delivery, backlog handling, reopen, and
 retained failures. One native-memory lifecycle case also passes with the updated
 service's interrupt callbacks disabled. Physical GPU assertion remains untested.
+The [translation-cache invalidation component](gpu-flush.md) now has host
+integration evidence for table publication, command completion, queue pressure,
+and retained failure. Its complete commands match the pinned driver. Live table
+edits, service integration, and physical invalidation remain outstanding.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -269,7 +274,12 @@ the tool hash and recovery evidence in the application document.
    Reuse the passed SRAM configuration/restoration
    evidence. The ROM redirect candidate and its unresolved
    retention requirements are in [watchdog.md](watchdog.md).
-   Integrate recovery before further peripheral access.
+   The [protected watchdog diagnostic](watchdog-expiry.md) is implemented with
+   instruction-model and host-protocol evidence. Its enable/disarm and expiry
+   requests are pending in the board queue. Protected reset observation alone
+   does not establish reset cause or bus-stall recovery. Reuse the existing
+   `watchdog-expiry-20261016` evidence. Integrate recovery before further
+   peripheral access.
    Resume UFS with the corrected capability-read ordering only after recovery
    protection passes. Implement read-only storage access and backup through the
    native transport; physical storage population is still unknown.
@@ -337,10 +347,12 @@ the tool hash and recovery evidence in the application document.
    and `gpu-irq-20261016/failed-enable-disable` for the new power and interrupt
    components. The source-locked power setting is 400 MHz at 800 mV; it is not a
    frequency measurement or performance target. Power-off does not establish
-   memory isolation. The shared-resource manager and protected watchdog-expiry
-   diagnostic remain assigned to parallel workers in the `gpu-resources` and
-   `watchdog-expiry` branches. Firmware event handling is assigned to a worker
-   in `gpu-events`. Inspect live agent state before reassigning their files.
+   memory isolation. The shared-resource manager remains assigned to a worker
+   in `gpu-resources`; firmware event handling is assigned to `gpu-events`.
+   The [reset-evidence investigation](watchdog-reset-evidence.md) found no
+   source-defined retained cause contract; ROM progress words are software
+   records. A separate worker is developing I2S support in `i2s`. Inspect live
+   agent state before reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic
@@ -355,8 +367,10 @@ the tool hash and recovery evidence in the application document.
    delays, readiness, and retained failures; reuse `gpu-start-20261016`.
    Physical startup remains blocked on independent watchdog recovery.
    Native [GPU workload tables](gpu-vm.md) now have host and reference evidence
-   for six page sizes; reuse `gpu-vm-20261016`. Allocation, cache publication,
-   live mapping changes, invalidation, and device attachment remain outstanding.
+   for six page sizes; reuse `gpu-vm-20261016`. The bounded
+   [invalidation component](gpu-flush.md) now has host integration and reference
+   evidence in `gpu-flush-20261016`. Allocation, platform cache publication,
+   live mapping changes, service integration, and device attachment remain outstanding.
    Native [initialization records](gpu-fw-state.md) now connect queues and firmware
    resources; reuse `gpu-fw-state-20261016` evidence. The pinned driver's
    `pvr_fw_startstop.c` describes startup sequencing; `pvr_mmu.c` describes

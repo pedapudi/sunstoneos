@@ -91,6 +91,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
   cores, queue saturation, backlog draining, deferred rearm, and retained failures.
   Physical GPU power and interrupt behavior remain unqualified.
+  The [translation-cache invalidation protocol](gpu-flush.md) has host evidence
+  for publication ordering, bounded command completion, and retained failures.
+  Actual mapping changes and physical invalidation remain unqualified.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

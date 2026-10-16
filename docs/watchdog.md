@@ -37,6 +37,14 @@ remain untested. Treat DDR as uninitialized after
 watchdog reset. The existing warm CPU-reset loader cannot establish this reset
 path by reading an old DDR result.
 
+The separate [protected expiry diagnostic](watchdog-expiry.md) implements
+explicit enable/disarm and expiry phases. Its instruction-model and host-protocol
+checks pass; both physical requests remain pending in the board queue. The
+physical BOOT/GND connection must be confirmed before either phase.
+The [reset-evidence investigation](watchdog-reset-evidence.md) distinguishes
+watchdog interrupt status, software reset, and ROM-written progress records.
+None currently supplies a qualified retained watchdog-cause result.
+
 ## ROM recovery candidate
 
 Disassembly of the pinned board boot0 identifies the FEL-flag reader at

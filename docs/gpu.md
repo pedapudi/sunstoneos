@@ -30,6 +30,9 @@ The [power controller](gpu-power.md) has bounded clock/reset/domain sequencing
 with host/reference evidence. [Interrupt delivery](gpu-interrupts.md) now connects
 the worker to GIC mask/rearm operations and passes actual QEMU interrupt delivery.
 Shared-resource management and the physical board bindings remain outstanding.
+The [translation-cache invalidation protocol](gpu-flush.md) now publishes changed
+tables and waits for a checked firmware command result in the host model.
+Live mapping edits, service integration, and physical invalidation remain required.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,

@@ -4,6 +4,10 @@ The [physical recovery instructions](../docs/board-wiring.md) identify the
 BOOT/GND pads and the `check-fel-input.py` diagnostic. That diagnostic samples
 the hardware input without resetting the board. USB permissions and physical
 selection of the ROM recovery path are separate requirements.
+The [protected watchdog procedure](../docs/watchdog-expiry.md) uses
+`build-watchdog-expiry.sh` and `check-watchdog-expiry.py` for separate
+enable/disarm and expiry requests. Both require coordinator review and a
+confirmed stable BOOT/GND connection.
 
 `usb-access.py` grants a user read/write access to the single attached Allwinner
 FEL recovery device (`1f3a:efe8`). It discovers the current USB address each time
