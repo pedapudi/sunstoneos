@@ -20,6 +20,8 @@ comparison, including capture during recognition and formatting across utterance
 The native service command compiles but has not run on the board.
 The separate [SMP emulator target](smp.md) passes three bounded two-core trials
 with queues, mutexes, preemption, affinity, and floating-point register checks.
+A separate session passes 64 task migrations with general/vector registers,
+condition flags, stack position, and floating-point control/status preserved.
 Physical secondary-core startup and multicore mimus remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -136,8 +138,10 @@ the tool hash and recovery evidence in the application document.
    work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
    and coherence, with checks selected from each change. The SMP emulator target
-   now provides a starting point; add migration and complete register-state checks
-   before physical integration. Its current evidence is in [smp.md](smp.md).
+   now passes migration and register-state checks. Replace the C library's global
+   task-state pointer and qualify multicore allocator locking before application
+   integration. Interrupt nesting and physical startup remain outstanding.
+   Current evidence is in [smp.md](smp.md) and [runtime.md](runtime.md).
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all

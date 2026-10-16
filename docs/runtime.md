@@ -32,6 +32,16 @@ threading, or a wall clock. Concurrent stdio, multicore allocator locking,
 compiler thread-local storage, and orderly process shutdown remain unqualified.
 These limits are separate from the tested newlib task reentrancy.
 
+The existing library integration is unsuitable for concurrent execution on
+multiple cores. The pinned `libc.a` references the global `_impure_ptr`, and
+FreeRTOS's default `configSET_TLS_BLOCK` assigns that pointer on task switches.
+Two cores would overwrite the same selection even though each task has its own
+reentrancy structure. Defining dynamic reentrancy only in application headers
+would not change the compiled library's accesses.
+Multicore integration requires library accesses to obtain the running task's
+state independently on each core, plus qualification of allocator and other
+shared library locks. The [SMP checks](smp.md) do not link this C/C++ runtime.
+
 ## Build and bounded checks
 
 Use the Clang configuration and FreeRTOS source from [build.md](build.md).

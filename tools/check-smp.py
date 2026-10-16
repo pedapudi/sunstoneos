@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("image", type=Path)
 parser.add_argument("--qemu", default="qemu-system-aarch64")
 parser.add_argument("--trials", type=int, default=1)
+parser.add_argument("--case", choices=("kernel", "context"), default="kernel")
 parser.add_argument("--evidence", type=Path,
                     default=Path.home() / ".cache/sunstoneos/evidence/smp-check.json")
 args = parser.parse_args()
@@ -30,7 +31,8 @@ command = [emulator, "-machine", "virt,gic-version=3,secure=off,virtualization=o
            "-monitor", "none", "-semihosting-config", "enable=on,target=native",
            "-device", f"loader,file={args.image.resolve()},cpu-num=0"]
 identity = {"image_sha256": digest(args.image), "qemu_sha256": digest(emulator),
-            "checker_sha256": digest(__file__), "command": command, "trials": args.trials}
+            "checker_sha256": digest(__file__), "command": command, "trials": args.trials,
+            "case": args.case}
 libraries = subprocess.run(["ldd", emulator], check=True, capture_output=True, text=True).stdout
 identity["libraries"] = {word: digest(word) for word in libraries.split()
                          if word.startswith("/") and Path(word).is_file()}
@@ -50,7 +52,9 @@ for index in range(args.trials):
         output = ((error.stdout or b"") + (error.stderr or b"")).decode(errors="replace")
         output += "\nFAIL: emulator exceeded ten seconds.\n"
         code = 124
-    passed = code == 0 and "PASS SMP: 256 cross-core queue exchanges" in output and "FAIL" not in output
+    marker = ("PASS SMP context: 64 task migrations" if args.case == "context"
+              else "PASS SMP: 256 cross-core queue exchanges")
+    passed = code == 0 and marker in output and "FAIL" not in output
     trials.append({"passed": passed, "exit_code": code, "output": output})
     print(f"Trial {index + 1}: {output}", end="")
     if not passed:

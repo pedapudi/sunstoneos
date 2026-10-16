@@ -83,15 +83,56 @@ match. The recorded investigation used `--trials 3` and an explicit evidence pat
 It stops at the first failure. No board access or mimus rerun was needed for this
 separate target.
 
-## Requirements before physical integration
+## Register state survives task migration
+
+The separate `smp-context-model` check moves two running tasks between cores
+for 32 rounds. Each task loads distinct patterns into general registers
+`x0`–`x30` and all 32 vector registers. It also sets the condition flags, all
+four floating-point rounding modes across successive rounds, and floating-point
+status flags. The assembly check records its stack position before switching.
+
+A controller changes each task's affinity to the other core while the patterns
+are live. The assembly loop reports its current core through a supervisor call.
+The controller waits until both tasks report their destinations before releasing
+them to capture and compare their state. Temporary loop values preserve the
+register patterns and condition flags on the task's stack.
+A yield supervisor call also runs with all register patterns loaded.
+
+One bounded session passed all 64 migrations on 2026-10-16. Comparisons cover
+`x0`–`x30`, the stack pointer, `q0`–`q31`, condition flags in `NZCV`, rounding
+control in `FPCR`, and status flags in `FPSR`. This is functional emulator
+evidence for those state values. It does not exercise every interrupt priority
+or nesting combination, compiler thread-local storage, or physical coherence.
+No port changes were needed for this check.
+
+The ELF SHA-256 is
+`305e611d82e79e34dd23fbbf06057565dcb6dc80c9473cc9fa3e38b7ea5f5547`.
+Its sections contain 25,720 bytes of code/read-only data and 181,936 bytes of
+reserved RAM. The image, successful output, and dependency manifest are under
+`~/.cache/sunstoneos/evidence/smp-context-20261016/`.
+The result file is `initial.json`; `manifest.json` records the compiled inputs.
+The earlier queue/mutex evidence remains applicable to its unchanged image.
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+cmake --build "$cache/build/qemu-virt" --target smp-context-model -j 8
+python3 tools/check-smp.py "$cache/build/qemu-virt/smp-context-model.elf" \
+  --case context --qemu "$cache/host/usr/bin/qemu-system-aarch64" \
+  --evidence "$cache/evidence/smp-context-check.json"
+```
+
+## Requirements before application and physical integration
 
 Physical integration requires independent watchdog recovery, A733 core power and
 reset sequencing, logical-to-hardware affinity translation, and per-core monitor
 state. The current physical monitor and startup remain single-core.
 The emulator's CPU_ON service does not implement those board operations.
 
-Further checks must cover task migration, every general/vector register and
-floating-point control state, interrupt priorities and nesting, all eight physical
+The [C/C++ runtime](runtime.md) requires task-local library state and qualified
+multicore locking before linking mimus with this port. The existing library's
+global reentrancy pointer cannot select two concurrent tasks' state correctly.
+
+Further checks must cover interrupt priorities and nesting, all eight physical
 cores, and concurrent device activity. QEMU does not establish physical cache
 coherence, weak-memory behavior, performance, or power transitions. Mimus still
 uses the physical single-core runtime; multicore recognition remains outstanding.
