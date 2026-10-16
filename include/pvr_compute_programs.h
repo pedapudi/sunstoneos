@@ -28,7 +28,8 @@ struct pvr_compute_program_config {
     struct pvr_compute_program_heap pds, usc, general;
     struct pvr_compute_program_span buffers[PVR_PROGRAM_REGIONS];
     /* First five entries: compute context, firmware register state, CCCB
-     * control, CCCB ring, VM memory record, using actual mapped GPU addresses.
+     * control, CCCB ring, VM memory record, using their firmware virtual addresses.
+     * These five addresses belong to the MIPS heap, not the workload GPU VM.
      * Append every other known conflicting allocation. These are exclusions,
      * not proof of mapping or of physical alias freedom. */
     struct pvr_compute_program_span excluded[PVR_COMPUTE_PROGRAM_EXCLUSIONS];

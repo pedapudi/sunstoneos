@@ -51,9 +51,11 @@ PDS and USC heaps cannot exceed their 32-bit offset ranges. All GPU spans must f
 the 40-bit virtual address space. Shared-state allocations belong to the PDS heap;
 resume state belongs to general memory.
 
-The caller also supplies CPU and GPU ranges for the compute context, firmware
+The caller also supplies CPU and firmware virtual ranges for the compute context, firmware
 register state, client command control and ring, and VM memory record. It appends
-other known conflicting allocations, up to sixteen exclusions. The producer
+other known conflicting allocations, up to sixteen exclusions. The first five
+objects belong to the MIPS firmware heap. They do not require workload-VM
+mappings; physical alias exclusion remains a separate admission condition. The producer
 rejects overlapping owned spans, exclusion conflicts, truncated allocations,
 overflow, invalid heap offsets, and input/result aliases before writing bytes.
 These logical checks cannot detect physical aliases or prove VM permissions.

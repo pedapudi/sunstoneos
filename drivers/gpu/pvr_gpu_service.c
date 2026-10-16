@@ -1,4 +1,5 @@
 #include "pvr_gpu_service.h"
+#include "pvr_compute_service.h"
 #include <string.h>
 
 static struct pvr_gpu_service *instance;
@@ -86,6 +87,8 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
             }
         }
     }
+    if (c->compute && (c->compute->service != s ||
+        c->compute->phase != PVR_COMPUTE_SERVICE_BOUND)) return 0;
     return free_list_allocations(s, c);
 }
 /* Interrupt state is shared with an ISR that may run on another core.
@@ -137,6 +140,7 @@ static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
 {
     if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
+    if (s->config.compute) pvr_compute_service_abort(s->config.compute, PVR_COMPUTE_SERVICE_LIFECYCLE);
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
     (void)pvr_ccb_abort(&s->queue);
@@ -149,16 +153,18 @@ static int free_list_clock(void *ctx, uint64_t *now)
     if (!s || ctx != s->config.context || s->phase == PVR_GPU_SERVICE_FAILED ||
         !s->config.start.now(ctx, now) || *now < s->last_now || *now < s->queue.last_now ||
         *now < s->start.last_now || *now < s->control.last_now || *now < s->stop.last_now ||
-        *now < s->free_lists.last_now) return 0;
+        *now < s->free_lists.last_now ||
+        (s->config.compute && *now < s->config.compute->last_now)) return 0;
     s->last_now = *now; return 1;
 }
 static int free_list_event(void *ctx, const unsigned char command[PVR_CCB_COMMAND_BYTES])
 {
     struct pvr_gpu_service *s = instance;
     if (!s || ctx != s->config.context || s->phase == PVR_GPU_SERVICE_FAILED) return 0;
+    if (s->config.compute && !pvr_compute_service_event(s->config.compute, command)) return 0;
     uint32_t kind = (uint32_t)command[0] | (uint32_t)command[1] << 8 |
                     (uint32_t)command[2] << 16 | (uint32_t)command[3] << 24;
-    if (kind == (PVR_CCB_MAGIC | 103u) || kind == (PVR_CCB_MAGIC | 104u))
+    if (s->config.free_lists.count && (kind == (PVR_CCB_MAGIC | 103u) || kind == (PVR_CCB_MAGIC | 104u)))
         return pvr_gpu_events_dispatch(&s->free_list_events, s->epoch, command, PVR_CCB_COMMAND_BYTES);
     return s->config.control.event && s->config.control.event(ctx, command);
 }
@@ -193,7 +199,7 @@ static enum pvr_free_list_result free_list_progress(struct pvr_gpu_service *s, i
 static int deadline(struct pvr_gpu_service *s, uint64_t duration)
 {
     uint64_t now;
-    if (!(s->config.free_lists.count ? free_list_clock(s->config.context, &now) :
+    if (!((s->config.free_lists.count || s->config.compute) ? free_list_clock(s->config.context, &now) :
           s->config.start.now(s->config.context, &now)) || now < s->last_now ||
         duration > UINT64_MAX - now) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
     s->last_now = now; s->deadline = now + duration; return 1;
@@ -201,7 +207,7 @@ static int deadline(struct pvr_gpu_service *s, uint64_t duration)
 static int opening_clock(struct pvr_gpu_service *s)
 {
     uint64_t now;
-    if (!(s->config.free_lists.count ? free_list_clock(s->config.context, &now) :
+    if (!((s->config.free_lists.count || s->config.compute) ? free_list_clock(s->config.context, &now) :
           s->config.start.now(s->config.context, &now)) || now < s->last_now || now >= s->deadline) {
         fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
     }
@@ -227,16 +233,33 @@ static int enable_firmware(struct pvr_gpu_service *s)
     if (!c->enable(c->context)) { fail(s, PVR_GPU_SERVICE_ENABLE); return 0; }
     return start_firmware(s);
 }
+static int publish_compute(struct pvr_gpu_service *s)
+{
+    if (!s->config.compute) return enable_firmware(s);
+    if (pvr_compute_service_prepare(s->config.compute, s->deadline) != 1) {
+        fail(s, PVR_GPU_SERVICE_COMPUTATION); return 0;
+    }
+    s->phase = PVR_GPU_SERVICE_PUBLISHING; return 1;
+}
 static int prepare(struct pvr_gpu_service *s)
 {
     const struct pvr_gpu_service_config *c = &s->config;
     memset(&s->queue, 0, sizeof(s->queue)); memset(&s->start, 0, sizeof(s->start));
     memset(&s->control, 0, sizeof(s->control)); memset(&s->stop, 0, sizeof(s->stop));
     struct pvr_gpu_start_ops start_ops = c->start;
-    if (c->free_lists.count) start_ops.now = free_list_clock;
-    if (!pvr_fw_state_prepare(c->resources, &c->state, s->mappings) ||
-        !pvr_mips_prepare(c->firmware, c->firmware_bytes, c->firmware_buffers,
-            s->mappings, PVR_FW_RESOURCE_COUNT, &s->boot) ||
+    if (c->free_lists.count || c->compute) start_ops.now = free_list_clock;
+    if (!pvr_fw_state_prepare(c->resources, &c->state, s->mappings)) {
+        fail(s, PVR_GPU_SERVICE_PREPARATION); return 0;
+    }
+    unsigned objects = PVR_FW_RESOURCE_COUNT;
+    if (c->compute) {
+        _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_COMPUTE_SERVICE_OBJECTS <= PVR_MIPS_MAX_OBJECTS,
+                       "firmware object capacity");
+        memcpy(s->mappings + objects, c->compute->objects, sizeof(c->compute->objects));
+        objects += PVR_COMPUTE_SERVICE_OBJECTS;
+    }
+    if (!pvr_mips_prepare(c->firmware, c->firmware_bytes, c->firmware_buffers,
+            s->mappings, objects, &s->boot) ||
         !pvr_gpu_start_init(&s->start, c->firmware, c->firmware_bytes, &s->boot,
             &start_ops, c->context) ||
         pvr_ccb_init(&s->queue, &c->queue, c->context, s->epoch) != PVR_CCB_OK) {
@@ -257,12 +280,12 @@ static int prepare(struct pvr_gpu_service *s)
         }
         s->phase = PVR_GPU_SERVICE_BUILDING; return 1;
     }
-    return enable_firmware(s);
+    return publish_compute(s);
 }
 static int begin_stop(struct pvr_gpu_service *s)
 {
     struct pvr_gpu_stop_ops ops = s->config.stop;
-    if (s->config.free_lists.count) ops.now = free_list_clock;
+    if (s->config.free_lists.count || s->config.compute) ops.now = free_list_clock;
     if (!pvr_gpu_stop_init(&s->stop, &s->control, s->config.firmware,
             s->config.firmware_bytes, &ops, s->config.context, s->deadline)) {
         fail(s, PVR_GPU_SERVICE_STOP); return 0;
@@ -280,7 +303,15 @@ static void advance(struct pvr_gpu_service *s)
         if (!opening_clock(s)) return;
         enum pvr_free_list_result r = free_list_progress(s, 0);
         if (r == PVR_FREE_LIST_FAULT || !opening_clock(s)) return;
-        if (r == PVR_FREE_LIST_OK) (void)enable_firmware(s);
+        if (r == PVR_FREE_LIST_OK) (void)publish_compute(s);
+        return;
+    }
+    case PVR_GPU_SERVICE_PUBLISHING: {
+        if (!opening_clock(s)) return;
+        int r = pvr_compute_service_poll(s->config.compute);
+        if (r < 0) { fail(s, PVR_GPU_SERVICE_COMPUTATION); return; }
+        if (!opening_clock(s)) return;
+        if (r == 1) (void)enable_firmware(s);
         return;
     }
     case PVR_GPU_SERVICE_ENABLING: {
@@ -296,7 +327,7 @@ static void advance(struct pvr_gpu_service *s)
         now = s->start.last_now;
         if (r == PVR_GPU_START_OK) {
             struct pvr_gpu_control_ops ops = s->config.control;
-            if (s->config.free_lists.count) { ops.now = free_list_clock; ops.event = free_list_event; }
+            if (s->config.free_lists.count || s->config.compute) { ops.now = free_list_clock; ops.event = free_list_event; }
             if (!pvr_gpu_control_init(&s->control, &s->start, &s->queue,
                     &ops, s->config.context, s->deadline)) {
                 fail(s, PVR_GPU_SERVICE_CONTROL); return;
@@ -313,6 +344,15 @@ static void advance(struct pvr_gpu_service *s)
         else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
         if (s->config.free_lists.count) {
             if (free_list_progress(s, 0) == PVR_FREE_LIST_FAULT) return;
+            now = s->last_now;
+        }
+        if (s->config.compute) {
+            unsigned phase = s->config.compute->phase;
+            if (phase == PVR_COMPUTE_SERVICE_FORMAT || phase == PVR_COMPUTE_SERVICE_RUNNING) {
+                if (pvr_compute_service_poll(s->config.compute) < 0) {
+                    fail(s, PVR_GPU_SERVICE_COMPUTATION); return;
+                }
+            }
             now = s->last_now;
         }
         break;
@@ -368,7 +408,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
-    if ((unsigned)r->operation > PVR_GPU_SERVICE_CLOSE ||
+    if ((unsigned)r->operation > PVR_GPU_SERVICE_COMPUTE ||
         (r->operation == PVR_GPU_SERVICE_STATUS ? r->timeout_us != 0 :
          (!r->timeout_us || r->timeout_us > INT64_MAX))) return PVR_GPU_SERVICE_INVALID;
     if (r->operation == PVR_GPU_SERVICE_STATUS)
@@ -378,7 +418,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
         if (s->owner != PVR_GPU_SERVICE_CLIENTS) return PVR_GPU_SERVICE_BUSY;
         if ((s->phase != PVR_GPU_SERVICE_COLD && s->phase != PVR_GPU_SERVICE_STOPPED) ||
             s->epoch == UINT64_MAX) return PVR_GPU_SERVICE_BUSY;
-        if (s->config.free_lists.count && s->phase == PVR_GPU_SERVICE_STOPPED)
+        if ((s->config.free_lists.count || s->config.compute) && s->phase == PVR_GPU_SERVICE_STOPPED)
             return PVR_GPU_SERVICE_BUSY;
         s->owner = m->client; ++s->epoch;
         if (!deadline(s, r->timeout_us) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
@@ -387,6 +427,17 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;
     if (s->phase == PVR_GPU_SERVICE_FAILED) return PVR_GPU_SERVICE_FAULT;
     if (s->phase != PVR_GPU_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
+    if (r->operation == PVR_GPU_SERVICE_COMPUTE) {
+        if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
+        if (s->config.compute->phase != PVR_COMPUTE_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
+        if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
+        if (pvr_compute_service_begin(s->config.compute, s->deadline) != 1) {
+            fail(s, PVR_GPU_SERVICE_COMPUTATION); return PVR_GPU_SERVICE_FAULT;
+        }
+        return PVR_GPU_SERVICE_OK;
+    }
+    if (s->config.compute && s->config.compute->phase != PVR_COMPUTE_SERVICE_READY &&
+        s->config.compute->phase != PVR_COMPUTE_SERVICE_COMPLETE) return PVR_GPU_SERVICE_BUSY;
     if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return PVR_GPU_SERVICE_FAULT; }
     if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
     if (s->config.free_lists.count) { s->phase = PVR_GPU_SERVICE_DRAINING; return PVR_GPU_SERVICE_OK; }
@@ -407,7 +458,7 @@ static void worker(void *argument)
         advance(s); /* One bounded step before each request; traffic cannot starve it. */
         int active = (s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING) ||
                      s->phase == PVR_GPU_SERVICE_ENABLING || s->phase == PVR_GPU_SERVICE_BUILDING ||
-                     s->phase == PVR_GPU_SERVICE_DRAINING;
+                     s->phase == PVR_GPU_SERVICE_DRAINING || s->phase == PVR_GPU_SERVICE_PUBLISHING;
         struct pvr_gpu_service_message message;
         if (xQueueReceive(s->requests, &message, active ? 1 : portMAX_DELAY) != pdTRUE) continue;
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
@@ -422,6 +473,10 @@ static void worker(void *argument)
         reply.start_error = s->start.error; reply.control_error = s->control.error;
         reply.stop_error = s->stop.error;
         reply.free_list_error = s->free_lists.error; reply.free_list_pending = s->free_lists.request_count;
+        if (s->config.compute) {
+            reply.compute_phase = s->config.compute->phase; reply.compute_error = s->config.compute->error;
+            reply.compute_job_error = s->config.compute->job.error;
+        }
         configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
     }
 }
