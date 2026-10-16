@@ -118,8 +118,15 @@ static void integration(void)
     assert(word(control_bytes+13)==PVR_CCCB_MAX_BYTES-1);
     assert(word(vm_bytes+1)==table_pages[0] && word(vm_bytes+9)==UINT32_MAX);
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    assert(argc == 1 || (argc == 2 && !strcmp(argv[1], "--vm-root-only")));
+    setup(); uint64_t excluded_root = 0x1fc00000;
+    memcpy(vm_bytes + 1, &excluded_root, sizeof(excluded_root));unchanged_refusal();
+    if (argc == 2) {
+        puts("PASS offline compute context: excluded native VM root preserves all output bytes");
+        return 0;
+    }
     reference_comparison();integration();
     setup();config.bvnc++;unchanged_refusal();
     setup();config.priority=3;unchanged_refusal();

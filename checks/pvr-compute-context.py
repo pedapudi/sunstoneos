@@ -76,6 +76,7 @@ def main():
     parser.add_argument('--sources', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', default='clang-21')
+    parser.add_argument('--vm-root-only', action='store_true')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parent.parent
@@ -126,7 +127,8 @@ def main():
     command += [str(root / name) for name in sources] + ['-o', str(binary)]
     (args.output / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')
     subprocess.run(command, check=True)
-    run = subprocess.run([str(binary)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+    run_command = [str(binary)] + (['--vm-root-only'] if args.vm_root_only else [])
+    run = subprocess.run(run_command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
     (args.output / 'check.log').write_text(run.stdout)
     for name in sources + ['checks/pvr-compute-context.py', 'include/pvr_compute_context.h',
                            'include/pvr_cccb.h', 'include/pvr_ccb.h', 'include/pvr_gpu_vm.h', 'include/pvr_firmware.h']:
@@ -136,7 +138,8 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     passed = run.returncode == 0 and 'PASS offline compute context:' in run.stdout
-    result = dict(passed=passed, returncode=run.returncode, inputs=inputs,
+    result = dict(passed=passed, returncode=run.returncode, inputs=inputs, run_command=run_command,
+                  scope="excluded VM root refusal only" if args.vm_root_only else "reference and VM/CCCB integration",
                   binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                   reference_sha256=hashlib.sha256(reference.encode()).hexdigest(),
                   compiler=subprocess.check_output([args.compiler, '--version'], text=True),

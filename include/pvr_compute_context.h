@@ -30,7 +30,8 @@ struct pvr_compute_config {
  * Every CPU span and firmware span must be disjoint from the other objects;
  * CPU spans must also be disjoint from both input record spans. Keep all inputs
  * stable. The VM record must contain an aligned, nonzero, 36-bit page catalogue
- * address, UINT32_MAX register marker and otherwise zero bytes, as produced by
+ * address outside 0x1fc00000..0x1fc03fff, UINT32_MAX register marker and
+ * otherwise zero bytes, as produced by
  * pvr_gpu_vm_build. Priority 0/1/2 means low/normal/high; privileged admission
  * owns priority permission and unique context/owner identities, including zero.
  *

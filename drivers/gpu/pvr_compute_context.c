@@ -46,6 +46,7 @@ int pvr_compute_context_build(const struct pvr_compute_config *c,
     const unsigned char *vm = b[PVR_COMPUTE_VM].cpu;
     uint64_t catalogue = get(vm, 8);
     if (!catalogue || (catalogue & 4095) || catalogue >= (UINT64_C(1) << 36) ||
+        (catalogue >= 0x1fc00000 && catalogue < 0x1fc04000) ||
         get(vm + 8, 4) != UINT32_MAX) return 0;
     for (unsigned i = 12; i < PVR_GPU_VM_CONTEXT_BYTES; ++i) if (vm[i]) return 0;
 

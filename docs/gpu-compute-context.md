@@ -42,6 +42,8 @@ storage may be unaligned; typed input records require ordinary C alignment.
 
 The VM record must contain a nonzero, 4 KiB aligned catalogue physical address
 below 2^36, an unallocated catalogue-register marker, and otherwise zero bytes.
+It excludes physical pages `0x1fc00000` through `0x1fc03fff`, matching native
+workload-memory admission.
 The native [GPU VM builder](gpu-vm.md) produces that initial record. This check
 establishes its offline structure; admission must still own and publish its
 page tables and validate every workload mapping.
@@ -102,13 +104,17 @@ references and initial control cursors without attaching a context or sending
 a notification. Forty-two refusal cases cover profile, priority, size,
 alignment, range, overlap and VM-record errors; all output guards remain intact.
 
-The first sanitizer/reference run passed. Clang 21 also compiled the component
+The first sanitizer/reference run passed. A separate focused refusal check
+passed after aligning the root-address exclusion with native memory admission;
+the full byte/reference and integration evidence remains reusable. Clang 21 also compiled the component
 for freestanding AArch64 with strict alignment. Existing VM, client-transport,
 GPU service, emulator and physical checks were not repeated.
 
 Evidence is under `~/.cache/sunstoneos/evidence/gpu-compute-context-20261016/`.
 `results.json` records source hashes, reference identity and the host result;
-`target.json` records the target command and object identity. The references are
+`target.json` records the target command and object identity. The later root
+refusal result is under `~/.cache/sunstoneos/evidence/gpu-compute-context-root-20261016/`.
+The references are
 [pvr_queue.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c),
 [pvr_context.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_context.c),
 and their pinned stream/ABI dependencies. No physical request or performance
