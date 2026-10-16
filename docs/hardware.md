@@ -31,6 +31,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits. Rate changes, regulator control,
   and thermal management remain planned.
+- Storage: **implemented** bounded eMMC identification probe. Controller access,
+  pin/clock restoration, and ROM return are **tested**; CMD1 receives no response.
+  [Storage evidence](storage.md) records this negative result. No media device
+  is identified, and block access remains planned.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

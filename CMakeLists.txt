@@ -48,10 +48,12 @@ set_target_properties(kernel-check PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-virt/link.ld")
 
 # The physical platform and its secure QEMU model share the monitor and kernel.
-foreach(target a733-kernel-check a733-kernel-model a733-monitor-model)
+foreach(target a733-kernel-check a733-kernel-model a733-monitor-model a733-storage-probe)
   set(check_source checks/kernel.c)
   if(target STREQUAL "a733-monitor-model")
     set(check_source checks/monitor-renew.c)
+  elseif(target STREQUAL "a733-storage-probe")
+    set(check_source checks/storage-probe.c)
   endif()
   add_executable(${target}
     platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c

@@ -2,6 +2,7 @@
 """Manage temporary access to the single attached Allwinner FEL USB device."""
 
 import argparse
+import errno
 import fcntl
 import json
 import os
@@ -144,6 +145,18 @@ def session_backup(node):
 
 
 def session_node(config):
+    # sysfs attributes can return ENODEV while an expected USB disconnect is
+    # removing the directory. Treat only absence errors as an absent instance;
+    # callers retain their existing deadline and other errors remain fatal.
+    try:
+        return _session_node(config)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ENODEV):
+            return None
+        raise
+
+
+def _session_node(config):
     device = SYS_USB / config["port"]
     if not device.exists():
         return None

@@ -94,6 +94,12 @@ access across both transitions. FEL loaders require the verified ROM revision
 This protocol check runs on the host and does not require reinstalling the
 session helper.
 
+Session discovery treats missing sysfs entries and `ENODEV` during an expected
+disconnect as temporary device absence. Callers keep their bounded reconnect
+deadlines; other I/O errors remain fatal. `checks/usb-disconnect.py` covers this
+metadata race without contacting hardware. The host-side fix needs no rule
+reinstallation.
+
 `usb-diagnostic.py` loads the bounded RAM runtime, checks its native protocol,
 and requests ROM return. `read-returned-result.py` retrieves diagnostics after
 a failed session only when host metadata identifies an independently returned

@@ -20,6 +20,11 @@ complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
 `/home/sunil/git/sunstoneos-worktrees/bringup` worktree.
 
+The [storage probe](storage.md) reaches the SD/MMC controller, but eMMC CMD1
+times out after applying the reference clock-mode setting. Population and power
+remain unconfirmed. Pin/clock restoration and automatic ROM return passed.
+Investigate storage power and the enabled UFS path before another eMMC attempt.
+
 ## Observed host and device state
 
 The attached FEL device (`1f3a:efe8`) identifies A733. The boot CPU identifies
@@ -28,7 +33,7 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board returned to FEL after the native application’s host lease expired.
+The board returned to FEL after the bounded storage probe (latest node `003:061`).
 Native assets now occupy `0x43000000` through the WAV slot at `0x44000000`; the
 one-shot combined input bundle must be uploaded again before one-shot execution. The installed
 [session access rule](../tools/README.md) grants access after reconnects on
@@ -98,7 +103,9 @@ the tool hash and recovery evidence in the application document.
 ## Next actions
 
 1. Identify and preserve populated storage before persistent installation.
-   Implement read-only storage access and backup through the native transport.
+   Use the storage probe findings to establish power and population; inspect UFS
+   initialization in the pinned bootloader. Implement read-only storage access
+   and backup through the native transport.
    Establish storage boot and recovery before overwriting existing contents.
 2. Extend USB with interrupt delivery, cold clock/PHY setup, and remaining roles.
    Preserve independent task and host deadlines during controller work.
