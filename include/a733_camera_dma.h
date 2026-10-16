@@ -1,0 +1,91 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef SUNSTONE_A733_CAMERA_DMA_H
+#define SUNSTONE_A733_CAMERA_DMA_H
+#include <stdint.h>
+
+/* One serialized privileged owner, fresh zeroed storage, no callback reentry.
+ * One NV16 640x480 frame: separate Y and interleaved UV planes, stride 640.
+ * This is a DMA140 component; route/VIPP and single-frame gating are required.
+ */
+enum a733_camera_dma_state {
+    A733_CAM_DMA_NEW, A733_CAM_DMA_ADMIT, A733_CAM_DMA_CHECK,
+    A733_CAM_DMA_CONFIGURE, A733_CAM_DMA_ARMED, A733_CAM_DMA_START,
+    A733_CAM_DMA_WAIT, A733_CAM_DMA_STOP, A733_CAM_DMA_DISABLE,
+    A733_CAM_DMA_DRAIN, A733_CAM_DMA_FINAL_STATUS, A733_CAM_DMA_SYNC,
+    A733_CAM_DMA_READY, A733_CAM_DMA_RELEASE, A733_CAM_DMA_CLOSED,
+    A733_CAM_DMA_FAULT
+};
+enum a733_camera_frame_owner {
+    A733_CAMERA_CALLER, A733_CAMERA_RESERVED, A733_CAMERA_DEVICE
+};
+struct a733_camera_plane {
+    uint64_t bus_address;
+    /* Full mapped span, including any platform-required tail/prefetch guard.
+     * Both spans must be disjoint. Address fields encode bits [33:2], but
+     * admission must establish the actual bus/IOMMU addressability separately.
+     */
+    uint64_t mapped_bytes;
+};
+struct a733_camera_dma_config {
+    struct a733_camera_plane y, uv;
+    uint64_t frame_id; /* Nonzero caller identity, immutable through close. */
+    uint8_t block; /* Physical DMA 0..5; channel 0, entire block exclusive. */
+};
+struct a733_camera_dma_ops {
+    int (*now_us)(void *, uint64_t *);
+    /* Return 1 complete, 0 pending, -1 failure. Publish a nonzero token before
+     * any side effect and preserve it thereafter. Admission owns both spans,
+     * clocks, reset, full physical block, route and one-frame producer fence.
+     * Prove CSI master-1 mapping, guard spans, cache isolation and independent
+     * recovery. Prepare cache for device writes. Producer remains quiet.
+     * VIPP must deliver progressive YUV422 640x480 without scale/crop/OSD.
+     * Native route/VIPP/gating implementations are not supplied by this API.
+     */
+    int (*admit)(void *, const struct a733_camera_dma_config *, uint64_t,
+                 uint64_t *token);
+    /* Aligned ordered Device accesses, base 0x05830000 + block*0x1000.
+     * MMIO callbacks return 1 or -1; every successful write includes barriers.
+     */
+    int (*read)(void *, uint64_t token, uint16_t off, uint32_t *, uint64_t);
+    int (*write)(void *, uint64_t token, uint16_t off, uint32_t, uint64_t);
+    /* Release exactly one complete frame into the admitted path. The fence
+     * must prevent even a partial second frame from reaching the DMA.
+     * Use parser SCAP image mode; completion requires DMA CAPTURE_DONE.
+     */
+    int (*start_one)(void *, uint64_t token, uint64_t);
+    /* Establish quiet input and successful single-frame fence operation. */
+    int (*producer_stop)(void *, uint64_t token, uint64_t);
+    /* After CAP_EN clear, prove all writes retired, no prefetched addresses,
+     * no upstream errors, and exactly one complete undamaged frame. Register
+     * enable readback and CAPTURE_DONE alone do not establish these properties.
+     */
+    int (*drain)(void *, uint64_t token, uint64_t);
+    /* Cache invalidation/acquire barriers only. Ownership stays with driver
+     * until poll returns READY; a failure retains both spans and the token.
+     */
+    int (*sync_cpu)(void *, uint64_t token, uint64_t);
+    /* Release mapping/resource leases after READY. Caller keeps frame data. */
+    int (*release)(void *, uint64_t token, uint64_t);
+};
+struct a733_camera_dma {
+    struct a733_camera_dma_ops ops;
+    struct a733_camera_dma_config config;
+    void *context;
+    uint64_t token, now, deadline;
+    uint32_t saved, events;
+    enum a733_camera_dma_state state;
+    enum a733_camera_frame_owner owner;
+    uint16_t index;
+    uint8_t phase, initialized;
+};
+int a733_camera_dma_init(struct a733_camera_dma *,
+    const struct a733_camera_dma_ops *, void *, const struct a733_camera_dma_config *);
+int a733_camera_dma_open(struct a733_camera_dma *, uint64_t deadline_us);
+int a733_camera_dma_capture(struct a733_camera_dma *, uint64_t deadline_us);
+int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
+/* At most one MMIO/platform operation plus pre/post monotonic time checks.
+ * Faults are terminal and retain ownership; no automatic stop/reset/retry.
+ * READY alone returns frame ownership. ARMED has not captured any data.
+ */
+int a733_camera_dma_poll(struct a733_camera_dma *);
+#endif
