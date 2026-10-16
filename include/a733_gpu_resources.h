@@ -5,6 +5,8 @@
 #include "a733_gpu_power.h"
 
 #define A733_GPU_RESOURCE_CLIENTS 16u
+#define A733_GPU_RESOURCE_GUARDS 16u
+#define A733_GPU_RESOURCE_SLOTS (A733_GPU_RESOURCE_CLIENTS + A733_GPU_RESOURCE_GUARDS)
 #define A733_GPU_RESOURCE_OSC       (1u << 0)
 #define A733_GPU_RESOURCE_PARENT    (1u << 1)
 #define A733_GPU_RESOURCE_RAIL      (1u << 2)
@@ -46,14 +48,19 @@ struct a733_gpu_resource_lease {
     uint32_t mask;
     enum a733_gpu_resource_mode mode;
 };
+struct a733_gpu_rail_guard {
+    struct a733_gpu_resource_lease lease;
+    unsigned client;
+};
 struct a733_gpu_resource_manager {
     struct a733_gpu_resource_ops ops;
     void *context;
     atomic_uint busy;
     uint64_t next_token, last_now, deadline;
-    struct a733_gpu_resource_lease leases[A733_GPU_RESOURCE_CLIENTS];
+    struct a733_gpu_resource_lease leases[A733_GPU_RESOURCE_SLOTS];
     enum a733_gpu_resource_error error;
     uint32_t initialized, failed, stage, last_value;
+    uint32_t rail_guards;
     struct a733_gpu_resource_rail rail;
 };
 /* Initialize zeroed storage once, before concurrent access. Context and callback
@@ -102,4 +109,20 @@ enum a733_gpu_resource_result a733_gpu_resources_release(
  * sample, hardware operation, state mutation or release occurs. */
 enum a733_gpu_resource_result a733_gpu_resources_status(
     struct a733_gpu_resource_manager *, unsigned client, const struct a733_gpu_resource_lease *);
+/* Metadata-only bridge for the common rail ledger. Allocate one free manager
+ * bridge slot16–31 with RAIL STABLE or CHANGE ownership. Legacy client IDs
+ * remain0–15; bridge admission cannot consume a caller's fixed client slot. Existing GPU acquisitions/change
+ * guards conflict normally. No clock sample, I2C/MMIO, gate enable, voltage
+ * proof or power readiness occurs. The ledger owns the private returned guard.
+ * Status/end authenticate client, token, mask and mode plus bridge provenance.
+ * Legacy release/change_end cannot release a bridge. end requires independently
+ * established quiescence; it only removes metadata. Guard storage and manager
+ * must be disjoint. All operations are nonblocking and preserve refusal output.
+ */
+enum a733_gpu_resource_result a733_gpu_rail_guard_acquire(
+    struct a733_gpu_resource_manager *, int change, struct a733_gpu_rail_guard *);
+enum a733_gpu_resource_result a733_gpu_rail_guard_status(
+    struct a733_gpu_resource_manager *, const struct a733_gpu_rail_guard *);
+enum a733_gpu_resource_result a733_gpu_rail_guard_end(
+    struct a733_gpu_resource_manager *, const struct a733_gpu_rail_guard *);
 #endif

@@ -153,7 +153,7 @@ static enum a733_gpu_resource_result reserve(struct a733_gpu_resource_manager *m
 {
     if (m->leases[client].mode != A733_GPU_RESOURCE_FREE || !m->next_token)
         return A733_GPU_RESOURCE_BUSY;
-    for (unsigned i = 0; i < A733_GPU_RESOURCE_CLIENTS; ++i) {
+    for (unsigned i = 0; i < A733_GPU_RESOURCE_SLOTS; ++i) {
         struct a733_gpu_resource_lease *l = &m->leases[i];
         uint32_t common = mask & l->mask;
         if (common && (mode == A733_GPU_RESOURCE_CHANGE || l->mode == A733_GPU_RESOURCE_CHANGE ||
@@ -208,7 +208,7 @@ enum a733_gpu_resource_result a733_gpu_resources_change_end(
     enum a733_gpu_resource_result result = enter(m);
     if (result != A733_GPU_RESOURCE_OK) return result;
     struct a733_gpu_resource_lease *l = &m->leases[client];
-    if (l->mode != A733_GPU_RESOURCE_CHANGE || l->token != token)
+    if ((m->rail_guards & (1u << client)) || l->mode != A733_GPU_RESOURCE_CHANGE || l->token != token)
         return leave(m, A733_GPU_RESOURCE_INVALID);
     if (!success) { l->mode = A733_GPU_RESOURCE_RETAINED; fail(m, A733_GPU_RESOURCE_IO); }
     else *l = (struct a733_gpu_resource_lease){0};
@@ -221,7 +221,7 @@ enum a733_gpu_resource_result a733_gpu_resources_release(
     enum a733_gpu_resource_result result = enter(m);
     if (result != A733_GPU_RESOURCE_OK) return result;
     struct a733_gpu_resource_lease *l = &m->leases[client];
-    if (l->mode != A733_GPU_RESOURCE_STABLE || l->token != token)
+    if ((m->rail_guards & (1u << client)) || l->mode != A733_GPU_RESOURCE_STABLE || l->token != token)
         return leave(m, A733_GPU_RESOURCE_INVALID);
     m->deadline = deadline; m->stage = 0;
     int ok = time_ok(m);
@@ -232,4 +232,52 @@ enum a733_gpu_resource_result a733_gpu_resources_release(
     if (!ok) { l->mode = A733_GPU_RESOURCE_RETAINED; return leave(m, A733_GPU_RESOURCE_FAULT); }
     *l = (struct a733_gpu_resource_lease){0};
     return leave(m, A733_GPU_RESOURCE_OK);
+}
+
+static int exact_guard(struct a733_gpu_resource_manager *m, const struct a733_gpu_rail_guard *g)
+{
+    if (g->client < A733_GPU_RESOURCE_CLIENTS || g->client >= A733_GPU_RESOURCE_SLOTS || !(m->rail_guards & (1u << g->client))) return 0;
+    const struct a733_gpu_resource_lease *l = &m->leases[g->client];
+    return g->lease.token && g->lease.token == l->token &&
+        g->lease.mask == A733_GPU_RESOURCE_RAIL && g->lease.mask == l->mask &&
+        g->lease.mode == l->mode &&
+        (l->mode == A733_GPU_RESOURCE_STABLE || l->mode == A733_GPU_RESOURCE_CHANGE);
+}
+enum a733_gpu_resource_result a733_gpu_rail_guard_acquire(
+    struct a733_gpu_resource_manager *m, int change, struct a733_gpu_rail_guard *out)
+{
+    if ((change != 0 && change != 1) || !separate(m,sizeof(*m),out,sizeof(*out)))
+        return A733_GPU_RESOURCE_INVALID;
+    enum a733_gpu_resource_result r = enter(m);
+    if (r != A733_GPU_RESOURCE_OK) return r;
+    unsigned client = A733_GPU_RESOURCE_CLIENTS;
+    while (client < A733_GPU_RESOURCE_SLOTS && m->leases[client].mode != A733_GPU_RESOURCE_FREE) ++client;
+    if (client == A733_GPU_RESOURCE_SLOTS) return leave(m,A733_GPU_RESOURCE_BUSY);
+    uint64_t token;
+    r = reserve(m,client,A733_GPU_RESOURCE_RAIL,
+        change ? A733_GPU_RESOURCE_CHANGE : A733_GPU_RESOURCE_STABLE,&token);
+    if (r == A733_GPU_RESOURCE_OK) {
+        m->rail_guards |= 1u << client;
+        *out = (struct a733_gpu_rail_guard){m->leases[client],client};
+    }
+    return leave(m,r);
+}
+enum a733_gpu_resource_result a733_gpu_rail_guard_status(
+    struct a733_gpu_resource_manager *m, const struct a733_gpu_rail_guard *g)
+{
+    if (!separate(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
+    enum a733_gpu_resource_result r = enter(m);
+    if (r != A733_GPU_RESOURCE_OK) return r;
+    return leave(m,exact_guard(m,g) ? A733_GPU_RESOURCE_OK : A733_GPU_RESOURCE_INVALID);
+}
+enum a733_gpu_resource_result a733_gpu_rail_guard_end(
+    struct a733_gpu_resource_manager *m, const struct a733_gpu_rail_guard *g)
+{
+    if (!separate(m,sizeof(*m),g,sizeof(*g))) return A733_GPU_RESOURCE_INVALID;
+    enum a733_gpu_resource_result r = enter(m);
+    if (r != A733_GPU_RESOURCE_OK) return r;
+    if (!exact_guard(m,g)) return leave(m,A733_GPU_RESOURCE_INVALID);
+    m->leases[g->client] = (struct a733_gpu_resource_lease){0};
+    m->rail_guards &= ~(1u << g->client);
+    return leave(m,A733_GPU_RESOURCE_OK);
 }

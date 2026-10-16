@@ -11,7 +11,7 @@ static a733_clock_mask_t parents(a733_clock_mask_t mask)
     a733_clock_mask_t p=0;
     if(mask&(A733_CLOCK_USB0|A733_CLOCK_USB1))p|=A733_CLOCK_USB01_REF;
     if(mask&A733_CLOCK_MAIN_UARTS)p|=A733_CLOCK_APB_UART;
-    if(mask&A733_CLOCK_S_UARTS)p|=A733_CLOCK_APBS1;
+    if(mask&(A733_CLOCK_S_UARTS|A733_CLOCK_S_TWI0))p|=A733_CLOCK_APBS1;
     if(mask&A733_CLOCK_THS)p|=A733_CLOCK_GPADC24M;
     if(mask&A733_CLOCK_VO0)p|=A733_CLOCK_DISPLL1;
     if((mask|p)&A733_CLOCK_DISPLL1)p|=A733_CLOCK_OSC;
@@ -59,7 +59,8 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
 {
     const a733_clock_mask_t local=A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU|
         A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS|A733_CLOCK_MAIN_UARTS|
-        A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1;
+        A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1|
+        A733_CLOCK_SDC1|A733_CLOCK_RADIO_MODULE|A733_CLOCK_S_TWI0;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;

@@ -64,12 +64,15 @@ typedef uint64_t a733_clock_mask_t;
 #define A733_CLOCK_USB01_REF  (UINT64_C(1)<<50) /* USB0/1 reference mux/gate at CCU+0x1340. */
 #define A733_CLOCK_USB0       (UINT64_C(1)<<51) /* Complete USB0 port; exclusive. */
 #define A733_CLOCK_USB1       (UINT64_C(1)<<52) /* Complete USB1 port; exclusive. */
+#define A733_CLOCK_SDC1       (UINT64_C(1)<<53) /* Complete SDC1 host and dedicated clock/reset. */
+#define A733_CLOCK_RADIO_MODULE (UINT64_C(1)<<54) /* Shared Wi-Fi/BT module lifecycle; exclusive. */
+#define A733_CLOCK_S_TWI0     (UINT64_C(1)<<55) /* Complete S_TWI0 including autonomous engines. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT64_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT64_C(0x1fffffffffffff) /* Bits0-52; unassigned bits refused. */
+#define A733_CLOCK_ALL     UINT64_C(0xffffffffffffff) /* Bits0-55; unassigned bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -125,6 +128,18 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * gate/reset at CCU+0x5a4 and USB_SYS gate at +0x5c0 bit9 remain FABRIC
  * authority; a local port token grants no upstream mutation rights. A shared
  * FABRIC lease permits only observation/adoption of stable upstream configuration.
+ * SDC1 owns host 0x04021000, CCU+0xd10/+0xd1c, IRQ194 and controller
+ * DMA routes. Its selected module parent is reserved explicitly. RADIO_MODULE
+ * owns shared Wi-Fi/BT reset, firmware and power sequencing; it has no clock
+ * ancestor and grants no pin or rail authority. Independent UART/SDIO operations
+ * borrow that one lifetime owner rather than acquire separate module ownership.
+ * S_TWI0 owns 0x07083000, all legacy/autonomous PMU/DRV engines and DMA,
+ * R_CCU+0x19c gate0/reset16 and IRQ235; it reserves APBS1 -> REF -> OSC.
+ * Every remote and local engine writer must be excluded before admission.
+ * PL0/PL1 and electrical authority remain separate. FABRIC additionally covers
+ * STORE_AHB/SD-monitor CCU+0x5c0 bits24/29, STORE_MBUS+0x5e0 bit30 and
+ * MSI-LITE1+0x59c gate0/reset16/17. These shared storage fields cannot be
+ * changed under an SDC1 token; exclusive FABRIC excludes all other consumers.
  * Changing a child holds its ancestors stable. Local controller scopes are
  * exclusive only; their selected parent must be leased separately. I2S/ASRC/
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO

@@ -13,7 +13,7 @@ int a733_gpu_clock_parent_init(struct a733_gpu_clock_parent *s,struct a733_clock
         !separate(m,sizeof(*m),r,sizeof(*r)) || s->phase!=A733_GPU_CLOCK_NEW ||
         !m->initialized || m->failed || !r->initialized || r->failed ||
         client>=A733_GPU_RESOURCE_CLIENTS || !owner || !deadline)return 0;
-    for(unsigned i=0;i<A733_GPU_RESOURCE_CLIENTS;++i)
+    for(unsigned i=0;i<A733_GPU_RESOURCE_SLOTS;++i)
         if(r->leases[i].mode!=A733_GPU_RESOURCE_FREE)return 0;
     *s=(struct a733_gpu_clock_parent){.registry=m,.resources=r,.owner=owner,
         .deadline=deadline,.client=client,.phase=A733_GPU_CLOCK_COMMON};
