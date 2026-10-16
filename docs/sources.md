@@ -49,6 +49,8 @@ The [compiler record](npu-compiler.md) pins the downloaded host image and record
 the generated convolution, original license locations, and numerical comparisons.
 The [directory investigation](nbg-directory.md) pins the inspector's debug
 information and compiler CRC instructions used to establish the emitted layout.
+The [convolution loader trace](nbg-conv-loader.md) reuses the pinned A733 loader
+and synthetic HAL to capture preparation of that numerical fixture.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

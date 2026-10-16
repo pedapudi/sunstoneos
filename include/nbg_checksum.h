@@ -8,16 +8,25 @@ enum nbg_checksum_result {
 };
 struct nbg_checksum { uint32_t stored, computed; };
 
-/* Check the complete 0x1001e file with CRC-32/ISO-HDLC, treating bytes 108..111
- * (the stored checksum) as zero. Does not modify the file. Covers padding and
- * trailing bytes, not only declared sections. A stored zero is compared normally;
- * it does not disable verification. Only NBG magic, version, and file-size limits
- * are checked here. Container structure and execution admission remain separate.
+/* CRC-32/ISO-HDLC, without modifying the file. For 0x1001e, checks the complete
+ * file, including gaps/trailing bytes, with bytes 108..111 treated as zero.
+ * This path checks magic, version, and size; structure is validated separately.
  *
- * Caller supplies stable readable bytes, 592..256 MiB, and a writable result
- * disjoint from the file. Input may be unaligned. MATCH and MISMATCH publish both
- * values. INVALID leaves result unchanged. No heap, device access, mutable static
- * state, or synchronization. CRC detects corruption; it is not authentication. */
+ * For 32-bit-address 0x20000, first calls nbg_model_open. Requires the packed
+ * 48-byte header, 12-byte subheader, and consecutive 44-byte directory records.
+ * Checks every byte after that directory, including gaps/trailing bytes, with
+ * section-checksum values treated as zero. Then checks every listed section CRC.
+ * The checksum table must be nonempty and reference distinct, present sections;
+ * references to itself are invalid. HEADER AND DIRECTORY BYTES ARE NOT COVERED.
+ * A match is not target admission, trusted model identity, or command validation.
+ *
+ * Caller supplies stable readable bytes, at most 256 MiB, and a writable result
+ * disjoint from the file. Input may be unaligned. A stored zero is compared
+ * normally; it never disables verification. MATCH returns the format's primary
+ * stored/computed pair. MISMATCH returns the first failing pair, checking the
+ * primary CRC before section CRCs in table order. INVALID leaves output unchanged.
+ * No heap, device access, mutable static state, or synchronization. CRC detects
+ * corruption; it is not authentication. Link with the native container decoder. */
 enum nbg_checksum_result nbg_checksum_verify(const void *, size_t,
                                              struct nbg_checksum *);
 #endif

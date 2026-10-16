@@ -23,8 +23,9 @@ with host field-packing and complete-submission comparisons.
 The [pinned host compiler](npu-compiler.md) now produces a small numerical fixture
 whose simulator output matches the quantized CPU reference. Its `0x20000` format
 now has native decoding support. The [directory investigation](nbg-directory.md)
-records its changed layouts and checksum coverage; native checksum verification,
-assembly, and execution remain outstanding.
+records its changed layouts and checksum coverage. Native checksum verification
+passes host checks. The [convolution capture](nbg-conv-loader.md) supplies allocation
+and command evidence; native assembly and execution remain outstanding.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -225,8 +226,8 @@ authorizing device execution.
 
 1. **Load the numerical fixture natively.** The pinned compiler now produces a
    small convolution with exact float and matched quantized simulator references.
-   Native decoding now supports its `0x20000` format. Use the
-   [directory findings](nbg-directory.md) to extend checksum verification, then
+   Native decoding and checksum verification now support its `0x20000` layout.
+   Use the [SDK convolution capture](nbg-conv-loader.md) to extend assembly and
    allocation planning for its zero working pool. Keep the existing SDK network
    as the `0x1001e` format reference.
 2. **Complete driver integration.** The native controller, memory policy, CPU

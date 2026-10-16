@@ -117,7 +117,7 @@ The initial fixture-generation attempt failed because container root lacked writ
 permission on the host-owned output directory. Assigning that directory to
 container root resolved it; model generation had not written any files.
 
-## Native checksum and assembly support remain outstanding
+## Native assembly support remains outstanding
 
 The model SHA-256 is
 `db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
@@ -134,7 +134,9 @@ whole-file CRC method does not reproduce the stored value. The
 layouts and matches its checksum over normalized section payloads. That checksum
 excludes the header and directory. Native directory decoding and version-specific
 accessors now pass host checks.
-Directory checksum verification remains unimplemented.
+The [checksum verifier](nbg-checksum.md) now passes primary and section checks.
+A [saved SDK capture](nbg-conv-loader.md) records the model's allocation and
+command requirements for native assembly.
 
 The host inspector returned `unsupported NBG version 0x20000`, as intended.
 Native allocation planning still needs to handle legitimate zero-pool models and

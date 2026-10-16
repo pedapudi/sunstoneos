@@ -1,19 +1,19 @@
 # Verify compiled-model integrity before assembly
 
-Native checksum verification is **implemented and host-tested** for NBG format
-`0x1001e`. The assembler requires a match before publishing allocation requirements
-or modifying output buffers. The verifier covers the complete supplied file,
-including gaps and trailing bytes. Successful verification detects corruption;
-it does not authenticate a model or establish command safety.
+Native checksum verification is **implemented and host-tested** for NBG formats
+`0x1001e` and the supported `0x20000` directory layout. Coverage differs by format:
+the older format covers the complete file; the directory format excludes its
+header and directory. Successful verification detects corruption within that
+coverage. It does not authenticate a model or establish command safety.
 
 This document assumes familiarity with binary formats and checksums. The interface
 is [nbg_checksum.h](../include/nbg_checksum.h), implemented in
 [nbg_checksum.c](../drivers/npu/nbg_checksum.c).
 
-## Compute CRC over the file with the checksum field zeroed
+## Fixed-header files cover every byte with the checksum field zeroed
 
 The algorithm is CRC-32/ISO-HDLC: reflected polynomial `0xedb88320`, initial state
-`0xffffffff`, and final complement. The checksum field at bytes 108–111 is treated
+`0xffffffff`, and final complement. For `0x1001e`, the field at bytes 108–111 is treated
 as four zero bytes during computation. The implementation substitutes those bytes
 while reading; it never modifies the input file.
 
@@ -38,62 +38,92 @@ and matches native C and Python zlib. This does not establish that the SDK loade
 enforces whole-file integrity. Its separate section-checksum routine has a
 version-bit guard that excludes the inspected `0x1001e` files.
 
+## Directory files require payload and listed section checksums
+
+For `0x20000`, the verifier first calls [nbg_model_open](nbg-model.md). It requires
+32-bit addresses, the 48-byte header, a 12-byte subheader immediately afterward,
+and consecutive 44-byte directory records starting at byte 60. Other placements
+can pass structural decoding but have no established checksum coverage and are
+refused by the verifier.
+
+The primary CRC covers every byte after the directory, including payload gaps
+and trailing bytes. Each checksum-value word in the section-checksum table is
+treated as zero; the section-type words remain included. The verifier then checks
+every listed section against its stored CRC. The table must be nonempty, name
+distinct present sections, and exclude itself. A repaired primary CRC cannot
+conceal a failure in a listed section checksum.
+
+The [directory reference](nbg-directory.md) establishes this rule from the compiler
+writer and the pinned convolution. Its primary value is `0xe5e19256`; all three
+listed section values also match. The writer updates its running CRC when emitting
+alignment padding. A synthetic 64-byte payload gap matches zlib and the native
+verifier; a compiler-generated padded directory model remains untested.
+
+Header and directory bytes are **outside checksum coverage**. A structurally valid
+changed target ID still passes checksum verification. Target compatibility,
+trusted model identity, and command admission must be checked separately.
+
 ## Preserve input bytes and distinguish invalid input from corruption
 
-`nbg_checksum_verify` accepts stable, readable input from 592 bytes through 256 MiB.
-It checks the NBG magic and supported version, but leaves complete container
-validation to [nbg_model_open](nbg-model.md). Input may be unaligned. The writable
-result must not overlap the file.
+`nbg_checksum_verify` accepts stable readable input up to 256 MiB. Fixed-header
+files require at least 592 bytes. Directory files require successful structural
+decoding before checksum reads. Input may be unaligned. The writable result
+must not overlap the file.
 
-A match or mismatch returns both the stored and computed checksum. Invalid
-pointers, sizes, output overlap, magic, or version leave the result unchanged.
-These checks cannot establish whether an arbitrary pointer names readable memory.
-A stored zero is compared normally; zero never disables verification. A generated
-fixture whose computed CRC is zero verifies that behavior.
+A match returns the primary stored/computed pair. A mismatch returns the first
+failing pair: the primary checksum first, then section checksums in table order.
+Invalid input leaves the result unchanged. These checks cannot establish whether
+an arbitrary pointer names readable memory. A stored zero is compared normally;
+zero never disables verification. Generated zero-CRC cases cover both formats.
 
 The implementation processes each byte with two four-bit table steps. It reserves
 64 bytes of read-only table storage and uses no heap, mutable static state,
-initialization lock, or device interface. Work is linear in file size.
+initialization lock, or device interface. Work is linear in file size. Distinct,
+nonoverlapping section ranges bound the additional section-CRC pass.
 
-The assembler checks integrity on each requirements or assembly call because it
-does not retain an authenticated file identity between calls. Callers keep the
-file and decoded view immutable during use. A checksum mismatch prevents all
-caller-buffer writes and leaves the result unchanged.
+The assembler requires a matching checksum on each requirements or assembly call.
+It still supports only the older profile. A successfully verified directory model
+remains refused by assembly until its profile and allocation support are added.
+Callers keep the file and decoded view immutable during use.
 
-## Focused checks cover the verifier and its assembly requirement
+## Focused checks cover both formats and section integrity
 
-One ASan/UBSan check passed both published models, a generated zero-CRC file,
-unaligned input, 64 corruption cases, and 18 invalid-input cases. Corruption cases
-cover header metadata, stored checksum bytes, every nonempty section's first and
-last byte, inter-section padding, and the final file byte. The checks also cover
-zeroing a nonzero stored checksum, output overlap, and invalid address ranges.
+One ASan/UBSan check passed both published fixed-header models, the saved zero-CRC
+file, unaligned input, 64 corruption cases, and 18 invalid-input cases. This check
+was repeated because the byte-update helper and version dispatch changed. The
+existing isolated SDK CRC comparison was reused.
 
-One isolated SDK comparison passed the published models and generated zero-CRC
-file, with a five-second and twenty-million-instruction limit per call. The SDK
-loader and device submission path were not executed. The generated file checks
-the CRC's zero value; it is not a structurally valid executable model.
+One directory ASan/UBSan check passed the compiled convolution, a synthetic
+payload gap, and a synthetic zero-primary-CRC file. It covers 36 corruption
+cases and thirteen invalid-input cases, including repaired-primary corruption,
+zeroed section checksums, duplicate or absent section references, malformed
+metadata, output aliasing, and unsupported metadata placement. It confirms that
+these verified directory models remain refused by assembly.
 
-The affected assembly sanitizer check passed the full fixture and 107 refusal
-cases. Existing malformed-profile cases receive repaired checksums so that they
-continue to exercise assembly validation. Added cases corrupt the checksum,
-coefficient payload, and final file byte. The earlier complete SDK-byte comparison
-remains relevant: command construction and address encoding are unchanged, and
-the original model passes the added integrity requirement.
+[nbg-directory-checksum-fixtures.py](../checks/nbg-directory-checksum-fixtures.py)
+uses Python zlib to generate the synthetic cases. It solves 32 linear CRC bit
+equations for a four-byte suffix that makes the primary CRC zero. These are
+checksum fixtures, not compiler-generated executable models. The sanitizer check
+is [nbg-directory-checksum.c](../checks/nbg-directory-checksum.c).
 
-The AArch64 verifier object contains 376 bytes of text and read-only data, no
-writable static data, no external references, and no stack frame. Its SHA-256 is
-`dbc5502536d737ebab602218ea0eaefaf320a4f201626bcd7183822663b6e069`.
-The isolated target is `nbg-checksum`. The affected assembler object also builds;
-its current identity and resources are in [nbg-assembly.md](nbg-assembly.md).
+The current AArch64 verifier contains 1,128 bytes of text and read-only data,
+no writable static data, and one external reference to `nbg_model_open`. Its
+SHA-256 is `8915adbe2297ac15dc6e0b87750add313b175f965722809a7a82b86f51de2b60`.
+Its frame occupies 528 bytes. The directory path adds the decoder's 944-byte
+open-to-tensor path, totaling 1,472 bytes before memory-helper stack use.
+The isolated target is `nbg-checksum`. Host links now require `nbg_model.c` too.
 
-The checks are [nbg-checksum.c](../checks/nbg-checksum.c),
-[nbg-checksum-reference.py](../checks/nbg-checksum-reference.py), and the affected
-[assembly check](../checks/nbg-assembly.c). The Python check accepts the pinned SDK,
-both published models, a host shared library containing the verifier, and a new
-output directory. It writes the zero-CRC fixture used by the C check. Raw results,
-commands, artifacts, and input identities are under
-`~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
+Current commands, artifacts, input identities, and results are under
+`~/.cache/sunstoneos/evidence/nbg-directory-checksum-20261016/`. The fixed-header
+reference evidence remains under `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
+[nbg-checksum.c](../checks/nbg-checksum.c) consumes the two published models and
+saved zero-CRC fixture. [nbg-checksum-reference.py](../checks/nbg-checksum-reference.py)
+records the earlier isolated SDK comparison; it need not run when those inputs
+and CRC semantics remain unchanged.
 
-Descriptor access bounds, SRAM mapping, command semantics, and physical inference
-remain outstanding. No board request, kernel rebuild, or unchanged integration
-suite was run for checksum verification.
+The separate [convolution loader capture](nbg-conv-loader.md) records SDK preparation
+for the newly verified model. It stops before device submission and supplies
+allocation and command evidence for the next native assembly change. No board
+request, kernel rebuild, compiler run, or numerical simulator run occurred.
+Descriptor access bounds, SRAM routing, command admission, and physical inference
+remain outstanding.

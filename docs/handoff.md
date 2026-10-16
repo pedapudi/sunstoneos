@@ -76,8 +76,8 @@ the saved SDK submission. Linear accesses, weight prefetch, and actual hardware
 access behavior remain unresolved.
 The [pinned host compiler](npu-compiler.md) now produces a small convolution with
 matched float and quantized simulator references. Its emitted `0x20000` format
-now has native directory and record-layout support; checksum verification and
-assembly support remain outstanding. Physical execution of this fixture remains
+now has native directory, record-layout, and checksum support. Assembly support
+remains outstanding. Physical execution of this fixture remains
 outstanding.
 The [directory investigation](nbg-directory.md) now identifies the changed tensor
 and patch layouts and matches the payload and section checksums with the isolated
@@ -87,6 +87,11 @@ count differs from the section's record count and needs interpretation.
 The decoder uses the checked section count and retains raw network metadata.
 The [native decoding evidence](nbg-model.md) covers the numerical fixture, malformed
 directories, and continued agreement with the older saved SDK submission.
+The [checksum extension](nbg-checksum.md) now verifies the normalized primary CRC
+and every listed section CRC. A [convolution SDK trace](nbg-conv-loader.md) reaches
+intercepted submission with five allocations and no working pool. It records a
+136-byte command image, a different operation state word, and a 192-byte output
+allocation. Reuse those snapshots for native comparison; no comparison has run yet.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.
@@ -232,9 +237,11 @@ the tool hash and recovery evidence in the application document.
    stride units, linear accesses, and prefetch before device admission.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
-   Extend checksum verification and assembly for the
-   [compiled numerical fixture](npu-compiler.md), whose format is `0x20000` and whose
-   working pool is empty. Native directory decoding now has host evidence.
+   Extend assembly for the [compiled numerical fixture](npu-compiler.md), whose
+   format is `0x20000` and whose working pool is empty. Native decoding and
+   checksum verification now have host evidence. The
+   [saved SDK convolution trace](nbg-conv-loader.md) supplies the allocation and
+   command comparison; preserve its hashes and do not repeat SDK preparation.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 

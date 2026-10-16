@@ -47,8 +47,8 @@ does not establish that an unknown operation can execute.
 The header retains target, feature flags, core count, memory requirements,
 and stored checksum. The decoder does not verify checksum or hardware
 compatibility. The separate [checksum verifier](nbg-checksum.md) checks
-complete-file integrity for `0x1001e` and is required by the assembler.
-The verifier and assembler still refuse `0x20000`. Names preserve the original 64 bytes and add a terminating NUL;
+complete-file integrity for `0x1001e` and payload/section integrity for the
+supported `0x20000` layout. The assembler still refuses `0x20000`. Names preserve the original 64 bytes and add a terminating NUL;
 they are not checked for valid UTF-8. Signed fields are decoded without
 relying on an out-of-range unsigned-to-signed conversion.
 
@@ -146,6 +146,6 @@ The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
 assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
 and SRAM placement remain separate admission requirements. Directory checksum
-verification and zero-pool assembly remain required before the numerical fixture
-can reach execution admission.
+verification now has host evidence. Zero-pool assembly remains required before
+the numerical fixture can reach execution admission.
 The assembler adapts the completion event and reserves the controller's full fetch span.
