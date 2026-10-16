@@ -119,6 +119,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   construction, deferred responses, shutdown draining, and retained faults in
   QEMU. Concrete allocation/publication callbacks, linked render-target recovery,
   lease disposal for reopen, and physical execution remain outstanding.
+  The [client command transport](gpu-cccb.md) passes host/reference checks for
+  complete ring and KICK bytes, wraparound, queue pressure, deadlines, and retained
+  faults. It compiles for AArch64. Context construction, job admission, completion
+  fences, service integration, and physical execution remain outstanding.
+
+- Radio: **research-only** [bootstrap and board mapping](radio.md), with a
+  host-tested Bluetooth patch-table inspector. Published software identifies
+  an AIC8800D80 candidate and loads Bluetooth patches over SDIO before UART use.
+  Physical silicon identity, native transports, power/reset bindings, networking,
+  pairing, and headset audio remain outstanding.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

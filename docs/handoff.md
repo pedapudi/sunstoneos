@@ -184,6 +184,19 @@ deferred event responses, shutdown draining, and retained faults in QEMU. Reuse
 temporarily refuse reopen until verified lease disposal is implemented.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
+The [client command transport](gpu-cccb.md) now writes bounded sequences,
+handles ring wrap and queue pressure, and waits for firmware notification
+acceptance. Host/reference checks compare full ring and KICK bytes and exercise
+retained failures; the component compiles for AArch64. Reuse `gpu-cccb-20261016`.
+Context construction, workload admission, completion fences, service integration,
+and physical execution remain outstanding.
+The [radio investigation](radio.md) identifies a source-backed AIC8800D80
+candidate, SDIO bootstrap before Bluetooth UART operation, board wiring,
+firmware availability, and stack dependencies. Installed silicon identity,
+reset/LPO wiring, firmware redistribution terms, and voice routing remain
+unconfirmed. The read-only patch-table inspector passes focused published-file
+and malformed-input checks; reuse `radio-20261016`. A native identity-message
+codec is in progress in an isolated worker; no radio board request exists.
 NPU platform resource setup, complete model admission,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
