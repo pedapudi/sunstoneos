@@ -35,7 +35,9 @@ The memory-publication callback receives the selected
 validate the image against reserved, pinned memory and the actual CPU mappings.
 It must also validate the trusted command stream, clean device-read buffers,
 and clean and invalidate device-written buffers. Publication must finish before
-command submission. Its production implementation remains outstanding.
+command submission. The [memory policy](npu-memory.md) implements private buffer
+admission, table validation, and cache-operation ordering through callbacks.
+Native callbacks and command-semantic validation remain outstanding.
 
 The controller borrows the MMU image, bootstrap allocation, and associated
 resource bundle until successful close. Each application job remains borrowed
@@ -166,7 +168,7 @@ cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-controller
 ```
 
-The next work is the FreeRTOS service and its native memory-publication callbacks,
+The next work is the FreeRTOS service and its native translation/cache callbacks,
 platform power/clock integration, and model relocation. Numerical inference and
 physical error recovery remain separate qualification requirements. No hardware
 request occurred during these checks.

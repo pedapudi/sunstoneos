@@ -58,6 +58,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
   passes host startup, completion, cancellation, and retained-fault checks.
+  The [memory policy](npu-memory.md) passes host integration for private mappings,
+  table validation, cache publication, and retained faults.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
   checks. Production FreeRTOS controller integration,
   model loading, execution, and physical qualification remain outstanding.
