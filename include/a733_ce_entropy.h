@@ -1,28 +1,19 @@
 #ifndef SUNSTONE_A733_CE_ENTROPY_H
 #define SUNSTONE_A733_CE_ENTROPY_H
-#include "a733_ce.h"
+#include "a733_ce_session.h"
 #include "device_memory_pool.h"
 #define A733_CE_ENTROPY_MAX 256u
 enum a733_ce_entropy_result { A733_CE_ENTROPY_PENDING,A733_CE_ENTROPY_BUSY,
     A733_CE_ENTROPY_BYTES,A733_CE_ENTROPY_CONSUMED,A733_CE_ENTROPY_RETAINED,A733_CE_ENTROPY_INVALID };
 struct a733_ce_entropy {
     uintptr_t self;
-    struct {
-        struct device_memory_pool *pool;
-        struct device_memory_lease lease;
-        struct device_memory_extent extent;
-        struct a733_clock_leases *registry;
-        struct a733_clock_token token;
-        struct a733_ce_config config;
-        struct a733_ce_ops ops;
-        void *cookie;
-    } binding;
-    struct a733_ce controller;
+    struct a733_ce_session *engine,*bound_engine;
     atomic_uint busy;
-    uint64_t next_generation,generation,deadline,last_now;
+    uint64_t next_generation,generation,session_generation,deadline,last_now;
     unsigned initialized,active,consumed,need_request,fault,terminal;
     size_t wanted,filled;
     uint8_t staging[A733_CE_ENTROPY_MAX];
+    struct a733_ce_session owned_session; /* Optional embedded owner; client metadata precedes it. */
 };
 /* Zero service storage once. Bind one actual CPU-owned page of this owner's device pool. The config's
  * address fields are replaced by that page's real physical extent. The complete
@@ -31,6 +22,7 @@ struct a733_ce_entropy {
  * Hold the pool's existing common service lock for this call and EVERY request,
  * poll and other allocator/consumer operation. All state is private, disjoint
  * from the pool; never copy/reinitialize it or call its CE controller directly.
+ * engine identifies the one actual shared session; SHA clients bind that object.
  * Source-defined task completion permits same-reservation reuse, not global
  * drain or memory release. Authority/health/startup qualification requirements
  * of a733_ce_init remain applicable. Output remains UNQUALIFIED for production
@@ -39,6 +31,9 @@ struct a733_ce_entropy {
 int a733_ce_entropy_bind(struct a733_ce_entropy *,struct device_memory_pool *,
     struct device_memory_lease,const struct a733_ce_config *,const struct a733_ce_ops *,
     void *,struct a733_clock_leases *,const struct a733_clock_token *);
+/* Attach an entropy client to an already bound session with TRNG capability.
+ * The session and client lifetimes remain coupled; no alternate token is created. */
+int a733_ce_entropy_attach(struct a733_ce_entropy *,struct a733_ce_session *);
 /* Serialized boot only: get the actual singleton linker pool, acquire one page
  * and bind native CE MMIO/cache operations. No peripheral MMIO here. Must run
  * after platform_init, before concurrent users, with real native authority. */

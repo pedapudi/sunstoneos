@@ -61,13 +61,17 @@ platform authorization; no existing secure-monitor entropy service is assumed.
 ## One reserved page supports sequential tasks
 
 The native constructor runs after platform initialization during serialized
-boot, before concurrent users. It obtains the existing singleton linker pool,
+boot, before concurrent users. It reserves the one native CE owner and rejects
+a second construction. An initialized owner remains reserved permanently. It obtains the existing singleton linker pool,
 acquires one page and binds real CE MMIO/cache operations. It does not construct
 a second allocator over the same RAM. Binding replaces caller address fields
 with the allocated page's physical descriptor and output extents.
 
-The complete page remains in device ownership after binding, including between
-requests. The common pool service lock must serialize binding, requests, polls
+The shared CE session owns the actual page, token and controller. The complete
+page remains in device ownership after binding, including between requests.
+A mixed capability profile lets a [SHA-256 client](crypto-hash.md) bind the same
+`engine` pointer. One typed client slot serializes entire entropy requests and
+hash streams; it does not create another engine reservation. The common pool service lock must serialize binding, requests, polls
 and every allocator or consumer transition. A successful task permits the
 controller's CPU access and reuse of these same buffers under continuous
 reservation. It does not authorize pool release, global reset or clock removal.
@@ -118,13 +122,16 @@ native constructor calls to the existing singleton pool and CE operations.
 The unchanged descriptor, initial admission and cache-operation behavior retain
 the evidence recorded in the CE driver record.
 
-The focused sanitizer model, source checks and native AArch64 compilation pass.
+The initial entropy-service sanitizer model, source checks and native AArch64
+compilation passed. The shared-session extraction is covered by the focused
+[hash composition model](crypto-hash.md), including both client orders and
+deferred health provisioning.
 A relocatable link resolves the CE service against the actual pool, registry
 and translation implementations. Final image linker symbols, runtime `memset`
 and the pool module's separate DMA constructor remain external link inputs;
-this is not a bootable-image check. The three CE objects contain 16,264 bytes
+this is not a bootable-image check. The initial three CE objects contained 16,264 bytes
 of code and no static data or BSS. Their largest direct compiler-reported stack
-frame is 352 bytes, without a whole-call-chain bound.
+frame was 352 bytes, without a whole-call-chain bound.
 
 Exact executed inputs, objects and logs are preserved in
 `~/.cache/sunstoneos/evidence/ce-service-20261016/batch1/`.

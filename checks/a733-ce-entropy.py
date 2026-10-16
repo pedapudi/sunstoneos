@@ -38,8 +38,8 @@ for text in ['ss_wait_finish(CHANNEL_2);', 'ss_pending_clear(CHANNEL_2);',
              'ss_check_err(CHANNEL_2)', 'invalidate_dcache_range', 'memcpy(rng_buf, p_sign, RNG_LEN);']:
     assert text in uboot, text
 assembly = subprocess.check_output([a.objdump, '-dr', str(a.native_object)], text=True)
-constructor = assembly.split('<a733_ce_entropy_native_init>:', 1)[1]
-for symbol in ['a733_memory_reservations_init', 'device_memory_acquire', 'a733_ce_entropy_bind',
+constructor = assembly.split('<a733_ce_session_native_init>:', 1)[1]
+for symbol in ['a733_memory_reservations_init', 'device_memory_acquire', 'a733_ce_session_bind',
                'a733_ce_native_read', 'a733_ce_native_write', 'a733_ce_native_sync', 'device_memory_release']:
     assert symbol in constructor, symbol
 write = assembly.split('<a733_ce_native_write>:', 1)[1].split('<a733_ce_native_sync>:', 1)[0]

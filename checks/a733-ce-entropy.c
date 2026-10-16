@@ -212,7 +212,7 @@ int main(void)
     /* Copied service, callback substitution and stale pool identity cannot operate hardware. */
     setup(&m,0);struct a733_ce_entropy copy=m.service;
     assert(a733_ce_entropy_request(&copy,32,10000,&g)==A733_CE_ENTROPY_RETAINED);assert(!m.writes);
-    setup(&m,0);m.service.controller.ops.read=0;
+    setup(&m,0);m.service.engine->controller.ops.read=0;
     assert(a733_ce_entropy_request(&m.service,32,10000,&g)==A733_CE_ENTROPY_RETAINED);assert(!m.writes);
     setup(&m,0);++m.pool.allocations[m.lease.slot].generation;
     assert(a733_ce_entropy_request(&m.service,32,10000,&g)==A733_CE_ENTROPY_RETAINED);assert(!m.writes);

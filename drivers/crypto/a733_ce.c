@@ -25,26 +25,35 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
     void *cookie,struct a733_clock_leases *r,const struct a733_clock_token *t,struct a733_ce_memory *m)
 {
     if (!p || p->initialized || !c || !o || !r || !t || !m || ((uintptr_t)m&63) ||
-        !c->owner || !c->handoff || !c->health_profile || !c->deadline_us || c->configure_health>1 ||
+        !c->owner || !c->handoff || !c->deadline_us || c->configure_health>1 ||
+        (unsigned)c->profile>A733_CE_TRNG_SHA256 ||
         !t->id || t->owner!=c->owner || !o->now_us || !o->authorize || !o->enter ||
         !o->leave || !o->retain || !o->read || !o->write || !o->sync) return 0;
     const void *objects[]={p,c,o,r,t,m};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*r),sizeof(*t),sizeof(*m)};
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
         if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
-    a733_clock_mask_t stable=A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_CLOCK_RC16M;
+    a733_clock_mask_t stable=A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
+    if (c->profile!=A733_CE_SHA256_ONLY) stable|=A733_CLOCK_RC16M;
     if ((t->exclusive&A733_CLOCK_CE)!=A733_CLOCK_CE || ((t->shared|t->exclusive)&stable)!=stable ||
         !extent(c->descriptor_physical,256) || !extent(c->output_physical,64) ||
         !(c->descriptor_physical+256<=c->output_physical || c->output_physical+64<=c->descriptor_physical)) return 0;
-    uint32_t window=c->health[3]&2047;
-    if (!c->health[0] || !c->health[1] || c->health[1]>window || c->health[2] ||
-        (window!=512 && window!=1024) || c->health[3]!=(UINT32_C(0x30000)|window)) return 0;
+    if (c->profile!=A733_CE_TRNG_ONLY &&
+        (!extent(c->descriptor_physical,sizeof(*m)) || c->output_physical!=c->descriptor_physical+256)) return 0;
+    if (c->profile==A733_CE_SHA256_ONLY) {
+        if (c->health_profile || c->configure_health) return 0;
+        for (unsigned i=0;i<4;++i) if (c->health[i]) return 0;
+    } else {
+        uint32_t window=c->health[3]&2047;
+        if (!c->health_profile || !c->health[0] || !c->health[1] || c->health[1]>window || c->health[2] ||
+            (window!=512 && window!=1024) || c->health[3]!=(UINT32_C(0x30000)|window)) return 0;
+    }
     for (unsigned i=0;i<3;++i) {
         uint32_t v=c->fabric[i];unsigned mhz=parent_mhz[i][(v>>24)&7],div=(v&31)+1;
         if ((v&~fabric_mask[i]) || (i && !(v&BIT(31))) || !mhz ||
             (mhz*1000000u)%div || c->fabric_hz[i]!=mhz*1000000u/div) return 0;
     }
-    *p=(struct a733_ce){.self=(uintptr_t)p,.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1};
+    *p=(struct a733_ce){.self=(uintptr_t)p,.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1,.task_configured=c->profile!=A733_CE_SHA256_ONLY};
     atomic_init(&p->busy,0);return 1;
 }
 static int timely(struct a733_ce *p)
@@ -67,7 +76,8 @@ static int update(struct a733_ce *p,uintptr_t a,uint32_t mask,uint32_t value)
 static int clocks(struct a733_ce *p)
 {
     uint32_t v,ref;
-    if (!rd(p,UINT32_C(0x07090160),&v) || !(v&1) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
+    if (!rd(p,UINT32_C(0x07090160),&v) ||
+        (p->config.profile!=A733_CE_SHA256_ONLY && !(v&1)) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
         !rd(p,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u) return 0;
     unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
     if (n<80 || n>116 || n!=m || !rd(p,CCU+0xa0,&v) ||
@@ -102,24 +112,36 @@ static int provision(struct a733_ce *p)
         !update(p,SEC+0x9c,0x307ff,p->config.health[3]) || !health(p)) return 0;
     p->health_programmed=1;return 1;
 }
+static int task_health(struct a733_ce *p)
+{return p->operation || (health(p) && bits(p,NS+0xd0,3,2));}
 static void little(uint8_t *p,uint64_t v,unsigned n)
 {for (unsigned i=0;i<n;++i) p[i]=(uint8_t)(v>>(8*i));}
 static int prepare(struct a733_ce *p)
 {
     uint32_t lpc;
-    if (p->config.configure_health && !p->health_programmed &&
+    if (!p->operation && p->config.configure_health && !p->health_programmed &&
         !bits(p,SEC+0x9c,0x30000,0)) return 0;
     if (!clocks(p) || !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
         !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
         !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
-        !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0) ||
-        !rd(p,NS+0xd0,&lpc) || (lpc&1)) return 0;
-    if (!(lpc&2) && (!wr(p,NS+0xd0,lpc|2) || !bits(p,NS+0xd0,UINT32_MAX,lpc|2))) return 0;
-    if (!provision(p)) return 0;
+        !bits(p,NS+0x10,0x8421,0) || !bits(p,SEC+0x10,0x8421,0)) return 0;
+    if (!p->operation) {
+        if (!rd(p,NS+0xd0,&lpc) || (lpc&1)) return 0;
+        if (!(lpc&2) && (!wr(p,NS+0xd0,lpc|2) || !bits(p,NS+0xd0,UINT32_MAX,lpc|2))) return 0;
+        if (!provision(p)) return 0;
+    }
     for (unsigned i=0;i<256;++i) p->memory->descriptor[i]=0;
     for (unsigned i=0;i<64;++i) p->memory->output[i]=0;
-    little(p->memory->descriptor,0x11002,4);
-    little(p->memory->descriptor+4,0x203,4);
+    little(p->memory->descriptor,p->operation ? (0x10002u|(p->hash_continue<<8)):0x11002u,4);
+    little(p->memory->descriptor+4,p->operation ? 3:0x203,4);
+    if (p->operation) {
+        little(p->memory->descriptor+8,(uint64_t)p->hash_bytes*8,5);
+        if (p->hash_continue) little(p->memory->descriptor+18,p->config.descriptor_physical+320,5);
+        little(p->memory->descriptor+24,p->config.descriptor_physical+384,5);
+        little(p->memory->descriptor+36,p->hash_bytes,4);
+        little(p->memory->descriptor+200,p->hash_total_bits>>32,4);
+        little(p->memory->descriptor+204,p->hash_total_bits,4);
+    }
     little(p->memory->descriptor+29,p->config.output_physical,5);
     little(p->memory->descriptor+40,32,4);
     return timely(p) && p->ops.sync(p->cookie,p->memory,A733_CE_PUBLISH)==1 && timely(p);
@@ -135,7 +157,7 @@ static enum a733_ce_result failed(struct a733_ce *p)
 }
 enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
 {
-    if (!p || !p->initialized || p->self!=(uintptr_t)p || !output || !separate(p,sizeof(*p),output,32) ||
+    if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output || !separate(p,sizeof(*p),output,32) ||
         !separate(p->memory,sizeof(*p->memory),output,32) || !separate(p->registry,sizeof(*p->registry),output,32)) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
@@ -160,7 +182,7 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
         if (!prepare(p)) goto fail;
         next=SUBMIT;
     } else if (p->stage==SUBMIT) {
-        if (!clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
+        if (!clocks(p) || !task_health(p) ||
             !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
             !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
             !wr(p,NS,(uint32_t)p->config.descriptor_physical) ||
@@ -174,7 +196,7 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
         uint32_t status=(p->status_ns>>4)&3;
         if (status>1) goto fail;
         if (status==1) {
-            if (!clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
+            if (!clocks(p) || !task_health(p) ||
                 p->ops.sync(p->cookie,p->memory,A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
             for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
             if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
@@ -187,16 +209,26 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
     p->stage=next;
     if (ready) {
         for (unsigned i=0;i<32;++i) output[i]=bytes[i];
-        zero(bytes,sizeof(bytes));return finish(p,A733_CE_RANDOM);
+        zero(bytes,sizeof(bytes));return finish(p,p->operation ? A733_CE_DIGEST:A733_CE_RANDOM);
     }
     zero(bytes,sizeof(bytes));return finish(p,A733_CE_PENDING);
 fail:
     zero(bytes,sizeof(bytes));return failed(p);
 }
 
-enum a733_ce_result a733_ce_request(struct a733_ce *p,uint64_t deadline)
+static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned operation,
+    const uint8_t *input,size_t bytes,const uint8_t *iv,unsigned continuation,uint64_t total)
 {
     if (!p || !p->initialized || p->self!=(uintptr_t)p || !deadline) return A733_CE_INVALID;
+    if ((!operation && p->config.profile==A733_CE_SHA256_ONLY) ||
+        (operation && p->config.profile==A733_CE_TRNG_ONLY)) return A733_CE_INVALID;
+    if (operation && (!input || !bytes || bytes>2048 || bytes%64 || continuation>1 ||
+        total%512 || total<(uint64_t)bytes*8 || (!continuation && total!=(uint64_t)bytes*8) ||
+        (continuation && (total==(uint64_t)bytes*8 || !iv)) ||
+        !separate(input,bytes,p,sizeof(*p)) || !separate(input,bytes,p->memory,sizeof(*p->memory)) ||
+        !separate(input,bytes,p->registry,sizeof(*p->registry)) ||
+        (continuation && (!separate(iv,32,p,sizeof(*p)) || !separate(iv,32,p->memory,sizeof(*p->memory)) ||
+         !separate(iv,32,p->registry,sizeof(*p->registry)))))) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
@@ -209,11 +241,11 @@ enum a733_ce_result a733_ce_request(struct a733_ce *p,uint64_t deadline)
     if (token==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
     if (token!=A733_CLOCK_OK) return failed(p);
     p->config.deadline_us=deadline;
-    if (p->stage==ADMIT) return finish(p,A733_CE_PENDING);
+    if (p->stage==ADMIT) goto configure;
     int lock=p->ops.enter(p->cookie,deadline);
     if (!lock) {if (!timely(p)) return failed(p);return finish(p,A733_CE_BUSY);}
     p->held=1;
-    if (lock!=1 || !timely(p) || !clocks(p) || !health(p) || !bits(p,NS+0xd0,3,2) ||
+    if (lock!=1 || !timely(p) || !clocks(p) || !task_health(p) ||
         !bits(p,NS+8,15,0) || !bits(p,SEC+8,15,0) ||
         !bits(p,NS+12,255,0) || !bits(p,SEC+12,255,0) ||
         !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
@@ -221,5 +253,24 @@ enum a733_ce_result a733_ce_request(struct a733_ce *p,uint64_t deadline)
     if (!timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;
     if (!timely(p)) return failed(p);
-    p->stage=PREPARE;return finish(p,A733_CE_PENDING);
+    p->stage=PREPARE;
+configure:
+    p->operation=operation;p->task_configured=1;
+    if (operation) {
+        zero(p->memory->input,sizeof(p->memory->input));zero(p->memory->iv,sizeof(p->memory->iv));
+        for (size_t i=0;i<bytes;++i) p->memory->input[i]=input[i];
+        if (continuation) for (unsigned i=0;i<32;++i) p->memory->iv[i]=iv[i];
+        p->hash_bytes=(unsigned)bytes;p->hash_continue=continuation;p->hash_total_bits=total;
+    }
+    if (!timely(p)) return failed(p);
+    return finish(p,A733_CE_PENDING);
 }
+
+enum a733_ce_result a733_ce_request(struct a733_ce *p,uint64_t deadline)
+{return request(p,deadline,0,0,0,0,0,0);}
+enum a733_ce_result a733_ce_hash_request(struct a733_ce *p,const uint8_t *input,size_t bytes,
+    const uint8_t iv[32],unsigned continuation,uint64_t total,uint64_t deadline)
+{return request(p,deadline,1,input,bytes,iv,continuation,total);}
+int a733_ce_idle(const struct a733_ce *p)
+{return p && p->initialized && p->self==(uintptr_t)p && !p->fault &&
+    !atomic_load_explicit(&p->busy,memory_order_acquire) && (p->stage==ADMIT || p->stage==DONE);}

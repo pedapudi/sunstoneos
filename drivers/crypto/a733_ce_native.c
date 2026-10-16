@@ -75,6 +75,8 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
             uintptr_t a=(uintptr_t)m->descriptor+i;
             __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
         }
+        for (uintptr_t a=(uintptr_t)m->iv;a<(uintptr_t)m+sizeof(*m);a+=64)
+            __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
         __asm__ volatile("dc civac, %0" :: "r"((uintptr_t)m->output) : "memory");
     } else __asm__ volatile("dc ivac, %0" :: "r"((uintptr_t)m->output) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");return 1;
@@ -82,20 +84,41 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 
 #include "a733_ce_entropy.h"
 #include "a733_memory_reservations.h"
-int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_config *c,
+int a733_ce_session_native_init(struct a733_ce_session *s,const struct a733_ce_config *c,
     const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
     const struct a733_clock_token *token)
 {
     if (!s || s->initialized || !c || !platform || !registry || !token || !c->owner) return 0;
+    if (!a733_ce_session_native_claim(s)) return 0;
     /* This constructor is serialized during boot. The initializer returns the
      * actual singleton and verifies its linker reservation/translations once. */
     struct device_memory_pool *pool=a733_memory_reservations_init();
-    if (!pool) return 0;
+    if (!pool) {a733_ce_session_native_abort(s);return 0;}
     struct device_memory_lease lease;struct device_memory_extent extent;
-    if (!device_memory_acquire(pool,c->owner,DEVICE_MEMORY_PAGE,&lease,&extent)) return 0;
+    if (!device_memory_acquire(pool,c->owner,DEVICE_MEMORY_PAGE,&lease,&extent)) {a733_ce_session_native_abort(s);return 0;}
+    struct a733_ce_ops ops=*platform;
+    ops.read=a733_ce_native_read;ops.write=a733_ce_native_write;ops.sync=a733_ce_native_sync;
+    if (a733_ce_session_bind(s,pool,lease,c,&ops,cookie,registry,token)) return 1;
+    /* No controller/MMIO operation has occurred on a failed binding. */
+    (void)device_memory_release(pool,lease);a733_ce_session_native_abort(s);return 0;
+}
+
+int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_config *c,
+    const struct a733_ce_ops *platform,void *cookie,struct a733_clock_leases *registry,
+    const struct a733_clock_token *token)
+{
+    if (!s || s->initialized || !c || !platform || !registry || !token || !c->owner ||
+        c->profile==A733_CE_SHA256_ONLY) return 0;
+    struct a733_ce_session *owner=&s->owned_session;
+    if (!a733_ce_session_native_claim(owner)) return 0;
+    struct device_memory_pool *pool=a733_memory_reservations_init();
+    if (!pool) {a733_ce_session_native_abort(owner);return 0;}
+    struct device_memory_lease lease;struct device_memory_extent extent;
+    if (!device_memory_acquire(pool,c->owner,DEVICE_MEMORY_PAGE,&lease,&extent)) {a733_ce_session_native_abort(owner);return 0;}
     struct a733_ce_ops ops=*platform;
     ops.read=a733_ce_native_read;ops.write=a733_ce_native_write;ops.sync=a733_ce_native_sync;
     if (a733_ce_entropy_bind(s,pool,lease,c,&ops,cookie,registry,token)) return 1;
-    /* No controller/MMIO operation has occurred on a failed binding. */
-    (void)device_memory_release(pool,lease);return 0;
+    (void)device_memory_release(pool,lease);
+    if (owner->initialized) (void)a733_ce_session_retain(owner);
+    a733_ce_session_native_abort(owner);return 0;
 }

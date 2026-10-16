@@ -10,8 +10,9 @@ Physical randomness, health-test efficacy and board operation are unqualified.
 
 The implementation is in `drivers/crypto/a733_ce.c` and
 `drivers/crypto/a733_ce_native.c`. The interfaces are `include/a733_ce.h` and
-`include/a733_ce_native.h`. These files provide a command foundation for broader
-crypto support; they do not implement the engine's cipher, hash or key APIs.
+`include/a733_ce_native.h`. These files provide the common command controller. The [SHA-256 stream
+interface](crypto-hash.md) shares its actual retained session with entropy.
+Cipher, other hash and key APIs remain required.
 
 ## Hardware path and memory ownership
 
@@ -22,7 +23,9 @@ Both secure and nonsecure clients must be excluded throughout this reservation.
 The platform must establish initial DMA drain independently before admission.
 The task-status register identifies a running channel; zero does not prove idle.
 
-A 208-byte hash descriptor occupies a private 256-byte allocation. The 32-byte
+A 208-byte hash descriptor occupies a private 256-byte allocation. SHA-capable
+sessions also reserve separate cache lines for intermediate state and input;
+all of these extents fit within the same retained page. The 32-byte
 result occupies a separate private 64-byte allocation. Sixty-four-byte alignment
 protects cache-line ownership; the manual permits byte-addressed descriptors.
 Both allocations require authenticated CPU mappings, physical RAM extents,
@@ -142,5 +145,5 @@ Cold clock provisioning, production platform authority, startup and entropy
 qualification, interrupt service and physical qualification remain required.
 Provisioning and repeated-request evidence is recorded in [entropy.md](entropy.md).
 Full engine coverage also includes the documented symmetric cipher modes,
-hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
+other hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
 The first TRNG command does not satisfy those remaining hardware requirements.
