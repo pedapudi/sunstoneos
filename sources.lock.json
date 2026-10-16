@@ -1644,5 +1644,33 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/mmc.c",
     "sha256": "4bdca067049f6813b07034cd83e8d9880992a0a01a1292fe499dcd34efcaf2e2",
     "archive": "mmc-read/linux-mmc.c"
+  },
+  "bluetooth-hci-include-net-bluetooth-hci-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/net/bluetooth/hci.h",
+    "archive": "bluetooth-hci/include/net/bluetooth/hci.h",
+    "sha256": "9da36dad169c8c02ba3a676a3c884527e4efb7d152b975b131f33aaa59347bb7",
+    "git_blob": "e4a97b2d099841da01719380772f9be1d6b270da"
+  },
+  "bluetooth-hci-drivers-bluetooth-hci_h4-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/bluetooth/hci_h4.c",
+    "archive": "bluetooth-hci/drivers/bluetooth/hci_h4.c",
+    "sha256": "3feecb455fb057eca510a8b465a55086cf5729dcdc1215adbcf6db2e53697311",
+    "git_blob": "1d0cdf02324373062f82e69d7acb1cd28c4271f9"
+  },
+  "bluetooth-hci-net-bluetooth-hci_event-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_event.c",
+    "archive": "bluetooth-hci/net/bluetooth/hci_event.c",
+    "sha256": "c9f1555e27d0112b62ef6c3da95f8914ba891a71a43bb5620e05d8d12a3376bd",
+    "git_blob": "4029330e29a99890d8556dde70e8cf0dafbe505c"
+  },
+  "bluetooth-hci-net-bluetooth-hci_sync-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_sync.c",
+    "archive": "bluetooth-hci/net/bluetooth/hci_sync.c",
+    "sha256": "76b67bb118eede5bc012c8e5add2a720d24eec50198ff7528815273684bad205",
+    "git_blob": "d602e9d8eff450a2bab502402abb3013bb98c877"
   }
 }

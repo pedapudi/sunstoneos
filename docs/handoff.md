@@ -44,6 +44,7 @@ software behavior; physical operation remains unqualified.
 | [GPU isolation](gpu-isolation.md) | Only exact provider success permits reclamation; focused instruction check passes | Proven request blocking and completion of all accepted external writes |
 | [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Security/data paths and physical radio binding |
 | [Wi-Fi association and data](radio-data.md) | Association control, owned Ethernet packets, EAPOL confirmations and open-port authorization; host/source checks pass | Authentication/keys, secure receive and network-stack integration; WPA2 is security-pending |
+| [Bluetooth H4/HCI](bluetooth-hci.md) | UART packet framing, retained records, command credits and identification; host checks and native compilation pass | Native polling/binding, link/data scheduling, security and headset profiles |
 | [Camera analog startup](camera-platform.md) | Cold shared PHY setup and calibration readback; source/model checks pass | Native resource binding and actual memory/drain providers |
 | [Camera capture](camera-capture.md) | All six native controllers compose in both port models; one NV16 frame becomes CPU-owned after shutdown, drain and fault scan | Actual providers, global mapping disposal and concurrent device ownership |
 | [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Display engine, panel and physical scanout |
@@ -65,7 +66,7 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | `smp-cached` | Full cached eight-core image using the integrated CPU/EL3 primitives |
 | Display scanout worker, separate worktree | Combined display-engine, LCD1 and DSI startup/shutdown |
 | Wi-Fi security worker, separate worktree | WPA2 authentication, key installation and secure receive |
-| Bluetooth worker, separate worktree | H4 UART transport and HCI command/event ownership |
+| Bluetooth worker, separate worktree | BR/EDR links and ACL data transmit-credit scheduling |
 | NPU convolution worker, separate worktree | Trusted fixed-model registration and native numerical workload |
 | `video-codecs` | Baseline JPEG preparation and bounded decode execution |
 | Platform resource worker | Concrete camera/display clock, reset, pin and memory ownership design |
@@ -168,7 +169,7 @@ The dashboard requires no separate status maintenance or recurring browser tests
    Keep Hawkeye 64 MP feasibility separate from the first camera implementation.
 5. Extend the integrated Wi-Fi association and packet transport with
    authentication/key management, secure receive, network-stack integration,
-   interrupts, sleep and reconnect. Implement Bluetooth HCI, pairing, hands-free
+   interrupts, sleep and reconnect. Extend Bluetooth HCI with links, pairing, hands-free
    control and voice transport. Establish actual SDIO/UART/power/pin bindings and
    radio identity before physical use. No microphone is available; recorded input
    remains the application fixture while I2S and headset support proceed.

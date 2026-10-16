@@ -229,8 +229,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   frames with firmware confirmations. Open-network access requires an explicit
   association-bound authorization. Host checks, source comparisons and native compilation
   pass. Encrypted, reordered and unsupported receive records remain retained.
-  Physical identity and platform binding, authentication/keys, secure receive,
-  network-stack integration, pairing and headset audio remain outstanding.
+  [Bluetooth H4/HCI](bluetooth-hci.md) implements bounded UART packet framing,
+  retained receive ownership, command credits and controller identification.
+  Host checks and native compilation pass, including exclusion of unread stale
+  replies before transmission. It requires fresh firmware/UART generations and
+  scheduled polling with the UART interrupt masked. Physical identity and
+  platform binding, authentication/keys, secure receive, network-stack integration,
+  Bluetooth links/data transmission, pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
