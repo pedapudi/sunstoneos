@@ -33,6 +33,9 @@ Shared-resource management and the physical board bindings remain outstanding.
 The [translation-cache invalidation protocol](gpu-flush.md) now publishes changed
 tables and waits for a checked firmware command result in the host model.
 Live mapping edits, service integration, and physical invalidation remain required.
+[Firmware event dispatch](gpu-events.md) now decodes the delegated ABI and
+resolves owned resources before invoking a handler. Actual backing allocation,
+free-list growth/reconstruction, and response submission remain required.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,

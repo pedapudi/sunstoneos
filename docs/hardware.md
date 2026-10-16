@@ -94,6 +94,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [translation-cache invalidation protocol](gpu-flush.md) has host evidence
   for publication ordering, bounded command completion, and retained failures.
   Actual mapping changes and physical invalidation remain unqualified.
+  [Firmware event dispatch](gpu-events.md) has host ABI/control integration
+  evidence. Actual allocation, reconstruction, and firmware responses remain
+  resource-manager work.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

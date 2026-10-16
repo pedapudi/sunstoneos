@@ -11,6 +11,9 @@ remain unqualified.
 The optional [interrupt integration](gpu-interrupts.md) masks delivery, queues a
 worker wakeup, and rearms only after event service drains its backlog. The
 polling fallback remains available when interrupt callbacks are omitted.
+The [event dispatcher](gpu-events.md) supplies typed decoding and resource
+resolution for the platform event callback. It still requires implemented
+resource handlers and deferred firmware response submission.
 
 The [interface](../include/pvr_gpu_service.h) and
 [implementation](../drivers/gpu/pvr_gpu_service.c) use static storage and copied

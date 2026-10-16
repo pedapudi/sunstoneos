@@ -150,6 +150,10 @@ The [translation-cache invalidation component](gpu-flush.md) now has host
 integration evidence for table publication, command completion, queue pressure,
 and retained failure. Its complete commands match the pinned driver. Live table
 edits, service integration, and physical invalidation remain outstanding.
+[Firmware event dispatch](gpu-events.md) now decodes all delegated event types
+and resolves every requested resource before calling a handler. Host ABI and
+control integration checks pass. Backing allocation, free-list growth and
+reconstruction, and firmware response submission remain required.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -348,7 +352,8 @@ the tool hash and recovery evidence in the application document.
    components. The source-locked power setting is 400 MHz at 800 mV; it is not a
    frequency measurement or performance target. Power-off does not establish
    memory isolation. The shared-resource manager remains assigned to a worker
-   in `gpu-resources`; firmware event handling is assigned to `gpu-events`.
+   in `gpu-resources`; native free-list backing, growth/reconstruction, and
+   deferred responses are assigned to `gpu-freelist`.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
    records. A separate worker is developing I2S support in `i2s`. Inspect live
