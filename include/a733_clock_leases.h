@@ -67,12 +67,14 @@ typedef uint64_t a733_clock_mask_t;
 #define A733_CLOCK_SDC1       (UINT64_C(1)<<53) /* Complete SDC1 host and dedicated clock/reset. */
 #define A733_CLOCK_RADIO_MODULE (UINT64_C(1)<<54) /* Shared Wi-Fi/BT module lifecycle; exclusive. */
 #define A733_CLOCK_S_TWI0     (UINT64_C(1)<<55) /* Complete S_TWI0 including autonomous engines. */
+#define A733_CLOCK_SDC0       (UINT64_C(1)<<56) /* Complete SDC0 host and dedicated clock/reset. */
+#define A733_CLOCK_SDC2       (UINT64_C(1)<<57) /* Complete SDC2 host and dedicated clock/reset. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT64_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT64_C(0xffffffffffffff) /* Bits0-55; unassigned bits refused. */
+#define A733_CLOCK_ALL     UINT64_C(0x3ffffffffffffff) /* Bits0-57; unassigned bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -129,7 +131,12 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * authority; a local port token grants no upstream mutation rights. A shared
  * FABRIC lease permits only observation/adoption of stable upstream configuration.
  * SDC1 owns host 0x04021000, CCU+0xd10/+0xd1c, IRQ194 and controller
- * DMA routes. Its selected module parent is reserved explicitly. RADIO_MODULE
+ * DMA routes. SDC0 independently owns host 0x04020000 and CCU+0xd00/+0xd0c;
+ * SDC2 owns host 0x04022000 and CCU+0xd20/+0xd2c. Each local scope includes
+ * its controller, IRQ and DMA routes. All three are exclusive-only, with each
+ * selected module parent reserved explicitly. Common storage gates/reset stay
+ * under FABRIC; stable adoption never authorizes a shared storage reset.
+ * SDC3 remains unassigned. RADIO_MODULE
  * owns shared Wi-Fi/BT reset, firmware and power sequencing; it has no clock
  * ancestor and grants no pin or rail authority. Independent UART/SDIO operations
  * borrow that one lifetime owner rather than acquire separate module ownership.
