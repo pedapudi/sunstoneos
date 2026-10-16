@@ -5,6 +5,8 @@ decoding, staging, and [MIPS memory/boot preparation](gpu-mips.md) work for the
 pinned A733 image. The GPU has not booted
 firmware or executed a graphics or compute workload in SunstoneOS.
 Physical qualification remains outstanding.
+The [native firmware queue transport](gpu-queues.md) also has host evidence for
+submission, result ownership, events, deadlines, and retained failures.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -143,8 +145,10 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Implement GPU memory contexts, firmware shared structures, command queues,
-   cache publication, interrupt handling, and bounded start/stop behavior.
+1. Implement GPU memory contexts and firmware initialization structures.
+   Integrate the checked command transport with shared allocations, cache
+   publication, FreeRTOS serialization, interrupt/event handling, and bounded
+   start/stop behavior. GPU job completion needs separate synchronization.
    Use the checked MIPS preparation component for firmware mappings and boot data;
    interpret additional feature parameters as initialization requires them.
 2. Integrate platform power, clocks, reset, and identity checks after independent

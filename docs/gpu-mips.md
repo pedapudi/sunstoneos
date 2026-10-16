@@ -69,8 +69,9 @@ records each register's access width. The builder does not execute it.
 
 Allocation, CPU cache publication, GPU memory contexts, platform power and
 clocks, reset sequencing, shared firmware structures, interrupts, and bounded
-startup remain necessary before this prepared image can run. The FreeRTOS
-GPU service has not been integrated.
+startup remain necessary before this prepared image can run. The
+[command transport](gpu-queues.md) has host evidence; the FreeRTOS GPU service
+has not been integrated.
 
 ## Focused evidence compares complete outputs with pinned source functions
 
