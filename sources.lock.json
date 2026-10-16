@@ -46,5 +46,23 @@
     "archive": "newlib-4.5.0.20241231.tar.gz",
     "directory": "newlib-4.5.0.20241231",
     "sha256": "33f12605e0054965996c25c1382b3e463b0af91799001f5bb8c0630f2ec8c852"
+  },
+  "board-schematic": {
+    "revision": "V1.2",
+    "url": "https://drive.google.com/uc?export=download&id=1layhtSvMpQo-z_iMJjNfNVvhPhObpsvW",
+    "archive": "board-documents/schematic-v1.2.pdf",
+    "sha256": "4e0e92afbb1cca97a9c8593b8f2679178d9738f242ea431ed3650e893fe28ed0"
+  },
+  "board-position": {
+    "revision": "V1.2",
+    "url": "https://drive.google.com/uc?export=download&id=1YaAWxtrrsHZKDUEWRbWYWFlLKcrsu10_",
+    "archive": "board-documents/position-v1.2.pdf",
+    "sha256": "3b85fb61ab9ad949519fa3392b8bc73a9e846d50de14ca02dcbebc2e0736532c"
+  },
+  "board-manual": {
+    "revision": "V1.0",
+    "url": "https://drive.google.com/uc?export=download&id=1R1MC9erKTztd87GvJ_UFE132x6KgPATe",
+    "archive": "board-documents/manual-v1.0.pdf",
+    "sha256": "a4593068bf885296ea204529b880e874acb8f060bb21735c833f63305adb8cdf"
   }
 }

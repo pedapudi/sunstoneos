@@ -1,5 +1,10 @@
 # USB recovery access
 
+The [physical recovery instructions](../docs/board-wiring.md) identify the
+BOOT/GND pads and the `check-fel-input.py` diagnostic. That diagnostic samples
+the hardware input without resetting the board. USB permissions and physical
+selection of the ROM recovery path are separate requirements.
+
 `usb-access.py` grants a user read/write access to the single attached Allwinner
 FEL recovery device (`1f3a:efe8`). It discovers the current USB address each time
 and refuses to select among multiple matching devices. Python 3 and the host

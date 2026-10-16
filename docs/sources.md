@@ -12,6 +12,8 @@ implementations; physical support on this board requires qualification evidence.
 | [FEL tools](https://github.com/linux-sunxi/sunxi-tools/tree/b92f4ed3115a520e3ec406697d268239e3f29488) | `b92f4ed3115a520e3ec406697d268239e3f29488` | Recovery protocol and tested local A733 patches |
 | [TinyUSB](https://github.com/hathach/tinyusb/tree/d668b0abb7219b9ce324fa88d46604bb9e869973) | `d668b0abb7219b9ce324fa88d46604bb9e869973` | Device stack and sunxi MUSB driver adapted for A733 |
 | [A733 datasheet](https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf) | Version 0.93 | Hardware inventory and documented limits |
+| [Board schematic and position drawing](https://drive.google.com/drive/folders/199S7SkbqVDjMpPT7tkcbBX6kmbfnz94r) | V1.2; PDF hashes in `sources.lock.json` | Physical recovery pads, connector routing, and component references |
+| [Board user manual](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view) | V1.0; PDF hash in `sources.lock.json` | Recovery-pad photograph, power-on procedure, and advertised interfaces |
 | [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-15 | Candidate GPU runtime; exact BVNC match pending |
 | [OV5640 driver](https://github.com/torvalds/linux/blob/master/drivers/media/i2c/ov5640.c) | Revision pin pending | Sensor programming reference |
 
@@ -25,6 +27,9 @@ scheduling, and hardware access. Use its source and current project instructions
 when implementing that port.
 
 Download identities and archive hashes are in [sources.lock.json](../sources.lock.json).
+The [board wiring record](board-wiring.md) identifies the relevant schematic
+sheets and manual pages. Documented wiring remains separate from physical
+population and functional qualification of the attached board.
 The [DMA reference record](dma.md) pins the inspected board-kernel driver hash
 and distinguishes data addressing from unresolved wider descriptor addressing.
 The [native DMA memory record](dma-memory.md) identifies the cache-maintenance

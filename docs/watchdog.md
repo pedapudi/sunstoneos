@@ -122,9 +122,10 @@ The physical ROM's boot-input routine at `0x10134` samples bit 8 of
 `0x03000024` four times. Four low samples select FEL before the normal storage
 path, even without a CPU redirect. Any high sample continues toward storage
 boot. The live register value was `0x101`, so the sampled bit was high.
-Its relationship to a board button and its state across watchdog reset remain
-unqualified. Do not rely on this input until physical wiring and assertion are
-established.
+The manufacturer documents BOOT and GND test pads connected to this input.
+[Board wiring and physical recovery](board-wiring.md) pins the schematic and
+manual, identifies the pads, and gives a bounded input check. Assertion on the
+attached board and behavior across watchdog reset remain unqualified.
 
 The user confirmed automatic FEL entry after disconnecting and reattaching USB,
 with a microSD card inserted and no button held. This establishes the observed
@@ -178,6 +179,8 @@ of DDR. Review ownership and preserve original RTC values before using them
 for results.
 
 First establish a reset destination that cannot execute unknown storage code.
+The documented BOOT-to-GND connection provides a candidate independent of
+CPU redirect retention; physically verify its assertion before using it.
 Then test timer enabling and disarming, followed by expiry with CPU timer
 recovery disabled. Verify elapsed time, a new ROM
 instance, automatic access, and the retained result. Reinitialize DDR before

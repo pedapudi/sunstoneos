@@ -111,6 +111,9 @@ The captured board ROM and an instruction-model check identify a direct FEL
 redirect and a boot-input path before storage boot. The watchdog's RTC flag is
 handled by boot0 and does not establish storage-independent recovery. Register
 retention across reset and physical assertion of the boot input remain unknown.
+The [manufacturer's schematic and manual](board-wiring.md) now identify BOOT
+and GND pads beside mini-HDMI. They provide a documented physical FEL input;
+the attached board's layout and a stable connection still need confirmation.
 Qualify it before further new peripheral-access sequences.
 
 ## Observed host and device state
@@ -205,7 +208,11 @@ the tool hash and recovery evidence in the application document.
 
 1. Establish a reset destination that cannot
    execute unknown storage code, then qualify the prepared hardware watchdog
-   with an SRAM expiry test. Reuse the passed SRAM configuration/restoration
+   with an SRAM expiry test. The [physical recovery procedure](board-wiring.md)
+   identifies BOOT/GND and the prepared input checker. A question about the
+   user's ability to attach a stable, removable bridge is pending. No board
+   reset or new hardware transaction was issued while preparing these records.
+   Reuse the passed SRAM configuration/restoration
    evidence. The ROM redirect candidate and its unresolved
    retention requirements are in [watchdog.md](watchdog.md).
    Integrate recovery before further peripheral access.

@@ -2,8 +2,10 @@
 
 This inventory covers all onboard hardware and usable SoC blocks. It does not
 depend on mimus using a device. The initial list comes from the A733 device tree
-and datasheet; physical routing and component population remain unverified.
-Expand the list when schematic or device inspection identifies additional blocks.
+and datasheet. The pinned V1.2 schematic now supplies [board wiring](board-wiring.md)
+for recovery, audio, cameras, and display. The attached board's revision and
+component population remain unverified. Expand the list as circuit and device
+inspection identifies additional blocks.
 
 Status meanings: **planned** has no implementation; **implemented** has code;
 **tested** has a functional result under stated conditions; **qualified** meets
@@ -111,13 +113,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | Type-C and display multiplexing | Role/orientation and applicable display alternate modes | Confirm controller, wiring, shared PHY modes |
 | Wi-Fi | Firmware transport, scan, association, supported connection modes, packet interface | Confirm radio variant; SDIO/USB wiring; coexistence and reconnect |
 | Bluetooth controller and profiles | Bonds, BLE HID, hands-free audio gateway and voice packets | Firmware, HCI transport, SCO/eSCO routing, codec support |
-| Audio controllers | I2S input/output and other routed audio functions; timestamped PCM | No microphone present; confirm header routes and codec requirements |
-| CSI receivers and PHYs | Camera capture, modes, synchronization, errors, frame buffers | Connector wiring, lane limits, DMA, sensor clocks |
+| Audio controllers | I2S input/output and other routed audio functions; timestamped PCM | No microphone present; schematic routes I2S0 to the header and I2S1 PCM to Bluetooth; qualify both |
+| CSI receivers and PHYs | Camera capture, modes, synchronization, errors, frame buffers | Schematic routes four lanes each to CAM1/MCSIA and CAM2/MCSIB; qualify sensors, DMA, and clocks |
 | OV5640 | Sensor control, supported MIPI modes, exposure and frame delivery | Confirm module wiring and availability; upstream sensor reference |
 | Image processing | Pixel conversion, ISP controls, scaling, exposure/white-balance integration | Sensor tuning, buffer formats, documented dimensions |
 | Display engine | Scanout, composition, synchronization and supported formats | Buffer sharing, display clocks, bandwidth |
 | HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY |
-| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Panel undecided; timings, lanes, power sequence, touch separate |
+| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; panel undecided; timings, power sequence, touch separate |
 | DisplayPort | Output and applicable Type-C integration | Verify board routing, shared PHY and monitor |
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership |
