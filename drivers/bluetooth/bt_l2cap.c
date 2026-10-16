@@ -482,6 +482,10 @@ static int lower_results(struct bt_l2cap *q)
             enum bt_acl_tx_state state=q->acl->packets[j].state;
             if(!f->accepted && (state==BT_ACL_SENT || state==BT_ACL_CREDIT_RETIRED || state==BT_ACL_FLUSHED)) {
                 p->accepted+=f->length;f->accepted=1;
+                if(p->accepted==p->length) {
+                    p->accepted_after=q->acl->hci->transport.next_serial-1;
+                    p->accepted_at=q->acl->hci->transport.now;
+                }
                 if(p->accepted==p->length)for(unsigned k=0;k<BT_L2CAP_CHANNELS;++k) {
                     if(q->channels[k].request_serial==p->serial && waiting(&q->channels[k])) {
                         q->channels[k].request_sent=1;

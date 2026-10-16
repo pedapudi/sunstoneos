@@ -34,6 +34,9 @@ enum bt_l2cap_buffer_state { BT_L2CAP_FREE, BT_L2CAP_PARTIAL,
 struct bt_l2cap_pdu {
     uint8_t bytes[BT_L2CAP_MTU+4];
     uint64_t serial, link, deadline, first_record, channel;
+    /* Acquisition boundary captured when accepted reaches length. Valid only
+     * then; immutable until explicit release/reuse, including terminal TX. */
+    uint64_t accepted_after, accepted_at;
     size_t length, cursor, accepted;
     unsigned leases, application, failed, request_id;
     uint16_t cid;
