@@ -13,8 +13,16 @@ struct fixture {
     uint64_t now,last_lock,enabled_time,multiplier_time;
     unsigned held,retained,leaves,reads,writes,auths,locks,barriers;
     unsigned fail_auth,uncertain_write,corrupt_write,late_write,lose_lock,enter_busy;
+    unsigned final_time_fault,post_leave_observations;
 };
-static int now(void *ctx,uint64_t *n) {*n=((struct fixture *)ctx)->now;return 1;}
+static int now(void *ctx,uint64_t *n)
+{
+    struct fixture *f=ctx;*n=f->now;
+    if(f->final_time_fault && f->leaves && ++f->post_leave_observations==2) {
+        *n=f->config.deadline;atomic_store(&f->registry.busy,1);
+    }
+    return 1;
+}
 static int enter(void *ctx,uint64_t deadline)
 {struct fixture *f=ctx;assert(f->now<deadline);if(f->enter_busy)return 0;assert(!f->held);f->held=1;return 1;}
 static void leave(void *ctx)
@@ -123,8 +131,29 @@ static void fault_cases(const struct fixture *saved)
     finish(&f,A733_DISPLAY_PLL_FAULT_RETAINED);
     assert(f.pll.error==A733_DISPLAY_PLL_AUTHORITY && f.writes==1);
 }
-int main(void)
+static void final_retention(void)
 {
+    struct fixture f;setup(&f,0,480000000,120000000,600000000,100000000);
+    f.final_time_fault=1;
+    for(unsigned i=0;!f.pll.fault && i<10000;++i)tick(&f);
+    assert(f.pll.fault && f.pll.error==A733_DISPLAY_PLL_TIME);
+    assert(f.pll.state==A733_DISPLAY_PLL_PENDING && !f.registry.failed);
+    assert(f.post_leave_observations==2 && f.leaves==1 && !f.held && !f.retained);
+    unsigned reads=f.reads,writes=f.writes,auths=f.auths,barriers=f.barriers;
+    /* While registry metadata is busy, ownership remains reserved and the
+     * failed operation cannot publish readiness or invoke another callback. */
+    tick(&f);assert(f.pll.state==A733_DISPLAY_PLL_PENDING);
+    atomic_store(&f.registry.busy,0);tick(&f);
+    assert(f.pll.state==A733_DISPLAY_PLL_FAULT_RETAINED && f.registry.failed);
+    assert(f.reads==reads && f.writes==writes && f.auths==auths && f.barriers==barriers);
+    assert(f.leaves==1 && f.post_leave_observations==2 && !f.retained);
+    finish(&f,A733_DISPLAY_PLL_FAULT_RETAINED);
+    puts("display PLL: final time failure waits for registry retention without publishing readiness");
+}
+int main(int argc,char **argv)
+{
+    if(argc==2 && !strcmp(argv[1],"final-retain")){final_retention();return 0;}
+    assert(argc==1);
     struct fixture f,saved;
     static const uint32_t rates[][4]={{480000000,120000000,600000000,100000000},
         {840000000,140000000,480000000,80000000}};

@@ -88,6 +88,9 @@ reservation before each write, and compares complete words before and after
 masked updates. The common register mutex remains held across yielded waits.
 An uncertain write, changed word, lost authority or expired deadline retains
 the exclusive reservation and any still-held mutex.
+Readiness is published only after the final time observation succeeds.
+A fault remains pending while registry retention is busy, and later polls
+retry that metadata operation without invoking device or mutex callbacks.
 
 Lock observations must be consecutive and separated by at least five
 microseconds. Three successful observations are followed by at least twenty-five
@@ -185,17 +188,24 @@ and retained terminal behavior. Planner cases reject missing provenance,
 modulation, partial activation and an excessive intermediate LS rate.
 These model profiles are synthetic fixtures, not qualified hardware profiles.
 
-The native AArch64 object contains 3,358 bytes of code/read-only data. Direct
+The native AArch64 object contains 3,426 bytes of code/read-only data. Direct
 stack frames are 288 bytes for planning, 240 for initialization and 48 for
 polling; nested planning and callback frames are additional. The object depends
 on the existing PLL planner, common-clock token status/retention, `memcpy` and
 `memset`.
 
-The first source/model/native batch passed. Evidence and exact executed inputs
-are preserved in `~/.cache/sunstoneos/evidence/display-pll-20261016/`.
-The final header clarification changes comments only; runtime and check sources
-match the successful batch. No board access or performance measurement ran,
-and earlier DSI, timing-controller and display-engine checks were not repeated.
+The source/model/native batch passed. A separate focused case injects a time
+failure after mutex release while registry retention is busy. It verifies
+that readiness stays unpublished and that metadata polling completes fault
+retention after the registry becomes available.
+
+Evidence and exact executed inputs are preserved in
+`~/.cache/sunstoneos/evidence/display-pll-20261016/`. The terminal publication
+correction reuses the initial source comparison because register sequencing
+and factor arithmetic are unchanged. Its focused case and native object are
+preserved under `final-retain/` and `final-retain-snapshot/`.
+No board access or performance measurement ran, and earlier DSI,
+timing-controller and display-engine checks were not repeated.
 
 Reproduce only when relevant inputs change:
 
@@ -204,6 +214,8 @@ python3 checks/a733-display-pll.py \
   --source-root ~/.cache/sunstoneos/sources/display \
   --evidence /path/to/new/evidence
 ```
+
+Use `--case final-retain` for the isolated terminal-retention case.
 
 The inspected sources are:
 

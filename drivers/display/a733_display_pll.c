@@ -138,7 +138,7 @@ enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *p)
     p->wait_until=0;
     void *ctx=p->config.context;
     uint32_t value=0;
-    int ok=1;
+    int ok=1,finishing=0;
     switch (p->stage) {
     case ENTER:
         ok=p->config.ops.enter(ctx,p->config.deadline);
@@ -209,13 +209,14 @@ enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *p)
         break;
     case LEAVE:
         p->config.ops.leave(ctx);p->held=0;
-        if (timely(p)) p->state=A733_DISPLAY_PLL_READY_RETAINED;
+        if (timely(p)) finishing=1;
         break;
     default:fail(p,A733_DISPLAY_PLL_IO);break;
     }
     if (timely(p)) {
         if (p->stage==FILTER || p->stage==SETTLE) delay(p,p->stage==SETTLE?25:5);
         else if (p->stage==PROGRAM && p->substep==5) {p->substep=0;delay(p,20);}
+        if (finishing) p->state=A733_DISPLAY_PLL_READY_RETAINED;
     }
 out:
     if (p->fault) retain(p);

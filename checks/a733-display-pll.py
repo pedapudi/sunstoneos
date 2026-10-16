@@ -11,6 +11,7 @@ p = argparse.ArgumentParser()
 p.add_argument('--source-root', type=pathlib.Path, required=True)
 p.add_argument('--evidence', type=pathlib.Path, required=True)
 p.add_argument('--cc', default='clang-21')
+p.add_argument('--case', choices=['all', 'final-retain'], default='all')
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
 a.evidence.mkdir(parents=True, exist_ok=False)
@@ -102,7 +103,7 @@ run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
      'checks/a733-display-pll.c', 'drivers/display/a733_display_pll.c',
      'drivers/display/a733_dsi_phy.c', 'drivers/clock/a733_clock_leases.c',
      str(ref), '-o', str(binary)], 'host-compile.log')
-run([str(binary)], 'run.log')
+run([str(binary)] + ([] if a.case == 'all' else [a.case]), 'run.log')
 obj = a.evidence / 'a733_display_pll.o'
 run([a.cc, '--target=aarch64-none-elf', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
      '-ffreestanding', '-fno-builtin', '-mgeneral-regs-only', '-mstrict-align',
@@ -111,7 +112,9 @@ run([a.cc, '--target=aarch64-none-elf', '-std=c11', '-O2', '-Wall', '-Wextra', '
 run(['/usr/lib/llvm-21/bin/llvm-size', str(obj)], 'size.log')
 run(['/usr/lib/llvm-21/bin/llvm-nm', '-u', str(obj)], 'undefined.log')
 record = {
-    'purpose': 'Source-ordered PLL activation/retuning, intermediate rates, shared ownership and retained faults',
+    'purpose': ('Final time failure with busy registry retention; reuse unchanged sequence evidence'
+                if a.case == 'final-retain' else
+                'Source-ordered PLL activation/retuning, intermediate rates, shared ownership and retained faults'),
     'commands': commands, 'references': pins,
     'inputs': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in inputs},
     'artifacts': {name: hashlib.sha256((a.evidence / name).read_bytes()).hexdigest()
