@@ -61,12 +61,15 @@ typedef uint64_t a733_clock_mask_t;
 #define A733_CLOCK_S_SPI      (UINT64_C(1)<<47)
 #define A733_CLOCK_CE         (UINT64_C(1)<<48) /* Complete secure/nonsecure CE controller. */
 #define A733_CLOCK_RC16M      (UINT64_C(1)<<49) /* Independent internal oscillator; no PLL parent. */
+#define A733_CLOCK_USB01_REF  (UINT64_C(1)<<50) /* USB0/1 reference mux/gate at CCU+0x1340. */
+#define A733_CLOCK_USB0       (UINT64_C(1)<<51) /* Complete USB0 port; exclusive. */
+#define A733_CLOCK_USB1       (UINT64_C(1)<<52) /* Complete USB1 port; exclusive. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT64_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT64_C(0x3ffffffffffff) /* Bits0-49; unassigned bits refused. */
+#define A733_CLOCK_ALL     UINT64_C(0x1fffffffffffff) /* Bits0-52; unassigned bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -114,6 +117,14 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * other local owners; SPI/CE selected parents and fabric are reserved explicitly.
  * Shared register words require the common mutex and preservation of other
  * controllers' fields. Pins, rail control and remote ownership remain separate.
+ * USB0 and USB1 each own their complete controller/PHY/EHCI/OHCI port,
+ * role routes, and local clock/reset fields at CCU+0x1300/1304 or +0x1308/130c.
+ * Both reserve USB01_REF -> REF -> OSC. USB01_REF covers CCU+0x1340 mux26:24
+ * and gate31; SYS24M/DCXO source selection still requires live rate proof.
+ * USB2 is independent and is not authorized by these scopes. Upstream MSI-LITE2
+ * gate/reset at CCU+0x5a4 and USB_SYS gate at +0x5c0 bit9 remain FABRIC
+ * authority; a local port token grants no upstream mutation rights. A shared
+ * FABRIC lease permits only observation/adoption of stable upstream configuration.
  * Changing a child holds its ancestors stable. Local controller scopes are
  * exclusive only; their selected parent must be leased separately. I2S/ASRC/
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO
@@ -160,7 +171,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
 /* Atomic metadata publication after the privileged PLL coordinator has proved
  * its physical profile stable and kept all consumers excluded. parents must
- * be a nonempty subset of PLL_NPU|DISPLL1 currently held exclusively. Convert
+ * be a nonempty subset of PLL_NPU|DISPLL1|USB01_REF held exclusively. Convert
  * only those bits to shared ownership, preserving owner and every other scope.
  * A fresh token invalidates the old identity. All validation/time callbacks
  * precede mutation; OK always returns the only live replacement token. Refusal

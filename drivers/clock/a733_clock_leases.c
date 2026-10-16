@@ -9,6 +9,7 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
 static a733_clock_mask_t parents(a733_clock_mask_t mask)
 {
     a733_clock_mask_t p=0;
+    if(mask&(A733_CLOCK_USB0|A733_CLOCK_USB1))p|=A733_CLOCK_USB01_REF;
     if(mask&A733_CLOCK_MAIN_UARTS)p|=A733_CLOCK_APB_UART;
     if(mask&A733_CLOCK_S_UARTS)p|=A733_CLOCK_APBS1;
     if(mask&A733_CLOCK_THS)p|=A733_CLOCK_GPADC24M;
@@ -17,7 +18,7 @@ static a733_clock_mask_t parents(a733_clock_mask_t mask)
     if(mask&(A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5))p|=A733_CLOCK_AUDIO1;
     if((mask|p)&(A733_CLOCK_AUDIO1|A733_CLOCK_PERI0|A733_CLOCK_PLL_NPU|
         A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE|A733_CLOCK_PLL_VE0|A733_CLOCK_PLL_VE1|
-        A733_CLOCK_GPADC24M|A733_CLOCK_APB_UART|A733_CLOCK_APBS1))p|=A733_CLOCK_REF;
+        A733_CLOCK_GPADC24M|A733_CLOCK_APB_UART|A733_CLOCK_APBS1|A733_CLOCK_USB01_REF))p|=A733_CLOCK_REF;
     if((mask|p)&A733_CLOCK_REF)p|=A733_CLOCK_OSC;
     return p;
 }
@@ -58,7 +59,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
 {
     const a733_clock_mask_t local=A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU|
         A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS|A733_CLOCK_MAIN_UARTS|
-        A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE;
+        A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
@@ -106,7 +107,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
 enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     const struct a733_clock_token *token,a733_clock_mask_t stable,uint64_t deadline,struct a733_clock_token *out)
 {
-    const a733_clock_mask_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1;
+    const a733_clock_mask_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1|A733_CLOCK_USB01_REF;
     if(!stable || (stable&~supported) || !separate(m,sizeof(*m),token,sizeof(*token)) ||
         !separate(m,sizeof(*m),out,sizeof(*out)) || !separate(token,sizeof(*token),out,sizeof(*out)))
         return A733_CLOCK_INVALID;

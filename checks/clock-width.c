@@ -40,7 +40,8 @@ static void coexistence(void)
     assert(a733_clock_token_status(&r,&live[0])==A733_CLOCK_OK);
     for(unsigned i=0;i<sizeof(live)/sizeof(*live);++i)
         assert(a733_clock_release(&r,&live[i],10)==A733_CLOCK_OK);
-    for(unsigned bit=50;bit<64;++bit) {
+    for(unsigned bit=0;bit<64;++bit) {
+        if(A733_CLOCK_ALL&(UINT64_C(1)<<bit))continue;
         assert(a733_clock_acquire(&r,99,UINT64_C(1)<<bit,0,10,&out)==A733_CLOCK_INVALID && out.id==999);
         assert(a733_clock_acquire(&r,99,0,UINT64_C(1)<<bit,10,&out)==A733_CLOCK_INVALID && out.id==999);
     }
