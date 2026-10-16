@@ -69,8 +69,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   DMA controller. Host checks cover producer shutdown before DMA drain and
   retained ownership after uncertain failures. Format encodings match pinned
   source functions. [Audio implementation and limits](i2s.md) records formats,
-  header routes, and evidence. Platform clock/reset/pin callbacks, continuous
-  streaming, playback, Bluetooth PCM, and physical qualification remain open.
+  header routes, and evidence. The [clock/reset/pin binding](i2s-platform.md)
+  passes host resource/deadline checks, pinned CCU comparison, and AArch64
+  compilation. Production common clock leases, privileged DMA scheduling,
+  continuous streaming, playback, Bluetooth PCM, and physical qualification
+  remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
@@ -119,12 +122,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   construction, deferred responses, shutdown draining, and retained faults in
   QEMU. Concrete allocation/publication callbacks, linked render-target recovery,
   lease disposal for reopen, and physical execution remain outstanding.
+  The [native lifecycle backend](gpu-backend.md) now has instruction-model
+  evidence for identity admission, restricted MMIO, memory/GIC composition,
+  retained faults, and actual queue event reception. A proven physical memory
+  isolation provider, board reservations, and firmware boot remain required.
   The [client command transport](gpu-cccb.md) passes host/reference checks for
   complete ring and KICK bytes, wraparound, queue pressure, deadlines, and retained
   faults. It compiles for AArch64. Context construction, job admission, completion
   fences, service integration, and physical execution remain outstanding.
 
-- Radio: **research-only** [bootstrap and board mapping](radio.md), with a
+- Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
+  with host sanitizer and AArch64 compile evidence. The
+  [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies
   an AIC8800D80 candidate and loads Bluetooth patches over SDIO before UART use.
   Physical silicon identity, native transports, power/reset bindings, networking,

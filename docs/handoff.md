@@ -48,14 +48,19 @@ callers. Its RAM/FIFO admission policy also passes host checks. Board reservatio
 clock/reset setup, and a production privileged service remain outstanding.
 Native [I2S0 capture](i2s.md) now configures finite mono/stereo reception through
 the DMA controller. Host checks pass shutdown ordering, deadlines, and retained
-faults; format plans match pinned audio functions. Reuse `i2s-20261016` evidence:
-integrated source and DMA dependency hashes match the tested inputs. Platform
-clock/reset/pin ownership, allocation, continuous streaming, and physical audio
-remain outstanding. No microphone is attached.
+faults; format plans match pinned audio functions. Reuse the unchanged format
+comparison from `i2s-20261016`; the affected capture fixture passes with the
+new platform API. Allocation, continuous streaming, and physical audio remain outstanding. No
+microphone is attached. The [I2S0 platform binding](i2s-platform.md) now supplies
+bounded clock/reset/pin acquisition and release, with retained partial ownership.
+Host checks and pinned CCU comparison pass; core, platform, and native adapter
+compile for AArch64. Reuse `i2s-platform-20261016`, including the focused parent
+clock regression check. Its 14 final input hashes match the integrated files.
+Production common clock leases and a privileged DMA service remain required.
 Shared [header pin ownership](pins.md) now covers PB4–PB8 with retained tokens,
 verified register updates, and host/reference evidence. Reuse `pins-20261016`
-and the focused late-operation checks in `pins-deadline-20261016`. A source-backed
-I2S clock/reset/pin binding and its partial-acquisition contract remain in progress.
+and the focused late-operation checks in `pins-deadline-20261016`. The I2S
+binding uses this manager after acquiring local controller ownership.
 The [NPU investigation](npu.md) identifies available driver source and the
 remaining model-loader/compiler dependencies. A host inspector now matches
 compiled-model metadata and rejects malformed containers. Native [NPU page-table
@@ -160,8 +165,14 @@ and retained I2C restoration failures. The service's asynchronous power interfac
 passes power-controller integration, timeout, and partial-acquisition failures
 in QEMU. The [native platform binding](gpu-platform.md) now connects resource
 admission to power transitions and shared task mutexes. Instruction-model and
-two-core FreeRTOS checks pass; reuse `gpu-platform-20261016`. Board composition,
-cold initialization, and physical operations remain outstanding.
+two-core FreeRTOS checks pass; reuse `gpu-platform-20261016`. Cold initialization
+and physical operations remain outstanding. The [native lifecycle backend](gpu-backend.md)
+now binds MMIO, identity admission, memory operations, power, and GIC callbacks.
+Instruction-model checks pass register composition, retained faults, shared-clock
+ordering, and actual firmware-event reception. Reuse `gpu-backend-20261016`;
+55 input hashes match and the source-lock extension preserves all prior pins.
+Physical memory isolation, reservations, interrupt setup, and firmware boot remain
+required. The backend's external isolation provider is still unimplemented.
 [Interrupt delivery](gpu-interrupts.md)
 now wakes the privileged worker through a bounded GIC mask/notification/rearm
 path. Two QEMU cases pass cross-core delivery, backlog handling, reopen, and
@@ -195,8 +206,11 @@ candidate, SDIO bootstrap before Bluetooth UART operation, board wiring,
 firmware availability, and stack dependencies. Installed silicon identity,
 reset/LPO wiring, firmware redistribution terms, and voice routing remain
 unconfirmed. The read-only patch-table inspector passes focused published-file
-and malformed-input checks; reuse `radio-20261016`. A native identity-message
-codec is in progress in an isolated worker; no radio board request exists.
+and malformed-input checks; reuse `radio-20261016`. The native
+[identity-message codec](radio-codec.md) now encodes source-matched read requests
+and validates response bounds while preserving unrelated messages. Its host
+sanitizer check and AArch64 compilation pass; reuse `radio-codec-20261016`.
+SDIO controller/enumeration work remains in progress; no radio board request exists.
 NPU platform resource setup, complete model admission,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
@@ -395,17 +409,22 @@ the tool hash and recovery evidence in the application document.
    memory isolation. Reuse `gpu-resources-20261016` for shared leases and the
    native register/I2C adapter, and `gpu-power-service-20261016` for asynchronous
    service sequencing. Native platform binding and shared FreeRTOS locks are
-   integrated; reuse `gpu-platform-20261016`. Its worker is developing native
-   register/backend composition in `gpu-backend`. Free-list backing, growth/reconstruction, and
+   integrated; reuse `gpu-platform-20261016`. The native lifecycle backend is
+   integrated with instruction-model evidence in `gpu-backend-20261016`.
+   Its worker is developing offline compute-context construction in `gpu-context`.
+   The client command transport is integrated; reuse `gpu-cccb-20261016`.
+   Free-list backing, growth/reconstruction, and
    deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
    Lifecycle-service integration is complete with emulator evidence in
-   `gpu-freelist-service-20261016`. Its worker is identifying concrete radio
-   firmware and transport dependencies in `radio`.
+   `gpu-freelist-service-20261016`. The radio worker has completed dependency
+   inspection and identity-message encoding/decoding. It is implementing bounded
+   SDIO controller operations and card enumeration in an isolated worktree.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
    records. Finite I2S0 capture and shared PB4–PB8 pin ownership are integrated;
-   their worker is developing a concrete audio clock/reset/pin binding in
-   `i2s-platform`. Inspect live agent state before reassigning their files.
+   their clock/reset/pin binding is integrated with `i2s-platform-20261016`
+   evidence. That worker is proposing a privileged FreeRTOS DMA service.
+   Inspect live agent state before reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic

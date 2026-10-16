@@ -202,5 +202,41 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sun60iw2.c",
     "archive": "board-kernel/pinctrl-sun60iw2.c",
     "sha256": "ab05ddccecd152edf3fafd238ade22299aebe3448646f02f0551edef0c6e1ec7"
+  },
+  "board-gpu-backend-pvr-device-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_device.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_device.c",
+    "sha256": "e81e5b2126db83517fc7435a96e0fddb48e6364b255747f300f448d10255805d"
+  },
+  "board-gpu-backend-pvr-rogue-cr-defs-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_cr_defs.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_cr_defs.h",
+    "sha256": "7421bd9524a485e729421fa1452e09d6687d7a34b092c2502a3c1271b0295b7c"
+  },
+  "board-gpu-backend-pvr-fw-startstop-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_fw_startstop.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_fw_startstop.c",
+    "sha256": "2906cf9237dfc1ee30b28cb30d85994578ea371222dc3074c4135bb1858d92a5"
+  },
+  "board-gpu-backend-pvr-fw-mips-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_fw_mips.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_fw_mips.c",
+    "sha256": "cb2cecd374b45048b5c597044f77c0aa792064639d6279f2324667d28b9e097b"
+  },
+  "board-gpu-backend-pvr-fw-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_fw.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_fw.c",
+    "sha256": "186dbc931f33d17c6e05bc8d92ec41735901d1e1afe621dc178bacfdfd2b46a1"
+  },
+  "board-gpu-backend-pvr-ccb-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_ccb.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_ccb.c",
+    "sha256": "f267167ef51ba9f46c0b7fb939ce94e802fda03d6c692b1fc4579693ff5fa800"
   }
 }
