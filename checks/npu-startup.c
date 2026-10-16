@@ -292,6 +292,8 @@ void kernel_main(void)
     ccu[0]=0xf8000000|(99<<16)|(99<<8);
     ccu[0xa0/4]=0xfe000000|(1<<20)|(2<<16)|(99<<8)|(4<<2);
     ccu[0x2a0/4]=0xf8000000|(1<<20)|(81<<8);
+    ccu[0x1908/4]=0x0fff0fff;ccu[0x1988/4]=0x0fff0000;
+    ccu[0x1920/4]=0x10001;ccu[0x19a0/4]=0x10000;
     ccu[0x500/4]=h.allowed.fabric[0];ccu[0x580/4]=h.allowed.fabric[1];ccu[0x588/4]=h.allowed.fabric[2];
     ccu[0x5c0/4]=0x010000ff;ccu[0x5e0/4]=0x41055800;ccu[0xb04/4]=0x80000;
     bootstrap_task=xTaskCreateStaticAffinitySet(bootstrap,"npu-bootstrap",3072,NULL,3,stacks[0],&task_storage[0],1);

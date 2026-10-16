@@ -9,6 +9,7 @@ import re
 p = argparse.ArgumentParser()
 p.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--gates-only', action='store_true', help='Check only the changed parent-gate semantics')
 a = p.parse_args()
 paths = {
     'ccu': a.sources/'board-kernel/ccu-sun60iw2.c',
@@ -23,6 +24,35 @@ paths = {
     'manual': a.sources/'camera-research/A733_User_Manual_V1.00.txt',
 }
 s = {k: v.read_text() for k, v in paths.items()}
+if a.gates_only:
+    manual = s['manual']
+    sections = {}
+    for name, start, end in [('npu_control', '4.1.6.255 ', '4.1.6.256 '),
+                             ('npu_status', '4.1.6.264 ', '4.1.6.265 '),
+                             ('peri_control', '4.1.6.249 ', '4.1.6.250 '),
+                             ('peri_status', '4.1.6.258 ', '4.1.6.259 ')]:
+        section = manual[manual.index(start):manual.index(end)]
+        sections[name] = section
+    assert re.search(r'NPUPLL_GATE_SW_CFG\..*?16\s+R/W\s+0x1.*?0: Disable\s+1: Enable', sections['npu_control'], re.S)
+    assert re.search(r'NPUPLL_AUTO_GATE_EN\..*?0\s+R/W\s+0x1.*?0: Auto\s+1: No-Auto', sections['npu_control'], re.S)
+    assert re.search(r'NPUPLL_GATE_STAT\..*?16\s+R\s+0x1.*?0: Disable\s+1: Enable', sections['npu_status'], re.S)
+    for stem, low in [('PERI0PLL2X', 11), ('PERI0_800M', 10), ('PERI0_600M', 9),
+                      ('PERI0_480M', 7), ('PERI0_400M', 1)]:
+        assert re.search(stem + r'_AUTO_GATE_EN\..*?\b' + str(low) + r'\s+R/W\s+0x1.*?0: Auto\s+1: No-Auto', sections['peri_control'], re.S)
+        assert re.search(stem + r'_GATE_SW_CFG\..*?\b' + str(low + 16) + r'\s+R/W\s+0x1', sections['peri_control'], re.S)
+        assert re.search(stem + r'_GATE_STAT\..*?\b' + str(low + 16) + r'\s+R\s+0x1', sections['peri_status'], re.S)
+    for stem, low in [('PERI0_480M', 8), ('PERI0_400M', 2)]:
+        assert re.search(stem + r'_AUTO_GATE_EN_ALL\..*?\b' + str(low) + r'\s+R/W\s+0x1.*?0: Auto\s+1: No-Auto', sections['peri_control'], re.S)
+        assert re.search(stem + r'_GATE_ALL_CFG\..*?\b' + str(low + 16) + r'\s+R/W\s+0x1', sections['peri_control'], re.S)
+        assert re.search(stem + r'_GATE_ALL_STAT\..*?\b' + str(low + 16) + r'\s+R\s+0x1', sections['peri_status'], re.S)
+    a.output.mkdir(parents=True, exist_ok=True)
+    record = {'manual_sha256': hashlib.sha256(paths['manual'].read_bytes()).hexdigest(),
+              'sections': list(sections), 'npu_control_mask': '0x10001', 'npu_status_mask': '0x10000',
+              'peri_no_auto_masks': {'600': '0xa00', '400': '0x806', '800': '0x400', '480': '0x180'},
+              'rule': 'Selected low No-Auto bits and their corresponding high software/status bits must all be one.'}
+    (a.output/'gate-reference.json').write_text(json.dumps(record, indent=2)+'\n')
+    print('Primary manual NPU/PERI0 No-Auto, software-enable and effective-status fields match.')
+    raise SystemExit(0)
 def match(key, pattern):
     m = re.search(pattern, s[key], re.S)
     assert m, (key, pattern)

@@ -22,7 +22,7 @@ The pinned kernel defines these resources:
 | NPU SRAM reset | CCU `+0xb04` bit 19 | Require deasserted; preserve it |
 | NPU critical leaf gates | CCU `+0x5c0` bit 6 and `+0x5e0` bit 18 | Require enabled; preserve entire words |
 | PLL_NPU | CCU `+0x2a0`; parent PLL_REF, N bits 8–15, M bits 20–22 | Verify enabled, locked, unmodulated and stable; preserve configuration |
-| PLL_NPU automatic gate | CCU `+0x1920` bit 0 | Require disabled |
+| PLL_NPU gate control/status | CCU `+0x1920` bits 0 and 16; `+0x19a0` bit 16 | Require No-Auto, software enable and effective gate enabled |
 | NPU clock-management mode | CCU `+0x1b1c` bit 0 | Require disabled; enabled-mode handoff remains unsupported |
 | PCK clock | R_CCU `0x07010000 + 0x1ac` bit 0 | Require enabled and leased |
 | NPU power domain | PCK `0x07060000 + 0x4000` | Require OFF; program source timing values and request ON |
@@ -39,6 +39,13 @@ Accepted inherited parent rates are 492, 984, and 1,968 MHz. Module divisors
 are respectively 1, 2, and 4. A 1,008 MHz inherited parent is refused.
 The reference PLL must preserve a 24 MHz oscillator rate. Modulation and
 selected-parent automatic gating must be disabled.
+The primary manual defines gate-control bit 0 as `0: Auto`, `1: No-Auto`.
+PLL_NPU therefore requires `+0x1920` bits 0 and 16 set, together with effective
+gate status at `+0x19a0` bit 16. For each selected PERI0 output, the controller
+requires its No-Auto route bits and corresponding software-enable bits at
+`+0x1908`, plus matching effective status at `+0x1988`. Parent and divided-leaf
+gates both participate in this check. Unused routes do not constrain admission.
+The verifier reads these controls and statuses; it does not change any gate.
 
 The source operating-point table assigns 800 mV to 492 MHz for every listed
 NPU speed bin, for both oscillator variants. This implementation supports the
@@ -170,3 +177,14 @@ The primary reference is *A733 User Manual V1.00*, sections 2, 4.1.6.6,
 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`;
 the shared source lock names it `a733-user-manual-1.00`.
 No board access or performance measurement occurred.
+
+The parent-gate correction has separate evidence under
+`~/.cache/sunstoneos/evidence/npu-parent-gates-20261016/`. A focused source
+comparison checks manual sections 4.1.6.249, 4.1.6.255, 4.1.6.258 and 4.1.6.264.
+The host model accepts each selected PERI0 output route, then refuses every
+missing required No-Auto, software-enable or effective-status bit before writes.
+The changed controller and native read allowlist compile for AArch64.
+The startup fixture now supplies forced-on controls and matching effective
+status. Its lifecycle logic is unchanged; earlier startup, service and
+convolution evidence is reused without replaying those cases. These software
+checks do not establish physical gate behavior.

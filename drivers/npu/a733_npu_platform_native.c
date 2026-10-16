@@ -8,7 +8,7 @@ static int readable(uintptr_t address)
         switch(address-CCU) {
         case 0:case 0xa0:case 0xa8:case 0xac:case 0x2a0:case 0x2a8:case 0x2ac:
         case 0x500:case 0x580:case 0x588:case 0x5c0:case 0x5e0:case 0xb00:case 0xb04:
-        case 0x1908:case 0x1920:case 0x1b1c:return 1;
+        case 0x1908:case 0x1920:case 0x1988:case 0x19a0:case 0x1b1c:return 1;
         default:return 0;
         }
     }

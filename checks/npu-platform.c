@@ -88,6 +88,10 @@ static void setup(struct model *m,unsigned parent_div)
     *reg(m,CCU)=0xf8000000|(99u<<8)|(99u<<16);
     *reg(m,CCU+0xa0)=0xfe000000|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
     *reg(m,CCU+0x2a0)=0xf8000000|(81u<<8)|((parent_div-1)<<20);
+    *reg(m,CCU+0x1908)=0x0fff0fff;
+    *reg(m,CCU+0x1988)=0x0fff0000;
+    *reg(m,CCU+0x1920)=0x10001;
+    *reg(m,CCU+0x19a0)=0x10000;
     *reg(m,CCU+0x500)=m->config.fabric[0];
     *reg(m,CCU+0x580)=m->config.fabric[1];
     *reg(m,CCU+0x588)=m->config.fabric[2];
@@ -191,8 +195,52 @@ static void ownership_and_time(void)
     setup(&m,2);m.fail_unlock=1;assert(run(&m)==RETAINED && !m.nwrite);retained(&m);
     setup(&m,2);m.regress=1;assert(run(&m)==RETAINED && !m.reads);retained(&m);
 }
+static void gate_profile(struct model *m,unsigned route)
+{
+    setup(m,4);
+    static const uint32_t selected[]={0x81000000,0x84000000,0x83000000,0x82000000};
+    static const uint32_t rates[]={600000000,400000000,480000000,800000000};
+    static const uint32_t masks[]={0xa00,0x806,0x180,0x400};
+    m->config.fabric[0]=0;m->config.rate_hz[0]=24000000;
+    m->config.fabric[1]=0x80000000;m->config.rate_hz[1]=24000000;
+    m->config.fabric[2]=0x80000000;m->config.rate_hz[2]=24000000;
+    unsigned index=route==3 ? 1 : 2;
+    m->config.fabric[index]=selected[route];m->config.rate_hz[index]=rates[route];
+    *reg(m,CCU+0x500)=m->config.fabric[0];*reg(m,CCU+0x580)=m->config.fabric[1];
+    *reg(m,CCU+0x588)=m->config.fabric[2];
+    *reg(m,CCU+0x1908)=masks[route]|(masks[route]<<16);
+    *reg(m,CCU+0x1988)=masks[route]<<16;
+    memset(&m->p,0,sizeof(m->p));assert(a733_npu_platform_init(&m->p,&m->config,&ops,m));
+}
+static void gate_admission(void)
+{
+    static const uint32_t masks[]={0xa00,0x806,0x180,0x400};
+    unsigned refusals=0;
+    for(unsigned route=0;route<4;++route) {
+        struct model m;gate_profile(&m,route);
+        assert(a733_npu_platform_poll(&m.p)==PENDING);
+        assert(a733_npu_platform_poll(&m.p)==PENDING && !m.nwrite && m.p.parent_hz==492000000);
+        for(unsigned bit=0;bit<12;++bit)if(masks[route]&(1u<<bit)) {
+            for(unsigned kind=0;kind<3;++kind) {
+                gate_profile(&m,route);
+                *reg(&m,CCU+(kind==2 ? 0x1988 : 0x1908))&=~(1u<<(bit+(kind ? 16 : 0)));
+                assert(a733_npu_platform_poll(&m.p)==PENDING);
+                assert(a733_npu_platform_poll(&m.p)==RETAINED && !m.nwrite);retained(&m);++refusals;
+            }
+        }
+    }
+    for(unsigned kind=0;kind<3;++kind) {
+        struct model m;gate_profile(&m,0);
+        *reg(&m,CCU+(kind==2 ? 0x19a0 : 0x1920))&=~(1u<<(kind ? 16 : 0));
+        assert(a733_npu_platform_poll(&m.p)==PENDING);
+        assert(a733_npu_platform_poll(&m.p)==RETAINED && !m.nwrite);retained(&m);++refusals;
+    }
+    assert(refusals==27);
+    puts("NPU/PERI0 forced-on parent admission: four routes pass; missing No-Auto, software gate or effective gate retains before writes.");
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"gates")){gate_admission();return 0;}
     if(argc==2 && !strcmp(argv[1],"admission")) {
         struct model m;setup(&m,2);m.partial=2;
         assert(run(&m)==RETAINED && m.p.resources.clock.id && m.p.resources.pck && !m.reads);retained(&m);
