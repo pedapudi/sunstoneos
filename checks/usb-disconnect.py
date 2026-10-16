@@ -2,6 +2,7 @@
 """Check metadata disappearance without opening or resetting a USB device."""
 import errno
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -35,4 +36,21 @@ with tempfile.TemporaryDirectory(prefix="sunstoneos-disconnect-") as directory:
             assert access.session_node(config) == access.DEV_USB / "003/060"
             (device / "idProduct").write_text("0000")
             assert access.session_node(config) is None
+    # Cached ROM descriptors remain visible after a failed CPU handoff. A stale
+    # instance must be refused without reading descriptors or opening USB.
+    with patch.object(access, "RECOVERY_REQUIRED", root / "blocked.json"), \
+         patch.object(access, "identity", return_value=[1, 2, 3, 0, 0]), \
+         patch.object(access, "target", return_value=device) as target:
+        access.quarantine_instance(root / "node", "fixture")
+        try:
+            access.require_rom(root / "node")
+        except ValueError as error:
+            assert "failed to recover" in str(error)
+        else:
+            raise AssertionError("Stale ROM instance accepted")
+        target.assert_not_called()
+        (device / "bcdDevice").write_text("02b3")
+        with patch.object(access, "identity", return_value=[1, 4, 5, 0, 0]):
+            access.require_rom(root / "node")
+        assert json.loads(access.RECOVERY_REQUIRED.read_text())["reason"] == "fixture"
 print("PASS: disconnect absence, new ROM instance, unrelated device, and fatal metadata errors.")

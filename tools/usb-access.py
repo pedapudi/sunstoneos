@@ -18,6 +18,7 @@ STATE_DIR = Path("/run/sunstoneos-usb-access")
 RULE = Path("/run/udev/rules.d/90-sunstoneos-fel.rules")
 SYS_USB = Path("/sys/bus/usb/devices")
 DEV_USB = Path("/dev/bus/usb")
+RECOVERY_REQUIRED = Path.home() / ".cache/sunstoneos/recovery-required.json"
 
 
 def command(*args, input=None):
@@ -243,7 +244,19 @@ def require_session(node, uid=None):
         raise ValueError("Current FEL node is not accessible.")
 
 
+def quarantine_instance(node, reason, observed_identity=None):
+    """Refuse further FEL requests to an instance that failed to recover."""
+    info = {"identity": observed_identity or identity(node), "reason": reason}
+    RECOVERY_REQUIRED.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(RECOVERY_REQUIRED, json.dumps(info) + "\n")
+
+
 def require_rom(node):
+    if RECOVERY_REQUIRED.exists():
+        blocked = json.loads(RECOVERY_REQUIRED.read_text())
+        if identity(node) == blocked["identity"]:
+            raise ValueError("This USB instance failed to recover; its cached ROM descriptor "
+                             "does not prove FEL is running. " + blocked["reason"])
     device = target(node)
     if (device / "bcdDevice").read_text().strip() != "02b3":
         raise ValueError("USB device is not the verified A733 ROM service; do not send FEL requests.")
@@ -259,7 +272,7 @@ def main():
     uid = pwd.getpwnam(args.user).pw_uid
     if args.action == "check-session":
         require_session(discover(), uid)
-        print("Reconnect rule and current FEL access are present.")
+        print("Reconnect rule and current USB node permissions are present.")
         return
     if args.action == "status":
         node = discover()

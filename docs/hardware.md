@@ -35,6 +35,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pin/clock restoration, and ROM return are **tested**; CMD1 receives no response.
   [Storage evidence](storage.md) records this negative result. No media device
   is identified, and block access remains planned.
+- I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
+  AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
+  the conditions. Regulator writes and full bus operation remain unqualified.
+- UFS initialization: **implemented**, but the physical attempt did not return
+  to ROM. [Storage evidence](storage.md) records the failure and untested correction.
+- Independent watchdog: **implemented** register operations with host checks.
+  [Hardware reset and FEL return](watchdog.md) remain untested and are required
+  before further new peripheral-access sequences.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

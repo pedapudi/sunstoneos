@@ -7,7 +7,8 @@ or read. This result does not establish that eMMC is absent: population, power,
 signal routing, and timing still need confirmation.
 
 The board device tree enables SD, eMMC, and UFS controllers. An enabled node
-does not establish physical population. UFS initialization has not run. SD card
+does not establish physical population. UFS initialization failed to return to
+ROM; its controller is not qualified. SD card
 detection has not been configured, so the recorded PF input value does not
 establish whether a card is inserted.
 
@@ -90,9 +91,38 @@ The [pinned sources](sources.md) supply the register and wiring references:
   `drivers/mmc/host/sunxi_mmc_host_tm4.c`, the type-1 clock implementation,
   and the A733 GPIO definitions.
 
-The next useful work is to establish storage power and population, then initialize
-UFS or the applicable SD/MMC path for read-only identification and block access.
+The [PMIC reader](power.md) confirms that the rails assigned to UFS are enabled
+at programmed settings of 2.5 V and 1.8 V. Physical population remains unknown.
+The next hardware work is [independent watchdog qualification](watchdog.md),
+followed by guarded UFS initialization for read-only identification and block access.
 UFS references are available in the pinned bootloader's `drivers/ufs/` directory.
 Repeated CMD1 attempts need new evidence about wiring, power, or initialization.
 Storage backup, native USB block export, persistent boot, writes, power-loss
 behavior, and recovery qualification remain outstanding.
+
+## UFS initialization exposed a recovery gap
+
+The first UFS probe stopped before changing controller state because the
+configuration clock was already enabled. The inherited value `0x80000018` matched
+the desired divisor, so the revised probe preserved it. That revised image did
+not return to FEL within the loader's ten-second deadline. The host retained the
+old USB instance and recorded no disconnect. No subsequent device requests were
+issued to that instance. Host-controller logs showed no controller-death event.
+
+The failed binary hash is
+`ff58df3e809b4fc93b8ba3db2e60afe00966584e4a0c7df2e3bc7d98a0e4df20`.
+Raw evidence is `~/.cache/sunstoneos/evidence/ufs-inherited-clock-20261016/`;
+the earlier precondition result is under `ufs-controller-20261016/`.
+The uploaded bytes and complete host transaction record are retained.
+
+Source review found that the failed image read capability/version registers
+before releasing the UFS core reset. The reference bootloader reads those
+registers after its platform initialization releases core reset. A stalled early
+read is a plausible cause, but inaccessible target diagnostics prevent confirmation.
+The source now follows the reference ordering and compiles; it has not executed.
+PHY startup, local attribute reads, and storage identification remain unproven.
+
+The UFS target is excluded from normal builds by the default-off
+`SUNSTONE_EXPERIMENTAL_UFS` option. Its raw binary has been removed from the normal
+build location and preserved with the failure evidence. Do not execute the probe
+until independent watchdog recovery is physically tested and integrated.

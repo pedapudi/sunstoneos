@@ -100,6 +100,13 @@ deadlines; other I/O errors remain fatal. `checks/usb-disconnect.py` covers this
 metadata race without contacting hardware. The host-side fix needs no rule
 reinstallation.
 
+After a failed return to ROM, the loader records the old device identity in
+`~/.cache/sunstoneos/recovery-required.json`. Loaders refuse that instance even
+when its cached ROM descriptor remains visible. Independent board recovery must
+produce a distinct instance that passes the ROM checks. `check-session` reports
+permissions only; it does not establish that the device is executing ROM code.
+The [watchdog recovery work](../docs/watchdog.md) records the current limitation.
+
 `usb-diagnostic.py` loads the bounded RAM runtime, checks its native protocol,
 and requests ROM return. `read-returned-result.py` retrieves diagnostics after
 a failed session only when host metadata identifies an independently returned

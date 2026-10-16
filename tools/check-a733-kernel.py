@@ -125,6 +125,9 @@ try:
                 except FileNotFoundError:
                     pass
                 if time.monotonic() >= deadline:
+                    access.quarantine_instance(node,
+                        "Independent board recovery and a new USB instance are required.",
+                        node_identity)
                     raise RuntimeError("FEL did not return with access before the deadline; no reset retry.")
                 time.sleep(0.1)
             node = candidate

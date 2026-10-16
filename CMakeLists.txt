@@ -48,12 +48,21 @@ set_target_properties(kernel-check PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-virt/link.ld")
 
 # The physical platform and its secure QEMU model share the monitor and kernel.
-foreach(target a733-kernel-check a733-kernel-model a733-monitor-model a733-storage-probe)
+option(SUNSTONE_EXPERIMENTAL_UFS "Build the unqualified UFS probe; hardware watchdog recovery is required before execution" OFF)
+set(kernel_targets a733-kernel-check a733-kernel-model a733-monitor-model a733-storage-probe a733-power-probe)
+if(SUNSTONE_EXPERIMENTAL_UFS)
+  list(APPEND kernel_targets a733-ufs-probe)
+endif()
+foreach(target IN LISTS kernel_targets)
   set(check_source checks/kernel.c)
   if(target STREQUAL "a733-monitor-model")
     set(check_source checks/monitor-renew.c)
   elseif(target STREQUAL "a733-storage-probe")
     set(check_source checks/storage-probe.c)
+  elseif(target STREQUAL "a733-power-probe")
+    set(check_source checks/power-probe.c drivers/i2c/a733_i2c.c)
+  elseif(target STREQUAL "a733-ufs-probe")
+    set(check_source checks/ufs-probe.c drivers/i2c/a733_i2c.c)
   endif()
   add_executable(${target}
     platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c

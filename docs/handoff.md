@@ -23,7 +23,10 @@ subsystem is qualified. Development uses branch `bringup` in the isolated
 The [storage probe](storage.md) reaches the SD/MMC controller, but eMMC CMD1
 times out after applying the reference clock-mode setting. Population and power
 remain unconfirmed. Pin/clock restoration and automatic ROM return passed.
-Investigate storage power and the enabled UFS path before another eMMC attempt.
+The [PMIC reader](power.md) identifies AXP8191 and reads enabled UFS rail settings.
+UFS initialization then failed to return to ROM. The [watchdog driver](watchdog.md)
+is prepared and passes host checks, but independent hardware reset remains untested.
+Qualify it before further new peripheral-access sequences.
 
 ## Observed host and device state
 
@@ -33,9 +36,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board returned to FEL after the bounded storage probe (latest node `003:061`).
-Native assets now occupy `0x43000000` through the WAV slot at `0x44000000`; the
-one-shot combined input bundle must be uploaded again before one-shot execution. The installed
+The board did not return to FEL after the UFS probe. The old node `003:063`
+remains visible; its cached descriptor is not evidence of ROM execution.
+The host records that instance as unavailable for further requests. Independent
+power-cycle/FEL recovery has been requested. After recovery, verify a new ROM
+instance and reinitialize DDR; do not reuse previous RAM assets or signatures.
+No new peripheral probe may run before independent watchdog recovery passes.
+The installed
 [session access rule](../tools/README.md) grants access after reconnects on
 physical port `3-1`. Kernel and native USB checks regained access automatically.
 The rule lasts until host reboot and can be removed with `disable-session`.
@@ -65,8 +72,9 @@ through secure timer interrupt 29 after approximately two seconds. The monitor
 restored the modified GIC settings before returning to ROM.
 
 The USB session helper passed its focused ACL lifecycle check and rule validation.
-Automatic access after physical re-enumeration passed during the EL1 handoff and
-both kernel cases. No access-helper changes require another check.
+Automatic access after physical re-enumeration passed during the EL1 handoff,
+kernel cases, and PMIC probe. Focused host checks cover expected-disconnect
+metadata errors and refusal of the instance that failed to recover.
 
 The original nonsecure QEMU platform remains available. Its earlier check passed
 100 exchanges in 100 ticks. The added secure-monitor configuration is selected
@@ -102,10 +110,11 @@ the tool hash and recovery evidence in the application document.
 
 ## Next actions
 
-1. Identify and preserve populated storage before persistent installation.
-   Use the storage probe findings to establish power and population; inspect UFS
-   initialization in the pinned bootloader. Implement read-only storage access
-   and backup through the native transport.
+1. Recover the board independently and qualify the prepared hardware watchdog
+   with a dedicated expiry test. Integrate it before further peripheral access.
+   Resume UFS with the corrected capability-read ordering only after recovery
+   protection passes. Implement read-only storage access and backup through the
+   native transport; physical storage population is still unknown.
    Establish storage boot and recovery before overwriting existing contents.
 2. Extend USB with interrupt delivery, cold clock/PHY setup, and remaining roles.
    Preserve independent task and host deadlines during controller work.
