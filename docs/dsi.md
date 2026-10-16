@@ -111,27 +111,23 @@ Failed writes may already have affected hardware. Faults retain packet storage
 and ownership, and further polls perform no I/O. There is no reset, release,
 rollback, cancellation or automatic retry API.
 
-## PHY timing and lane-rate qualification remain required
+## PHY setup verifies inherited clocks and prepares command transmission
 
-The source supports one to four data lanes. A733 uses the display-PLL clock
-path. Its clock descriptors specify a 1.26–2.52 GHz internal oscillator range;
-that range is not a qualified per-lane signaling limit.
-The A733 PHY configuration does not supply the rate bands present for another
-SoC in the same file. Those other bands must not become A733 limits.
+The [native PHY controller](dsi-phy.md) prepares analog controls and host
+instructions under an admitted, already-running display PLL. It derives exact
+high-speed and low-speed rates from the 24 MHz reference, verifies inherited
+factors and repeated lock observations, then composes with command transmission.
+It rejects inherited test controls that could force transmitter output.
 
-The A733 PHY defaults set HS trail to 9, HS prepare to 6, and LPX to 14.
-Common setup also programs clock prepare 7, clock zero 50, clock pre 3,
-clock post 10 and clock trail 30. These are register counts whose physical
-durations depend on their clock domains. A native PHY implementation must
-derive and verify rates and timing bounds before using these values.
-The separate legacy PLL helper contains frequency branches through 2.144 GHz,
-but its call is commented out in the active configure function. It cannot
-establish the active clock sequence or the board's maximum lane rate.
+The A733 manual specifies an operating oscillator range of 1.26–2.4 GHz,
+a high-speed output limit of 1 GHz and a low-speed output limit of 1.2 GHz.
+Those specified limits do not establish a qualified board or panel lane rate.
+Source comparisons cover complete analog and host images; focused admission
+checks and native compilation pass. Physical signaling remains unqualified.
 
-Required work includes shared power/clock/reset admission, bounded PLL lock and
-analog setup, host instruction preparation, TCON routing/timing, display-engine
-buffer ownership and scanout, interrupt handling, panel-specific power/reset
-and commands, backlight control, and physical error/recovery qualification.
+Required work includes cold PLL setup, shared power/clock/reset admission,
+video transmission, TCON routing/timing, display-engine buffer ownership and
+scanout, interrupts, panel power/reset and commands, and backlight control.
 Panel timings and power requirements remain separate configuration inputs.
 
 ## Validation compares complete packets and register images

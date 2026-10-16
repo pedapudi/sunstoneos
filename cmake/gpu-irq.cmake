@@ -7,7 +7,7 @@ if(SUNSTONE_GPU_FIRMWARE)
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-irq-platform.c" COPYONLY)
   file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/gpu-irq-platform.c.tmp")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS platform/qemu-smp/platform.c)
-  add_executable(gpu-irq-model EXCLUDE_FROM_ALL
+  add_executable(gpu-irq-model EXCLUDE_FROM_ALL ${gpu_compute_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/npu-service-start.S" "${CMAKE_CURRENT_BINARY_DIR}/gpu-irq-platform.c"
     runtime/memory.c runtime/memmove.c checks/pvr-gpu-irq.c "${gpu_image}"
     drivers/gpu/gicv3_spi.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c

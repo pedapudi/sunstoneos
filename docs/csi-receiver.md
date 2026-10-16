@@ -19,8 +19,8 @@ loop inside the driver.
 The initial configuration accepts port/parser pairs zero/zero and one/one,
 a 324 MHz camera top clock, an explicit settle count from 1 to 255, and an
 explicit deskew count from 1 to 31. It uses two data lanes, virtual channel zero,
-UYVY 8-bit CSI-2 packets, progressive 640 × 480 output and continuous parser
-capture. These restrictions define an initial component profile; remaining
+UYVY 8-bit CSI-2 packets and progressive 640 × 480 output. The caller selects
+continuous video or single-image parser capture. These restrictions define an initial component profile; remaining
 receivers, formats, lane counts and synchronization modes remain required work.
 
 The platform admission callback must establish all of the following before it
@@ -59,7 +59,8 @@ Packet configuration enables unpacking, UYVY ordering, data type `0x1e`, virtual
 channel zero and progressive frame/line triggers. Parser setup follows the
 reference enable/disable/enable sequence, configures MIPI input and UYVY ordering,
 sets a zero-offset 640 × 480 crop, disables frame-rate decimation and enables
-continuous capture. Packet-port enable occurs last, after downstream admission
+the selected capture mode. Single-image capture clears after the next frame;
+the producer must remain quiet until the downstream path is armed. Packet-port enable occurs last, after downstream admission
 and all local setup have completed.
 
 Armed means the local registers passed verification. A production adapter may
@@ -110,20 +111,14 @@ finds that the deadline expired; completed release cannot be undone. Closed
 objects cannot reopen. Recovery and later admission require independent platform
 proof that outstanding device references have ended.
 
-## The A733 capture route still needs implementation
+## Native routing and frame ownership require platform composition
 
-The pinned build selects combo CSI, ISP600, VIPP200 scalers and camera DMA140.
-The general-purpose DMA controller does not implement camera capture.
-`vin.c` selects a direct parser-to-DMA route only for the separate SUN50IW9
-platform. Its A733 path programs ISP and scaler input selection.
-
-The source marks YUV sensors as not requiring ISP processing. Logical ISP
-instances four, five and six map to input selectors one, two and three;
-instances without register resources skip ISP programming. The bridge function
-also returns early for nonzero ISP selectors. These facts identify candidate
-bypass routes, but they do not establish a complete working A733 YUV path.
-The selected scaler, camera DMA channel, bridge clocks and parser-to-selector
-mapping still need a consistent configuration and physical qualification.
+The [route controller](camera-route.md) configures the A733 path from either
+supported parser through pass-through ISP1 and VIPP0 to DMA0. Its unity-scale
+parameter block uses YUV422 without cropping or overlays. The
+[camera DMA controller](camera-dma.md) owns a complete NV16 image until capture,
+bus drain and cache synchronization finish. These components have host/source
+evidence; sensor-to-memory operation remains physically unqualified.
 
 The relevant memory and platform dependencies are explicit:
 
@@ -143,26 +138,22 @@ The relevant memory and platform dependencies are explicit:
   these values. Hawkeye's 9,152-pixel full width exceeds one parser output-width
   field; any tiled or bypass strategy requires a separate validated design.
 
-No downstream allocator, DMA completion protocol or ISP configuration is supplied
-by the receiver component. The next implementation must resolve the candidate
-YUV route and implement camera DMA frame ownership before enabling sensor packets
-on hardware. Full ISP support remains required independently of the first
-sensor-generated UYVY capture.
+The receiver does not allocate downstream memory. Complete platform admission
+must connect routing, frame ownership and bus drain before enabling sensor
+packets on hardware. Full ISP support remains required independently of the
+first sensor-generated UYVY capture.
 
-## Global analog startup has an unresolved source defect
+## Global analog startup must follow the manual's calibration semantics
 
-The active combo-PHY source uses reference steps two and three and a termination
-calibration setting of `0x10` for A733. Its `cmb_phy_set_trescal()` function passes
-`CMB_PHYA_TRESCAL_RESULT`, whose value is the shift count 16, as the RMW clear mask.
-The header separately defines `CMB_PHYA_TRESCAL_RESULT_MASK` as `0x1f << 16`.
-The shared RMW helper masks the requested set bits with its clear mask.
-Consequently, that call clears bit four and does not program the result field.
+The active source passes a shift count as an RMW clear mask in its termination
+calibration helper. That operation cannot establish a valid calibration setting.
+The A733 manual defines the result field as read-only. Software calibration
+must program the setting field and verify the reflected result and completion
+flag. Replacing the source mask with a result-field mask would still be wrong.
 
-The native receiver does not reproduce or silently correct that global operation.
-A global PHY controller must resolve whether the result field is writable and
-what the calibration sequence requires, using additional register documentation
-or a controlled physical observation after recovery qualification. Its admission
-proof must also cover shared PHY users and reset/power transitions.
+Global analog startup remains unimplemented. Its ownership contract must cover
+all shared PHY users, stable reference settings and reset/power transitions.
+The local receiver requires that independently established preparation.
 
 ## Sources and validation define the evidence boundary
 
@@ -202,7 +193,7 @@ Reference compilation supplies Linux type declarations and omits unused parser
 synchronization helpers. It preserves signed mask expressions in the source;
 sanitizers apply to the native implementation.
 
-The freestanding AArch64 object contains 3,404 bytes of code/read-only data and
+The original freestanding AArch64 object contains 3,404 bytes of code/read-only data and
 no writable static data. Its largest reported direct stack frame is 64 bytes;
 the object requires runtime `memmove`. These are build resource records.
 The evidence directory contains commands, input hashes, reference code, complete
@@ -210,3 +201,8 @@ register images and target metadata. The initial reference-only compile failed
 because the harness lacked Linux type declarations; the corrected harness passed.
 No sensor, PHY, parser or DMA hardware ran in these checks. No performance
 measurement or previously passing sensor test was repeated.
+
+Single-image mode has separate source/model and native-build evidence in
+`~/.cache/sunstoneos/evidence/camera-route-20261016/`. Its final receiver object
+contains 3,512 bytes of code/read-only data, with a 64-byte maximum direct frame.
+Existing local PHY and packet checks remain reusable.

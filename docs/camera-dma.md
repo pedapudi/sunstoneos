@@ -6,10 +6,10 @@ another. Each plane has 480 rows of 640 bytes, for 614,400 image bytes in total.
 The sensor and receiver carry UYVY packets; the DMA memory layout is NV16.
 
 The implementation is source-checked and host-tested. It has not captured a
-physical image. Camera routing, scaler configuration, memory admission and a
-single-frame input fence remain platform integration requirements. The
-[existing receiver](csi-receiver.md) enables continuous capture and cannot satisfy
-the single-frame contract without an explicit integration change.
+physical image. The [native camera route](camera-route.md) now configures a
+YUV pass-through path and identity scaling. The [receiver](csi-receiver.md)
+supports single-image parser capture. Complete platform composition, memory
+admission, bus drain and physical capture remain required.
 
 ## One admitted image owns both memory spans
 
@@ -84,38 +84,23 @@ case the controller records a fault with no resource token, and the caller
 retains the image it already owned. There is no cancellation path from `ARMED`;
 interruption before capture requires coordinator recovery.
 
-## The A733 YUV route still needs a complete native implementation
+## Native routing connects the parser to the frame DMA
 
-The pinned A733 build selects combo CSI, ISP600, VIPP200 and DMA140. VIPP is the
-video image postprocessor that performs scaling and output-format conversion.
-The active pipeline selects a parser input for an ISP selector, then selects that
-ISP output for a VIPP block. The direct parser-to-DMA function belongs to another
-SoC branch and does not establish an A733 route.
+The [route controller](camera-route.md) selects parser zero or one through
+pass-through ISP1 and VIPP0 to DMA0. The A733 manual identifies ISP1–3 as
+pass-through paths; ISP0 performs image processing. VIPP is the video image
+postprocessor that performs scaling and output-format conversion.
 
-The source exposes logical ISP devices 4, 5 and 6 without register resources.
-Their selector numbers are 1, 2 and 3. These are candidate bypass paths, but the
-board's enabled camera paths select the physical ISP. A complete configured
-OV5640 YUV path through those empty ISP devices has not been established.
-The DMA controller therefore does not program speculative crossbar values.
+The controller publishes a complete parameter block for unity YUV422 scaling,
+reserves both complete shared selector registers, and retains ownership through
+capture and independent drain. The receiver's single-image mode admits one frame;
+DMA completion and memory visibility still require their separate observations.
+Full ISP processing and other capture modes remain required.
 
-For a candidate selector `s`, parser `p`, channel `c` and VIPP block `v`, the
-source's crossbar functions write `p * 4 + c` at camera TOP offset
-`0x30 + s * 0x10 + input * 4`. They write `s * 4 + output` at offset
-`0xa0 + v * 4`. Camera TOP is `0x05800800`. The valid input/output selections
-must be resolved for the actual bypass path before these formulas become a
-native routing sequence.
-
-VIPP200 loads parameter blocks from memory and needs its own memory admission,
-clocking and completion handling. The normal YUV path enables scaling and
-copies parameter data into a DMA-visible load buffer. A native identity-scale
-configuration must account for that load, even when image dimensions stay
-unchanged. No assumption that disabling ISP also disables VIPP is safe here.
-
-The camera domain, bus reset, CSI and ISP clocks, camera memory-bus clocks,
-local camera clock gates and IOMMU state also remain required. The shared PHY
-calibration source defect described in the receiver document remains unresolved.
-No independent register description found during this work establishes a safe
-correction.
+The camera domain, bus reset, CSI/ISP clocks, memory-bus clocks, local gates,
+IOMMU mappings and global analog startup remain platform integration work.
+The manual defines the termination-calibration result as read-only; global
+startup must program the software setting and verify its reflected result.
 
 ## Source anchors and focused validation
 

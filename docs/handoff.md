@@ -262,8 +262,11 @@ and final native objects in `radio-bootstrap-20261016`. The [firmware loader](ra
 now verifies pinned blobs, uploads Bluetooth patches and Wi-Fi firmware, and
 waits for start confirmation. Reuse the complete upload model and focused UART
 mode/alias checks in `radio-firmware-20261016`; final native objects compile.
-Binding response, continuous receive, platform clock/pin/power bindings, normal
-Wi-Fi traffic and Bluetooth HCI remain required. No radio board request exists.
+The [runtime worker](radio-runtime.md) now supplies the binding exchange,
+continuous receive and bounded raw-record ownership. Source/vector comparisons,
+host composition and native compilation pass; reuse `radio-runtime-20261016`,
+including focused invalid callback checks. Platform clock/pin/power bindings,
+normal Wi-Fi traffic and Bluetooth HCI remain required. No radio board request exists.
 The [OV5640 driver](camera.md) now supplies bounded sensor control and one
 two-lane VGA mode. Complete modeled sensor state matches the pinned Linux
 reference; lifecycle checks and native compilation pass. Reuse `ov5640-20261016`.
@@ -286,8 +289,14 @@ requires an additional admission guard in DMA and GPU clock checks. Focused
 sanitizer checks and native compilation pass; reuse `peri0-input-divider-20261016`.
 The affected clock checks now refuse divided input before register writes.
 Earlier evidence remains applicable to unchanged platform behavior.
-NPU platform resource setup, complete model admission,
-and physical execution remain outstanding.
+Complete NPU model admission and physical execution remain outstanding.
+The [NPU platform controller](npu-platform.md)
+now supplies bounded local clock/reset/power sequencing under retained resource
+ownership. Source/model checks and native compilation pass; reuse
+`npu-platform-20261016`. Its nine final input identities match the integrated
+files, as recorded in `hardware-integration-20261016f`.
+Actual DCDC2/PCK binding, shared SRAM reservations, cold PLL provisioning and
+deferred service activation remain required.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -397,6 +406,24 @@ The FEL receive tool now bounds reads;
 a diagnosed oversized receive was completed without resetting the board. Use
 the tool hash and recovery evidence in the application document.
 
+## Prepared components awaiting integration review
+
+The following isolated commits have preserved component evidence. Review their
+runtime contracts before integration; a local commit does not establish physical
+qualification. The progress dashboard is the immediate user-requested task.
+
+| Component | Worktree | Commit | Evidence directory under `~/.cache/sunstoneos/evidence/` |
+| --- | --- | --- | --- |
+| Secondary CPU continuation | `cpu-entry` | `c0d8c7e1877b9a87e1bece11c7c37ad2673a3dc6` | `cpu-continue-vectors-20261016/` |
+| Eight-core diagnostic image | `a733-smp` | `f9a1a93` | `a733-smp-image-20261016/` |
+| System IOMMU | `iommu` | `e864a59c81df4dfc62ac36c4e78424755c7a95b0` | `iommu-20261016/` |
+| NPU startup and deferred activation | `npu-startup` | `02f4fb2` | `npu-startup-20261016/` |
+
+The diagnostic image depends on the continuation. Native memory admission and
+independent recovery remain prerequisites for physical execution. Active workers
+are also completing Wi-Fi initialization, DSI video, camera analog startup and
+GPU core-mode observation. Their files remain owned by those workers.
+
 ## Next actions
 
 1. Establish a reset destination that cannot
@@ -479,7 +506,7 @@ the tool hash and recovery evidence in the application document.
    privileged worker. Its two-core emulator check passes ownership, migration,
    reopen, event service, and retained startup/control/shutdown failures. Reuse
    `gpu-service-20261016`; no GPU firmware instructions or physical device
-   accesses occurred. Shader/runtime integration and GPU job completion remain
+   accesses occurred. Physical shader execution and GPU job completion remain
    outstanding. Physical backend work requires independent recovery first.
    Reuse `gpu-memory-20261016` for native translation, shared-memory access,
    publication/reclamation, and permission-change failure. Reserve uncached
@@ -495,9 +522,11 @@ the tool hash and recovery evidence in the application document.
    integrated with instruction-model evidence in `gpu-backend-20261016`.
    Real USC/PDS context programs, offline context construction and a fixed
    numerical shader with command stream and completion fence are integrated.
-   Host/reference checks and native compilation pass. The GPU worker is
-   integrating job publication and completion with the privileged service.
-   Core-mode admission and complete multicore addressing remain required.
+   Host/reference checks and native compilation pass. The [compute service](gpu-compute-service.md)
+   integrates native memory publication, firmware records and owner-only jobs.
+   Reuse `gpu-compute-service-20261016`; central compute/service/IRQ targets link.
+   The GPU worker is resolving core-mode admission and multicore addressing.
+   Repeated jobs, disposal and physical completion remain required.
    The client command transport is integrated; reuse `gpu-cccb-20261016`.
    Free-list backing, growth/reconstruction, and
    deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
@@ -505,12 +534,16 @@ the tool hash and recovery evidence in the application document.
    `gpu-freelist-service-20261016`. The radio worker has completed dependency
    inspection, identity-message encoding/decoding, SDIO controller operations,
    card enumeration, bounded bootstrap transport and verified firmware loading.
-   It is implementing binding response and continuous receive.
+   Binding response and continuous receive are integrated with host evidence.
+   It is implementing normal Wi-Fi firmware initialization and scan control.
    The camera worker has completed OV5640, local CSI control and dedicated
-   frame-DMA ownership. It is resolving ISP/VIPP routing and parser image mode.
-   Separate workers are implementing DSI PHY initialization and the secondary
-   CPU continuation. Command transport and entry/mailbox components are
-   integrated. Panel selection remains independent of DSI controller support.
+   frame-DMA ownership. [Pass-through routing](camera-route.md) and single-image
+   parser mode are integrated; reuse `camera-route-20261016`. It is implementing
+   global analog startup. The [DSI PHY controller](dsi-phy.md) is integrated with
+   inherited-clock admission; reuse `dsi-phy-20261016`. Its worker is implementing
+   video transmission. Separate workers have prepared the secondary CPU
+   continuation, eight-core diagnostic image and system IOMMU for review.
+   Command transport and entry/mailbox components are integrated. Panel selection remains independent of DSI controller support.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
    records. Finite I2S0 capture and shared PB4–PB8 pin ownership are integrated;
@@ -518,7 +551,8 @@ the tool hash and recovery evidence in the application document.
    evidence. The privileged DMA service and shared GPU/audio clock registry are
    integrated, including deferred DMA activation. Physical reservations and
    handoff qualification remain required. The platform worker is now resolving
-   NPU power/clock/reset preparation; the native compiler remains deferred.
+   NPU resource binding and deferred service activation. Bounded local
+   power/clock/reset preparation is integrated; the native compiler remains deferred.
    Inspect live agent state before reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse

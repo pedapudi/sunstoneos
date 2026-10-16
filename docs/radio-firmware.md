@@ -11,8 +11,8 @@ unqualified.
 `START_CONFIRMED` means that the published start-confirmation message arrived.
 It does not establish Wi-Fi traffic, Bluetooth HCI operation, pairing, or audio.
 The loader keeps Bluetooth patch application and Wi-Fi startup as separate
-progress states. A binding challenge remains outstanding work for a subsequent
-protocol worker.
+progress states. The subsequent [runtime worker](radio-runtime.md) handles the
+binding exchange and continuous receive; both remain physically unqualified.
 
 ## Selection follows completed identity and pinned artifact availability
 
@@ -133,14 +133,13 @@ The consumer receives a borrowed view and must copy any asynchronous work before
 consuming it. While a record is held, the aggregate remains unchanged and no new
 command is submitted. The deadline still advances. Binding indication `0x0417`
 requires its declared 16-byte challenge, remains subject to the same backpressure,
-and sets a retained `binding_required` flag. No challenge response or binding
-success is fabricated.
+and sets a retained `binding_required` flag. The loader preserves the first
+challenge for the runtime worker, which computes the reply and checks confirmation.
 
 After the start confirmation, the transport drains the current aggregate before
 reporting `START_CONFIRMED`. This endpoint does not provide continuous runtime
-receive service. A binding indication in a later aggregate and subsequent normal
-traffic require the next protocol worker. No state here claims normal radio
-readiness.
+receive service. The [runtime worker](radio-runtime.md) handles later aggregates
+and binding indications. Normal network operation remains separate work.
 
 A failed callback may follow a partial transfer or a write that took effect.
 Faults retain both workers, immutable blobs, outgoing bytes, the controller
@@ -211,7 +210,7 @@ python3 checks/aic8800-firmware.py \
 ```
 
 Physical execution still requires qualified recovery, shared power/pin/clock
-ownership, controller bindings, and the selected radio identity. Binding
+ownership, controller bindings, and the selected radio identity. Physical binding
 verification, normal network traffic, Bluetooth HCI/profiles, runtime interrupts,
 and sleep/wake operation remain outstanding. No board operation, test-queue
 submission, or performance measurement was performed.

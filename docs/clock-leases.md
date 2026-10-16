@@ -1,6 +1,6 @@
-# Shared clock ownership for GPU, audio and DMA
+# Shared clock ownership for GPU, audio, DMA and NPU
 
-The common clock registry prevents GPU and audio drivers from changing clocks
+The common clock registry prevents participating drivers from changing clocks
 that another driver holds stable. It records shared and exclusive leases in
 private platform storage. A lease authorizes its owner to use or change a
 resource; it does not establish the hardware's clock rate or power state.
@@ -18,12 +18,12 @@ Token identities never repeat; exhaustion refuses further acquisition.
 Release requires the complete current token and verified hardware quiescence.
 
 The registry covers the oscillator, reference clock, peripheral PLL0, audio
-PLL1, its DIV2 and DIV5 outputs, local audio controllers, DMA0 and interconnect
-configuration. Local audio scopes cover I2S0 through I2S4, ASRC, OWA transmit
+PLL1, its DIV2 and DIV5 outputs, local audio controllers, DMA0, PLL_NPU, the
+NPU controller and interconnect configuration. Local audio scopes cover I2S0 through I2S4, ASRC, OWA transmit
 and DMIC. Other hardware needs additional scopes before it can share this authority.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
-the reference clock and oscillator. Peripheral PLL0 also depends on the
+the reference clock and oscillator. Peripheral PLL0 and PLL_NPU also depend on the
 reference clock and oscillator. Exclusive child ownership keeps its ancestors
 shared and stable. Local controller scopes are exclusive; the caller separately
 leases the selected parent.
@@ -96,7 +96,7 @@ The registry and GPU manager must use the same monotonic microsecond clock.
 The DMA0 scope is exclusive and requires a platform handoff covering the entire
 controller, its channels, dedicated bus/MBUS gates, reset and CPU/MCU routing.
 Idle channel registers cannot establish that remote firmware has relinquished
-ownership. The future platform binding must retain this scope throughout use.
+ownership. The [startup binding](dma-startup.md) retains this scope throughout use.
 
 The fabric scope protects AHB, NSI and MBUS interconnect selectors, dividers
 and global source gates. Shared fabric ownership does not stabilize the
@@ -107,6 +107,23 @@ unchanged without separate authority.
 The registry can acquire fabric and selected-parent stability together with
 exclusive DMA0 ownership. Hardware selector/rate verification, remote-MCU
 handoff, clock/reset setup and production composition remain platform work.
+
+## NPU startup retains shared PLL and local power ownership
+
+The [NPU platform controller](npu-platform.md) acquires stable PLL_NPU,
+reference, oscillator and fabric scopes together with exclusive NPU ownership.
+The NPU scope includes its local clock, resets and power domain. Separate
+PCK-clock and DCDC2 rail leases remain prerequisites for production startup.
+
+PLL_NPU can also supply memory, fabric and video clocks. Retuning it requires
+exclusion of every consumer; an idle NPU does not establish that exclusion.
+The NPU's shared SRAM also requires its power domain to remain on. Memory
+reservations must preserve the domain lifetime for every CPU and DMA user.
+
+The focused NPU platform fixture checks actual registry conflicts and refuses
+shared ownership of the local NPU scope. Native compilation passes; evidence
+is in `~/.cache/sunstoneos/evidence/npu-platform-20261016/`.
+Existing registry clients retain their earlier evidence.
 
 ## Focused evidence covers ownership composition
 

@@ -151,13 +151,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   matches complete reference allocations. The [fixed numerical job](gpu-compute-job.md)
   constructs a real compiled shader and command stream, then requires timeline
   advancement and correct guarded output. Source-byte and host lifecycle checks
-  pass; no GPU instructions executed. Proven single-core admission, multicore
-  addressing, service integration and physical execution remain outstanding.
+  pass; no GPU instructions executed. The [compute service](gpu-compute-service.md)
+  publishes native workload memory and firmware records before startup, then
+  runs owner-only jobs with timeline and guarded-output checks. Focused FreeRTOS
+  emulator cases pass; central compute, lifecycle and IRQ targets link.
+  Proven single-core admission, multicore addressing, repeated-job resource
+  disposal and physical execution remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
-  compilation passes. PHY setup, clock/pin ownership, scanout, panel configuration,
-  read transactions and physical qualification remain outstanding.
+  compilation passes. The [PHY controller](dsi-phy.md) verifies inherited PLL
+  factors and lock, prepares analog controls and composes with command transport.
+  Source comparisons and focused admission checks pass. Cold PLL setup,
+  clock/pin ownership, scanout, panel configuration, read transactions and
+  physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
   with host sanitizer and AArch64 compile evidence. The
@@ -170,8 +177,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   now prepares the SDIO function, performs the fixed setup write and reads both
   identity words. The [firmware loader](radio-firmware.md) verifies immutable
   artifacts, uploads Bluetooth patches and Wi-Fi firmware, and waits for start
-  confirmation. Host composition and native compilation pass. Binding response,
-  continuous receive, physical silicon identity, power/reset bindings, networking,
+  confirmation. The [runtime worker](radio-runtime.md) computes binding replies,
+  checks status and preserves continuously received data/control records.
+  Host composition and native compilation pass. Physical binding and silicon
+  identity, power/reset bindings, networking,
   pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
@@ -181,9 +190,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   complete register images match source functions. The [camera DMA controller](camera-dma.md)
   configures one NV16 image and retains buffers until capture, drain and cache
   synchronization complete. Register comparisons and ownership checks pass.
-  Module electrical binding, global PHY startup, single-image parser mode,
-  ISP/VIPP routing, actual DMA mapping/drain, additional modes and physical
-  qualification remain outstanding. Module availability remains unconfirmed.
+  The [route controller](camera-route.md) configures pass-through ISP1 and
+  unity-scale VIPP0, with exclusive shared-selector ownership. The receiver
+  now supports single-image mode. Host/source checks and native compilation
+  pass. Module electrical binding, global PHY startup, actual DMA mapping/drain,
+  additional modes and physical qualification remain outstanding.
+  Module availability remains unconfirmed.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
@@ -211,7 +223,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   directory format, and checksum verification passes host checks. A saved
   [SDK preparation trace](nbg-conv-loader.md) supplies allocation and command
   evidence now matched by native assembly with five buffers and an empty pool.
-  Board resource integration, model admission, numerical execution,
+  The [NPU platform controller](npu-platform.md) verifies inherited parent clocks
+  and leased supply, programs local clock/reset state, and powers domain 4.
+  Source/model checks and native compilation pass. It preserves shared SRAM
+  reset and requires exclusive ownership of that memory's existing users.
+  Actual rail/PCK binding, cold PLL provisioning, model admission, numerical execution,
   and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary

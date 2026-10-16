@@ -192,8 +192,10 @@ The runner verifies its pinned reference files, including the message header
 and sender. The [firmware engine](radio-firmware.md) extends the same transport with
 1,536-byte uploads after completed identity. Physical execution still needs
 shared-resource admission, qualified recovery, controller bindings, and verified
-current bootstrap ownership. Soft-interrupt handling, normal data traffic,
-sleep/wake management, binding verification, and network/HCI integration remain
+current bootstrap ownership. The [runtime worker](radio-runtime.md) supplies
+binding exchange and continuous receive with retained raw data/control records.
+Soft-interrupt handling, normal data traffic, sleep/wake management,
+physical binding verification and network/HCI integration remain
 outstanding. There is no board executable to submit to the physical test queue.
 
 ## Pinned references

@@ -1000,5 +1000,71 @@
     "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
     "archive": "camera-research/A733_User_Manual_V1.00.pdf",
     "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d"
+  },
+  "npu-platform-sun60iw2p1-cpu-vf-dtsi": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1-cpu-vf.dtsi",
+    "archive": "npu-platform/sun60iw2p1-cpu-vf.dtsi",
+    "sha256": "d5535630db3d0acdeace832d1dfad684fab9ab0c31c482b493e36a7f3387e5ad"
+  },
+  "radio-runtime-aic8800_bsp-aic_bsp_verify-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_verify.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aic_bsp_verify.c",
+    "sha256": "76ccd57c0ddb2f2c5b074575f709d4816a0dd7a0fbb3ba9cfa763d69d1b76ed1"
+  },
+  "radio-runtime-aic8800_fdrv-aicwf_txrxif-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_txrxif.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_txrxif.c",
+    "sha256": "2c22a400aa25e38fa908d0f43313081811aa8b988641464555ed1643585e8ce4"
+  },
+  "radio-runtime-aic8800_fdrv-aicwf_txrxif-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_txrxif.h",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_txrxif.h",
+    "sha256": "d70fb2f1382b5612d1efccb04fb59a7a56183765d05b731637c2c241587ad69a"
+  },
+  "display-bootloader-dsi-combophy-reg": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/video/drm/phys/sunxi_dsi_combophy_reg.c",
+    "archive": "display/bootloader/drivers/video/drm/phys/sunxi_dsi_combophy_reg.c",
+    "sha256": "769360ea3cb94602f1e753a12881b87e0477e5cfab57e051f0ddb7003a08d6a5"
+  },
+  "camera-mipi-csi-guide": {
+    "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/Software%20%E8%BD%AF%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2FSDK%E6%A8%A1%E5%9D%97%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97%2FCAMERA%2FAllwinner_Developer_Guide_Linux_MIPI_CSI_zh.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "sha256": "17b19bbe09fa4a20593761d0f19a7ed5ea181a3d9a0237185bbf83eccdda6912",
+    "archive": "camera-research/Linux_MIPI_CSI_Guide.pdf"
+  },
+  "camera-isp-guide": {
+    "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/Software%20%E8%BD%AF%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2FSDK%E6%A8%A1%E5%9D%97%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97%2FCAMERA%2FAllwinner_Developer_Guide_Linux_ISP_zh.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "sha256": "9a626d86dc5653cf9ff1f62adbadbc768646d5f17afc3c92684a2957b55f9c4d",
+    "archive": "camera-research/Linux_ISP_Guide.pdf"
+  },
+  "camera-radxa-vipp200-reg-c": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/vin/vin-vipp/vipp200/vipp200_reg.c",
+    "sha256": "0738084ab4fc72ce670db5158741c9e49d54d4ca21e996064e8f97ac90de95ab",
+    "archive": "camera-research/allwinner-bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.c"
+  },
+  "camera-radxa-vipp200-reg-h": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/vin/vin-vipp/vipp200/vipp200_reg.h",
+    "sha256": "6879ce32d094148d0636c2cd5c9c2ffead2f7037798afd34f3c85ab4b01cb16e",
+    "archive": "camera-research/allwinner-bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.h"
+  },
+  "camera-radxa-vipp200-reg-i-h": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h",
+    "sha256": "37c0b5ca6866e58b05fbf6680d3969dce9107b3ad11aff6139a0ae90d9730e15",
+    "archive": "camera-research/allwinner-bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h"
+  },
+  "camera-radxa-combo-csi-reg-c": {
+    "revision": "2045a3ca2a01f088c0314dc924bda59d154e363e",
+    "url": "https://raw.githubusercontent.com/radxa/allwinner-bsp/2045a3ca2a01f088c0314dc924bda59d154e363e/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c",
+    "sha256": "16cf3c5e09a4613ebbebd6c5efc0182dbf54ff3b37dfbb88e42d629bd45ca07b",
+    "archive": "camera-research/allwinner-bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c"
   }
 }

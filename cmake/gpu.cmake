@@ -16,7 +16,12 @@ if(SUNSTONE_GPU_FIRMWARE)
   # Reuse the checked privilege extension with this service's private hook.
   set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/gpu-service-port.c" PROPERTIES
     COMPILE_DEFINITIONS "npu_service_task_privileged=pvr_gpu_service_task_privileged")
-  add_executable(gpu-service-model EXCLUDE_FROM_ALL
+  set(gpu_compute_sources
+    drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_job.c
+    drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
+    drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    platform/a733/gpu_vm_memory.c arch/aarch64/device_memory.c)
+  add_executable(gpu-service-model EXCLUDE_FROM_ALL ${gpu_compute_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/npu-service-start.S" platform/qemu-smp/platform.c
     runtime/memory.c runtime/memmove.c checks/pvr-gpu-service.c "${gpu_image}"
     drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
@@ -48,7 +53,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   list(REMOVE_ITEM gpu_service_sources platform/qemu-smp/platform.c)
   add_executable(gpu-memory-model EXCLUDE_FROM_ALL ${gpu_service_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-platform.c"
-    arch/aarch64/device_memory.c platform/a733/gpu_memory.c)
+    platform/a733/gpu_memory.c)
   foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
     get_target_property(value gpu-service-model ${property})
     set_property(TARGET gpu-memory-model PROPERTY ${property} "${value}")
@@ -61,6 +66,21 @@ if(SUNSTONE_GPU_FIRMWARE)
   target_compile_definitions(gpu-memory-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
   set_target_properties(gpu-memory-model PROPERTIES SUFFIX ".elf")
+
+  get_target_property(gpu_compute_model_sources gpu-memory-model SOURCES)
+  list(REMOVE_ITEM gpu_compute_model_sources checks/pvr-gpu-service.c)
+  add_executable(gpu-compute-service-model EXCLUDE_FROM_ALL
+    ${gpu_compute_model_sources} checks/pvr-compute-service.c)
+  foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_OPTIONS LINK_DEPENDS)
+    get_target_property(value gpu-memory-model ${property})
+    set_property(TARGET gpu-compute-service-model PROPERTY ${property} "${value}")
+  endforeach()
+  get_target_property(gpu_compute_link_options gpu-compute-service-model LINK_OPTIONS)
+  list(REMOVE_ITEM gpu_compute_link_options "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-model.map")
+  set_property(TARGET gpu-compute-service-model PROPERTY LINK_OPTIONS "${gpu_compute_link_options}")
+  target_link_options(gpu-compute-service-model PRIVATE
+    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-compute-service-model.map")
+  set_target_properties(gpu-compute-service-model PROPERTIES SUFFIX ".elf")
 
   get_target_property(gpu_power_sources gpu-service-model SOURCES)
   add_executable(gpu-power-service-model EXCLUDE_FROM_ALL ${gpu_power_sources}
