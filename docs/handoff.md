@@ -45,7 +45,11 @@ DMA remain unimplemented or untested; no hardware access occurred in these check
 The [native DMA memory adapter](dma-memory.md) now passes a FreeRTOS emulator
 check for translations, permissions, cache instructions, and two serialized EL1
 callers. Its RAM/FIFO admission policy also passes host checks. Board reservations,
-clock/reset setup, and a production privileged service remain outstanding.
+clock/reset setup remain outstanding. The [privileged DMA service](dma-service.md)
+now passes one two-core FreeRTOS session with copied metadata, task ownership,
+concurrent channels, retained results, and I2S shutdown ordering. Its root build
+target links successfully. Reuse `dma-service-20261016`; integration identities
+are in `hardware-integration-20261016b`. No emulator session was repeated.
 Native [I2S0 capture](i2s.md) now configures finite mono/stereo reception through
 the DMA controller. Host checks pass shutdown ordering, deadlines, and retained
 faults; format plans match pinned audio functions. Reuse the unchanged format
@@ -56,7 +60,10 @@ bounded clock/reset/pin acquisition and release, with retained partial ownership
 Host checks and pinned CCU comparison pass; core, platform, and native adapter
 compile for AArch64. Reuse `i2s-platform-20261016`, including the focused parent
 clock regression check. Its 14 final input hashes match the integrated files.
-Production common clock leases and a privileged DMA service remain required.
+The [common clock registry](clock-leases.md) now binds audio ownership and the
+existing GPU resource manager. Host composition checks and AArch64 compilation
+pass; reuse `clock-leases-20261016`. Production startup must create one registry,
+complete GPU parent admission, and provide the audio binding before consumers run.
 Shared [header pin ownership](pins.md) now covers PB4–PB8 with retained tokens,
 verified register updates, and host/reference evidence. Reuse `pins-20261016`
 and the focused late-operation checks in `pins-deadline-20261016`. The I2S
@@ -199,8 +206,15 @@ The [client command transport](gpu-cccb.md) now writes bounded sequences,
 handles ring wrap and queue pressure, and waits for firmware notification
 acceptance. Host/reference checks compare full ring and KICK bytes and exercise
 retained failures; the component compiles for AArch64. Reuse `gpu-cccb-20261016`.
-Context construction, workload admission, completion fences, service integration,
-and physical execution remain outstanding.
+The [offline compute-context builder](gpu-compute-context.md) now matches complete
+reference bytes and integrates with native VM and client-queue formatting.
+Reuse `gpu-compute-context-20261016` and the focused root-exclusion result and
+final AArch64 object in `gpu-compute-context-root-20261016`.
+The [program producer investigation](gpu-compute-producer.md) establishes real
+PDS/USC generators and storage sizes. Reference multicore addressing is incomplete;
+the executable producer must require a proven core mode. Program generation,
+workload admission, completion fences, service integration and physical execution
+remain outstanding.
 The [radio investigation](radio.md) identifies a source-backed AIC8800D80
 candidate, SDIO bootstrap before Bluetooth UART operation, board wiring,
 firmware availability, and stack dependencies. Installed silicon identity,
@@ -210,7 +224,11 @@ and malformed-input checks; reuse `radio-20261016`. The native
 [identity-message codec](radio-codec.md) now encodes source-matched read requests
 and validates response bounds while preserving unrelated messages. Its host
 sanitizer check and AArch64 compilation pass; reuse `radio-codec-20261016`.
-SDIO controller/enumeration work remains in progress; no radio board request exists.
+The [SDIO controller and card worker](sdio.md) now implement bounded preparation,
+enumeration, CMD52 and whole-word CMD53 transfers. Host checks and final AArch64
+compilation pass; reuse `sdio-controller-20261016/final-inputs.json` and its
+focused follow-up cases. Function setup, bootstrap transport and platform
+clock/pin/power bindings remain required. No radio board request exists.
 NPU platform resource setup, complete model admission,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
@@ -358,7 +376,9 @@ the tool hash and recovery evidence in the application document.
    and [mimus-smp.md](mimus-smp.md).
 5. Integrate the checked DMA controller core and native memory adapter with the
    platform. Reserve dedicated RAM, register verified FIFO routes, and supply
-   production FreeRTOS serialization and clock/reset setup. Qualify completion
+   clock/reset setup to the integrated privileged service. The DMA worker is
+   implementing bounded platform preparation with explicit fabric and controller
+   ownership. Qualify completion
    and failed-stop
    recovery physically after watchdog protection passes. Resolve DMA1 resources
    and wider descriptor addressing. Reference facts, ownership behavior, and
@@ -411,19 +431,25 @@ the tool hash and recovery evidence in the application document.
    service sequencing. Native platform binding and shared FreeRTOS locks are
    integrated; reuse `gpu-platform-20261016`. The native lifecycle backend is
    integrated with instruction-model evidence in `gpu-backend-20261016`.
-   Its worker is developing offline compute-context construction in `gpu-context`.
+   Its worker is building the real USC/PDS compute-context programs from pinned
+   Mesa sources. Offline context construction is integrated with host/reference
+   evidence and final AArch64 compilation. Core-mode admission and complete
+   multicore addressing remain required.
    The client command transport is integrated; reuse `gpu-cccb-20261016`.
    Free-list backing, growth/reconstruction, and
    deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
    Lifecycle-service integration is complete with emulator evidence in
    `gpu-freelist-service-20261016`. The radio worker has completed dependency
-   inspection and identity-message encoding/decoding. It is implementing bounded
-   SDIO controller operations and card enumeration in an isolated worktree.
+   inspection, identity-message encoding/decoding, SDIO controller operations
+   and card enumeration. It is implementing function setup and bounded bootstrap
+   message transport in an isolated worktree.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
    records. Finite I2S0 capture and shared PB4–PB8 pin ownership are integrated;
    their clock/reset/pin binding is integrated with `i2s-platform-20261016`
-   evidence. That worker is proposing a privileged FreeRTOS DMA service.
+   evidence. The privileged DMA service and shared GPU/audio clock registry are
+   integrated. Their production board composition remains required; the DMA
+   worker is implementing clock/reset/routing preparation in isolated files.
    Inspect live agent state before reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse

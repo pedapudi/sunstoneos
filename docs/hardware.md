@@ -56,6 +56,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   concurrent ownership, bounded cancellation, and retained buffers after faults.
   [Native memory operations](dma-memory.md) pass a FreeRTOS emulator check for
   translation, permissions, cache instructions, and serialized callers.
+  The [privileged FreeRTOS service](dma-service.md) passes a two-core emulator
+  session for copied requests, task ownership, retained buffers and I2S producer
+  shutdown ordering. Its root build target links successfully.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
@@ -71,9 +74,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   source functions. [Audio implementation and limits](i2s.md) records formats,
   header routes, and evidence. The [clock/reset/pin binding](i2s-platform.md)
   passes host resource/deadline checks, pinned CCU comparison, and AArch64
-  compilation. Production common clock leases, privileged DMA scheduling,
-  continuous streaming, playback, Bluetooth PCM, and physical qualification
-  remain open.
+  compilation. The [common clock registry](clock-leases.md) passes host
+  composition with I2S and the existing GPU manager; its runtime files compile
+  for AArch64. The privileged DMA service schedules finite capture. Production
+  startup wiring, continuous streaming, playback, Bluetooth PCM and physical
+  qualification remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
@@ -128,16 +133,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   isolation provider, board reservations, and firmware boot remain required.
   The [client command transport](gpu-cccb.md) passes host/reference checks for
   complete ring and KICK bytes, wraparound, queue pressure, deadlines, and retained
-  faults. It compiles for AArch64. Context construction, job admission, completion
-  fences, service integration, and physical execution remain outstanding.
+  faults. The [offline compute-context builder](gpu-compute-context.md) matches
+  complete reference bytes and composes with native VM/client-queue formatting.
+  Both compile for AArch64. Executable context programs, job admission, completion
+  fences, service integration and physical execution remain outstanding.
+  The [program producer investigation](gpu-compute-producer.md) identifies
+  source generators and an unresolved multicore-addressing requirement.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
   with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies
   an AIC8800D80 candidate and loads Bluetooth patches over SDIO before UART use.
-  Physical silicon identity, native transports, power/reset bindings, networking,
-  pairing, and headset audio remain outstanding.
+  The [SDIO controller/card worker](sdio.md) passes host checks for bounded
+  preparation, enumeration, CMD52/CMD53, interrupt ownership and retained faults.
+  Its runtime files compile for AArch64. Physical silicon identity, radio
+  bootstrap transport, power/reset bindings, networking, pairing and headset
+  audio remain outstanding.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

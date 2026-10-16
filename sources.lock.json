@@ -238,5 +238,299 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_ccb.c",
     "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_ccb.c",
     "sha256": "f267167ef51ba9f46c0b7fb939ce94e802fda03d6c692b1fc4579693ff5fa800"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif.h",
+    "sha256": "39b6eb48874fdb4bd6e4b8fa6eadae99209d22c5d9945ec4cd6989549460fb13"
+  },
+  "board-gpu-compute-pvr-rogue-defs-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_defs.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_defs.h",
+    "sha256": "7c4c6902f7e456694bd3d64608eae48cdfccc223750773f07648de712e2d4ced"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-common-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif_common.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif_common.h",
+    "sha256": "979ae32fdc3c96e4b0ae38e3b288b4230a66d87b7aa07fb7d5f4d5f6fb8cdcce"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-shared-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif_shared.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif_shared.h",
+    "sha256": "b57d60e8b563adde51f020258a8c86aa8e20cdadd9e1597c2faf1ef516a317d9"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-shared-check-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif_shared_check.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif_shared_check.h",
+    "sha256": "bbaba75dcb161c554b17b3d696ea78717dd4e7af047522786ada1bd03176a076"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-check-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif_check.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif_check.h",
+    "sha256": "f33aea3a53414d4e4e95abbe1754ac126ae44a44723a4ff46a22e33021ab88cd"
+  },
+  "board-gpu-compute-pvr-stream-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_stream.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_stream.h",
+    "sha256": "df6f22a0ee91b0e2b04f7788a3c1586e932735d29ed388408d0470cf11aa797e"
+  },
+  "board-gpu-compute-pvr-rogue-fwif-stream-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_fwif_stream.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_fwif_stream.h",
+    "sha256": "76cec5527dd3515acd3e46e2628d9f0142ca3a2d2f4632b622cb6c51ff78756a"
+  },
+  "board-gpu-compute-pvr-queue-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_queue.c",
+    "sha256": "1084d5498dd7f29f8ea50e8791f85c0083dc8c52d08b6e7c05301acc8db53c5b"
+  },
+  "board-gpu-compute-pvr-context-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_context.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_context.c",
+    "sha256": "aa4518fcf46c76196bbd883cd3e68715a4ec781b197fe17ccb346f876a55afb3"
+  },
+  "board-gpu-compute-pvr-stream-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_stream.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_stream.c",
+    "sha256": "b1102673453a6f94f5fbdd79ccc495f320b4197b11016a0a1f142cc911884be0"
+  },
+  "board-gpu-compute-pvr-stream-defs-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_stream_defs.c",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_stream_defs.c",
+    "sha256": "aec4f5c90bcd5fb5ce96f23b0f00b18275e32ec2c6a3479593b38df3a5bb07e9"
+  },
+  "gpu-compute-producer-mesa-src-imagination-README-md": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/README.md",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/README.md",
+    "sha256": "b5c105b3e7888ebfcee767fb0b41a2c2d3167c227fc7c260848c477812fc431f"
+  },
+  "gpu-compute-producer-mesa-src-imagination-common-device-info-bxm-4-64-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/device_info/bxm-4-64.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/device_info/bxm-4-64.h",
+    "sha256": "4fc2ef4cfa1652f77d72cc868760bdd760f9ccd361dd491d8a097f87ea6ec145"
+  },
+  "gpu-compute-producer-mesa-src-imagination-common-pvr-device-info-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/pvr_device_info.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/pvr_device_info.c",
+    "sha256": "54cba687fb5ca437eaa254590d5ef06c2c80602b080a56d8c546051e4c826f9a"
+  },
+  "gpu-compute-producer-mesa-src-imagination-common-pvr-device-info-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/pvr_device_info.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/common/pvr_device_info.h",
+    "sha256": "b29bbe154543598192661645c44ec72804ddd54fbcbafb276ac80d54a3a64ed2"
+  },
+  "gpu-compute-producer-mesa-src-imagination-csbgen-rogue-cr-xml": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/cr.xml",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/cr.xml",
+    "sha256": "e66018b7e9aa58623364c2ebdc52b1e901ab0b41423283ac99e7a7047aaefa27"
+  },
+  "gpu-compute-producer-mesa-src-imagination-csbgen-rogue-lls-xml": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/lls.xml",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/lls.xml",
+    "sha256": "a66e5eeaf8b968756cd614be9d74451c8283d033c023ce5dcf9727dd64498146"
+  },
+  "gpu-compute-producer-mesa-src-imagination-csbgen-rogue-pds-xml": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/pds.xml",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/pds.xml",
+    "sha256": "547be02c1e466778a6b51ba8f900f94a4d85168cc6bf2cefcbf2fd4ba95b3e0c"
+  },
+  "gpu-compute-producer-mesa-src-imagination-csbgen-rogue-vdm-xml": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/vdm.xml",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/csbgen/rogue/vdm.xml",
+    "sha256": "c41dcfd5f3acf4b6af7573b746fcf66377dcf5e8d81d51f8de77fe99bea172df"
+  },
+  "gpu-compute-producer-mesa-src-imagination-include-hwdef-pvr-hw-utils-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/pvr_hw_utils.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/pvr_hw_utils.h",
+    "sha256": "0c2bf2c657946ec25093ff80cda26f61677906bf79a9bd54a851d98ca37dd837"
+  },
+  "gpu-compute-producer-mesa-src-imagination-include-hwdef-rogue-hw-defs-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/rogue_hw_defs.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/rogue_hw_defs.h",
+    "sha256": "3509e5739ef4f6ac14d60196c5b7b5ae13cfb027d858eb4583032e4ee1849f85"
+  },
+  "gpu-compute-producer-mesa-src-imagination-include-hwdef-rogue-hw-utils-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/rogue_hw_utils.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/include/hwdef/rogue_hw_utils.h",
+    "sha256": "57d26f8bafff8b4dcfbd91ddc531da40a7f43427f431f401f4bd5035dc7a8688"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-meson-build": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/meson.build",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/meson.build",
+    "sha256": "1781600679aa5f8d6fca184e0e227a09f0ebc341945c5d2ce8c7ece0b23646a5"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-uscgen-meson-build": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/uscgen/meson.build",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/uscgen/meson.build",
+    "sha256": "295c3de027936f0efb44428e4ddd6fb29b988985edb7c01bde6373976aee9098"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-uscgen-pco-clc-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/uscgen/pco_clc.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/uscgen/pco_clc.c",
+    "sha256": "1281aa7e7b909d496a25f145ebc72bcdebc2755aec83bdde351b700091e9a1d4"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-usclib-common-cl": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/common.cl",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/common.cl",
+    "sha256": "0b89e8c7cf9af7182ab97220fa3dac5c87380325af94aaa8fc0ff850da7ee1cf"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-usclib-libcl-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/libcl.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/libcl.h",
+    "sha256": "73dd0bb42437091180502c00aaffbc7476147cf472fd8e3569e7e82144677ad7"
+  },
+  "gpu-compute-producer-mesa-src-imagination-pco-usclib-meson-build": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/meson.build",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/pco/usclib/meson.build",
+    "sha256": "f3b40f6862bc068a7baccadc4d847741eef24007444b96b718a06b682d1e9f26"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-meson-build": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/meson.build",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/meson.build",
+    "sha256": "53461a9c8fd4526786983cf3a3c5ece0ac0d807588d978b869fc8a2be7d40956"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pds-pvr-pds-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_pds.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_pds.c",
+    "sha256": "dfa8cd8b3fcfedcc44f181fc0e2e4ed6fbfc2ada92dd8a00fc1072f777a6339d"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pds-pvr-pds-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_pds.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_pds.h",
+    "sha256": "43b2bc22ea75c778ba1f1316b4f8cf6f5117dd4c7d44c0f35065b8d002d19e12"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pds-pvr-rogue-pds-encode-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_rogue_pds_encode.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pds/pvr_rogue_pds_encode.h",
+    "sha256": "9559113eb4894220462153e23366b7c4a661fc9c0e52486914465790db032bd2"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pvr-arch-job-context-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_arch_job_context.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_arch_job_context.c",
+    "sha256": "abfcfcd0bd6d6824a3269f8707fa037b98b7699ecca2517e2b4a95b2f5f71bc0"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pvr-job-context-h": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_job_context.h",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_job_context.h",
+    "sha256": "0d150c506b86f1edfb1f2e0e1347a69306fdf8cbf4b08a906fc0d9429224b50a"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-pvr-physical-device-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_physical_device.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/pvr_physical_device.c",
+    "sha256": "7a84bd02ceb49a7cef7062b716b03f6025fa5fc93c0abc608fb998db330c0192"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-winsys-powervr-pvr-drm-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/winsys/powervr/pvr_drm.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/winsys/powervr/pvr_drm.c",
+    "sha256": "ab6e80f788f3b02a25fbe55ffad19916a97b2f2d7c010dc744212dd48d3477f5"
+  },
+  "gpu-compute-producer-mesa-src-imagination-vulkan-winsys-powervr-pvr-drm-job-compute-c": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/raw/86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c",
+    "sha256": "0ecc196099b1286371fd4bf721b49154026a99fb5aceff27987857d5c1d2a326"
+  },
+  "gpu-compute-producer-board-linux-rogue-km-services-server-devices-rogue-rgxmulticore-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rogue/rgxmulticore.c",
+    "archive": "gpu-compute-producer/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/linux/rogue_km/services/server/devices/rogue/rgxmulticore.c",
+    "sha256": "024cd5c5b81ba2c8a7ad1f91f20847bdd65f48dba0745d811d2629a1b5b0e6d9"
+  },
+  "gpu-compute-producer-board-linux-rogue-km-hwdefs-rogue-km-cores-rgxcore-km-36-56-104-183-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/hwdefs/rogue/km/cores/rgxcore_km_36.56.104.183.h",
+    "archive": "gpu-compute-producer/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/linux/rogue_km/hwdefs/rogue/km/cores/rgxcore_km_36.56.104.183.h",
+    "sha256": "d739a96d69311b0c01f7103f15638febb3661db6f42547792c1163db5b59372e"
+  },
+  "board-sdio-bsp-drivers-mmc-sunxi-mmc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc.c",
+    "archive": "radio-sdio/bsp/drivers/mmc/sunxi-mmc.c",
+    "sha256": "52c7f92db77290437b7818f3c3a92a2956c1ab637214794e56220d0dde99ce16"
+  },
+  "board-sdio-bsp-drivers-mmc-sunxi-mmc-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc.h",
+    "archive": "radio-sdio/bsp/drivers/mmc/sunxi-mmc.h",
+    "sha256": "0945ee0ea5e47082c2ff159e578380671f86f4cd797f4fb3a853bc6f8cde0da3"
+  },
+  "board-sdio-bsp-drivers-mmc-sunxi-mmc-v5p3x-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v5p3x.c",
+    "archive": "radio-sdio/bsp/drivers/mmc/sunxi-mmc-v5p3x.c",
+    "sha256": "348a6893ae256b2df712813e998ab2b6a13341dd8c57f6fcfb31656fe735d94c"
+  },
+  "board-sdio-bsp-drivers-mmc-sunxi-mmc-v5p3x-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v5p3x.h",
+    "archive": "radio-sdio/bsp/drivers/mmc/sunxi-mmc-v5p3x.h",
+    "sha256": "fb3470a66a19f5f422088cd3dcc8baf035043c0a1fc030603dab281a82a68a43"
+  },
+  "board-sdio-drivers-mmc-core-sdio_ops-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sdio_ops.c",
+    "archive": "radio-sdio/drivers/mmc/core/sdio_ops.c",
+    "sha256": "23e6cd52c802263e69e95eacc4054a9afcd751da746ef6fa53f8312f93a7aa29"
+  },
+  "board-sdio-drivers-mmc-core-sdio-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sdio.c",
+    "archive": "radio-sdio/drivers/mmc/core/sdio.c",
+    "sha256": "d1e27eda01bd0117f312d027f3a133543e0945b6ea968ccc49c040adbd3e894b"
+  },
+  "board-sdio-drivers-mmc-core-sdio_cis-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sdio_cis.c",
+    "archive": "radio-sdio/drivers/mmc/core/sdio_cis.c",
+    "sha256": "5ff82f36a6c15fb9bb8836ec54bb53c44a0be9210e898a0db647bc702716d118"
+  },
+  "board-sdio-include-linux-mmc-sdio-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/mmc/sdio.h",
+    "archive": "radio-sdio/include/linux/mmc/sdio.h",
+    "sha256": "c2657f975c3f38c5c1071c63c7638913cc227296794010d3745d15e1fe414cbe"
+  },
+  "board-sdio-include-linux-mmc-mmc-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/mmc/mmc.h",
+    "archive": "radio-sdio/include/linux/mmc/mmc.h",
+    "sha256": "9762e69cbbadb447abe1ba191ad2fc883d645c808024dfd810c12436ad4a695b"
   }
 }

@@ -113,7 +113,8 @@ GPU service, emulator and physical checks were not repeated.
 Evidence is under `~/.cache/sunstoneos/evidence/gpu-compute-context-20261016/`.
 `results.json` records source hashes, reference identity and the host result;
 `target.json` records the target command and object identity. The later root
-refusal result is under `~/.cache/sunstoneos/evidence/gpu-compute-context-root-20261016/`.
+refusal result and final AArch64 object identity are under
+`~/.cache/sunstoneos/evidence/gpu-compute-context-root-20261016/`.
 The references are
 [pvr_queue.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c),
 [pvr_context.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_context.c),

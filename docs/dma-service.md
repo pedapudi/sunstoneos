@@ -175,11 +175,9 @@ cache maintenance. Existing controller, memory-policy, I2S format, clock/pin
 and full worker-register migration evidence is reused. No lower-layer suite,
 physical board test or performance measurement was repeated.
 
-The [CMake fragment](../cmake/dma-service.cmake) builds `dma-service-model` after
-the existing SMP setup. It uses a private generated port and the existing
-fixture-only execution-level observation hook. Root build integration is a
-separate include of this fragment; the implementation does not change other
-workers' port copies.
+The root build includes the [CMake fragment](../cmake/dma-service.cmake) after
+the existing SMP setup. It builds `dma-service-model` with a private generated
+port and the existing fixture-only execution-level observation hook.
 
 Run the affected target when these inputs change:
 
