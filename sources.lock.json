@@ -1913,5 +1913,149 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sun60iw2-r.c",
     "archive": "board-kernel/pinctrl-sun60iw2-r.c",
     "sha256": "431fac7b767f5be39015cdf67fdd3dec230cbc1ebeb2fa0c0de08ca0f6e223a1"
+  },
+  "ce-Kconfig": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/Kconfig",
+    "archive": "rng/Kconfig",
+    "sha256": "95e221519e8c7b9ee43c3637a19b562f5120e9dc1c80f9220eb1c156754d5615"
+  },
+  "ce-Makefile": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/Makefile",
+    "archive": "rng/Makefile",
+    "sha256": "8b34032729f196f159813188bc63795b8004380a31890b2e228c66339cf1e5d5"
+  },
+  "ce-smc_process-sunxi_ce_smc_process-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/smc_process/sunxi_ce_smc_process.c",
+    "archive": "rng/smc_process/sunxi_ce_smc_process.c",
+    "sha256": "83a524350c85cf6c8a099bec39652ac5e38d486b87d14a7bde27f2a92cea6333"
+  },
+  "ce-sun8i-ce-core-c": {
+    "revision": "adc218676eef25575469234709c2d87185ca223a",
+    "url": "https://raw.githubusercontent.com/torvalds/linux/adc218676eef25575469234709c2d87185ca223a/drivers/crypto/allwinner/sun8i-ce/sun8i-ce-core.c",
+    "archive": "rng/sun8i-ce-core.c",
+    "sha256": "42670aa13f6b3cde3310a53092dfdae2698c331ba7a3587f672b3d817e72a97d"
+  },
+  "ce-sun8i-ce-trng-c": {
+    "revision": "adc218676eef25575469234709c2d87185ca223a",
+    "url": "https://raw.githubusercontent.com/torvalds/linux/adc218676eef25575469234709c2d87185ca223a/drivers/crypto/allwinner/sun8i-ce/sun8i-ce-trng.c",
+    "archive": "rng/sun8i-ce-trng.c",
+    "sha256": "5e6c9c9f20773912a90fd6efaf443c3118ad3db3a6338c30e6b6b5b2228369d1"
+  },
+  "ce-sunxi_ce-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce.c",
+    "archive": "rng/sunxi_ce.c",
+    "sha256": "c4807b2ff8daa748263a774406f05f500f7a6dbeeb51ffef7326940130eb8928"
+  },
+  "ce-sunxi_ce_cdev-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce_cdev.h",
+    "archive": "rng/sunxi_ce_cdev.h",
+    "sha256": "20c5532574deeb370a84c272be3a9e8126748d9c08b172457fa265f6b08d2026"
+  },
+  "ce-sunxi_ce_proc-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce_proc.h",
+    "archive": "rng/sunxi_ce_proc.h",
+    "sha256": "16e950a2c8a3e14869b01bb441dd84dde51cfaff49a48cb656e6c16ea8780223"
+  },
+  "ce-sunxi_ce_proc_comm-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce_proc_comm.c",
+    "archive": "rng/sunxi_ce_proc_comm.c",
+    "sha256": "892149a199ade387231cc17667eff5fe85b1f6e21ab1410972be9fc15c686753"
+  },
+  "ce-sunxi_hwrng-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_hwrng.c",
+    "archive": "rng/sunxi_hwrng.c",
+    "sha256": "162f25554f57db699233649f403fd0db637db9804e9e95461f1af8a542e4543d"
+  },
+  "ce-sunxi_trng-sunxi_trng-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_trng/sunxi_trng.c",
+    "archive": "rng/sunxi_trng/sunxi_trng.c",
+    "sha256": "1c2cb76157e630f4a4b20a37207bda095d0706b802c672b06ba42d4746944938"
+  },
+  "ce-v5-sunxi_ce_cdev_comm-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_cdev_comm.c",
+    "archive": "rng/v5/sunxi_ce_cdev_comm.c",
+    "sha256": "def80f1e8b8ed39fdd9cc6a3e4f81a43d6dd274f08bbd39a2b899ef717cd85d3"
+  },
+  "ce-v5-sunxi_ce_proc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_proc.c",
+    "archive": "rng/v5/sunxi_ce_proc.c",
+    "sha256": "51a935895f57f9efd99d614fa25d41d2a3436a2f74d4e4697587e1a82f7c8e4c"
+  },
+  "ce-v5-sunxi_ce_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_reg.c",
+    "archive": "rng/v5/sunxi_ce_reg.c",
+    "sha256": "1f0b2debba141551fb9260dea52d009f199153cbb8689c01f4d2f19cef343b72"
+  },
+  "ce-v5-sunxi_ce_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_reg.h",
+    "archive": "rng/v5/sunxi_ce_reg.h",
+    "sha256": "5e3f45f7e7b5ebc935f8c6cf0b755971942a6f6f7b765f52741070d294a119fe"
+  },
+  "bluetooth-sdp-lib-sdp-h": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/lib/sdp.h",
+    "archive": "bluetooth-sdp/lib/sdp.h",
+    "sha256": "7195ad57a4a280195e3f223f5187eaf7c43753ade67250ac54ca08fec08b0267"
+  },
+  "bluetooth-sdp-lib-sdp_lib-h": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/lib/sdp_lib.h",
+    "archive": "bluetooth-sdp/lib/sdp_lib.h",
+    "sha256": "51fbcfb01b816e1dd2a1288715622b38b8c3b641b9bc146a8224b8d5b8ff2be5"
+  },
+  "bluetooth-sdp-lib-sdp-c": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/lib/sdp.c",
+    "archive": "bluetooth-sdp/lib/sdp.c",
+    "sha256": "a7640bb799fa0009a4332426a829f8b44038afd66115c2a7b7709a4d58b0c0fa"
+  },
+  "usb-platform-sunxi_udc_board-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/udc/sunxi_udc_board.c",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/udc/sunxi_udc_board.c",
+    "sha256": "272476a90ad565c248ccda37f31f087c8009a5bb9533585c011d3327dbbc2392"
+  },
+  "usb-platform-sunxi_udc_dma-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/udc/sunxi_udc_dma.h",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/udc/sunxi_udc_dma.h",
+    "sha256": "355f51d3caae7b934398ec8a01a486dc8865ebc971b0decfe0ba738485231a57"
+  },
+  "usb-platform-usbc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/usbc/usbc.c",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/usbc/usbc.c",
+    "sha256": "ac42c7f779dc5cc13a77d097d0abc055d80eb253ea526b0da70ead4691b52c33"
+  },
+  "usb-platform-usbc_phy-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/usbc/usbc_phy.c",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/usbc/usbc_phy.c",
+    "sha256": "7fe5f0af63d31c06f406df7fb5b70c3ab828842cabac99e413877b9d15dfa4fb"
+  },
+  "usb-platform-usbc_dev-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/usbc/usbc_dev.c",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/usbc/usbc_dev.c",
+    "sha256": "82fac4045a4ce11e5ea2c21f094c7bb4d474f32c795f8a135b3ef4bc91f13c51"
+  },
+  "usb-platform-sunxi_usb_bsp-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/include/sunxi_usb_bsp.h",
+    "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/include/sunxi_usb_bsp.h",
+    "sha256": "829b22d7a8000f0a9e212ac3da3da50a5d0957e90a53de60cca1cb37d220399b"
   }
 }

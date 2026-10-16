@@ -41,27 +41,30 @@ software behavior; physical operation remains unqualified.
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Native reservation binding, handoff authority, physical transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
 | [NPU PLL](npu-pll.md) | Source-backed enable/retune and atomic startup adoption; focused host/emulator checks and native compilation pass | Concrete boot authority and physical qualification |
-| [NPU startup and convolution](npu-convolution.md) | Fixed model authentication, private commands, guarded startup and copied input/output ownership; focused emulator checks pass | Physical confinement, supply/domain qualification and numerical execution |
+| [NPU startup and convolution](npu-convolution.md) | Linker-owned session buffers, fixed model authentication, guarded startup and copied input/output ownership; focused emulator checks pass | Physical confinement, supply/domain qualification and numerical execution |
 | [GPU compute](gpu-compute-service.md) | Native workload publication, compiled fixed shader, command stream and output checking; service model passes | Physical firmware startup and numerical execution |
 | [GPU core mode](gpu-compute-mode.md) | Observed single-core capability required before startup/submission; instruction/service checks pass | Physical identity and wider core modes |
 | [GPU isolation](gpu-isolation.md) | Only exact provider success permits reclamation; focused instruction check passes | Proven request blocking and completion of all accepted external writes |
 | [Wi-Fi initialization](radio-wifi.md) | Source-defined RF/firmware setup, explicit channel policy, passive scanning; packet/model checks pass | Native radio binding and physical radio operation |
 | [Wi-Fi association, data and WPA2](radio-security.md) | Real RSN handshakes, confirmed keys, controlled-port authorization and CCMP replay checks; host checks and native link pass | Native radio/entropy binding and wider security modes |
 | [Native IPv4 networking](radio-network.md) | Actual FreeRTOS+TCP UDP/TCP clients, bounded socket ownership and revocation; emulator checks and native link pass | Production entropy/radio binding, record dispatch, DHCP/DNS/IPv6, servers and reconnect |
-| [Bluetooth channels](bluetooth-l2cap.md) | Real UART/HCI/ACL composition, response timers and guarded channel reuse; host checks and native compilation pass | Finite wire/link identities, native binding, SDP, security and headset profiles |
+| [Bluetooth channels](bluetooth-l2cap.md) | Real UART/HCI/ACL composition, response timers and guarded channel reuse; host checks and native compilation pass | Finite wire/link identities, native binding, security and headset profiles |
+| [Bluetooth service discovery](bluetooth-sdp.md) | Actual L2CAP transactions, bounded attribute/continuation parsing and confirmed teardown; host checks and native compilation pass | Security, RFCOMM, profiles and physical peer discovery |
+| [Hardware random request](crypto-engine.md) | One native TRNG operation with health admission and retained DMA resources; host/source checks and native compilation pass | Characterized health profile, secure/memory binding, sustained requests and physical entropy |
 | [Media clocks](media-clock.md) | Native CSI/ISP/DE/DSI gates and inherited-parent admission; host checks and native compilation pass | Complete electrical, pin, memory and drain binding |
 | [Camera analog startup](camera-platform.md) | Cold shared PHY setup and calibration readback; source/model checks pass | Native resource binding and actual memory/drain providers |
 | [Camera capture](camera-capture.md) | All six native controllers compose in both port models; one NV16 frame becomes CPU-owned after shutdown, drain and fault scan | Actual providers, global mapping disposal and concurrent device ownership |
 | [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Display engine, panel and physical scanout |
-| [Display PLL](display-pll.md) | Source-backed enable/retune, intermediate-rate checks and retained faults; host checks and native compilation pass | Qualified initial analog profile and atomic consumer handoff |
-| [Display scanout](display-scanout.md) | Actual PHY, command, DSI, LCD1 and display-engine composition; host checks and native compilation pass | Platform binding, cold PLL, panel, independent drain and shutdown/release |
+| [Display PLL](display-pll.md) | Source-backed enable/retune, intermediate-rate checks and retained faults; host checks and native compilation pass | Qualified initial analog profile and physical operation |
+| [Display scanout](display-scanout.md) | Actual PHY/DSI/LCD/DE composition and atomic PLL/media adoption; host checks and native compilation pass | Qualified analog profile, memory/panel binding, independent drain and shutdown/release |
 | [I2S capture](i2s.md) | Finite capture, DMA ownership and clock/reset/header-pin binding; host/emulator checks pass | Continuous capture, playback, Bluetooth PCM and attached microphone |
 | [JPEG decode and native binding](video-platform.md) | Parser/executor, admitted cold startup and per-identity reset; host checks and native compilation pass | Board ROM profile, actual memory/cache/drain authority, physical output and remaining codec families |
 | [SD/eMMC reads](mmc.md) | Cold identification, capacity and bounded block reads; host/source checks and native compilation pass | Actual card presence, platform binding, physical reads and wider storage modes |
 | [GPIO and pins](pins.md) | Shared B–M ownership, GPIO and interrupt setup; host/source checks and native compilation pass | Physical routes, GIC delivery and platform admission |
 | [Thermal sensors](thermal.md) | Calibrated sampling, alarms and critical thresholds; host/source checks and native compilation pass | Physical accuracy, GIC delivery and thermal policy |
-| [SPI](spi.md) | Six native controllers with bounded master transfers; host/source checks and native compilation pass | Native pin/clock binding, DMA, advanced modes and physical peers |
-| [UART](uart.md) | Bounded FIFO transfers, configuration, flow control, interrupt service and drain; source/model checks and native compile pass | Native resource binding, advanced modes and physical peer tests |
+| [SPI platform](spi-platform.md) | Actual clock/pin/GIC binding and bounded master transfers; composed host checks and native compilation pass | Board admission, SPI4 route proof, DMA, advanced modes and physical peers |
+| [Cold USB0 preparation](usb-platform.md) | Actual clock/reset/PHY sequencing and detached controller admission; host/source/native instruction checks pass | Full platform admission, connection, remaining USB controllers and physical operation |
+| [UART](uart.md) | Real clock/pin leases, reset/GIC masking and bounded FIFO transfers; composed host checks and native compilation pass | Physical peer tests, Bluetooth binding, platform IRQ service and advanced modes |
 
 The camera path also has [OV5640 control](camera.md), [local CSI control](csi-receiver.md),
 [ISP/VIPP pass-through routing](camera-route.md) and [single-frame DMA](camera-dma.md).
@@ -73,12 +76,14 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 
 | Worktree | Assigned work |
 | --- | --- |
-| SPI platform worker | Native shared pin, clock and controller lifecycle binding |
-| NPU memory worker | Actual reserved-buffer composition with authenticated convolution preparation |
-| UART platform worker | Native shared pin, clock and controller lifecycle binding |
-| Bluetooth worker | Service discovery over actual L2CAP channels |
-| Security engine worker | Fixed random-generator request complete; integration and production health/service work remain |
-| Independent reviewers | UART and NPU memory ownership review |
+| Radio platform worker | Actual SDC1 pins, clocks, supply and firmware lifetime binding |
+| Bluetooth worker | RFCOMM transport for headset control |
+| Security engine worker | Production health provisioning and sustained random output |
+| Radio worker | Exclusive receive dispatch and bounded event/record retirement |
+| GPU memory worker | Native write-back/uncached reservations and actual firmware preparation |
+| PMIC provider worker | Shared runtime I²C transactions and rail snapshots |
+| Rail ownership worker | Common stable/change rail authority with existing GPU/NPU bridges |
+| Independent reviewers | RFCOMM, radio, entropy and native memory ownership review |
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -131,7 +136,8 @@ limitations. Raw evidence lives under `~/.cache/sunstoneos/evidence/`.
 The central integration records `hardware-integration-20261016f`,
 `hardware-integration-20261016g`, `hardware-integration-20261016h`,
 `hardware-integration-20261016i`, `hardware-integration-20261016j`,
-`hardware-integration-20261016k` and `hardware-integration-20261016l`
+`hardware-integration-20261016k`, `hardware-integration-20261016l` and
+`hardware-integration-20261016m`
 preserve source comparisons, build artifacts
 and source-pin verification. Integration reused component execution evidence;
 no unchanged emulator or physical workload was repeated. The JPEG record explicitly
@@ -142,7 +148,7 @@ Observer compiler resource headers lacked historical hashes. These limits remain
 explicit and cannot establish missing final-candidate acceptance evidence.
 
 The shared clock registry now has independent UART, SPI, security-engine and
-RC16M scopes, 64-bit masks and 128 slots. Its 32-byte token ABI requires all
+RC16M scopes, independent USB ports, 64-bit masks and 128 slots. Its 32-byte token ABI requires all
 producers and consumers to rebuild together. A focused sanitizer check and
 affected native compile/link checks pass; earlier workload results retain
 their recorded source and ABI identities.
@@ -177,19 +183,21 @@ The dashboard requires no separate status maintenance or recurring browser tests
    access. Protected ROM return alone does not establish reset cause or recovery
    from a stalled interconnect. Preserve the inserted microSD and all storage.
 2. Use the prepared [cached observer bundle](a733-smp-observe-host.md) after
-   independent recovery and entry admission pass. The host preserves authenticated
+   independent recovery and entry admission pass. The host preserves validated
    scheduler frames before separately observing ROM return. Qualify all-core
    startup, interrupts, coherent memory, affinity and context preservation.
    ROM return alone does not establish scheduler operation.
-3. Bind the integrated native memory pool and platform ownership to DMA, IOMMU,
-   GPU and NPU. Corrected inherited-clock guards now require forced-on control,
+3. Complete native memory and platform binding for DMA, IOMMU, GPU and NPU.
+   The fixed NPU convolution now uses the actual linker pool; physical startup
+   authority, exclusive internal SRAM ownership and numerical output remain open.
+   Corrected inherited-clock guards require forced-on control,
    software enable and effective-gate readback; focused checks pass. Account for remote firmware, all shared-memory users, cache
    attributes and outstanding bus traffic. Supply real admission/drain evidence
    before device commands or buffer reuse.
 4. Bind the integrated camera capture and display scanout coordinators to native
-   platform providers. Qualify the display PLL initial analog profile and bind
-   atomic clock handoff, then implement safe shutdown/release. The PLL sequence
-   and media gate/rate controllers are integrated with software evidence.
+   platform providers. Qualify the display PLL initial analog profile and
+   implement safe shutdown/release. Atomic PLL/media adoption into scanout is
+   integrated with software evidence.
    Add panel-specific sequencing, live frame updates and wider camera modes.
    OV5640 module availability remains unconfirmed; the DSI panel is undecided.
    Keep Hawkeye 64 MP feasibility separate from the first camera implementation.

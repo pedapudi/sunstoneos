@@ -28,7 +28,10 @@ before it can share this authority. UART0–6 and both always-on UARTs have
 independent local scopes, with shared APB_UART or APBS1 parent ownership. Each
 SPI controller also has its own local scope. The security engine reserves its
 complete shared queues and control words; its RC16M source has independent
-ownership without reference-clock ancestry.
+ownership without reference-clock ancestry. USB0 and USB1 have independent
+exclusive controller/PHY scopes. Both reserve the shared USB01 reference and
+its reference-clock/oscillator ancestry. Upstream MSI-LITE2 and USB_SYS gates
+remain under FABRIC ownership; local port tokens do not authorize their changes.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
 the reference clock and oscillator. Peripheral PLL0 and PLL_NPU also depend on the
@@ -146,10 +149,11 @@ shared ownership of the local NPU scope. Native compilation passes; evidence
 is in `~/.cache/sunstoneos/evidence/npu-platform-20261016/`.
 Existing registry clients retain their earlier evidence.
 
-## PLL publication transfers ownership without a release window
+## Clock publication transfers ownership without a release window
 
 After a trusted coordinator validates the physical profile, atomic publication
-converts its exclusive PLL_NPU or display PLL1 scope to shared ownership. A fresh
+converts its exclusive PLL_NPU, display PLL1 or USB01 reference scope to
+shared ownership. A fresh
 token replaces the old identity while preserving the owner and all other scopes.
 Validation and time checks precede the metadata change. Refusal leaves the old
 reservation and output unchanged; publication itself proves no hardware state.
@@ -158,7 +162,12 @@ The [NPU startup handoff](npu-clock-handoff.md) writes the replacement directly
 into persistent startup storage and transfers the source authority only after
 its actual controller completes. A late fault retains the reachable token.
 Focused emulator checks cover successful adoption and failures before and after
-publication. Display consumer adoption still requires integration.
+publication. The USB extension passes a focused host check for reference
+publication and concurrent independent port reservations. Its physical source
+proof and consumer adoption belong to the USB platform controller. The [display handoff](display-clock-handoff.md) adopts the completed PLL and
+media producers into actual scanout ownership. It refreshes every borrowed live
+token before the next callback and retains the reachable token after late faults.
+Its focused host composition and native compilation pass.
 
 The thermal controller reserves GPADC24M and its conservative reference and
 oscillator ancestry. Changing that shared source requires exclusion of every

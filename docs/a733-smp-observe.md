@@ -37,7 +37,7 @@ workaround runs before the new branch.
 
 Each call handles at most four TinyUSB events and one bounded request or response
 step. It does not call blocking scheduler APIs. Initial USB preparation includes
-150 ms detach, 1 ms reset and 10 ms controller delays using the physical counter.
+150 ms detach and 1 ms reset delays using the physical counter.
 These delays run with IRQ masked and consume the existing deadline. Pending
 timer interrupts resume afterward. Physical enumeration and host capture within
 the four-second watchdog interval still require qualification. The image never

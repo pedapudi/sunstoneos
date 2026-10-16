@@ -37,7 +37,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   interrupts. Focused checks cover inherited SIF clearing and terminal faults.
   The central image also links; it has a distinct build identity. Physical
   cache coherence, entry, interrupts and secondary scheduling remain unqualified.
-  The [USB observer](a733-smp-observe.md) publishes authenticated bounded result
+  The [USB observer](a733-smp-observe.md) publishes validated bounded result
   frames from the cached diagnostic. Host and instruction checks pass. Its
   [separate launcher](a733-smp-observe-host.md) preserves received frames before
   observing ROM return. The exact offline bundle is prepared; physical USB
@@ -76,13 +76,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
   pass. Unread byte errors are preserved when receive capacity is exhausted.
-  Clock/pin/GIC binding, DMA, advanced modes and physical serial operation remain
-  outstanding. Bluetooth and the header UART1 route share one controller.
+  The [native platform binding](uart-platform.md) now composes actual clock
+  and pin leases, reset sequencing, GIC masking and one FreeRTOS owner task.
+  Host checks and single-core/SMP native compilation pass. Twelve explicit
+  routes cover all nine controllers. Physical serial operation, Bluetooth
+  binding, platform IRQ service, DMA and advanced modes remain outstanding.
+  Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,
-  chip-select timing and retained failures; native compilation passes. Actual
-  resource acquisition, physical peers, DMA, advanced modes and SPIF remain
-  outstanding.
+  chip-select timing and retained failures; native compilation passes. The
+  [native platform binding](spi-platform.md) composes real clock/pin leases,
+  reset/GIC handling, inactive chip-select preparation and bounded restoration.
+  Focused host checks and native compilation pass. SPI4 route activation refuses
+  its unproven package signal mapping. Board admission, physical peers, DMA,
+  advanced modes and SPIF remain outstanding.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
@@ -236,8 +243,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass; native compilation passes. [Display PLL activation and retuning](display-pll.md)
   now follows the source sequence with intermediate-rate bounds, filtered lock
   checks and retained ownership. Host checks and native compilation pass.
-  Qualified initial analog provisioning, atomic clock handoff, pin ownership,
-  native scanout binding, panel configuration, read transactions and
+  [Atomic scanout handoff](display-clock-handoff.md) now transfers the completed
+  PLL reservation into persistent ownership and refreshes the actual media
+  controller token before further access. Focused host composition and native
+  compilation pass. Qualified initial analog provisioning, pin ownership,
+  native frame/panel binding, read transactions and
   physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
@@ -281,11 +291,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Response and extended-response timers, independent caller deadlines, opaque
   channel generations and confirmed-slot reuse pass focused composed checks.
   Wire identifiers and lower link quarantine still impose finite lifetimes.
+  [Service discovery](bluetooth-sdp.md) now opens actual L2CAP channels,
+  assembles bounded continuation responses and exposes service attributes and
+  advertised RFCOMM endpoints. Host checks and native compilation pass.
+  Confirmed teardown retains transport buffers until controller completion.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
   Physical identity and platform binding, DHCP/DNS/IPv6, server sockets,
-  reconnection, unrelated radio-record dispatch, wider Wi-Fi security modes, SDP,
+  reconnection, unrelated radio-record dispatch, wider Wi-Fi security modes, RFCOMM,
   Bluetooth pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
@@ -349,7 +363,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the complete compiled model, private allocations and commands before startup
   and publication. Copied inputs, matching output completion and explicit result
   reaping pass focused emulator checks. The output bytes are modeled, so these
-  checks do not establish inference. The [NPU PLL controller](npu-pll.md)
+  checks do not establish inference. The [native memory session](npu-reserved.md)
+  now reserves one linker-owned allocation for all six buffers and private
+  tables, then invokes the actual authenticated preparation path. Focused
+  emulator checks execute native translation/cache operations and retain the
+  parent allocation on failure. Missing startup authority still refuses
+  service binding. The [NPU PLL controller](npu-pll.md)
   implements bounded cold enable and enabled retuning, consumer exclusion and
   retained faults. Host checks, source comparisons and native compilation pass.
   [Atomic startup adoption](npu-clock-handoff.md) transfers the PLL reservation
@@ -372,11 +391,26 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
 
+- Crypto, random, identity and secure storage: **implemented** one bounded
+  [hardware random-number request](crypto-engine.md) through the native crypto
+  engine. Host checks, pinned-source comparisons and native compilation pass
+  for descriptor encoding, health-register admission, DMA/cache ownership and
+  retained failures. The request requires a characterized secure health profile;
+  no production profile or physical entropy evidence is available. Sustained
+  requests, native security/memory admission, cipher/hash/asymmetric operations,
+  key handling and physical qualification remain outstanding.
+
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
   programmed-I/O implementation, inherited clock state, and remaining modes.
   The [native mimus session](mimus-usb.md) also passes asset loading, status polling
   during recognition, repeated results, and host-lease return with automatic access.
+  [Cold USB0 preparation](usb-platform.md) now supplies native clock/reset/PHY
+  sequencing, detached-controller admission and shared-reference publication.
+  Host checks, source comparisons and native instruction checks pass. It keeps
+  the device disconnected and does not enable DMA or host power. Actual
+  fabric/power/security/recovery admission, connection, USB1 and USB2/DWC3 modes
+  and physical cold-start qualification remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |
