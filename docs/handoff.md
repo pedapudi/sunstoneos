@@ -109,6 +109,9 @@ ordering, completion-slot ownership, events, deadlines, and retained failures.
 Native [initialization records](gpu-fw-state.md) connect nineteen firmware
 resources to the queues. Full allocations match the reference initializers;
 one host check integrates their mappings with firmware staging and queue formatting.
+Native [GPU workload tables](gpu-vm.md) now prepare all six page sizes and a
+firmware memory-context record. Complete bytes match pinned entry encoders;
+one sanitizer check passes translation boundaries and 34 atomic refusals.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -284,11 +287,16 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement GPU memory contexts and platform integration. The native
-   [initialization records](gpu-fw-state.md) now connect queues and firmware
+7. Implement GPU startup sequencing validated against device features, then
+   integrate platform resources.
+   Native [GPU workload tables](gpu-vm.md) now have host and reference evidence
+   for six page sizes; reuse `gpu-vm-20261016`. Allocation, cache publication,
+   live mapping changes, invalidation, and device attachment remain outstanding.
+   Native [initialization records](gpu-fw-state.md) now connect queues and firmware
    resources; reuse `gpu-fw-state-20261016` evidence. The pinned driver's
-   `pvr_mmu.c` and `pvr_fw_startstop.c` describe the remaining GPU address-space
-   and startup sequencing.
+   `pvr_fw_startstop.c` describes startup sequencing; `pvr_mmu.c` describes
+   translation-cache invalidation. The MIPS startup path skips GPU BIF setup;
+   workload page tables are separate from firmware translation.
    Integrate the [checked transport](gpu-queues.md)
    with shared allocations, platform memory callbacks, FreeRTOS serialization,
    event handlers, and bounded startup/recovery. GPU job completion remains

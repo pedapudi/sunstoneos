@@ -69,7 +69,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   passes host checks for publication, return ownership, events, deadlines, and
   retained failures. Native [initialization records](gpu-fw-state.md) match the
   reference initializers and pass integration with queue formatting and MIPS
-  mappings. These components compile for AArch64. Physical identity,
+  mappings. Native [GPU workload tables](gpu-vm.md) support six page sizes and
+  match the pinned entry encoders and firmware context initializer. These
+  components compile for AArch64. Physical identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host

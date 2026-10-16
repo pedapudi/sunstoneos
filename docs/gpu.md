@@ -9,6 +9,8 @@ The [native firmware queue transport](gpu-queues.md) also has host evidence for
 submission, result ownership, events, deadlines, and retained failures.
 Native [initialization records](gpu-fw-state.md) connect the queues to backed
 firmware resources and match the pinned reference initializers.
+Native [GPU workload tables](gpu-vm.md) also match the reference encoders for
+all six page sizes and prepare firmware memory-context records.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -147,9 +149,9 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Implement GPU memory contexts and integrate the prepared firmware resources.
-   Connect the checked command transport to shared allocations, cache
-   publication, FreeRTOS serialization, interrupt/event handling, and bounded
+1. Integrate the prepared GPU memory contexts and firmware resources.
+   Implement startup sequencing validated against device features. Connect the
+   checked command transport to shared allocations, cache publication, FreeRTOS serialization, interrupt/event handling, and bounded
    start/stop behavior. GPU job completion needs separate synchronization.
    Use the checked MIPS preparation component for firmware mappings and boot data;
    interpret additional feature parameters as initialization requires them.
