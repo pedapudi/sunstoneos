@@ -30,14 +30,21 @@ struct a733_camera_admission {
 struct a733_camera_platform_ops {
     int (*now_us)(void *,uint64_t *);
     /* 1 complete, 0 pending, -1 uncertain failure; token before acquisition.
-     * Retain exclusive ownership of BOTH COMPLETE common registers, all three
-     * PHY/packet paths and every writer across polls, ACTIVE and FAULT.
+     * Retain exclusive ownership of BOTH COMPLETE common registers and all
+     * three PHY/packet paths across polls, ACTIVE and FAULT. After ACTIVE, a
+     * higher-level coordinator may authenticate this same token/owner and
+     * delegate a quiescent local path to its explicitly authorized receiver
+     * and sensor. Common-word writers remain excluded; delegation must not
+     * allow overlapping unsynchronized common-register RMW operations.
      * Prove reset and boot handoff independently; observed zeros are not proof.
      * A resolved handoff must establish a cold reset state, not adopt live PHYs.
      * Reserve clocks/reset, analog rails, sensor pins/rails and interrupt routing;
      * prove stable clocks/power, quiet producers, drained prior transactions and
      * independent recovery. The raw trim profile 0xb00 must be approved for the
-     * board: manual/source field names disagree. Hold sensors quiet throughout.
+     * board: manual/source field names disagree. Hold sensors quiet through
+     * ACTIVE and until the coordinator authenticates the assembled capture
+     * path and explicitly permits that sensor's packet enable. ACTIVE alone
+     * cannot grant either delegation. Unrelated local writers stay excluded.
      * This callback must not configure common analog registers or change IOMMU
      * mappings. Pin/clock/power managers and the actual evidence provider remain
      * platform responsibilities. No current native provider is implemented.

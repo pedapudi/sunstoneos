@@ -16,9 +16,18 @@ physical analog qualification.
 
 Common PHY registers at `0x05810000` affect PHY A, B and C. Admission reserves
 both complete common register words and excludes every other writer for the
-controller's lifetime. It also excludes all three PHY/packet paths, holds
-sensors quiet and owns the required clocks, resets, rails, pins and interrupt
-routing. Shared-register read/modify/write operations span separate polls.
+controller's lifetime. It also reserves all three PHY/packet paths and owns
+the required clocks, resets, rails, pins and interrupt routing. Sensors remain
+quiet through analog initialization. Shared-register read/modify/write operations
+span separate polls.
+
+After `ACTIVE`, a higher-level coordinator can authenticate the same token and
+owner, verify a quiescent local path, and delegate that path to its receiver.
+Enabling sensor packets requires a further explicit handoff after the complete
+capture path is prepared. The common/global lease remains owned throughout.
+Only the authorized child's local writes and sensor enable are permitted;
+unrelated users and overlapping common-register updates remain excluded.
+Analog `ACTIVE` alone grants neither handoff.
 
 The admission record identifies either an independently established cold reset
 or a resolved boot handoff that establishes the same reset state. Both origins
