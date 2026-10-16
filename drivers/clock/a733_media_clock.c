@@ -66,7 +66,7 @@ int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clo
     if (c->groups&DE) {shared|=A733_CLOCK_PLL_DE;exclusive|=A733_CLOCK_DE_SYS;}
     if (c->groups&VO) {shared|=A733_CLOCK_PERI0;exclusive|=A733_CLOCK_VO0|A733_CLOCK_DISPLL1;}
     if (c->groups&MM) exclusive|=A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VE_DEC;
-    *p=(struct a733_media_clock){.config=*c,.ops=*o,.registry=registry,.pck_manager=manager,
+    *p=(struct a733_media_clock){.self=p,.config=*c,.ops=*o,.registry=registry,.pck_manager=manager,
         .pck=*pck,.cookie=cookie,.shared=shared,.exclusive=exclusive,.pck_client=client,.initialized=1};
     for (unsigned i=0;i<3;++i) p->selected_mhz[i]=selected[i];
     atomic_init(&p->busy,0);return 1;
@@ -185,7 +185,7 @@ static enum a733_media_clock_result failed(struct a733_media_clock *p)
 }
 enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *p)
 {
-    if (!p || !p->initialized) return A733_MEDIA_INVALID;
+    if (!p || !p->initialized || p->self!=p) return A733_MEDIA_INVALID;
     unsigned expected=0;
     if (!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))
         return A733_MEDIA_BUSY;
@@ -238,4 +238,9 @@ enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *p)
     /* Publish only after all final observations, mutex release and time checks. */
     if (completed) p->stage=COMPLETE;
     return finish(p,completed ? A733_MEDIA_PREPARED : A733_MEDIA_PENDING);
+}
+int a733_media_clock_prepared(const struct a733_media_clock *p)
+{
+    return p && p->self==p && p->initialized && !p->fault && !p->held &&
+        !atomic_load_explicit(&p->busy,memory_order_acquire) && p->stage==COMPLETE;
 }

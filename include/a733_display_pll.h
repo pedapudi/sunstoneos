@@ -57,6 +57,9 @@ enum a733_display_pll_error { A733_DISPLAY_PLL_OK,A733_DISPLAY_PLL_TIME,
     A733_DISPLAY_PLL_IO,A733_DISPLAY_PLL_AUTHORITY,A733_DISPLAY_PLL_INITIAL,
     A733_DISPLAY_PLL_VERIFY,A733_DISPLAY_PLL_REENTRY };
 struct a733_display_pll {
+    struct a733_display_pll *self;
+    void *successor; /* Single serialized consumer; never copied or released. */
+    unsigned transferred;
     struct a733_display_pll_config config;
     struct a733_display_pll_plan plan;
     uint32_t expected[A733_DISPLAY_PLL_WORDS];
@@ -95,4 +98,6 @@ int a733_display_pll_init(struct a733_display_pll *,const struct a733_display_pl
  * READY_RETAINED proves observed register/lock state, not electrical qualification.
  */
 enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *);
+/* Serialized, callback-free completion observation. No physical revalidation. */
+int a733_display_pll_ready(const struct a733_display_pll *);
 #endif

@@ -79,7 +79,7 @@ int a733_display_pll_init(struct a733_display_pll *p,const struct a733_display_p
         (c->reservation.token.shared&(A733_CLOCK_OSC|A733_CLOCK_PERI0|A733_CLOCK_FABRIC))!=
             (A733_CLOCK_OSC|A733_CLOCK_PERI0|A733_CLOCK_FABRIC) ||
         !a733_display_pll_plan(&c->initial,c->hs_hz,c->ls_hz,&plan)) return 0;
-    memset(p,0,sizeof(*p));p->config=*c;p->plan=plan;
+    memset(p,0,sizeof(*p));p->self=p;p->config=*c;p->plan=plan;
     memcpy(p->expected,c->initial.words,sizeof(p->expected));p->initialized=1;return 1;
 }
 
@@ -129,7 +129,7 @@ static int current(struct a733_display_pll *p)
 }
 enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *p)
 {
-    if (!p || !p->initialized) return A733_DISPLAY_PLL_FAULT_RETAINED;
+    if (!p || !p->initialized || p->self!=p) return A733_DISPLAY_PLL_FAULT_RETAINED;
     if (p->state!=A733_DISPLAY_PLL_PENDING) return p->state;
     if (p->entered) {fail(p,A733_DISPLAY_PLL_REENTRY);return p->state;}
     p->entered=1;
@@ -221,4 +221,9 @@ enum a733_display_pll_state a733_display_pll_poll(struct a733_display_pll *p)
 out:
     if (p->fault) retain(p);
     p->entered=0;return p->state;
+}
+int a733_display_pll_ready(const struct a733_display_pll *p)
+{
+    return p && p->self==p && p->initialized && !p->entered && !p->held && !p->fault &&
+        p->state==A733_DISPLAY_PLL_READY_RETAINED;
 }

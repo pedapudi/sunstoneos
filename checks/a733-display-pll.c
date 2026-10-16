@@ -111,6 +111,7 @@ static void restore(struct fixture *f,const struct fixture *saved)
     memcpy(f,saved,sizeof(*f));f->registry.context=f;
     f->config.context=f;f->config.registry=&f->registry;
     f->pll.config.context=f;f->pll.config.registry=&f->registry;
+    f->pll.self=&f->pll; /* Model checkpoint rebinding, never a runtime copy. */
 }
 static void fault_cases(const struct fixture *saved)
 {

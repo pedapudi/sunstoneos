@@ -44,6 +44,9 @@ struct a733_media_clock_ops {
     int (*write)(void *,uintptr_t,uint32_t);
 };
 struct a733_media_clock {
+    struct a733_media_clock *self;
+    void *successor; /* Single serialized consumer; never copied or released. */
+    unsigned transferred;
     struct a733_media_clock_config config;
     struct a733_media_clock_ops ops;
     struct a733_clock_leases *registry;
@@ -71,6 +74,8 @@ int a733_media_clock_init(struct a733_media_clock *,const struct a733_media_cloc
     const struct a733_media_clock_ops *,void *,struct a733_clock_leases *,
     struct a733_gpu_resource_manager *,unsigned,const struct a733_gpu_resource_lease *);
 enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *);
+/* Serialized, callback-free completion observation. No physical revalidation. */
+int a733_media_clock_prepared(const struct a733_media_clock *);
 /* No release API: prepared or faulted clocks and authority remain retained.
  * PREPARED is a historical initialization result, not a current readiness scan.
  * BUSY can mean registry fault retention is pending; retry metadata polling.
