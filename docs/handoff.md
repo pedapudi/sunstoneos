@@ -5,6 +5,8 @@ A733 boot CPU. The kernel check passes timer preemption, blocking queues, and
 floating-point context checks. An EL3 secure-timer timeout recovers a forced
 EL1 stall and returns to FEL. [Physical kernel evidence](a733-kernel.md) records
 the image, resources, measurements, and limitations.
+The [bring-up sequence](bringup-sequence.md) orders recovery, shared platform
+services, complete device functionality, qualification, and performance work.
 
 A native USB channel now passes status, packet-boundary echo, log, and commanded
 ROM return checks. [USB evidence](usb.md) records the implementation and limits.
@@ -253,7 +255,10 @@ the tool hash and recovery evidence in the application document.
    The [descriptor research](npu.md#descriptor-field-compatibility-is-a-research-result)
    maps all observed relocation destinations to candidate Mesa fields but exposes
    stride differences and an additional descriptor word. Ring geometry is now
-   checked against source allocations. Resolve instruction-family semantics,
+   checked against source allocations. The [simulator stride investigation](nbg-strides.md)
+   now identifies the target's revision-9.2 decoder and direct channel-stride
+   packing. Its bounded instruction check passes with explicit synthetic-state
+   limits; full access paths remain unresolved. Resolve instruction-family semantics,
    stride units, linear accesses, and prefetch before device admission.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.

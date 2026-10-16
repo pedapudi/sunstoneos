@@ -214,6 +214,9 @@ beyond that structure. Mesa assigns image heights to its named Y-stride fields,
 while the A733 fixture contains values resembling per-channel image area.
 The first descriptor reports an input width and height of 224 but a Y-stride
 value of 50,176. These differences prevent direct adoption as an access validator.
+The [simulator investigation](nbg-strides.md) now identifies direct channel-stride
+packing in the target's revision-9.2 decoder. It explains this difference but
+does not establish complete access extents or prefetch behavior.
 
 The [isolated HAL comparison](nbg-rings.md) confirms circular-size/end packing
 and identifies a transpose selector in the 48 descriptors without coefficient
@@ -233,8 +236,8 @@ authorizing device execution.
 1. **Load the numerical fixture natively.** The pinned compiler now produces a
    small convolution with exact float and matched quantized simulator references.
    Native decoding and checksum verification now support its `0x20000` layout.
-   Use the [SDK convolution capture](nbg-conv-loader.md) to extend assembly and
-   allocation planning for its zero working pool. Keep the existing SDK network
+   Native assembly now matches the [SDK convolution capture](nbg-conv-loader.md),
+   including allocation planning for its zero working pool. Keep the existing SDK network
    as the `0x1001e` format reference.
 2. **Complete driver integration.** The native controller, memory policy, CPU
    adapter, and FreeRTOS service have software evidence. Add interrupt delivery,
@@ -269,8 +272,8 @@ authorizing device execution.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is decoding the numerical fixture,
-complete descriptor access bounds, and command admission. Physical inference
+The next independent implementation work is complete descriptor access bounds
+and command admission. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.
