@@ -106,6 +106,12 @@ and passes a host simulator comparison. Its emitted `0x20000` format differs fro
 the existing decoder profile. Host-side Linux tools are compatible with the
 FreeRTOS requirement; the board runtime remains native.
 
+[Issue 12](https://github.com/pedapudi/sunstoneos/issues/12) tracks an
+in-repository compiler and development toolkit with native FreeRTOS execution.
+This replacement of external tools is deferred until complete hardware support.
+Published compiler dependencies remain acceptable during bring-up. CPU, GPU,
+and NPU optimization follows the [validation schedule](validation.md).
+
 ## Structural inspection is implemented
 
 Run the host inspector with a downloaded model path:

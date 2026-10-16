@@ -50,3 +50,22 @@ behavior. A failed attempt is not permission to retry indefinitely.
 For each batch, record the purpose, command or procedure, artifact identity,
 hardware state, result, and raw-evidence location. Keep raw logs outside Git.
 Record an untested requirement as untested, even when a related check passes.
+
+## Schedule performance work after functional hardware support
+
+Defer CPU, GPU, and NPU optimization until every required board hardware function
+works. During bring-up, measure only what is needed to diagnose a failure,
+establish functional deadlines, validate recovery, or satisfy a specific
+functional acceptance condition. Do not run recurring benchmark suites or
+optimization experiments alongside unfinished hardware support.
+
+After functional coverage, qualify CPU, GPU, and NPU performance separately.
+Include application latency, sustained throughput, memory and transfer costs,
+multicore scaling, concurrent workloads, and thermal behavior where relevant.
+Compare equivalent workloads at recorded clock rates, precision, and correctness
+requirements. Existing mimus latency requirements remain in force.
+
+Every measurement batch needs a concrete question, relevant input identities,
+and a declared sample count or stopping rule. Reuse valid baseline and candidate
+results. Repeat only when changed inputs or unresolved variance require new
+evidence; commits, handoffs, and documentation changes do not justify reruns.

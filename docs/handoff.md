@@ -119,11 +119,15 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The board did not return to FEL after the UFS probe. The old node `003:063`
-remains visible; its cached descriptor is not evidence of ROM execution.
-The host records that instance as unavailable for further requests. Independent
-power-cycle/FEL recovery has been requested. After recovery, verify a new ROM
-instance and reinitialize DDR; do not reuse previous RAM assets or signatures.
+The user reconnected the board. The new node `003:064` has automatic access
+and answered the A733 ROM identity request. A direct ROM read at address zero
+returned FEL rejection status `0x01`; the tool consumed the status and USB
+transaction response without a transport error. Device requests stopped for
+source review. Earlier ROM checks used CPU loads through an SRAM helper.
+The next ROM comparison must use that path and preserve its SRAM workspace.
+Evidence is under `~/.cache/sunstoneos/evidence/reconnected-rom-20261016-083552/`.
+The failed UFS instance `003:063` remains quarantined. DDR must be reinitialized;
+do not reuse previous RAM assets or signatures.
 No new peripheral probe may run before independent watchdog recovery passes.
 The installed
 [session access rule](../tools/README.md) grants access after reconnects on
@@ -193,7 +197,7 @@ the tool hash and recovery evidence in the application document.
 
 ## Next actions
 
-1. Recover the board independently. Establish a reset destination that cannot
+1. Finish ROM comparison on the reconnected board. Establish a reset destination that cannot
    execute unknown storage code, then qualify the prepared hardware watchdog
    with an SRAM expiry test. The ROM redirect candidate and its unresolved
    retention requirements are in [watchdog.md](watchdog.md).
@@ -248,6 +252,12 @@ the tool hash and recovery evidence in the application document.
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
 hardware and final qualification independently of mimus.
+
+[Issue 12](https://github.com/pedapudi/sunstoneos/issues/12) tracks the deferred
+native NPU compiler and development toolkit. External compiler tools remain
+acceptable until complete hardware support. Defer CPU, GPU, and NPU optimization
+until all board hardware is functional. The [validation policy](validation.md)
+limits bring-up measurements and defines when performance results need repeating.
 
 No microphone is available. I2S and Bluetooth headset input remain required.
 OV5640 is the first camera; the DSI panel is undecided. Missing hardware must
