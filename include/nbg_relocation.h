@@ -8,7 +8,8 @@
 enum nbg_address_encoding {
     NBG_ADDRESS_WORD = 0,
     NBG_ADDRESS_SHIFT6 = 1,
-    NBG_ADDRESS_FLAGS6 = 2
+    NBG_ADDRESS_FLAGS6 = 2,
+    NBG_ADDRESS_END_SHIFT6 = 3
 };
 
 /* Resolved address reference, not a serialized NBG patch record. The loader
@@ -29,6 +30,9 @@ struct nbg_relocation {
  * CPU buffer itself need not be aligned. SHIFT6 requires a 64-byte-aligned
  * address and preserves destination bits 31:26. FLAGS6 requires a 64-byte-
  * aligned address and preserves destination bits 5:0. WORD replaces all 32 bits.
+ * END_SHIFT6 validates the nonempty span at source_offset, then encodes its
+ * exclusive end shifted by six, preserving destination bits 31:26. The end may
+ * equal the allocation end, but must be 64-byte aligned and fit in 32 bits.
  *
  * Refuse empty/out-of-range allocations and accesses, address zero, unknown
  * encodings, duplicate destinations, metadata/buffer aliases, wrapping CPU

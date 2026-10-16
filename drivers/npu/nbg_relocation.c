@@ -39,9 +39,11 @@ int nbg_relocate(void *buffer, size_t bytes,
             (p->destination_offset & 3) ||
             p->destination_offset > bytes || bytes - p->destination_offset < 4 ||
             (p->encoding != NBG_ADDRESS_WORD && p->encoding != NBG_ADDRESS_SHIFT6 &&
-             p->encoding != NBG_ADDRESS_FLAGS6))
+             p->encoding != NBG_ADDRESS_FLAGS6 && p->encoding != NBG_ADDRESS_END_SHIFT6))
             return 0;
-        uint32_t address = p->source_device + p->source_offset;
+        uint64_t address = (uint64_t)p->source_device + p->source_offset;
+        if (p->encoding == NBG_ADDRESS_END_SHIFT6) address += p->referenced_bytes;
+        if (address >= address_space) return 0;
         if (p->encoding != NBG_ADDRESS_WORD && (address & 63))
             return 0;
         for (size_t j = 0; j != i; ++j)
@@ -52,8 +54,9 @@ int nbg_relocate(void *buffer, size_t bytes,
         const struct nbg_relocation *p = &patches[i];
         unsigned char *dst = (unsigned char *)buffer + p->destination_offset;
         uint32_t address = p->source_device + p->source_offset;
+        if (p->encoding == NBG_ADDRESS_END_SHIFT6) address += (uint32_t)p->referenced_bytes;
         uint32_t value = address;
-        if (p->encoding == NBG_ADDRESS_SHIFT6)
+        if (p->encoding == NBG_ADDRESS_SHIFT6 || p->encoding == NBG_ADDRESS_END_SHIFT6)
             value = (read_word(dst) & UINT32_C(0xfc000000)) | (address >> 6);
         else if (p->encoding == NBG_ADDRESS_FLAGS6)
             value = address | (read_word(dst) & 63);

@@ -70,6 +70,10 @@ uses the native completion event and reserves the complete fetch span.
 The [checksum verifier](nbg-checksum.md) now matches two published models and
 the isolated SDK CRC routine. Native assembly requires a matching complete-file
 checksum before publishing requirements or modifying buffers.
+The assembler now checks [complete encoded rings](nbg-rings.md), including
+tensor membership and exclusive ends at allocation boundaries. It still matches
+the saved SDK submission. Linear accesses, weight prefetch, and actual hardware
+access behavior remain unresolved.
 Descriptor access bounds and command admission remain outstanding.
 Platform resource setup, complete model admission,
 and physical execution remain outstanding.
@@ -210,8 +214,9 @@ the tool hash and recovery evidence in the application document.
    and establish descriptor semantics and cold initialization equivalence.
    The [descriptor research](npu.md#descriptor-field-compatibility-is-a-research-result)
    maps all observed relocation destinations to candidate Mesa fields but exposes
-   stride differences and an additional descriptor word. Resolve those differences
-   before using the layout for access validation.
+   stride differences and an additional descriptor word. Ring geometry is now
+   checked against source allocations. Resolve instruction-family semantics,
+   stride units, linear accesses, and prefetch before device admission.
    Integrate board
    power/clock setup and physical interrupt handling after recovery qualification.
    Obtain a pinned

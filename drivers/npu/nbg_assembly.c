@@ -134,6 +134,34 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
 /* Each scratch descriptor is private. A later operation's refusal therefore
  * cannot leave an earlier caller-owned descriptor partially assembled. */
 struct operation_image { unsigned char nn[192], command[32]; uint32_t command_bytes; };
+
+/* Slots identify the observed pointer fields, not arbitrary patch destinations.
+ * Circular sizes and ends are in 64-byte units in both the Mesa NN layout and
+ * the pinned HAL transpose encoder. Checking the encoded ring does not prove
+ * that all device accesses (including prefetch) remain within it. */
+enum pointer_slot { WEIGHTS, INPUT, OUTPUT, OUTPUT_END, INPUT_END, POINTER_COUNT };
+static int ring(const unsigned char *descriptor, struct nbg_relocation *nn,
+                const uint32_t *slot, const uint32_t *source, unsigned tensor,
+                unsigned end_slot, unsigned size_word)
+{
+    if (slot[tensor] == UINT32_MAX) return 0;
+    uint64_t size = (uint64_t)(word(descriptor + size_word * 4) & 0x03ffffff) << 6;
+    if (!size)
+        return slot[end_slot] == UINT32_MAX &&
+            (word(descriptor + (size_word + 1) * 4) & 0x03ffffff) == 0x03ffffff;
+    if (slot[end_slot] == UINT32_MAX) return 0;
+    struct nbg_relocation *address = &nn[slot[tensor]], *end = &nn[slot[end_slot]];
+    uint64_t limit = end->source_offset;
+    if (source[slot[tensor]] != source[slot[end_slot]] ||
+        address->source_device != end->source_device || address->source_bytes != end->source_bytes ||
+        size > limit || limit > end->source_bytes ||
+        address->source_offset < limit - size || address->source_offset >= limit) return 0;
+    end->source_offset = (uint32_t)(limit - size);
+    end->referenced_bytes = size;
+    end->encoding = NBG_ADDRESS_END_SHIFT6;
+    return 1;
+}
+
 static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                      const struct nbg_assembly_buffer *buffers,
                      const struct nbg_assembly_plan *plan, struct operation_image *image,
@@ -143,7 +171,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
     struct nbg_span span;
     if (!nbg_model_operation(m, number, &op) || op.kind != 2 || op.index != number - 1 ||
         op.state != number || op.first_patch != first || !op.patch_count ||
-        op.patch_count > 49 || op.auxiliary[0] ||
+        op.patch_count > POINTER_COUNT + 1 || op.auxiliary[0] ||
         !nbg_model_table(m, NBG_LOAD_STATES_TABLE, op.state, &span)) return 0;
     int last = number == plan->nn_operations;
     image->command_bytes = last ? 32 : 24;
@@ -152,7 +180,9 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
         if (word(span.data + i * 4) != (i == 5 && last ? 0 : state[i])) return 0;
     memcpy(image->command, span.data, span.bytes);
     memcpy(image->nn, m->data + m->sections[NBG_NN].offset + op.index * 192, 192);
-    struct nbg_relocation nn[48], command = {0};
+    struct nbg_relocation nn[POINTER_COUNT], command = {0};
+    uint32_t slot[POINTER_COUNT], source[POINTER_COUNT];
+    for (unsigned i = 0; i < POINTER_COUNT; ++i) slot[i] = UINT32_MAX;
     uint32_t nn_count = 0, command_count = 0;
     for (uint32_t i = 0; i < op.patch_count; ++i) {
         struct nbg_patch p;
@@ -166,7 +196,27 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                 op.index * 192, 20, NBG_ADDRESS_FLAGS6};
             ++command_count;
         } else {
-            if (p.kind != 1 || nn_count == 48) return 0;
+            if (p.kind != 1 || nn_count == POINTER_COUNT) return 0;
+            unsigned field;
+            switch (p.destination) {
+            case 20:
+                if (p.source != 5 || p.transformed != 1) return 0;
+                field = WEIGHTS; break;
+            case 24:
+                if ((p.source != 1 && p.source != 3 && p.source != 8) || p.transformed) return 0;
+                field = INPUT; break;
+            case 28:
+                if ((p.source != 2 && p.source != 3 && p.source != 8) || p.transformed) return 0;
+                field = OUTPUT; break;
+            case 76: case 84:
+                if ((p.source != 1 && p.source != 2 && p.source != 3 && p.source != 8) ||
+                    p.transformed != 1) return 0;
+                field = p.destination == 76 ? OUTPUT_END : INPUT_END; break;
+            default: return 0;
+            }
+            if (slot[field] != UINT32_MAX) return 0;
+            slot[field] = nn_count;
+            source[nn_count] = p.source;
             unsigned id;
             switch (p.source) {
             case 1: case 2:
@@ -196,7 +246,7 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
                 break;
             default: return 0;
             }
-            /* Address resolution only. Descriptor access lengths are unresolved. */
+            /* Rings are expanded below. Linear/weight access extents are unresolved. */
             r.referenced_bytes = 1;
             r.source_offset = p.source_offset;
             r.destination_offset = p.destination;
@@ -204,7 +254,9 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
             nn[nn_count++] = r;
         }
     }
-    if (command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
+    if (!ring(image->nn, nn, slot, source, INPUT, INPUT_END, 20) ||
+        !ring(image->nn, nn, slot, source, OUTPUT, OUTPUT_END, 18) ||
+        command_count != 1 || !nbg_relocate(image->command, image->command_bytes, &command, 1) ||
         (nn_count && !nbg_relocate(image->nn, sizeof(image->nn), nn, nn_count))) return 0;
     *count = op.patch_count;
     return 1;

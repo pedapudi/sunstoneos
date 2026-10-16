@@ -74,6 +74,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the saved neural-operation submission after address and completion adaptation.
   [Complete-file integrity](nbg-checksum.md) passes two published model checks
   and is required before native assembly.
+  [Encoded ring validation](nbg-rings.md) checks complete ranges and tensor
+  membership, with isolated SDK packing and saved-submission comparisons.
   Board resource integration, model admission, numerical execution,
   and physical qualification remain outstanding.
 

@@ -43,6 +43,8 @@ The [checksum record](nbg-checksum.md) pins two published models and compares
 the native verifier with the isolated SDK CRC primitive. The
 [descriptor investigation](npu.md#descriptor-field-compatibility-is-a-research-result)
 pins Mesa's candidate neural-command fields and records compatibility limits.
+The [ring validation record](nbg-rings.md) pins the SDK HAL library and restricts
+its instruction comparison to the isolated transpose descriptor encoder.
 The [NPU memory record](npu-mmu.md) pins table geometry and directory setup
 references for the native page-table builder. The [controller record](npu-controller.md)
 identifies the adapted register sequences and their modeled ownership behavior.

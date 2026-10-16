@@ -30,6 +30,9 @@ templates. Operation, descriptor, state-table, and relocation ordering must
 agree. Unused relocations, repeated descriptor destinations, unknown sources,
 split high addresses, unsupported transformations, and additional nonempty
 execution sections are refused.
+Descriptor patches are limited to the five observed pointer fields.
+[Circular-buffer validation](nbg-rings.md) checks each complete encoded ring and
+requires its tensor address to fall within that range in the same source allocation.
 
 The first auxiliary operation word must be zero. The second remains opaque
 and does not affect assembly; its semantics remain unresolved. Recognition
@@ -89,12 +92,14 @@ space contains END pairs. The reservation covers the controller's fixed
 ## Host evidence covers assembly and refusal
 
 One final ASan/UBSan check passed the complete fixture, buffer guards, padding,
-event adaptation, deterministic reassembly, and 107 refusal cases. Cases include
+event adaptation, deterministic reassembly, and 120 refusal cases. Cases include
 unsupported profiles, malformed relocations, a late-operation failure, CPU and
 device aliases, metadata aliases, misalignment, overflow, undersized buffers,
-and checksum or payload corruption. Malformed-profile cases receive repaired
+checksum or payload corruption, invalid ring geometry, and unsupported pointer
+fields. Malformed-profile cases receive repaired
 checksums so that they continue to exercise the intended assembly validation.
 A valid final allocation ending at the 32-bit address-space boundary also passes.
+A separate valid case places a ring end at its source allocation's end.
 
 One integration check starts from the hash-verified SDK submission capture at
 high device addresses. It adjusts captured address words for the native page
@@ -103,11 +108,11 @@ all 534 descriptor relocations, 125 command-pointer relocations, complete
 descriptor and command images, coefficients, allocation padding, and guards.
 The SDK is not executed again.
 
-The current AArch64 object build passes. It contains 5,000 bytes of text and read-only
+The current AArch64 object build passes. It contains 5,524 bytes of text and read-only
 data, no writable static data, and references the checksum verifier, decoder, encoder, `memcpy`,
 and `memset`. Its SHA-256 is
-`10aae4b5c3170b8bb27734676c035c9a7f0e68feaa8ad0669e0677913b508b4b`.
-Disassembly shows a 480-byte assembly frame and a 1,872-byte per-operation frame;
+`11a0f93f4d339e5abd56501a7a323dc534fdcc2d4f8ef5d7a67434ac8966da2d`.
+Disassembly shows a 480-byte assembly frame and a 528-byte per-operation frame;
 decoder, encoder, and memory-helper frames are additional. The returned plan
 occupies 88 bytes on the 64-bit host. The isolated build target is `nbg-assembly`.
 
@@ -117,14 +122,12 @@ The focused checks are [nbg-assembly.c](../checks/nbg-assembly.c) and
 `-shared -fPIC -Iinclude`.
 The Python check takes the model, shared library, saved capture directory, and
 a new output directory. It uses [host dependencies](../checks/host-requirements.txt).
-Raw results, artifacts, commands, and hashes are under
-`~/.cache/sunstoneos/evidence/nbg-assembly-20261016/`. The current sanitizer check
-and AArch64 object, including mandatory checksum verification, are under
-`~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`. The earlier complete SDK-byte
-comparison remains reusable because command construction is unchanged and the
-reference model passes the added integrity requirement.
+Current results, artifacts, commands, and hashes are under
+`~/.cache/sunstoneos/evidence/nbg-rings-20261016/`. The initial implementation
+evidence remains under `~/.cache/sunstoneos/evidence/nbg-assembly-20261016/`;
+checksum-specific evidence is under `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`.
 
-The evidence directory retains an initial fixture refusal caused by an incorrect
+The initial evidence directory retains a fixture refusal caused by an incorrect
 interpretation of the second auxiliary operation word. A separate build failure
 identified the missing runtime-header include path in the isolated CMake target.
 Both corrections are covered by the final checks relevant to those changes.
@@ -132,8 +135,10 @@ Unchanged kernel, controller, service, DMA, and mimus suites were not repeated.
 
 ## Admission and physical execution remain outstanding
 
-Descriptor data references currently check one addressed byte. Command-pointer
-references check the complete 192-byte descriptor. Full data-access extents,
+Linear tensor and weight references currently check one addressed byte. Encoded
+rings are checked as complete spans with tensor addresses inside them.
+Command-pointer references check the complete 192-byte descriptor. Actual device
+accesses, including prefetch, are not established by those ring checks. Full access extents,
 internal-SRAM mapping, auxiliary-field semantics, and cold
 initialization equivalence remain unresolved. Arbitrary descriptor contents
 can therefore pass offline assembly without being safe to execute.

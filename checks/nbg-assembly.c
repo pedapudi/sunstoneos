@@ -37,14 +37,18 @@ static void reset(void)
     memcpy(image, original, image_bytes);
     assert(nbg_model_open(image, image_bytes, &view) == NBG_DECODE_OK);
 }
-static void bad_word(size_t offset, uint32_t value)
+static void repair_checksum(void)
 {
-    reset(); put(image + offset, value);
-    /* Keep integrity valid so these cases continue to exercise assembly policy. */
     struct nbg_checksum checksum;
     assert(nbg_checksum_verify(image, image_bytes, &checksum) != NBG_CHECKSUM_INVALID);
     put(image + 108, checksum.computed);
     assert(nbg_model_open(image, image_bytes, &view) == NBG_DECODE_OK);
+}
+static void bad_word(size_t offset, uint32_t value)
+{
+    reset(); put(image + offset, value);
+    /* Keep integrity valid so these cases continue to exercise assembly policy. */
+    repair_checksum();
     struct nbg_assembly_plan out, before;
     memset(&out, 0xa5, sizeof(out)); memcpy(&before, &out, sizeof(out));
     assert(!nbg_assembly_requirements(&view, &out));
@@ -119,6 +123,19 @@ int main(int argc, char **argv)
     bad_word(patches + 200 + 12, UINT32_MAX); bad_word(patches + 200 + 12, 60);
     bad_word(patches + 200 + 16, UINT32_MAX);
     bad_word(patches + 659 * 40 + 4, 192); /* Failure after all earlier operations. */
+    reset(); uint32_t nn = view.sections[NBG_NN].offset;
+    bad_word(nn + 72, 0); /* Active endpoint requires nonzero ring size. */
+    bad_word(nn + 72, 4705); /* Ring start would precede allocation. */
+    bad_word(nn + 72, 4703); /* Tensor start would precede the ring. */
+    bad_word(nn + 80, 1); /* Ring size requires an endpoint patch. */
+    bad_word(nn + 84, 0); /* A disabled ring requires its sentinel. */
+    bad_word(nn + 192 + 80, 0); /* Endpoint present for a disabled input ring. */
+    bad_word(patches + 160 + 16, 0); /* Underflow when deriving ring start. */
+    bad_word(patches + 160 + 16, 1092416); /* Whole ring exceeds pool. */
+    bad_word(patches + 160 + 8, 8); /* Endpoint and tensor name different sources. */
+    bad_word(patches + 120 + 16, 301056); /* Tensor start equals exclusive ring end. */
+    bad_word(patches + 80 + 4, 4); /* Aligned destination outside pointer fields. */
+    bad_word(patches + 80 + 20, 1); /* Tensor pointers use full address words. */
     reset();
 
     /* Corruption is refused before assembly; checksum verification is mandatory. */
@@ -164,6 +181,20 @@ int main(int argc, char **argv)
     struct nbg_model *alias_view = buffers[0].cpu; memcpy(alias_view, &view, sizeof(view));
     memcpy(saved[0], storage[0], buffers[0].bytes + 8192);
     assert(!nbg_assemble(alias_view, buffers, &out)); unchanged(); ++refusals;
+
+    /* The ring may finish at the allocation end, which is not a readable byte. */
+    reset();
+    put(image + patches + 120 + 16, 1092352 - 301056);
+    put(image + patches + 160 + 16, 1092352);
+    repair_checksum();
+    assert(nbg_assemble(&view, buffers, &out));
+    uint32_t expected_end = (buffers[NBG_ALLOC_POOL].device + 1092352) >> 6;
+    assert((get((unsigned char *)buffers[NBG_ALLOC_NN].cpu + 76) & 0x03ffffff) == expected_end);
+    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i)
+        memcpy(saved[i], storage[i], buffers[i].bytes + 8192);
+    put(image + patches + 160 + 16, 1092352 + 64);
+    repair_checksum(); refuse(&out);
+    reset();
 
     /* A final allocation may end at the top of the 32-bit address space. */
     buffers[NBG_ALLOC_OUTPUT].device = 0xfffff000;

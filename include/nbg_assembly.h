@@ -27,13 +27,18 @@ struct nbg_assembly_buffer {
  * the observed load-state templates, and patch sources 0/1/2/3/5/8. Other
  * layouts are refused. The complete file checksum must match. Full profile
  * validation precedes publishing requirements.
+ * Pointer patches are limited to weight/input/output fields and circular ends.
+ * A nonzero ring size requires its end patch, the same source as its tensor,
+ * the complete ring inside that source, and the tensor address inside the ring.
+ * Zero-size rings require the observed unpatched disabled-end sentinel.
  * Minimum sizes reproduce observed SDK padding; allocation sizes round to 4 KiB
  * and reserve the controller's complete command fetch. Total <= 256 MiB.
  * Returns 1 on success, 0 on refusal. Result must not overlap view or file.
  * Refusal leaves result unchanged. No allocation, MMIO, cache, or locking.
  *
- * SUCCESS IS NOT SUBMISSION AUTHORIZATION. Descriptor data references check
- * one addressed byte only; full access extents, SRAM mapping, and
+ * SUCCESS IS NOT SUBMISSION AUTHORIZATION. Linear/weight references check one
+ * addressed byte only. Ring geometry does not establish actual device accesses
+ * or prefetch limits. Complete access extents, SRAM mapping, and
  * descriptor semantics remain unverified. No controller token is produced. */
 int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan *);
 

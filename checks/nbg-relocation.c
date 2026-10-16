@@ -48,7 +48,7 @@ int main(void)
     baseline(); p[1].referenced_bytes = 4096; refuse(32, 2);
     baseline(); p[1].referenced_bytes = UINT64_MAX; refuse(32, 2);
     baseline(); p[1].source_offset = 1; refuse(32, 2);
-    baseline(); p[1].encoding = (enum nbg_address_encoding)3; refuse(32, 2);
+    baseline(); p[1].encoding = (enum nbg_address_encoding)4; refuse(32, 2);
     baseline(); p[1].encoding = (enum nbg_address_encoding)-1; refuse(32, 2);
     baseline(); p[1].encoding = NBG_ADDRESS_FLAGS6; p[1].source_offset = 1; refuse(32, 2);
     assert(!nbg_relocate(NULL, 32, p, 2));
@@ -70,6 +70,24 @@ int main(void)
     const unsigned char last_shifted[] = {0xff, 0xff, 0xff, 0xa7};
     assert(!memcmp(storage + 1, last, 4));
     assert(!memcmp(storage + 29, last_shifted, 4));
+
+    /* An exclusive end may equal the allocation end, after a complete span check. */
+    baseline(); p[1] = (struct nbg_relocation){4096, 4096, 0x20000000, 0, 28, NBG_ADDRESS_END_SHIFT6};
+    assert(nbg_relocate(storage + 1, 32, p, 2));
+    const unsigned char end[] = {0x40, 0, 0x80, 0xa4};
+    assert(!memcmp(storage + 29, end, 4));
+    baseline(); p[1] = (struct nbg_relocation){4096, 4032, 0xfffff000, 0, 28, NBG_ADDRESS_END_SHIFT6};
+    assert(nbg_relocate(storage + 1, 32, p, 2));
+    assert(!memcmp(storage + 29, last_shifted, 4));
+    baseline(); p[1] = (struct nbg_relocation){4096, 63, 0x10000000, 1, 28, NBG_ADDRESS_END_SHIFT6};
+    assert(nbg_relocate(storage + 1, 32, p, 2));
+    const unsigned char aligned_end[] = {1, 0, 0x40, 0xa4};
+    assert(!memcmp(storage + 29, aligned_end, 4));
+    baseline(); p[1] = (struct nbg_relocation){4096, 4096, 0xfffff000, 0, 28, NBG_ADDRESS_END_SHIFT6};
+    refuse(32, 2); /* The end 2^32 cannot be encoded even though all data fits. */
+    baseline(); p[1].encoding = NBG_ADDRESS_END_SHIFT6; p[1].referenced_bytes = 0; refuse(32, 2);
+    baseline(); p[1].encoding = NBG_ADDRESS_END_SHIFT6; p[1].referenced_bytes = 63; refuse(32, 2);
+    baseline(); p[1].encoding = NBG_ADDRESS_END_SHIFT6; p[1].source_offset = 4080; refuse(32, 2);
 
     for (unsigned flags = 0; flags < 64; ++flags) {
         baseline();

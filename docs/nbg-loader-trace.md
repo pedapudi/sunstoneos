@@ -148,6 +148,9 @@ registration. Other model formats and operation types remain required.
 Numerical output, physical completion, and recovery have not been tested.
 The separate [checksum verifier](nbg-checksum.md) now validates the complete
 `0x1001e` file before native assembly.
+Native [ring validation](nbg-rings.md) also checks full encoded circular spans
+and reproduces the saved submission. The host reconstruction itself retains
+its original one-byte data-address checks.
 
 The [native assembler](nbg-assembly.md) now reuses the saved capture to verify
 allocation planning and command construction in C, including the native

@@ -25,12 +25,16 @@ unaligned. The supported encodings are:
 | Full word | Resolved device address | One byte |
 | Shifted address | Existing bits 31:26 followed by address bits 31:6 | 64 bytes |
 | Address with flags | Aligned address with existing bits 5:0 | 64 bytes |
+| Exclusive end | Existing bits 31:26 followed by span-end bits 31:6 | End aligned to 64 bytes |
 
 The complete source allocation must lie in the 32-bit device address space,
 with a nonzero base and length. The requested access must have nonzero length
 and fit within that allocation. Destination words must fit within the CPU
 buffer. Unknown encodings, duplicate destinations, wrapping CPU ranges, and
 overlap between metadata and the destination buffer are refused.
+Exclusive-end encoding validates the start and length of the complete span,
+then encodes its end. That end may equal the allocation end but must fit in
+32 bits. [Circular-buffer validation](nbg-rings.md) uses this mode.
 
 Validation precedes all writes, so any refusal leaves the buffer unchanged.
 The caller must keep the buffer and relocation array stable and exclusively
@@ -74,7 +78,7 @@ uses only format `0x1001e` and 32-bit device addresses.
 One updated ASan/UBSan host check passed encoding examples, all low-six-bit flag
 patterns, source and destination
 bounds, guards, a full 4,096-entry batch, and atomic refusal with an invalid
-last entry. Twenty parameter-refusal cases check unchanged destination bytes;
+last entry. Twenty-four parameter-refusal cases check unchanged destination bytes;
 additional cases cover null pointers, wrapping CPU ranges, and metadata aliases.
 
 The initial isolated reference comparison passed all 241 memory-pool and 215 internal-SRAM
@@ -91,11 +95,15 @@ including command pointers, weights, and deferred tensor bindings. Its full-buff
 comparison passes at two allocation bases. The model's one initialization
 relocation is omitted by the SDK and remains explicit in the report.
 
-One AArch64 object build passed. The current object contains 400 bytes of code, no
+Fifteen [isolated HAL packing comparisons](nbg-rings.md) also pass the new
+exclusive-end mode. The current assembly comparison reuses the saved SDK capture
+and checks every active relocation and complete allocation.
+
+One AArch64 object build passed. The current object contains 428 bytes of code, no
 static data, and no undefined symbols. Its SHA-256 is
-`beb793b3f796b45e12af05fd9997012aa268cc150a6424a0ad8c4dedaed744f4`.
-Current native and complete-loader evidence is under
-`~/.cache/sunstoneos/evidence/nbg-loader-20261016/`.
+`0981aaf008d21652bca56b227217d26da6c70b1df7ade0339c1a8651e402bd85`.
+Current native evidence is under `~/.cache/sunstoneos/evidence/nbg-rings-20261016/`.
+Complete-loader captures remain under `~/.cache/sunstoneos/evidence/nbg-loader-20261016/`.
 The initial isolated comparison remains under
 `~/.cache/sunstoneos/evidence/npu-relocation-20261016/`.
 Existing kernel, service, DMA, and application evidence was reused; no board
@@ -108,7 +116,7 @@ built from the native encoder. Its host dependencies are pinned in
 [host-requirements.txt](../checks/host-requirements.txt).
 The isolated AArch64 CMake target is `nbg-relocation`.
 
-The next loader work must map every serialized patch to an owned command or
-state allocation, resolve source kinds and allocation lengths, and validate
-every command before publication. Internal-SRAM mapping, output
+The native assembler resolves the observed profile's sources and validates
+encoded ring ranges. Complete access extents and command semantics still require
+validation before publication. Internal-SRAM mapping, output
 padding, dynamic command registration, and numerical inference remain required.

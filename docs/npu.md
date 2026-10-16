@@ -18,6 +18,8 @@ now plans allocations and constructs the observed neural-operation profile,
 matching saved SDK bytes after address and completion-event adjustments.
 The [checksum verifier](nbg-checksum.md) matches two published models and is
 required before assembly.
+The assembler also validates [encoded circular-buffer ranges](nbg-rings.md),
+with host field-packing and complete-submission comparisons.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -200,11 +202,18 @@ while the A733 fixture contains values resembling per-channel image area.
 The first descriptor reports an input width and height of 224 but a Y-stride
 value of 50,176. These differences prevent direct adoption as an access validator.
 
-The saved inventory is `descriptor-research.json` under
+The [isolated HAL comparison](nbg-rings.md) confirms circular-size/end packing
+and identifies a transpose selector in the 48 descriptors without coefficient
+relocations. Native assembly now checks complete encoded rings and requires the
+tensor address to lie within the ring. These checks do not establish actual
+access extents or prefetch behavior.
+
+The initial saved inventory is `descriptor-research.json` under
 `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`. It includes every decoded
-candidate field, relocation correspondence, and descriptor tail. Resolve stride
-units, circular-buffer boundaries, the extra word, and prefetch extents before
-replacing one-byte address checks with complete device-access validation.
+candidate field, relocation correspondence, and descriptor tail. The ring record
+adds a complete range inventory. Resolve instruction-family semantics, stride
+units, the extra word, linear access bounds, and prefetch extents before
+authorizing device execution.
 
 ## Native implementation sequence
 
