@@ -65,7 +65,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [FreeRTOS service](npu-service.md) passes a two-core ownership check with
   EL0 clients and a preemptible EL1 worker.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
-  checks. Board resource integration, native model loading, numerical execution,
+  checks. The [address encoder](nbg-relocation.md) passes host bounds checks and
+  comparison with SDK pool/SRAM relocation instructions.
+  Board resource integration, native model loading, numerical execution,
   and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary

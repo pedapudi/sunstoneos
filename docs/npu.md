@@ -7,7 +7,9 @@ The [memory policy](npu-memory.md) passes host integration for private mappings,
 table validation, cache publication, and retained faults. The
 [native CPU adapter](npu-native.md) passes a FreeRTOS emulator check.
 The [FreeRTOS service](npu-service.md) passes a two-core check with EL0 clients,
-a preemptible EL1 worker, task ownership, and retained faults. Board-resource
+a preemptible EL1 worker, task ownership, and retained faults. The checked
+[address relocation component](nbg-relocation.md) passes host bounds checks
+and comparison with isolated SDK instructions. Board-resource
 integration, native model loading, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -111,8 +113,10 @@ selected operation references, relocation tensor indices, and pool alignment.
 It accepts only disjoint nonempty sections. Other legitimate layouts may require
 an extension supported by a compiled fixture.
 
-Successful inspection does not authorize hardware submission. Command encoding,
-relocation transformations and destinations, software-operation semantics, SRAM
+Successful inspection does not authorize hardware submission. The separate
+[address encoder](nbg-relocation.md) implements two checked 32-bit relocation
+encodings. Complete relocation source/destination resolution, command encoding,
+software-operation semantics, SRAM
 placement, device identity, and the stored checksum remain unvalidated. Unknown
 operation and relocation-source values appear explicitly in the inventory.
 The output reports `checksum_verified: false`.
@@ -180,7 +184,8 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    reporting. Reserve model buffers and track CPU/device addresses separately.
    Qualify the complete mapping, cache, and translation-cache behavior physically.
 5. **Implement native model loading.** Decode the supported container, validate
-   every reference, allocate aligned buffers, and apply relocations. Establish
+   every reference, allocate aligned buffers, and resolve sources and destinations
+   before applying the checked address encoder. Establish
    checksum semantics, command permissions, supported operators, and output
    padding. Inspect `libNBGlinker.so` where published source is insufficient.
    Extend to other format versions with representative compiler output.
