@@ -23,8 +23,19 @@
 #define A733_CLOCK_PLL_NPU  (1u<<16) /* Also selectable by MBUS, DRAM0 and video clocks. */
 #define A733_CLOCK_NPU      (1u<<17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
 #define A733_POWER_DCDC2    (1u<<18) /* Stable rail or exclusive change authority; no clock parent. */
+#define A733_CLOCK_PLL_VIDEO0 (1u<<19)
+#define A733_CLOCK_PLL_DE     (1u<<20)
+#define A733_CLOCK_VI         (1u<<21) /* All CSI/ISP/analog/MCLK and VI domain controls. */
+#define A733_CLOCK_DE_SYS     (1u<<22) /* Both DE outputs, DMA, routes, SRAM and domain. */
+#define A733_CLOCK_VO0        (1u<<23) /* VO0 shared words, LCD/DSI/LVDS and domain. */
+#define A733_CLOCK_IOMMU_SYS  (1u<<24) /* Both banks; master exclusion remains separate. */
+#define A733_CLOCK_PLL_VE0    (1u<<25)
+#define A733_CLOCK_PLL_VE1    (1u<<26)
+#define A733_CLOCK_VE_DEC     (1u<<27) /* Decoder clocks, reset, routes and domain 2. */
+#define A733_CLOCK_DISPLL1    (1u<<28) /* Local display PLL1, DCXO parent. */
+#define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT32_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT32_C(0x7ffff)
+#define A733_CLOCK_ALL     UINT32_C(0x1fffffff)
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -47,7 +58,10 @@ struct a733_clock_leases {
  */
 int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_t *), void *);
 /* Privileged owner IDs are trusted registrations, not application input.
- * Shared clock dependencies expand through AUDIO1/PERI0/PLL_NPU -> REF -> OSC.
+ * Shared PLL dependencies expand through REF -> OSC, including VIDEO0, DE,
+ * VE0 and VE1. AUDIO2/5 also depend on AUDIO1. VO0 depends on DISPLL1,
+ * which depends directly on OSC. Parent change authority therefore conflicts
+ * with every VO0 consumer; a cold coordinator can acquire both exclusively.
  * Changing a child holds its ancestors stable. Local controller scopes are
  * exclusive only; their selected parent must be leased separately. I2S/ASRC/
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO
@@ -57,6 +71,13 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * all channels and remote-MCU/routing writers; idle bits cannot establish it.
  * PLL_NPU retuning requires exclusion of every parent consumer, including
  * memory/fabric consumers. NPU local ownership alone cannot authorize it.
+ * Media local scopes are exclusive. VI includes all camera controllers and
+ * common analog words; DE_SYS includes both outputs and shared internal memory;
+ * VO0 includes all shared TOP words and every output-0 consumer. IOMMU_SYS owns
+ * both banks, but never establishes exclusion or drain of their ten masters.
+ * Every overlapping writer, including remote firmware, must be bound to these
+ * scopes. Whole-domain power changes additionally require stable PCK ownership
+ * and verified quiescence. PLL retuning excludes every selected consumer.
  * Stable PCK clock and DCDC2 rail ownership remain separate platform leases.
  * DCDC2 shared/exclusive rail authority also uses this registry. Every PMIC
  * voltage/enable writer must acquire its exclusive scope; a mutex alone only

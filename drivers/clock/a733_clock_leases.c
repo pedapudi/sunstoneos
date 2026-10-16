@@ -9,8 +9,11 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
 static uint32_t parents(uint32_t mask)
 {
     uint32_t p=0;
+    if(mask&A733_CLOCK_VO0)p|=A733_CLOCK_DISPLL1;
+    if((mask|p)&A733_CLOCK_DISPLL1)p|=A733_CLOCK_OSC;
     if(mask&(A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5))p|=A733_CLOCK_AUDIO1;
-    if((mask|p)&(A733_CLOCK_AUDIO1|A733_CLOCK_PERI0|A733_CLOCK_PLL_NPU))p|=A733_CLOCK_REF;
+    if((mask|p)&(A733_CLOCK_AUDIO1|A733_CLOCK_PERI0|A733_CLOCK_PLL_NPU|
+        A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE|A733_CLOCK_PLL_VE0|A733_CLOCK_PLL_VE1))p|=A733_CLOCK_REF;
     if((mask|p)&A733_CLOCK_REF)p|=A733_CLOCK_OSC;
     return p;
 }
@@ -50,7 +53,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
     uint32_t shared,uint32_t exclusive,uint64_t deadline,struct a733_clock_token *out)
 {
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
-        (shared&exclusive) || (shared&(A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU)) ||
+        (shared&exclusive) || (shared&(A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU|A733_CLOCK_MEDIA_LOCALS)) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
     shared|=parents(shared|exclusive);shared&=~exclusive;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
