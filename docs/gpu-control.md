@@ -4,7 +4,9 @@ The native firmware control component is **implemented and host-tested**. It con
 completed startup to queue activation, a bounded health command, interrupt
 acknowledgement, and limited event batches. It has not run on the GPU. Physical
 interrupt delivery, firmware publication, event-specific resource handlers, and
-shutdown remain outstanding.
+shutdown qualification remain outstanding. The [FreeRTOS service](gpu-service.md)
+integrates this component and [shutdown](gpu-stop.md) under one privileged worker
+with emulator evidence.
 
 This document assumes familiarity with interrupt handlers and shared firmware
 queues. The [API](../include/pvr_gpu_control.h) requires completed

@@ -1,0 +1,120 @@
+#ifndef SUNSTONE_PVR_GPU_SERVICE_H
+#define SUNSTONE_PVR_GPU_SERVICE_H
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "pvr_fw_state.h"
+#include "pvr_gpu_stop.h"
+
+#define PVR_GPU_SERVICE_CLIENTS 8u
+#define PVR_GPU_SERVICE_STACK_WORDS 4096u
+enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
+    PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
+    PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED };
+enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
+    PVR_GPU_SERVICE_CLOSE };
+enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
+    PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
+enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
+    PVR_GPU_SERVICE_PREPARATION, PVR_GPU_SERVICE_ENABLE, PVR_GPU_SERVICE_START,
+    PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP };
+
+/* Private platform configuration, copied at init; pointed-to storage stays
+ * pinned and exclusively owned throughout the service lifetime. No filesystem
+ * or allocator is required: the platform reserves these exact buffers once.
+ * Firmware/pages must remain immutable. Buffers must not alias backend state.
+ * All operations use one context and monotonic microsecond clock. enable must
+ * establish stopped-device power/reset/clock ownership, including on reopen;
+ * its selected rate must match state.gpu_clock_hz. It is bounded and returns
+ * 1 on success. Failure can have side effects, so all resources are retained.
+ * Queue callbacks address resources 0..4; start/control/stop callbacks address
+ * these same allocations. Their individual cache/order contracts still apply.
+ * The platform verifies firmware identity, physical identity, CPU/PA mapping,
+ * reserved RAM, recovery, and physical isolation before board use.
+ */
+struct pvr_gpu_service_config {
+    const void *firmware;
+    size_t firmware_bytes;
+    struct pvr_mips_buffer firmware_buffers[3];
+    struct pvr_mips_buffer resources[PVR_FW_RESOURCE_COUNT];
+    struct pvr_fw_state_config state;
+    struct pvr_ccb_ops queue;
+    struct pvr_gpu_start_ops start;
+    struct pvr_gpu_control_ops control;
+    struct pvr_gpu_stop_ops stop;
+    int (*enable)(void *);
+    void *context;
+};
+struct pvr_gpu_service_request {
+    enum pvr_gpu_service_operation operation;
+    uint64_t timeout_us; /* OPEN/CLOSE only; STATUS requires zero. */
+};
+struct pvr_gpu_service_reply {
+    uint64_t ticket, epoch;
+    enum pvr_gpu_service_result result;
+    enum pvr_gpu_service_phase phase;
+    enum pvr_gpu_service_error error;
+    uint32_t owns_session, start_error, control_error, stop_error;
+};
+struct pvr_gpu_service_message {
+    struct pvr_gpu_service_request request;
+    uint64_t ticket;
+    unsigned client;
+};
+struct pvr_gpu_service_client {
+    TaskHandle_t task;
+    uint64_t next_ticket, pending;
+    QueueHandle_t replies;
+    StaticQueue_t reply_state;
+    uint8_t reply_storage[sizeof(struct pvr_gpu_service_reply)];
+};
+/* Private static storage; visible for reservation without a heap. Only the
+ * worker may access the controllers or backing after scheduler startup. */
+struct pvr_gpu_service {
+    struct pvr_gpu_service_config config;
+    struct pvr_ccb queue;
+    struct pvr_gpu_start start;
+    struct pvr_gpu_control control;
+    struct pvr_gpu_stop stop;
+    struct pvr_mips_boot boot;
+    struct pvr_mips_object mappings[PVR_FW_RESOURCE_COUNT];
+    uint64_t epoch, deadline, last_now;
+    enum pvr_gpu_service_phase phase;
+    enum pvr_gpu_service_error error;
+    unsigned owner, initialized;
+    QueueHandle_t requests;
+    StaticQueue_t request_state;
+    uint8_t request_storage[PVR_GPU_SERVICE_CLIENTS * sizeof(struct pvr_gpu_service_message)];
+    struct pvr_gpu_service_client clients[PVR_GPU_SERVICE_CLIENTS];
+    TaskHandle_t worker;
+    StaticTask_t worker_state;
+    StackType_t worker_stack[PVR_GPU_SERVICE_STACK_WORDS];
+};
+
+/* One instance. Zero storage once. Init/bind run at EL1 before the scheduler.
+ * The SMP port must grant EL1t only through the internal worker hook below.
+ * Client handles must remain live, never deleted/reused. Current shared
+ * mappings enforce cooperative API ownership, not malicious-task isolation.
+ * Init validates allocation spans without changing buffers or invoking ops.
+ */
+int pvr_gpu_service_init(struct pvr_gpu_service *, const struct pvr_gpu_service_config *,
+                         UBaseType_t priority, UBaseType_t affinity);
+int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
+
+/* Task-only copied requests/replies, one pending ticket per registered caller.
+ * Finite waits only. Refusal/timeout preserves outputs; collect timeout retains
+ * the pending ticket. A queued OPEN/CLOSE reply reports acceptance, not device
+ * readiness or shutdown. STATUS reports progress without driving it.
+ * OPEN claims an unowned COLD/STOPPED device. Its deadline covers preparation,
+ * startup and health. Only the owner may CLOSE a READY device. Shutdown closes
+ * admission immediately; STOPPED releases ownership only after isolation.
+ * Failure retains ownership, diagnostics and all resources; no further backend
+ * callback or automatic restart occurs. Reopening after successful stop uses a
+ * fresh epoch and prepares all backing again. No application GPU jobs yet.
+ */
+int pvr_gpu_service_send(struct pvr_gpu_service *, const struct pvr_gpu_service_request *,
+                         TickType_t wait, uint64_t *ticket);
+int pvr_gpu_service_collect(struct pvr_gpu_service *, uint64_t ticket,
+                            struct pvr_gpu_service_reply *, TickType_t wait);
+BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t, void *);
+#endif

@@ -125,6 +125,10 @@ firmware acknowledgements, retires control/queue I/O, and performs idle/reset
 checks before requiring platform isolation. Host integration passes 115 retained
 faults, and the affected control regression passes. Commands and register plans
 match the pinned functions. The isolation callback remains unimplemented on the board.
+The [FreeRTOS lifecycle service](gpu-service.md) integrates preparation, startup,
+control, and shutdown under one privileged worker. Its two-core emulator cases
+pass session ownership, reopen, event service, and retained failures. Physical
+backend operations and resource-specific event handlers remain outstanding.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -300,9 +304,15 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Integrate GPU preparation, startup, control, and shutdown under one privileged
-   FreeRTOS worker with platform allocation/cache operations. Implement
-   resource-specific firmware event handlers and physical interrupt delivery.
+7. Implement the GPU lifecycle service's board backend with reserved allocations,
+   cache operations, power/reset control, resource-specific firmware event
+   handlers, and physical interrupt delivery. The [FreeRTOS service](gpu-service.md)
+   now integrates resource preparation, startup, control, and shutdown under one
+   privileged worker. Its two-core emulator check passes ownership, migration,
+   reopen, event service, and retained startup/control/shutdown failures. Reuse
+   `gpu-service-20261016`; no GPU firmware instructions or physical device
+   accesses occurred. Shader/runtime integration and GPU job completion remain
+   outstanding. Physical backend work requires independent recovery first.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic
    and drain outstanding transactions before resources can be reused. Implement
@@ -323,10 +333,9 @@ the tool hash and recovery evidence in the application document.
    `pvr_fw_startstop.c` describes startup sequencing; `pvr_mmu.c` describes
    translation-cache invalidation. The MIPS startup path skips GPU BIF setup;
    workload page tables are separate from firmware translation.
-   Integrate the [checked transport](gpu-queues.md)
-   with shared allocations, platform memory callbacks, FreeRTOS serialization,
-   event handlers, and verified shutdown/recovery. GPU job completion remains
-   separate from command acceptance. Reuse the `gpu-ccb-20261016` evidence.
+   Connect the service's [checked transport](gpu-queues.md) to physical memory
+   callbacks, event handlers, and verified shutdown/recovery. GPU job completion
+   remains separate from command acceptance. Reuse the `gpu-ccb-20261016` evidence.
    Native [MIPS preparation](gpu-mips.md)
    now constructs the firmware page table, boot configuration, and wrapper
    register plan. Complete outputs match the pinned reference functions;

@@ -78,6 +78,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks. [Shutdown](gpu-stop.md) also passes host handshakes, idle/reset ordering,
   retirement, and retained-failure checks. Physical isolation, identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
+  The [FreeRTOS lifecycle service](gpu-service.md) passes a two-core emulator
+  check integrating resource preparation, startup, control, and shutdown under
+  one privileged worker. It covers client ownership, reopen, event service,
+  and retained failures. Physical backend operations remain outstanding.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

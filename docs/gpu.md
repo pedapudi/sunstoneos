@@ -1,6 +1,6 @@
 # GPU firmware preparation and remaining implementation
 
-GPU support is **partially implemented and host-tested**. Native firmware
+GPU support is **partially implemented with host and emulator evidence**. Native firmware
 decoding, staging, and [MIPS memory/boot preparation](gpu-mips.md) work for the
 pinned A733 image. The GPU has not booted
 firmware or executed a graphics or compute workload in SunstoneOS.
@@ -20,6 +20,10 @@ batches. It has host integration and ABI-reference evidence.
 [Bounded shutdown](gpu-stop.md) now implements firmware power handshakes,
 idle/reset checks, and a required platform-isolation callback. Host and reference
 checks pass; physical isolation remains unimplemented and unqualified.
+The [FreeRTOS lifecycle service](gpu-service.md) now integrates preparation,
+startup, control, and shutdown under one privileged worker. A two-core emulator
+check passes ownership, reopen, event service, and retained-failure cases.
+The backend still requires physical power, cache, interrupt, and isolation work.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -141,8 +145,8 @@ table produced a match without changing or repeating the native sanitizer check.
 Clang 21 compiles the component for AArch64 with strict alignment and
 freestanding options. The object contains 6,708 bytes of code/read-only data
 and no writable static data. The plan occupies 976 bytes; calls use stack
-scratch, with no heap allocation. This build is a standalone component;
-the FreeRTOS GPU service has not been integrated.
+scratch, with no heap allocation. These sizes describe the standalone component;
+the [FreeRTOS service](gpu-service.md) records the integrated emulator build.
 
 Input copies, hashes, commands, sanitizer output, staged buffers, comparison,
 and object are under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
@@ -158,11 +162,10 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Integrate the prepared GPU memory contexts and firmware resources.
-   Connect the checked startup controller and command transport to shared
-   allocations, cache publication, and FreeRTOS serialization. Integrate the
-   checked control worker with physical interrupt delivery and event-specific
-   resource handlers. Implement and qualify the shutdown isolation callback.
+1. Implement the lifecycle service's board backend with reserved allocations,
+   cache publication, physical interrupt delivery, and event-specific resource
+   handlers. Implement and qualify the shutdown isolation callback. Integrate
+   GPU workload contexts, live mapping updates, and translation invalidation.
    GPU job completion needs
    separate synchronization.
    Use the checked MIPS preparation component for firmware mappings and boot data;

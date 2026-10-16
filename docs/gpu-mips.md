@@ -71,8 +71,9 @@ Allocation, CPU cache publication, GPU memory contexts, platform power and
 clocks, reset sequencing, interrupts, and bounded startup remain necessary
 before this prepared image can run. Native [initialization records](gpu-fw-state.md)
 now connect firmware resources to the queues. The
-[command transport](gpu-queues.md) has host evidence; the FreeRTOS GPU service
-has not been integrated.
+[command transport](gpu-queues.md) has host evidence. The
+[FreeRTOS service](gpu-service.md) integrates firmware preparation and the
+checked startup controller in an emulator; physical backend work remains.
 
 ## Focused evidence compares complete outputs with pinned source functions
 

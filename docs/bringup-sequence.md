@@ -70,6 +70,8 @@ The GPU now has native [firmware decoding and staging](gpu.md) and
 also have host reference evidence. [Compatibility, health, and event service](gpu-control.md)
 have host integration evidence. [Shutdown](gpu-stop.md) has host handshake and
 idle/reset evidence; physical interrupt delivery and isolation remain outstanding.
+The [FreeRTOS lifecycle service](gpu-service.md) integrates these components and
+passes ownership, reopen, event, and failure checks in the two-core emulator.
 Its firmware boot, graphics/compute runtime, and physical identity remain
 unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is
