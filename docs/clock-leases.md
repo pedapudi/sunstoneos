@@ -1,4 +1,4 @@
-# Shared clock ownership for GPU and audio
+# Shared clock ownership for GPU, audio and DMA
 
 The common clock registry prevents GPU and audio drivers from changing clocks
 that another driver holds stable. It records shared and exclusive leases in
@@ -18,9 +18,9 @@ Token identities never repeat; exhaustion refuses further acquisition.
 Release requires the complete current token and verified hardware quiescence.
 
 The registry covers the oscillator, reference clock, peripheral PLL0, audio
-PLL1, its DIV2 and DIV5 outputs, and local audio controllers. Local scopes cover
-I2S0 through I2S4, ASRC, OWA transmit and DMIC. Other hardware needs additional
-scopes before it can share this authority.
+PLL1, its DIV2 and DIV5 outputs, local audio controllers, DMA0 and interconnect
+configuration. Local audio scopes cover I2S0 through I2S4, ASRC, OWA transmit
+and DMIC. Other hardware needs additional scopes before it can share this authority.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
 the reference clock and oscillator. Peripheral PLL0 also depends on the
@@ -91,6 +91,23 @@ Startup must stop admission if the binding fails. A timeout or invalid inherited
 profile retains any acquired tokens. Terminal polls perform no callbacks.
 The registry and GPU manager must use the same monotonic microsecond clock.
 
+## DMA preparation requires controller and interconnect authority
+
+The DMA0 scope is exclusive and requires a platform handoff covering the entire
+controller, its channels, dedicated bus/MBUS gates, reset and CPU/MCU routing.
+Idle channel registers cannot establish that remote firmware has relinquished
+ownership. The future platform binding must retain this scope throughout use.
+
+The fabric scope protects AHB, NSI and MBUS interconnect selectors, dividers
+and global source gates. Shared fabric ownership does not stabilize the
+selected PLLs: callers must also lease those parents. Dedicated peripheral
+leaf gates belong to their controller scopes; unrelated gate fields must stay
+unchanged without separate authority.
+
+The registry can acquire fabric and selected-parent stability together with
+exclusive DMA0 ownership. Hardware selector/rate verification, remote-MCU
+handoff, clock/reset setup and production composition remain platform work.
+
 ## Focused evidence covers ownership composition
 
 `checks/a733-clock-leases.c` combines registry cases with the existing I2S
@@ -103,6 +120,12 @@ active adoption, close/reopen and retained failure use the common binding.
 sanitizer check passes paired parent acquisition, change refusal through both
 managers, local close/reopen, contention, wrong-profile retention and deadlines.
 The existing lower-layer suites were not repeated.
+
+The focused `checks/dma-clock-leases.c` extension passes shared-DMA refusal,
+fabric change conflicts and peripheral/reference-parent protection. The changed
+registry compiles for AArch64. Evidence is in
+`~/.cache/sunstoneos/evidence/dma-platform-20261016/clock-evidence.json`;
+unchanged GPU/audio cases retain their earlier results.
 
 Commands, observed results, source snapshots and AArch64 object identities are
 under `~/.cache/sunstoneos/evidence/clock-leases-20261016/`. The first GPU fixture
