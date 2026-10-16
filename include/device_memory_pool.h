@@ -26,8 +26,9 @@ struct device_memory_pool {
     struct device_memory_allocation allocations[DEVICE_MEMORY_MAX_ALLOCATIONS];
     unsigned initialized;
 };
-/* Portable core for an already reserved, canonical WBWA region. The native
- * initializer obtains the region from linker symbols and verifies translations.
+/* Portable core for an already reserved region with one immutable CPU memory
+ * attribute. Each native initializer obtains its region from linker symbols
+ * and verifies that attribute and its translations.
  * This method neither discovers RAM nor admits arbitrary ranges on the board. */
 int device_memory_pool_init(struct device_memory_pool *, uintptr_t, uint64_t, size_t);
 int device_memory_acquire(struct device_memory_pool *, uint64_t owner, size_t bytes,

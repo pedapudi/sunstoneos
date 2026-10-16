@@ -45,5 +45,19 @@ SECTIONS {
            "device pool exceeds allocation registry capacity")
     ASSERT(__device_pool_end <= ORIGIN(RAM) + LENGTH(RAM),
            "device pool exceeds image RAM reservation")
+    /* Optional complete L2 block: never share cached and uncached aliases. */
+    .uncached_pool (DEFINED(__uncached_pool_size) && __uncached_pool_size ?
+                    0x41c00000 : .) (NOLOAD) : {
+        __uncached_pool_start = .;
+        . += DEFINED(__uncached_pool_size) ? __uncached_pool_size : 0;
+        __uncached_pool_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__uncached_pool_size) || !__uncached_pool_size ||
+           __uncached_pool_size == 2097152,
+           "uncached pool requires one complete 2 MiB block")
+    ASSERT(__uncached_pool_start == __uncached_pool_end ||
+           (__device_pool_end <= 0x41c00000 && __uncached_pool_start == 0x41c00000 &&
+            __uncached_pool_end == 0x41e00000),
+           "uncached pool overlaps image state or write-back pool")
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

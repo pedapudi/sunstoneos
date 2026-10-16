@@ -1,6 +1,7 @@
 #include "FreeRTOS.h"
 #include "platform.h"
 #include "boot.h"
+#include "a733_memory_boot.h"
 
 #define TIMER_IRQ TICK_IRQ
 
@@ -74,6 +75,7 @@ void platform_init(void)
     // Map this 2 MiB block as normal non-cacheable memory (attribute index 2).
     level2[(RESULT_BASE - 0x40000000UL) / 0x200000UL] =
         RESULT_BASE | (1UL << 10) | (3UL << 8) | (2UL << 2) | 1;
+    configASSERT(a733_memory_boot_uncached(level2));
     uint64_t mair = 0x44ff00;
     uint64_t tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |
                    (1UL << 10) | (1UL << 8) | 25;
