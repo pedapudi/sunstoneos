@@ -72,6 +72,10 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *,
  */
 enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
+/* Read-only, nonblocking observation under the registry lock. OK requires an
+ * exact live token in a healthy registry; BUSY admits no conclusion. No time
+ * sample, state change, token release, or hardware access occurs. */
+enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *,const struct a733_clock_token *);
 /* Retain all reservations and prohibit later acquisition/release/publication.
  * BUSY means the caller must retry this metadata operation before relinquishing
  * its existing exclusive ownership. No physical action or implicit reset. */

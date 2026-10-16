@@ -1,7 +1,9 @@
 #include "dma_service.h"
+#include <string.h>
 
 static struct dma_service *instance;
 static unsigned creating_worker;
+enum { SERVICE_ACTIVE, SERVICE_WAITING, SERVICE_CHECKING, SERVICE_RETAINED };
 static void worker(void *);
 BaseType_t dma_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
@@ -183,6 +185,10 @@ static void worker(void *argument)
     (void)stack;
 #endif
     for (;;) {
+        if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
+            (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+            continue;
+        }
         unsigned active=0;
         for (unsigned i=0;i<A733_DMA_CHANNELS;++i) {
             struct dma_service_channel *c=&s->channels[i];
@@ -210,11 +216,17 @@ static void worker(void *argument)
         configASSERT(xQueueSend(s->clients[message.client].replies,&reply,0) == pdTRUE);
     }
 }
-int dma_service_init(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
+static int initialize(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
     uintptr_t base,uint16_t channels,uint64_t drain,const struct dma_service_job *jobs,
     unsigned count,const struct dma_service_protected *protected,unsigned protected_count,
-    UBaseType_t priority,UBaseType_t affinity)
+    UBaseType_t priority,UBaseType_t affinity,const struct dma_service_activation *activation)
 {
+    struct dma_service_activation saved_activation={0};
+    if (activation) {
+        memcpy(&saved_activation,activation,sizeof(saved_activation));
+        if (!saved_activation.bootstrap || !saved_activation.prepared) return 0;
+        activation=&saved_activation;
+    }
     if (!s || instance || s->initialized || !ops || !jobs || !count || count > DMA_SERVICE_JOBS ||
         !protected || !protected_count || protected_count > 32 ||
         !priority || priority >= configMAX_PRIORITIES || !affinity || (affinity >> configNUMBER_OF_CORES) ||
@@ -263,6 +275,8 @@ int dma_service_init(struct dma_service *s,const struct a733_dma_operations *ops
         c->replies=xQueueCreateStatic(1,sizeof(struct dma_service_reply),c->storage,&c->queue);
         configASSERT(c->replies);
     }
+    s->activation=activation ? *activation : (struct dma_service_activation){0};
+    atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     s->initialized=1; instance=s; creating_worker=1;
 #if configNUMBER_OF_CORES > 1
     s->worker=xTaskCreateStaticAffinitySet(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,
@@ -271,6 +285,38 @@ int dma_service_init(struct dma_service *s,const struct a733_dma_operations *ops
     s->worker=xTaskCreateStatic(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,s->worker_stack,&s->worker_state);
 #endif
     creating_worker=0; configASSERT(s->worker); return 1;
+}
+int dma_service_init(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
+    uintptr_t base,uint16_t channels,uint64_t drain,const struct dma_service_job *jobs,
+    unsigned count,const struct dma_service_protected *protected,unsigned protected_count,
+    UBaseType_t priority,UBaseType_t affinity)
+{
+    return initialize(s,ops,cookie,base,channels,drain,jobs,count,protected,protected_count,priority,affinity,NULL);
+}
+int dma_service_init_deferred(struct dma_service *s,const struct a733_dma_operations *ops,void *cookie,
+    uintptr_t base,uint16_t channels,uint64_t drain,const struct dma_service_job *jobs,
+    unsigned count,const struct dma_service_protected *protected,unsigned protected_count,
+    UBaseType_t priority,UBaseType_t affinity,const struct dma_service_activation *activation)
+{
+    if(!activation) return 0;
+    return initialize(s,ops,cookie,base,channels,drain,jobs,count,protected,protected_count,priority,affinity,activation);
+}
+enum dma_service_result dma_service_activate(struct dma_service *s)
+{
+    if(!s || s!=instance || !s->initialized || !s->activation.bootstrap ||
+        xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle()!=s->activation.bootstrap) return DMA_SERVICE_DENIED;
+    uint64_t level;__asm__ volatile("mrs %0,CurrentEL" : "=r"(level));
+    if(level!=4) return DMA_SERVICE_DENIED;
+    unsigned expected=SERVICE_WAITING;
+    if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_CHECKING,
+        memory_order_acq_rel,memory_order_acquire))
+        return expected==SERVICE_RETAINED ? DMA_SERVICE_FAULT : DMA_SERVICE_BUSY;
+    int prepared=s->activation.prepared(s->activation.context,s->controller.base,s->controller.authorized_channels);
+    unsigned state=prepared==1 ? SERVICE_ACTIVE : prepared==0 ? SERVICE_WAITING : SERVICE_RETAINED;
+    atomic_store_explicit(&s->activation_state,state,memory_order_release);
+    if(state==SERVICE_ACTIVE) {xTaskNotifyGive(s->worker);return DMA_SERVICE_OK;}
+    return state==SERVICE_WAITING ? DMA_SERVICE_BUSY : DMA_SERVICE_FAULT;
 }
 int dma_service_bind(struct dma_service *s,unsigned slot,TaskHandle_t task,uint32_t jobs)
 {
@@ -282,7 +328,9 @@ int dma_service_bind(struct dma_service *s,unsigned slot,TaskHandle_t task,uint3
 }
 static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
 {
-    if (!s || s != instance || !s->initialized || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NULL;
+    if (!s || s != instance || !s->initialized ||
+        atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE ||
+        xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return NULL;
     TaskHandle_t task=xTaskGetCurrentTaskHandle();
     for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) { *slot=i; return &s->clients[i]; }
     return NULL;

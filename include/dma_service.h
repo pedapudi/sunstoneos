@@ -4,6 +4,7 @@
 #include "task.h"
 #include "queue.h"
 #include "dma_service_i2s.h"
+#include <stdatomic.h>
 
 #define DMA_SERVICE_CLIENTS 8u
 #define DMA_SERVICE_JOBS 16u
@@ -75,6 +76,15 @@ struct dma_service_channel {
     enum dma_service_outcome outcome;
     struct a733_i2s_capture capture;
 };
+/* Trusted private bootstrap configuration, copied before scheduling starts.
+ * prepared is bounded and performs no device operations. It authenticates the
+ * prepared platform controller and exact channel mask: 1 ready, 0 pending,
+ * -1 retained failure. Its context remains private and protected for lifetime. */
+struct dma_service_activation {
+    TaskHandle_t bootstrap;
+    int (*prepared)(void *, uintptr_t controller, uint16_t channels);
+    void *context;
+};
 /* Private static storage. Public layout permits reservation without a heap.
  * Applications must not modify/read these fields. Only this service's worker
  * calls the controller, native adapter or I2S callbacks after initialization. */
@@ -82,6 +92,8 @@ struct dma_service {
     struct a733_dma_controller controller;
     struct dma_service_private_job jobs[DMA_SERVICE_JOBS];
     unsigned job_count,initialized;
+    atomic_uint activation_state;
+    struct dma_service_activation activation;
     struct dma_service_channel channels[A733_DMA_CHANNELS];
     struct dma_service_client clients[DMA_SERVICE_CLIENTS];
     QueueHandle_t requests;
@@ -106,6 +118,22 @@ int dma_service_init(struct dma_service *, const struct a733_dma_operations *, v
     const struct dma_service_job *, unsigned count,
     const struct dma_service_protected *, unsigned protected_count,
     UBaseType_t priority, UBaseType_t affinity);
+/* Deferred variant: initialize and bind before scheduling, then prepare hardware
+ * from the designated EL1 bootstrap task using shared task mutexes. No worker
+ * device callbacks or client sends occur before successful activation. Hardware
+ * readiness is deferred; memory reservations and all other init prerequisites
+ * remain mandatory. Existing init creates an immediately active service. */
+int dma_service_init_deferred(struct dma_service *, const struct a733_dma_operations *, void *,
+    uintptr_t base, uint16_t channels, uint64_t drain_timeout_ticks,
+    const struct dma_service_job *, unsigned count,
+    const struct dma_service_protected *, unsigned protected_count,
+    UBaseType_t priority, UBaseType_t affinity, const struct dma_service_activation *);
+/* Designated bootstrap task only, EL1, scheduler running. No supplied token or
+ * callback can replace copied authority. Pending returns BUSY without activation;
+ * a failed prepared callback permanently retains the inactive service. Success
+ * publishes readiness across cores and wakes its worker. Activation is one-way;
+ * unauthorized or duplicate calls do not invoke prepared or change readiness. */
+enum dma_service_result dma_service_activate(struct dma_service *);
 int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t job_mask);
 /* Task-only. Identity comes from FreeRTOS. send copies the request, never
  * retains a caller stack pointer. A queued SUBMIT freezes its registered

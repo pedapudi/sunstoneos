@@ -100,3 +100,10 @@ enum a733_clock_result a733_clock_retain(struct a733_clock_leases *m,const struc
     if(find(m,token)==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
     m->failed=1;return leave(m,A733_CLOCK_FAULT);
 }
+
+enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *m,const struct a733_clock_token *token)
+{
+    if(!separate(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
+    enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
+    return leave(m,find(m,token)==A733_CLOCK_CLIENTS ? A733_CLOCK_INVALID : A733_CLOCK_OK);
+}
