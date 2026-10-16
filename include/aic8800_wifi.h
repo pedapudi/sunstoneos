@@ -28,8 +28,39 @@ struct aic8800_wifi_scan_result {
     const uint8_t *frame;
 };
 struct aic8800_wifi_scan_summary { uint32_t received; uint8_t vif, status, reported_results, accepted; };
+enum aic8800_wifi_security { AIC8800_WIFI_OPEN = 1, AIC8800_WIFI_WPA2_PSK_CCMP };
+enum aic8800_wifi_link { AIC8800_WIFI_LINK_DOWN, AIC8800_WIFI_CONNECTING,
+    AIC8800_WIFI_ASSOCIATED_OPEN, AIC8800_WIFI_SECURITY_PENDING, AIC8800_WIFI_DISCONNECTING, AIC8800_WIFI_LINK_UNRESOLVED };
+struct aic8800_wifi_target {
+    /* Independent caller authority for active association and a previously
+     * observed matching beacon. A scan result or numeric ID alone is no proof.
+     * Copies remain immutable through connection/disconnection. No credentials. */
+    uint64_t connection_authority, beacon_evidence;
+    unsigned channel_index;
+    enum aic8800_wifi_security security;
+    uint8_t bssid[6], ssid[32], ssid_bytes;
+};
+enum aic8800_wifi_station_event_kind { AIC8800_WIFI_ASSOCIATION,
+    AIC8800_WIFI_CONNECTION_REFUSED, AIC8800_WIFI_DISCONNECTION };
+struct aic8800_wifi_station_event {
+    enum aic8800_wifi_station_event_kind kind;
+    enum aic8800_wifi_link link;
+    uint16_t status, aid, frequency, request_ie_bytes, response_ie_bytes, bytes;
+    uint32_t center_frequency1, center_frequency2, ac_parameters[4];
+    uint8_t bssid[6], vif, ap_index, channel_index, qos, acm, band, width, ft_over_ds, reassoc;
+    /* Entire source indication retained, including unspecified padding. Owned
+     * by worker; borrowed only until generic transport consume. */
+    const uint8_t *payload;
+};
 struct aic8800_wifi {
     struct aic8800_wifi_config config;
+    struct aic8800_wifi_target target;
+    struct aic8800_wifi_station_event station_event;
+    enum aic8800_wifi_link link;
+    const uint8_t *station_record;
+    uint16_t disconnect_reason;
+    uint8_t station_held, station_accepted, station_indicated;
+    uint8_t station_payload[852];
     const void *owner;
     enum aic8800_wifi_state state;
     enum aic8800_wifi_error error;
@@ -49,6 +80,10 @@ struct aic8800_wifi {
 int aic8800_wifi_init(struct aic8800_wifi *, const struct aic8800_wifi_config *);
 int aic8800_wifi_claim(struct aic8800_wifi *, const void *owner, uint64_t now, uint64_t deadline);
 int aic8800_wifi_scan(struct aic8800_wifi *, const void *owner, uint64_t now, uint64_t deadline);
+/* Only the serialized transport owner admits these operations. Association
+ * never means network readiness; WPA2 remains SECURITY_PENDING. */
+int aic8800_wifi_connect(struct aic8800_wifi *, const void *, const struct aic8800_wifi_target *, uint64_t, uint64_t);
+int aic8800_wifi_disconnect(struct aic8800_wifi *, const void *, uint16_t reason, uint64_t, uint64_t);
 void aic8800_wifi_step(struct aic8800_wifi *, const void *owner, uint64_t now);
 void aic8800_wifi_observe(struct aic8800_wifi *, const void *owner, uint64_t now);
 int aic8800_wifi_sent(struct aic8800_wifi *, const void *owner);

@@ -8,6 +8,8 @@ handling. Physical calibration, scanning, and radio behavior remain unqualified.
 Management readiness means that the worker received the required initialization
 confirmations and a station-interface index. It does not establish association,
 authentication, encryption, network data delivery, or Bluetooth operation.
+[Station association and disconnection](radio-association.md) use a separately
+admitted target and preserve WPA2 security as pending.
 The [runtime receiver](radio-runtime.md) continues to preserve unrelated control
 and opaque data records throughout management work.
 
@@ -200,7 +202,7 @@ helper remain outside Git, preserving the downloaded license/copyright notices.
 
 Physical execution still needs qualified recovery, platform bindings, approved
 module RF settings, current channel authority, and explicit admission of the
-board operation. Association, authentication/security, network data paths,
+board operation. Full authentication/security, network data paths,
 full capability configuration, UART/HCI, sleep/wake, and interrupt service remain
 required follow-on work. No physical RF transmission, board access, or performance
 measurement occurred during this implementation.

@@ -178,6 +178,28 @@ int aic8800_transport_scan(struct aic8800_sdio_transport *t, uint64_t deadline)
     if (ok) { t->phase = RUNTIME_STEP; t->wait_until = 0; }
     t->entered = 0; return ok;
 }
+int aic8800_transport_connect(struct aic8800_sdio_transport *t,const struct aic8800_wifi_target *target,uint64_t deadline)
+{
+    if(!runtime_idle(t)||!t->wifi||!independent(t,target,sizeof(*target))||deadline>t->deadline)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_wifi_connect(t->wifi,t,target,now,deadline);
+    if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
+    t->entered=0;return ok;
+}
+int aic8800_transport_disconnect(struct aic8800_sdio_transport *t,uint16_t reason,uint64_t deadline)
+{
+    if(!runtime_idle(t)||!t->wifi||deadline>t->deadline)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_wifi_disconnect(t->wifi,t,reason,now,deadline);
+    if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
+    t->entered=0;return ok;
+}
+int aic8800_transport_peek_station(const struct aic8800_sdio_transport *t,struct aic8800_wifi_station_event *out)
+{
+    if(!t||!t->initialized||t->entered||!t->wifi||!t->held||!t->wifi->station_held||
+        t->unrelated.record!=t->wifi->station_record||!independent(t,out,sizeof(*out)))return 0;
+    *out=t->wifi->station_event;return 1;
+}
 int aic8800_transport_peek_scan(const struct aic8800_sdio_transport *t, struct aic8800_wifi_scan_result *out)
 {
     if (!t || !t->initialized || t->entered || !t->wifi || !t->held || !t->wifi->held ||

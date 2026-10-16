@@ -9,6 +9,8 @@ struct aic8800_firmware;
 struct aic8800_runtime;
 struct aic8800_wifi;
 struct aic8800_wifi_scan_result;
+struct aic8800_wifi_target;
+struct aic8800_wifi_station_event;
 struct aic8800_wifi_scan_summary;
 
 enum aic8800_transport_variant { AIC8800_TRANSPORT_D80_BOOTSTRAP = 1 };
@@ -115,6 +117,14 @@ int aic8800_transport_renew_runtime(struct aic8800_sdio_transport *, uint64_t de
  */
 int aic8800_transport_start_wifi(struct aic8800_sdio_transport *, struct aic8800_wifi *, uint64_t deadline);
 int aic8800_transport_scan(struct aic8800_sdio_transport *, uint64_t deadline);
+/* Active association requires independent caller authority and observed-beacon
+ * evidence in the copied target. No credentials or network-ready state exist.
+ * Command acceptance, association and security completion are distinct. */
+int aic8800_transport_connect(struct aic8800_sdio_transport *, const struct aic8800_wifi_target *, uint64_t deadline);
+int aic8800_transport_disconnect(struct aic8800_sdio_transport *, uint16_t reason, uint64_t deadline);
+/* Event/payload view remains valid until generic consume, which acknowledges
+ * ownership only. It does not authenticate WPA or authorize network data. */
+int aic8800_transport_peek_station(const struct aic8800_sdio_transport *, struct aic8800_wifi_station_event *);
 /* Scan view is valid until generic consume. Copy before asynchronous use.
  * Summary take acknowledges completion and permits the next scan; it requires
  * a drained aggregate. No request/result is overwritten without consumption. */
