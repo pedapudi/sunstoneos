@@ -163,7 +163,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
   model; lifecycle checks and native compilation pass. Module electrical binding,
   CSI/PHY reception, frame DMA, ISP, additional modes and physical qualification
-  remain outstanding. No camera is attached for qualification.
+  remain outstanding. Module availability and electrical compatibility remain
+  unconfirmed.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
