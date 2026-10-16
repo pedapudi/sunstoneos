@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f5f3ed">
+  <title>sunstoneos · Progress</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to progress</a>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="sunstoneos progress home">
+      <svg class="sun" viewBox="0 0 40 40" fill="none" aria-hidden="true"><circle cx="20" cy="20" r="8" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 2v5M20 33v5M2 20h5M33 20h5M7.3 7.3l3.5 3.5M29.2 29.2l3.5 3.5M7.3 32.7l3.5-3.5M29.2 10.8l3.5-3.5"/></g></svg>
+      <span>sunstone<span class="brand-suffix">os</span></span>
+    </a>
+    <span class="masthead-caption">Development journal</span>
+    <div class="live-tools"><span class="connection" id="connection"><span class="live-dot"></span><span id="connection-label">Connecting</span></span><button class="refresh-button" id="refresh" type="button" aria-label="Refresh project progress"><span aria-hidden="true">↻</span> Refresh</button></div>
+  </header>
+  <main id="main" class="page">
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">ORANGE PI ZERO 3W · A733 · FREERTOS</p><h1 id="page-title">From first boot to<br><em>full hardware support.</em></h1><p class="intro-copy" id="project-summary">A live view of implementation, evidence and remaining work.</p></div>
+      <aside class="project-note app-feature" aria-labelledby="featured-mimus-title"><span class="note-index">APPLICATION / MIMUS</span><h2 id="featured-mimus-title">Local speech recognition</h2><p id="featured-mimus">Reading application evidence…</p><button class="text-button" type="button" data-document="docs/mimus.md">Results &amp; remaining limits <span aria-hidden="true">↗</span></button></aside>
+    </section>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="metrics" class="metrics" aria-label="Hardware evidence overview" aria-busy="true">
+      <article class="metric"><span class="metric-value" id="count-total">—</span><span class="metric-label">Hardware areas</span><span class="metric-note">The complete inventory</span></article>
+      <article class="metric"><span class="metric-value" id="count-board">—</span><span class="metric-label">Physical results</span><span class="metric-note">Within the recorded test scope</span></article>
+      <article class="metric"><span class="metric-value" id="count-checked">—</span><span class="metric-label">Host or emulator evidence</span><span class="metric-note">Physical testing remains separate</span></article>
+      <article class="metric metric-qualified"><span class="metric-value" id="count-qualified">—</span><span class="metric-label">Fully qualified</span><span class="metric-note">Operational and recovery criteria met</span></article>
+    </section>
+    <p class="metric-context">Evidence counts can overlap. A partial result does not establish full hardware support.</p>
+    <div class="view-bar"><nav class="tabs" aria-label="Progress views"><button class="tab active" type="button" data-view="hardware" aria-pressed="true">Hardware <span id="inventory-count" class="tab-count">—</span></button><button class="tab" type="button" data-view="next" aria-pressed="false">Next actions</button><button class="tab" type="button" data-view="activity" aria-pressed="false">Recent activity</button></nav><span class="checked-time" id="checked-time">Waiting for project records</span></div>
+    <section id="view-hardware" aria-labelledby="hardware-heading">
+      <div class="section-heading"><div><p class="eyebrow">COMPLETE INVENTORY</p><h2 id="hardware-heading">Hardware &amp; platform</h2></div><button class="text-button" data-document="docs/hardware.md" type="button">Open support matrix <span aria-hidden="true">↗</span></button></div>
+      <div class="filters"><div class="search-field"><label class="sr-only" for="search">Search hardware and evidence</label><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search hardware, evidence or dependencies…" autocomplete="off"></div><label class="select-field"><span>Area</span><select id="area"><option value="">All areas</option></select></label><label class="select-field"><span>Status</span><select id="status"><option value="">All statuses</option></select></label><button class="reset-button" id="clear-filters" type="button" hidden>Clear</button></div>
+      <div class="results-bar"><p id="result-count" role="status">Loading the hardware inventory…</p><span>Open a card for evidence and limits <span aria-hidden="true">↙</span></span></div>
+      <div id="hardware-grid" class="hardware-grid" aria-busy="true"><div class="loading-state">Reading project records<span class="loading-dots" aria-hidden="true">…</span></div></div>
+      <div class="empty-state" id="empty" hidden><span class="empty-symbol" aria-hidden="true">∅</span><h3>No matching hardware</h3><p>Try another search or clear the filters to see the full inventory.</p><button class="button" id="empty-clear" type="button">Clear filters</button></div>
+    </section>
+    <section id="view-next" aria-labelledby="next-heading" hidden><div class="section-heading"><div><p class="eyebrow">WHAT COMES NEXT</p><h2 id="next-heading">The next useful steps</h2></div><button class="text-button" data-document="docs/handoff.md" type="button">Open current work <span aria-hidden="true">↗</span></button></div><div class="next-layout"><div><div id="next-actions" class="action-list"></div><section class="mimus-panel" aria-labelledby="mimus-heading"><p class="eyebrow">APPLICATION</p><h3 id="mimus-heading">Local mimus</h3><div id="mimus-summary" class="prose"></div><button class="text-button" type="button" data-document="docs/mimus.md">Read application evidence <span aria-hidden="true">↗</span></button></section></div><aside><section class="side-panel"><div class="panel-title"><h3>Board test queue</h3><span id="queue-state" class="pill">Loading</span></div><p id="queue-note" class="secondary"></p><div id="queue-list"></div></section><section class="side-panel"><h3>Current constraints</h3><div id="blockers"></div></section></aside></div></section>
+    <section id="view-activity" aria-labelledby="activity-heading" hidden><div class="section-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h2 id="activity-heading">Changes in the project</h2></div><span id="branch-name" class="branch-name"></span></div><p id="git-note" class="secondary"></p><ol id="activity-list" class="activity-list"></ol><section class="source-section"><h3>Source records</h3><div id="sources" class="source-list"></div></section></section>
+    <aside class="performance-note" id="performance-note" hidden><span class="note-mark" aria-hidden="true">↳</span><div><strong>Performance work</strong><p id="performance-copy"></p></div></aside>
+    <footer class="page-footer"><span>Built from the project records. Read-only.</span><span id="source-time">Refreshes every 30 seconds while visible.</span></footer>
+  </main>
+  <dialog id="document-dialog" aria-labelledby="document-title"><div class="dialog-header"><div><p class="eyebrow">PROJECT RECORD · READ-ONLY</p><h2 id="document-title">Document</h2></div><button id="close-document" class="close-button" type="button" aria-label="Close document">×</button></div><div class="document-toolbar"><span id="document-path"></span><label><input id="raw-source" type="checkbox"> Show Markdown source</label></div><div id="document-body" class="document-body prose" aria-busy="false"></div></dialog>
+</body>
+</html>
