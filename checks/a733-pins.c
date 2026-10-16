@@ -178,10 +178,10 @@ int main(void)
     }
     assert(winners==1); assert(!pthread_barrier_destroy(&start_barrier));
     assert(!a733_pins_native_address(0x02000110,1));
-    assert(!a733_pins_native_address(0x02000150,1));
+    assert(a733_pins_native_address(0x02000150,1));
     assert(!a733_pins_native_address(0x02000048,1));
     assert(!a733_pins_native_address(0x02000101,0));
-    assert(!a733_pins_native_address(0x02000200,1));
+    assert(a733_pins_native_address(0x02000200,1));
     puts("Pin ownership: shared-word preservation, stale/conflicting leases, concurrent claims, deadlines, and retained failures passed");
     return 0;
 }

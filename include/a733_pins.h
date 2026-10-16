@@ -6,6 +6,13 @@
 #define A733_PINS_PB_MASK UINT32_C(0x1f0) /* PB4..PB8 only. */
 #define A733_PINS_BASE UINT32_C(0x02000000)
 #define A733_PINS_COUNT 5u
+#define A733_PIN_BANKS 13u
+#define A733_PIN_MAX_REQUESTS 32u
+#define A733_PINS_R_BASE UINT32_C(0x07025000)
+/* Letter indices: B=1 through M=12. A is not implemented. */
+enum a733_pin_bank { A733_PIN_B=1, A733_PIN_C, A733_PIN_D, A733_PIN_E,
+    A733_PIN_F, A733_PIN_G, A733_PIN_H, A733_PIN_I, A733_PIN_J, A733_PIN_K,
+    A733_PIN_L, A733_PIN_M };
 
 enum a733_pins_result {
     A733_PINS_OK, A733_PINS_BUSY, A733_PINS_CONFLICT, A733_PINS_INVALID,
@@ -13,8 +20,8 @@ enum a733_pins_result {
 };
 /* Raw source-defined codes. Pull: 0 off, 1 up, 2 down; drive: 0..3.
  * Drive labels in the reference are 10/20/30/40 mA, not electrical guarantees.
- * Supported functions are pin-specific input/alternate/disabled modes.
- * GPIO output (1) and external interrupt (14) are outside this component. */
+ * Legacy PB functions accept pin-specific input/alternate/disabled modes.
+ * The bank-qualified API also implements GPIO output (1) and interrupt (14). */
 struct a733_pin_config { uint8_t function, pull, drive; };
 struct a733_pin_request {
     unsigned pb_pin;
@@ -45,16 +52,38 @@ struct a733_pins_operations {
 struct a733_pin_state {
     uint64_t id, owner;
     struct a733_pin_config initial, current;
+    uint8_t initial_output, current_output, initial_irq, current_irq;
+    uint8_t irq_enabled, banked;
 };
 /* Implementation state; zero-initialize once and never modify initialized
  * fields. All managers sharing these pins must be the SAME instance. */
+/* The platform authenticates this complete bank-latch record before init.
+ * It excludes all other DATA writers for the manager lifetime. Values sampled
+ * while pins are inputs or alternate functions cannot establish this record. */
+struct a733_pin_latch_handoff {
+    uint64_t identity, owner;
+    uint32_t known_mask, value;
+};
+struct a733_pin_handoff {
+    uint32_t authorized[A733_PIN_BANKS];
+    /* Exclusive authority over bank-wide interrupt debounce; all interrupt
+     * clients in each authorized bank must use this manager. */
+    uint32_t irq_banks;
+    struct a733_pin_latch_handoff latch[2]; /* L, M; zero means unavailable. */
+};
+struct a733_pin_bank_state {
+    uint32_t irq_pins, initial_debounce, debounce;
+    uint32_t latch;
+};
 struct a733_pins {
     struct a733_pins_operations operations;
     void *cookie;
     uint64_t next_id, last_time;
     uint32_t authorized_pb_mask;
     unsigned initialized, failed;
-    struct a733_pin_state pins[A733_PINS_COUNT];
+    struct a733_pin_handoff handoff;
+    struct a733_pin_bank_state banks[A733_PIN_BANKS];
+    struct a733_pin_state pins[A733_PIN_BANKS][32];
 };
 /* No MMIO. authorized_pb_mask is an explicit platform handoff of unowned pins,
  * not a discovery of unused pins. PIO clock, bank voltage, stable mappings,
@@ -80,4 +109,55 @@ enum a733_pins_result a733_pins_read_inputs(struct a733_pins *,
 /* Read ownership under the shared lock, including after RECOVERY; no MMIO. */
 enum a733_pins_result a733_pins_held(struct a733_pins *,
     const struct a733_pin_lease *, int *held, uint64_t deadline);
+/* Bank-qualified API. Legacy PB functions above keep their input/alternate/
+ * disabled admission. Both APIs share this manager, lock, and token sequence.
+ * The enlarged manager is a source-compatible, not binary-compatible, change:
+ * rebuild every embedding consumer and link a733_pin_tables.c. */
+struct a733_pin_request_banked {
+    unsigned bank, pin;
+    struct a733_pin_config expected, desired;
+    uint8_t output_value; /* 0/1, only for desired GPIO output (function 1). */
+    uint8_t irq_mode; /* 0 rising, 1 falling, 2 high, 3 low, 4 both edges. */
+    uint8_t debounce; /* bit 0: 0 RTC32K, 1 SYS24M; bits 6:4: divide by 2^n. */
+};
+struct a733_pin_lease_banked {
+    uint64_t id, owner;
+    uint32_t masks[A733_PIN_BANKS];
+};
+struct a733_pin_descriptor {
+    uint16_t functions;
+    /* 1..7 UART0..6, 8..9 S_UART0..1; zero means no UART route. */
+    uint8_t uart[16];
+    /* Explicit manual-backed route set; zero refuses an unproven UART route. */
+    uint8_t uart_group[16];
+};
+const struct a733_pin_descriptor *a733_pin_descriptor(unsigned bank, unsigned pin);
+uint32_t a733_pin_bank_mask(unsigned bank);
+int a733_pin_fields_banked(unsigned bank, unsigned pin, struct a733_pin_fields *);
+int a733_pin_config_valid_banked(unsigned bank, unsigned pin, struct a733_pin_config);
+int a733_pins_init_banks(struct a733_pins *, const struct a733_pins_operations *,
+    void *, const struct a733_pin_handoff *);
+enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *, uint64_t owner,
+    const struct a733_pin_request_banked *, size_t, struct a733_pin_lease_banked *, uint64_t deadline);
+enum a733_pins_result a733_pins_release_banked(struct a733_pins *,
+    struct a733_pin_lease_banked *, unsigned users_quiescent, uint64_t deadline);
+enum a733_pins_result a733_pins_read_inputs_banked(struct a733_pins *,
+    const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask,
+    uint32_t *levels, uint64_t deadline);
+enum a733_pins_result a733_pins_write_outputs(struct a733_pins *,
+    const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask,
+    uint32_t levels, uint64_t deadline);
+/* IRQ acquisition leaves lines masked. Bind the corresponding GIC handler
+ * before enabling. Pending reads and W1C acknowledge touch only leased EINTs.
+ * Release requires the handler and peripheral producers to be quiescent. */
+enum a733_pins_result a733_pins_irq_enable(struct a733_pins *,
+    const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask,
+    unsigned enable, uint64_t deadline);
+enum a733_pins_result a733_pins_irq_pending(struct a733_pins *,
+    const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask,
+    uint32_t *pending, uint64_t deadline);
+enum a733_pins_result a733_pins_irq_ack(struct a733_pins *,
+    const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask, uint64_t deadline);
+enum a733_pins_result a733_pins_held_banked(struct a733_pins *,
+    const struct a733_pin_lease_banked *, int *held, uint64_t deadline);
 #endif

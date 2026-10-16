@@ -116,5 +116,5 @@ file.write_text(notice+stubs+structure+'\nstruct sunxi_pinctrl_hw_info sunxi_pin
                 f'static const unsigned max_drive={hi};\n'+main)
 binary=args.build_dir/'reference'
 subprocess.run(['cc','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-                '-I'+str(root/'include'),str(file),str(root/'drivers/pinctrl/a733_pins.c'),'-o',str(binary)],check=True)
+                '-I'+str(root/'include'),str(file),str(root/'drivers/pinctrl/a733_pins.c'),str(root/'drivers/pinctrl/a733_pin_tables.c'),'-o',str(binary)],check=True)
 subprocess.run([str(binary)],check=True)
