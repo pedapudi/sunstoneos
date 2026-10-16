@@ -31,7 +31,8 @@ The RTC flag is volatile boot state; this operation does not program storage.
 
 The RTC flag is handled by boot0. It does not establish recovery independent
 of the installed storage bootloader. Register reads now pass on the physical
-board. Watchdog programming, timer expiry, reset scope, and register retention
+board. Reset-policy programming and restoration also pass the configuration
+trial below. Timer enabling, expiry, reset scope, and register retention
 remain untested. Treat DDR as uninitialized after
 watchdog reset. The existing warm CPU-reset loader cannot establish this reset
 path by reading an old DDR result.
@@ -56,8 +57,8 @@ The captured board ROM contains another route that executes before storage boot:
 
 The reference bootloader names the block at `0x07050000` CPUIDLE. Setting its
 CPU0 redirect entry to `0x20` is a candidate for recovery without executing
-boot0. The flag and entry must survive the selected reset. Reads of these
-registers pass; write behavior, retention, and reset entry remain untested.
+boot0. The flag and entry must survive the selected reset. Reads, writes, and
+restoration pass; retention and reset entry remain untested.
 The separate dispatch flag must also be inactive; it can override this route.
 
 [checks/a733-rom-recovery.py](../checks/a733-rom-recovery.py) accepts pinned
@@ -171,14 +172,14 @@ check contacts no USB device.
 
 ## Required next validation
 
-ROM communication is restored. Build the isolated
-watchdog diagnostic entirely in SRAM, with saved host state and RTC results;
-it must not require DDR to report a system reset. Review ownership and preserve
-the original RTC values before using them for results.
+ROM communication is restored, and the SRAM configuration trial below passes.
+Extend the diagnostic for expiry with saved host state and results independent
+of DDR. Review ownership and preserve original RTC values before using them
+for results.
 
 First establish a reset destination that cannot execute unknown storage code.
-Then test watchdog configuration and disarming with register readback, followed
-by expiry with CPU timer recovery disabled. Verify elapsed time, a new ROM
+Then test timer enabling and disarming, followed by expiry with CPU timer
+recovery disabled. Verify elapsed time, a new ROM
 instance, automatic access, and the retained result. Reinitialize DDR before
 resuming normal probes. Integrate watchdog arming before risky peripheral access
 only after the physical reset path passes.
@@ -187,3 +188,75 @@ The [pinned sources](sources.md) provide the register references: kernel
 `bsp/drivers/watchdog/sunxi_wdt.c` uses the `wdt-v103` layout; bootloader
 `arch/arm/mach-sunxi/board_sun60iw2.c` supplies reset-output configuration;
 `arch/arm/mach-sunxi/rtc.c` supplies the FEL flag and RTC index.
+
+## SRAM configuration and restoration pass on hardware
+
+The [ROM-return helper](../drivers/watchdog/a733_rom_return.c) prepares CPU0
+redirection to ROM entry `0x20`. It refuses an active watchdog or an existing
+redirect/alternate-dispatch owner. It verifies the entry before activating the
+flag. Restoration refuses an active watchdog, clears and verifies the flag,
+then restores the original entry. Failed restoration retains the context.
+Callers need exclusive ownership, a zero-initialized context, and a verified
+ROM identity. This helper does not establish reset retention.
+
+The [SRAM diagnostic](../checks/a733-watchdog-configuration.c) exercises this
+helper and the keyed watchdog configuration/output registers. It never writes
+the watchdog enable or feed register. The entry wrapper preserves the FEL
+caller registers, stack pointer, and CPSR, using a private 4 KiB SRAM stack.
+The linked image is 832 bytes with no static data, BSS, or undefined symbols.
+Its SHA-256 is
+`01a47f9bd1cc3c61353c988f0b34a9168d3311db591ba63ddd9b538009dd09eb`.
+The helper also builds for AArch64: 264 text bytes, no data or BSS.
+
+The [compiled-image check](../checks/watchdog-configuration.py) passes twelve
+cases covering restoration, invalid requests, existing owners, ignored writes,
+failed restoration, and a watchdog becoming active before restoration. It
+checks caller state, private-stack guards, redirect write ordering, and the
+absence of writes to watchdog enable/feed registers. An initial wrapper restored
+the return address through PC but left LR changed; the final wrapper restores
+LR explicitly. Only the affected wrapper and focused model were rebuilt or
+rerun for that correction.
+
+One [physical configuration run](../tools/check-watchdog-configuration.py)
+passed on USB instance `003:064`. The runner pins the image, FEL tool, and
+physical ROM capture; it compares the reset prefix before execution. It saves
+registers and SRAM, checks the uploaded image and request, reads the diagnostic
+result, and compares restored registers and SRAM. The trial set the redirect
+to `0x20` and reset output to `2`, then restored the original zero redirect and
+output `0x1f`. Watchdog configuration remained `1`, and mode remained `0`.
+The alternate dispatch and bootloader RTC flag were unchanged. No reset,
+storage access, or performance measurement occurred.
+
+Raw build commands, image, model result, transaction log, backups, readbacks,
+and source hashes are under
+`~/.cache/sunstoneos/evidence/watchdog-configuration-20261016-085706/`.
+These results do not qualify timer enabling, feeding, expiry, reset retention,
+or autonomous recovery from a peripheral bus stall.
+
+Build the isolated diagnostic from the worktree:
+
+```sh
+probe_build="$HOME/.cache/sunstoneos/build/watchdog-configuration"
+mkdir -p "$probe_build"
+probe_flags=(--target=arm-none-eabi -march=armv8-a -marm -mfloat-abi=soft
+  -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables
+  -fno-asynchronous-unwind-tables -Os -g -Wall -Wextra -Werror
+  -Iinclude -Iplatform/a733)
+clang "${probe_flags[@]}" -c checks/a733-watchdog-configuration.S -o "$probe_build/entry.o"
+clang "${probe_flags[@]}" -c checks/a733-watchdog-configuration.c -o "$probe_build/probe.o"
+clang "${probe_flags[@]}" -c drivers/watchdog/a733_rom_return.c -o "$probe_build/return.o"
+"$HOME/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld" \
+  -T checks/a733-watchdog-configuration.ld "$probe_build/entry.o" \
+  "$probe_build/probe.o" "$probe_build/return.o" -o "$probe_build/probe.elf"
+/usr/lib/llvm-21/bin/llvm-objcopy -O binary "$probe_build/probe.elf" "$probe_build/probe.bin"
+```
+
+The physical runner is intentionally pinned to the checked image. A changed
+image requires review and focused validation before updating its pin. Reuse
+the completed run while its relevant inputs remain unchanged:
+
+```sh
+python3 tools/check-watchdog-configuration.py \
+  --fel "$HOME/.cache/sunstoneos/build/sunxi-a733/sunxi-fel" \
+  --rom "$HOME/.cache/sunstoneos/evidence/rom-copy-20261016-084055/physical-rom.bin"
+```

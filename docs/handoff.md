@@ -105,7 +105,8 @@ times out after applying the reference clock-mode setting. Population and power
 remain unconfirmed. Pin/clock restoration and automatic ROM return passed.
 The [PMIC reader](power.md) identifies AXP8191 and reads enabled UFS rail settings.
 UFS initialization then failed to return to ROM. The [watchdog driver](watchdog.md)
-is prepared and passes host checks, but independent hardware reset remains untested.
+passes host checks and a physical SRAM configuration/restoration trial.
+Independent hardware reset remains untested.
 The captured board ROM and an instruction-model check identify a direct FEL
 redirect and a boot-input path before storage boot. The watchdog's RTC flag is
 handled by boot0 and does not establish storage-independent recovery. Register
@@ -130,7 +131,10 @@ reattaching USB, with a microSD card inserted and no button held. Preserve that
 card. No watchdog was armed and no reset was issued.
 The failed UFS instance `003:063` remains quarantined. DDR must be reinitialized;
 do not reuse previous RAM assets or signatures.
-No new peripheral probe may run before independent watchdog recovery passes.
+The [SRAM configuration trial](watchdog.md) now verifies ROM-redirect and
+watchdog reset-policy writes with complete register/workspace restoration.
+It never enables the timer. Timer enabling, expiry, and reset retention remain
+unqualified. No new peripheral probe may run before independent watchdog recovery passes.
 The installed
 [session access rule](../tools/README.md) grants access after reconnects on
 physical port `3-1`. Kernel and native USB checks regained access automatically.
@@ -201,7 +205,8 @@ the tool hash and recovery evidence in the application document.
 
 1. Establish a reset destination that cannot
    execute unknown storage code, then qualify the prepared hardware watchdog
-   with an SRAM expiry test. The ROM redirect candidate and its unresolved
+   with an SRAM expiry test. Reuse the passed SRAM configuration/restoration
+   evidence. The ROM redirect candidate and its unresolved
    retention requirements are in [watchdog.md](watchdog.md).
    Integrate recovery before further peripheral access.
    Resume UFS with the corrected capability-read ordering only after recovery
@@ -210,15 +215,14 @@ the tool hash and recovery evidence in the application document.
    Establish storage boot and recovery before overwriting existing contents.
 2. Extend USB with interrupt delivery, cold clock/PHY setup, and remaining roles.
    Preserve independent task and host deadlines during controller work.
-3. Physically validate paced replay after recovery qualification, then continue
-   matrix optimization. Add worker cores
+3. Physically validate paced replay after recovery qualification. Add worker cores
    with change-dependent parity checks. Keep accelerator and remaining hardware
    work active independently of the recorded-audio milestone.
 4. Extend CPU and memory support to secondary cores, usable capacity, protection,
    and coherence, with checks selected from each change. The SMP emulator target
    now passes migration and register-state checks. The separate C/C++ runtime
    passes concurrent library checks. Mimus now passes two-core reference parity;
-   extend matrix-kernel parallelization and qualify physical workers. Task-deletion
+   qualify all physical workers. Task-deletion
    cleanup, interrupt nesting, and physical startup remain outstanding.
    Current evidence is in [smp.md](smp.md), [smp-runtime.md](smp-runtime.md),
    and [mimus-smp.md](mimus-smp.md).

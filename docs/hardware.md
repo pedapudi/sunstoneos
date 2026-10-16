@@ -29,6 +29,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
+  A [physical SRAM trial](watchdog.md) also passes ROM-redirect and watchdog
+  reset-policy programming/restoration with the timer disabled. Timer enabling,
+  expiry, and reset retention remain unqualified.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits. Rate changes, regulator control,
