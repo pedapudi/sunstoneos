@@ -3,7 +3,9 @@
 The native UART controller implements bounded configuration, FIFO receive and
 transmit, automatic RTS/CTS flow control, line-error reporting and interrupt
 service. Host checks and an AArch64 compile pass. Physical serial operation,
-Bluetooth HCI transport and complete platform resource binding remain unqualified.
+Bluetooth HCI transport and platform resource binding remain unqualified on hardware.
+The [platform binding](uart-platform.md) implements real clock/pin ownership,
+local gate/reset control and a native adapter for task-polled operation.
 This document is for driver and platform developers.
 
 ## Controller profiles follow the manual
@@ -95,7 +97,7 @@ The platform must provide the following prerequisites:
   reset and a quiescent peer. Preserve every other user's shared clock lease.
 - Accessible Device mappings for the selected register range, ordered callbacks
   and sufficient privilege for those accesses. The controller does not alter
-  translation tables or install a native memory-mapped adapter.
+  translation tables; the platform binding supplies a native memory-mapped adapter.
 - Serialized task and interrupt access. An interrupt handler must not wait on a
   task-held blocking mutex. GIC configuration, acknowledgement, masking and
   synchronization remain external.
@@ -141,7 +143,7 @@ The controller compiles as freestanding AArch64 C.
 
 Evidence and exact inputs are under
 `~/.cache/sunstoneos/evidence/uart-20261016/`. Physical qualification requires
-independent recovery, actual resource and GIC bindings, a reference serial peer,
+independent recovery, authenticated platform admission, a reference serial peer,
 flow-control wiring and a coordinator-owned board test. DMA, RS-485, IrDA,
 nine-bit modes, runtime format changes and suspend/resume remain required
 controller extensions; they are outside the implemented FIFO path.
