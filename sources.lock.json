@@ -1294,5 +1294,355 @@
     "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/docs/design/cpu-specific-build-macros.rst",
     "sha256": "bdeb09db084177087678db8388743ff0c4d4e13dfb610ff85aabb1def3a25cb8",
     "archive": "cpu-coherence/docs/design/cpu-specific-build-macros.rst"
+  },
+  "a733-sunxi-uart-ng-core-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng-core.c",
+    "archive": "uart/sunxi-uart-ng-core.c",
+    "sha256": "29237c6c3497c6f1dfd7b850d7b8596030e1d7d99a728cff79436ec1fb084fda",
+    "git_blob": "23df5642543b19ea1d721a0124ba89d7a93f9a3e"
+  },
+  "a733-sunxi-uart-ng-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng.h",
+    "archive": "uart/sunxi-uart-ng.h",
+    "sha256": "20d584972c8d32a2f48f19af15a182f371571be16dc497cbd6a12cd88747c84a",
+    "git_blob": "5cb96c16d08806afa70d85d24d31f07b68756998"
+  },
+  "display-de-de_top-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_top.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_top.c",
+    "sha256": "19aacddfaa41e73127977580103244da76539e82d0fe4b949b9c859d622b895d"
+  },
+  "display-de-de_top-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_top.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_top.h",
+    "sha256": "b2649f97c524db7533a33766d60cbb3a51f74df20b49ffcb2bd49dcf9cd8080c"
+  },
+  "display-de-de_channel-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_channel.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_channel.c",
+    "sha256": "7b5f9f2b0db3bf9632d0d1bf9456b5a0ffb65cbd81b32bddb6264b6244ab0636"
+  },
+  "display-de-de_channel-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_channel.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_channel.h",
+    "sha256": "9aaf1df124c1944ed0f3e7404d6154d8009e0f6df17b6e1efc8eed74f054d27a"
+  },
+  "display-de-de_backend-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_backend.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_backend.c",
+    "sha256": "925d6c0290b8a89f7722deaceb1660d4adfe0afd6d2355d8face509b6f22c4af"
+  },
+  "display-de-de_frontend-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_frontend.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_frontend.c",
+    "sha256": "2fa1cbc80fb383bde92e73b7867e9c11af5843cc20014cc0dea33bff3ee0a5c9"
+  },
+  "display-de-ovl-de_ovl-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl.c",
+    "sha256": "2241dda24c6824442178a7536ea79ea47dfa24bf52dad645483c293ed0cf17a4"
+  },
+  "display-de-ovl-de_ovl_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_type.h",
+    "sha256": "2f14b553d3280e3fd83d87e4d57c3880449d76832168547a0c7ba724933c0fe3"
+  },
+  "display-de-ovl-de_ovl_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_platform.c",
+    "sha256": "56b91d7038e63fa7108e042097b72bf67166688de1d2c4c005b63f006bbc3d0b"
+  },
+  "display-de-ovl-de_ovl_platform-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_platform.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl_platform.h",
+    "sha256": "f8a0f0f2b8ab2eee90866d4e4928dd8d129fb92f7833a367b16cace91814fd75"
+  },
+  "display-de-scaler-de_scaler-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler.c",
+    "sha256": "0194efea5796a8445ea6ad7463626959d64812ef3134109328eddc1853122ac0"
+  },
+  "display-de-scaler-de_scaler_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler_platform.c",
+    "sha256": "1855f2fe555810be4089c9a27a1f2518c843e79157a2e61104acf55edb902b1e"
+  },
+  "display-de-scaler-de_scaler_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/scaler/de_scaler_type.h",
+    "sha256": "c7158644c966a359c215af4522bdc0d70a6da54318a0474e6b45357048834b08"
+  },
+  "display-de-sunxi_de-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sunxi_de.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sunxi_de.c",
+    "sha256": "06053a177b4de847910678f080a11fa996971bdc2ac67b259a68f217a6195c04"
+  },
+  "display-de-sunxi_de-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sunxi_de.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sunxi_de.h",
+    "sha256": "24dc31058db034dbbb5162ddb124184099ceab98297eceb609f64387254ce855"
+  },
+  "display-de-bld-de_bld-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld.c",
+    "sha256": "629e50040c58c0a1afe237fe35743715a3a2576b8790a25a4c2d66719ffb42e5"
+  },
+  "display-de-bld-de_bld_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld_type.h",
+    "sha256": "570a532afe31c787f5fa56d0ca30b9d49d6856212c1fa86ef3e5742a83eda6d0"
+  },
+  "display-de-bld-de_bld_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/bld/de_bld_platform.c",
+    "sha256": "d388c83f8712377e0f7fcadef95fac19da2df691bb444b2fd0fa3578ae12cad7"
+  },
+  "display-de-de_base-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_base.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_base.h",
+    "sha256": "7379f0913edc2f5704d714a67c7e46923000476d5b30ceead0c54dddd733e85b"
+  },
+  "display-de-de_frontend-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_frontend.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_frontend.h",
+    "sha256": "5f778785ef90417ad71cca67fbe118659277513c0b1e1a60bd0c0db452ff6f1e"
+  },
+  "display-de-de_backend-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_backend.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/de_backend.h",
+    "sha256": "bb350767dc4dadf8d620c484d70ac897acde63da4881a762bbdc81de6f451688"
+  },
+  "display-de-csc-de_csc_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc_platform.c",
+    "sha256": "9fcc9be3056127477f4a35854c2a8040bb9f17fc251e33114fdaae344ff7e2f4"
+  },
+  "display-de-csc-de_csc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc.c",
+    "sha256": "43852dc3ce323cf5e9b89c880932164d41c56d0f9d5b0a767347b3c152dd434f"
+  },
+  "display-de-csc-de_csc_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/csc/de_csc_type.h",
+    "sha256": "77d1563b3ccb4e5859a2832c6e8e67a76c2e03a8eaa92e0ce8a39dbd8dbd5a19"
+  },
+  "display-de-gamma-de_gamma_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma_platform.c",
+    "sha256": "9794393fb92d048fecb76fe870f7e569228d4ecc0b02892b930dada143534045"
+  },
+  "display-de-gamma-de_gamma-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma.c",
+    "sha256": "e830a4d026cab4bb1903233ec5b8e796d2db4fe268f173a79b80fb008ec46c75"
+  },
+  "display-de-gamma-de_gamma_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/gamma/de_gamma_type.h",
+    "sha256": "0ce6f69a33a1f539e87e8efeffdd1a61ed4206918d0fa52ecd8959e0a5087008"
+  },
+  "display-de-dither-de_dither_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dither/de_dither_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dither/de_dither_platform.c",
+    "sha256": "2a660219aa5ae1c629b381e2d165220e1cca5e5f1eca658c28a3ba6c7ebc2781"
+  },
+  "display-de-dither-de_dither-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dither/de_dither.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dither/de_dither.c",
+    "sha256": "98dfe587dafcb7aa05b26a7d1875fede6f2d37bac0eb11acb972370357d14de7"
+  },
+  "display-de-crc-de_crc_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc_platform.c",
+    "sha256": "e859aaebe471bca1dce456f1424c993c228caf20b67cc36a33d385f69f16b134"
+  },
+  "display-de-cdc-de_cdc_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/cdc/de_cdc_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/cdc/de_cdc_platform.c",
+    "sha256": "5dc968d431813732b05d0127147b255b32760e8610d8e1d1a7ad24e52d85ded7"
+  },
+  "display-de-snr-de_snr_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/snr/de_snr_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/snr/de_snr_platform.c",
+    "sha256": "999e7c1d2193bb414efdef9c9904efd7ec16ff0101f0cf2898df16abb6260e5c"
+  },
+  "display-de-sharp-de_sharp_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sharp/de_sharp_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/sharp/de_sharp_platform.c",
+    "sha256": "5d395140da7b8e34cd4cdb4cce43881ea3f27ef18abc8e1fd57322d775e9d716"
+  },
+  "display-de-fcm-de_fcm_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/fcm/de_fcm_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/fcm/de_fcm_platform.c",
+    "sha256": "21bd978273354fcb0b2385a594d3db66a59bc822e95d468080c1c292ec74dd80"
+  },
+  "display-de-dci-de_dci_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dci/de_dci_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dci/de_dci_platform.c",
+    "sha256": "77a3a687cfde07fef624041a9cbcfcb2da98295a316778f1e7ffa9293eff9165"
+  },
+  "display-de-dlc-de_dlc_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dlc/de_dlc_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/dlc/de_dlc_platform.c",
+    "sha256": "e0b0682450f6a892aba6049fe80c63e1e77b1b1d44f6172cedc1dae2276539c6"
+  },
+  "display-de-afbd-de_fbd_atw-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/afbd/de_fbd_atw.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/afbd/de_fbd_atw.c",
+    "sha256": "18984661fe61eb200458c0f00cf67c594c688220857651a024f2dfbf878baa2c"
+  },
+  "display-de-tfbd-de_tfbd-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/tfbd/de_tfbd.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/tfbd/de_tfbd.c",
+    "sha256": "329ab3fa516f202863f013ea4e43ac985c211dbc33a6339b26a9a742c23d69ec"
+  },
+  "display-de-deband-de_deband_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/deband/de_deband_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/deband/de_deband_platform.c",
+    "sha256": "ff00357f20e3dda1ed49157059a00175ed87822c8e8ad2a73f95bc3779d09bd4"
+  },
+  "display-de-deband-de_deband-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/deband/de_deband.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/deband/de_deband.c",
+    "sha256": "d055d84fa249c2da273e3695d65ff98e3b8615e263133c8aabad7687fdfd2c61"
+  },
+  "display-de-smbl-de_smbl-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/smbl/de_smbl.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/smbl/de_smbl.c",
+    "sha256": "c2ded4b78dbc01bd7a414dabf2b55f27e4cd798e7896a16dbe4f2b9bbadf998c"
+  },
+  "display-de-smbl-de_smbl_platform-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/smbl/de_smbl_platform.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/smbl/de_smbl_platform.c",
+    "sha256": "b63b97e91aa769fd0d9bd91bed0f93b7ea5a3374d6750050964c887c07c6295e"
+  },
+  "display-de-crc-de_crc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc.c",
+    "sha256": "11688c6767b47e0b9b0cd042b4e90231e16b60b946984ca6c3a6bd440f9e509d"
+  },
+  "display-de-crc-de_crc_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/crc/de_crc_type.h",
+    "sha256": "703587ae13cf5baf55b3b01ec236f91d61d29c86e7d0c2ff4a09ae9e24fb586f"
+  },
+  "display-de-ovl-de_ovl-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_de/ovl/de_ovl.h",
+    "sha256": "96ff543f9b328aa6915f2016eb85c8e9742cb6daf98969a15b704dc4988df8f6"
+  },
+  "radio-data-ipc_shared-h": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/ipc_shared.h",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "b5ba7dfa5b1cad22edfecc35b0a52e91c6d3e9568ecf2070115889f6da0b1111",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/ipc_shared.h"
+  },
+  "radio-data-rwnx_rx-h": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_rx.h",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "4e9322ae9da8bd7e41da60104e3760b3ee822ff421635242898507e9f0d72703",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_rx.h"
+  },
+  "radio-data-rwnx_tx-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_tx.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "900f56ddebcad3a52721860f6c167e75f40a48730a8104f6bbb9d4a17b8e31e4",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_tx.c"
+  },
+  "radio-data-rwnx_rx-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_rx.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "a3bfd89f7f56d6eecadacd469d3ee31631b1194f114b308695d8e19b7c39484c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_rx.c"
+  },
+  "radio-data-aicwf_sdio-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_sdio.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "2d4bd746a042c521237fd23bc55c5b452e25f563ab3592385c5b7671d94287a4",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/aicwf_sdio.c"
+  },
+  "radio-data-sdio_host-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/sdio_host.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "fd9639318b326bac4969bc969eca40d1895b2a9825b0fbc5cd3033bccce08435",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/sdio_host.c"
+  },
+  "radio-data-hal_desc-h": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/hal_desc.h",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "ac19cf6a29174a4db81b0662d110914b1a03dd5746d7b69f37ee0cf4e51bc39e",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/hal_desc.h"
+  },
+  "radio-data-lmac_mac-h": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/lmac_mac.h",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "90dae163c4350a7786194c4b1f12f7e1d7012cdf1ffda683ff6f116d72bcddce",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/lmac_mac.h"
+  },
+  "radio-data-makefile": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/Makefile",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "447e4982d090a6587ef1c321eb6450c8e683a71c204acec3e9df34fc57bbcd03",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/Makefile"
+  },
+  "mmc-core-sd-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sd.c",
+    "sha256": "2d522377ea4ea46fa01f23fdd9e5e04d7756dd51cbb2b6031aa8fe7e13796c07",
+    "archive": "mmc-read/linux-sd.c"
+  },
+  "mmc-core-mmc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/mmc.c",
+    "sha256": "4bdca067049f6813b07034cd83e8d9880992a0a01a1292fe499dcd34efcaf2e2",
+    "archive": "mmc-read/linux-mmc.c"
   }
 }

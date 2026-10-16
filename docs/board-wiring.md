@@ -99,6 +99,14 @@ SDIO; Bluetooth has UART data and RTS/CTS, plus wake/reset signals and the
 PCM bus. Firmware identification and supported voice transport still require
 investigation. PCM wiring alone does not establish headset audio support.
 
+Sheet 18 exposes UART1 TX/RX on PE12/PE13 at header pins 29/31. Bluetooth
+uses UART1 through PG6–PG9, including RTS/CTS. These are alternative pin routes
+of one controller; they cannot serve independent serial clients concurrently.
+UART2 PB0/PB1 appears at header pins 11/13. UART6 PE0/PE1 shares header pins
+24/23 with SPI3 chip select 0 and clock. The [UART driver record](uart.md)
+documents controller capabilities and unresolved device-tree pin definitions.
+Actual board revision and electrical operation remain unverified.
+
 Sheet 13 routes four data lanes and one clock pair to each 22-pin camera
 connector. CAM1 uses MCSIA, I2C bus TWI11, and control nets PE5/PE6. CAM2 uses
 MCSIB, TWI9, and PE9/PE10. Both receive the `VCC_3V3_CSI` supply.

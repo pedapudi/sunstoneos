@@ -50,13 +50,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits. Rate changes, regulator control,
   and thermal management remain planned.
-- Storage: **implemented** bounded eMMC identification probe. Controller access,
-  pin/clock restoration, and ROM return are **tested**; CMD1 receives no response.
-  [Storage evidence](storage.md) records this negative result. No media device
-  is identified, and block access remains planned.
+- Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
+  for the 1-bit legacy-speed profile. Host checks and source comparisons cover capacity, full-range
+  addressing, automatic stop, completion/status and retained partial buffers;
+  native compilation passes. Controller access, pin/clock restoration, and ROM
+  return are **tested** in the earlier eMMC probe; CMD1 received no response.
+  [Physical storage evidence](storage.md) records that negative result. No media
+  device is physically identified. Native platform binding, physical reads,
+  writes, faster modes, backup and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. Regulator writes and full bus operation remain unqualified.
+- UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
+  always-on UARTs, with format planning, flow control where supported, interrupts,
+  error reporting and transmit drain. Host checks, source comparisons and native compilation
+  pass. Unread byte errors are preserved when receive capacity is exhausted.
+  Clock/pin/GIC binding, DMA, advanced modes and physical serial operation remain
+  outstanding. Bluetooth and the header UART1 route share one controller.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
@@ -175,6 +185,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and transaction-drain protocol, multicore addressing, repeated-job resource
   disposal and actual GPU execution remain outstanding.
 
+- Display engine: **implemented** [immutable framebuffer scanout control](display-engine.md)
+  for XRGB8888 through one UI channel into DE1 and LCD1/DSI1. Host checks,
+  source comparisons and native compilation pass. Preparation defers producer enable;
+  stop and faults retain the framebuffer and resource leases. Memory reuse
+  requires independent drain evidence. Actual platform binding, physical scanout, live frame
+  updates, composition, additional formats and synchronization remain outstanding.
+
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
   compilation passes. The [PHY controller](dsi-phy.md) verifies inherited PLL
@@ -207,9 +224,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   host lifecycle checks pass. [Station association](radio-association.md) adds
   copied targets, explicit transmission authority and separate command/connection
   completion. Source and focused host checks pass. WPA2 remains security-pending;
-  unresolved roaming blocks replacement operations. Physical binding and silicon
-  identity, power/reset bindings, authentication/keys, data networking,
-  pairing and headset audio remain outstanding.
+  unresolved roaming blocks replacement operations. [Data transport](radio-data.md)
+  adds owned Ethernet packets, reserved transmit credits and EAPOL authentication
+  frames with firmware confirmations. Open-network access requires an explicit
+  association-bound authorization. Host checks, source comparisons and native compilation
+  pass. Encrypted, reordered and unsupported receive records remain retained.
+  Physical identity and platform binding, authentication/keys, secure receive,
+  network-stack integration, pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
@@ -220,7 +241,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   synchronization complete. Register comparisons and ownership checks pass.
   The [route controller](camera-route.md) configures pass-through ISP1 and
   unity-scale VIPP0, with exclusive shared-selector ownership. The receiver
-  now supports single-image mode. Host/source checks and native compilation
+  now supports single-image mode. Host checks, source comparisons and native compilation
   pass. The [shared analog controller](camera-platform.md) implements cold PHY
   startup with exclusive common-register ownership and calibration readback.
   Source/model checks and native compilation pass. The [capture coordinator](camera-capture.md)

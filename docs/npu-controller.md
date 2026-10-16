@@ -22,7 +22,10 @@ The [privileged FreeRTOS service](npu-service.md) serializes every call. The
 [native adapter](npu-native.md) supplies register, clock, delay, barrier, and
 memory-publication callbacks and passes an emulator check. The service
 must establish power, clocks, reset ownership, and independent watchdog recovery
-before opening the controller. This platform integration remains unimplemented.
+before opening the controller. The [platform controller](npu-platform.md) and
+[startup adapter](npu-startup.md) implement resource acquisition and deferred
+service activation with model evidence. Physical platform qualification remains
+outstanding.
 A synchronous bus stall can prevent a software deadline from running; the
 independent watchdog requirement still applies.
 
@@ -171,7 +174,7 @@ cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-controller
 ```
 
-The next work is platform power/clock integration, model relocation, and command
-validation. Numerical inference and physical error recovery remain separate
-qualification requirements. No hardware
-request occurred during these checks.
+The [native assembler](nbg-assembly.md) now supplies relocation and command
+construction for the recorded model profiles. Complete command-memory admission,
+physical platform startup, numerical inference and error recovery remain
+outstanding. No hardware request occurred during these controller checks.
