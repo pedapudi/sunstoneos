@@ -38,19 +38,23 @@ void sunstone_net_stack_free(void *pointer)
     vPortFree(pointer);
     if(owned)atomic_store(&owned->disposed,1);
 }
-static void reply(struct sunstone_net *s,struct sunstone_net_pending *p,enum sunstone_net_result result,int code,const void *bytes,unsigned length,const struct freertos_sockaddr *peer)
+static void publish_reply(struct sunstone_net *s,struct sunstone_net_pending *p,struct sunstone_net_reply *r)
 {
-    if(result==SUNSTONE_NET_OK&&(TickType_t)(xTaskGetTickCount()-p->message.submitted)>=p->message.request.timeout){
-        result=SUNSTONE_NET_TIMEOUT;
+    if(r->result==SUNSTONE_NET_OK&&(TickType_t)(xTaskGetTickCount()-p->message.submitted)>=p->message.request.timeout){
+        r->result=SUNSTONE_NET_TIMEOUT;
         if(p->slot<SUNSTONE_NET_SOCKETS&&s->sockets[p->slot].socket&&
             p->message.request.operation!=SUNSTONE_NET_SEND&&p->message.request.operation!=SUNSTONE_NET_RECEIVE)
             s->sockets[p->slot].uncertain=1;
     }
+    if(xQueueSend(s->clients[p->message.client].reply_queue,r,0)!=pdPASS){atomic_store(&s->failed,1);aic8800_network_fault(&s->network);return;}
+    p->active=0;
+}
+static void reply(struct sunstone_net *s,struct sunstone_net_pending *p,enum sunstone_net_result result,int code,const void *bytes,unsigned length,const struct freertos_sockaddr *peer)
+{
     struct sunstone_net_reply r={.ticket=p->message.ticket,.handle=p->message.request.handle,.result=result,.stack_result=code,.bytes=(uint16_t)length};
     if(bytes&&length)memcpy(r.payload,bytes,length);
     if(peer){memcpy(r.address,&peer->sin_address.ulIP_IPv4,4);r.port=FreeRTOS_ntohs(peer->sin_port);}
-    if(xQueueSend(s->clients[p->message.client].reply_queue,&r,0)!=pdPASS){atomic_store(&s->failed,1);aic8800_network_fault(&s->network);return;}
-    p->active=0;
+    publish_reply(s,p,&r);
 }
 static struct freertos_sockaddr address(const uint8_t ip[4],uint16_t port)
 {
@@ -72,6 +76,12 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
         if(p->started&&p->slot<SUNSTONE_NET_SOCKETS&&r->operation!=SUNSTONE_NET_RECEIVE&&r->operation!=SUNSTONE_NET_SEND)
             s->sockets[p->slot].uncertain=1;
         reply(s,p,SUNSTONE_NET_TIMEOUT,0,NULL,0,NULL);return;
+    }
+    if(r->operation==SUNSTONE_NET_EVENT){
+        struct sunstone_net_reply result={.ticket=p->message.ticket,.result=SUNSTONE_NET_OK};
+        if(s->network.receive&&aic8800_dispatch_take_event(s->network.receive,&result.event))publish_reply(s,p,&result);
+        else if(atomic_load(&s->failed)||atomic_load(&s->network.failed))reply(s,p,SUNSTONE_NET_LINK_LOST,0,NULL,0,NULL);
+        return;
     }
     if(r->operation!=SUNSTONE_NET_CLOSE&&!aic8800_network_ready(&s->network)){
         if(atomic_load(&s->failed)||atomic_load(&s->network.failed)){reply(s,p,SUNSTONE_NET_LINK_LOST,0,NULL,0,NULL);return;}
@@ -174,7 +184,7 @@ int sunstone_net_activate(struct sunstone_net *s)
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
 {
     if(!s||!s->initialized||!independent(s,r,sizeof(*r))||!independent(s,ticket,sizeof(*ticket))||
-        !r->timeout||r->timeout>(TickType_t)(portMAX_DELAY/2)||r->operation>SUNSTONE_NET_CLOSE||r->bytes>SUNSTONE_NET_BYTES||
+        !r->timeout||r->timeout>(TickType_t)(portMAX_DELAY/2)||r->operation>SUNSTONE_NET_EVENT||r->bytes>SUNSTONE_NET_BYTES||
         ((r->operation==SUNSTONE_NET_SEND||r->operation==SUNSTONE_NET_RECEIVE)&&!r->bytes))return 0;
     int i=client(s);if(i<0)return 0;struct sunstone_net_client *c=&s->clients[i];
     if(c->pending||c->next_ticket==UINT64_MAX)return 0;

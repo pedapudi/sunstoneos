@@ -24,7 +24,7 @@ int aic8800_network_storage_valid(const void *p,size_t bytes,const struct aic880
     const struct aic8800_sdio_transport *t=c->transport;
     if(t->firmware)for(unsigned i=0;i<AIC8800_FIRMWARE_BLOBS;++i)
         if(!disjoint(p,bytes,t->firmware->config.blobs[i].data,t->firmware->config.blobs[i].bytes))return 0;
-    return disjoint(p,bytes,t,sizeof(*t))&&t->card&&disjoint(p,bytes,t->card,sizeof(*t->card))&&
+    return disjoint(p,bytes,t->receive_owner,t->receive_owner_bytes)&&disjoint(p,bytes,t,sizeof(*t))&&t->card&&disjoint(p,bytes,t->card,sizeof(*t->card))&&
         t->card->host&&disjoint(p,bytes,t->card->host,sizeof(*t->card->host))&&
         disjoint(p,bytes,t->data,sizeof(struct aic8800_data))&&disjoint(p,bytes,t->wifi,sizeof(struct aic8800_wifi))&&
         disjoint(p,bytes,t->security,sizeof(struct aic8800_security))&&disjoint(p,bytes,t->supplicant,sizeof(struct aic8800_supplicant))&&
@@ -86,6 +86,11 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
 {
     if(!n||!c||n->initialized||stack_owner||!aic8800_network_storage_valid(n,sizeof(*n),c)||!c->transport||!c->transport->wifi||!c->transport->data||
         !c->tx_timeout||!c->queue_timeout||!c->entropy_record||!c->random32||!c->sequence)return 0;
+    if(c->transport->receive_owner){
+        if(!c->dispatcher||c->transport->receive_owner!=c->dispatcher||
+            c->transport->receive_owner_bytes!=sizeof(*c->dispatcher)||!c->dispatcher->initialized||
+            c->dispatcher->faulted||c->dispatcher->entered||c->dispatcher->transport!=c->transport)return 0;
+    }else if(c->dispatcher)return 0;
     uint64_t generation=c->transport->wifi->association_generation;
     if(!generation||!authority_for(c->transport,generation)||
         c->transport->entered||c->transport->pending||c->transport->data_tx||c->transport->security_tx||
@@ -95,6 +100,11 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
     if(sizeof(*n)>UINTPTR_MAX-begin||sizeof(*c)>UINTPTR_MAX-end||
         (begin<end+sizeof(*c)&&end<begin+sizeof(*n)))return 0;
     memset(n,0,sizeof(*n));n->initialized=1;n->config=*c;n->generation=generation;
+    if(c->dispatcher)n->receive=c->dispatcher;
+    else{
+        if(!aic8800_dispatch_init(&n->local_dispatcher,c->transport)){aic8800_network_fault(n);return 0;}
+        n->receive=&n->local_dispatcher;
+    }
     n->tx=xQueueCreateStatic(AIC8800_NETWORK_TX_SLOTS,sizeof(struct aic8800_network_packet),n->tx_storage,&n->tx_queue);
     if(!n->tx){aic8800_network_fault(n);return 0;}
     n->interface=(NetworkInterface_t){.pcName="wifi",.pvArgument=n,.pfInitialise=link_status,.pfOutput=output,.pfGetPhyLinkStatus=link_status};
@@ -102,15 +112,15 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
     FreeRTOS_AddNetworkInterface(&n->interface);
     FreeRTOS_FillEndPoint(&n->interface,&n->endpoint,c->address,c->netmask,c->gateway,dns,c->transport->wifi->mac);
     stack_owner=n;atomic_store(&n->ready,1);
-    if(FreeRTOS_IPInit_Multi()!=pdPASS){aic8800_network_fault(n);return 0;}return 1;
+    if(FreeRTOS_IPInit_Multi()!=pdPASS){aic8800_network_fault(n);return 0;}n->stack_started=1;return 1;
 }
 void aic8800_network_poll(struct aic8800_network *n)
 {
     if(!n||!n->initialized)return;
     struct aic8800_sdio_transport *t=n->config.transport;
-    if(atomic_load(&n->failed)){if(!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
-    aic8800_transport_poll(t);
-    if(t->state==AIC8800_TRANSPORT_FAULT||!t->wifi||t->wifi->association_generation!=n->generation||
+    if(atomic_load(&n->failed)){if(n->stack_started&&!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
+    aic8800_dispatch_poll(n->receive);
+    if(n->receive->faulted||t->state==AIC8800_TRANSPORT_FAULT||!t->wifi||t->wifi->association_generation!=n->generation||
         t->wifi->link==AIC8800_WIFI_LINK_DOWN||t->wifi->link==AIC8800_WIFI_LINK_UNRESOLVED){aic8800_network_fault(n);return;}
     atomic_store(&n->ready,authority_for(t,n->generation));
     if(n->active&&t->data->state==AIC8800_DATA_DONE){
@@ -122,7 +132,7 @@ void aic8800_network_poll(struct aic8800_network *n)
     }
     if(t->held){
         struct aic8800_data_frame frame;
-        if(!aic8800_transport_peek_data(t,&frame)||frame.eapol)return; /* Other dispatcher retains raw/control ownership. */
+        if(!aic8800_dispatch_peek_data(n->receive,&frame))return; /* Other dispatcher retains raw/control ownership. */
         if(frame.generation!=n->generation){aic8800_network_fault(n);return;}
         NetworkBufferDescriptor_t *buffer=aic8800_network_ready(n)?pxGetNetworkBufferWithDescriptor(frame.bytes,0):NULL;
         if(buffer){
@@ -132,7 +142,7 @@ void aic8800_network_poll(struct aic8800_network *n)
             if(xSendEventStructToIPTask(&event,0)==pdPASS)++n->rx_packets;
             else{vReleaseNetworkBufferAndDescriptor(buffer);++n->rx_dropped;}
         }else ++n->rx_dropped;
-        if(!aic8800_transport_consume(t))aic8800_network_fault(n);
+        if(!aic8800_dispatch_consume_data(n->receive))aic8800_network_fault(n);
         return;
     }
     if(!n->owns_current&&xQueueReceive(n->tx,&n->current,0)==pdPASS)n->owns_current=1;

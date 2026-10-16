@@ -24,6 +24,7 @@ static int independent(const struct aic8800_sdio_transport *t, const void *p, si
     if (!span(p, n) || overlap(t, sizeof(*t), p, n) ||
         overlap(t->card, sizeof(*t->card), p, n) ||
         overlap(t->card->host, sizeof(*t->card->host), p, n)) return 0;
+    if (t->receive_owner && overlap(t->receive_owner,t->receive_owner_bytes,p,n)) return 0;
     if (t->security && overlap(t->security, sizeof(*t->security), p, n)) return 0;
     if (t->supplicant && overlap(t->supplicant, sizeof(*t->supplicant), p, n)) return 0;
     if (t->data && overlap(t->data, sizeof(*t->data), p, n)) return 0;
@@ -565,10 +566,10 @@ static void parse(struct aic8800_sdio_transport *t, uint64_t now)
         t->unrelated = r; t->held = 1;
     } else fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);
 }
-void aic8800_transport_poll(struct aic8800_sdio_transport *t)
+static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
 {
     uint64_t now;
-    if (!t || !t->initialized || t->entered ||
+    if (!t || !t->initialized || t->entered || t->receive_owner!=owner ||
         (t->state != AIC8800_TRANSPORT_SETUP && t->state != AIC8800_TRANSPORT_IDENTITY &&
          t->state != AIC8800_TRANSPORT_FIRMWARE && t->state != AIC8800_TRANSPORT_RUNTIME)) return;
     t->entered = 1;
@@ -599,10 +600,55 @@ int aic8800_transport_peek(const struct aic8800_sdio_transport *t, struct aic880
     if (!t || !t->initialized || t->entered || !t->held || !independent(t, out, sizeof(*out))) return 0;
     *out = t->unrelated; return 1;
 }
-int aic8800_transport_consume(struct aic8800_sdio_transport *t)
+static int consume_receive(struct aic8800_sdio_transport *t,const void *owner)
 {
-    if (!t || !t->initialized || t->entered || !t->held || t->state == AIC8800_TRANSPORT_FAULT) return 0;
+    if (!t || !t->initialized || t->entered || t->receive_owner!=owner || !t->held || t->state == AIC8800_TRANSPORT_FAULT) return 0;
+    uint64_t now;
+    if(owner){t->entered=1;if(!observe(t,&now)){t->entered=0;return 0;}}
     if (t->data) aic8800_data_consumed(t->data, t, t->unrelated.record);
     if (t->wifi) aic8800_wifi_consumed(t->wifi, t, t->unrelated.record);
-    t->cursor += t->unrelated.consumed; t->held = 0; return 1;
+    t->cursor += t->unrelated.consumed; t->held = 0;
+    if(owner){int ok=observe(t,&now);t->entered=0;return ok;}return 1;
+}
+
+void aic8800_transport_poll(struct aic8800_sdio_transport *t){poll_receive(t,NULL);}
+int aic8800_transport_consume(struct aic8800_sdio_transport *t){return consume_receive(t,NULL);}
+void aic8800_transport_poll_receive(struct aic8800_sdio_transport *t,const void *owner)
+{if(owner)poll_receive(t,owner);}
+int aic8800_transport_consume_receive(struct aic8800_sdio_transport *t,const void *owner)
+{return owner&&consume_receive(t,owner);}
+int aic8800_transport_claim_receive(struct aic8800_sdio_transport *t,const void *owner,size_t bytes)
+{
+    if(!t||!t->initialized||t->entered||t->receive_owner||t->state!=AIC8800_TRANSPORT_RUNTIME||
+        !bytes||!independent(t,owner,bytes)||t->pending||t->card->host->state!=SUNXI_SDIO_READY)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok){t->receive_owner=owner;t->receive_owner_bytes=bytes;}
+    t->entered=0;return ok;
+}
+int aic8800_transport_receive_view(const struct aic8800_sdio_transport *t,const void *owner,
+    const uint8_t **record,size_t *available)
+{
+    if(!t||!owner||t->receive_owner!=owner||t->entered||t->pending||t->held||
+        t->state!=AIC8800_TRANSPORT_RUNTIME||t->phase!=PARSE||t->cursor>=t->rx_bytes||
+        !independent(t,record,sizeof(*record))||!independent(t,available,sizeof(*available))||
+        overlap(record,sizeof(*record),available,sizeof(*available)))return 0;
+    *record=t->rx+t->cursor;*available=t->rx_bytes-t->cursor;return 1;
+}
+int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void *owner,
+    const uint8_t *record,size_t consumed)
+{
+    const uint8_t *current;size_t available;
+    if(!aic8800_transport_receive_view(t,owner,&current,&available)||record!=current||available<4)return 0;
+    size_t length=(size_t)record[0]|(size_t)record[1]<<8;
+    if(!length)return 0;
+    size_t expected=(record[2]&0x10)?4+((length+3)&~(size_t)3):((length+60+3)&~(size_t)3);
+    if(consumed!=expected||consumed>available)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok){t->cursor+=consumed;ok=observe(t,&now);}
+    t->entered=0;return ok;
+}
+void aic8800_transport_fault_receive(struct aic8800_sdio_transport *t,const void *owner)
+{
+    if(t&&owner&&t->receive_owner==owner&&!t->entered&&t->state==AIC8800_TRANSPORT_RUNTIME)
+        fail(t,AIC8800_TRANSPORT_MESSAGE_ERROR);
 }

@@ -9,7 +9,7 @@
 #define SUNSTONE_NET_BYTES 1472u
 #define SUNSTONE_NET_STACK_WORDS 4096u
 enum sunstone_net_operation { SUNSTONE_NET_OPEN_UDP,SUNSTONE_NET_OPEN_TCP,SUNSTONE_NET_CONNECT,
-    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE };
+    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE,SUNSTONE_NET_EVENT };
 enum sunstone_net_result { SUNSTONE_NET_OK,SUNSTONE_NET_INVALID,SUNSTONE_NET_BUSY,SUNSTONE_NET_TIMEOUT,
     SUNSTONE_NET_IO,SUNSTONE_NET_LINK_LOST };
 struct sunstone_net_request {
@@ -23,6 +23,7 @@ struct sunstone_net_reply {
     enum sunstone_net_result result;
     uint64_t ticket,handle;
     int stack_result;
+    struct aic8800_dispatch_event event; /* Filled only for EVENT replies. */
     uint16_t bytes,port;uint8_t address[4];
     uint8_t payload[SUNSTONE_NET_BYTES];
 };
@@ -62,7 +63,9 @@ struct sunstone_net {
 /* Trusted initialization before scheduling. Configuration and task identities
  * are copied; radio and entropy contexts remain pinned. Activation transfers
  * exclusive radio ownership from the declared bootstrap task to this worker.
- * No API call exposes stack socket pointers or borrowed application buffers. */
+ * No API call exposes stack socket pointers or borrowed application buffers.
+ * EVENT copies one ordered radio event, including after link revocation. A late
+ * reply preserves that copied event with TIMEOUT; receipt does not authorize RF. */
 int sunstone_net_init(struct sunstone_net *,const struct sunstone_net_config *);
 int sunstone_net_activate(struct sunstone_net *);
 int sunstone_net_submit(struct sunstone_net *,const struct sunstone_net_request *,uint64_t *ticket);

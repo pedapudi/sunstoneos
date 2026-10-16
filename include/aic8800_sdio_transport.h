@@ -68,6 +68,8 @@ struct aic8800_sdio_transport {
     uint64_t deadline, wait_until, enable_deadline;
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
+    const void *receive_owner;
+    size_t receive_owner_bytes;
     uint8_t data_tx, security_tx;
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
@@ -170,8 +172,19 @@ int aic8800_transport_finish_security(struct aic8800_sdio_transport *);
 void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining
  * asynchronous work. Peek works after FAULT; consume refuses in FAULT. Output
- * must not alias transport/card/host, runtime, Wi-Fi worker, firmware or immutable blobs. No callbacks or hardware access occur.
+ * must not alias transport/card/host, runtime, Wi-Fi worker, receive owner,
+ * firmware or immutable blobs. No callbacks or hardware access occur.
  */
 int aic8800_transport_peek(const struct aic8800_sdio_transport *, struct aic8800_sdio_response *);
 int aic8800_transport_consume(struct aic8800_sdio_transport *);
+/* Exclusive native dispatcher admission. The owner span stays pinned through
+ * fault; no release/reinitialization exists. Legacy poll/consume stop advancing
+ * after adoption. Command admission remains serialized by the same worker.
+ * Views name the current record and expire on owned retirement/consumption. */
+int aic8800_transport_claim_receive(struct aic8800_sdio_transport *,const void *,size_t);
+void aic8800_transport_poll_receive(struct aic8800_sdio_transport *,const void *);
+int aic8800_transport_receive_view(const struct aic8800_sdio_transport *,const void *,const uint8_t **,size_t *);
+int aic8800_transport_retire_record(struct aic8800_sdio_transport *,const void *,const uint8_t *,size_t);
+int aic8800_transport_consume_receive(struct aic8800_sdio_transport *,const void *);
+void aic8800_transport_fault_receive(struct aic8800_sdio_transport *,const void *);
 #endif
