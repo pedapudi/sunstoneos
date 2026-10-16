@@ -27,7 +27,7 @@ static int active(struct a733_ce_hash *h)
 int a733_ce_hash_bind(struct a733_ce_hash *h,struct a733_ce_session *engine)
 {
     if (!h || h->initialized || !a733_ce_session_bound(engine) ||
-        engine->binding.config.profile==A733_CE_TRNG_ONLY || !a733_ce_session_outside(engine,h,sizeof(*h))) return 0;
+        !(a733_ce_capabilities(engine->binding.config.profile)&A733_CE_CAP_SHA256) || !a733_ce_session_outside(engine,h,sizeof(*h))) return 0;
     h->self=(uintptr_t)h;h->engine=engine;h->bound_engine=engine;h->initialized=1;h->next_generation=1;
     atomic_init(&h->busy,0);return 1;
 }

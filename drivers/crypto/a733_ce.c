@@ -26,7 +26,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
 {
     if (!p || p->initialized || !c || !o || !r || !t || !m || ((uintptr_t)m&63) ||
         !c->owner || !c->handoff || !c->deadline_us || c->configure_health>1 ||
-        (unsigned)c->profile>A733_CE_TRNG_SHA256 ||
+        !a733_ce_capabilities(c->profile) ||
         !t->id || t->owner!=c->owner || !o->now_us || !o->authorize || !o->enter ||
         !o->leave || !o->retain || !o->read || !o->write || !o->sync) return 0;
     const void *objects[]={p,c,o,r,t,m};
@@ -34,13 +34,13 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
     for (unsigned i=0;i<6;++i) for (unsigned j=i+1;j<6;++j)
         if (!separate(objects[i],sizes[i],objects[j],sizes[j])) return 0;
     a733_clock_mask_t stable=A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
-    if (c->profile!=A733_CE_SHA256_ONLY) stable|=A733_CLOCK_RC16M;
+    if ((a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) stable|=A733_CLOCK_RC16M;
     if ((t->exclusive&A733_CLOCK_CE)!=A733_CLOCK_CE || ((t->shared|t->exclusive)&stable)!=stable ||
         !extent(c->descriptor_physical,256) || !extent(c->output_physical,64) ||
         !(c->descriptor_physical+256<=c->output_physical || c->output_physical+64<=c->descriptor_physical)) return 0;
-    if (c->profile!=A733_CE_TRNG_ONLY &&
+    if ((a733_ce_capabilities(c->profile)&(A733_CE_CAP_SHA256|A733_CE_CAP_AES128)) &&
         (!extent(c->descriptor_physical,sizeof(*m)) || c->output_physical!=c->descriptor_physical+256)) return 0;
-    if (c->profile==A733_CE_SHA256_ONLY) {
+    if (!(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) {
         if (c->health_profile || c->configure_health) return 0;
         for (unsigned i=0;i<4;++i) if (c->health[i]) return 0;
     } else {
@@ -53,7 +53,7 @@ int a733_ce_init(struct a733_ce *p,const struct a733_ce_config *c,const struct a
         if ((v&~fabric_mask[i]) || (i && !(v&BIT(31))) || !mhz ||
             (mhz*1000000u)%div || c->fabric_hz[i]!=mhz*1000000u/div) return 0;
     }
-    *p=(struct a733_ce){.self=(uintptr_t)p,.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1,.task_configured=c->profile!=A733_CE_SHA256_ONLY};
+    *p=(struct a733_ce){.self=(uintptr_t)p,.config=*c,.ops=*o,.token=*t,.registry=r,.memory=m,.cookie=cookie,.initialized=1,.task_configured=!!(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)};
     atomic_init(&p->busy,0);return 1;
 }
 static int timely(struct a733_ce *p)
@@ -77,7 +77,7 @@ static int clocks(struct a733_ce *p)
 {
     uint32_t v,ref;
     if (!rd(p,UINT32_C(0x07090160),&v) ||
-        (p->config.profile!=A733_CE_SHA256_ONLY && !(v&1)) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
+        ((a733_ce_capabilities(p->config.profile)&A733_CE_CAP_TRNG) && !(v&1)) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
         !rd(p,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u) return 0;
     unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
     if (n<80 || n>116 || n!=m || !rd(p,CCU+0xa0,&v) ||
@@ -132,6 +132,18 @@ static int prepare(struct a733_ce *p)
     }
     for (unsigned i=0;i<256;++i) p->memory->descriptor[i]=0;
     for (unsigned i=0;i<64;++i) p->memory->output[i]=0;
+    if (p->operation==2) {
+        zero(p->memory->cipher_output,sizeof(p->memory->cipher_output));
+        little(p->memory->descriptor,2,4);
+        little(p->memory->descriptor+4,UINT32_C(0x80000000)|(p->cipher_decrypt<<8),4);
+        little(p->memory->descriptor+16,p->config.descriptor_physical+3456,5);
+        little(p->memory->descriptor+32,p->cipher_bytes,4);
+        little(p->memory->descriptor+36,p->config.descriptor_physical+384,5);
+        little(p->memory->descriptor+41,p->config.descriptor_physical+2432,5);
+        little(p->memory->descriptor+48,p->cipher_bytes,4);
+        little(p->memory->descriptor+52,p->cipher_bytes,4);
+        return timely(p) && p->ops.sync(p->cookie,p->memory,A733_CE_CIPHER_PUBLISH)==1 && timely(p);
+    }
     little(p->memory->descriptor,p->operation ? (0x10002u|(p->hash_continue<<8)):0x11002u,4);
     little(p->memory->descriptor+4,p->operation ? 3:0x203,4);
     if (p->operation) {
@@ -155,10 +167,12 @@ static enum a733_ce_result failed(struct a733_ce *p)
     if (a733_clock_retain(p->registry,&p->token)==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
     p->stage=FAILED;return finish(p,A733_CE_RETAINED);
 }
-enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
+static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_bytes)
 {
-    if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output || !separate(p,sizeof(*p),output,32) ||
-        !separate(p->memory,sizeof(*p->memory),output,32) || !separate(p->registry,sizeof(*p->registry),output,32)) return A733_CE_INVALID;
+    if (!p || !p->initialized || p->self!=(uintptr_t)p || !p->task_configured || !output ||
+        output_bytes!=(p->operation==2?p->cipher_bytes:32) ||
+        !separate(p,sizeof(*p),output,output_bytes) ||
+        !separate(p->memory,sizeof(*p->memory),output,output_bytes) || !separate(p->registry,sizeof(*p->registry),output,output_bytes)) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
@@ -187,7 +201,7 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
             !bits(p,NS+0x18,UINT32_MAX,0) || !bits(p,SEC+0x18,UINT32_MAX,0) ||
             !wr(p,NS,(uint32_t)p->config.descriptor_physical) ||
             !update(p,NS+4,255,(uint32_t)(p->config.descriptor_physical>>32)) ||
-            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,0x400)) goto fail;
+            !update(p,NS+8,4,4) || !bits(p,NS+8,15,4) || !wr(p,NS+0x10,p->operation==2?1:0x400)) goto fail;
         next=WAIT;
     } else {
         if (!rd(p,NS+12,&p->status_ns) || !rd(p,SEC+12,&p->status_secure) ||
@@ -197,8 +211,8 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
         if (status>1) goto fail;
         if (status==1) {
             if (!clocks(p) || !task_health(p) ||
-                p->ops.sync(p->cookie,p->memory,A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
-            for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
+                p->ops.sync(p->cookie,p->memory,p->operation==2?A733_CE_CIPHER_ACQUIRE:A733_CE_ACQUIRE)!=1 || !timely(p)) goto fail;
+            if (p->operation!=2) for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
             if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
             ready=1;next=DONE;
         }
@@ -208,8 +222,10 @@ enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
     if (!timely(p)) goto fail;
     p->stage=next;
     if (ready) {
-        for (unsigned i=0;i<32;++i) output[i]=bytes[i];
-        zero(bytes,sizeof(bytes));return finish(p,p->operation ? A733_CE_DIGEST:A733_CE_RANDOM);
+        if (p->operation==2) {
+            for (size_t i=0;i<output_bytes;++i) output[i]=p->memory->cipher_output[i];
+        } else for (unsigned i=0;i<32;++i) output[i]=bytes[i];
+        zero(bytes,sizeof(bytes));return finish(p,p->operation==2?A733_CE_CIPHER:(p->operation?A733_CE_DIGEST:A733_CE_RANDOM));
     }
     zero(bytes,sizeof(bytes));return finish(p,A733_CE_PENDING);
 fail:
@@ -220,19 +236,22 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     const uint8_t *input,size_t bytes,const uint8_t *iv,unsigned continuation,uint64_t total)
 {
     if (!p || !p->initialized || p->self!=(uintptr_t)p || !deadline) return A733_CE_INVALID;
-    if ((!operation && p->config.profile==A733_CE_SHA256_ONLY) ||
-        (operation && p->config.profile==A733_CE_TRNG_ONLY)) return A733_CE_INVALID;
-    if (operation && (!input || !bytes || bytes>2048 || bytes%64 || continuation>1 ||
-        total%512 || total<(uint64_t)bytes*8 || (!continuation && total!=(uint64_t)bytes*8) ||
-        (continuation && (total==(uint64_t)bytes*8 || !iv)) ||
+    unsigned capability=operation==0?A733_CE_CAP_TRNG:(operation==1?A733_CE_CAP_SHA256:A733_CE_CAP_AES128);
+    if (!(a733_ce_capabilities(p->config.profile)&capability)) return A733_CE_INVALID;
+    if (operation && (!input || !bytes || continuation>1 ||
         !separate(input,bytes,p,sizeof(*p)) || !separate(input,bytes,p->memory,sizeof(*p->memory)) ||
-        !separate(input,bytes,p->registry,sizeof(*p->registry)) ||
-        (continuation && (!separate(iv,32,p,sizeof(*p)) || !separate(iv,32,p->memory,sizeof(*p->memory)) ||
-         !separate(iv,32,p->registry,sizeof(*p->registry)))))) return A733_CE_INVALID;
+        !separate(input,bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
+    if (operation==1 && (bytes>2048 || bytes%64 || total%512 || total<(uint64_t)bytes*8 ||
+        (!continuation && total!=(uint64_t)bytes*8) || (continuation && (total==(uint64_t)bytes*8 || !iv)))) return A733_CE_INVALID;
+    if (operation==2 && (bytes>1024 || bytes%16 || !iv || total)) return A733_CE_INVALID;
+    size_t auxiliary_bytes=operation==2?16:32;
+    if ((operation==2 || (operation==1 && continuation)) &&
+        (!separate(iv,auxiliary_bytes,p,sizeof(*p)) || !separate(iv,auxiliary_bytes,p->memory,sizeof(*p->memory)) ||
+         !separate(iv,auxiliary_bytes,p->registry,sizeof(*p->registry)))) return A733_CE_INVALID;
     if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
     if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
     if (p->fault) return failed(p);
-    if (p->stage!=DONE && p->stage!=ADMIT) return finish(p,A733_CE_BUSY);
+    if (p->key_dirty || (p->stage!=DONE && p->stage!=ADMIT)) return finish(p,A733_CE_BUSY);
     uint64_t now;
     if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now) return failed(p);
     p->last_now=now;
@@ -257,10 +276,17 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
 configure:
     p->operation=operation;p->task_configured=1;
     if (operation) {
-        zero(p->memory->input,sizeof(p->memory->input));zero(p->memory->iv,sizeof(p->memory->iv));
+        zero(p->memory->input,sizeof(p->memory->input));
         for (size_t i=0;i<bytes;++i) p->memory->input[i]=input[i];
-        if (continuation) for (unsigned i=0;i<32;++i) p->memory->iv[i]=iv[i];
-        p->hash_bytes=(unsigned)bytes;p->hash_continue=continuation;p->hash_total_bits=total;
+        if (operation==1) {
+            zero(p->memory->iv,sizeof(p->memory->iv));
+            if (continuation) for (unsigned i=0;i<32;++i) p->memory->iv[i]=iv[i];
+            p->hash_bytes=(unsigned)bytes;p->hash_continue=continuation;p->hash_total_bits=total;
+        } else {
+            zero(p->memory->key,sizeof(p->memory->key));
+            for (unsigned i=0;i<16;++i) p->memory->key[i]=iv[i];
+            p->cipher_bytes=(unsigned)bytes;p->cipher_decrypt=continuation;p->key_dirty=1;p->key_clean_complete=0;
+        }
     }
     if (!timely(p)) return failed(p);
     return finish(p,A733_CE_PENDING);
@@ -273,4 +299,40 @@ enum a733_ce_result a733_ce_hash_request(struct a733_ce *p,const uint8_t *input,
 {return request(p,deadline,1,input,bytes,iv,continuation,total);}
 int a733_ce_idle(const struct a733_ce *p)
 {return p && p->initialized && p->self==(uintptr_t)p && !p->fault &&
-    !atomic_load_explicit(&p->busy,memory_order_acquire) && (p->stage==ADMIT || p->stage==DONE);}
+    !p->key_dirty && !atomic_load_explicit(&p->busy,memory_order_acquire) && (p->stage==ADMIT || p->stage==DONE);}
+
+enum a733_ce_result a733_ce_poll(struct a733_ce *p,uint8_t output[32])
+{if (!p || p->operation==2) return A733_CE_INVALID;return poll(p,output,32);}
+enum a733_ce_result a733_ce_cipher_request(struct a733_ce *p,const uint8_t key[16],
+    const uint8_t *input,size_t bytes,unsigned decrypt,uint64_t deadline)
+{return request(p,deadline,2,input,bytes,key,decrypt,0);}
+enum a733_ce_result a733_ce_cipher_task_poll(struct a733_ce *p,uint8_t *output,size_t bytes)
+{if (!p || p->operation!=2) return A733_CE_INVALID;return poll(p,output,bytes);}
+enum a733_ce_result a733_ce_cipher_clear_key(struct a733_ce *p)
+{
+    if (!p || !p->initialized || p->self!=(uintptr_t)p) return A733_CE_INVALID;
+    if (atomic_exchange_explicit(&p->busy,1,memory_order_acquire)) return A733_CE_BUSY;
+    if (p->stage==FAILED) return finish(p,A733_CE_RETAINED);
+    if (p->fault) return failed(p);
+    if (p->operation!=2 || p->stage!=DONE) return finish(p,A733_CE_INVALID);
+    if (!p->key_dirty) return finish(p,A733_CE_CONSUMED);
+    if (!timely(p)) return failed(p);
+    enum a733_clock_result token=a733_clock_token_status(p->registry,&p->token);
+    if (token==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
+    if (token!=A733_CLOCK_OK) return failed(p);
+    if (!p->key_clean_complete) {
+        int lock=p->ops.enter(p->cookie,p->config.deadline_us);
+        if (!lock) {if (!timely(p)) return failed(p);return finish(p,A733_CE_BUSY);}
+        p->held=1;
+        if (lock!=1 || !timely(p)) return failed(p);
+        zero(p->memory->key,sizeof(p->memory->key));
+        if (p->ops.sync(p->cookie,p->memory,A733_CE_KEY_CLEAN)!=1 || !timely(p)) return failed(p);
+        p->ops.leave(p->cookie);p->held=0;
+        if (!timely(p)) return failed(p);
+        p->key_clean_complete=1;
+        token=a733_clock_token_status(p->registry,&p->token);
+        if (token==A733_CLOCK_BUSY) return finish(p,A733_CE_BUSY);
+        if (token!=A733_CLOCK_OK) return failed(p);
+    }
+    p->key_dirty=0;return finish(p,A733_CE_KEY_CLEARED);
+}

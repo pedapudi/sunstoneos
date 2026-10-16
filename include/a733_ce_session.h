@@ -2,7 +2,7 @@
 #define SUNSTONE_A733_CE_SESSION_H
 #include "a733_ce.h"
 #include "device_memory_pool.h"
-enum a733_ce_client { A733_CE_CLIENT_ENTROPY=1,A733_CE_CLIENT_SHA256=2 };
+enum a733_ce_client { A733_CE_CLIENT_ENTROPY=1,A733_CE_CLIENT_SHA256=2,A733_CE_CLIENT_AES128=3 };
 struct a733_ce_session {
     uintptr_t self;
     struct {

@@ -7,10 +7,23 @@
 #define A733_CE_RANDOM_BYTES 32u
 #define A733_CE_DESCRIPTOR_BYTES 208u
 #define A733_CE_HASH_INPUT_BYTES 2048u
-enum a733_ce_profile { A733_CE_TRNG_ONLY, A733_CE_SHA256_ONLY, A733_CE_TRNG_SHA256 };
+enum a733_ce_profile { A733_CE_TRNG_ONLY, A733_CE_SHA256_ONLY, A733_CE_TRNG_SHA256,
+    A733_CE_AES128_ONLY,A733_CE_SHA256_AES128,A733_CE_TRNG_AES128,A733_CE_TRNG_SHA256_AES128 };
+#define A733_CE_CAP_TRNG 1u
+#define A733_CE_CAP_SHA256 2u
+#define A733_CE_CAP_AES128 4u
+static inline unsigned a733_ce_capabilities(enum a733_ce_profile profile)
+{
+    switch (profile) {
+    case A733_CE_TRNG_ONLY:return 1;case A733_CE_SHA256_ONLY:return 2;case A733_CE_TRNG_SHA256:return 3;
+    case A733_CE_AES128_ONLY:return 4;case A733_CE_SHA256_AES128:return 6;
+    case A733_CE_TRNG_AES128:return 5;case A733_CE_TRNG_SHA256_AES128:return 7;default:return 0;
+    }
+}
 #define A733_CE_NS_INTID 200u
 #define A733_CE_S_INTID 201u
-/* Separate complete cache lines: the hardware descriptor occupies 208 bytes.
+/* Separate complete cache lines: hash/TRNG descriptors occupy 208 bytes;
+ * symmetric descriptors occupy 220 bytes.
  * Storage, aliases and physical extents remain exclusively reserved forever
  * after init; task completion permits reuse under the same reservation,
  * but no global drain or release operation is provided. */
@@ -19,6 +32,8 @@ struct a733_ce_memory {
     _Alignas(64) uint8_t output[64];
     _Alignas(64) uint8_t iv[64];
     _Alignas(64) uint8_t input[A733_CE_HASH_INPUT_BYTES];
+    _Alignas(64) uint8_t cipher_output[1024];
+    _Alignas(64) uint8_t key[64];
 };
 struct a733_ce_config {
     uint64_t owner, handoff, health_profile, deadline_us;
@@ -28,7 +43,8 @@ struct a733_ce_config {
     enum a733_ce_profile profile; /* Immutable admitted capabilities; zero preserves TRNG. */
     unsigned configure_health; /* 0 adopt; 1 program with both tests initially disabled. */
 };
-enum a733_ce_sync { A733_CE_PUBLISH, A733_CE_ACQUIRE };
+enum a733_ce_sync { A733_CE_PUBLISH, A733_CE_ACQUIRE,
+    A733_CE_CIPHER_PUBLISH,A733_CE_CIPHER_ACQUIRE,A733_CE_KEY_CLEAN };
 struct a733_ce_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate owner, handoff, actual token and the complete memory mapping.
@@ -40,13 +56,14 @@ struct a733_ce_ops {
      * GIC routes owned/masked; qualified recovery. This provides authority, not
      * measured entropy or substitute register observations.
      * Memory must be private normal RAM, mapped to the specified CE physical
-     * addresses without IOMMU inference. SHA capability requires the complete
+     * addresses without IOMMU inference. SHA or AES capability requires the complete
      * contiguous memory object beginning at descriptor_physical (output +256,
-     * IV +320, input +384), including all cache lines. TRNG uses 256/64-byte DMA extents;
+     * IV +320, input +384), including all cache lines. AES uses
+     * cipher output +2432 (1024 bytes) and key +3456 (64 bytes). TRNG uses 256/64-byte DMA extents;
      * cache-line ownership, no aliases or remote accesses. Keep all leases.
      * Success grants immutable authority through the retained lifetime and all
      * rearmed requests and every capability in profile. SHA-only admission
-     * requires no health profile or entropy/startup assertion. deadline_us bounds execution only; it cannot limit or
+     * or AES-only admission requires no health profile or entropy/startup assertion. deadline_us bounds execution only; it cannot limit or
      * silently extend this lifetime authority. */
     int (*authorize)(void *,const struct a733_ce_config *,const struct a733_clock_token *,
         const struct a733_ce_memory *);
@@ -56,12 +73,15 @@ struct a733_ce_ops {
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
     /* Publish cleans descriptor and cleans/invalidates output before DMA.
+     * CIPHER_PUBLISH additionally cleans the key and complete input lines.
+     * CIPHER_ACQUIRE invalidates the complete cipher output. KEY_CLEAN cleans
+     * only the software key line after a consumed successful cipher task.
      * Acquire invalidates output after successful completion. Exact 1 means
      * completed cache maintenance and barriers, never memory drain or release. */
     int (*sync)(void *,struct a733_ce_memory *,enum a733_ce_sync);
 };
 enum a733_ce_result { A733_CE_PENDING,A733_CE_BUSY,A733_CE_RANDOM,
-    A733_CE_CONSUMED,A733_CE_RETAINED,A733_CE_INVALID,A733_CE_DIGEST };
+    A733_CE_CONSUMED,A733_CE_RETAINED,A733_CE_INVALID,A733_CE_DIGEST,A733_CE_CIPHER,A733_CE_KEY_CLEARED };
 struct a733_ce {
     uintptr_t self;
     struct a733_ce_config config;
@@ -76,6 +96,7 @@ struct a733_ce {
     uint64_t hash_total_bits;
     unsigned initialized,stage,fault,held,health_programmed;
     unsigned operation,task_configured,hash_bytes,hash_continue;
+    unsigned cipher_bytes,cipher_decrypt,key_dirty,key_clean_complete;
 };
 /* Zero controller storage once. All inputs, registry and DMA memory are pairwise
  * disjoint and live throughout retained lifetime. Borrow an immutable actual
@@ -110,6 +131,18 @@ enum a733_ce_result a733_ce_request(struct a733_ce *,uint64_t deadline_us);
  * shared session is the sole caller; do not interleave direct controller use. */
 enum a733_ce_result a733_ce_hash_request(struct a733_ce *,const uint8_t *,size_t,
     const uint8_t iv[32],unsigned continuation,uint64_t total_bits,uint64_t deadline_us);
+/* Typed AES-128 ECB task, 16..1024 bytes in complete blocks, decrypt 0/1.
+ * Input/key are copied into private memory; normal input-key selection only.
+ * No IV, counter, padding, authentication or key-ladder operation. The actual
+ * session is the sole caller. CIPHER returns task bytes once; all later tasks
+ * and client release remain blocked until key cleanup succeeds. */
+enum a733_ce_result a733_ce_cipher_request(struct a733_ce *,const uint8_t key[16],
+    const uint8_t *,size_t,unsigned decrypt,uint64_t deadline_us);
+enum a733_ce_result a733_ce_cipher_task_poll(struct a733_ce *,uint8_t *,size_t);
+/* Only a consumed successful AES task permits zeroing its software key line and
+ * completing cache clean/barriers. Earlier faults retain secret DMA backing.
+ * This does not prove internal CE key-register erasure or global engine drain. */
+enum a733_ce_result a733_ce_cipher_clear_key(struct a733_ce *);
 /* Callback-free completion boundary used by the retained session owner. */
 int a733_ce_idle(const struct a733_ce *);
 #endif

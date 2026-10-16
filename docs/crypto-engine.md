@@ -18,14 +18,16 @@ Cipher, other hash and key APIs remain required.
 
 The A733 has nonsecure registers at `0x04603000` and secure registers at
 `0x04603800`. Four task channels share the engine in each security world.
-The implemented request uses channel 2 and the hash/TRNG execution unit.
+The implemented requests use channel 2. SHA and entropy use the hash/TRNG
+execution unit; [AES block transforms](crypto-cipher.md) use the symmetric unit.
 Both secure and nonsecure clients must be excluded throughout this reservation.
 The platform must establish initial DMA drain independently before admission.
 The task-status register identifies a running channel; zero does not prove idle.
 
 A 208-byte hash descriptor occupies a private 256-byte allocation. SHA-capable
-sessions also reserve separate cache lines for intermediate state and input;
-all of these extents fit within the same retained page. The 32-byte
+sessions also reserve separate cache lines for intermediate state and input.
+AES uses a 220-byte descriptor in the same reservation and adds separate cipher
+output and key lines. The complete 3520-byte object fits within one retained page. The 32-byte
 result occupies a separate private 64-byte allocation. Sixty-four-byte alignment
 protects cache-line ownership; the manual permits byte-addressed descriptors.
 Both allocations require authenticated CPU mappings, physical RAM extents,
@@ -144,6 +146,6 @@ for the A733 command format.
 Cold clock provisioning, production platform authority, startup and entropy
 qualification, interrupt service and physical qualification remain required.
 Provisioning and repeated-request evidence is recorded in [entropy.md](entropy.md).
-Full engine coverage also includes the documented symmetric cipher modes,
-other hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
+Full engine coverage still requires cipher modes beyond AES-128 ECB, other
+hashes and HMAC, asymmetric algorithms, key ladders and secure-key operations.
 The first TRNG command does not satisfy those remaining hardware requirements.

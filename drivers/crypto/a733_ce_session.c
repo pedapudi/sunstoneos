@@ -72,9 +72,10 @@ enum a733_ce_result a733_ce_session_claim(struct a733_ce_session *s,const void *
     if (!a733_ce_session_bound(s)) return a733_ce_session_retain(s);
     if (!client || !n || !generation || !a733_ce_session_outside(s,client,n) ||
         !a733_ce_session_outside(s,generation,sizeof(*generation)) ||
-        (kind!=A733_CE_CLIENT_ENTROPY && kind!=A733_CE_CLIENT_SHA256) ||
-        (kind==A733_CE_CLIENT_ENTROPY && s->binding.config.profile==A733_CE_SHA256_ONLY) ||
-        (kind==A733_CE_CLIENT_SHA256 && s->binding.config.profile==A733_CE_TRNG_ONLY) ||
+        (kind!=A733_CE_CLIENT_ENTROPY && kind!=A733_CE_CLIENT_SHA256 && kind!=A733_CE_CLIENT_AES128) ||
+        (kind==A733_CE_CLIENT_ENTROPY && !(a733_ce_capabilities(s->binding.config.profile)&A733_CE_CAP_TRNG)) ||
+        (kind==A733_CE_CLIENT_SHA256 && !(a733_ce_capabilities(s->binding.config.profile)&A733_CE_CAP_SHA256)) ||
+        (kind==A733_CE_CLIENT_AES128 && !(a733_ce_capabilities(s->binding.config.profile)&A733_CE_CAP_AES128)) ||
         !s->next_generation) return A733_CE_INVALID;
     if (s->client) return A733_CE_BUSY;
     if (!a733_ce_idle(&s->controller)) return a733_ce_session_retain(s);

@@ -29,7 +29,7 @@ static int output_ok(const struct a733_ce_entropy *s,const void *out,size_t n)
 int a733_ce_entropy_attach(struct a733_ce_entropy *s,struct a733_ce_session *engine)
 {
     if (!s || s->initialized || !a733_ce_session_bound(engine) || engine->client ||
-        engine->binding.config.profile==A733_CE_SHA256_ONLY ||
+        !(a733_ce_capabilities(engine->binding.config.profile)&A733_CE_CAP_TRNG) ||
         !a733_ce_session_outside(engine,s,offsetof(struct a733_ce_entropy,owned_session)) ||
         !separate(s,sizeof(*s),engine->binding.pool,sizeof(*engine->binding.pool)) ||
         !separate(s,sizeof(*s),(void *)engine->binding.pool->backing.cpu,engine->binding.pool->backing.bytes) ||
@@ -42,7 +42,7 @@ int a733_ce_entropy_bind(struct a733_ce_entropy *s,struct device_memory_pool *po
     struct device_memory_lease lease,const struct a733_ce_config *c,const struct a733_ce_ops *o,
     void *cookie,struct a733_clock_leases *registry,const struct a733_clock_token *token)
 {
-    if (!s || s->initialized || !pool || !c || c->profile==A733_CE_SHA256_ONLY ||
+    if (!s || s->initialized || !pool || !c || !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG) ||
         !separate(s,sizeof(*s),pool,sizeof(*pool)) ||
         !separate(s,sizeof(*s),(void *)pool->backing.cpu,pool->backing.bytes) ||
         !separate(s,sizeof(*s),registry,sizeof(*registry)) ||

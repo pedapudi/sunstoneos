@@ -48,7 +48,7 @@ int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
     case 4:mask=255;break;
     case 8:mask=4;break;
     case 12:if (v!=0x30) return 0;break;
-    case 0x10:if (v!=0x400) return 0;break;
+    case 0x10:if (v!=0x400 && v!=1) return 0;break;
     case 0xd0:mask=2;break;
     default:return 0;
     }
@@ -65,20 +65,31 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 {
     (void)cookie;
     if (!m || ((uintptr_t)m&63) || sizeof(*m)>UINTPTR_MAX-(uintptr_t)m ||
-        (mode!=A733_CE_PUBLISH && mode!=A733_CE_ACQUIRE)) return 0;
+        mode>A733_CE_KEY_CLEAN || (int)mode<0) return 0;
     uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     if (((ctr>>16)&15)!=4) return 0; /* A733 DminLine: 4 * 2^4 = 64 bytes. */
     __asm__ volatile("dsb sy" ::: "memory");
-    if (mode==A733_CE_PUBLISH) {
+    if (mode==A733_CE_PUBLISH || mode==A733_CE_CIPHER_PUBLISH) {
         for (unsigned i=0;i<256;i+=64) {
             uintptr_t a=(uintptr_t)m->descriptor+i;
             __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
         }
-        for (uintptr_t a=(uintptr_t)m->iv;a<(uintptr_t)m+sizeof(*m);a+=64)
+        for (uintptr_t a=(uintptr_t)m->iv;a<(uintptr_t)m->input+sizeof(m->input);a+=64)
             __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
-        __asm__ volatile("dc civac, %0" :: "r"((uintptr_t)m->output) : "memory");
-    } else __asm__ volatile("dc ivac, %0" :: "r"((uintptr_t)m->output) : "memory");
+        if (mode==A733_CE_PUBLISH)
+            __asm__ volatile("dc civac, %0" :: "r"((uintptr_t)m->output) : "memory");
+        else {
+            __asm__ volatile("dc cvac, %0" :: "r"((uintptr_t)m->key) : "memory");
+            for (uintptr_t a=(uintptr_t)m->cipher_output;a<(uintptr_t)m->cipher_output+sizeof(m->cipher_output);a+=64)
+                __asm__ volatile("dc civac, %0" :: "r"(a) : "memory");
+        }
+    } else if (mode==A733_CE_ACQUIRE)
+        __asm__ volatile("dc ivac, %0" :: "r"((uintptr_t)m->output) : "memory");
+    else if (mode==A733_CE_CIPHER_ACQUIRE) {
+        for (uintptr_t a=(uintptr_t)m->cipher_output;a<(uintptr_t)m->cipher_output+sizeof(m->cipher_output);a+=64)
+            __asm__ volatile("dc ivac, %0" :: "r"(a) : "memory");
+    } else __asm__ volatile("dc cvac, %0" :: "r"((uintptr_t)m->key) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
 
@@ -108,7 +119,7 @@ int a733_ce_entropy_native_init(struct a733_ce_entropy *s,const struct a733_ce_c
     const struct a733_clock_token *token)
 {
     if (!s || s->initialized || !c || !platform || !registry || !token || !c->owner ||
-        c->profile==A733_CE_SHA256_ONLY) return 0;
+        !(a733_ce_capabilities(c->profile)&A733_CE_CAP_TRNG)) return 0;
     struct a733_ce_session *owner=&s->owned_session;
     if (!a733_ce_session_native_claim(owner)) return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
