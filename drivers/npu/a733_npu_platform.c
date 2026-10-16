@@ -171,8 +171,11 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
             check(p,CCU+0xb00,0x8700001f,BIT(31)|(p->divisor-1));
         if(ok)p->stage=COMPLETE;
     }
+    /* Publish uncertainty while the adapter still owns its register mutex.
+     * A successful bus callback can still have failed readback or timing. */
+    if (!ok || !timely(p)) (void)fault(p);
     int released=p->ops.leave(p->cookie);
-    if (!ok || released!=1 || !timely(p)) return fault(p);
+    if (p->failed || released!=1 || !timely(p)) return fault(p);
     return p->stage==COMPLETE ? READY : PENDING;
 }
 int a733_npu_platform_ready(const struct a733_npu_platform *p)

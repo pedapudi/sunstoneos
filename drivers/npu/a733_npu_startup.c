@@ -167,8 +167,9 @@ static int leave(void *v)
 {
     struct a733_npu_startup *b=v;
     configASSERT(b->register_held && xTaskGetCurrentTaskHandle()==b->task);
-    if(b->failed || atomic_load_explicit(&b->shared->locks->retained,memory_order_acquire)) {
-        (void)a733_platform_lock_retain(b->shared->locks,A733_PLATFORM_REGISTER_LOCK);return 0;
+    if(b->failed || b->platform.failed ||
+        atomic_load_explicit(&b->shared->locks->retained,memory_order_acquire) || !timely(b,0)) {
+        (void)fault(b);return 0;
     }
     a733_platform_lock_leave(b->shared->locks,A733_PLATFORM_REGISTER_LOCK);b->register_held=0;return 1;
 }

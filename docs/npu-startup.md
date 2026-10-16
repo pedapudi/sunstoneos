@@ -168,3 +168,25 @@ bootloader revision `b791be842935b27268ae3d00e943a9075495f30a`.
 Cold PLL provisioning, physical handoff proofs, production memory/command
 registration, and board qualification remain required integration work.
 No board access or performance measurement occurred.
+
+## Register failure and release boundary
+
+The platform publishes a failed readback or deadline check before invoking the
+register-release callback. Startup retains the actual shared register mutex
+when that failure is present, including when the MMIO callback itself returned
+success. It also checks its deadline immediately before releasing the mutex.
+Further polling and service activation perform no device access after failure.
+
+A successful mutex release is irreversible. If the closing clock observation
+first detects expiry after release, startup becomes terminal and retains its
+clock, rail, and PCK leases; the register mutex is no longer owned. That outcome
+is not evidence of a retained mutex. In either case the NPU service remains
+inactive and there is no automatic retry or resource reclamation.
+
+The focused follow-up uses one two-core image with three terminal modes:
+incorrect readback after a successful write, expiry during the final read,
+and expiry after successful unlock. The first two preserve the shared mutex;
+the third verifies that it was released. Each mode checks retained leases,
+refused service activation, and absence of later device callbacks. Evidence is
+under `~/.cache/sunstoneos/evidence/npu-startup-retention-20261016/`. The earlier
+success and invalid-rail results remain applicable and were not rerun.

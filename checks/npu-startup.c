@@ -16,7 +16,16 @@ static TaskHandle_t bootstrap_task,client_task,holder_task;
 static uint32_t ccu[0x2000/4],pck[0x1000/4];
 static atomic_uint platform_reads,platform_writes,backend_calls,holder_done;
 static unsigned failure_mode,prepared_calls,rail_reads,closes,reenter;
-static unsigned command_token;
+static unsigned command_token, injected;
+void __real_a733_platform_lock_leave(struct a733_platform_locks *,enum a733_platform_lock);
+void __wrap_a733_platform_lock_leave(struct a733_platform_locks *p,enum a733_platform_lock lock)
+{
+    __real_a733_platform_lock_leave(p,lock);
+    if(failure_mode==4 && !injected && lock==A733_PLATFORM_REGISTER_LOCK && startup.platform.stage==5) {
+        uint64_t now;injected=1;
+        do {configASSERT(a733_counter_clock_now(&clock_source,&now));} while(now<startup.handoff.allowed.deadline_us);
+    }
+}
 static uint64_t first_snapshot_time,second_snapshot_time;
 static uint64_t deadline(void)
 {uint64_t now;configASSERT(a733_counter_clock_now(&clock_source,&now));return now+1000000;}
@@ -35,6 +44,12 @@ int __wrap_a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t
     else if(address==0x070101ac)*out=1;
     else if(address==PCK+8 && (pck[0]&15)==8)*out=8;
     else *out=*reg(address);
+    if(failure_mode==2 && !injected && address==CCU+0xb04 && atomic_load(&platform_writes)) {
+        *out^=1u<<18;injected=1; /* Successful transfer, incorrect readback. */
+    } else if(failure_mode==3 && !injected && startup.platform.stage==4 && address==CCU+0xb00) {
+        uint64_t now;injected=1;
+        do {configASSERT(a733_counter_clock_now(&clock_source,&now));} while(now<startup.handoff.allowed.deadline_us);
+    }
     return 1;
 }
 int __wrap_a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
@@ -83,7 +98,7 @@ enum i2c_result __wrap_a733_i2c_read8(struct a733_i2c *bus,uint8_t address,uint8
         uint64_t now;configASSERT(a733_counter_clock_now(&clock_source,&now));
         if(rail_reads==1)first_snapshot_time=now;else second_snapshot_time=now;
     }
-    *out=failure_mode && slot==4 ? 31 : values[slot];return I2C_OK;
+    *out=failure_mode==1 && slot==4 ? 31 : values[slot];return I2C_OK;
 }
 void __wrap_a733_i2c_close(struct a733_i2c *bus)
 {configASSERT(bus==&startup.bus && bus->opened);bus->opened=0;++closes;}
@@ -127,7 +142,7 @@ static void client(void *unused)
     (void)unused;
     struct npu_service_request request={NPU_SERVICE_STATUS,0,0};uint64_t ticket=0xabc;
     configASSERT(!npu_service_send(&service,&request,0,&ticket) && ticket==0xabc);
-    configASSERT(npu_service_activate(&service)==NPU_SERVICE_DENIED);
+    if(failure_mode<2)configASSERT(npu_service_activate(&service)==NPU_SERVICE_DENIED);
     configASSERT(a733_npu_startup_poll(&startup)==A733_NPU_PLATFORM_RETAINED && !startup.failed);
     configASSERT(!prepared_calls && !atomic_load(&backend_calls) && !atomic_load(&platform_reads));
     xTaskNotifyGive(bootstrap_task);configASSERT(ulTaskNotifyTake(pdTRUE,1000)==1);
@@ -142,9 +157,44 @@ static void client(void *unused)
     }
     xTaskNotifyGive(bootstrap_task);vTaskSuspend(NULL);configASSERT(0);
 }
+static void register_failure(void)
+{
+    /* Only the changed register-lock failure boundary; existing rail, success
+     * and client-authority evidence is reused. No device command executes. */
+    atomic_store(&holder_done,1);
+    enum a733_npu_platform_result result=A733_NPU_PLATFORM_PENDING;
+    for(unsigned i=0;i<150 && result!=A733_NPU_PLATFORM_RETAINED;++i) {
+        result=a733_npu_startup_poll(&startup);
+        configASSERT(result!=A733_NPU_PLATFORM_READY);
+        if(result!=A733_NPU_PLATFORM_RETAINED)vTaskDelay(1);
+    }
+    configASSERT(injected && result==A733_NPU_PLATFORM_RETAINED);
+    configASSERT(rail_reads==12 && closes==2 && !startup.i2c_held);
+    configASSERT(startup.failed && startup.platform.failed);
+    if(failure_mode==4) {
+        configASSERT(!startup.register_held && !atomic_load(&locks.retained));
+        configASSERT(!xSemaphoreGetMutexHolder(locks.mutex[0]));
+    } else {
+        configASSERT(startup.register_held && atomic_load(&locks.retained)==1);
+        configASSERT(xSemaphoreGetMutexHolder(locks.mutex[0])==bootstrap_task);
+    }
+    configASSERT(startup.clock_token.id && startup.rail_token.id && startup.pck_token.token);
+    unsigned reads=atomic_load(&platform_reads),writes=atomic_load(&platform_writes);
+    configASSERT(reads && writes && a733_npu_startup_poll(&startup)==A733_NPU_PLATFORM_RETAINED);
+    configASSERT(npu_service_activate(&service)==NPU_SERVICE_FAULT);
+    configASSERT(reads==atomic_load(&platform_reads) && writes==atomic_load(&platform_writes));
+    configASSERT(!atomic_load(&backend_calls));
+    xTaskNotifyGive(client_task);configASSERT(ulTaskNotifyTake(pdTRUE,1000)==1);
+    platform_puts(failure_mode==2 ?
+        "PASS NPU register readback mismatch retains shared mutex and leases; inactive service remains silent\n" :
+        failure_mode==3 ? "PASS NPU late final read retains shared mutex and leases; inactive service remains silent\n" :
+        "PASS NPU late successful unlock faults with leases retained and mutex released; inactive service remains silent\n");
+    platform_exit(0);
+}
 static void bootstrap(void *unused)
 {
     (void)unused;configASSERT(ulTaskNotifyTake(pdTRUE,1000)==1);
+    if(failure_mode>=2){register_failure();configASSERT(0);}
     struct a733_npu_command changed=startup.handoff.commands[0];++changed.readable_bytes;
     configASSERT(a733_npu_startup_prepared(&bad_auth,&startup.handoff.backend,startup.handoff.backend_cookie,
         &startup.handoff.image,&changed,1)==-1 && bad_auth.failed);
@@ -211,7 +261,12 @@ static unsigned mode(void)
     register uintptr_t arguments __asm__("x1")=(uintptr_t)parameters;
     __asm__ volatile("hlt #0xf000" : "+r"(operation) : "r"(arguments) : "memory");
     configASSERT(operation==0);
-    for(unsigned i=0;i+8<sizeof(command);++i)if(!memcmp(command+i,"retained",8))return 1;
+    for(unsigned i=0;i+11<sizeof(command);++i) {
+        if(!memcmp(command+i,"readback",8))return 2;
+        if(!memcmp(command+i,"late-read",9))return 3;
+        if(!memcmp(command+i,"late-unlock",11))return 4;
+        if(!memcmp(command+i,"retained",8))return 1;
+    }
     return 0;
 }
 void kernel_main(void)
@@ -230,6 +285,7 @@ void kernel_main(void)
         .backend={device_read,device_write,microseconds,delay,barrier,publish,finish},.backend_cookie=&command_token,
         .image={0x44000000,0x5000,0x44000000,1},.commands={{0x100000,A733_NPU_FETCH_BYTES,&command_token}},
         .controller=0x03600000,.evidence=123,.command_admission=234,.established=A733_NPU_HANDOFF_REQUIRED,.command_count=1};
+    if(failure_mode>=2)h.allowed.deadline_us-=900000;
     configASSERT(!a733_npu_startup_init(&startup,&h,&resources,&other_registry));
     configASSERT(a733_npu_startup_init(&startup,&h,&resources,&registry));
     configASSERT(a733_npu_startup_init(&bad_auth,&h,&resources,&registry));

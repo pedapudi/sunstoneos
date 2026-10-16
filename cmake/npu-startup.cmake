@@ -28,6 +28,7 @@ target_link_options(npu-startup-model PRIVATE -nostdlib -static -Wl,--gc-section
   -Wl,--wrap=a733_npu_platform_native_read -Wl,--wrap=a733_npu_platform_native_write
   -Wl,--wrap=a733_gpu_resources_native_init -Wl,--wrap=a733_i2c_open
   -Wl,--wrap=a733_i2c_read8 -Wl,--wrap=a733_i2c_close
+  -Wl,--wrap=a733_platform_lock_leave
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-startup-model.map")
 set_target_properties(npu-startup-model PROPERTIES SUFFIX ".elf"
