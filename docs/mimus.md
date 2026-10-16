@@ -12,7 +12,8 @@ performance qualification remain outstanding.
 The companion mimus port is pinned in [apps/mimus/source.json](../apps/mimus/source.json).
 It adds external monotonic-clock and task-identity providers. The sunstoneos
 adapter uses the architectural counter and the current FreeRTOS task handle.
-Arithmetic and portable kernels retain their existing implementation, with
+The AArch64 backend replaces integer dot and packed matrix products with NEON
+implementations. Output arithmetic retains the reference ordering, with
 floating-point contraction disabled. Profiling counter units on this path are
 nanoseconds, not CPU cycles.
 
@@ -51,7 +52,7 @@ overlay, and WAV bytes follow in that order, each starting on a 64-byte boundary
 The bench bundle contains 14,346,688 bytes. The application uses a separate
 97,280-byte internal arena to match the host’s portable execution configuration.
 
-The physical profiling image contains 397,744 bytes. ELF sections contain 394,064 bytes
+The physical NEON image contains 395,952 bytes. ELF sections contain 392,272 bytes
 of text/read-only data, 3,664 bytes of initialized data, and 4,489,728 bytes of
 reserved RAM, including the heap. Input, result, and recognition-arena regions
 are additional reservations. The bench recording uses a peak of 1,761,840 bytes
@@ -96,6 +97,10 @@ the image. The loader holds the shared board lock and stops at a transport
 failure. The companion `a733-mimus-model` target uses the secure QEMU model;
 load the same bundle at `0x43000000` with QEMU’s loader device.
 
+The OS build defaults `MIMUS_AARCH64_NEON` to `ON`. Configure it explicitly when
+reusing a build directory that previously disabled the option. `OFF` selects the
+portable kernels for a comparison image.
+
 `checks/mimus-parity.py` compares a host reference record and either an emulator
 record or a physical session record. It requires matching input-bundle identity,
 successful completion, and agreement on all recorded output fields. The exact
@@ -114,7 +119,7 @@ The formatted result was:
 
 > Hand it to me, said the chief, and when it came into his hands he began to turn over the leaves hurriedly.
 
-The physical image SHA-256 is
+The initial portable image SHA-256 is
 `01e0e97a19e02fa06c5fbee40e93055ec23e621ae154cec7a3059cf552ed62d2`;
 its ELF hash begins `d1deb6dbc3a0d919`. Compute time was 39.086 seconds in this
 single run, about 4.41 times the audio duration. There is no repeatability range.
@@ -154,8 +159,8 @@ and kernel checks retain their earlier evidence.
 | Linear weight expansion | 0.111 s | Small relative to matrix products |
 | Audio frontend | 0.168 s | Small relative to matrix products |
 
-The linear kernels are the first optimization target. Arithmetic-preserving Arm
-implementations require focused kernel comparisons and recorded-audio parity.
+These measurements identify linear kernels as the first optimization target.
+The following section records the implemented Arm kernels and their screen.
 Broader audio qualification, multicore execution, and GPU/NPU backends remain
 separate requirements.
 
@@ -182,6 +187,63 @@ Raw transactions, output, source/reference hashes, and readbacks reside in
 `~/.cache/sunstoneos/evidence/mimus-profile-20261016/`. The comparison is
 `~/.cache/sunstoneos/evidence/mimus-profile-parity.json`. The two physical runs
 establish integration and profiling results, without a timing repeatability study.
+
+## NEON matrix products halve the bench compute time
+
+The AArch64 backend uses baseline Armv8-A NEON operations for int16 dot products
+and packed matrix products. Each product is widened before accumulation into
+int64 lanes. The packed path accumulates eight output channels together and
+retains the existing conversion, scaling, bias, residual addition, and row-level
+yield calls. It uses the existing operand layout and no additional scratch.
+
+On the same physical recording and configured 494 MHz CPU clock, one NEON run
+took 19.475858 seconds, compared with 39.086250 seconds for the portable profiling
+image. This is a 2.01-times speedup in a provisional screen. There is no repeated
+trial range. The feature and log-probability CRCs, frames, text, punctuation,
+capitals, and formatted output all matched the host reference.
+
+| Measurement | Portable | NEON |
+| --- | --- | --- |
+| Recognition compute | 39.086 s | 19.476 s |
+| Linear matrix products and output scaling | 32.430 s | 14.894 s |
+| Attention matrix products | 3.709 s | 1.634 s |
+| Recognition arena peak | 1,761,840 bytes | 1,761,840 bytes |
+| Allocator reservation peak | 105,984 bytes | 105,984 bytes |
+
+The compute-to-audio ratio is about 2.20, so the required maximum of 0.25 remains
+unmet. Broader recorded-audio parity, physical kernel boundary checks,
+repeatability, and concurrent workloads remain unqualified.
+
+The contiguous-dot implementation alone produced no meaningful bench improvement:
+39.085063 seconds with unchanged CRCs. This model primarily uses the separate
+packed matrix path. That screen is retained under
+`~/.cache/sunstoneos/evidence/mimus-neon-20261016/`; it does not establish a speed
+benefit for contiguous-dot workloads.
+
+Compiled-code checks executed 796 dot-family calls and 536 packed-kernel calls
+under Unicorn against independent integer sums and float output bytes. Cases
+cover accumulator extremes, row tails, padded strides, scaling, signed zero,
+residual addition, and raw accumulator packing. Operand bounds, output guards,
+input preservation, and callee-saved registers passed. The affected portable host
+dot and GEMM fixtures also passed. These checks support the arithmetic change;
+the physical recognition run establishes the screen’s actual board behavior.
+
+The companion mimus tool `tools/aarch64_kernel_check.py` accepts `--elf`,
+`--output`, and `--only dot|gemm|all`. Link the backend’s compiled
+`dot_aarch64.cc`, `dot_portable.cc`, `gemm_portable.cc`, and
+`gemm_combine_portable.cc` objects into an ELF, retaining all functions. Supply a
+no-op `mimus::asr::MaybeYield()` provider for this isolated arithmetic check.
+Run it with the cache Python environment containing Unicorn and pyelftools.
+Raw results are `aarch64-dot.json` and `aarch64-gemm.json` in the evidence cache.
+
+The physical NEON image SHA-256 is
+`29d3f24683c92719c77094770a8622356b633b6088d107006e14def32cd97e5c`;
+its ELF SHA-256 is
+`76c9a8bfb6d222d365067040794fa8f9f583f1e8424f46ec687ba36cf198eae7`.
+Transactions, readbacks, logs, and source identities reside under
+`~/.cache/sunstoneos/evidence/mimus-neon-packed-20261016/`. The host comparison is
+`~/.cache/sunstoneos/evidence/mimus-neon-packed-parity.json`. The board returned
+to ROM with stage 5, status 0, and automatic USB access.
 
 ## Bounded FEL reads and recovery
 
