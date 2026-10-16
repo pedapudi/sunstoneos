@@ -71,7 +71,7 @@ int aic8800_wifi_connect(struct aic8800_wifi *w,const void *owner,const struct a
 int aic8800_wifi_disconnect(struct aic8800_wifi *w,const void *owner,uint16_t reason,uint64_t now,uint64_t deadline)
 {
     if(!w||!w->initialized||w->owner!=owner||w->state!=AIC8800_WIFI_READY||w->held||w->station_held||
-        (w->link!=AIC8800_WIFI_ASSOCIATED_OPEN&&w->link!=AIC8800_WIFI_SECURITY_PENDING)||
+        (w->link!=AIC8800_WIFI_ASSOCIATED_OPEN&&w->link!=AIC8800_WIFI_SECURITY_PENDING&&w->link!=AIC8800_WIFI_SECURED)||
         !reason||now<w->last_now||deadline<=now)return 0;
     w->disconnect_reason=reason;w->last_now=now;w->deadline=deadline;w->command_deadline=0;
     w->station_accepted=w->station_indicated=0;w->phase=DISCONNECT;w->link=AIC8800_WIFI_DISCONNECTING;

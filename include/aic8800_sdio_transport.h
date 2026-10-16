@@ -9,6 +9,8 @@ struct aic8800_firmware;
 struct aic8800_runtime;
 struct aic8800_wifi;
 struct aic8800_data;
+struct aic8800_security;
+struct aic8800_supplicant;
 struct aic8800_data_result;
 struct aic8800_data_frame;
 struct aic8800_wifi_scan_result;
@@ -53,6 +55,8 @@ struct aic8800_sdio_transport {
     struct aic8800_runtime *runtime;
     struct aic8800_wifi *wifi;
     struct aic8800_data *data;
+    struct aic8800_security *security;
+    struct aic8800_supplicant *supplicant;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
@@ -64,7 +68,7 @@ struct aic8800_sdio_transport {
     uint64_t deadline, wait_until, enable_deadline;
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
-    uint8_t data_tx;
+    uint8_t data_tx, security_tx;
     uint8_t initialized, entered, pending, phase, expected, have[2], held, setup_confirmed;
     uint8_t prior_enable, prior_irq, prior_function_irq, raw_rx_status, byte_length;
     uint8_t tx[AIC8800_TRANSPORT_TX_BYTES], rx[AIC8800_TRANSPORT_RX_BYTES];
@@ -151,6 +155,15 @@ int aic8800_transport_take_data_result(struct aic8800_sdio_transport *, struct a
 /* Copy RX before generic consume; generation identifies its association. This
  * view remains inspectable after FAULT, but grants no current send authority. */
 int aic8800_transport_peek_data(const struct aic8800_sdio_transport *, struct aic8800_data_frame *);
+#ifdef SUNSTONE_AIC8800_RSN
+/* Real BSD RSN adapter build only. One initialized security worker and supplicant
+ * attach to an associated data owner. PMK/observed RSN/entropy are supplied via
+ * supplicant init; no generic key or secure-port API is exposed. Explicit
+ * retirement confirms port close and all deletes before detachment. */
+int aic8800_transport_start_security(struct aic8800_sdio_transport *,struct aic8800_security *,struct aic8800_supplicant *,uint64_t);
+int aic8800_transport_retire_security(struct aic8800_sdio_transport *,uint64_t);
+int aic8800_transport_finish_security(struct aic8800_sdio_transport *);
+#endif
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
  */

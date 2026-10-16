@@ -5,6 +5,8 @@
 #include "aic8800_runtime.h"
 #include "aic8800_wifi.h"
 #include "aic8800_data.h"
+#include "aic8800_security.h"
+#include "aic8800_supplicant.h"
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
@@ -22,6 +24,8 @@ static int independent(const struct aic8800_sdio_transport *t, const void *p, si
     if (!span(p, n) || overlap(t, sizeof(*t), p, n) ||
         overlap(t->card, sizeof(*t->card), p, n) ||
         overlap(t->card->host, sizeof(*t->card->host), p, n)) return 0;
+    if (t->security && overlap(t->security, sizeof(*t->security), p, n)) return 0;
+    if (t->supplicant && overlap(t->supplicant, sizeof(*t->supplicant), p, n)) return 0;
     if (t->data && overlap(t->data, sizeof(*t->data), p, n)) return 0;
     if (t->wifi && overlap(t->wifi, sizeof(*t->wifi), p, n)) return 0;
     if (t->runtime && overlap(t->runtime, sizeof(*t->runtime), p, n)) return 0;
@@ -36,6 +40,10 @@ static void fail(struct aic8800_sdio_transport *t, enum aic8800_transport_error 
 {
     if (t->state == AIC8800_TRANSPORT_FAULT) return;
     t->error = e; t->state = AIC8800_TRANSPORT_FAULT;
+    if(t->security) aic8800_security_stop(t->security,t);
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->supplicant) aic8800_supplicant_stop(t->supplicant);
+#endif
     if (t->data) aic8800_data_stop(t->data, t,
         e == AIC8800_TRANSPORT_TIMEOUT ? AIC8800_DATA_TIME_ERROR : AIC8800_DATA_TRANSPORT_ERROR);
     if (t->wifi) aic8800_wifi_stop(t->wifi, t,
@@ -68,6 +76,16 @@ static int observe(struct aic8800_sdio_transport *t, uint64_t *now)
         aic8800_data_observe(t->data, t, *now);
         if (t->data->state == AIC8800_DATA_FAULT) { fail(t, AIC8800_TRANSPORT_DATA_ERROR); return 0; }
     }
+    if(t->security) {
+        aic8800_security_observe(t->security,t,*now);
+        if(t->security->state==AIC8800_SECURITY_FAULT) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);return 0;}
+    }
+#ifdef SUNSTONE_AIC8800_RSN
+    if(t->supplicant) {
+        aic8800_supplicant_observe(t->supplicant,*now);
+        if(t->supplicant->state==AIC8800_SUPPLICANT_FAULT) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);return 0;}
+    }
+#endif
     return 1;
 }
 static int later(uint64_t now, uint64_t delta, uint64_t *out)
@@ -190,7 +208,7 @@ int aic8800_transport_scan(struct aic8800_sdio_transport *t, uint64_t deadline)
 }
 int aic8800_transport_connect(struct aic8800_sdio_transport *t,const struct aic8800_wifi_target *target,uint64_t deadline)
 {
-    if(!runtime_idle(t)||!t->wifi||data_busy(t)||!independent(t,target,sizeof(*target))||deadline>t->deadline)return 0;
+    if(!runtime_idle(t)||!t->wifi||(data_busy(t)||t->security)||!independent(t,target,sizeof(*target))||deadline>t->deadline)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
     if(ok)ok=aic8800_wifi_connect(t->wifi,t,target,now,deadline);
     if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
@@ -240,7 +258,8 @@ int aic8800_transport_authorize_open_data(struct aic8800_sdio_transport *t,uint6
 }
 int aic8800_transport_send_data(struct aic8800_sdio_transport *t,const uint8_t *p,size_t n,uint64_t deadline)
 {
-    if(!runtime_idle(t)||!t->data||!independent(t,p,n)||deadline>t->deadline)return 0;
+    if(!runtime_idle(t)||!t->data||(t->supplicant&&t->supplicant->state!=AIC8800_SUPPLICANT_AUTHORIZED)||
+        !independent(t,p,n)||deadline>t->deadline||(t->supplicant&&n>=14&&p[12]==0x88&&p[13]==0x8e))return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
     if(ok)ok=aic8800_data_send(t->data,t,p,n,now,deadline);
     if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
@@ -249,7 +268,7 @@ int aic8800_transport_send_data(struct aic8800_sdio_transport *t,const uint8_t *
 int aic8800_transport_take_data_result(struct aic8800_sdio_transport *t,struct aic8800_data_result *out)
 {
     if(!t||!t->initialized||t->entered||t->state!=AIC8800_TRANSPORT_RUNTIME||!t->data||
-        t->data->state!=AIC8800_DATA_DONE||!independent(t,out,sizeof(*out)))return 0;
+        t->data->state!=AIC8800_DATA_DONE||(t->supplicant&&t->supplicant->action_active)||!independent(t,out,sizeof(*out)))return 0;
     *out=t->data->result;t->data->state=AIC8800_DATA_IDLE;return 1;
 }
 int aic8800_transport_peek_data(const struct aic8800_sdio_transport *t,struct aic8800_data_frame *out)
@@ -258,6 +277,38 @@ int aic8800_transport_peek_data(const struct aic8800_sdio_transport *t,struct ai
         t->unrelated.record!=t->data->held_record||!independent(t,out,sizeof(*out)))return 0;
     *out=t->data->frame;return 1;
 }
+#ifdef SUNSTONE_AIC8800_RSN
+int aic8800_transport_start_security(struct aic8800_sdio_transport *t,struct aic8800_security *sec,
+    struct aic8800_supplicant *s,uint64_t deadline)
+{
+    if(!runtime_idle(t)||!t->data||t->data->state!=AIC8800_DATA_IDLE||t->security||t->supplicant||
+        !independent(t,sec,sizeof(*sec))||!independent(t,s,sizeof(*s))||
+        overlap(sec,sizeof(*sec),s,sizeof(*s))||!sec->initialized||sec->owner||!s->initialized||s->owner||
+        deadline>t->deadline||deadline<=t->card->host->last_now)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok) {
+        ok=aic8800_supplicant_claim(s,t,sec,now,deadline);
+        /* A claim that retained either owner is irrevocable even on failure. */
+        if(sec->owner==t){t->security=sec;t->supplicant=s;t->data->security=sec;}
+        if(!ok&&t->security)fail(t,AIC8800_TRANSPORT_DATA_ERROR);
+        if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}
+    }
+    t->entered=0;return ok;
+}
+int aic8800_transport_retire_security(struct aic8800_sdio_transport *t,uint64_t deadline)
+{
+    if(!runtime_idle(t)||!t->supplicant)return 0;
+    uint64_t now;t->entered=1;int ok=observe(t,&now);
+    if(ok)ok=aic8800_supplicant_retire(t->supplicant,now,deadline);
+    if(ok){t->phase=RUNTIME_STEP;t->wait_until=0;}t->entered=0;return ok;
+}
+int aic8800_transport_finish_security(struct aic8800_sdio_transport *t)
+{
+    if(!runtime_idle(t)||!t->supplicant||t->supplicant->state!=AIC8800_SUPPLICANT_RETIRED||
+        !t->security||!t->security->retired||t->data->state!=AIC8800_DATA_IDLE)return 0;
+    t->data->security=0;t->security=0;t->supplicant=0;return 1;
+}
+#endif
 static int cmd52(struct aic8800_sdio_transport *t, unsigned fn, uint32_t addr, int write, uint8_t value,
                  struct sunxi_sdio_request *r)
 {
@@ -303,6 +354,13 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     case RUNTIME_STEP:
         /* Do not transmit binding while a Wi-Fi command awaits confirmation. */
         if (t->wifi && t->wifi->state == AIC8800_WIFI_WAITING) { t->phase = RX_STATUS; return 1; }
+#ifdef SUNSTONE_AIC8800_RSN
+        if(t->supplicant) {
+            aic8800_supplicant_step(t->supplicant,now);
+            if(t->supplicant->state==AIC8800_SUPPLICANT_FAULT) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);return 1;}
+            if(t->security->state==AIC8800_SECURITY_WAITING){t->phase=RX_STATUS;return 1;}
+        }
+#endif
         aic8800_runtime_step(t->runtime, t, now);
         if (t->runtime->state == AIC8800_RUNTIME_FAULT) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); return 1; }
         if (t->runtime->state == AIC8800_RUNTIME_REQUEST) {
@@ -316,6 +374,10 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
                 t->tx_bytes = sizeof(t->wifi->request);
                 for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->wifi->request[i];
                 t->phase = CREDIT;
+            } else if(t->security && t->security->state == AIC8800_SECURITY_REQUEST) {
+                t->tx_bytes=sizeof(t->security->request);
+                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->security->request[i];
+                t->security_tx=1;t->phase=CREDIT;
             } else if(t->data && t->data->state == AIC8800_DATA_REQUEST) {
                 t->tx_bytes=t->data->request_bytes;
                 for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->data->request[i];
@@ -377,7 +439,10 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         else delay(t, now, t->config.poll_interval);
         break;
     case TX:
-        if(t->data_tx) {
+        if(t->security_tx) {
+            if(!aic8800_security_sent(t->security,t)) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);break;}
+            t->security_tx=0;aic8800_security_zero(t->tx,sizeof(t->tx));
+        } else if(t->data_tx) {
             if(!aic8800_data_sent(t->data,t)) {fail(t,AIC8800_TRANSPORT_DATA_ERROR);break;}
             t->data_tx=0;
         } else if (t->wifi && t->wifi->state == AIC8800_WIFI_REQUEST) {
@@ -450,12 +515,27 @@ static void parse(struct aic8800_sdio_transport *t, uint64_t now)
             t->codec_result = aic8800_wifi_response(t->wifi, t, &r, now);
             if (t->wifi->state == AIC8800_WIFI_FAULT) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); return; }
         }
+        if(t->security && t->codec_result == AIC8800_CODEC_UNRELATED) {
+            t->codec_result=aic8800_security_response(t->security,t,&r,now);
+            if(t->security->state==AIC8800_SECURITY_FAULT) {
+                t->unrelated=r;t->held=1;fail(t,AIC8800_TRANSPORT_DATA_ERROR);return;
+            }
+        }
         if(t->data && t->codec_result == AIC8800_CODEC_UNRELATED) {
             t->codec_result=aic8800_data_response(t->data,t,&r,now);
             if(t->data->state==AIC8800_DATA_FAULT) {
                 t->unrelated=r;t->held=1;fail(t,AIC8800_TRANSPORT_DATA_ERROR);return;
             }
         }
+#ifdef SUNSTONE_AIC8800_RSN
+        if(t->supplicant&&t->data->held&&t->data->held_record==r.record&&t->data->frame.eapol&&
+            aic8800_supplicant_receive(t->supplicant,&t->data->frame,now)) {
+            aic8800_data_consumed(t->data,t,r.record);t->codec_result=AIC8800_CODEC_OK;
+        }
+        if(t->supplicant&&t->supplicant->state==AIC8800_SUPPLICANT_FAULT) {
+            t->unrelated=r;t->held=1;fail(t,AIC8800_TRANSPORT_DATA_ERROR);return;
+        }
+#endif
         if (t->codec_result == AIC8800_CODEC_OK) t->cursor += r.consumed;
         else if (t->codec_result == AIC8800_CODEC_UNRELATED) { t->unrelated = r; t->held = 1; }
         else fail(t, AIC8800_TRANSPORT_MESSAGE_ERROR);

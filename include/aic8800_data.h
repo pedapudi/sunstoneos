@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_AIC8800_DATA_H
 #define SUNSTONE_AIC8800_DATA_H
 #include "aic8800_wifi.h"
+struct aic8800_security;
 #define AIC8800_DATA_ETHERNET_BYTES 1514u
 #define AIC8800_DATA_PACKET_BYTES 1536u
 enum aic8800_data_state { AIC8800_DATA_IDLE, AIC8800_DATA_REQUEST,
@@ -17,11 +18,12 @@ struct aic8800_data_frame {
     uint64_t generation;
     const uint8_t *ethernet; /* Borrowed until generic transport consume. */
     uint16_t bytes;
-    uint8_t eapol, vif, ap_index;
+    uint8_t eapol, vif, ap_index, encrypted;
 };
 struct aic8800_data {
     const void *owner;
     const struct aic8800_wifi *wifi;
+    struct aic8800_security *security;
     enum aic8800_data_state state;
     enum aic8800_data_error error;
     uint64_t last_now, deadline, completion_deadline, open_authority, open_generation;

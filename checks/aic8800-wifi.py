@@ -20,10 +20,10 @@ REFERENCES = {
     "aicwf_8800d80.c": "b102320fe7ffd98f51c04bd419e9359f78fd181bd3e71e0aaa2d3a6bcf5b2cb5",
     "Makefile": "447e4982d090a6587ef1c321eb6450c8e683a71c204acec3e9df34fc57bbcd03",
 }
-SOURCES = ["checks/aic8800-wifi.c", "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_data.c", "drivers/net/aic8800_runtime.c",
+SOURCES = ["checks/aic8800-wifi.c", "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c", "drivers/net/aic8800_runtime.c",
            "drivers/net/aic8800_firmware.c", "drivers/net/aic8800_sdio_transport.c",
            "drivers/net/aic8800_sdio_codec.c", "drivers/storage/sunxi_sdio.c", "drivers/storage/sdio_card.c"]
-HEADERS = ["include/aic8800_wifi.h", "include/aic8800_data.h", "include/aic8800_runtime.h", "include/aic8800_firmware.h",
+HEADERS = ["include/aic8800_wifi.h", "include/aic8800_security.h", "include/aic8800_data.h", "include/aic8800_runtime.h", "include/aic8800_firmware.h",
            "include/aic8800_sdio_transport.h", "include/aic8800_sdio_codec.h", "include/sunxi_sdio.h",
            "include/sdio_card.h", "checks/aic8800-runtime.c", "checks/aic8800-sdio-transport.c", "checks/sdio-controller.c"]
 

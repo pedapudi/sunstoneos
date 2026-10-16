@@ -1,6 +1,7 @@
 /* Native packet worker; source ABI and supported receive profile are documented
  * in docs/radio-data.md. No allocation, Linux code, retry loop or key handling. */
 #include "aic8800_data.h"
+#include "aic8800_security.h"
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0]|(uint16_t)p[1]<<8); }
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0]<<8|p[1]); }
 static uint32_t le32(const uint8_t *p) { return le16(p)|(uint32_t)le16(p+2)<<16; }
@@ -12,13 +13,13 @@ static int linked(const struct aic8800_data *d)
 {
     const struct aic8800_wifi *w=d->wifi;
     return w&&w->state==AIC8800_WIFI_READY&&w->association_generation&&
-        (w->link==AIC8800_WIFI_ASSOCIATED_OPEN||w->link==AIC8800_WIFI_SECURITY_PENDING);
+        (w->link==AIC8800_WIFI_ASSOCIATED_OPEN||w->link==AIC8800_WIFI_SECURITY_PENDING||w->link==AIC8800_WIFI_SECURED);
 }
 static int active(const struct aic8800_data *d)
 { return d->state==AIC8800_DATA_REQUEST||d->state==AIC8800_DATA_WAITING; }
 static int port_open(const struct aic8800_data *d)
-{ return linked(d)&&d->wifi->link==AIC8800_WIFI_ASSOCIATED_OPEN&&d->open_authority&&
-    d->open_generation==d->wifi->association_generation; }
+{ return linked(d)&&((d->wifi->link==AIC8800_WIFI_ASSOCIATED_OPEN&&d->open_authority&&
+    d->open_generation==d->wifi->association_generation)||aic8800_security_open(d->security)); }
 static int eapol(const uint8_t *p,size_t n)
 { return n>=4&&be16(p+2)<=n-4; }
 int aic8800_data_init(struct aic8800_data *d)
@@ -106,28 +107,43 @@ enum aic8800_codec_result aic8800_data_response(struct aic8800_data *d,const voi
     if((r->transport_type&0x10)||!p||r->record_bytes<60||d->held||!linked(d))return AIC8800_CODEC_UNRELATED;
     size_t n=le16(p);if(n!=r->record_bytes-60||n<24)return AIC8800_CODEC_UNRELATED;
     uint32_t flags=le32(p+48),status=le32(p+36);
+    unsigned encrypted=((status>>2)&7)==3;
     /* upload required; management, four-address, reorder, AMSDU and monitor
      * records stay opaque. Error/decryption bits are not fabricated as success. */
     if(!(flags&0x40)||(flags&0xa7)||p[49]!=d->wifi->vif||
-        (p[50]!=d->wifi->ap_index&&p[50]!=0xff)||(status&0x3fc))return AIC8800_CODEC_UNRELATED;
+        (p[50]!=d->wifi->ap_index&&p[50]!=0xff)||(status&0x3e0)||
+        ((status&0x1c)&&!encrypted))return AIC8800_CODEC_UNRELATED;
     const uint8_t *m=p+60;uint16_t fc=le16(m);
-    if((fc&0x000f)!=8||(fc&0x0300)!=0x0200||(fc&0xc400)||
+    if((fc&0x000f)!=8||(fc&0x0300)!=0x0200||(fc&0x8400)||
+        (!!(fc&0x4000)!=encrypted)||
         (le16(m+22)&15)||!equal(m+10,d->wifi->target.bssid,6)||
         (!(m[4]&1)&&!equal(m+4,d->wifi->mac,6)))return AIC8800_CODEC_UNRELATED;
     /* Only data or QoS data; null/CF variants are not Ethernet MSDUs. */
     if((fc&0x00f0)!=0&&(fc&0x00f0)!=0x0080)return AIC8800_CODEC_UNRELATED;
     size_t header=(fc&0x0080)?26:24;
     if(n<header+8||((fc&0x0080)&&(m[24]&0x80)))return AIC8800_CODEC_UNRELATED;
+    unsigned key_slot=0,tid=(fc&0x80)?m[24]&15:16;uint64_t pn=0;
+    if(encrypted) {
+        if(n<header+16)return AIC8800_CODEC_UNRELATED;
+        const uint8_t *ccmp=m+header;
+        if(ccmp[2]||(ccmp[3]&0x3f)!=0x20)return AIC8800_CODEC_UNRELATED;
+        pn=(uint64_t)ccmp[0]|(uint64_t)ccmp[1]<<8;
+        for(unsigned i=0;i<4;++i)pn|=(uint64_t)ccmp[4+i]<<(16+8*i);
+        if(!aic8800_security_rx_key(d->security,!!(m[4]&1),ccmp[3]>>6,tid,pn,&key_slot))return AIC8800_CODEC_UNRELATED;
+        header+=8;
+    }
     const uint8_t snap[]={0xaa,0xaa,3,0,0,0};
     if(!equal(m+header,snap,6))return AIC8800_CODEC_UNRELATED;
     size_t bytes=n-header-8+14;if(bytes>AIC8800_DATA_ETHERNET_BYTES)return AIC8800_CODEC_UNRELATED;
     unsigned control=be16(m+header+6)==0x888e;
     if(control) {if(!eapol(m+header+8,n-header-8))return AIC8800_CODEC_UNRELATED;}
-    else if(!port_open(d)||be16(m+header+6)<1536)return AIC8800_CODEC_UNRELATED;
+    else if(!port_open(d)||be16(m+header+6)<1536||
+        (d->wifi->target.security==AIC8800_WIFI_WPA2_PSK_CCMP&&!encrypted))return AIC8800_CODEC_UNRELATED;
     for(unsigned i=0;i<6;++i){d->ethernet[i]=m[4+i];d->ethernet[6+i]=m[16+i];}
     for(size_t i=0;i<bytes-12;++i)d->ethernet[12+i]=m[header+6+i];
     d->frame=(struct aic8800_data_frame){.generation=d->wifi->association_generation,.ethernet=d->ethernet,
-        .bytes=(uint16_t)bytes,.eapol=(uint8_t)control,.vif=d->wifi->vif,.ap_index=d->wifi->ap_index};
+        .bytes=(uint16_t)bytes,.eapol=(uint8_t)control,.encrypted=(uint8_t)encrypted,.vif=d->wifi->vif,.ap_index=d->wifi->ap_index};
+    if(encrypted)aic8800_security_rx_commit(d->security,key_slot,tid,pn);
     d->held_record=r->record;d->held=1;return AIC8800_CODEC_UNRELATED;
 }
 void aic8800_data_consumed(struct aic8800_data *d,const void *owner,const uint8_t *record)

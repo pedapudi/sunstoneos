@@ -30,7 +30,7 @@ struct aic8800_wifi_scan_result {
 struct aic8800_wifi_scan_summary { uint32_t received; uint8_t vif, status, reported_results, accepted; };
 enum aic8800_wifi_security { AIC8800_WIFI_OPEN = 1, AIC8800_WIFI_WPA2_PSK_CCMP };
 enum aic8800_wifi_link { AIC8800_WIFI_LINK_DOWN, AIC8800_WIFI_CONNECTING,
-    AIC8800_WIFI_ASSOCIATED_OPEN, AIC8800_WIFI_SECURITY_PENDING, AIC8800_WIFI_DISCONNECTING, AIC8800_WIFI_LINK_UNRESOLVED };
+    AIC8800_WIFI_ASSOCIATED_OPEN, AIC8800_WIFI_SECURITY_PENDING, AIC8800_WIFI_DISCONNECTING, AIC8800_WIFI_LINK_UNRESOLVED, AIC8800_WIFI_SECURED };
 struct aic8800_wifi_target {
     /* Independent caller authority for active association and a previously
      * observed matching beacon. A scan result or numeric ID alone is no proof.
