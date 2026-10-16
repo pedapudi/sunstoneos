@@ -26,6 +26,15 @@ handoff, or final response does not invalidate successful test evidence.
 
 ## Hardware access
 
+- Parallel workers develop in isolated worktrees and use separate build/evidence
+  directories. Assign file ownership before overlapping work begins.
+- One coordinator owns physical board testing. Workers use host checks/emulation
+  and submit bounded board-test requests with artifact identities, prerequisites,
+  expected results, and evidence destinations. A queue claim does not replace
+  the exclusive board lock or establish recovery qualification.
+- Integrate changes and reuse valid component evidence before scheduling physical
+  checks. Do not retry failed board tests automatically or release a live test's
+  ownership solely because an observation timeout elapsed.
 - Identify the target before issuing device commands. Do not open other boards.
 - Hold an exclusive target lock during device operations. Coordinate access with
   existing shared-board tooling when a controller or acoustic resource is shared.

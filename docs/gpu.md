@@ -23,7 +23,9 @@ checks pass; physical isolation remains unimplemented and unqualified.
 The [FreeRTOS lifecycle service](gpu-service.md) now integrates preparation,
 startup, control, and shutdown under one privileged worker. A two-core emulator
 check passes ownership, reopen, event service, and retained-failure cases.
-The backend still requires physical power, cache, interrupt, and isolation work.
+The [native memory adapter](gpu-memory.md) has emulator evidence for translation,
+uncached shared resources, and cached firmware publication/reclamation. The
+backend still requires physical power, cache, interrupt, and isolation qualification.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -162,8 +164,8 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Implement the lifecycle service's board backend with reserved allocations,
-   cache publication, physical interrupt delivery, and event-specific resource
+1. Integrate the lifecycle service's board backend with reserved allocations,
+   native memory operations, physical interrupt delivery, and event-specific resource
    handlers. Implement and qualify the shutdown isolation callback. Integrate
    GPU workload contexts, live mapping updates, and translation invalidation.
    GPU job completion needs

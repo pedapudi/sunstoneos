@@ -37,4 +37,27 @@ if(SUNSTONE_GPU_FIRMWARE)
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-service-model.map")
   set_target_properties(gpu-service-model PROPERTIES SUFFIX ".elf"
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+
+  apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/platform.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checks/gpu-memory-platform.patch")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    platform/qemu-smp/platform.c checks/gpu-memory-platform.patch)
+  get_target_property(gpu_service_sources gpu-service-model SOURCES)
+  list(REMOVE_ITEM gpu_service_sources platform/qemu-smp/platform.c)
+  add_executable(gpu-memory-model EXCLUDE_FROM_ALL ${gpu_service_sources}
+    "${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-platform.c"
+    arch/aarch64/device_memory.c platform/a733/gpu_memory.c)
+  foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
+    get_target_property(value gpu-service-model ${property})
+    set_property(TARGET gpu-memory-model PROPERTY ${property} "${value}")
+  endforeach()
+  # Keep the integration artifact's map separate from the service-only evidence.
+  get_target_property(gpu_memory_link_options gpu-memory-model LINK_OPTIONS)
+  list(REMOVE_ITEM gpu_memory_link_options "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-service-model.map")
+  set_property(TARGET gpu-memory-model PROPERTY LINK_OPTIONS "${gpu_memory_link_options}")
+  target_link_options(gpu-memory-model PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-model.map")
+  target_compile_definitions(gpu-memory-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1
+    INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
+  set_target_properties(gpu-memory-model PROPERTIES SUFFIX ".elf")
 endif()

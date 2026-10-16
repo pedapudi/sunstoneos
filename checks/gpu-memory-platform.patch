@@ -1,0 +1,23 @@
+--- platform.c
++++ platform.c
+@@ -63,7 +63,7 @@
+ static void local_init(void) {
+     // The non-MPU reference port runs tasks at EL0. Both levels share this
+     // development mapping; tasks can access all data and peripherals.
+-    uint64_t mair = 0xff00, tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |
++    uint64_t mair = 0x44ff00, tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |
+         (1UL << 10) | (1UL << 8) | 25;
+     __asm__ volatile("dsb sy\n msr mair_el1, %0\n msr tcr_el1, %1\n msr ttbr0_el1, %2\n"
+                      "isb\n tlbi vmalle1\n dsb sy\n isb" :: "r"(mair), "r"(tcr), "r"(level1) : "memory");
+@@ -100,6 +100,11 @@
+     for (unsigned i = 0; i < 64; ++i)
+         level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) |
+             (3UL << 8) | (1UL << 6) | (1UL << 2) | (1UL << 54) | (1UL << 53) | 1;
++    // Fixture-only NC reservations, established before either CPU enables MMU.
++    level2[(0x46000000 - 0x40000000) / 0x200000] ^= (1UL << 2) | (2UL << 2);
++    level2[(0x47000000 - 0x40000000) / 0x200000] ^= (1UL << 2) | (2UL << 2);
++    level2[(0x47000000 - 0x40000000) / 0x200000] |= 1UL << 7;
++
+     // Code is read-only at both EL0 and EL1; writable EL0 pages cannot
+     // execute at EL1. The linker puts all data in later blocks.
+     level2[8] = 0x41000000UL | (1UL << 10) | (3UL << 8) | (3UL << 6) | (1UL << 2) | 1;

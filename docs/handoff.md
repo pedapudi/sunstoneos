@@ -7,6 +7,11 @@ EL1 stall and returns to FEL. [Physical kernel evidence](a733-kernel.md) records
 the image, resources, measurements, and limitations.
 The [bring-up sequence](bringup-sequence.md) orders recovery, shared platform
 services, complete device functionality, qualification, and performance work.
+Parallel workers now use separate worktrees and build directories. One coordinator
+owns physical board tests through the [submission queue](board-test-queue.md)
+and the existing exclusive board lock. The shared queue is initialized; the
+physical FEL-input check is pending on confirmed pad connection and current
+target/access conditions. No new physical request has run.
 
 A native USB channel now passes status, packet-boundary echo, log, and commanded
 ROM return checks. [USB evidence](usb.md) records the implementation and limits.
@@ -129,6 +134,10 @@ The [FreeRTOS lifecycle service](gpu-service.md) integrates preparation, startup
 control, and shutdown under one privileged worker. Its two-core emulator cases
 pass session ownership, reopen, event service, and retained failures. Physical
 backend operations and resource-specific event handlers remain outstanding.
+The [native memory adapter](gpu-memory.md) now connects shared firmware records
+to uncached CPU mappings and publishes/reclaims cached firmware backing. Two
+emulator cases pass lifecycle integration and retained mapping failure. Board
+allocation, physical cache behavior, and isolation remain unqualified.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -304,8 +313,8 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement the GPU lifecycle service's board backend with reserved allocations,
-   cache operations, power/reset control, resource-specific firmware event
+7. Integrate the GPU lifecycle service's board backend with reserved allocations,
+   the [native memory adapter](gpu-memory.md), power/reset control, resource-specific firmware event
    handlers, and physical interrupt delivery. The [FreeRTOS service](gpu-service.md)
    now integrates resource preparation, startup, control, and shutdown under one
    privileged worker. Its two-core emulator check passes ownership, migration,
@@ -313,6 +322,12 @@ the tool hash and recovery evidence in the application document.
    `gpu-service-20261016`; no GPU firmware instructions or physical device
    accesses occurred. Shader/runtime integration and GPU job completion remain
    outstanding. Physical backend work requires independent recovery first.
+   Reuse `gpu-memory-20261016` for native translation, shared-memory access,
+   publication/reclamation, and permission-change failure. Reserve uncached
+   firmware resource mappings without cacheable aliases on the board; qualify
+   physical cache/interconnect behavior after recovery. Power/reset and IRQ
+   development are assigned to isolated parallel workers; coordinate integration
+   before changing their service interfaces or files.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic
    and drain outstanding transactions before resources can be reused. Implement

@@ -5,7 +5,8 @@ emulator check. One privileged task prepares firmware resources, starts the
 firmware protocol, checks compatibility and health, services events, and shuts
 down the device. The check uses a software model of firmware responses and GPU
 registers. GPU firmware instructions and graphics/compute workloads do not run.
-Physical power, cache synchronization, interrupts, isolation, and recovery
+The [native memory adapter](gpu-memory.md) adds emulator evidence for translation
+and cache operations. Physical power, cache synchronization, interrupts, isolation, and recovery
 remain unqualified.
 
 The [interface](../include/pvr_gpu_service.h) and
@@ -142,6 +143,6 @@ python3 checks/pvr-gpu-service.py \
 
 Use `--cases` to select affected cases when existing evidence covers the others.
 The next implementation work is the board backend: reserved allocations and
-cache operations, power/reset/isolation services, resource-specific events, and
+native memory integration, power/reset/isolation services, resource-specific events, and
 physical interrupt delivery. Watchdog recovery remains a prerequisite for new
 peripheral access.

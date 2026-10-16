@@ -82,6 +82,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   check integrating resource preparation, startup, control, and shutdown under
   one privileged worker. It covers client ownership, reopen, event service,
   and retained failures. Physical backend operations remain outstanding.
+  The [native firmware memory adapter](gpu-memory.md) passes emulator integration
+  for CPU translation, uncached shared resources, cached firmware publication,
+  reclamation, and retained permission failures. Physical coherence and board
+  reservation remain unqualified.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

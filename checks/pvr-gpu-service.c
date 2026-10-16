@@ -1,6 +1,12 @@
 #include "pvr_gpu_service.h"
 #include "platform.h"
 #include <string.h>
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+#include "a733_gpu_memory.h"
+#include "aarch64_device_memory.h"
+static struct a733_gpu_memory memory, refused;
+static uint64_t *fixture_level2;
+#endif
 
 extern const unsigned char gpu_firmware[], gpu_firmware_end[];
 /* The runner changes this initialized fixture word without recompiling code. */
@@ -77,6 +83,9 @@ static int publish(void *ctx)
         callback(ctx); configASSERT(portGET_CORE_ID() == 1);
     }
     __asm__ volatile("dsb sy" ::: "memory");
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    configASSERT(a733_gpu_memory_publish(&memory));
+#endif
     __atomic_fetch_add(&published, 1, __ATOMIC_RELEASE); return 1;
 }
 static int started(void *ctx, uint32_t *out)
@@ -87,22 +96,41 @@ static int started(void *ctx, uint32_t *out)
         unsigned char *b = resource(PVR_FW_OS_INIT) + 40;
         put(b + 8, 8, PVR_FW_A733_BVNC); put(b + 24, 8, PVR_FW_A733_BVNC); b[56] = 1;
     }
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_started(&memory, out);
+#else
     return 1;
+#endif
 }
 static int read_mem(void *ctx, enum pvr_ccb_region region, uint32_t off, void *out, size_t n)
 {
     callback(ctx); configASSERT(off <= pvr_ccb_region_bytes(region) && n <= pvr_ccb_region_bytes(region) - off);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_read(&memory, region, off, out, n);
+#else
     if (n == 4) { uint32_t v = get((uint32_t *)(resource(region) + off)); memcpy(out, &v, 4); }
     else memcpy(out, resource(region) + off, n);
     return 1;
+#endif
 }
 static int write_mem(void *ctx, enum pvr_ccb_region region, uint32_t off, const void *in, size_t n)
 {
     callback(ctx); configASSERT(off <= pvr_ccb_region_bytes(region) && n <= pvr_ccb_region_bytes(region) - off);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_write(&memory, region, off, in, n);
+#else
     memcpy(resource(region) + off, in, n); return 1;
+#endif
 }
 static int barrier(void *ctx, enum pvr_ccb_barrier kind)
-{ callback(ctx); (void)kind; __asm__ volatile("dsb sy" ::: "memory"); return 1; }
+{
+    callback(ctx);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_barrier(&memory, kind);
+#else
+    (void)kind; __asm__ volatile("dsb sy" ::: "memory"); return 1;
+#endif
+}
 static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     callback(ctx); configASSERT(running && off == 0xb00 && !value);
@@ -121,12 +149,29 @@ static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 {
     callback(ctx); configASSERT(off == 0x8a8);
     if (get(&fault_mode) == 3) return 0;
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    if (get(&fault_mode) == 4) {
+        /* Deliberately violate pinned writable mappings. This is a fault fixture,
+         * not a supported live remap. Keep NC attributes; no cached alias exists. */
+        fixture_level2[(0x46000000 - 0x40000000) / 0x200000] |= 1u << 7;
+        configASSERT(aarch64_device_cache(AARCH64_CACHE_CLEAN, (uintptr_t)fixture_level2, 4096));
+        __asm__ volatile("dsb sy\n tlbi vmalle1is\n dsb sy\n isb" ::: "memory");
+        *out = 0; return 1;
+    }
+#endif
     *out = get((uint32_t *)resource(3)) != get((uint32_t *)(resource(3) + 128)); return 1;
 }
 static int irq_write(void *ctx, uint32_t off, uint32_t value)
 { callback(ctx); configASSERT(off == 0x8b0 && value == 1); return 1; }
 static int compat(void *ctx, uint32_t off, void *out, size_t n)
-{ callback(ctx); configASSERT(off <= 64 && n <= 64 - off); memcpy(out, resource(PVR_FW_OS_INIT) + 40 + off, n); return 1; }
+{
+    callback(ctx); configASSERT(off <= 64 && n <= 64 - off);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_compat(&memory, off, out, n);
+#else
+    memcpy(out, resource(PVR_FW_OS_INIT) + 40 + off, n); return 1;
+#endif
+}
 static int event(void *ctx, const unsigned char command[88])
 {
     callback(ctx); configASSERT(word(command, 4) == (PVR_CCB_MAGIC | 101));
@@ -134,14 +179,33 @@ static int event(void *ctx, const unsigned char command[88])
     __atomic_fetch_add(&handled, 1, __ATOMIC_RELEASE); return 1;
 }
 static int sync_write(void *ctx, uint32_t value)
-{ callback(ctx); put(resource(PVR_FW_POWER_SYNC), 4, value); return 1; }
+{
+    callback(ctx);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_sync_write(&memory, value);
+#else
+    put(resource(PVR_FW_POWER_SYNC), 4, value); return 1;
+#endif
+}
 static int sync_read(void *ctx, uint32_t *out)
-{ callback(ctx); *out = (uint32_t)word(resource(PVR_FW_POWER_SYNC), 4); return 1; }
+{
+    callback(ctx);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_sync_read(&memory, out);
+#else
+    *out = (uint32_t)word(resource(PVR_FW_POWER_SYNC), 4); return 1;
+#endif
+}
 static int isolate(void *ctx)
 {
     callback(ctx); configASSERT(stopping && service.queue.phase == PVR_CCB_RETIRED);
     configASSERT(word(registers + 0x100, 8) == UINT64_C(0xffeffffffffffc3d));
-    running = 0; __atomic_fetch_add(&isolated, 1, __ATOMIC_RELEASE); return 1;
+    running = 0; __atomic_fetch_add(&isolated, 1, __ATOMIC_RELEASE);
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_reclaim(&memory);
+#else
+    return 1;
+#endif
 }
 static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op, uint64_t us)
 {
@@ -228,7 +292,12 @@ static void owner(void *arg)
         configASSERT(request(PVR_GPU_SERVICE_CLOSE, 20000).result == PVR_GPU_SERVICE_OK);
         vTaskDelay(50); /* Missing power acknowledgment expires without a client. */
     } else {
-        configASSERT(gpu_service_case == 3); set(&fault_mode, 3); vTaskDelay(10);
+        configASSERT(gpu_service_case == 3
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+            || gpu_service_case == 4
+#endif
+        );
+        set(&fault_mode, gpu_service_case); vTaskDelay(10);
     }
     reply = request(PVR_GPU_SERVICE_STATUS, 0);
     configASSERT(reply.result == PVR_GPU_SERVICE_FAULT && reply.phase == PVR_GPU_SERVICE_FAILED && reply.owns_session);
@@ -238,6 +307,9 @@ static void owner(void *arg)
     configASSERT(request(PVR_GPU_SERVICE_CLOSE, 100000).result == PVR_GPU_SERVICE_FAULT);
     configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_FAULT);
     vTaskDelay(5); configASSERT(count == get(&calls));
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    configASSERT(memory.phase == (gpu_service_case == 4 ? A733_GPU_MEMORY_FAILED : A733_GPU_MEMORY_PUBLISHED));
+#endif
     for (unsigned i=0;i<22;++i) for (unsigned j=0;j<4096;++j) configASSERT(guards[i][j] == 0xa5);
     configASSERT(get(&cores) == 3);
     platform_puts("PASS GPU service: case "); platform_hex(gpu_service_case);
@@ -249,6 +321,13 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 void kernel_main(void)
 {
     platform_init(); memset(arena, 0xa5, sizeof(arena));
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    uint64_t ttbr;
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr));
+    uint64_t *root = (void *)(uintptr_t)(ttbr & UINT64_C(0x000ffffffffff000));
+    fixture_level2 = (void *)(uintptr_t)(root[1] & UINT64_C(0x000ffffffffff000));
+    memset((void *)(uintptr_t)0x46000000, 0xa5, 0x200000);
+#endif
     char move[8] = "abcdefg";
     configASSERT(memmove(move + 1, move, 6) == move + 1 && !memcmp(move, "aabcdef", 8));
     configASSERT(memmove(move, move + 1, 6) == move && !memcmp(move, "abcdeff", 8));
@@ -265,9 +344,13 @@ void kernel_main(void)
         unsigned n = i < 2 ? (i ? 20480 : 102400) : i == 2 ? 16384 :
             pvr_fw_state_layout((enum pvr_fw_resource)(i - 3))->allocation_bytes;
         struct pvr_mips_buffer *b = i < 3 ? &config.firmware_buffers[i] : &config.resources[i - 3];
-        *b = (struct pvr_mips_buffer){{arena + byte, n}, pages + page, n/4096};
-        for (unsigned p=0;p<n/4096;++p) pages[page++] = (uintptr_t)(arena + byte + p*4096);
-        guards[i] = arena + byte + n; byte += n + 4096;
+        unsigned char *cpu = arena + byte;
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+        if (i >= 3) cpu = (void *)(uintptr_t)(0x46000000 + byte);
+#endif
+        *b = (struct pvr_mips_buffer){{cpu, n}, pages + page, n/4096};
+        for (unsigned p=0;p<n/4096;++p) pages[page++] = (uintptr_t)(cpu + p*4096);
+        guards[i] = cpu + n; byte += n + 4096;
     }
     configASSERT(page == 79 && byte == sizeof(arena));
     struct pvr_mips_buffer saved = config.resources[0];
@@ -277,6 +360,21 @@ void kernel_main(void)
     uint64_t pa = pages[34]; pages[34] = pages[0];
     configASSERT(!pvr_gpu_service_init(&service, &config, 4, 1) && !service.initialized && !get(&calls));
     pages[34] = pa;
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    /* Cached shared memory, wrong PA, read-only NC and absent mappings must be
+     * refused before any resource or adapter mutation. */
+    const uintptr_t invalid_cpu[] = {(uintptr_t)arena + 0x60000, (uintptr_t)saved.storage.cpu,
+                                     0x47000000, 0x48000000};
+    for (unsigned i = 0; i < 4; ++i) {
+        config.resources[0].storage.cpu = (void *)invalid_cpu[i];
+        pages[34] = i == 1 ? pa + 4096 : invalid_cpu[i];
+        configASSERT(!a733_gpu_memory_init(&refused, config.firmware_buffers, config.resources));
+        for (unsigned j = 0; j < sizeof(refused); ++j) configASSERT(!((unsigned char *)&refused)[j]);
+    }
+    config.resources[0] = saved; pages[34] = pa;
+    configASSERT(a733_gpu_memory_init(&memory, config.firmware_buffers, config.resources));
+    configASSERT(memory.phase == A733_GPU_MEMORY_OFFLINE);
+#endif
     configASSERT(pvr_gpu_service_init(&service, &config, 4, 1) && !get(&calls));
     TaskHandle_t a = xTaskCreateStaticAffinitySet(owner, "owner", 4096, NULL, 5, stacks[0], &tasks[0], 1);
     TaskHandle_t b = xTaskCreateStaticAffinitySet(peer, "peer", 4096, NULL, 5, stacks[1], &tasks[1], 2);
