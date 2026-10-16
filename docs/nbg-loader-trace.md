@@ -159,4 +159,5 @@ until complete command admission is implemented.
 
 The [native decoder](nbg-model.md) now supplies checked C views to this
 reconstruction. Its comparison reads these saved SDK snapshots without rerunning
-the loader library. Native allocation planning and command assembly remain outstanding.
+the loader library. Native allocation planning and command construction are
+covered by the separate assembly evidence above.

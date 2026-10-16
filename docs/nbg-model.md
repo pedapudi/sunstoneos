@@ -48,7 +48,8 @@ The header retains target, feature flags, core count, memory requirements,
 and stored checksum. The decoder does not verify checksum or hardware
 compatibility. The separate [checksum verifier](nbg-checksum.md) checks
 complete-file integrity for `0x1001e` and payload/section integrity for the
-supported `0x20000` layout. The assembler still refuses `0x20000`. Names preserve the original 64 bytes and add a terminating NUL;
+supported `0x20000` layout. The assembler accepts the observed profiles in both
+formats. Names preserve the original 64 bytes and add a terminating NUL;
 they are not checked for valid UTF-8. Signed fields are decoded without
 relying on an out-of-range unsigned-to-signed conversion.
 
@@ -109,8 +110,9 @@ The directory-specific ASan/UBSan check passes the compiled convolution and
 84 atomic refusals. It covers truncated allocations, malformed subheaders and
 sections, overlap, duplicate IDs, record widths, scalar memory requirements,
 quantization, reference bounds, and accessor aliases. A relocated, reversed
-directory also passes. The same check confirms that the assembler refuses the
-newly decoded format without changing its result.
+directory also passes. Assembly now has separate profile checks; the obsolete
+blanket-refusal assertion was removed from the decoder check when directory
+assembly was implemented.
 
 One comparison with the saved directory reference matches thirteen sections,
 two operations, five patches, two tensors, and three payload ranges. Its initial
@@ -146,6 +148,6 @@ The [native assembler](nbg-assembly.md) resolves caller-owned allocations and
 assembles the observed command profile from these views. Descriptor access extents, device padding,
 relocation destinations, software-operation semantics, command permissions,
 and SRAM placement remain separate admission requirements. Directory checksum
-verification now has host evidence. Zero-pool assembly remains required before
-the numerical fixture can reach execution admission.
+verification and assembly with an empty working pool now have host evidence.
+Complete admission remains required before numerical execution.
 The assembler adapts the completion event and reserves the controller's full fetch span.

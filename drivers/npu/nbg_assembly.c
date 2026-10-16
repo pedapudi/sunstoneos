@@ -73,10 +73,11 @@ static int patch_fields(const struct nbg_patch *p)
 static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
 {
     const struct nbg_model_header *h = &m->header;
+    int directory = h->version == NBG_MODEL_DIRECTORY_VERSION;
     struct nbg_checksum checksum;
     if (nbg_checksum_verify(m->data, m->bytes, &checksum) != NBG_CHECKSUM_MATCH) return 0;
-    if (h->version != NBG_MODEL_VERSION || h->target != 0x1000003b ||
-        h->flags != 0x02d00027 || h->core_count != 1 || h->nn_bytes != 192 ||
+    if ((!directory && h->version != NBG_MODEL_VERSION) || h->target != 0x1000003b ||
+        h->flags != (directory ? 0x0aU : 0x02d00027U) || h->core_count != 1 || h->nn_bytes != 192 ||
         h->input_count != 1 || h->output_count != 1 ||
         h->operation_count < 2 || h->operation_count > NBG_ASSEMBLY_MAX_NN + 1 ||
         h->pool_alignment != 64 || h->pool_base || h->axi_sram_base ||
@@ -87,6 +88,10 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
         case NBG_INPUT: case NBG_OUTPUT: case NBG_LAYER: case NBG_OPERATION:
         case NBG_NN: case NBG_PATCH: case NBG_LOAD_STATES:
         case NBG_COEFF_TABLE: case NBG_COEFF: case NBG_LOAD_STATES_TABLE: break;
+        case NBG_NETWORK_INFO: case NBG_MEMORY_POOL: case NBG_VIP_SRAM:
+        case NBG_AXI_SRAM: case NBG_SECTION_CHECKSUM:
+            if (!directory && m->sections[i].bytes) return 0;
+            break;
         default: if (m->sections[i].bytes) return 0;
         }
     }
@@ -102,7 +107,7 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
                      m->sections[NBG_NN].bytes) ||
         !requirement(&p->buffers[NBG_ALLOC_COEFF], m->sections[NBG_COEFF].bytes,
                      (uint64_t)m->sections[NBG_COEFF].bytes + 128) ||
-        !requirement(&p->buffers[NBG_ALLOC_POOL], h->pool_bytes, h->pool_bytes) ||
+        (h->pool_bytes && !requirement(&p->buffers[NBG_ALLOC_POOL], h->pool_bytes, h->pool_bytes)) ||
         !requirement(&p->buffers[NBG_ALLOC_COMMAND], command_bytes, fetch)) return 0;
     for (unsigned i = 0; i < 2; ++i) {
         struct nbg_tensor t;
@@ -119,7 +124,7 @@ static int profile(const struct nbg_model *m, struct nbg_assembly_plan *p)
     struct nbg_span span;
     struct nbg_patch patch;
     if (!nbg_model_operation(m, 0, &op) || op.kind != 0xffff || op.index != 0xffff ||
-        op.layer != 0xffff || op.state || op.first_patch || op.patch_count != 1 ||
+        op.layer != (directory ? UINT32_MAX : 0xffffU) || op.state || op.first_patch || op.patch_count != 1 ||
         op.auxiliary[0] || op.auxiliary[1] != UINT32_MAX ||
         !nbg_model_table(m, NBG_LOAD_STATES_TABLE, 0, &span) ||
         span.bytes != sizeof(initial)) return 0;
@@ -176,8 +181,13 @@ static int operation(const struct nbg_model *m, uint32_t number, uint32_t first,
     int last = number == plan->nn_operations;
     image->command_bytes = last ? 32 : 24;
     if (span.bytes != image->command_bytes) return 0;
-    for (unsigned i = 0; i < span.bytes / 4; ++i)
-        if (word(span.data + i * 4) != (i == 5 && last ? 0 : state[i])) return 0;
+    for (unsigned i = 0; i < span.bytes / 4; ++i) {
+        uint32_t expected = i == 5 && last ? 0 : state[i];
+        // The observed directory profile changes bit 17 of this state value.
+        // Its hardware meaning remains unresolved; require the captured bytes.
+        if (i == 1 && m->header.version == NBG_MODEL_DIRECTORY_VERSION) expected = 0x0493e040;
+        if (word(span.data + i * 4) != expected) return 0;
+    }
     memcpy(image->command, span.data, span.bytes);
     memcpy(image->nn, m->data + m->sections[NBG_NN].offset + op.index * 192, 192);
     struct nbg_relocation nn[POINTER_COUNT], command = {0};
@@ -272,7 +282,8 @@ static int inspect(const struct nbg_model *m, const struct nbg_assembly_buffer *
         if (!operation(m, i, first, b, p, &scratch, &count)) return 0;
         first += count;
     }
-    if (first != m->sections[NBG_PATCH].bytes / 40) return 0;
+    unsigned patch_bytes = m->header.version == NBG_MODEL_DIRECTORY_VERSION ? 28 : 40;
+    if (first != m->sections[NBG_PATCH].bytes / patch_bytes) return 0;
     p->state_patches = p->nn_operations;
     p->descriptor_patches = first - 1 - p->state_patches;
     return 1;
@@ -294,6 +305,10 @@ int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
     if (!result_space(m, out) || !range(b, metadata_bytes) ||
         !separate(out, sizeof(*out), b, metadata_bytes) || !profile(m, &p)) return 0;
     for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i) {
+        if (!p.buffers[i].allocation_bytes) {
+            if (b[i].cpu || b[i].bytes || b[i].device) return 0;
+            continue;
+        }
         if (b[i].bytes != p.buffers[i].allocation_bytes || !range(b[i].cpu, b[i].bytes) ||
             ((uintptr_t)b[i].cpu & 4095) || !b[i].device || (b[i].device & 4095) ||
             b[i].bytes > (UINT64_C(1) << 32) - b[i].device ||
@@ -303,14 +318,15 @@ int nbg_assemble(const struct nbg_model *m, const struct nbg_assembly_buffer *b,
             !separate(b[i].cpu, b[i].bytes, m, sizeof(*m)) ||
             !separate(b[i].cpu, b[i].bytes, m->data, m->bytes)) return 0;
         for (unsigned j = 0; j < i; ++j)
-            if (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
-                overlaps(b[i].device, b[i].bytes, b[j].device, b[j].bytes)) return 0;
+            if (b[j].bytes && (!separate(b[i].cpu, b[i].bytes, b[j].cpu, b[j].bytes) ||
+                overlaps(b[i].device, b[i].bytes, b[j].device, b[j].bytes))) return 0;
     }
     if (!inspect(m, b, &p)) return 0;
 
     /* All caller-visible failure paths precede mutation. Immutable input and
      * metadata make the repeated operation construction infallible here. */
-    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i) memset(b[i].cpu, 0, b[i].bytes);
+    for (unsigned i = 0; i < NBG_ALLOCATION_COUNT; ++i)
+        if (b[i].bytes) memset(b[i].cpu, 0, b[i].bytes);
     memcpy(b[NBG_ALLOC_COEFF].cpu, m->data + m->sections[NBG_COEFF].offset,
            p.buffers[NBG_ALLOC_COEFF].payload_bytes);
     unsigned char *commands = b[NBG_ALLOC_COMMAND].cpu;

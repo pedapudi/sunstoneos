@@ -1,5 +1,4 @@
 #include "nbg_model.h"
-#include "nbg_assembly.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,10 +59,6 @@ int main(int argc, char **argv)
     assert(!nbg_model_tensor(&m, NBG_INPUT, 0, (void *)&m));
     assert(!nbg_model_section(&m, NBG_NETWORK_INFO, (void *)(image + 1)));
     assert(!memcmp(image + 1, original, sizeof(original)));
-    struct nbg_assembly_plan plan, saved_plan;
-    memset(&plan, 0xa5, sizeof(plan)); memcpy(&saved_plan, &plan, sizeof(plan));
-    assert(!nbg_assembly_requirements(&m, &plan));
-    assert(!memcmp(&plan, &saved_plan, sizeof(plan))); /* Decoding cannot admit execution. */
 
     const struct { size_t at; uint32_t value; } changes[] = {
         {16,1927},{20,1},{24,0},{24,UINT32_MAX},{28,0},{28,24},{32,0},{32,2},
@@ -127,5 +122,5 @@ int main(int argc, char **argv)
     assert(m.header.pool_bytes == 4096 && m.header.axi_sram_bytes == 1024);
     put(image + 1932, 1); refuse(image, 1940); put(image + 1932, 0);
     put(pool + 12, 16); refuse(image, 1940);
-    printf("PASS directory decoder: %u atomic refusals, unaligned reads, relocated/reversed directory, quantization union, execution refusal\n", refused);
+    printf("PASS directory decoder: %u atomic refusals, unaligned reads, relocated/reversed directory, quantization union\n", refused);
 }

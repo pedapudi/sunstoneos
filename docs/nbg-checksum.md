@@ -82,8 +82,8 @@ initialization lock, or device interface. Work is linear in file size. Distinct,
 nonoverlapping section ranges bound the additional section-CRC pass.
 
 The assembler requires a matching checksum on each requirements or assembly call.
-It still supports only the older profile. A successfully verified directory model
-remains refused by assembly until its profile and allocation support are added.
+The [assembler](nbg-assembly.md) supports the observed fixed-header and directory
+profiles; checksum success alone does not establish profile compatibility.
 Callers keep the file and decoded view immutable during use.
 
 ## Focused checks cover both formats and section integrity
@@ -97,8 +97,9 @@ One directory ASan/UBSan check passed the compiled convolution, a synthetic
 payload gap, and a synthetic zero-primary-CRC file. It covers 36 corruption
 cases and thirteen invalid-input cases, including repaired-primary corruption,
 zeroed section checksums, duplicate or absent section references, malformed
-metadata, output aliasing, and unsupported metadata placement. It confirms that
-these verified directory models remain refused by assembly.
+metadata, output aliasing, and unsupported metadata placement. Assembly now has
+separate profile checks; the obsolete blanket-refusal assertion was removed
+from the checksum check when directory assembly was implemented.
 
 [nbg-directory-checksum-fixtures.py](../checks/nbg-directory-checksum-fixtures.py)
 uses Python zlib to generate the synthetic cases. It solves 32 linear CRC bit
@@ -123,7 +124,7 @@ and CRC semantics remain unchanged.
 
 The separate [convolution loader capture](nbg-conv-loader.md) records SDK preparation
 for the newly verified model. It stops before device submission and supplies
-allocation and command evidence for the next native assembly change. No board
+allocation and command evidence now matched by native assembly. No board
 request, kernel rebuild, compiler run, or numerical simulator run occurred.
 Descriptor access bounds, SRAM routing, command admission, and physical inference
 remain outstanding.

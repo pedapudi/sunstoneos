@@ -45,8 +45,13 @@ def main():
     decoder = module('decoder', root/'checks/nbg-model.py')
     reference = module('reference', root/'checks/nbg-loader-reference.py')
     data = args.model.read_bytes()
-    assert hashlib.sha256(data).hexdigest() == reference.MODEL_SHA
-    capture = decoder.Capture(args.capture, reference.SDK_SHA, reference.MODEL_SHA)
+    model_sha = hashlib.sha256(data).hexdigest()
+    directory = model_sha == 'db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca'
+    assert directory or model_sha == reference.MODEL_SHA
+    # The convolution capture deliberately has no previous comparison. Verify
+    # its hashes and intercepted-submission status, then perform that comparison.
+    capture = decoder.Capture(args.capture, reference.SDK_SHA, model_sha,
+                              require_comparison=not directory)
     args.output.mkdir(parents=True)  # Refuse replacement of existing evidence.
     native = decoder.Native(args.native, data)
     lib = native.lib
@@ -58,6 +63,10 @@ def main():
     storage = []
     device = 0xe0000000
     for i, req in enumerate(plan.buffers):
+        if req.allocation_bytes == 0:
+            assert i == 2 and req.payload_bytes == req.minimum_bytes == 0
+            storage.append(None)
+            continue
         raw = c.create_string_buffer(req.allocation_bytes + 12288)
         c.memset(c.addressof(raw), 0xa5, c.sizeof(raw))
         cpu = (c.addressof(raw) + 8191) & -4096
@@ -72,12 +81,15 @@ def main():
     network = capture.report['network']
     properties, = [t['arguments'] for t in capture.tasks if t['operation'] == 'property']
     binding = {(b['operation'], b['index']): by_handle[b['memory_handle']] for b in capture.bindings}
-    old = [by_cpu[capture.read64(network + offset)] for offset in (0x2f8, 0x2d8, 0x3a0)]
+    old = [by_cpu[capture.read64(network + offset)] for offset in (0x2f8, 0x2d8)]
+    pool = capture.read64(network + 0x3a0)
+    old.append(by_cpu[pool] if pool else None)
+    assert bool(pool) == bool(plan.buffers[2].allocation_bytes)
     old += [by_handle[properties[3]], binding['vip_set_input', 0], binding['vip_set_output', 0]]
     expected_nn = bytearray(capture.mem_read(old[0]['cpu'], old[0]['bytes']))
     expected_command = bytearray(capture.mem_read(old[3]['cpu'], old[3]['bytes']))
     for i in (0, 1, 2, 4, 5):
-        assert plan.buffers[i].minimum_bytes == old[i]['bytes']
+        assert plan.buffers[i].minimum_bytes == (old[i]['bytes'] if old[i] else 0)
     assert plan.command_body_bytes == properties[4]
     assert plan.buffers[3].payload_bytes == old[3]['bytes']
     records = native.patches()
@@ -121,10 +133,14 @@ def main():
     struct.pack_into('<I', expected_command, command_at + 28, 0x40)
     assert (nn_patches, command_patches) == (plan.descriptor_patches, plan.state_patches)
 
-    payloads = [bytes(expected_nn), native.section(23), bytes(plan.buffers[2].payload_bytes),
-                bytes(expected_command), bytes(plan.buffers[4].payload_bytes),
-                bytes(plan.buffers[5].payload_bytes)]
+    payloads = [bytes(expected_nn), capture.mem_read(old[1]['cpu'], old[1]['bytes']),
+                capture.mem_read(old[2]['cpu'], old[2]['bytes']) if old[2] else b'',
+                bytes(expected_command), capture.mem_read(old[4]['cpu'], old[4]['bytes']),
+                capture.mem_read(old[5]['cpu'], old[5]['bytes'])]
     for i, (buf, req, payload, raw) in enumerate(zip(buffers, plan.buffers, payloads, storage, strict=True)):
+        if not buf.bytes:
+            assert i == 2 and buf.cpu is None and buf.device == 0 and payload == b'' and raw is None
+            continue
         pad = req.allocation_bytes - len(payload)
         expected = payload + (struct.pack('<II', 0x10000000, 0) * (pad // 8) if i == 3 else bytes(pad))
         actual = c.string_at(buf.cpu, buf.bytes)
@@ -139,7 +155,7 @@ def main():
                   command_allocation_bytes=plan.buffers[3].allocation_bytes,
                   total_allocation_bytes=sum(b.bytes for b in buffers),
                   buffers=[dict(device=hex(b.device), bytes=b.bytes) for b in buffers],
-                  model_sha256=reference.MODEL_SHA,
+                  model_sha256=model_sha,
                   native_sha256=hashlib.sha256(args.native.read_bytes()).hexdigest(),
                   capture=str(args.capture.resolve()), sdk_executed=False,
                   physical_access=False, submission_authorized=False)

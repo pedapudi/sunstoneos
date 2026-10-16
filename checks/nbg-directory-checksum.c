@@ -1,6 +1,5 @@
 #include "nbg_checksum.h"
 #include "nbg_model.h"
-#include "nbg_assembly.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,11 +56,7 @@ int main(int argc, char **argv)
         assert(out.stored == word(data + 12) && out.computed == primary(data, bytes));
         assert(!memcmp(data, copy, bytes));
         struct nbg_model decoded;
-        struct nbg_assembly_plan plan, saved_plan;
         assert(nbg_model_open(data, bytes, &decoded) == NBG_DECODE_OK);
-        memset(&plan, 0xa5, sizeof(plan)); memcpy(&saved_plan, &plan, sizeof(plan));
-        assert(!nbg_assembly_requirements(&decoded, &plan));
-        assert(!memcmp(&plan, &saved_plan, sizeof(plan)));
         if (fixture == 1) { changed(data, bytes, 1600); changed(data, bytes, 1663); }
         if (fixture == 2) {
             assert(out.stored == 0 && out.computed == 0);

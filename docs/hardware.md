@@ -85,7 +85,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   with matching CPU and simulator output. Native decoding now supports its
   directory format, and checksum verification passes host checks. A saved
   [SDK preparation trace](nbg-conv-loader.md) supplies allocation and command
-  evidence for native assembly, which remains outstanding.
+  evidence now matched by native assembly with five buffers and an empty pool.
   Board resource integration, model admission, numerical execution,
   and physical qualification remain outstanding.
 

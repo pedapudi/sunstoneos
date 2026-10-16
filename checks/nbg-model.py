@@ -130,7 +130,7 @@ class Native:
 
 class Capture:
     """Only byte reads from recorded snapshots; no CPU emulator is constructed."""
-    def __init__(self, directory, sdk_sha, model_sha):
+    def __init__(self, directory, sdk_sha, model_sha, *, require_comparison=True):
         manifest = json.loads((directory.parent/'manifest.json').read_text())
         for path in directory.rglob('*'):
             if path.is_file():
@@ -141,7 +141,8 @@ class Capture:
         self.report = json.loads((directory/'trace.json').read_text())
         if (self.report['sdk_sha256'] != sdk_sha or self.report['model_sha256'] != model_sha or
             self.report['result'] != 'submission_intercepted' or
-            self.report['comparison']['result'] != 'pass'):
+            self.report.get('error') is not None or self.report.get('physical_access') is not False or
+            (require_comparison and (self.report.get('comparison') or {}).get('result') != 'pass')):
             raise RuntimeError('capture identities or reference result do not match')
         self.allocations, self.tasks, self.bindings = (
             self.report[key] for key in ('allocations', 'tasks', 'bindings'))

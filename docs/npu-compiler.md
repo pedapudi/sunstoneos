@@ -117,7 +117,7 @@ The initial fixture-generation attempt failed because container root lacked writ
 permission on the host-owned output directory. Assigning that directory to
 container root resolved it; model generation had not written any files.
 
-## Native assembly support remains outstanding
+## Native assembly matches the saved SDK preparation
 
 The model SHA-256 is
 `db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
@@ -139,7 +139,8 @@ A [saved SDK capture](nbg-conv-loader.md) records the model's allocation and
 command requirements for native assembly.
 
 The host inspector returned `unsupported NBG version 0x20000`, as intended.
-Native allocation planning still needs to handle legitimate zero-pool models and
-validate their commands. The small fixture enables that work without discarding
-the existing format checks. Physical inference, complete descriptor admission,
+The [native assembler](nbg-assembly.md) now handles the empty working pool and
+matches the saved SDK allocations and command image after address and
+completion-event adjustments. The older format still passes its focused checks.
+Physical inference, complete descriptor admission,
 and all other NPU capabilities remain required by [issue 9](https://github.com/pedapudi/sunstoneos/issues/9).

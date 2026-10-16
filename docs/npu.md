@@ -25,7 +25,7 @@ whose simulator output matches the quantized CPU reference. Its `0x20000` format
 now has native decoding support. The [directory investigation](nbg-directory.md)
 records its changed layouts and checksum coverage. Native checksum verification
 passes host checks. The [convolution capture](nbg-conv-loader.md) supplies allocation
-and command evidence; native assembly and execution remain outstanding.
+and command evidence now matched by native assembly with no working-pool allocation.
 Board-resource integration, model admission, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.

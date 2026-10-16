@@ -2,8 +2,8 @@
 
 The NBG `0x20000` directory and checksum findings provide **reference evidence**.
 The [native decoder](nbg-model.md) now supports its 32-bit-address layout;
-native checksum verification also passes host checks. Assembly support remains
-outstanding.
+native checksum verification also passes host checks. The [native assembler](nbg-assembly.md)
+now matches saved SDK buffers for the numerical fixture.
 The [compiled convolution](npu-compiler.md)
 provides a pinned numerical fixture for implementing support without weakening
 the existing `0x1001e` checks. This document assumes familiarity with binary

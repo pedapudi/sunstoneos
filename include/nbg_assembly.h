@@ -25,7 +25,8 @@ struct nbg_assembly_buffer {
  * Requires an immutable successful nbg_model_open view and file. Supports one
  * UINT8 input/output, INIT followed by 1..1024 sequential 192-byte NN records,
  * the observed load-state templates, and patch sources 0/1/2/3/5/8. Other
- * layouts are refused. The complete file checksum must match. Full profile
+ * layouts are refused. Supports the observed 0x1001e and 0x20000 profiles;
+ * the applicable primary and section checksums must match. Full profile
  * validation precedes publishing requirements.
  * Pointer patches are limited to weight/input/output fields and circular ends.
  * A nonzero ring size requires its end patch, the same source as its tensor,
@@ -42,7 +43,9 @@ struct nbg_assembly_buffer {
  * descriptor semantics remain unverified. No controller token is produced. */
 int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan *);
 
-/* Supply six exclusively owned offline buffers in enum order, with exact
+/* Supply six buffer slots in enum order. An empty working pool requires
+ * {NULL, 0, 0}; no allocation or memory access occurs for that slot.
+ * Supply exclusively owned offline buffers for nonempty slots, with exact
  * planned sizes, 4 KiB aligned CPU/device bases, nonoverlapping CPU/device
  * ranges, and no device overlap with SRAM 0x400000..0x47ffff. Physical aliases
  * and ownership are the caller's responsibility; this layer cannot check them.
@@ -50,7 +53,7 @@ int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan
  * not overlap metadata, view, or file. Keep all inputs stable during the call.
  *
  * Validates every operation and relocation before changing any caller bytes.
- * Initializes all six allocations, including input/output and padding; supply
+ * Initializes all nonempty allocations, including input/output and padding; supply
  * input data AFTER assembly. Adapts the SDK completion event to event 0 and
  * fills unused fetch space with END pairs. Refusal preserves buffers and result.
  * Reuses bounded stack scratch per operation; no heap or borrowed output spans.

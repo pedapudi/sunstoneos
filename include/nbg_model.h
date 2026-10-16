@@ -93,7 +93,7 @@ struct nbg_patch {
  * descriptor semantics, relocation destinations, complete device access sizes,
  * software operators, command permissions, and SRAM placement remain unchecked.
  * The stored checksum is reported without verification. The separate verifier
- * supports both formats; the assembler still refuses 0x20000. */
+ * supports both formats. Successful offline assembly does not authorize execution. */
 enum nbg_decode_result nbg_model_open(const void *data, size_t bytes,
                                       struct nbg_model *result);
 
