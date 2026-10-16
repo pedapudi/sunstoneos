@@ -28,6 +28,10 @@ memory-stream locking, and newlib task-state preservation through 256 migrations
 four paced utterances in QEMU, including packed matrix rows on both cores.
 A focused matrix check also passes serial parity and guards across 12 shapes.
 Physical secondary-core startup and multicore application qualification remain outstanding.
+The native [DMA descriptor encoder](dma.md) now passes a host execution model
+for memory/FIFO chains, 35-bit addresses, guards, and invalid-input refusal.
+The encoder also compiles for AArch64. Controller execution and physical
+DMA remain unimplemented or untested; no hardware access occurred in this check.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
 subsystem is qualified. Development uses branch `bringup` in the isolated
@@ -149,6 +153,11 @@ the tool hash and recovery evidence in the application document.
    cleanup, interrupt nesting, and physical startup remain outstanding.
    Current evidence is in [smp.md](smp.md), [smp-runtime.md](smp-runtime.md),
    and [mimus-smp.md](mimus-smp.md).
+5. Add a DMA controller service around the checked descriptor encoder. Establish
+   channel ownership, cache operations, bounded completion/cancellation, and
+   retained buffers on failed stops. Preserve the always-on processor's channels.
+   Resolve DMA1 resources and wider descriptor addressing; the reference facts,
+   required behavior, and reusable host evidence are in [dma.md](dma.md).
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
