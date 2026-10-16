@@ -1,0 +1,163 @@
+#include "a733_gpu_power.h"
+#include <stddef.h>
+
+#define BIT(n) (UINT32_C(1) << (n))
+enum kind { CHECK, WRITE, UPDATE, WAIT, DELAY, DOMAIN_STATE };
+struct step { enum kind kind; enum a733_gpu_power_bank bank;
+    uint32_t offset, mask, value; };
+/* The GPU_TOP domain is PCK domain 5. GPU_CORE is not independently enabled by
+ * the board device tree. GPU local clock selects pll-peri0-400m / 1.
+ */
+static const struct step on_steps[] = {
+    {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
+    {CHECK, A733_GPU_CCU, 0x05e0, BIT(16), BIT(16)},
+    {CHECK, A733_GPU_R_CCU, 0x01ac, BIT(0), BIT(0)},
+    {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
+    {DOMAIN_STATE, A733_GPU_PCK, 0x5008, 0xf, 0},
+    {WRITE, A733_GPU_PCK, 0x5170, 0, 0x1f1f1f},
+    {CHECK, A733_GPU_PCK, 0x5170, UINT32_MAX, 0x1f1f1f},
+    {WRITE, A733_GPU_PCK, 0x5174, 0, 0x1f1f},
+    {CHECK, A733_GPU_PCK, 0x5174, UINT32_MAX, 0x1f1f},
+    {WRITE, A733_GPU_PCK, 0x5c00, 0, 0x08080808},
+    {CHECK, A733_GPU_PCK, 0x5c00, UINT32_MAX, 0x08080808},
+    {WRITE, A733_GPU_PCK, 0x5c04, 0, 0x0808},
+    {CHECK, A733_GPU_PCK, 0x5c04, UINT32_MAX, 0x0808},
+    {WRITE, A733_GPU_PCK, 0x5c10, 0, 0x8},
+    {CHECK, A733_GPU_PCK, 0x5c10, UINT32_MAX, 0x8},
+    {UPDATE, A733_GPU_PCK, 0x5000, 0xf, 8},
+    {WAIT, A733_GPU_PCK, 0x5008, 0xf, 8},
+    {UPDATE, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x0b000000},
+    {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x03000000},
+    {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
+    {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x83000000},
+    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(0)},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(0)},
+    {DELAY, A733_GPU_CCU, 0, 0, 1},
+    {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(16)},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16) | BIT(0)},
+};
+static const struct step off_steps[] = {
+    {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16), 0},
+    {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
+    {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
+    {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
+    {CHECK, A733_GPU_CCU, 0x0b20, BIT(31), 0},
+    {UPDATE, A733_GPU_PCK, 0x5000, 0xf, 0},
+    {WAIT, A733_GPU_PCK, 0x5008, 0xf, 0},
+};
+static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
+                                       enum a733_gpu_power_error error)
+{
+    s->error = error;
+    s->phase = A733_GPU_POWER_FAILED;
+    return A733_GPU_POWER_FAULT;
+}
+static int clock_read(struct a733_gpu_power *s)
+{
+    uint64_t now;
+    if (!s->ops.now(s->context, &now)) { fail(s, A733_GPU_POWER_IO); return 0; }
+    if (now < s->last_now) { fail(s, A733_GPU_POWER_CLOCK); return 0; }
+    s->last_now = now;
+    if (now >= s->deadline) { fail(s, A733_GPU_POWER_TIMEOUT); return 0; }
+    return 1;
+}
+int a733_gpu_power_init(struct a733_gpu_power *s,
+                       const struct a733_gpu_power_ops *ops, void *context)
+{
+    if (!s || !ops || s->phase != A733_GPU_POWER_NEW || s->ops.now ||
+        !ops->now || !ops->acquire || !ops->release || !ops->read ||
+        !ops->write || !ops->update) return 0;
+    uintptr_t a = (uintptr_t)s, b = (uintptr_t)ops;
+    if (a > UINTPTR_MAX - sizeof(*s) || b > UINTPTR_MAX - sizeof(*ops) ||
+        !(a + sizeof(*s) <= b || b + sizeof(*ops) <= a)) return 0;
+    *s = (struct a733_gpu_power){.ops = *ops, .context = context};
+    return 1;
+}
+static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
+                                        uint64_t deadline, int on)
+{
+    if (!s || !s->ops.now || (on ?
+        (s->phase != A733_GPU_POWER_NEW && s->phase != A733_GPU_POWER_OFF) :
+        s->phase != A733_GPU_POWER_ON)) return A733_GPU_POWER_INVALID;
+    s->deadline = deadline;
+    s->index = 0;
+    s->wait_until = 0;
+    s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
+    if (on) s->lease_attempted = 0;
+    return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
+}
+enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *s, uint64_t deadline)
+{ return begin(s, deadline, 1); }
+enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *s, uint64_t deadline)
+{ return begin(s, deadline, 0); }
+enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
+{
+    if (!s || !s->ops.now) return A733_GPU_POWER_INVALID;
+    if (s->phase == A733_GPU_POWER_FAILED) return A733_GPU_POWER_FAULT;
+    if (s->phase == A733_GPU_POWER_ON || s->phase == A733_GPU_POWER_OFF)
+        return A733_GPU_POWER_OK;
+    if (s->phase != A733_GPU_POWER_STARTING && s->phase != A733_GPU_POWER_STOPPING)
+        return A733_GPU_POWER_INVALID;
+    if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+    int on = s->phase == A733_GPU_POWER_STARTING;
+    if (on && !s->lease_attempted) {
+        struct a733_gpu_power_resources r = {0};
+        s->lease_attempted = 1;
+        if (!s->ops.acquire(s->context, &r)) return fail(s, A733_GPU_POWER_IO);
+        s->lease_held = 1;
+        if (r.parent_hz != A733_GPU_INITIAL_HZ || r.supply_uv != A733_GPU_INITIAL_UV)
+            return fail(s, A733_GPU_POWER_RESOURCES);
+        return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
+    }
+    uint32_t count = on ? sizeof(on_steps) / sizeof(*on_steps) :
+                          sizeof(off_steps) / sizeof(*off_steps);
+    if (s->index == count) {
+        if (!on) {
+            if (!s->ops.release(s->context)) return fail(s, A733_GPU_POWER_IO);
+            s->lease_held = 0;
+            if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+        }
+        s->phase = on ? A733_GPU_POWER_ON : A733_GPU_POWER_OFF;
+        return A733_GPU_POWER_OK;
+    }
+    const struct step *p = &(on ? on_steps : off_steps)[s->index];
+    if (p->kind == DELAY) {
+        if (!s->wait_until) {
+            if (s->last_now > UINT64_MAX - p->value) return fail(s, A733_GPU_POWER_TIMEOUT);
+            s->wait_until = s->last_now + p->value;
+        }
+        if (s->last_now >= s->wait_until) { s->wait_until = 0; ++s->index; }
+        return A733_GPU_POWER_AGAIN;
+    }
+    uint32_t value = 0;
+    int ok;
+    if (p->kind == UPDATE)
+        ok = s->ops.update(s->context, p->bank, p->offset, p->mask, p->value);
+    else if (p->kind == WRITE)
+        ok = s->ops.write(s->context, p->bank, p->offset, p->value);
+    else {
+        ok = s->ops.read(s->context, p->bank, p->offset, &value);
+        if (ok) s->last_value = value;
+    }
+    if (!ok) return fail(s, A733_GPU_POWER_IO);
+    if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+    if (p->kind == DOMAIN_STATE) {
+        if ((value & p->mask) != 0 && (value & p->mask) != 8)
+            return fail(s, A733_GPU_POWER_STATE);
+    } else if (p->kind == CHECK || p->kind == WAIT) {
+        if ((value & p->mask) != p->value) {
+            if (p->kind == CHECK) return fail(s, A733_GPU_POWER_STATE);
+            return A733_GPU_POWER_AGAIN;
+        }
+    }
+    ++s->index;
+    return A733_GPU_POWER_AGAIN;
+}
+enum a733_gpu_power_result a733_gpu_power_cancel(struct a733_gpu_power *s)
+{
+    if (!s || (s->phase != A733_GPU_POWER_STARTING && s->phase != A733_GPU_POWER_STOPPING))
+        return A733_GPU_POWER_INVALID;
+    return fail(s, A733_GPU_POWER_CANCELLED);
+}
