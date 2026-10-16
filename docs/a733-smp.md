@@ -10,7 +10,7 @@ emulator. Physical CPU startup, shared atomic operations and scheduling remain
 unqualified.
 
 This is a functional diagnostic with instruction and data caches disabled.
-All CPUs use the [continuation's canonical Normal-noncacheable mapping](cpu-entry.md).
+All CPUs use the [continuation's canonical Normal-noncacheable mapping](cpu-continue.md).
 Physical support for exclusive accesses to that mapping still requires testing.
 Cache-enabled coherence, CPU-specific errata and production memory isolation
 remain required work.
@@ -80,27 +80,156 @@ CPU-power writes. It copies the contract before those checks and bounds startup
 by one second from admission. The diagnostic deadline leaves at least one
 second before the declared watchdog expiry.
 
-These readbacks cannot prove oscillator progress, watchdog independence, the
-arm timestamp or successful ROM return. The coordinator must first qualify that
-specific watchdog interval, clock source and protected FEL recovery procedure.
-The pending [SRAM watchdog trial](watchdog-expiry.md) has not yet established
-that evidence. Its result must also match this contract's clock source. A host-to-image adapter that arms and publishes this
-contract has not been integrated. Physical execution is blocked until that adapter
-and recovery evidence exist.
-
-A future qualified coordinator must load every file-backed ELF segment, reserve
-every memory segment and verify the image. It must prepare the contract with
-`magic` clear, arm and read back the watchdog under exclusive board ownership,
-then publish `magic` last and enter the image before its startup deadline.
-The declared arm time must describe that actual arm operation.
-The coordinator must retain the physical board lock through watchdog expiry and
-verified ROM return. An observation timeout does not release board ownership.
+These readbacks cannot prove oscillator progress, watchdog independence or
+successful ROM return. The coordinator must first qualify that watchdog interval,
+clock source and protected FEL recovery procedure. The pending
+[SRAM watchdog trial](watchdog-expiry.md) has not established those properties.
+The host adapter described below closes the preparation and publication gap;
+physical execution remains blocked by independent recovery qualification.
 
 The diagnostic never feeds, disarms or resets the watchdog. Success and failure
-park with resources retained until the externally armed reset occurs.
-Watchdog reset can invalidate DRAM contents; retained result addresses do not
-promise post-reset evidence preservation. The recovery adapter must provide an
-independently qualified observation or preservation mechanism before a board trial.
+park with resources retained until the independently armed reset occurs.
+Watchdog reset can invalidate DRAM contents. A returned ROM instance therefore
+cannot establish diagnostic success from the previous result address.
+A qualified observation channel remains necessary to report a physical scheduler
+result. A launch-protocol trial may report only that a distinct ROM instance
+became accessible.
+
+## Preload and verify before issuing one execution request
+
+The [host adapter](../tools/check-a733-smp.py) separates host preparation from a
+coordinator's physical launch. Preparation parses the ELF, checks its reviewed
+hash and linker reservations, builds the SRAM launcher, and copies every input
+into a new evidence directory. It creates random nonzero session, generation and
+lease identifiers. The contract initially has a clear magic value and zero times.
+Preparation makes no board requests:
+
+```sh
+python3 tools/check-a733-smp.py prepare \
+  --image /absolute/path/a733-smp-diagnostic.elf \
+  --image-manifest /absolute/path/image-manifest.json \
+  --output /absolute/new/prepared-directory
+```
+
+The image manifest's `final_elf` field is the reviewed ELF SHA-256.
+Preparation uses Clang 21, the cached LLVM 21 linker and LLVM 21 objcopy.
+It records source copies, commands, build output and payload hashes.
+
+A physical launch requires a claimed queue item and four reviewed prerequisites:
+
+- `independent-watchdog-rom-return`: qualified reset, clock and protected ROM
+  return evidence for the same physical port, SoC and captured ROM.
+- `stable-protected-fel`: successful physical input inspection for the current
+  USB instance, with SRAM restoration recorded. The coordinator must confirm
+  that the BOOT-to-GND connection remains stable through reset.
+- `ddr-reservation`: current-instance initialization and exclusive ownership of
+  `0x41000000..0x42200000`, cache-disabled publication and excluded remote writers.
+- `smp-launcher-software`: the exact prepared bundle, image, launcher and host
+  source, with successful host protocol and instruction-model evidence.
+
+The independent recovery record uses schema `a733-independent-reset-v1`.
+It names the physical port and sysfs path, SoC `00001903`, captured ROM hash,
+watchdog MODE `0x41`, CFG `1`, OUTPUT `2`, and the independent 32,768 Hz RTC source.
+Its hashed evidence covers clock source, masked-CPU expiry, whole-system reset,
+protected ROM return and interconnect-stall recovery. It also requires a
+24 MHz physical counter that remains continuous across the CPU warm reset.
+The launcher checks CNTFRQ, but that software register cannot prove either clock
+progress or continuity. These prerequisites concern independently qualified
+hardware properties; they do not require this launcher's earlier physical success.
+No qualifying recovery record currently exists.
+
+The DDR record uses schema `a733-ddr-reservation-v1`. Its `identity`, `port`,
+`image_sha256` and `ranges` bind the current instance and exact reservation.
+The `exclusive`, `published_cache_disabled` and `remote_writers_excluded` fields
+must be true, with hashed initialization and reservation evidence.
+The software record uses schema `a733-smp-launcher-software-v1` and requires
+`host_protocol` and `instruction_model` true, `physical_access` false,
+artifact references for `prepared`, `image`, `launcher` and `host_tool`, and a
+nonempty `evidence` list. Artifact references contain absolute `path` and
+`sha256` fields. The coordinator reviews these records before queue admission.
+A record describes evidence; its booleans do not establish hardware qualification.
+
+The launch command requires explicit paths for the prepared bundle, pinned FEL
+tool, qualification record, input evidence, DDR contract, queue database and new
+evidence directory. It also requires the queue claim, coordinator owner and
+`--confirm-bridge-stable`. The adapter checks host health, acquires
+`/tmp/mimus-board.lock`, checks the target identity, and requires the port's
+reconnect access rule and an unquarantined ROM instance.
+It reads the queue without changing its claim or completion state.
+
+The adapter saves and flushes SRAM backups, then uploads every file-backed ELF
+segment, a zeroed result reservation, the unpublished contract, request, report
+and launcher. Every transfer receives an exact readback comparison; watchdog
+MODE must remain disabled before each upload and before execution.
+After four low-input samples and a second queue review, it flushes the execution
+intent and issues one `exe 0x52000` request. It never invokes the FEL tool's
+`reset64` operation, which would upload another helper after watchdog arming.
+
+## The SRAM launcher arms and publishes the timed contract
+
+| SRAM range | Purpose |
+| --- | --- |
+| `0x52000..0x52800` | Launcher code; the linker rejects overflow |
+| `0x52800..0x52880` | Immutable 128-byte request |
+| `0x52900..0x52980` | Transient launcher report |
+| `0x53000..0x54000` | Private launcher stack |
+| `0x71000..0x71080` | Saved FEL helper scratch |
+
+The request contains its magic, version and size; session epoch; generation and
+inverse generation; resource lease; build-identity address; 32-byte build identity;
+and four reserved zero words. It has no selectable branch destination.
+The launcher requires secure AArch32 SVC execution on core 0, little-endian access,
+disabled MMU and caches, and CNTFRQ equal to 24 MHz.
+It validates the request, corresponding copied contract and image build identity
+before any peripheral writes. It also requires low BOOT input, disabled watchdog,
+RTC clock selection and clear ROM redirects.
+
+The [launcher](../platform/a733-smp/launch.c) sets and reads back the protected ROM
+redirect, FEL flag, whole-system reset and watchdog output configuration.
+It samples the physical counter immediately before enabling the four-second
+watchdog, feeds once, and verifies MODE, CFG and OUTPUT.
+That pre-enable sample is a conservative lower bound for the actual arm time;
+the transient report also records a post-readback sample.
+The contract's startup, diagnostic and expiry times are respectively one, two
+and four seconds after the lower-bound sample. The launcher publishes magic last.
+
+Counter checks after arming, after publication and before the transition refuse
+elapsed intervals of 24,000 ticks or more, equivalent to one millisecond at the
+required counter rate. A backward counter or arithmetic overflow also refuses
+entry. The final check precedes a short instruction tail that requests warm reset.
+It does not bound a stalled CPU, bus transaction or hardware reset completion.
+Independent watchdog recovery remains necessary for those failures.
+The diagnostic independently rejects entry after its one-second startup deadline.
+
+The assembly writes fixed RVBAR `0x41000000`, verifies both RVBAR words, executes
+DSB/ISB and requests AArch64 warm reset through RMR's RR and AA64 bits.
+This follows `aw_rmr_request` in the pinned sunxi-tools source revision
+`b92f4ed3115a520e3ec406697d268239e3f29488`.
+The A733 RVBAR location is `0x08001004`; the high word is cleared.
+The watchdog register sequence and protected-ROM prerequisites are documented in
+[watchdog expiry](watchdog-expiry.md) and the A733 manual's watchdog section 8.3.6.
+Any refusal parks without an alternate branch, retry, feed or disarm.
+A refusal before arming can leave the board parked without an active watchdog;
+the coordinator retains ownership for intervention.
+
+## ROM observation does not establish a scheduler result
+
+After execution, the host makes no requests to the old USB instance.
+It waits up to 20 seconds for a distinct instance on the same physical port and
+requires restored permissions and ROM access before sending a version request.
+A successful response records `scheduler_result: unobserved` and `complete: false`.
+The process exits with status 2 and leaves queue completion to the coordinator.
+The reset cause, launcher entry and scheduler result remain unobserved.
+Neither the transient SRAM report nor the previous DRAM result is read after reset.
+DDR must be initialized again before reuse.
+
+The first transport failure ends device communication. There is no automatic
+retry, host USB reset or second execution request. If an attempted launch has
+an unresolved outcome, including an observation timeout or interruption, the
+process holds the board flock and leaves the queue claim in place.
+It waits for independent coordinator intervention; Ctrl-C does not release that
+ownership. Before an execution attempt, a failure retains the queue claim and
+quarantines the instance. Downloaded backups remain available for review.
 
 ## Linker reservations separate code, task memory and monitor state
 
@@ -150,3 +279,30 @@ commands remain in the evidence directory. The successful host admission result
 was reused throughout. The continuation's corrected EL3 reset constants required
 only its assembly object, build identity and final link to change.
 The image manifest records executed and final artifact identities separately.
+
+## Launcher and host evidence cover the new preparation protocol
+
+The launcher instruction checker executes the linked AArch32 bytes with modeled
+registers and counter reads. Its cases cover admission, contract mismatch,
+ignored register writes, counter rollback, overflow and elapsed-time refusal.
+The host checker uses a fake transport and a private SQLite queue to cover every
+request failure point, corrupt readback, changed claims and missing prerequisites.
+It verifies one execution request and an unobserved scheduler result after ROM
+observation. Neither checker discovers or opens a board.
+
+```sh
+~/.cache/sunstoneos/venv/bin/python checks/a733-smp-launch.py \
+  --bundle /absolute/prepared-directory --output /absolute/launcher-results.json
+python3 checks/a733-smp-host.py \
+  --bundle /absolute/prepared-directory --output /absolute/host-results.json
+```
+
+Reusable evidence is in
+`~/.cache/sunstoneos/evidence/a733-smp-launch-20261016`.
+The linked 2,036-byte launcher passed 28 instruction cases; the host adapter passed
+41 protocol cases. Focused host checks also cover ownership retention when
+evidence flushing or quarantine fails. Host checks were repeated for durable
+backup flushes, source-identical evidence after integration and failure retention.
+The successful launcher cases were reused. These checks do not model oscillators,
+interconnect stalls, warm reset completion, AArch64 entry or physical scheduling.
+The earlier image, SGI and CPU-entry evidence remains valid and was not rerun.
