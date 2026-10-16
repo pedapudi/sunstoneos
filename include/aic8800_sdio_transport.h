@@ -6,18 +6,20 @@
 #define AIC8800_TRANSPORT_RX_BYTES 4096u
 #define AIC8800_TRANSPORT_TX_BYTES 1536u
 struct aic8800_firmware;
+struct aic8800_runtime;
 
 enum aic8800_transport_variant { AIC8800_TRANSPORT_D80_BOOTSTRAP = 1 };
 enum aic8800_transport_pad { AIC8800_PAD_KEEP = 1, AIC8800_PAD_WRITE_80 };
 enum aic8800_transport_state { AIC8800_TRANSPORT_NEW, AIC8800_TRANSPORT_SETUP,
     AIC8800_TRANSPORT_READY, AIC8800_TRANSPORT_IDENTITY,
     AIC8800_TRANSPORT_COMPLETE, AIC8800_TRANSPORT_FAULT,
-    AIC8800_TRANSPORT_FIRMWARE, AIC8800_TRANSPORT_START_CONFIRMED };
+    AIC8800_TRANSPORT_FIRMWARE, AIC8800_TRANSPORT_START_CONFIRMED,
+    AIC8800_TRANSPORT_RUNTIME };
 enum aic8800_transport_error { AIC8800_TRANSPORT_NO_ERROR,
     AIC8800_TRANSPORT_HOST_ERROR, AIC8800_TRANSPORT_TIMEOUT,
     AIC8800_TRANSPORT_SETUP_ERROR, AIC8800_TRANSPORT_RX_BOUNDS,
     AIC8800_TRANSPORT_UNSUPPORTED_IRQ, AIC8800_TRANSPORT_MESSAGE_ERROR,
-    AIC8800_TRANSPORT_FIRMWARE_ERROR };
+    AIC8800_TRANSPORT_FIRMWARE_ERROR, AIC8800_TRANSPORT_RUNTIME_ERROR };
 struct aic8800_transport_config {
     enum aic8800_transport_variant variant; /* Explicit source protocol choice. */
     enum aic8800_transport_pad pad; /* Source's conditional function-0 F1 write. */
@@ -40,6 +42,7 @@ struct aic8800_identity_admission {
 struct aic8800_sdio_transport {
     struct sdio_card *card;
     struct aic8800_firmware *firmware;
+    struct aic8800_runtime *runtime;
     struct aic8800_transport_config config;
     struct aic8800_identity_admission admission;
     struct sunxi_sdio_result last_result;
@@ -88,13 +91,26 @@ int aic8800_transport_read_identity(struct aic8800_sdio_transport *,
  */
 int aic8800_transport_load_firmware(struct aic8800_sdio_transport *,
                                   struct aic8800_firmware *, uint64_t deadline);
+/* Attach a zero-initialized runtime after START_CONFIRMED under uninterrupted
+ * power/reset and exclusive ownership. Imports any retained early challenge.
+ * The lease deadline bounds ongoing receive, including consumer backpressure.
+ * There are no arbitrary application commands or implicit Wi-Fi/HCI readiness.
+ */
+int aic8800_transport_start_runtime(struct aic8800_sdio_transport *,
+                                  struct aic8800_runtime *, uint64_t deadline);
+/* Lease extension with one bounded clock observation, only between aggregates,
+ * with no pending controller request, held record, or unfinished binding action.
+ * Caller reaffirms continued awake platform ownership. Expired leases cannot be
+ * revived: renewal checks the old deadline against the shared clock.
+ */
+int aic8800_transport_renew_runtime(struct aic8800_sdio_transport *, uint64_t deadline);
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
  */
 void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining
  * asynchronous work. Peek works after FAULT; consume refuses in FAULT. Output
- * must not alias transport/card/host. No callbacks or hardware access occur.
+ * must not alias transport/card/host, runtime, firmware or immutable blobs. No callbacks or hardware access occur.
  */
 int aic8800_transport_peek(const struct aic8800_sdio_transport *, struct aic8800_sdio_response *);
 int aic8800_transport_consume(struct aic8800_sdio_transport *);

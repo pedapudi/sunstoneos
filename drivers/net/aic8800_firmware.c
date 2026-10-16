@@ -247,7 +247,9 @@ enum aic8800_codec_result aic8800_firmware_response(struct aic8800_firmware *f,c
     }
     if(r.has_message&&r.message_id==0x0417){
         if(r.parameter_bytes!=16){aic8800_firmware_stop(f,owner,AIC8800_FW_PROTOCOL_ERROR);return AIC8800_CODEC_MALFORMED;}
-        f->binding_required=1;for(unsigned i=0;i<16;++i)f->binding_challenge[i]=r.parameters[i];
+        if(!f->binding_required){
+            f->binding_required=1;for(unsigned i=0;i<16;++i)f->binding_challenge[i]=r.parameters[i];
+        }
     }
     if(f->state!=AIC8800_FW_WAITING||!r.has_message||r.message_id!=f->expected_message){*output=r;return AIC8800_CODEC_UNRELATED;}
     unsigned bytes=(r.message_id==0x0401||r.message_id==0x0403)?8:4;
