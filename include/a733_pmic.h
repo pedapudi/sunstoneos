@@ -1,0 +1,100 @@
+#ifndef SUNSTONE_A733_PMIC_H
+#define SUNSTONE_A733_PMIC_H
+#include "a733_rail_leases.h"
+#include "a733_pins.h"
+#define A733_PMIC_REQUESTS 8u
+enum a733_pmic_status {
+    A733_PMIC_PENDING, A733_PMIC_READY, A733_PMIC_COMPLETE, A733_PMIC_BUSY,
+    A733_PMIC_EXPIRED, A733_PMIC_INVALID, A733_PMIC_RETAINED
+};
+struct a733_pmic;
+struct a733_pmic_lifetime { const struct a733_pmic *provider; uint64_t owner, identity; };
+struct a733_pmic_request { struct a733_pmic_lifetime lifetime; uint64_t id, owner; };
+struct a733_pmic_snapshot {
+    enum a733_rail rail;
+    uint8_t page_before, chip, revision, enable, selector, page_after;
+    unsigned enabled, decoded;
+    uint32_t programmed_uv;
+};
+/* Immutable privileged boot admission, authenticated before init. It excludes
+ * every legacy reader, remote/secure owner, DMA/IRQ handler and autonomous PMU
+ * writer. Device mappings, PL voltage/pullups and independent recovery must
+ * already be established. An identity or register read does not prove these
+ * facts. This first profile adopts an enabled, idle DCXO24M/APBS1 bus only.
+ */
+struct a733_pmic_config {
+    uint64_t owner, identity, startup_deadline;
+    struct a733_pin_config pins[2]; /* Exact inherited PL0/PL1 mux2 fields. */
+};
+struct a733_pmic_ops {
+    int (*now)(void *,uint64_t *);
+    int (*current)(void *); /* Exactly1 only for designated provider task. */
+    int (*enter)(void *,uint64_t); /* Common PMIC mutex; 0 has no effects. */
+    void (*leave)(void *);
+    void (*retain)(void *);
+    int (*read)(void *,uintptr_t,uint32_t *);
+    int (*write)(void *,uintptr_t,uint32_t);
+    int (*outside)(void *,const void *,size_t); /* Exclude adapter/lock/clock backing. */
+};
+struct a733_pmic_slot {
+    struct a733_pmic_request request;
+    struct a733_rail_borrow borrow;
+    struct a733_pmic_snapshot snapshot;
+    uint64_t deadline;
+    unsigned state;
+};
+struct a733_pmic {
+    struct a733_pmic *self;
+    struct a733_pmic_config config;
+    struct a733_pmic_ops ops;
+    void *cookie;
+    struct a733_clock_leases *clocks;
+    struct a733_rail_leases *rails;
+    struct a733_pins *pins;
+    struct a733_clock_token clock;
+    struct a733_pin_lease_banked pin;
+    struct a733_pmic_slot slots[A733_PMIC_REQUESTS];
+    atomic_uint busy;
+    uint64_t last_now, next_id, deadline;
+    uint32_t divider, last_status;
+    unsigned stage, held, retained, failed, active, phase, byte_index;
+    uint8_t values[6];
+};
+/* Zero private, disjoint storage once; all arguments/callback metadata and
+ * shared managers have platform lifetime. No MMIO. All clocks use the same
+ * monotonic microseconds. The actual native adapter performs direct I/O.
+ * There is no close/reinit: controller, clock and pins remain platform-owned.
+ */
+int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
+    const struct a733_pmic_ops *,void *,struct a733_clock_leases *,
+    struct a733_rail_leases *,struct a733_pins *);
+/* identity returns READY when the metadata copy succeeds, even during startup.
+ * Only live reports provider readiness. Neither performs hardware discovery. */
+enum a733_pmic_status a733_pmic_identity(struct a733_pmic *,struct a733_pmic_lifetime *);
+enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_lifetime *);
+/* One designated task advances one bounded state per call. No busy waits,
+ * retries, PMIC data writes, clock/reset writes or bus-recovery pulses. An
+ * accepted transaction retains the common I2C mutex across worker calls.
+ * Failure retains any still-owned mutex, request ticket and all leases. A
+ * client-detected fault is latched immediately; the provider task must poll
+ * once more to mark its own mutex retained. No client unlocks another task.
+ */
+enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
+/* Nonblocking client metadata. Supports DCDC1/2/4/8, BLDO5 and CLDO1. Snapshot
+ * reads ff/0e/0f/enable/selector/ff at address36 under one mutex. The ledger
+ * borrow prevents parent release until reap. A snapshot remains meaningful
+ * only under the same still-live parent rail lease. It proves programmed
+ * values, never wiring, measured voltage or settling. Public fields read-only.
+ * All buffers/tokens must be disjoint from the complete provider object graph.
+ */
+enum a733_pmic_status a733_pmic_submit(struct a733_pmic *,uint64_t owner,
+    const struct a733_rail_token *,enum a733_rail,uint64_t deadline,struct a733_pmic_request *);
+enum a733_pmic_status a733_pmic_result(struct a733_pmic *,const struct a733_pmic_request *,
+    struct a733_pmic_snapshot *);
+enum a733_pmic_status a733_pmic_reap(struct a733_pmic *,const struct a733_pmic_request *);
+/* Pure source-backed decode. Unsupported/reserved selectors leave decoded=0
+ * and retain raw bytes. In particular DCDC8's unproven selector>=102 branch is not
+ * guessed from the bootloader's non-power-of-two ALIGN expression. */
+int a733_pmic_decode(enum a733_rail,uint8_t enable,uint8_t selector,
+    struct a733_pmic_snapshot *);
+#endif
