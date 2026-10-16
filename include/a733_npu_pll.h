@@ -66,6 +66,10 @@ struct a733_npu_pll {
     struct a733_npu_pll_operations ops;
     struct a733_npu_pll_resources resources, observed;
     void *cookie;
+    const struct a733_npu_pll *self;
+    struct a733_clock_leases *registry;
+    void *successor; /* Exact private startup object; permanent after binding. */
+    unsigned transferred;
     uint64_t last_now, next_sample, settle_until;
     uint32_t shared, expected_control;
     unsigned initialized, stage, step, samples, consecutive, failed, wrote, lock_state;
@@ -76,10 +80,21 @@ int a733_npu_pll_scopes(const struct a733_npu_pll_config *, uint32_t *shared, ui
 /* Zero once; metadata copied before mutating p. Serialize every poll. */
 int a733_npu_pll_init(struct a733_npu_pll *, const struct a733_npu_pll_config *,
     const struct a733_npu_pll_operations *, void *);
-/* READY retains ALL exclusive reservations. No release, retry, rollback or
- * service authorization. Atomic exclusive-to-stable publication and concrete
- * cold boot binding are REQUIRED follow-on integration before usable startup.
- * No callback occurs after terminal failure. */
+/* Optional concrete registry provenance for startup adoption. Bind before the
+ * first poll, while private and serialized. The acquisition provider must use
+ * this exact registry and its monotonic counter. Binding does not create boot
+ * authority or prove that callbacks use the counter correctly. Object address,
+ * callbacks, config and registry are immutable thereafter; never copy/move it.
+ * The bound object and whole-platform reservation outlive every successor. */
+int a733_npu_pll_bind_registry(struct a733_npu_pll *,struct a733_clock_leases *);
+/* Serialized read-only observation; completion is published only after final
+ * readback, mutex release and deadline checks. Not a cross-core atomic API. */
+int a733_npu_pll_ready(const struct a733_npu_pll *);
+/* READY retains all reservations. An explicitly bound NPU startup successor
+ * may atomically convert PLL ownership to shared and adopt the live token;
+ * transferred then records that change. PLL polling alone never releases or
+ * authorizes a service. Concrete cold boot authority remains REQUIRED.
+ * No callback occurs after terminal failure or completed preparation. */
 enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *);
 /* Native allowlisted Device access only; not a resource/boot binding. */
 int a733_npu_pll_native_read(void *, uintptr_t, uint32_t *);

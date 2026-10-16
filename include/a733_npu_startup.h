@@ -2,6 +2,7 @@
 #define SUNSTONE_A733_NPU_STARTUP_H
 #include "a733_counter_clock.h"
 #include "a733_npu_platform.h"
+#include "a733_npu_pll.h"
 #include "a733_platform_locks.h"
 #include "npu_service.h"
 
@@ -49,6 +50,13 @@ struct a733_npu_startup {
     struct a733_npu_platform platform;
     struct a733_npu_platform_operations operations;
     struct a733_clock_token clock_token,rail_token;
+    struct a733_npu_pll *pll_source;
+    const struct a733_npu_startup *pll_binding_self;
+    struct a733_npu_pll_config pll_config;
+    struct a733_npu_pll_operations pll_operations;
+    void *pll_cookie;
+    unsigned pll_transferred;
+    uint64_t pll_whole_platform;
     struct a733_gpu_resource_lease pck_token;
     struct a733_npu_startup_resources *shared;
     struct a733_clock_leases *registry;
@@ -66,6 +74,19 @@ int a733_npu_startup_resources_init(struct a733_npu_startup_resources *,
     struct a733_counter_clock *,struct a733_platform_locks *);
 int a733_npu_startup_init(struct a733_npu_startup *,const struct a733_npu_handoff *,
     struct a733_npu_startup_resources *,struct a733_clock_leases *);
+/* Optional, EL1 pre-scheduler binding before any startup poll. Source registry,
+ * owner, handoff and fabric must match. The source may already be prepared by
+ * cold boot, or the designated bootstrap task must serialize source polling
+ * with startup polling. No concurrent observer/writer of either object is
+ * permitted; their state fields are plain C data. One source has one successor.
+ * Source, all callback metadata and its whole-platform reservation MUST remain
+ * live and immutable for startup/service lifetime. Neither object may be copied
+ * or moved. The source provider still has to establish real boot/remote/RAM
+ * authority; binding does not infer those facts from metadata.
+ * Bootstrap polling atomically publishes stable PLL_NPU ownership and adopts
+ * the fresh token while preserving exclusive local NPU and all parent scopes.
+ * This does not bypass rail, PCK, local platform or service admission. */
+int a733_npu_startup_bind_pll(struct a733_npu_startup *,struct a733_npu_pll *);
 int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);
 /* One designated EL1 bootstrap task after scheduler start. Acquisition and rail
  * snapshots never nest platform mutexes. Failure retains every admitted lease;

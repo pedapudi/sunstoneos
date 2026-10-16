@@ -2,9 +2,9 @@
 
 The native PLL controller programs a fixed 492 MHz output from the 24 MHz
 reference. It implements the documented disabled-PLL enable sequence and a
-separate enabled-PLL retune sequence. It does not yet have a concrete cold boot
-resource provider or an atomic handoff to NPU startup. Physical PLL operation
-remains unqualified.
+separate enabled-PLL retune sequence. An optional [atomic handoff](npu-clock-handoff.md)
+transfers its reservations to NPU startup. A concrete cold boot resource provider
+and physical PLL qualification remain required.
 
 The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to the
 NPU domain's DCDC2 supply. The PLL's internal LDO is a separate control. PLL
@@ -127,12 +127,11 @@ release, reset, rollback or retry.
 
 ## Required integration
 
-Successful preparation retains exclusive PLL_NPU and NPU reservations. Normal
-NPU startup cannot acquire overlapping reservations yet. A required follow-on
-must atomically replace exclusive PLL ownership with stable ownership and adopt
-the local NPU token into startup. It must preserve all parent, fabric and
-whole-platform reservations until their consumers have a valid ownership
-transfer. Releasing and reacquiring the PLL would create an unsafe interval.
+Successful preparation retains exclusive PLL_NPU and NPU reservations. The
+optional startup binding atomically replaces exclusive PLL ownership with stable
+ownership and adopts the local NPU token. Parent, fabric and whole-platform
+reservations remain live throughout. The source controller stays reserved for
+the successor's lifetime. Releasing and reacquiring the PLL is not permitted.
 
 The concrete provider must authenticate cold boot/remote handoff, register
 security access, physical reference and parent state, independent recovery and

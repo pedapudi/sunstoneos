@@ -10,7 +10,7 @@ target_compile_options(npu-startup-native-io PRIVATE -march=armv8-a -mstrict-ali
   -ffreestanding -fno-builtin -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra -Werror)
 add_executable(npu-startup-model EXCLUDE_FROM_ALL
   platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c runtime/memmove.c
-  platform/a733/counter_clock.c platform/a733/shared_locks.c drivers/npu/a733_npu_startup.c
+  platform/a733/counter_clock.c platform/a733/shared_locks.c drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_pll.c
   drivers/clock/a733_clock_leases.c drivers/gpu/a733_gpu_resources.c
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c

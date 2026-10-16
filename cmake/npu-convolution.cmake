@@ -17,7 +17,7 @@ if(NPU_CONVOLUTION_FIXTURES)
     "${CMAKE_CURRENT_BINARY_DIR}/npu-service-start.S" platform/qemu-smp/platform.c
     arch/aarch64/device_memory.c runtime/memory.c runtime/memmove.c runtime/counter_clock.c
     checks/npu-convolution.c platform/a733/npu_native.c
-    drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_platform.c platform/a733/shared_locks.c
+    drivers/npu/a733_npu_startup.c drivers/npu/a733_npu_pll.c drivers/clock/a733_clock_leases.c drivers/npu/a733_npu_platform.c platform/a733/shared_locks.c
     drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c
     drivers/npu/a733_npu_memory.c drivers/npu/a733_npu_mmu.c
     drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c

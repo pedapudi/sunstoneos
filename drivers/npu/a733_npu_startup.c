@@ -79,6 +79,31 @@ static int timely(struct a733_npu_startup *b,uint64_t *out)
     if(out)*out=now;
     return 1;
 }
+static int pll_config_equal(const struct a733_npu_pll_config *a,const struct a733_npu_pll_config *b)
+{
+    if(a->owner!=b->owner || a->handoff!=b->handoff || a->deadline_us!=b->deadline_us ||
+        a->mode!=b->mode || a->initial_control!=b->initial_control)return 0;
+    for(unsigned i=0;i<A733_NPU_PLL_SNAPSHOTS;++i)if(a->consumers[i]!=b->consumers[i])return 0;
+    return 1;
+}
+static int pll_ops_equal(const struct a733_npu_pll_operations *a,const struct a733_npu_pll_operations *b)
+{
+    return a->acquire==b->acquire && a->enter==b->enter && a->leave==b->leave &&
+        a->retain==b->retain && a->now_us==b->now_us && a->read==b->read && a->write==b->write;
+}
+static int pll_integrity(const struct a733_npu_startup *b)
+{
+    const struct a733_npu_pll *p=b->pll_source;
+    if(!p)return !b->pll_binding_self && !b->pll_transferred && !b->pll_whole_platform;
+    if(b->pll_binding_self!=b || p->self!=p || !p->initialized || p->failed ||
+        p->registry!=b->registry || p->successor!=b || p->transferred!=b->pll_transferred ||
+        !pll_config_equal(&p->config,&b->pll_config) || !pll_ops_equal(&p->ops,&b->pll_operations) ||
+        p->cookie!=b->pll_cookie)return 0;
+    if(b->pll_transferred && (!a733_npu_pll_ready(p) || !p->resources.whole_platform ||
+        p->resources.whole_platform!=b->pll_whole_platform || p->observed.whole_platform!=b->pll_whole_platform ||
+        !same_clock(&p->resources.clock,&b->clock_token) || !same_clock(&p->observed.clock,&b->clock_token)))return 0;
+    return 1;
+}
 static int rail_snapshot(struct a733_npu_startup *b)
 {
     struct a733_platform_locks *locks=b->shared->locks;
@@ -119,8 +144,29 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
         !exact_config(c,&b->handoff.allowed) || !a733_npu_platform_scopes(c,&expected) || shared!=expected ||
         !same_clock(&out->clock,&b->clock_token) || out->rail!=b->rail_token.id || out->pck!=b->pck_token.token ||
         b->handoff.evidence!=c->handoff || b->handoff.established!=A733_NPU_HANDOFF_REQUIRED)return fault(b);
-    if(!timely(b,0))return fault(b);
+    if(!timely(b,0) || !pll_integrity(b))return fault(b);
     enum a733_clock_result cr;
+    if(b->stage==CLOCK && b->pll_source) {
+        struct a733_npu_pll *p=b->pll_source;
+        if(!a733_npu_pll_ready(p))return PENDING;
+        if(p->transferred || !p->resources.whole_platform ||
+            p->observed.whole_platform!=p->resources.whole_platform ||
+            !same_clock(&p->observed.clock,&p->resources.clock) ||
+            p->resources.clock.owner!=c->owner || p->resources.clock.shared!=(shared&~A733_CLOCK_PLL_NPU) ||
+            p->resources.clock.exclusive!=(A733_CLOCK_PLL_NPU|A733_CLOCK_NPU))return fault(b);
+        /* Persistent output is populated at registry commit. No failing action
+         * separates that commit from installing every live local token copy. */
+        cr=a733_clock_publish_stable(b->registry,&p->resources.clock,A733_CLOCK_PLL_NPU,
+            c->deadline_us,&b->clock_token);
+        if(cr==A733_CLOCK_BUSY)return BUSY;
+        if(cr!=A733_CLOCK_OK)return fault(b);
+        p->resources.clock=b->clock_token;p->observed.clock=b->clock_token;
+        p->transferred=1;b->pll_transferred=1;
+        b->pll_whole_platform=p->resources.whole_platform;b->stage=RAIL;
+        publish(b,out);
+        if(!timely(b,0))return fault(b);
+        return PENDING;
+    }
     if(b->stage==CLOCK || b->stage==RAIL) {
         cr=a733_clock_acquire(b->registry,c->owner,b->stage==CLOCK ? shared : A733_POWER_DCDC2,
             b->stage==CLOCK ? A733_CLOCK_NPU : 0,c->deadline_us,
@@ -222,6 +268,30 @@ int a733_npu_startup_init(struct a733_npu_startup *b,const struct a733_npu_hando
     if(!a733_npu_platform_init(&b->platform,&b->handoff.allowed,&b->operations,b))return 0;
     b->initialized=1;return 1;
 }
+int a733_npu_startup_bind_pll(struct a733_npu_startup *b,struct a733_npu_pll *p)
+{
+    uint32_t shared,exclusive,platform_shared;
+    if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
+        !b || !b->initialized || b->failed || b->pll_source || b->stage!=CLOCK || b->platform.stage ||
+        b->clock_token.id || b->rail_token.id || b->pck_token.token || b->platform.resources.clock.id ||
+        !p || p->self!=p || !p->initialized || p->failed || p->successor || p->transferred ||
+        p->registry!=b->registry || !separate(b,sizeof(*b),p,sizeof(*p)) ||
+        !separate(p,sizeof(*p),b->shared,sizeof(*b->shared)) ||
+        !separate(p,sizeof(*p),b->registry,sizeof(*b->registry)) ||
+        !separate(p,sizeof(*p),b->shared->clock,sizeof(*b->shared->clock)) ||
+        !separate(p,sizeof(*p),b->shared->locks,sizeof(*b->shared->locks)) ||
+        !a733_npu_pll_scopes(&p->config,&shared,&exclusive) ||
+        !a733_npu_platform_scopes(&b->handoff.allowed,&platform_shared) ||
+        (shared|A733_CLOCK_PLL_NPU)!=platform_shared ||
+        p->config.owner!=b->handoff.allowed.owner || p->config.handoff!=b->handoff.allowed.handoff ||
+        b->registry->now!=a733_counter_clock_now || b->registry->context!=b->shared->clock)return 0;
+    const uint32_t masks[]={0x0300001f,0x8700001f,0x8700001f};
+    for(unsigned i=0;i<3;++i)
+        if((p->config.consumers[i]&masks[i])!=b->handoff.allowed.fabric[i])return 0;
+    b->pll_source=p;b->pll_binding_self=b;b->pll_config=p->config;
+    b->pll_operations=p->ops;b->pll_cookie=p->cookie;p->successor=b;
+    return 1;
+}
 int a733_npu_startup_bind_task(struct a733_npu_startup *b,TaskHandle_t task)
 {
     if(!b || !b->initialized || b->failed || b->task || !task || !privileged() ||
@@ -231,12 +301,18 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *b,TaskHandle_t task)
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
 {
     if(!task_owner(b))return RETAINED;
+    if(!pll_integrity(b))return fault(b);
+    if(b->pll_transferred) {
+        enum a733_clock_result health=a733_clock_token_status(b->registry,&b->clock_token);
+        if(health==A733_CLOCK_BUSY)return BUSY;
+        if(health!=A733_CLOCK_OK)return fault(b);
+    }
     enum a733_npu_platform_result r=a733_npu_platform_poll(&b->platform);
     if(r==RETAINED)(void)fault(b);
     return r;
 }
 int a733_npu_startup_ready(const struct a733_npu_startup *b)
-{return b && b->initialized && !b->failed && a733_npu_platform_ready(&b->platform);}
+{return b && b->initialized && !b->failed && pll_integrity(b) && a733_npu_platform_ready(&b->platform);}
 static int backend_equal(const struct a733_npu_ops *a,const struct a733_npu_ops *b)
 {
     return a && a->read==b->read && a->write==b->write && a->microseconds==b->microseconds &&
@@ -247,6 +323,7 @@ int a733_npu_startup_prepared(void *v,const struct a733_npu_ops *o,void *cookie,
 {
     struct a733_npu_startup *b=v;
     if(!task_owner(b))return -1;
+    if(!pll_integrity(b)){fault(b);return -1;}
     const struct a733_npu_handoff *h=&b->handoff;
     if(!backend_equal(o,&h->backend) || cookie!=h->backend_cookie || !image || !commands ||
         count!=h->command_count || image->physical!=h->image.physical || image->bytes!=h->image.bytes ||

@@ -49,9 +49,21 @@ int a733_npu_pll_init(struct a733_npu_pll *p,const struct a733_npu_pll_config *c
     const struct a733_npu_pll_config config=*c;
     const struct a733_npu_pll_operations ops=*o;
     *p=(struct a733_npu_pll){.config=config,.ops=ops,.cookie=cookie,.shared=shared,
-        .expected_control=config.initial_control&~LOCK,.initialized=1};
+        .self=p,.expected_control=config.initial_control&~LOCK,.initialized=1};
     return 1;
 }
+int a733_npu_pll_bind_registry(struct a733_npu_pll *p,struct a733_clock_leases *registry)
+{
+    if (!p || p->self!=p || !p->initialized || p->failed || p->registry || p->successor ||
+        p->stage!=ACQUIRE || p->resources.clock.id || p->observed.clock.id ||
+        !registry || !registry->initialized) return 0;
+    uintptr_t a=(uintptr_t)p,b=(uintptr_t)registry;
+    if (sizeof(*p)>UINTPTR_MAX-a || sizeof(*registry)>UINTPTR_MAX-b ||
+        !(a+sizeof(*p)<=b || b+sizeof(*registry)<=a)) return 0;
+    p->registry=registry;return 1;
+}
+int a733_npu_pll_ready(const struct a733_npu_pll *p)
+{return p && p->self==p && p->initialized && !p->failed && p->stage==COMPLETE;}
 static int timely(struct a733_npu_pll *p)
 {
     uint64_t t;
@@ -123,7 +135,7 @@ static int equal(const struct a733_npu_pll_resources *a,const struct a733_npu_pl
 {return clock_equal(&a->clock,&b->clock) && a->whole_platform==b->whole_platform;}
 enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
 {
-    if (!p || !p->initialized || p->failed) return RETAINED;
+    if (!p || p->self!=p || !p->initialized || p->failed) return RETAINED;
     if (p->stage==COMPLETE) return READY;
     if (!timely(p)) return fault(p);
     if (p->stage==ACQUIRE) {
@@ -145,7 +157,7 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
     if (!held) return timely(p) ? BUSY : fault(p);
     p->lock_state=held==1 ? 1 : 2;
     if (held!=1 || !timely(p)) return fault(p);
-    int ok=1;
+    int ok=1,complete=0;
     if (p->stage==BASELINE) {ok=baseline(p);if(ok)p->stage=PROGRAM;}
     else if (p->stage==PROGRAM) {
         const struct step *s=p->config.mode==A733_NPU_PLL_COLD_ENABLE ? &cold[p->step] : &retune[p->step];
@@ -176,7 +188,7 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
         ok=check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) && update(p,CTRL,BIT(27),BIT(27)) &&
             check(p,CTRL,UINT32_MAX,p->expected_control|LOCK) &&
             check(p,CCU+0x19a0,BIT(16),BIT(16));
-        if(ok)p->stage=COMPLETE;
+        if(ok)complete=1;
     } else ok=0;
     /* No unlock after a failed readback/deadline. A failure first observed
      * after confirmed release retains authority but cannot retain that mutex. */
@@ -184,5 +196,6 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
     int released=p->ops.leave(p->cookie);
     p->lock_state=released==1 ? 0 : 2;
     if (released!=1 || !timely(p)) return fault(p);
+    if(complete)p->stage=COMPLETE;
     return p->stage==COMPLETE ? READY : PENDING;
 }
