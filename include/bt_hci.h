@@ -13,7 +13,7 @@ struct bt_hci {
     struct bt_hci_identity identity;
     uint64_t initialization_deadline, command_timeout_us, command_deadline, command_tag;
     uint16_t opcode;
-    unsigned stage, credits, command_accepted;
+    unsigned stage, credits, command_accepted, external_command;
     uint8_t last_status;
     enum bt_hci_command_state command;
     enum bt_hci_state state;
@@ -30,9 +30,18 @@ struct bt_hci {
 int bt_hci_init(struct bt_hci *, const struct bt_h4_binding *,
                 const struct bt_h4_storage *, unsigned count,
                 uint64_t initialization_deadline, uint64_t command_timeout_us);
+/* Post-identification leaf commands: Create Connection (0x0405,13 bytes) and
+ * Disconnect (0x0406,3 bytes). Exact1 accepted,0 busy/no credit,-1 refused/fault.
+ * The exclusive link owner validates semantics and owns final link events.
+ * Acknowledgement records remain OWNED; matching tag is command_tag after
+ * acceptance. Successful Status only returns the command slot, never proves a
+ * connection/disconnection. Caller supplies the entire absolute operation bound. */
+int bt_hci_request(struct bt_hci *, uint16_t opcode, const uint8_t *, size_t,
+                   uint64_t deadline);
 /* One H4 step and at most one complete record dispatch. Commands consume one
- * credit at submission. Successful Command Status marks acceptance only;
- * the listed commands require matching Command Complete before advancement.
+ * credit at submission. Bootstrap Command Status marks acceptance only;
+ * bootstrap advances after matching Command Complete. External link commands
+ * retain Status/refusal records for the link owner and its terminal event.
  * Tagging records at UART acquisition prevents already-acquired bytes from
  * satisfying a later command. H4 drains preexisting FIFO/staging bytes before
  * transmission; it cannot timestamp bytes arriving between observations. No opcode is reused within this initialization lifetime. */
@@ -40,7 +49,7 @@ int bt_hci_step(struct bt_hci *, unsigned budget, uint64_t deadline);
 /* Exposes earliest retained unsolicited event or ACL/SCO/ISO packet. Data bytes
  * and raw flags are unchanged; no ACL reassembly, audio decoding, link/security
  * state, or ISO feature support is implied. A successful Disconnect Complete
- * remains a record for future link owners to process. Handle reuse must be
+ * remains a record for the link owner to process. Handle reuse must be
  * resolved by that owner; this worker never treats it as a query completion.
  * After FAULT records remain inspectable, but release is refused. */
 const struct bt_h4_record *bt_hci_next(const struct bt_hci *);

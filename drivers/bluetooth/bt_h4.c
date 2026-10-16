@@ -69,7 +69,26 @@ int bt_h4_command(struct bt_h4 *q, uint16_t opcode, const uint8_t *p, size_t n,
     if(!valid(q,deadline)) return -1;
     q->tx[0]=1;q->tx[1]=(uint8_t)opcode;q->tx[2]=(uint8_t)(opcode>>8);q->tx[3]=(uint8_t)n;
     for(size_t i=0;i<n;++i) q->tx[4+i]=p[i];
+    q->tx_payload=0;q->tx_header=n+4;
     q->tx_length=n+4;q->tx_offset=0;q->tx_deadline=deadline;return 1;
+}
+int bt_h4_acl(struct bt_h4 *q, uint16_t handle_flags, const uint8_t *p, size_t n,
+              uint64_t deadline)
+{
+    unsigned pb=(handle_flags>>12)&3u;
+    if(!q || !n || n>65535 || !valid_span(p,n) || !deadline ||
+       (handle_flags&0xc000u) || (handle_flags&0xfffu)>0xeffu || (pb!=1 && pb!=2) ||
+       overlaps(p,n,q,sizeof(*q))) return -1;
+    if(q->state!=BT_H4_ACTIVE) return -1;
+    if(overlaps(p,n,q->binding.uart,sizeof(*q->binding.uart))) return -1;
+    for(unsigned i=0;i<q->count;++i)
+        if(overlaps(p,n,q->records[i].storage.bytes,q->records[i].storage.capacity)) return -1;
+    if(q->tx_offset<q->tx_length) return 0;
+    if(!valid(q,deadline)) return -1;
+    q->tx[0]=2;q->tx[1]=(uint8_t)handle_flags;q->tx[2]=(uint8_t)(handle_flags>>8);
+    q->tx[3]=(uint8_t)n;q->tx[4]=(uint8_t)(n>>8);
+    q->tx_payload=p;q->tx_header=5;q->tx_length=5+n;q->tx_offset=0;q->tx_deadline=deadline;
+    return 1;
 }
 static unsigned free_slot(const struct bt_h4 *q)
 {
@@ -130,8 +149,16 @@ int bt_h4_step(struct bt_h4 *q, unsigned budget, uint64_t tag, uint64_t deadline
     if(!valid(q,deadline) || !parse(q,budget) || !valid(q,deadline)) return -1;
     if(q->tx_offset<q->tx_length && rx_empty && !q->staged &&
        q->assembling==q->count && !bt_h4_next(q,BT_H4_COMPLETE)) {
+        const uint8_t *bytes;
+        size_t remaining;
+        if(q->tx_offset<q->tx_header) {
+            bytes=q->tx+q->tx_offset;remaining=q->tx_header-q->tx_offset;
+        } else {
+            bytes=q->tx_payload+(q->tx_offset-q->tx_header);
+            remaining=q->tx_length-q->tx_offset;
+        }
         int state=a733_uart_exchange(q->binding.uart,0,0,
-            q->tx+q->tx_offset,q->tx_length-q->tx_offset,budget,deadline,&result);
+            bytes,remaining,budget,deadline,&result);
         q->tx_offset+=result.transmitted;
         if(state!=A733_UART_READY || result.errors) {bt_h4_fail(q);return -1;}
         if(!valid(q,deadline)) return -1;

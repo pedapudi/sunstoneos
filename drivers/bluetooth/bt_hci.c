@@ -39,8 +39,23 @@ int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
     if(result!=1) return h->transport.state==BT_H4_FAULT ? fail(h) : -1;
     h->identity=(struct bt_hci_identity){0};h->initialization_deadline=deadline;
     h->command_timeout_us=timeout;h->command_deadline=0;h->command_tag=0;
-    h->stage=0;h->credits=1;h->opcode=0;h->last_status=0;h->command_accepted=0;
+    h->stage=0;h->external_command=0;h->credits=1;h->opcode=0;h->last_status=0;h->command_accepted=0;
     h->command=BT_HCI_IDLE;h->state=BT_HCI_INITIALIZING;return 1;
+}
+int bt_hci_request(struct bt_hci *h, uint16_t opcode, const uint8_t *p, size_t n,
+                   uint64_t deadline)
+{
+    if(!h || !deadline || !p || ((opcode!=0x0405 || n!=13) &&
+       (opcode!=0x0406 || n!=3)) || overlaps(h,sizeof(*h),p,n)) return -1;
+    if(h->state!=BT_HCI_IDENTIFIED) return -1;
+    if(h->command!=BT_HCI_IDLE || !h->credits ||
+       h->transport.tx_offset<h->transport.tx_length) return 0;
+    if(h->command_tag==UINT64_MAX) return fail(h);
+    int accepted=bt_h4_command(&h->transport,opcode,p,n,deadline);
+    if(accepted!=1) return accepted==0 ? 0 : fail(h);
+    ++h->command_tag;h->opcode=opcode;h->command_deadline=deadline;
+    h->command_accepted=0;h->external_command=1;h->command=BT_HCI_SENDING;
+    --h->credits;return 1;
 }
 static int retain(struct bt_hci *h, const struct bt_h4_record *r)
 { return bt_h4_own(&h->transport,r->serial)==1 ? 1 : fail(h); }
@@ -72,6 +87,14 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
     if(h->command!=BT_HCI_WAITING || opcode!=h->opcode || r->tag!=h->command_tag)
         return retain(h,r);
     h->credits=credits;
+    if(h->external_command) {
+        /* Link commands require Status then their separate terminal event.
+         * Unknown-command refusal may instead use Complete with status. */
+        if(!cs && (n!=4 || !p[5])) return bad_record(h,r);
+        h->last_status=p[cs ? 2 : 5];h->command_accepted=!h->last_status;
+        h->external_command=0;h->command=BT_HCI_IDLE;
+        return retain(h,r);
+    }
     if(cs) {
         h->last_status=p[2];
         if(p[2]) return bad_record(h,r);

@@ -38,6 +38,8 @@ struct bt_h4 {
     struct bt_h4_record records[BT_H4_SLOTS];
     struct a733_uart_byte staging[BT_H4_BUDGET];
     uint8_t tx[259];
+    const uint8_t *tx_payload;
+    size_t tx_header;
     size_t tx_length, tx_offset, staged, stage_offset;
     uint64_t now, deadline, partial_deadline, tx_deadline, next_serial, stage_tag;
     unsigned count, assembling;
@@ -53,6 +55,12 @@ int bt_h4_init(struct bt_h4 *, const struct bt_h4_binding *,
  * retransmission. Returns 1 accepted, 0 busy, -1 invalid/fault. */
 int bt_h4_command(struct bt_h4 *, uint16_t opcode, const uint8_t *, size_t,
                   uint64_t deadline);
+/* Borrow an immutable ACL payload until the last frame byte is accepted or
+ * external recovery resolves a fault. handle_flags includes the 12-bit handle
+ * and PB flag (1 continuation, 2 start); broadcast is forbidden. No data-credit
+ * admission occurs here: an exclusive upper owner must reserve it first. */
+int bt_h4_acl(struct bt_h4 *, uint16_t handle_flags, const uint8_t *, size_t,
+              uint64_t deadline);
 /* At most budget RX bytes, budget parser bytes and budget TX bytes. RX uses
  * one exchange; TX uses a second only after an RX-empty observation with no
  * staged, partial or worker-unprocessed complete records. OWNED records do not
