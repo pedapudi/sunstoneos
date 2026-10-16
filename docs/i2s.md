@@ -89,10 +89,13 @@ The component claims the chosen channel through the existing controller API;
 it does not alter global DMA routing or initialize DMA clocks. Its platform
 callback must also lease the I2S0 FIFO request route against other clients.
 
-The platform acquire callback is atomic: refusal has no effects. Success leases
-the I2S0 controller, pins, clocks, and reset, then presents a fresh reset device.
-It must preserve other consumers of each parent PLL and reject conflicting
-clock requests. The source clock controller identifies module register offset
+Platform acquisition can return ready, busy, pending or retained recovery.
+Pending acquisition preserves partial ownership in `OPENING`; only ready
+acquisition presents a fresh reset controller. Retained recovery preserves
+all tokens and prohibits further hardware access. Open and close take absolute
+monotonic microsecond deadlines, separate from DMA capture ticks. The
+[I2S0 platform binding](i2s-platform.md) implements pin ownership and a bounded
+16 kHz audio-clock profile with explicit shared PLL leases. The source clock controller identifies module register offset
 `0x1200`, its divider at bits 0–4, mux at bits 24–26, and gate at bit 31.
 Bus gating and reset use offset `0x120c`, bits 0 and 16 respectively. Parent
 choices include the audio PLL outputs and the 200 MHz peripheral PLL output.

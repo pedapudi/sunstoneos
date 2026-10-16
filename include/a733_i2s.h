@@ -30,19 +30,29 @@ int a733_i2s_plan(const struct a733_i2s_format *, struct a733_i2s_plan *);
 enum a733_i2s_status {
     A733_I2S_CLOSED, A733_I2S_READY, A733_I2S_PREPARING, A733_I2S_ACTIVE,
     A733_I2S_STOPPING, A733_I2S_COMPLETE, A733_I2S_CANCELED, A733_I2S_FAILED,
+    A733_I2S_OPENING, A733_I2S_CLOSING,
     A733_I2S_INVALID = -1, A733_I2S_CONFLICT = -2, A733_I2S_RECOVERY = -3
 };
 
-/* Synchronous, ordered device accesses: a successful write is visible before
- * the next read or DMA operation. Callbacks must not reenter this service.
- * acquire atomically leases I2S0, its FIFO route, PB pins, stable exact module
- * clock and optional MCLK, and prepares a fresh reset controller. Failure has
- * no effects. It must refuse conflicting pin/clock users and maintain their
- * parent PLL rates. release runs only after controller and DMA quiescence;
- * failure retains the lease. Hardware watchdog protection is mandatory. */
+/* Resource results are distinct from capture states. BUSY on the first acquire
+ * has no effects. PENDING admits resources and requires acquire_poll. RETAINED
+ * means uncertain state: preserve every token and perform no further I/O.
+ * BUSY while opening/closing retains already admitted resources. */
+enum a733_i2s_resource_result {
+    A733_I2S_RESOURCE_READY, A733_I2S_RESOURCE_BUSY,
+    A733_I2S_RESOURCE_PENDING, A733_I2S_RESOURCE_RETAINED
+};
+/* All resource deadlines are absolute, nonwrapping monotonic microseconds;
+ * DMA capture timeout uses the DMA controller's separate tick unit.
+ * Callbacks are bounded, ordered and non-reentrant. READY acquire guarantees
+ * leased pins, stable exact clocks and a fresh reset I2S0. release requires
+ * producer/DMA quiescence. Parent clock leases can outlive this local capture.
+ * Hardware watchdog protection remains mandatory for native access. */
 struct a733_i2s_operations {
-    int (*acquire)(void *cookie, const struct a733_i2s_plan *);
-    int (*release)(void *cookie);
+    enum a733_i2s_resource_result (*acquire)(void *, const struct a733_i2s_plan *, uint64_t);
+    enum a733_i2s_resource_result (*acquire_poll)(void *, uint64_t);
+    enum a733_i2s_resource_result (*release)(void *, uint64_t);
+    int (*now_us)(void *, uint64_t *);
     int (*read)(void *cookie, uintptr_t address, uint32_t *value);
     int (*write)(void *cookie, uintptr_t address, uint32_t value);
 };
@@ -57,14 +67,17 @@ struct a733_i2s_capture {
     void *cookie;
     struct a733_dma_controller *dma;
     const struct a733_dma_transfer *transfer;
-    uint64_t started, timeout;
+    uint64_t started, timeout, resource_deadline, resource_time;
     enum a733_i2s_status status, outcome;
     unsigned channel, platform_held, dma_held, buffers_held;
 };
 
+/* OPENING and CLOSING continue through poll() with the originally admitted
+ * deadline. An unfinished open cannot be canceled; expiry retains resources.
+ * owns() concerns capture buffers only, not platform/clock/pin ownership. */
 enum a733_i2s_status a733_i2s_open(struct a733_i2s_capture *,
     const struct a733_i2s_format *, const struct a733_i2s_operations *, void *cookie,
-    struct a733_dma_controller *, unsigned channel);
+    struct a733_dma_controller *, unsigned channel, uint64_t acquisition_deadline_us);
 
 /* One finite capture per open. Metadata and complete buffer allocations are
  * exclusive/immutable from accepted start until owns() is false, even if the
@@ -80,7 +93,7 @@ enum a733_i2s_status a733_i2s_start(struct a733_i2s_capture *,
     const struct a733_dma_transfer *, uint64_t timeout);
 enum a733_i2s_status a733_i2s_poll(struct a733_i2s_capture *);
 enum a733_i2s_status a733_i2s_cancel(struct a733_i2s_capture *);
-enum a733_i2s_status a733_i2s_close(struct a733_i2s_capture *);
+enum a733_i2s_status a733_i2s_close(struct a733_i2s_capture *, uint64_t release_deadline_us);
 int a733_i2s_owns(const struct a733_i2s_capture *);
 
 #endif

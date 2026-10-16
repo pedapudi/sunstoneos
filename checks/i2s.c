@@ -15,6 +15,7 @@ static uint32_t ir[0xa0/4], dr[0x2000/4];
 static uint64_t now;
 static unsigned acquired, released, writes, dma_started, invalidated;
 static unsigned acquire_refused, release_refused, flush_stuck;
+static unsigned pending_acquire, retained_acquire, late_resource, pending_release;
 static uintptr_t failing_read, failing_write, ignored_write;
 static unsigned cache_ticks, mapping_ticks;
 static struct a733_i2s_format format;
@@ -71,23 +72,30 @@ static int validate_fifo(void *cookie, const struct a733_dma_endpoint *e, enum a
     return a == A733_DMA_READ && e->address == A733_I2S0_RXFIFO &&
            e->request == 3 && e->width == format.container_bits / 8 && e->burst == 8;
 }
-static int acquire(void *cookie, const struct a733_i2s_plan *p)
+static enum a733_i2s_resource_result acquire(void *cookie, const struct a733_i2s_plan *p, uint64_t deadline)
 {
     assert(cookie == &capture && !acquired);
-    if (acquire_refused) return 0;
+    (void)deadline;
+    if (acquire_refused) return A733_I2S_RESOURCE_BUSY;
     assert(p->format.module_hz == format.module_hz);
     assert(p->pb_mask == ((1u<<5) | (1u<<6) | (1u<<8) | (format.mclk_hz ? 1u<<4 : 0)));
     acquired = 1;
-    return 1;
+    if (late_resource) now=deadline;
+    if (retained_acquire) return A733_I2S_RESOURCE_RETAINED;
+    if (pending_acquire) return A733_I2S_RESOURCE_PENDING;
+    return A733_I2S_RESOURCE_READY;
 }
-static int release(void *cookie)
+static enum a733_i2s_resource_result release(void *cookie, uint64_t deadline)
 {
     assert(cookie == &capture && acquired && !(ir[0] & 7) && !ir[28/4]);
     assert(!dr[ix(0)] && !dr[0x30/4] && !a733_i2s_owns(&capture));
-    if (release_refused) return 0;
+    (void)deadline;
+    if (release_refused) return A733_I2S_RESOURCE_RETAINED;
+    if (pending_release) { --pending_release; return A733_I2S_RESOURCE_PENDING; }
+    if (late_resource) now=deadline;
     acquired = 0;
     ++released;
-    return 1;
+    return A733_I2S_RESOURCE_READY;
 }
 static int i2s_read(void *cookie, uintptr_t address, uint32_t *value)
 {
@@ -112,7 +120,18 @@ static int i2s_write(void *cookie, uintptr_t address, uint32_t value)
     ir[offset/4] = value;
     return 1;
 }
-static const struct a733_i2s_operations iops = {acquire, release, i2s_read, i2s_write};
+static enum a733_i2s_resource_result acquire_poll(void *cookie, uint64_t deadline)
+{
+    assert(cookie == &capture && acquired);
+    if (late_resource) now=deadline;
+    if (retained_acquire) return A733_I2S_RESOURCE_RETAINED;
+    if (pending_acquire) { --pending_acquire; return A733_I2S_RESOURCE_BUSY; }
+    return A733_I2S_RESOURCE_READY;
+}
+static int now_us(void *cookie, uint64_t *out)
+{ assert(cookie == &capture); *out = now; return 1; }
+static const struct a733_i2s_operations iops = {
+    acquire, acquire_poll, release, now_us, i2s_read, i2s_write};
 static void setup(unsigned bits, unsigned channels)
 {
     /* A separate, independently reset model per case. */
@@ -125,6 +144,7 @@ static void setup(unsigned bits, unsigned channels)
     ir[20/4] = 0x120; /* Preserve platform reset FIFO threshold. */
     now = acquired = released = writes = dma_started = invalidated = 0;
     acquire_refused = release_refused = flush_stuck = 0;
+    pending_acquire = retained_acquire = late_resource = pending_release = 0;
     failing_read = failing_write = ignored_write = 0;
     cache_ticks = mapping_ticks = 0;
     format = (struct a733_i2s_format){24576000, 16000, 0, bits, 32, channels, 0};
@@ -139,7 +159,7 @@ static void setup(unsigned bits, unsigned channels)
 }
 static void open_capture(void)
 {
-    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0) == A733_I2S_READY);
+    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0, 10000) == A733_I2S_READY);
     assert(ir[20/4] == 0x121);
 }
 static void start_capture(void)
@@ -151,7 +171,7 @@ static void start_capture(void)
 static void close_capture(void)
 {
     assert(!a733_i2s_owns(&capture));
-    assert(a733_i2s_close(&capture) == A733_I2S_CLOSED);
+    assert(a733_i2s_close(&capture, 10000) == A733_I2S_CLOSED);
     assert(released == 1 && !acquired && !dma.channels[0].claimed);
 }
 static void held_recovery(void)
@@ -160,7 +180,7 @@ static void held_recovery(void)
     unsigned old_writes = writes;
     assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY);
     assert(a733_i2s_cancel(&capture) == A733_I2S_RECOVERY);
-    assert(a733_i2s_close(&capture) == A733_I2S_RECOVERY);
+    assert(a733_i2s_close(&capture, 10000) == A733_I2S_RECOVERY);
     assert(writes == old_writes && !released && a733_i2s_owns(&capture));
 }
 int main(void)
@@ -180,11 +200,34 @@ int main(void)
         assert(a733_i2s_start(&capture, &transfer, 100) == A733_I2S_INVALID);
         close_capture();
     }
+    setup(32,1); pending_acquire=1;
+    assert(a733_i2s_open(&capture,&format,&iops,&capture,&dma,0,10000) == A733_I2S_OPENING);
+    assert(!writes && capture.platform_held && !capture.dma_held);
+    assert(a733_i2s_poll(&capture) == A733_I2S_OPENING && !writes);
+    assert(a733_i2s_poll(&capture) == A733_I2S_READY);
+    pending_release=1;
+    assert(a733_i2s_close(&capture,10000) == A733_I2S_CLOSING && capture.platform_held);
+    assert(a733_i2s_poll(&capture) == A733_I2S_CLOSED && !capture.platform_held);
+
+    for (unsigned late=0;late<2;++late) {
+        setup(32,1); retained_acquire=!late; late_resource=late;
+        assert(a733_i2s_open(&capture,&format,&iops,&capture,&dma,0,10000) == A733_I2S_RECOVERY);
+        assert(capture.platform_held && !capture.dma_held && !writes);
+        assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY && !writes);
+        assert(a733_i2s_close(&capture,20000) == A733_I2S_RECOVERY && !released);
+    }
+    setup(32,1); pending_acquire=1;
+    assert(a733_i2s_open(&capture,&format,&iops,&capture,&dma,0,10000) == A733_I2S_OPENING);
+    now=10000;
+    assert(a733_i2s_poll(&capture) == A733_I2S_RECOVERY && capture.platform_held && !writes);
+    setup(32,1); open_capture(); late_resource=1;
+    assert(a733_i2s_close(&capture,10000) == A733_I2S_RECOVERY && capture.platform_held);
+
     setup(32, 1); acquire_refused = 1;
-    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0) == A733_I2S_CONFLICT);
+    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0, 10000) == A733_I2S_CONFLICT);
     assert(!writes && !acquired && !dma.channels[0].claimed);
     setup(32, 1); assert(a733_dma_claim(&dma, 0) == A733_DMA_CONTROL_OK);
-    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0) == A733_I2S_CONFLICT);
+    assert(a733_i2s_open(&capture, &format, &iops, &capture, &dma, 0, 10000) == A733_I2S_CONFLICT);
     assert(!writes && !acquired && dma.channels[0].claimed);
     setup(32, 1); open_capture(); segment.source.request = 4;
     unsigned old_writes = writes;
@@ -240,7 +283,7 @@ int main(void)
     dr[0x30/4] = 0;
     assert(a733_i2s_poll(&capture) == A733_I2S_FAILED); close_capture();
     setup(32, 1); open_capture(); release_refused = 1;
-    assert(a733_i2s_close(&capture) == A733_I2S_RECOVERY);
+    assert(a733_i2s_close(&capture, 10000) == A733_I2S_RECOVERY);
     assert(acquired && !capture.dma_held && !released);
     puts("I2S/native DMA capture: completion, ordering, isolation, deadlines, and retained faults passed");
     return 0;

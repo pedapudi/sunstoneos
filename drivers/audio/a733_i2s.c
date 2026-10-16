@@ -42,10 +42,21 @@ int a733_i2s_plan(const struct a733_i2s_format *f, struct a733_i2s_plan *out)
     return 1;
 }
 
+static int resource_time(struct a733_i2s_capture *c);
+static int resource_phase(struct a733_i2s_capture *c)
+{ return c->status == A733_I2S_OPENING || c->status == A733_I2S_CLOSING; }
 static int read_reg(struct a733_i2s_capture *c, unsigned r, uint32_t *v)
-{ return c->operations.read(c->cookie, A733_I2S0_BASE + r, v); }
+{
+    if (resource_phase(c) && !resource_time(c)) return 0;
+    return c->operations.read(c->cookie, A733_I2S0_BASE + r, v) &&
+           (!resource_phase(c) || resource_time(c));
+}
 static int write_reg(struct a733_i2s_capture *c, unsigned r, uint32_t v)
-{ return c->operations.write(c->cookie, A733_I2S0_BASE + r, v); }
+{
+    if (resource_phase(c) && !resource_time(c)) return 0;
+    return c->operations.write(c->cookie, A733_I2S0_BASE + r, v) &&
+           (!resource_phase(c) || resource_time(c));
+}
 static int checked_write(struct a733_i2s_capture *c, unsigned r, uint32_t v)
 {
     uint32_t got;
@@ -71,30 +82,36 @@ static enum a733_i2s_status finish(struct a733_i2s_capture *c)
     return c->status = c->outcome;
 }
 
-enum a733_i2s_status a733_i2s_open(struct a733_i2s_capture *c,
-    const struct a733_i2s_format *f, const struct a733_i2s_operations *ops, void *cookie,
-    struct a733_dma_controller *dma, unsigned channel)
+static int resource_time(struct a733_i2s_capture *c)
 {
-    struct a733_i2s_plan p;
-    if (!c || c->status != A733_I2S_CLOSED || c->platform_held || c->dma_held ||
-        !a733_i2s_plan(f, &p) || !ops || !ops->acquire || !ops->release ||
-        !ops->read || !ops->write || !dma || !dma->initialized ||
-        dma->base != 0x04601000u || channel >= A733_DMA_CHANNELS)
-        return A733_I2S_INVALID;
-    if (!ops->acquire(cookie, &p)) return A733_I2S_CONFLICT;
-    c->plan = p;
-    c->operations = *ops;
-    c->cookie = cookie;
-    c->dma = dma;
-    c->channel = channel;
-    c->platform_held = 1;
-    if (a733_dma_claim(dma, channel) != A733_DMA_CONTROL_OK) {
-        if (!ops->release(cookie)) return recovery(c);
-        c->platform_held = 0;
-        return A733_I2S_CONFLICT;
+    uint64_t now;
+    if (!c->operations.now_us(c->cookie, &now) || now < c->resource_time ||
+        now >= c->resource_deadline) return 0;
+    c->resource_time = now;
+    return 1;
+}
+static enum a733_i2s_status release_platform(struct a733_i2s_capture *c)
+{
+    if (!resource_time(c)) return recovery(c);
+    enum a733_i2s_resource_result r = c->operations.release(c->cookie, c->resource_deadline);
+    if (r == A733_I2S_RESOURCE_RETAINED || !resource_time(c)) return recovery(c);
+    if (r == A733_I2S_RESOURCE_BUSY || r == A733_I2S_RESOURCE_PENDING)
+        return c->status = A733_I2S_CLOSING;
+    if (r != A733_I2S_RESOURCE_READY) return recovery(c);
+    c->platform_held = 0;
+    c->status = A733_I2S_CLOSED;
+    return c->outcome;
+}
+static enum a733_i2s_status configure(struct a733_i2s_capture *c)
+{
+    if (!resource_time(c)) return recovery(c);
+    if (a733_dma_claim(c->dma, c->channel) != A733_DMA_CONTROL_OK) {
+        c->outcome = A733_I2S_CONFLICT;
+        return release_platform(c);
     }
     c->dma_held = 1;
     uint32_t ctl, interrupt, status, fifo;
+    struct a733_i2s_plan p = c->plan;
     if (!read_reg(c, CTL, &ctl) || (ctl & 7u) ||
         !read_reg(c, INTCTL, &interrupt) || interrupt ||
         !read_reg(c, INTSTA, &status) || (status & RX_ERRORS) ||
@@ -105,8 +122,44 @@ enum a733_i2s_status a733_i2s_open(struct a733_i2s_capture *c,
         !checked_write(c, CHCFG, p.chcfg) || !checked_write(c, RXCHSEL, p.rxchsel) ||
         !checked_write(c, RXMAP0, 0) || !checked_write(c, RXMAP1, 0) ||
         !checked_write(c, RXMAP2, 0) || !checked_write(c, RXMAP3, p.rxmap3) ||
-        !checked_write(c, FIFOCTL, (fifo & ~3u) | 1u)) return recovery(c);
+        !checked_write(c, FIFOCTL, (fifo & ~3u) | 1u) || !resource_time(c))
+        return recovery(c);
     return c->status = A733_I2S_READY;
+}
+static enum a733_i2s_status acquired(struct a733_i2s_capture *c,
+                                     enum a733_i2s_resource_result r)
+{
+    if (r == A733_I2S_RESOURCE_RETAINED) return recovery(c);
+    if (!resource_time(c)) return recovery(c);
+    if (r == A733_I2S_RESOURCE_PENDING || r == A733_I2S_RESOURCE_BUSY)
+        return c->status = A733_I2S_OPENING;
+    if (r != A733_I2S_RESOURCE_READY) return recovery(c);
+    return configure(c);
+}
+enum a733_i2s_status a733_i2s_open(struct a733_i2s_capture *c,
+    const struct a733_i2s_format *f, const struct a733_i2s_operations *ops, void *cookie,
+    struct a733_dma_controller *dma, unsigned channel, uint64_t deadline)
+{
+    struct a733_i2s_plan p;
+    uint64_t now;
+    if (!c || c->status != A733_I2S_CLOSED || c->platform_held || c->dma_held ||
+        !a733_i2s_plan(f, &p) || !ops || !ops->acquire || !ops->acquire_poll ||
+        !ops->release || !ops->now_us || !ops->read || !ops->write ||
+        !dma || !dma->initialized || dma->base != 0x04601000u ||
+        channel >= A733_DMA_CHANNELS || !deadline) return A733_I2S_INVALID;
+    if (!ops->now_us(cookie, &now) || now >= deadline) return A733_I2S_CONFLICT;
+    c->plan = p;
+    c->operations = *ops;
+    c->cookie = cookie;
+    c->dma = dma;
+    c->channel = channel;
+    c->resource_deadline = deadline;
+    c->resource_time = now;
+    enum a733_i2s_resource_result r = ops->acquire(cookie, &p, deadline);
+    if (r == A733_I2S_RESOURCE_BUSY) return A733_I2S_CONFLICT;
+    c->status = A733_I2S_OPENING;
+    c->platform_held = 1; /* Includes partial acquisition and uncertain callbacks. */
+    return acquired(c, r);
 }
 
 static int overlaps_context(struct a733_i2s_capture *c, const struct a733_dma_mapping *m)
@@ -166,6 +219,11 @@ static enum a733_i2s_status drain(struct a733_i2s_capture *c)
 enum a733_i2s_status a733_i2s_poll(struct a733_i2s_capture *c)
 {
     if (!c) return A733_I2S_INVALID;
+    if (c->status == A733_I2S_OPENING) {
+        if (!resource_time(c)) return recovery(c);
+        return acquired(c, c->operations.acquire_poll(c->cookie, c->resource_deadline));
+    }
+    if (c->status == A733_I2S_CLOSING) return release_platform(c);
     if (c->status == A733_I2S_STOPPING) return drain(c);
     if (c->status != A733_I2S_PREPARING && c->status != A733_I2S_ACTIVE) return c->status;
     uint32_t status;
@@ -229,20 +287,23 @@ enum a733_i2s_status a733_i2s_cancel(struct a733_i2s_capture *c)
     return c->status = A733_I2S_STOPPING;
 }
 
-enum a733_i2s_status a733_i2s_close(struct a733_i2s_capture *c)
+enum a733_i2s_status a733_i2s_close(struct a733_i2s_capture *c, uint64_t deadline)
 {
     if (!c) return A733_I2S_INVALID;
     if (c->status != A733_I2S_READY && c->status != A733_I2S_COMPLETE &&
         c->status != A733_I2S_CANCELED && c->status != A733_I2S_FAILED) return c->status;
+    c->resource_deadline = deadline;
+    c->status = A733_I2S_CLOSING;
+    if (!resource_time(c)) return recovery(c);
     if (c->buffers_held || !checked_write(c, INTCTL, 0) ||
         !checked_write(c, CTL, c->plan.ctl)) return recovery(c);
     if (c->dma_held) {
-        if (a733_dma_release(c->dma, c->channel) != A733_DMA_CONTROL_OK) return recovery(c);
+        if (a733_dma_release(c->dma, c->channel) != A733_DMA_CONTROL_OK || !resource_time(c))
+            return recovery(c);
         c->dma_held = 0;
     }
-    if (!c->operations.release(c->cookie)) return recovery(c);
-    c->platform_held = 0;
-    return c->status = A733_I2S_CLOSED;
+    c->outcome = A733_I2S_CLOSED;
+    return release_platform(c);
 }
 
 int a733_i2s_owns(const struct a733_i2s_capture *c)
