@@ -15,7 +15,7 @@ implementations; physical support on this board requires qualification evidence.
 | [Board schematic and position drawing](https://drive.google.com/drive/folders/199S7SkbqVDjMpPT7tkcbBX6kmbfnz94r) | V1.2; PDF hashes in `sources.lock.json` | Physical recovery pads, connector routing, and component references |
 | [Board user manual](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view) | V1.0; PDF hash in `sources.lock.json` | Recovery-pad photograph, power-on procedure, and advertised interfaces |
 | [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-16 | Candidate GPU runtime; board software selects BVNC 36.56.104.183, listed under active development; physical identity pending |
-| [OV5640 driver](https://github.com/torvalds/linux/blob/master/drivers/media/i2c/ov5640.c) | Revision pin pending | Sensor programming reference |
+| [OV5640 driver](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c) | `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` | Sensor programming reference; native control and complete register-image comparison in [camera.md](camera.md) |
 
 The inspected upstream Linux Allwinner device-tree directory at
 `2f2f7eeef8b0a1a9b9ca998231419873ccae8d4e` contains no A733 entry.

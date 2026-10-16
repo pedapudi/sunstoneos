@@ -22,7 +22,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
   A separate [two-core emulator target](smp.md) tests concurrent scheduling.
   [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons there.
-  Physical secondary-core startup remains planned.
+  The [secondary power controller](cpu-start.md) matches isolated board-firmware
+  writes for all seven secondary cores and compiles for AArch64. Physical entry,
+  coherence, per-core interrupts and secondary scheduling remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
@@ -59,7 +61,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [privileged FreeRTOS service](dma-service.md) passes a two-core emulator
   session for copied requests, task ownership, retained buffers and I2S producer
   shutdown ordering. Its root build target links successfully.
-  [DMA implementation and limits](dma.md) record the evidence. Board integration,
+  [DMA0 platform preparation](dma-platform.md) now validates inherited fabric
+  clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
+  Host/reference checks and native compilation pass. Production startup binding
+  remains outstanding. [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
@@ -135,10 +140,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   complete ring and KICK bytes, wraparound, queue pressure, deadlines, and retained
   faults. The [offline compute-context builder](gpu-compute-context.md) matches
   complete reference bytes and composes with native VM/client-queue formatting.
-  Both compile for AArch64. Executable context programs, job admission, completion
-  fences, service integration and physical execution remain outstanding.
-  The [program producer investigation](gpu-compute-producer.md) identifies
-  source generators and an unresolved multicore-addressing requirement.
+  Both compile for AArch64. The [context program producer](gpu-compute-programs.md)
+  now constructs executable USC/PDS programs from pinned compiler output and
+  matches complete reference allocations. Proven single-core admission,
+  multicore addressing, numerical jobs, completion fences, service integration
+  and physical execution remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
   with host sanitizer and AArch64 compile evidence. The
@@ -147,9 +153,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   an AIC8800D80 candidate and loads Bluetooth patches over SDIO before UART use.
   The [SDIO controller/card worker](sdio.md) passes host checks for bounded
   preparation, enumeration, CMD52/CMD53, interrupt ownership and retained faults.
-  Its runtime files compile for AArch64. Physical silicon identity, radio
-  bootstrap transport, power/reset bindings, networking, pairing and headset
-  audio remain outstanding.
+  Its runtime files compile for AArch64. The [bootstrap transport](radio-transport.md)
+  now prepares the SDIO function, performs the fixed setup write and reads both
+  identity words. Host composition and native compilation pass. Physical silicon
+  identity, firmware loading, power/reset bindings, networking, pairing and
+  headset audio remain outstanding.
+
+- Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
+  640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
+  model; lifecycle checks and native compilation pass. Module electrical binding,
+  CSI/PHY reception, frame DMA, ISP, additional modes and physical qualification
+  remain outstanding. No camera is attached for qualification.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

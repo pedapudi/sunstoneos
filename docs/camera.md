@@ -125,8 +125,8 @@ and device tree identify these register groups:
 | --- | --- |
 | Camera clock controller and top-level routing | `0x05800000`, `0x05800800` |
 | CSI receivers | `0x05820000`, `0x05821000`, `0x05822000` |
-| MIPI receiver register windows | `0x05810100`, `0x05810200`, `0x05810300` |
-| Associated combo-PHY windows | `0x05811000`, `0x05811400`, `0x05811800` |
+| Combo-PHY register windows | `0x05810100`, `0x05810200`, `0x05810300` |
+| Associated MIPI packet-port windows | `0x05811000`, `0x05811400`, `0x05811800` |
 | Camera DMA channels | `0x05830000` through `0x05835000`, stride `0x1000` |
 | ISP and scalers | `0x05900000`; `0x05910000` through `0x05910c00`, stride `0x400` |
 

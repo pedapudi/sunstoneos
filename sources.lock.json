@@ -532,5 +532,185 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/mmc/mmc.h",
     "archive": "radio-sdio/include/linux/mmc/mmc.h",
     "sha256": "9762e69cbbadb447abe1ba191ad2fc883d645c808024dfd810c12436ad4a695b"
+  },
+  "gpu-compute-programs-mesa": {
+    "revision": "86c7176d2dd0065555521bf8c61f208bf53c75d6",
+    "url": "https://gitlab.freedesktop.org/mesa/mesa/-/archive/86c7176d2dd0065555521bf8c61f208bf53c75d6/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6.tar.gz",
+    "archive": "gpu-compute-producer/mesa-86c7176d2dd0065555521bf8c61f208bf53c75d6.tar.gz",
+    "sha256": "ca5e3ac4b61b8dc659cc489c7eb3c7bcc750f6820fbf39f0b831ac87fb00da58"
+  },
+  "camera-bsp-drivers-vin-platform-sun60iw2_vin_cfg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/platform/sun60iw2_vin_cfg.h",
+    "archive": "camera/bsp/drivers/vin/platform/sun60iw2_vin_cfg.h",
+    "sha256": "fc775d576a4060f2bac857efc28bda436a6938d17fc4e97ecfec962b1671b550"
+  },
+  "camera-bsp-drivers-vin-vin-csi-sunxi_csi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-csi/sunxi_csi.c",
+    "archive": "camera/bsp/drivers/vin/vin-csi/sunxi_csi.c",
+    "sha256": "6aedec0f272c57e7a5877a161264b5ddf535307ad2820a6aaf9ee09cc5eefaf8"
+  },
+  "camera-bsp-drivers-vin-vin-isp-sunxi_isp-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/sunxi_isp.c",
+    "archive": "camera/bsp/drivers/vin/vin-isp/sunxi_isp.c",
+    "sha256": "83bcba85e5e842e9be61ee071007cc8e6456b21a2a75060c905f1438ee194b18"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-combo_csi-combo_csi_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.c",
+    "sha256": "e6368908f8393707c82aafaf7704af52a1c2b26c829b54553c123ed8bcfe09b4"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-combo_csi-combo_csi_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.h",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg.h",
+    "sha256": "3c32c83634cdc9fe236855b3d1345a728fde35109b3edc7db84efbecceff863f"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-combo_csi-combo_csi_reg_i-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg_i.h",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/combo_csi/combo_csi_reg_i.h",
+    "sha256": "33cd56ebac15fcb1b9457b221d983f004576a0ebf0766224f4b256dbafdf282d"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-sunxi_mipi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/sunxi_mipi.c",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/sunxi_mipi.c",
+    "sha256": "5f6c925f02796aa5f47a677dac1065fd1ca9f7fe37bb8eaae8ff5a2673eda609"
+  },
+  "camera-bsp-drivers-vin-vin-video-vin_video-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/vin_video.c",
+    "archive": "camera/bsp/drivers/vin/vin-video/vin_video.c",
+    "sha256": "70aeac0132e022b798b5f682b30cbaf1f23b14d6c8d5ca25ab1a9f9262ad3c0c"
+  },
+  "camera-drivers-media-i2c-ov5640-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c",
+    "archive": "camera/drivers/media/i2c/ov5640.c",
+    "sha256": "cdebbcd75dd5212d26a4d762144e07fbcdb9355fe9d73fb6b7883f9d76845783"
+  },
+  "a733-datasheet": {
+    "revision": "0.93",
+    "url": "https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf",
+    "archive": "A733_Datasheet_V0.93.pdf",
+    "sha256": "ebbdf6a9a46ea1fcdc5eac48a584f70a5ea240cd5cc54a3f80f6d6e00adf25ce"
+  },
+  "dma-platform-sunxi-dma-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/dma/sunxi-dma.c",
+    "archive": "dma-platform/sunxi-dma.c",
+    "sha256": "d60e6598835ddf16b1f2374f746abd82da507dfefeb16edade9a0f7021b3d3bb"
+  },
+  "dma-platform-ccu_gate-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_gate.h",
+    "archive": "dma-platform/ccu_gate.h",
+    "sha256": "02777af3356f168356d478ac8bcd9710acac97cc2a75b5354302c2787f9eac19"
+  },
+  "cpu-start-atf-drivers-arm-gic-v3-gicv3_helpers-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/drivers/arm/gic/v3/gicv3_helpers.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/drivers/arm/gic/v3/gicv3_helpers.c",
+    "sha256": "40ebf56586adf226aa4c01134d0ec3d7ea89215053e590b0ce8375fa69bb78bf"
+  },
+  "cpu-start-atf-plat-allwinner-common-include-sunxi_cpucfg_ncat3-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/include/sunxi_cpucfg_ncat3.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/include/sunxi_cpucfg_ncat3.h",
+    "sha256": "570a4037808b3f68e71f004ee63f7a71a813e635efa2ebd6b39a4a8cb8110854"
+  },
+  "cpu-start-atf-plat-allwinner-common-sunxi_pm-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_pm.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_pm.c",
+    "sha256": "877679c222ac233a38a0878dcb2b8e53618f5f570bf49886422ddd2d0fb9a10c"
+  },
+  "cpu-start-atf-plat-allwinner-common-sunxi_topology-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_topology.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_topology.c",
+    "sha256": "5cfbb49eec7ab61e059e1855af2ca626d2433e83e1a901756902b8f0bb618b31"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-include-sunxi_ccu-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_ccu.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_ccu.h",
+    "sha256": "a26538cad01e1f05e4558c7f4df493fb9e10b3276dc13b455236ca6b8b461f8b"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-include-sunxi_cpucfg-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_cpucfg.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_cpucfg.h",
+    "sha256": "631a00ba8f645c0737e44c09900085ad8d83dc4a8b8d013a607c96e1a88272cc"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-include-sunxi_mmap-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_mmap.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_mmap.h",
+    "sha256": "4a259b8f440bc0e7072dd43b086450581c510fd5cec0038eda9c94676041aec6"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-include-sunxi_spc-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_spc.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/include/sunxi_spc.h",
+    "sha256": "ee71f1f7eb2ae93a14f4a8bd2353f64bd54f0757e84b13f9ea205427e8885c43"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-platform-mk": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/platform.mk",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/platform.mk",
+    "sha256": "d6c42342dc8abc7ed06da55a00601173ee19eb6186db9627f13db4c9c2b062dd"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-sunxi_idle_states-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/sunxi_idle_states.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/sunxi_idle_states.c",
+    "sha256": "300b8f9a6f766ad2d532afeabfee3d0e7747b6999fbd802fd5e6367c518a532a"
+  },
+  "cpu-start-atf-plat-allwinner-sun60i_a733-sunxi_power-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/sunxi_power.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/sun60i_a733/sunxi_power.c",
+    "sha256": "ce8c5b321a95d4550888eeb8f31454db3d8c97e0f1a403eb3bbdbabfa39cfdf5"
+  },
+  "cpu-start-atf-plat-allwinner-common-allwinner-common-a55-mk": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common-a55.mk",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common-a55.mk",
+    "sha256": "f7616e667d0a0ec38404a53ea2a8d9ab65cd02d6b6fca4cbb15ef83c264f8d39"
+  },
+  "cpu-start-atf-plat-allwinner-common-allwinner-common-mk": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common.mk",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common.mk",
+    "sha256": "ad8729b49241e4cb26d29349c026e60c78c994822c92662052921ab6e28683f2"
+  },
+  "cpu-start-atf-plat-allwinner-common-include-platform_def-h": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/include/platform_def.h",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/include/platform_def.h",
+    "sha256": "9be72aabf2ae6da463ea6efe52713a6c3c5d450c55a9c2a7848eeb306bf738d5"
+  },
+  "cpu-start-atf-plat-allwinner-common-allwinner-common-ncat2-mk": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common-ncat2.mk",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/allwinner-common-ncat2.mk",
+    "sha256": "12649d8567c742f8e230123acdb41214ffbb68018f9e54778f278f9eeaad9f08"
+  },
+  "cpu-start-atf-plat-allwinner-common-sunxi_native_pm_ncat2-c": {
+    "revision": "5bc9605cbfc175276920c3204658c025da3ae279",
+    "url": "https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_native_pm_ncat2.c",
+    "archive": "cpu-startup/atf-5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_native_pm_ncat2.c",
+    "sha256": "62eb0ed4b1d5ec227cb9fdb4bd7a721c716cc0b9d5057976ff6a7a126df4841d"
+  },
+  "board-monitor": {
+    "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+    "archive": "cpu-startup/monitor.fex",
+    "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632"
   }
 }

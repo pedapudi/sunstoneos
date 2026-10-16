@@ -65,7 +65,9 @@ int pvr_cccb_init(struct pvr_cccb *, const struct pvr_cccb_ops *, void *context,
                   uint64_t deadline);
 
 /* Admit one trusted command sequence without I/O, only while IDLE and the
- * kernel queue is ACTIVE. Context attachment/publication must already be done.
+ * kernel queue is ACTIVE. Context/VM/program storage must already be valid and
+ * published. The first KICK supplies its firmware context address; this API does
+ * not require a separate firmware attachment command.
  * Payload lengths must be multiples of eight; each command uses a 40-byte
  * header. Total headers/payloads plus one header must fit in half the ring.
  * Task IDs 201..211 and generic IDs 212..219 are accepted with their ABI magic
