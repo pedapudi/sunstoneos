@@ -104,8 +104,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   for publication ordering, bounded command completion, and retained failures.
   Actual mapping changes and physical invalidation remain unqualified.
   [Firmware event dispatch](gpu-events.md) has host ABI/control integration
-  evidence. Actual allocation, reconstruction, and firmware responses remain
-  resource-manager work.
+  evidence. Native [free-list management](gpu-freelist.md) now has host/reference
+  evidence for backing ownership, growth, reconstruction, and deferred firmware
+  responses. Concrete allocation/publication callbacks, linked render-target
+  recovery, service polling, and physical execution remain outstanding.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

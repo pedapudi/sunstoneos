@@ -162,8 +162,11 @@ and retained failure. Its complete commands match the pinned driver. Live table
 edits, service integration, and physical invalidation remain outstanding.
 [Firmware event dispatch](gpu-events.md) now decodes all delegated event types
 and resolves every requested resource before calling a handler. Host ABI and
-control integration checks pass. Backing allocation, free-list growth and
-reconstruction, and firmware response submission remain required.
+control integration checks pass. Native [free-list management](gpu-freelist.md)
+now constructs backing tables and handles growth/reconstruction through deferred
+responses. Host/reference checks pass ownership, partial allocation refusal,
+response backpressure, and retained failures. Concrete allocation/publication,
+linked render-target recovery, service polling, and physical operation remain open.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -364,8 +367,10 @@ the tool hash and recovery evidence in the application document.
    memory isolation. Reuse `gpu-resources-20261016` for shared leases and the
    native register/I2C adapter, and `gpu-power-service-20261016` for asynchronous
    service sequencing. Native platform binding and shared FreeRTOS locks are
-   assigned to `gpu-platform`; native free-list backing, growth/reconstruction, and
-   deferred responses are assigned to `gpu-freelist`.
+   assigned to `gpu-platform`. Free-list backing, growth/reconstruction, and
+   deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
+   Its worker is preparing concrete lifecycle-service integration in
+   `gpu-freelist-service`; shared service edits require coordinator agreement.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
    records. Finite I2S0 capture is integrated; its worker is investigating shared
