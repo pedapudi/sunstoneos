@@ -1,7 +1,8 @@
 # GPU firmware preparation and remaining implementation
 
 GPU support is **partially implemented and host-tested**. Native firmware
-decoding and staging work for the pinned A733 image. The GPU has not booted
+decoding, staging, and [MIPS memory/boot preparation](gpu-mips.md) work for the
+pinned A733 image. The GPU has not booted
 firmware or executed a graphics or compute workload in SunstoneOS.
 Physical qualification remains outstanding.
 
@@ -74,8 +75,9 @@ two feature-mask words, and 29 feature-parameter words.
 | Stack | `0xcf600000` | Data | 16,384 | 4,096 |
 
 Code totals 102,400 bytes and data totals 20,480 bytes. These are CPU staging
-buffers. Physical pages, firmware page tables, and boot parameters still need
-allocation and construction by the GPU driver.
+buffers. The [MIPS preparation component](gpu-mips.md) now constructs firmware
+page tables and boot parameters from caller-supplied physical pages. Platform
+allocation and GPU startup remain outstanding.
 
 ## Native staging validates bounds before changing buffers
 
@@ -141,17 +143,17 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Decode required feature parameters and construct MIPS firmware page tables,
-   physical boot/exception remaps, stack backing, and boot data.
-2. Implement GPU memory contexts, firmware shared structures, command queues,
+1. Implement GPU memory contexts, firmware shared structures, command queues,
    cache publication, interrupt handling, and bounded start/stop behavior.
-3. Integrate platform power, clocks, reset, and identity checks after independent
+   Use the checked MIPS preparation component for firmware mappings and boot data;
+   interpret additional feature parameters as initialization requires them.
+2. Integrate platform power, clocks, reset, and identity checks after independent
    watchdog recovery is qualified. Boot the pinned firmware and verify its
    startup/completion protocol on the device.
-4. Adapt the shader compiler and command-generation runtime to native services.
+3. Adapt the shader compiler and command-generation runtime to native services.
    Execute bounded compute and offscreen graphics with known results, then
    integrate display buffers and synchronization.
-5. Qualify faults, cancellation, isolation, concurrent workloads, and power
+4. Qualify faults, cancellation, isolation, concurrent workloads, and power
    transitions. Optimize performance after complete board functionality,
    following [validation.md](validation.md).
 

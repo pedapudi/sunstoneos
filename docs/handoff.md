@@ -102,6 +102,8 @@ The [GPU firmware component](gpu.md) now decodes and stages the published
 MIPS image for the board software's target BVNC, 36.56.104.183. Its two
 allocations match an independent ELF reader. One sanitizer check passes
 malformed-image and buffer refusal cases; the component compiles for AArch64.
+The [MIPS preparation component](gpu-mips.md) now constructs physical mappings,
+boot data, and wrapper register values with host reference agreement.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -277,9 +279,12 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Extend the [GPU firmware component](gpu.md) with MIPS page tables, boot
-   configuration, and required device features. Add native power/startup,
-   shared firmware queues, completion, and recovery. Confirm physical identity
+7. Implement GPU memory contexts, shared firmware structures and queues,
+   completion, and bounded startup/recovery. Native [MIPS preparation](gpu-mips.md)
+   now constructs the firmware page table, boot configuration, and wrapper
+   register plan. Complete outputs match the pinned reference functions;
+   reuse the `gpu-mips-20261016` evidence. Integrate allocation, cache publication,
+   remaining device features, and platform power. Confirm physical identity
    and boot firmware after watchdog recovery passes, then execute compute and
    offscreen graphics through an adapted compiler/runtime. Keep display support
    and the remaining hardware matrix in scope independently of NPU progress.

@@ -63,7 +63,8 @@ Controller implementation can proceed before those accessories are available.
 
 ## Functional coverage precedes performance optimization
 
-The GPU now has native [firmware decoding and staging](gpu.md) with host evidence.
+The GPU now has native [firmware decoding and staging](gpu.md) and
+[MIPS memory/boot preparation](gpu-mips.md) with host evidence.
 Its firmware boot, graphics/compute runtime, and physical identity remain
 unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is

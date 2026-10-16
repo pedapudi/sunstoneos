@@ -63,7 +63,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
-  independent ELF reader. The component compiles for AArch64. Physical identity,
+  independent ELF reader. Native [MIPS preparation](gpu-mips.md) also builds
+  firmware page tables, boot data, and wrapper register values; complete outputs
+  match isolated reference functions. Both components compile for AArch64. Physical identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
