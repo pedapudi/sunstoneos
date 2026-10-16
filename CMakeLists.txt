@@ -41,3 +41,27 @@ target_link_options(kernel-check PRIVATE
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/kernel-check.map")
 set_target_properties(kernel-check PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-virt/link.ld")
+
+# The physical platform and its secure QEMU model share the monitor and kernel.
+foreach(target a733-kernel-check a733-kernel-model)
+  add_executable(${target}
+    platform/a733/monitor.S platform/a733/monitor.c platform/a733/platform.c
+    arch/aarch64/cache.S arch/aarch64/start.S arch/aarch64/vectors.S
+    runtime/memory.c checks/kernel.c checks/fp-context.S
+    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/portASM.S")
+  target_include_directories(${target} PRIVATE
+    include runtime/include platform/a733 "${FREERTOS_DIR}/include" "${PORT}")
+  target_compile_definitions(${target} PRIVATE GUEST=1 SUNSTONE_SECURE_MONITOR=1)
+  target_compile_options(${target} PRIVATE
+    -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
+    -fno-unwind-tables -fno-asynchronous-unwind-tables
+    -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra)
+  target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections
+    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld"
+    "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/${target}.map")
+  set_target_properties(${target} PROPERTIES SUFFIX ".elf"
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
+endforeach()
+set_source_files_properties(platform/a733/monitor.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+target_compile_definitions(a733-kernel-model PRIVATE MONITOR_QEMU=1)

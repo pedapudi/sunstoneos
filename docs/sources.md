@@ -50,3 +50,10 @@ The FEL patches retain the upstream tool's GPL licensing. The SRAM probe used
 the first two FEL patches; the argument-consumption fix was recorded afterward.
 DDR and AArch64 probes used all three patches. The DDR wrapper supplies its own
 SRAM layout instead of loading the full boot0 through the original SPL path.
+
+The monitor's interrupt grouping follows the [Trusted Firmware-A interrupt
+controller API](https://trustedfirmware-a.readthedocs.io/en/latest/components/platform-interrupt-controller-API.html):
+Group 0 serves EL3 and nonsecure Group 1 serves EL1. The [Arm GIC architecture
+specification](https://documentation-service.arm.com/static/67eaa4d098aa3c3b6eea7351)
+defines the nonsecure priority view and system-register interface. The monitor
+implementation is local code; its physical evidence is in [a733-kernel.md](a733-kernel.md).

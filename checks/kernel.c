@@ -57,7 +57,11 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 void kernel_main(void)
 {
     platform_init();
+#ifdef SUNSTONE_SECURE_MONITOR
+    platform_puts("sunstoneos FreeRTOS kernel check: AArch64 EL1, secure monitor\n");
+#else
     platform_puts("sunstoneos FreeRTOS kernel check: AArch64 EL1, QEMU virt\n");
+#endif
     queue = xQueueCreateStatic(4, sizeof(uint64_t), queue_storage, &queue_state);
     configASSERT(queue != NULL);
     configASSERT(xTaskCreateStatic(producer, "producer", STACK_WORDS, NULL, 3,

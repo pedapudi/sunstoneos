@@ -17,12 +17,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   See [boot evidence](boot.md).
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
-  Tasks, all other cores, and physical scheduler operation remain planned.
+  Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
+  Other cores remain planned.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
-- Memory management, interrupt dispatch, and task scheduling: **implemented**
-  for QEMU's single-core virtual platform and covered by the [kernel check](build.md).
-  This result does not qualify the board's controllers or memory system.
+- Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
+  boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
+  storage work for this workload; full memory protection/coherence remains untested.
+- Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
+  timeout that returns a stalled EL1 to FEL. This does not qualify the independent
+  hardware watchdog, every interrupt source, or arbitrary failure recovery.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |

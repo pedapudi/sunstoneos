@@ -111,7 +111,7 @@ The board re-enumerated in FEL, and the saved DRAM result remained readable.
 | SCTLR_EL3 | `0x00c50838` | MMU and caches disabled |
 
 The counter value alone does not establish its frequency. The EL1 handoff below configures access and timer metadata.
-Physical interrupt-controller setup remains outstanding before FreeRTOS startup.
+The [physical kernel check](a733-kernel.md) adds interrupt-controller setup and FreeRTOS startup.
 
 Raw evidence is under `~/.cache/sunstoneos/evidence/a733-aarch64`. Probe SHA-256:
 `2726fbc07cc6882749b28a13fa0462d04567fbe0a75ce8283a7cf0bf76093e49`.
@@ -124,7 +124,7 @@ The rule supplies permissions on the selected physical port until host reboot.
 
 Issue [1](https://github.com/pedapudi/sunstoneos/issues/1) tracks recovery and
 storage preservation. Issue [2](https://github.com/pedapudi/sunstoneos/issues/2)
-tracks physical FreeRTOS startup and the remaining CPU platform work.
+tracks the physical kernel milestone and remaining CPU platform work.
 
 ## EL1 handoff and automatic reconnect access
 

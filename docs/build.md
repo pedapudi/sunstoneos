@@ -1,6 +1,8 @@
 # Build and exercise the kernel foundation
 
-The current target is a FreeRTOS AArch64 kernel check for QEMU's `virt` machine.
+The original emulator target is a FreeRTOS AArch64 kernel check for QEMU's `virt`
+machine. The [physical A733 check](a733-kernel.md) adds an EL3 monitor and board
+interrupt/timer setup.
 It runs at EL1 on one emulated Cortex-A55 with a GICv3 interrupt controller,
 a physical generic timer, and 128 MiB RAM. It is not an Orange Pi boot image.
 

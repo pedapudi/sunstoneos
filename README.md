@@ -4,10 +4,10 @@ sunstoneos is a FreeRTOS-based embedded operating system under development for
 the Orange Pi Zero 3W. Its scope includes all onboard hardware, independently
 of the first application, mimus speech transcription.
 
-The attached board initializes DDR and executes an AArch64 EL1 probe that returns
-to its FEL recovery interface. The FreeRTOS AArch64 kernel foundation passes a
-focused emulator check. Physical FreeRTOS boot and mimus execution remain
-unimplemented; no complete board subsystem is qualified yet.
+The attached board runs a FreeRTOS kernel check with timer preemption, queues,
+and floating-point context preservation. An EL3 monitor recovers from a forced
+EL1 stall and returns results through FEL. Native USB diagnostics, persistent
+boot, mimus execution, and complete hardware qualification remain outstanding.
 
 - [Accepted goal](docs/goal.md)
 - [Hardware inventory and qualification](docs/hardware.md)
@@ -16,8 +16,8 @@ unimplemented; no complete board subsystem is qualified yet.
 - [Reference sources](docs/sources.md)
 - [Build and kernel check](docs/build.md)
 - [Boot investigation and physical evidence](docs/boot.md)
+- [Physical FreeRTOS and recovery check](docs/a733-kernel.md)
 - [Project issues](https://github.com/pedapudi/sunstoneos/issues)
 
-The first executable milestone is booting FreeRTOS and reproducing host
-transcription of recorded audio. Complete hardware support remains required
-after that milestone.
+The next application milestone is reproducing host transcription of recorded
+audio. Complete hardware support remains required after that milestone.

@@ -1,26 +1,30 @@
 # Current work
 
-The active objective is [goal.md](goal.md). DDR initialization and an AArch64
-EL1 handoff probe work on the board. The probe returns to FEL with its DRAM result
-intact. FreeRTOS passes the emulator kernel check; physical FreeRTOS startup
-and mimus execution remain outstanding. No complete hardware subsystem is
-qualified. Development uses branch `bringup` in the isolated
+The active objective is [goal.md](goal.md). FreeRTOS now runs on the physical
+A733 boot CPU. The kernel check passes timer preemption, blocking queues, and
+floating-point context checks. An EL3 secure-timer timeout recovers a forced
+EL1 stall and returns to FEL. [Physical kernel evidence](a733-kernel.md) records
+the image, resources, measurements, and limitations.
+
+Persistent boot, native USB diagnostics, mimus execution, other CPU cores, and
+complete hardware qualification remain outstanding. No complete hardware
+subsystem is qualified. Development uses branch `bringup` in the isolated
 `/home/sunil/git/sunstoneos-worktrees/bringup` worktree.
 
 ## Observed host and device state
 
 The attached FEL device (`1f3a:efe8`) identifies A733. The boot CPU identifies
 as Cortex-A55 r2p0. DDR firmware reports 12 GiB LPDDR5, with transfers checked
-at two distinct pages. [Boot evidence](boot.md) records the layout, registers,
-artifact identities, and limitations. Board revision and populated storage
-remain unconfirmed; no persistent-storage writes have been issued.
+at two distinct pages. [Boot evidence](boot.md) records initialization and the
+EL1 handoff. Board revision and populated storage remain unconfirmed.
+No persistent-storage writes have been issued.
 
-The latest observed node is `/dev/bus/usb/003/031`. The installed
-[session access rule](../tools/README.md) grants access after FEL reconnects on
-physical port `3-1`. The EL1 handoff check physically verified this behavior.
+The board returned to FEL after the kernel check. The installed
+[session access rule](../tools/README.md) grants access after reconnects on
+physical port `3-1`. Both physical kernel cases regained access automatically.
 The rule lasts until host reboot and can be removed with `disable-session`.
-Before another intentional reconnect, verify the rule and current permissions
-with `python3 tools/usb-access.py check-session`.
+Rediscover the node and run `python3 tools/usb-access.py check-session` before
+an intentional reconnect.
 
 The separate `mimus keyboard` device is an existing ESP32 board. It must not be
 used as the Orange Pi console. No Orange Pi UART adapter is currently visible.
@@ -33,40 +37,43 @@ The local Python environment has Unicorn 2.1.4 for the DDR wrapper check.
 
 ## Reusable validation evidence
 
-The [kernel check](build.md) passed 100 exchanges in 100 ticks. Its inputs remain
-unchanged. Reuse this result for the emulator platform.
+The DDR wrapper passed its simulated control-flow check and physical
+initialization. The explicit compatibility guards produced identical payloads
+with Python `-O`. DDR and the EL1 handoff have not changed since those checks.
 
-The DDR wrapper check passed simulated success and failure returns, register and
-FEL code preservation, parameter copying, and the logging trampoline. The
-physical loader then initialized DDR and verified both RAM pages. The builder's
-explicit compatibility guards produced identical payloads with Python `-O`.
+The secure-monitor kernel model passed normal execution and a forced EL1 stall.
+The physical image then passed both cases without rebuilding between them.
+The normal case completed 100 exchanges in 100 ticks. The forced stall returned
+through secure timer interrupt 29 after approximately two seconds. The monitor
+restored the modified GIC settings before returning to ROM.
 
-The AArch64 probe completed at EL3 and returned to forced FEL. Its saved result
-was read after access was restored; no repeat execution was needed. The EL1
-handoff check then configured the counter frequency declaration to 24 MHz,
-entered nonsecure EL1, read the counter, and returned through EL3 using SMC.
-It passed once in QEMU and once on the board.
+The USB session helper passed its focused ACL lifecycle check and rule validation.
+Automatic access after physical re-enumeration passed during the EL1 handoff and
+both kernel cases. No access-helper changes require another check.
 
-The USB session helper passed a focused test with real ACLs on temporary files.
-It covers adoption of the previous grant, reconnect grants, unrelated-event
-refusal, changed-ACL refusal, and undo with the device present or absent.
-`udevadm verify` accepted the generated rule. During the EL1 check, the physical
-board re-enumerated and the helper granted access automatically. The host read
-the result through the new node without user intervention.
+The original nonsecure QEMU platform remains available. Its earlier check passed
+100 exchanges in 100 ticks. The added secure-monitor configuration is selected
+by a separate build definition; the original configuration remains in the
+other preprocessor branch. The physical and secure-model results cover the
+new startup and configuration.
 
 ## Next actions
 
-1. Extend the tested EL3-to-EL1 handoff with physical GIC setup and FreeRTOS
-   startup. Adapt the kernel check to record results in DRAM and return to FEL.
-2. Preserve storage before any persistent installation, and establish native
-   USB diagnostics so continued operation does not depend on test-return code.
-3. Inspect mimus model/storage requirements and start its isolated port alongside
-   the remaining hardware investigations.
+1. Establish native USB diagnostics and a persistent runtime loop. The current
+   monitor arms a two-second recovery timer for bounded kernel checks; a running
+   OS needs an explicit policy for servicing or disarming it.
+2. Identify and preserve populated storage before persistent installation.
+   Add storage access and recovery without overwriting existing contents.
+3. Inspect mimus model/storage requirements and implement its isolated FreeRTOS
+   port using recorded audio. Keep accelerator and remaining hardware driver
+   investigations active independently of this application milestone.
+4. Extend CPU and memory support to secondary cores, usable capacity, protection,
+   and coherence, with checks selected from each change.
 
 Project issues [1–11](https://github.com/pedapudi/sunstoneos/issues) track
 implementation, dependencies and acceptance criteria. Their scope includes all
 hardware and final qualification independently of mimus.
 
-The first application milestone uses recorded audio. No microphone is available.
-I2S and Bluetooth headset input remain required. OV5640 is the first camera;
-the DSI panel is undecided. Missing hardware must not remove coverage requirements.
+No microphone is available. I2S and Bluetooth headset input remain required.
+OV5640 is the first camera; the DSI panel is undecided. Missing hardware must
+not remove coverage requirements.

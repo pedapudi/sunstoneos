@@ -28,8 +28,14 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #define configUSE_TASK_NOTIFICATIONS 1
 #define configCHECK_FOR_STACK_OVERFLOW 2
 #define configUSE_TASK_FPU_SUPPORT 2
+#ifdef SUNSTONE_SECURE_MONITOR
+// GICv3 exposes 16 nonsecure priorities when the secure view implements 32.
+#define configUNIQUE_INTERRUPT_PRIORITIES 16
+#define configMAX_API_CALL_INTERRUPT_PRIORITY 11ULL
+#else
 #define configUNIQUE_INTERRUPT_PRIORITIES 32
 #define configMAX_API_CALL_INTERRUPT_PRIORITY 19ULL
+#endif
 #define configSETUP_TICK_INTERRUPT() platform_tick_setup()
 #define configCLEAR_TICK_INTERRUPT() platform_tick_ack()
 #define configASSERT(condition) do { if (!(condition)) platform_panic(__FILE__, __LINE__); } while (0)
