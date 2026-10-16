@@ -9,11 +9,12 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
 static uint32_t parents(uint32_t mask)
 {
     uint32_t p=0;
+    if(mask&A733_CLOCK_THS)p|=A733_CLOCK_GPADC24M;
     if(mask&A733_CLOCK_VO0)p|=A733_CLOCK_DISPLL1;
     if((mask|p)&A733_CLOCK_DISPLL1)p|=A733_CLOCK_OSC;
     if(mask&(A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5))p|=A733_CLOCK_AUDIO1;
     if((mask|p)&(A733_CLOCK_AUDIO1|A733_CLOCK_PERI0|A733_CLOCK_PLL_NPU|
-        A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE|A733_CLOCK_PLL_VE0|A733_CLOCK_PLL_VE1))p|=A733_CLOCK_REF;
+        A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE|A733_CLOCK_PLL_VE0|A733_CLOCK_PLL_VE1|A733_CLOCK_GPADC24M))p|=A733_CLOCK_REF;
     if((mask|p)&A733_CLOCK_REF)p|=A733_CLOCK_OSC;
     return p;
 }
@@ -53,7 +54,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
     uint32_t shared,uint32_t exclusive,uint64_t deadline,struct a733_clock_token *out)
 {
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
-        (shared&exclusive) || (shared&(A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU|A733_CLOCK_MEDIA_LOCALS)) ||
+        (shared&exclusive) || (shared&(A733_CLOCK_LOCALS|A733_CLOCK_DMA0|A733_CLOCK_NPU|A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS)) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
     shared|=parents(shared|exclusive);shared&=~exclusive;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
@@ -95,6 +96,25 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
     r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
     struct a733_clock_token t={m->next_id++,token->owner,parents(A733_CLOCK_AUDIO5)|A733_CLOCK_AUDIO5,0};
     m->audio_profile=1;m->slots[slot]=t;*out=t;return leave(m,A733_CLOCK_OK);
+}
+enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
+    const struct a733_clock_token *token,uint32_t stable,uint64_t deadline,struct a733_clock_token *out)
+{
+    const uint32_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1;
+    if(!stable || (stable&~supported) || !separate(m,sizeof(*m),token,sizeof(*token)) ||
+        !separate(m,sizeof(*m),out,sizeof(*out)) || !separate(token,sizeof(*token),out,sizeof(*out)))
+        return A733_CLOCK_INVALID;
+    /* Snapshot before any callback; no caller bytes are consulted at commit. */
+    const struct a733_clock_token old=*token;
+    enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
+    unsigned slot=find(m,&old);
+    if(slot==A733_CLOCK_CLIENTS || (old.exclusive&stable)!=stable)return leave(m,A733_CLOCK_INVALID);
+    if(!m->next_id)return leave(m,A733_CLOCK_EXHAUSTED);
+    r=clock_check(m,deadline);if(r!=A733_CLOCK_OK)return leave(m,r);
+    struct a733_clock_token next=old;
+    next.id=m->next_id++;next.shared|=stable;next.exclusive&=~stable;
+    /* No fallible callback or additional refusal after the atomic commit. */
+    m->slots[slot]=next;*out=next;return leave(m,A733_CLOCK_OK);
 }
 enum a733_clock_result a733_clock_retain(struct a733_clock_leases *m,const struct a733_clock_token *token)
 {

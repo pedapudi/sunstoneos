@@ -18,7 +18,7 @@
 #define A733_CLOCK_ASRC     (1u<<11)
 #define A733_CLOCK_OWA_TX   (1u<<12)
 #define A733_CLOCK_DMIC     (1u<<13)
-#define A733_CLOCK_FABRIC   (1u<<14) /* AHB/NSI/MBUS source configuration and global gates. */
+#define A733_CLOCK_FABRIC   (1u<<14) /* AHB/NSI/MBUS/APB1 sources, divisors and global gates. */
 #define A733_CLOCK_DMA0     (1u<<15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
 #define A733_CLOCK_PLL_NPU  (1u<<16) /* Also selectable by MBUS, DRAM0 and video clocks. */
 #define A733_CLOCK_NPU      (1u<<17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
@@ -33,9 +33,11 @@
 #define A733_CLOCK_PLL_VE1    (1u<<26)
 #define A733_CLOCK_VE_DEC     (1u<<27) /* Decoder clocks, reset, routes and domain 2. */
 #define A733_CLOCK_DISPLL1    (1u<<28) /* Local display PLL1, DCXO parent. */
+#define A733_CLOCK_THS        (1u<<29) /* THS controller, bus gate/reset and IRQ; exclusive. */
+#define A733_CLOCK_GPADC24M   (1u<<30) /* Shared ADC clock word and all its source/gate writers. */
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT32_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT32_C(0x1fffffff)
+#define A733_CLOCK_ALL     UINT32_C(0x7fffffff)
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -62,10 +64,18 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * VE0 and VE1. AUDIO2/5 also depend on AUDIO1. VO0 depends on DISPLL1,
  * which depends directly on OSC. Parent change authority therefore conflicts
  * with every VO0 consumer; a cold coordinator can acquire both exclusively.
+ * THS depends on GPADC24M; GPADC24M conservatively reserves REF -> OSC for
+ * both SYS24M and DCXO selections. THS is exclusive-only. A GPADC24M change
+ * requires exclusion of every ADC/thermal consumer; analog supply authority
+ * and observed source frequency remain separate physical prerequisites.
  * Changing a child holds its ancestors stable. Local controller scopes are
  * exclusive only; their selected parent must be leased separately. I2S/ASRC/
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO
  * route writers. Pins, voltage, DMA channels and memory are separate leases.
+ * FABRIC includes APB1 at CCU+0x518; every selector/divider/global-gate
+ * writer requires exclusive FABRIC. Shared consumers separately validate and
+ * reserve their selected parent. This software contract does not establish
+ * remote-firmware exclusion or a stable live rate by itself.
  * FABRIC stability does not imply parent stability: callers must also lease
  * each selected PLL/reference parent. DMA0 requires a platform handoff covering
  * all channels and remote-MCU/routing writers; idle bits cannot establish it.
@@ -102,6 +112,22 @@ enum a733_clock_result a733_clock_release(struct a733_clock_leases *,
  */
 enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
+/* Atomic metadata publication after the privileged PLL coordinator has proved
+ * its physical profile stable and kept all consumers excluded. parents must
+ * be a nonempty subset of PLL_NPU|DISPLL1 currently held exclusively. Convert
+ * only those bits to shared ownership, preserving owner and every other scope.
+ * A fresh token invalidates the old identity. All validation/time callbacks
+ * precede mutation; OK always returns the only live replacement token. Refusal
+ * leaves both reservation and output unchanged (clock failure still poisons
+ * the registry). Input/output and registry storage must be disjoint.
+ * This does not prove a frequency, electrical state, consumer drain or boot
+ * authority. The coordinator must replace all borrowed token copies before
+ * admitting consumers and retain any uncertain handoff. Never release/reacquire
+ * around this transition. The output has the same platform lifetime as input.
+ */
+enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *,
+    const struct a733_clock_token *, uint32_t parents, uint64_t deadline,
+    struct a733_clock_token *);
 /* Read-only, nonblocking observation under the registry lock. OK requires an
  * exact live token in a healthy registry; BUSY admits no conclusion. No time
  * sample, state change, token release, or hardware access occurs. */
