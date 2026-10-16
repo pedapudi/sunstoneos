@@ -87,8 +87,8 @@ A synchronous interconnect stall can prevent instructions from completing.
 Software deadlines therefore do not replace independent watchdog recovery.
 Power, clocks, reset ownership, masked NPU interrupts, and watchdog recovery must
 be established before physical register access. Their board integration remains
-outstanding. A production FreeRTOS service and an EL0-to-EL1 interface for the
-SMP runtime are also outstanding.
+outstanding. The [FreeRTOS service](npu-service.md) now serializes requests from
+EL0 tasks through a preemptible EL1 worker and passes an SMP emulator check.
 
 ## Focused evidence and physical limits
 
@@ -129,7 +129,8 @@ The NPU emulator image has SHA-256
 It contains 30,800 bytes of code/constants, 8 bytes of initialized data, and
 1,173,072 bytes of BSS and reserved stacks. Most reserved memory belongs to the
 fixture's command buffers and tables. These are fixture-image measurements;
-production service memory use and latency remain unmeasured.
+the service's separate measurements are in its implementation record. Physical
+stack usage and latency remain unmeasured.
 
 Reproduce after relevant inputs change:
 

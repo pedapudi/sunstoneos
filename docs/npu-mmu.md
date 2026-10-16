@@ -139,6 +139,6 @@ board image yet. The [controller core](npu-controller.md) supplies modeled regis
 sequences and ownership transitions. The [memory policy](npu-memory.md) validates
 private buffers and table contents before ordering cache operations through
 callbacks. The [native adapter](npu-native.md) supplies CPU translation and cache
-operations. The next integration step is a FreeRTOS service with platform
-resources and fault recovery.
+operations. The [FreeRTOS service](npu-service.md) supplies serialized task
+ownership. Platform resources and fault recovery remain integration requirements.
 Physical work remains gated on independent watchdog recovery.

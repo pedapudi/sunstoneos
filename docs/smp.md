@@ -33,6 +33,10 @@ starts at `0x41200000` and cannot execute. Peripheral space uses device memory
 attributes. RAM uses shared, cacheable mappings over 128 MiB.
 Tasks can access all mapped data and peripherals, including kernel state.
 These mappings provide no task isolation.
+The separate [NPU service target](npu-service.md) grants EL1t execution to one
+statically configured driver worker while application tasks remain at EL0.
+Its focused check covers worker preemption and migration with full register
+retention. The original SMP targets retain their port configuration.
 Arm requires privileged code to avoid memory writable at EL0; the separate
 code mapping satisfies that execution rule.
 See [Arm's memory-protection guide](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/Providing%20protection%20for%20complex%20software.pdf).

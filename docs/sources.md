@@ -36,6 +36,8 @@ references for the native page-table builder. The [controller record](npu-contro
 identifies the adapted register sequences and their modeled ownership behavior.
 The [native NPU CPU record](npu-native.md) identifies the generic-timer reference
 and shared AArch64 translation/cache implementation.
+The [NPU service](npu-service.md) applies a separate startup-privilege patch to
+the pinned FreeRTOS SMP port; the downloaded source retains its license notices.
 The board-specific boot0 binary comes from the board build repository at
 `a95129bf30ea11886cc35f08ebb3e69695a26656`. Its header specifies a 245,760-byte
 image loaded at `0x47000`. Selected power/clock and DDR functions have executed

@@ -62,9 +62,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   table validation, cache publication, and retained faults.
   The [native CPU adapter](npu-native.md) passes a FreeRTOS emulator check for
   translation, cache maintenance, MMIO, deadlines, and retained failure.
+  The [FreeRTOS service](npu-service.md) passes a two-core ownership check with
+  EL0 clients and a preemptible EL1 worker.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
-  checks. Production FreeRTOS controller integration,
-  model loading, execution, and physical qualification remain outstanding.
+  checks. Board resource integration, native model loading, numerical execution,
+  and physical qualification remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

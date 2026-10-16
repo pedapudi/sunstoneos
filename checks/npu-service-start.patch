@@ -1,0 +1,21 @@
+--- start.S
++++ start.S
+@@ -72,6 +72,8 @@
+     and x0, x0, #0xffff
+     cmp x0, #119
+     b.eq .Lexit
++    cmp x0, #120
++    b.eq .Lchecklevel
+     ldp x0, x1, [sp], #16
+     b FreeRTOS_SWI_Handler
+ .Lexit:
+@@ -80,3 +82,9 @@
+ .Lexception:
+     ldp x0, x1, [sp], #16
+     b platform_exception
++.Lchecklevel:
++    // Fixture-only observation of the caller's execution level and stack mode.
++    ldp x0, x1, [sp], #16
++    mrs x0, spsr_el1
++    and x0, x0, #0xf
++    eret

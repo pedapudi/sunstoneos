@@ -6,9 +6,10 @@ passes a reference comparison. [Page-table construction](npu-mmu.md) and the
 The [memory policy](npu-memory.md) passes host integration for private mappings,
 table validation, cache publication, and retained faults. The
 [native CPU adapter](npu-native.md) passes a FreeRTOS emulator check.
-Production service and platform-resource integration remain outstanding.
-Production FreeRTOS integration, native model loading, and numerical inference
-remain outstanding. Physical access remains conditional on qualified independent
+The [FreeRTOS service](npu-service.md) passes a two-core check with EL0 clients,
+a preemptible EL1 worker, task ownership, and retained faults. Board-resource
+integration, native model loading, and numerical inference remain outstanding.
+Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
 
 This document assumes familiarity with drivers, virtual memory, and neural
@@ -167,18 +168,17 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    Compile a small supported operation with known input and expected output.
    Record compiler settings and quantization. Keep the existing SDK network as
    a format reference; its current inspection does not provide a numerical oracle.
-2. **Port the driver core.** Adapt the available hardware, memory-management,
-   and submission code with required license notices. Supply bounded FreeRTOS
-   waits, interrupt delivery, synchronization, allocation, and a privileged
-   register/cache service. Remove Linux file and ioctl dependencies.
+2. **Complete driver integration.** The native controller, memory policy, CPU
+   adapter, and FreeRTOS service have software evidence. Add interrupt delivery,
+   controlled model/command registration, and recovery. Retain required source
+   license notices and keep Linux file and ioctl interfaces out of the runtime.
 3. **Integrate platform resources.** Establish the NPU power domain, regulators,
    clocks, resets, and interrupt route. Confirm identity after watchdog recovery
    is qualified. Derive safe operating points from board-specific power data.
-4. **Map and own device buffers.** Implement NPU page tables and fault reporting.
-   Reserve command, tensor, weight, scratch, and internal-SRAM allocations.
-   Track CPU and device addresses separately. Reuse CPU translation and cache
-   primitives where applicable; the DMA controller's address policy does not
-   establish NPU addressability or an NPU MMU mapping.
+4. **Complete device-memory integration.** Ordinary RAM mappings and ownership
+   have software evidence. Implement internal-SRAM mapping and complete fault
+   reporting. Reserve model buffers and track CPU/device addresses separately.
+   Qualify the complete mapping, cache, and translation-cache behavior physically.
 5. **Implement native model loading.** Decode the supported container, validate
    every reference, allocate aligned buffers, and apply relocations. Establish
    checksum semantics, command permissions, supported operators, and output
@@ -197,7 +197,8 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is FreeRTOS service integration and
-model relocation. Physical inference remains untested, and
+The next independent implementation work is model loading, relocation, command
+validation, and a pinned host compiler for a numerical fixture. Physical inference
+remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
 video-codec acceptance requirements.

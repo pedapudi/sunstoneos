@@ -1,0 +1,14 @@
+--- port.c
++++ port.c
+@@ -470,7 +470,10 @@
+         *pxTopOfStack = ( StackType_t ) 0x00;         /* R30 - procedure call link register. */
+ 
+         pxTopOfStack--;
+-        *pxTopOfStack = portINITIAL_PSTATE_EL0;
++        /* Only the statically configured driver worker starts at EL1t. */
++        extern BaseType_t npu_service_task_privileged( TaskFunction_t, void * );
++        *pxTopOfStack = npu_service_task_privileged( pxCode, pvParameters ) ?
++                        portINITIAL_PSTATE_EL1 : portINITIAL_PSTATE_EL0;
+ 
+         pxTopOfStack--;
+         *pxTopOfStack = ( StackType_t ) pxCode; /* Exception return address. */

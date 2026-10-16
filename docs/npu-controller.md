@@ -18,7 +18,7 @@ the hashes of these files and the inspected feature database.
 
 ## Platform and memory requirements
 
-A privileged FreeRTOS service must serialize every call. The
+The [privileged FreeRTOS service](npu-service.md) serializes every call. The
 [native adapter](npu-native.md) supplies register, clock, delay, barrier, and
 memory-publication callbacks and passes an emulator check. The service
 must establish power, clocks, reset ownership, and independent watchdog recovery
@@ -150,7 +150,8 @@ The AArch64 object has SHA-256
 `0667e3f2255966cfb30441445550602d689c43bb15262d308391670b82a48cae`.
 It contains 5,508 bytes of code and constants, no static data, and an unresolved
 `memcpy` reference supplied by the runtime. These are object measurements;
-production service memory use and timing remain unmeasured.
+service storage is measured in its separate implementation record. Physical
+stack usage and timing remain unmeasured.
 
 Reproduce the focused host check with:
 
@@ -170,7 +171,7 @@ cmake -S . -B "$HOME/.cache/sunstoneos/build/qemu-virt"
 cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" --target a733-npu-controller
 ```
 
-The next work is the FreeRTOS service, platform power/clock integration, and
-model relocation. Numerical inference and
-physical error recovery remain separate qualification requirements. No hardware
+The next work is platform power/clock integration, model relocation, and command
+validation. Numerical inference and physical error recovery remain separate
+qualification requirements. No hardware
 request occurred during these checks.

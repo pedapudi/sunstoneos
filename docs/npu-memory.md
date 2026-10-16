@@ -2,8 +2,8 @@
 
 The NPU memory policy is **implemented** and passes a host check with separate
 CPU and device memory. It compiles for AArch64. The [native adapter](npu-native.md)
-also passes a FreeRTOS emulator check. Production service serialization,
-board integration, and physical memory transfers remain
+also passes a FreeRTOS emulator check. The [service](npu-service.md) supplies
+serialized task ownership. Board integration and physical memory transfers remain
 unimplemented or untested. The policy performs no MMIO and is excluded from
 default builds.
 
@@ -85,8 +85,8 @@ other CPU or device access during publication and execution.
 The policy validates memory relationships, not command semantics. A native model
 loader and privileged service must still validate commands, relocations,
 register permissions, and termination. The native adapter supplies CPU
-translation/cache callbacks and bounded timekeeping. FreeRTOS service ownership,
-power/clocks, and watchdog recovery remain integration requirements.
+translation/cache callbacks and bounded timekeeping. The service supplies task
+ownership; board power/clocks and watchdog recovery remain integration requirements.
 
 ## Focused evidence
 
@@ -119,7 +119,8 @@ The AArch64 object has SHA-256
 `4cbe693d63ffea31b4adae64c5615f277a0756bcf5c982824345945aafda1494`.
 It contains 3,568 bytes of code and constants and no static data. It references
 the MMU builder, `memcpy`, and `memset`. These are object measurements;
-production service memory use and publication latency remain unmeasured.
+the service's separate measurements are in its implementation record. Physical
+publication latency remains unmeasured.
 
 Reproduce the focused host check with:
 

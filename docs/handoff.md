@@ -50,7 +50,10 @@ private buffer mappings, canonical table validation, noncoherent publication,
 and retained faults. It compiles for AArch64. The [native NPU adapter](npu-native.md)
 now passes a FreeRTOS emulator check for CPU translation/cache operations, MMIO,
 deadlines, and retained failure. DMA passes its focused emulator check with the
-shared CPU operations. A production FreeRTOS service, platform resource setup,
+shared CPU operations. The [NPU FreeRTOS service](npu-service.md) now passes a
+two-core check with EL0 clients, a preemptible EL1 worker, full register retention
+through worker migration, task ownership, timed replies, and autonomous
+completion/cancellation/deadlines. Platform resource setup, native model loading,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
 complete hardware qualification remain outstanding. No complete hardware
@@ -181,10 +184,10 @@ the tool hash and recovery evidence in the application document.
    and wider descriptor addressing. Reference facts, ownership behavior, and
    reusable host evidence are in [dma.md](dma.md).
 
-6. Bind the native NPU controller and adapter to a production FreeRTOS service.
-   Serialize calls and enforce task ownership, including privileged CPU operations
-   for EL0 SMP applications. Integrate board power/clock setup. Implement native
-   model relocation and obtain a pinned
+6. Implement native NPU model loading, command validation, and controlled command
+   registration beyond the service's fixed startup catalogue. Integrate board
+   power/clock setup and physical interrupt handling after recovery qualification.
+   Obtain a pinned
    A733 host compiler for a small numerical fixture. The [NPU record](npu.md)
    identifies references, inspection evidence, and the implementation sequence.
 
