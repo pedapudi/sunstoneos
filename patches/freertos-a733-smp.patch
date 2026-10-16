@@ -1,0 +1,55 @@
+--- port.c
++++ port.c
+@@ -1173,7 +1173,7 @@
+     #if ( configASSERT_DEFINED == 1 )
+     {
+         volatile uint8_t ucOriginalPriority;
+-        volatile uint8_t * const pucFirstUserPriorityRegister = ( volatile uint8_t * const ) ( configINTERRUPT_CONTROLLER_BASE_ADDRESS + portINTERRUPT_PRIORITY_REGISTER_OFFSET );
++        volatile uint8_t * const pucFirstUserPriorityRegister = ( volatile uint8_t * const ) a733_smp_priority_address();
+         volatile uint8_t ucMaxPriorityValue;
+ 
+         /* Determine how many priority bits are implemented in the GIC.
+@@ -1227,7 +1227,7 @@
+     #if ( configNUMBER_OF_CORES > 1 )
+         /* Start the timer that generates the tick ISR. */
+         configSETUP_TICK_INTERRUPT();
+-        ucPrimaryCoreInitDoneFlag = 1;
++        __atomic_store_n( &ucPrimaryCoreInitDoneFlag, 1, __ATOMIC_RELEASE );
+         __asm volatile ( "DSB SY                    \n"
+                          "SEV                       \n"
+                          "ISB SY                    \n"
+@@ -1237,10 +1237,11 @@
+          */
+         while( 1 )
+         {
++            a733_smp_startup_check();
+             BaseType_t xAllCoresReady = pdTRUE;
+             for( uint8_t ucCoreID = 0; ucCoreID < ( configNUMBER_OF_CORES - 1 ); ucCoreID++ )
+             {
+-                if( ucSecondaryCoresReadyFlags[ ucCoreID ] != pdTRUE )
++                if( __atomic_load_n( &ucSecondaryCoresReadyFlags[ ucCoreID ], __ATOMIC_ACQUIRE ) != pdTRUE )
+                 {
+                     xAllCoresReady = pdFALSE;
+                     break;
+@@ -1548,18 +1549,9 @@
+ 
+     void vInterruptCore( uint32_t ulInterruptID, uint8_t ucCoreID )
+     {
+-        uint64_t ulRegVal = 0;
+-        uint32_t ulCoreMask = ( 1UL << ucCoreID );
+-        ulRegVal |= ( (ulCoreMask & 0xFFFF) | ( ( ulInterruptID & 0xF ) << 24U ) );
+-        __asm volatile (
+-            "str  x0, [ sp, #-0x10 ]!       \n"
+-            "mov  x0, %0                    \n"
+-            "svc  %1                        \n"
+-            "ldr  x0, [ sp ], # 0x10        \n"
+-            :
+-            : "r" ( ulRegVal ), "i" ( portSVC_INTERRUPT_CORE )
+-            : "memory", "w1"
+-        );
++        register uint64_t ulRegVal __asm( "x0" ) = a733_smp_sgi_value( ulInterruptID, ucCoreID );
++        __asm volatile ( "svc %1" : "+r" ( ulRegVal )
++                         : "i" ( portSVC_INTERRUPT_CORE ) : "memory" );
+     }
+ 
+ /*-----------------------------------------------------------*/
