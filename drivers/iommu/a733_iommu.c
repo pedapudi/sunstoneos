@@ -265,8 +265,11 @@ int a733_iommu_poll(struct a733_iommu *s)
             if(read_reg(s,s->index*0x10000+0x14,&v)!=1)return -1;
         } else if(s->index<4) {
             if(read_reg(s,(s->index-2)*0x10000+0x88,&v)!=1)return -1;
-        } else if(s->index<14) {
-            if(read_reg(s,masters[s->index-4].micro_offset+0x38,&v)!=1)return -1;
+        } else if(s->index<8) {
+            unsigned k=s->index-4;
+            if(read_reg(s,(k/2)*0x10000+0xb0+(k%2)*4,&v)!=1)return -1;
+        } else if(s->index<18) {
+            if(read_reg(s,masters[s->index-8].micro_offset+0x38,&v)!=1)return -1;
         } else { s->state=A733_IOMMU_PUBLISH;return 0; }
         if(v)return fail(s);
         ++s->index;return 0;

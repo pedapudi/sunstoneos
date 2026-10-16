@@ -177,8 +177,32 @@ static void controller_checks(struct a733_iommu_tables *t,const char *dump)
     }
     free(m);
 }
+static void inherited_walk_checks(void)
+{
+    struct a733_iommu_tables t={0};
+    assert(a733_iommu_build(&t,arena,0x140000000,maps,3)==1);
+    struct model *m=calloc(1,sizeof(*m));assert(m);
+    const unsigned offsets[]={0xb0,0xb4,0x100b0,0x100b4};
+    for(unsigned i=0;i<4;++i) {
+        memset(m,0,sizeof(*m));
+        struct a733_iommu s={0};
+        /* An isolated inherited walk error must refuse even when bank and
+         * micro interrupt status are clear and admission reports full drain. */
+        m->regs[offsets[i]/4]=1;
+        assert(a733_iommu_init(&s,&ops,m,&t)==1 && a733_iommu_open(&s,10000)==1);
+        assert(run(&s)==-1 && s.state==A733_IOMMU_FAULT && s.admission.token==37);
+        assert(m->reads==5+i && !m->writes && !m->publications);
+        assert(m->regs[offsets[i]/4]==1);
+        assert(a733_iommu_poll(&s)==-1 && m->reads==5+i);
+    }
+    free(m);
+    puts("A733 IOMMU: isolated inherited L1/L2 walk faults in both banks refuse before publication; token retained");
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--inherited-walk-only")) {
+        inherited_walk_checks();return 0;
+    }
     struct a733_iommu_tables t={0};builder_checks(&t);
     controller_checks(&t,argc>1?argv[1]:NULL);
     puts("A733 IOMMU: page walks, guards, atomic refusal, global admission, publication, cold install and retained faults passed");

@@ -114,8 +114,8 @@ No current platform adapter supplies this proof. Clearing an enable register
 or observing an idle camera cannot establish it. The callback performs resource
 admission and memory validation; native code constructs and installs the tables.
 
-After admission, the controller refuses either enabled bank or existing bank
-or master fault status. Thus even a completed admission cannot replace active
+After admission, the controller refuses either enabled bank or existing bank,
+directory-walk, leaf-walk, or master fault status. Thus even a completed admission cannot replace active
 inherited mappings. It publishes the complete table arena to the point of
 coherency before writing either directory base. The publication callback must
 complete cache cleaning and its barrier before reporting success.
@@ -219,7 +219,11 @@ Raw sources, executables, generated reference harnesses, logs and snapshots are
 under `~/.cache/sunstoneos/evidence/iommu-20261016/`. The source comparison in
 `reference1` remains valid after the admission and fault-reporting changes;
 the compared table and initialization operations did not change. Final host
-and AArch64 evidence is recorded in `snapshot2`. No physical accesses ran.
+and AArch64 evidence is recorded in `snapshot2`. The focused
+`walk-refusal/snapshot` evidence adds initial refusal for isolated directory or
+leaf walk faults in either bank, before publication or register writes.
+Existing encoding and initialization comparisons remain valid. No physical
+accesses ran.
 
 Integration must provide native memory/cache/MMIO operations and global
 resource admission before connecting the camera. Qualification must then cover
