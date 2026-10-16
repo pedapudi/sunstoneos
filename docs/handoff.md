@@ -60,6 +60,10 @@ now matches all active relocations and full SDK command buffers at two allocatio
 bases, using the native encoder's command-pointer mode. It records deferred
 tensor binding, allocation padding, and the completion-event difference that
 native assembly must handle. The encoder compiles for AArch64.
+The [native container decoder](nbg-model.md) now passes malformed-input and
+borrowed-view checks, compiles for AArch64, and supplies C records that reproduce
+the saved SDK submission through the host reconstruction. Full native assembly
+and descriptor access bounds remain outstanding.
 Platform resource setup, native model loading,
 and physical execution remain outstanding.
 Persistent boot, application qualification, other CPU cores, and
@@ -193,7 +197,8 @@ the tool hash and recovery evidence in the application document.
 
 6. Implement native NPU model loading, command validation, and controlled command
    registration beyond the service's fixed startup catalogue. Resolve serialized
-   patch sources and destinations in C using the
+   patch sources and destinations in C from the checked
+   [container views](nbg-model.md), using the
    [host reconstruction](nbg-loader-trace.md) as a reference. Determine complete
    descriptor access lengths, implement checksum handling, and adapt the
    completion event and fetch reservation to the native controller.

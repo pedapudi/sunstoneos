@@ -1,4 +1,11 @@
 # Offline NPU page-table construction. This target performs no hardware access.
+add_library(nbg-model OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_model.c)
+target_include_directories(nbg-model PRIVATE include)
+target_compile_options(nbg-model PRIVATE
+  -march=armv8-a -mstrict-align -ffreestanding -fno-builtin -fno-stack-protector
+  -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
+  -O2 -g -Wall -Wextra -Werror)
+
 add_library(nbg-relocation OBJECT EXCLUDE_FROM_ALL drivers/npu/nbg_relocation.c)
 target_include_directories(nbg-relocation PRIVATE include)
 target_compile_options(nbg-relocation PRIVATE

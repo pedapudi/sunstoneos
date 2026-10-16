@@ -68,6 +68,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks. The [address encoder](nbg-relocation.md) passes host bounds checks and
   comparison with SDK relocation instructions. The [host loader reconstruction](nbg-loader-trace.md)
   matches complete descriptor and command buffers at two allocation bases.
+  The [native container decoder](nbg-model.md) passes malformed-input checks
+  and reconstructs saved SDK output through C records and the host assembler.
   Board resource integration, native model loading, numerical execution,
   and physical qualification remain outstanding.
 

@@ -146,3 +146,7 @@ Native model admission still requires descriptor semantics, padded access
 bounds, checksum handling, internal-SRAM mapping, and controlled command
 registration. Other model formats and operation types remain required.
 Numerical output, physical completion, and recovery have not been tested.
+
+The [native decoder](nbg-model.md) now supplies checked C views to this
+reconstruction. Its comparison reads these saved SDK snapshots without rerunning
+the loader library. Native allocation planning and command assembly remain outstanding.

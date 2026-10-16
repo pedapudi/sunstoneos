@@ -214,7 +214,7 @@ class Reference:
                     self.uc.mem_read(allocation['cpu'], allocation['bytes']))
 
 
-def reconstruct(ref, model, native_path, output, network):
+def reconstruct(ref, model, native_path, output, network, decoded=None, capture=None):
     """Resolve the pinned NN profile independently and compare complete buffers.
 
     This is a format experiment, not admission of arbitrary model commands.
@@ -227,6 +227,8 @@ def reconstruct(ref, model, native_path, output, network):
     native.nbg_relocate.restype = ctypes.c_int
 
     def section(index):
+        if decoded is not None:
+            return decoded.section(index)
         offset, size = struct.unpack_from('<II', model, 376 + index * 8)
         return model[offset:offset + size]
 
@@ -252,15 +254,16 @@ def reconstruct(ref, model, native_path, output, network):
     binding = {(b['operation'], b['index']): by_handle[b['memory_handle']] for b in ref.bindings}
     input_buffer = binding['vip_set_input', 0]
     output_buffer = binding['vip_set_output', 0]
+    sram_bytes = decoded.view.header.vip_sram_bytes if decoded is not None else struct.unpack_from('<I', model, 372)[0]
     sources = {1: input_buffer, 2: output_buffer, 3: pool,
-               8: {'device': 0x400000, 'bytes': struct.unpack_from('<I', model, 372)[0]}}
+               8: {'device': 0x400000, 'bytes': sram_bytes}}
     nn_bytes = section(6)
     weights = section(23)
-    coefficients = list(struct.iter_unpack('<II', section(22)))
-    records = list(struct.iter_unpack('<10I', section(9)))
-    state_table = list(struct.iter_unpack('<II', section(26)))
+    coefficients = decoded.table_entries(22) if decoded is not None else list(struct.iter_unpack('<II', section(22)))
+    records = decoded.patches() if decoded is not None else list(struct.iter_unpack('<10I', section(9)))
+    state_table = decoded.table_entries(26) if decoded is not None else list(struct.iter_unpack('<II', section(26)))
     load_states = section(20)
-    operations = list(struct.iter_unpack('<8I', section(3)))
+    operations = decoded.operations() if decoded is not None else list(struct.iter_unpack('<8I', section(3)))
     nn_patches, state_patches, deferred = [], [], []
     states = bytearray(struct.pack('<12I',
         0x08010e02, 0x701, 0x48000000, 0x701, 0x0801022c, 0x1f,
@@ -315,8 +318,9 @@ def reconstruct(ref, model, native_path, output, network):
             'SDK command stream differs from native reconstruction')
     require(weights == bytes(ref.uc.mem_read(coeff['cpu'], len(weights))),
             'SDK coefficient payload differs from model section')
-    bound_nn = (output/'bound'/f"buffer-{nn['handle']}.bin").read_bytes()
-    prepared_nn = (output/'prepared'/f"buffer-{nn['handle']}.bin").read_bytes()
+    capture = output if capture is None else capture
+    bound_nn = (capture/'bound'/f"buffer-{nn['handle']}.bin").read_bytes()
+    prepared_nn = (capture/'prepared'/f"buffer-{nn['handle']}.bin").read_bytes()
     require(bound_nn == prepared_nn, 'binding unexpectedly changed descriptors immediately')
     expected_bound = bytearray(expected_nn)
     for offset in deferred:

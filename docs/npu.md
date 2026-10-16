@@ -11,7 +11,9 @@ a preemptible EL1 worker, task ownership, and retained faults. The checked
 [address relocation component](nbg-relocation.md) passes host bounds checks
 and comparison with SDK instructions. A [complete host loader trace](nbg-loader-trace.md)
 reconstructs all active relocations and matches SDK command buffers at two
-allocation bases. Board-resource
+allocation bases. The [native container decoder](nbg-model.md) passes bounded
+view and malformed-input checks and supplies the same reconstruction from C
+records using saved SDK evidence. Board-resource
 integration, native model loading, and numerical inference remain outstanding.
 Physical access remains conditional on qualified independent
 watchdog recovery and protected ROM return.
@@ -205,8 +207,8 @@ SHA-256 values. Retrieved files were also checked against Git blob identities.
    CPU execution of unsupported operations must remain explicit and cannot
    establish full NPU support.
 
-The next independent implementation work is a native container loader using the
-host reconstruction's source mappings, complete descriptor access bounds,
+The next independent implementation work is native model assembly using the
+checked container views and host reconstruction's source mappings, complete descriptor access bounds,
 command validation, and a pinned host compiler for a numerical fixture. Physical inference
 remains untested, and
 [issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
