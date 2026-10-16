@@ -59,9 +59,12 @@ Incoming validated Ethernet frames are copied into the fixed pool. Successful
 IP-event admission transfers descriptor ownership to the IP task. Pool
 exhaustion or a full IP queue drops the copied frame and releases any acquired
 descriptor. The adapter consumes the original radio record after this decision.
-Unsupported or unrelated radio records remain retained. An additional
-serialized dispatcher must inspect and consume those records before reception
-can continue; the network worker currently exposes no application API for them.
+The [receive dispatcher](radio-dispatch.md) owns the transport receive path.
+It routes command confirmations and security packets to their existing workers,
+copies scan and station events into a bounded queue, and retires complete
+unsupported records. Ambiguous framing or malformed active confirmations retain
+ownership and stop reception. The network service exposes copied event reads
+and diagnostic snapshots without allowing a second raw-record consumer.
 
 ## Deadlines preserve socket and packet ownership
 

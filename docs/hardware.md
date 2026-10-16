@@ -71,7 +71,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   writes, faster modes, backup and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
-  the conditions. Regulator writes and full bus operation remain unqualified.
+  the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
+  outputs with the existing DCDC2 and GPU DCDC4 owners. Host checks and native
+  compilation pass for shared selectors, snapshot ownership and retained faults.
+  The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
+  asynchronous read-only rail snapshots. Host checks, original getter comparisons
+  and native compilation pass. Legacy GPU/NPU reader migration, cold bus startup,
+  recovery, regulator writes and electrical qualification remain open.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
@@ -172,7 +178,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native firmware memory adapter](gpu-memory.md) passes emulator integration
   for CPU translation, uncached shared resources, cached firmware publication,
   reclamation, and retained permission failures. Physical coherence and board
-  reservation remain unqualified.
+  reservation remain unqualified. The [native firmware constructor](gpu-reserved.md)
+  now reserves actual write-back and uncached linker pools and prepares firmware
+  state and MIPS tables. Emulator checks pass for translation, NPU coexistence
+  and retained allocation failure; linker layout checks pass. Compute/VM
+  reservations, cached-image binding and physical exclusion/drain remain open.
   The [power controller](gpu-power.md) has host/reference evidence for GPU
   clock/reset and domain transitions. The [resource manager](gpu-resources.md)
   has host/native-adapter evidence for leases, inherited settings, and retained
@@ -276,7 +286,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass. [WPA2 station security](radio-security.md) now composes the real RSN
   handshake with confirmed keys, group renewal, controlled-port authorization
   and CCMP receive replay checks. Host checks and freestanding native linking
-  pass. Unsupported receive records remain retained. Actual firmware encryption,
+  pass. Actual firmware encryption,
   integrity and entropy quality remain unqualified.
   [Bluetooth H4/HCI](bluetooth-hci.md) implements bounded UART packet framing,
   retained receive ownership, command credits and controller identification.
@@ -295,12 +305,24 @@ implementation is **planned**. Partial results apply only to the stated scope:
   assembles bounded continuation responses and exposes service attributes and
   advertised RFCOMM endpoints. Host checks and native compilation pass.
   Confirmed teardown retains transport buffers until controller completion.
+  [RFCOMM serial channels](bluetooth-rfcomm.md) compose service discovery with
+  outbound credit-based transport, flow control and confirmed teardown. Host
+  checks and native compilation pass, including acceptance-time response fences
+  shared with other Bluetooth workers. Incoming sessions, additional channel
+  modes, authentication and hands-free control/voice remain outstanding.
+  The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
+  rail and PMIC ownership with bounded power/reset timing and a borrowed card
+  lifetime. Host checks and native compilation pass. Its initial profile uses
+  one data line at 400 kHz; firmware/transport binding, wider modes, shutdown and
+  physical topology/recovery remain unqualified.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
-  Physical identity and platform binding, DHCP/DNS/IPv6, server sockets,
-  reconnection, unrelated radio-record dispatch, wider Wi-Fi security modes, RFCOMM,
-  Bluetooth pairing and headset audio remain outstanding.
+  The [receive dispatcher](radio-dispatch.md) supplies one receive owner, copied
+  scan/station events and bounded retirement of unsupported records. Emulator
+  checks pass for sustained packet delivery, backpressure and retained ambiguous
+  records. Physical identity and platform binding, DHCP/DNS/IPv6, server sockets,
+  reconnection, wider Wi-Fi security modes, pairing and headset audio remain open.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
@@ -391,14 +413,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
 
-- Crypto, random, identity and secure storage: **implemented** one bounded
-  [hardware random-number request](crypto-engine.md) through the native crypto
-  engine. Host checks, pinned-source comparisons and native compilation pass
-  for descriptor encoding, health-register admission, DMA/cache ownership and
-  retained failures. The request requires a characterized secure health profile;
-  no production profile or physical entropy evidence is available. Sustained
-  requests, native security/memory admission, cipher/hash/asymmetric operations,
-  key handling and physical qualification remain outstanding.
+- Crypto, random, identity and secure storage: **implemented** bounded
+  [hardware random-number requests](entropy.md) through the native crypto engine.
+  The service provisions supplied health thresholds and returns complete
+  1–256-byte results using one retained linker-pool page. Host checks, source
+  comparisons, native compilation and a relocatable composition link pass.
+  Output remains unqualified for production security use: raw-source assessment,
+  an assessed profile and current-epoch startup testing are unresolved. Secure
+  access, physical operation, independent engine drain, cipher/hash/asymmetric
+  operations and key handling remain outstanding.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

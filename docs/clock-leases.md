@@ -32,6 +32,10 @@ ownership without reference-clock ancestry. USB0 and USB1 have independent
 exclusive controller/PHY scopes. Both reserve the shared USB01 reference and
 its reference-clock/oscillator ancestry. Upstream MSI-LITE2 and USB_SYS gates
 remain under FABRIC ownership; local port tokens do not authorize their changes.
+SDC1, the radio module and S_TWI0 also have independent exclusive scopes.
+S_TWI0 includes its autonomous engines and reserves shared APBS1 ancestry.
+The [rail ledger](rail-leases.md) separately coordinates 39 PMIC outputs through
+actual DCDC2 and GPU DCDC4 guards; clock ownership does not grant rail authority.
 
 Shared dependencies expand from either audio output to audio PLL1, then to
 the reference clock and oscillator. Peripheral PLL0 and PLL_NPU also depend on the

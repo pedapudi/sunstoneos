@@ -2057,5 +2057,47 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/sunxi_usb/include/sunxi_usb_bsp.h",
     "archive": "usb-platform/bsp/drivers/usb/sunxi_usb/include/sunxi_usb_bsp.h",
     "sha256": "829b22d7a8000f0a9e212ac3da3da50a5d0957e90a53de60cca1cb37d220399b"
+  },
+  "bluetooth-rfcomm-include-net-bluetooth-rfcomm-h": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/net/bluetooth/rfcomm.h",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "archive": "bluetooth-rfcomm/include/net/bluetooth/rfcomm.h",
+    "sha256": "f9d2f2b4ddd6b38070128aede392cf916485f7fc6d87e07155695b0628e0b853"
+  },
+  "bluetooth-rfcomm-net-bluetooth-rfcomm-core-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/rfcomm/core.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "archive": "bluetooth-rfcomm/net/bluetooth/rfcomm/core.c",
+    "sha256": "033b8e8b762b6bbd817a5faed6b0c2019374653ac0be01bd1234ab66e6bafa5e"
+  },
+  "bluetooth-rfcomm-rfcomm-1-2-pdf": {
+    "url": "https://www.bluetooth.org/docman/handlers/DownloadDoc.ashx?doc_id=263754",
+    "revision": "1.2",
+    "archive": "bluetooth-rfcomm/rfcomm-1.2.pdf",
+    "sha256": "87fb3a208bbdbeec1526df5cc8cfb2fdb5dbb1636506f2ed284089e5b93d3ca1"
+  },
+  "radio-dispatch-rwnx_cmds-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_cmds.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_cmds.c",
+    "sha256": "41e06e13c9ad59c244710c89abd9fd53d665739744f73323e8ed9297c11bc71a"
+  },
+  "radio-dispatch-rwnx_msg_rx-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_msg_rx.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_msg_rx.c",
+    "sha256": "9eed44d33b2f6241171e47648ba67e5d193d0e54558fa9f878e8821afe8f9f2b"
+  },
+  "radio-platform-power-delay": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c",
+    "archive": "radio/kernel/drivers/net/wireless/aic8800/aic8800_bsp/aicsdio.c",
+    "sha256": "f08bcfa63f9b7226f4b26832ee9b6088c057fd5ee06389f3ad872f13f9246f0c"
+  },
+  "radio-platform-wlan-power": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/sunxi-wlan.c",
+    "archive": "radio-platform/sunxi-wlan.c",
+    "sha256": "b167e148db2e9e55d9eb782c569c0eed8fe3604b4d8a3d7ec9a25e1617156110"
   }
 }

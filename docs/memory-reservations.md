@@ -64,9 +64,10 @@ cannot be released through the allocator API. Retention is permanent for this
 pool lifetime. Timeout, a changed controller pointer or a device failure does
 not authorize reuse.
 
-The native pool currently uses write-back mappings. GPU firmware resources that
-require uncached shared pages need a separate linker reservation and matching
-page-table attributes. [NPU convolution](npu-reserved.md) binds one complete session to this pool.
+The native pool uses write-back mappings. The [GPU firmware constructor](gpu-reserved.md)
+adds a separate optional uncached linker block with attributes established before
+MMU/cache enable. Both pools remain disjoint inside the existing image reservation.
+[NPU convolution](npu-reserved.md) binds one complete session to the write-back pool.
 IOMMU tables, camera frames and video buffers still need concrete consumer
 bindings and device-address policies. The cached multicore image has a
 separate linker layout and does not use this reservation yet.
