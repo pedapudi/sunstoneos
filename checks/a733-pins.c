@@ -183,4 +183,5 @@ int main(void)
     assert(!a733_pins_native_address(0x02000101,0));
     assert(!a733_pins_native_address(0x02000200,1));
     puts("Pin ownership: shared-word preservation, stale/conflicting leases, concurrent claims, deadlines, and retained failures passed");
+    return 0;
 }

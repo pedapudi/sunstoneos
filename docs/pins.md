@@ -134,11 +134,15 @@ ownership, preserve the pin token across the I2S failure, and prevent retry or
 cleanup from releasing uncertain resources. Returning false and discarding the
 token would violate this manager's ownership contract.
 
-Calls check deadlines between bounded register operations. A write's verification
-read can complete after its deadline; the deadline never substitutes for readback
-or revokes ownership. Synchronous MMIO can stall or fault before C code regains
-control. The native adapter's return value cannot recover such a condition, so
-independent hardware-watchdog protection remains mandatory.
+Calls check deadlines before and after bounded register operations. A late final
+write or verification read enters `RECOVERY` and retains the token, including
+when a release has already restored the hardware fields. A late GPIO observation
+leaves its output argument unchanged. Regressing clock readings are refused;
+observations under the shared lock preserve a monotonic lower bound across calls.
+
+Synchronous MMIO can stall or fault before C code regains control. The native
+adapter's return value cannot recover such a condition, so independent
+hardware-watchdog protection remains mandatory.
 
 ## Focused evidence covers ownership and source compatibility
 
@@ -155,6 +159,11 @@ pull, input-data, and interrupt-enable addresses for both silicon profiles.
 It also derives mux availability from the real-silicon pin table and checks
 admission against the reference pull and drive limits. The source comparison
 passed. Both native files compiled for freestanding AArch64 without warnings.
+A focused follow-up covers deadline expiry during the final acquire/release
+write or readback, late GPIO input, and a regressing clock after mutation.
+The follow-up evidence is `~/.cache/sunstoneos/evidence/pins-deadline-20261016/`.
+Only those cases ran for the deadline change; the source-encoding comparison
+and earlier ownership checks retain their original evidence.
 
 Raw evidence and input identities are in
 `~/.cache/sunstoneos/evidence/pins-20261016/`. Reproduce only affected checks when

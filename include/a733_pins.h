@@ -34,7 +34,8 @@ struct a733_pin_lease { uint64_t id, owner; uint32_t pb_mask; };
 struct a733_pins_operations {
     /* One shared scheduling-aware lock for every writer of these PIO words.
      * enter returns 1 only while owning it; false has no effects. The absolute
-     * deadline and now use nonwrapping monotonic microseconds. */
+     * deadline and now use nonwrapping monotonic microseconds. Regressing readings
+     * are refused, including observations after a write. */
     int (*enter)(void *, uint64_t deadline);
     void (*leave)(void *);
     int (*now)(void *, uint64_t *microseconds);
@@ -50,7 +51,7 @@ struct a733_pin_state {
 struct a733_pins {
     struct a733_pins_operations operations;
     void *cookie;
-    uint64_t next_id;
+    uint64_t next_id, last_time;
     uint32_t authorized_pb_mask;
     unsigned initialized, failed;
     struct a733_pin_state pins[A733_PINS_COUNT];

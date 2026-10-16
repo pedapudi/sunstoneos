@@ -35,12 +35,19 @@ int a733_pins_init(struct a733_pins *m, const struct a733_pins_operations *ops,
 static int in_time(struct a733_pins *m, uint64_t deadline)
 {
     uint64_t now;
-    return m->operations.now(m->cookie, &now) && now < deadline;
+    if (!m->operations.now(m->cookie, &now) || now < m->last_time) return 0;
+    m->last_time = now;
+    return now < deadline;
 }
 static enum a733_pins_result enter(struct a733_pins *m, uint64_t deadline)
 {
     if (!m || !m->initialized) return A733_PINS_INVALID;
-    if (!in_time(m, deadline) || !m->operations.enter(m->cookie, deadline)) return A733_PINS_BUSY;
+    uint64_t before;
+    if (!m->operations.now(m->cookie, &before) || before >= deadline ||
+        !m->operations.enter(m->cookie, deadline)) return A733_PINS_BUSY;
+    /* last_time belongs to the shared lock. Another operation may have run
+     * between our first clock read and admission. */
+    if (before > m->last_time) m->last_time = before;
     if (!in_time(m, deadline)) { m->operations.leave(m->cookie); return A733_PINS_BUSY; }
     return A733_PINS_OK;
 }
@@ -94,11 +101,15 @@ static enum a733_pins_result update(struct a733_pins *m, unsigned word, uint32_t
     if (!read_word(m, offsets[word], &before) || (before & mask) != expected)
         return A733_PINS_RECOVERY;
     uint32_t value = (before & ~mask) | bits;
-    if (before == value) return A733_PINS_OK;
+    if (before == value) {
+        if (!in_time(m, deadline)) return *attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY;
+        return A733_PINS_OK;
+    }
     if (!in_time(m, deadline)) return *attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY;
     *attempted = 1;
     if (!m->operations.write(m->cookie, A733_PINS_BASE+offsets[word], value) ||
         !read_word(m, offsets[word], &after) || after != value) return A733_PINS_RECOVERY;
+    if (!in_time(m, deadline)) return A733_PINS_RECOVERY;
     return A733_PINS_OK;
 }
 static enum a733_pins_result apply(struct a733_pins *m, const struct plan *p,
@@ -206,6 +217,7 @@ enum a733_pins_result a733_pins_read_inputs(struct a733_pins *m, const struct a7
     uint32_t value;
     if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
     if (!read_word(m,DATA,&value)) return leave(m,fault(m));
+    if (!in_time(m,deadline)) return leave(m,A733_PINS_BUSY);
     *levels=value & mask;
     return leave(m,A733_PINS_OK);
 }
