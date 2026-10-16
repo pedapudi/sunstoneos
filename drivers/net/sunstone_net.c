@@ -147,38 +147,54 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
     default:reply(s,p,SUNSTONE_NET_INVALID,0,NULL,0,NULL);return;
     }
 }
+static void service_step(struct sunstone_net *s)
+{
+    if(atomic_load(&s->failed))aic8800_network_fault(&s->network);
+    aic8800_network_poll(&s->network);
+    struct sunstone_net_message message;
+    if(xQueueReceive(s->requests,&message,0)==pdPASS){
+        struct sunstone_net_pending *p=&s->pending[message.client];configASSERT(!p->active);
+        *p=(struct sunstone_net_pending){.message=message,.active=1,.slot=SUNSTONE_NET_SOCKETS};
+    }
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)operation(s,&s->pending[i]);
+}
 static void worker(void *context)
 {
     struct sunstone_net *s=context;
     while(!atomic_load(&s->activation))vTaskDelay(1);
     if(!aic8800_network_activate(&s->network,&s->config.network))atomic_store(&s->failed,1);
-    for(;;){
-        if(atomic_load(&s->failed))aic8800_network_fault(&s->network);
-        aic8800_network_poll(&s->network);
-        struct sunstone_net_message message;
-        if(xQueueReceive(s->requests,&message,0)==pdPASS){
-            struct sunstone_net_pending *p=&s->pending[message.client];configASSERT(!p->active);
-            *p=(struct sunstone_net_pending){.message=message,.active=1,.slot=SUNSTONE_NET_SOCKETS};
-        }
-        for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)operation(s,&s->pending[i]);
-        vTaskDelay(1);
-    }
+    for(;;){service_step(s);vTaskDelay(1);}
 }
-int sunstone_net_init(struct sunstone_net *s,const struct sunstone_net_config *c)
+static int initialize(struct sunstone_net *s,const struct sunstone_net_config *c,unsigned owned)
 {
     if(!s||!c||service||s->initialized||!independent(s,c,sizeof(*c))||!c->bootstrap||
         !aic8800_network_storage_valid(s,sizeof(*s),&c->network)||
-        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+        (owned ? (xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle()!=c->bootstrap) :
+         xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED))return 0;
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)if(c->clients[i])for(unsigned j=0;j<i;++j)if(c->clients[j]==c->clients[i])return 0;
-    memset(s,0,sizeof(*s));s->initialized=1;s->config=*c;service=s;
+    memset(s,0,sizeof(*s));s->initialized=1;s->owned_poll=(uint8_t)owned;s->config=*c;service=s;
     s->requests=xQueueCreateStatic(SUNSTONE_NET_CLIENTS,sizeof(struct sunstone_net_message),s->request_storage,&s->request_queue);
     for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){s->clients[i].task=c->clients[i];s->clients[i].reply_queue=xQueueCreateStatic(1,sizeof(struct sunstone_net_reply),s->clients[i].storage,&s->clients[i].queue);}
-    s->worker=xTaskCreateStatic(worker,"network",SUNSTONE_NET_STACK_WORDS,s,4,s->stack,&s->task);
+    s->worker=owned ? c->bootstrap : xTaskCreateStatic(worker,"network",SUNSTONE_NET_STACK_WORDS,s,4,s->stack,&s->task);
     return s->requests&&s->worker;
+}
+int sunstone_net_init(struct sunstone_net *s,const struct sunstone_net_config *c)
+{return initialize(s,c,0);}
+int sunstone_net_init_owned(struct sunstone_net *s,const struct sunstone_net_config *c)
+{return initialize(s,c,1);}
+int sunstone_net_poll_owned(struct sunstone_net *s)
+{
+    if(!s || !s->initialized || !s->owned_poll || !atomic_load(&s->activation) ||
+        xTaskGetCurrentTaskHandle()!=s->worker)return 0;
+    service_step(s);return 1;
 }
 int sunstone_net_activate(struct sunstone_net *s)
 {
     if(!s||!s->initialized||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||atomic_load(&s->activation))return 0;
+    if(s->owned_poll && !aic8800_network_activate(&s->network,&s->config.network)){
+        atomic_store(&s->failed,1);aic8800_network_fault(&s->network);
+        atomic_store(&s->activation,1);return 0;
+    }
     atomic_store(&s->activation,1);return 1;
 }
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)

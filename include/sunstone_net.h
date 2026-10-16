@@ -58,7 +58,7 @@ struct sunstone_net {
     StaticTask_t task;StackType_t stack[SUNSTONE_NET_STACK_WORDS];TaskHandle_t worker;
     uint64_t next_handle;
     atomic_uint activation,failed;
-    uint8_t initialized;
+    uint8_t initialized,owned_poll;
 };
 /* Trusted initialization before scheduling. Configuration and task identities
  * are copied; radio and entropy contexts remain pinned. Activation transfers
@@ -67,6 +67,15 @@ struct sunstone_net {
  * EVENT copies one ordered radio event, including after link revocation. A late
  * reply preserves that copied event with TIMEOUT; receipt does not authorize RF. */
 int sunstone_net_init(struct sunstone_net *,const struct sunstone_net_config *);
+/* Running-task admission for a native radio session. The current task must be
+ * config.bootstrap and remains the only radio/socket polling owner. Creates
+ * the same bounded queues without creating another worker or transferring
+ * radio ownership. All storage is retained through failure. */
+int sunstone_net_init_owned(struct sunstone_net *,const struct sunstone_net_config *);
+/* One nonblocking network/socket iteration on the recorded task. The owning
+ * session must authenticate its actual platform lifetime before each call;
+ * after revocation, fault the network before calling to drain copied replies. */
+int sunstone_net_poll_owned(struct sunstone_net *);
 int sunstone_net_activate(struct sunstone_net *);
 int sunstone_net_submit(struct sunstone_net *,const struct sunstone_net_request *,uint64_t *ticket);
 int sunstone_net_receive(struct sunstone_net *,struct sunstone_net_reply *,TickType_t wait);
