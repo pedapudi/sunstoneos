@@ -13,6 +13,7 @@ if(SUNSTONE_GPU_FIRMWARE)
     drivers/gpu/gicv3_spi.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c
     drivers/gpu/pvr_mips.c drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c
     drivers/gpu/pvr_gpu_start.c drivers/gpu/pvr_gpu_control.c drivers/gpu/pvr_gpu_stop.c
+    drivers/gpu/pvr_free_list.c drivers/gpu/pvr_gpu_events.c
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${CMAKE_CURRENT_BINARY_DIR}/gpu-service-port.c" "${smp_build}/portASM.S")
   target_include_directories(gpu-irq-model PRIVATE platform/qemu-smp include runtime/include

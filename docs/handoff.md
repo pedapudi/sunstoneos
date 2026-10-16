@@ -52,6 +52,10 @@ faults; format plans match pinned audio functions. Reuse `i2s-20261016` evidence
 integrated source and DMA dependency hashes match the tested inputs. Platform
 clock/reset/pin ownership, allocation, continuous streaming, and physical audio
 remain outstanding. No microphone is attached.
+Shared [header pin ownership](pins.md) now covers PB4–PB8 with retained tokens,
+verified register updates, and host/reference evidence. Reuse `pins-20261016`
+and the focused late-operation checks in `pins-deadline-20261016`. A source-backed
+I2S clock/reset/pin binding and its partial-acquisition contract remain in progress.
 The [NPU investigation](npu.md) identifies available driver source and the
 remaining model-loader/compiler dependencies. A host inspector now matches
 compiled-model metadata and rejects malformed containers. Native [NPU page-table
@@ -173,7 +177,11 @@ control integration checks pass. Native [free-list management](gpu-freelist.md)
 now constructs backing tables and handles growth/reconstruction through deferred
 responses. Host/reference checks pass ownership, partial allocation refusal,
 response backpressure, and retained failures. Concrete allocation/publication,
-linked render-target recovery, service polling, and physical operation remain open.
+linked render-target recovery, and physical operation remain open. Optional
+[service integration](gpu-freelist-service.md) now passes bounded construction,
+deferred event responses, shutdown draining, and retained faults in QEMU. Reuse
+`gpu-freelist-service-20261016`. Enabled lists retain backing after stop and
+temporarily refuse reopen until verified lease disposal is implemented.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -377,13 +385,14 @@ the tool hash and recovery evidence in the application document.
    integrated; reuse `gpu-platform-20261016`. Its worker is developing native
    register/backend composition in `gpu-backend`. Free-list backing, growth/reconstruction, and
    deferred responses are integrated; reuse `gpu-freelist-20261016` evidence.
-   Its worker is preparing concrete lifecycle-service integration in
-   `gpu-freelist-service`; shared service edits require coordinator agreement.
+   Lifecycle-service integration is complete with emulator evidence in
+   `gpu-freelist-service-20261016`. Its worker is identifying concrete radio
+   firmware and transport dependencies in `radio`.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software
-   records. Finite I2S0 capture is integrated; its worker is investigating shared
-   pin ownership for the exposed header. Inspect live agent state before
-   reassigning their files.
+   records. Finite I2S0 capture and shared PB4–PB8 pin ownership are integrated;
+   their worker is developing a concrete audio clock/reset/pin binding in
+   `i2s-platform`. Inspect live agent state before reassigning their files.
    Root remains the sole physical board coordinator.
    Native [shutdown](gpu-stop.md) now has host/reference evidence; reuse
    `gpu-stop-20261016`. Its platform callback must block new GPU memory traffic

@@ -184,5 +184,23 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/sound/core/pcm_dmaengine.c",
     "archive": "i2s/pcm_dmaengine.c",
     "sha256": "017b8aca7246ffdf786f9e20a38f3e9c2b62f1f6115cfc6e23d20052ba999620"
+  },
+  "board-pins-pinctrl-sunxi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sunxi.c",
+    "archive": "pins/pinctrl-sunxi.c",
+    "sha256": "3bc32a1fd6be151be68979a7c44fe400adb657f21cb66f4e043d31aea4273406"
+  },
+  "board-pins-pinctrl-sunxi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sunxi.h",
+    "archive": "pins/pinctrl-sunxi.h",
+    "sha256": "cd345d552621857017e5a34c6c182c3fcc630d2394174c99edd9f2c135e9cab8"
+  },
+  "board-pins-pinctrl-sun60iw2-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pinctrl/pinctrl-sun60iw2.c",
+    "archive": "board-kernel/pinctrl-sun60iw2.c",
+    "sha256": "ab05ddccecd152edf3fafd238ade22299aebe3448646f02f0551edef0c6e1ec7"
   }
 }

@@ -76,8 +76,9 @@ The [native memory adapter](gpu-memory.md), [power controller](gpu-power.md), an
 [interrupt delivery](gpu-interrupts.md) now have focused host/emulator evidence.
 The [resource manager](gpu-resources.md) verifies inherited clock/rail settings
 and arbitrates shared leases. The service supports bounded asynchronous power
-steps. Shared scheduling locks, complete physical bindings, cold initialization,
-and device isolation remain required.
+steps. Native power binding and shared scheduling locks have instruction-model
+and FreeRTOS evidence. Complete physical bindings, cold initialization, and
+device isolation remain required.
 GPU firmware boot, graphics/compute runtime, and physical identity remain
 unqualified. The NPU has implemented components with host/emulator evidence,
 but physical numerical execution remains outstanding. Neither accelerator is

@@ -60,6 +60,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
+- Header pin ownership: **implemented** shared leases for PB4–PB8 with verified
+  mux/pull/drive updates. Host concurrency/failure checks and pinned field
+  comparisons pass; late completion retains ownership. The restricted native
+  adapter compiles for AArch64. [Pin implementation and limits](pins.md) records
+  pending platform binding, wider pin coverage, and physical qualification.
 - I2S0 capture: **implemented** finite mono/stereo capture through the native
   DMA controller. Host checks cover producer shutdown before DMA drain and
   retained ownership after uncertain failures. Format encodings match pinned
@@ -110,8 +115,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Firmware event dispatch](gpu-events.md) has host ABI/control integration
   evidence. Native [free-list management](gpu-freelist.md) now has host/reference
   evidence for backing ownership, growth, reconstruction, and deferred firmware
-  responses. Concrete allocation/publication callbacks, linked render-target
-  recovery, service polling, and physical execution remain outstanding.
+  responses. [Service integration](gpu-freelist-service.md) now passes bounded
+  construction, deferred responses, shutdown draining, and retained faults in
+  QEMU. Concrete allocation/publication callbacks, linked render-target recovery,
+  lease disposal for reopen, and physical execution remain outstanding.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

@@ -12,8 +12,10 @@ The optional [interrupt integration](gpu-interrupts.md) masks delivery, queues a
 worker wakeup, and rearms only after event service drains its backlog. The
 polling fallback remains available when interrupt callbacks are omitted.
 The [event dispatcher](gpu-events.md) supplies typed decoding and resource
-resolution for the platform event callback. It still requires implemented
-resource handlers and deferred firmware response submission.
+resolution for the platform event callback. Optional [free-list integration](gpu-freelist-service.md)
+now constructs backing before startup and drains deferred growth/reconstruction
+responses before retirement. Enabled free lists retain leases after shutdown;
+reopen remains refused until verified resource disposal is implemented.
 
 The [interface](../include/pvr_gpu_service.h) and
 [implementation](../drivers/gpu/pvr_gpu_service.c) use static storage and copied
@@ -125,6 +127,11 @@ forward these operations through the service's common context. Cold clock/regula
 initialization and physical qualification remain required.
 
 ## Emulator evidence covers integration and retained failure
+
+Free-list integration has separate focused evidence for construction, event
+responses, shutdown draining, and retained deadline/publication failures.
+See [free-list service evidence](gpu-freelist-service.md). The original disabled
+path retains its reopen behavior and passed one affected lifecycle check.
 
 The [fixture](../checks/pvr-gpu-service.c) connects the actual firmware builders,
 queue transport, startup, control, shutdown, and service to a software device

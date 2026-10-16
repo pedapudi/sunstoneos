@@ -7,8 +7,9 @@ allocator. Host checks cover the manager with the real event dispatcher and
 command queue. Physical GPU operation remains unqualified.
 
 This document assumes familiarity with memory ownership and firmware queues.
-Platform allocation, protected GPU mappings, render-target recovery, and lifecycle
-worker integration still need concrete board bindings. The manager exposes those
+Platform allocation, protected GPU mappings, and render-target recovery still
+need concrete board bindings. [Lifecycle-worker integration](gpu-freelist-service.md)
+now has emulator evidence. The manager exposes its platform
 operations through [bounded callbacks](../include/pvr_free_list.h).
 
 ## Initial construction publishes owned pages before exposing the list
@@ -164,6 +165,6 @@ The runner records compiler identity, input hashes, reference functions, binary
 hash, and results. Existing command-queue and event-decoder evidence remains
 applicable to their unchanged implementations. Board testing requires concrete
 allocation and publication bindings, protected table/record mappings, linked
-render-target recovery, worker polling, executable firmware, and qualified
+render-target recovery, executable firmware, and qualified
 independent reset recovery. No board executable or physical qualification is
 provided by this component.
