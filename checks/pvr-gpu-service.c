@@ -1,6 +1,11 @@
 #include "pvr_gpu_service.h"
 #include "platform.h"
 #include <string.h>
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+#include "a733_gpu_power.h"
+static struct a733_gpu_power power_controller;
+static uint32_t power_registers[3][0x6000/4], power_lease, power_requested;
+#endif
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
 #include "a733_gpu_memory.h"
 #include "aarch64_device_memory.h"
@@ -68,6 +73,53 @@ static int enable(void *ctx)
     memset(registers, 0, sizeof(registers)); stopping = 0;
     __atomic_fetch_add(&enabled, 1, __ATOMIC_RELEASE); return 1;
 }
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+static int power_acquire(void *ctx, struct a733_gpu_power_resources *out)
+{
+    callback(ctx); configASSERT(!get(&power_lease)); set(&power_lease, 1);
+    if (gpu_service_case == 6) return 0; /* Admission took effect before failure. */
+    *out = (struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ, A733_GPU_INITIAL_UV};
+    return 1;
+}
+static int power_release(void *ctx)
+{ callback(ctx); configASSERT(get(&power_lease)); set(&power_lease, 0); return 1; }
+static int power_read(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t *out)
+{
+    callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
+    *out = power_registers[bank][off/4]; return 1;
+}
+static int power_write(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t value)
+{
+    callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
+    power_registers[bank][off/4] = value;
+    if (bank == A733_GPU_CCU && off == 0xb20) power_registers[bank][off/4] &= ~(1u << 27);
+    if (bank == A733_GPU_PCK && off == 0x5000) {
+        set(&power_requested, value & 15);
+        if (gpu_service_case != 5) power_registers[bank][0x5008/4] = value & 15;
+    }
+    return 1;
+}
+static int power_update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint32_t clear, uint32_t value)
+{
+    uint32_t old;
+    return power_read(ctx, bank, off, &old) && power_write(ctx, bank, off, (old & ~clear) | value);
+}
+static int enable_begin(void *ctx, uint64_t absolute_deadline)
+{
+    callback(ctx); configASSERT(service.phase == PVR_GPU_SERVICE_ENABLING);
+    configASSERT(absolute_deadline == service.deadline && !running);
+    return a733_gpu_power_on(&power_controller, absolute_deadline) == A733_GPU_POWER_AGAIN;
+}
+static int enable_poll(void *ctx)
+{
+    callback(ctx); configASSERT(service.phase == PVR_GPU_SERVICE_ENABLING);
+    enum a733_gpu_power_result r = a733_gpu_power_poll(&power_controller);
+    if (r == A733_GPU_POWER_AGAIN) return 0;
+    if (r != A733_GPU_POWER_OK) return -1;
+    configASSERT(power_controller.phase == A733_GPU_POWER_ON && get(&power_lease));
+    return enable(ctx);
+}
+#endif
 static int publish(void *ctx)
 {
     callback(ctx);
@@ -201,6 +253,15 @@ static int isolate(void *ctx)
     callback(ctx); configASSERT(stopping && service.queue.phase == PVR_CCB_RETIRED);
     configASSERT(word(registers + 0x100, 8) == UINT64_C(0xffeffffffffffc3d));
     running = 0; __atomic_fetch_add(&isolated, 1, __ATOMIC_RELEASE);
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+    /* The fixture models quiescence above; clock-off is not isolation proof.
+     * This bounded, preemptible model callback exercises real power release. */
+    configASSERT(a733_gpu_power_off(&power_controller, service.deadline) == A733_GPU_POWER_AGAIN);
+    enum a733_gpu_power_result result;
+    do { result = a733_gpu_power_poll(&power_controller); if (result == A733_GPU_POWER_AGAIN) vTaskDelay(1); }
+    while (result == A733_GPU_POWER_AGAIN);
+    configASSERT(result == A733_GPU_POWER_OK && !get(&power_lease));
+#endif
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     return a733_gpu_memory_reclaim(&memory);
 #else
@@ -256,6 +317,32 @@ static void peer(void *arg)
 static void owner(void *arg)
 {
     (void)arg;
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+    if (gpu_service_case == 5 || gpu_service_case == 6) {
+        struct pvr_gpu_service_reply response = request(PVR_GPU_SERVICE_OPEN, 50000);
+        configASSERT(response.result == PVR_GPU_SERVICE_OK && response.phase == PVR_GPU_SERVICE_ENABLING);
+        if (gpu_service_case == 5) {
+            /* STATUS is serviced while the domain has not acknowledged power-on. */
+            response = request(PVR_GPU_SERVICE_STATUS, 0);
+            configASSERT(response.phase == PVR_GPU_SERVICE_ENABLING && response.owns_session);
+            configASSERT(request(PVR_GPU_SERVICE_CLOSE, 50000).result == PVR_GPU_SERVICE_BUSY);
+        }
+        vTaskDelay(80); /* No requests are needed to enforce the deadline. */
+        response = request(PVR_GPU_SERVICE_STATUS, 0);
+        configASSERT(response.result == PVR_GPU_SERVICE_FAULT && response.owns_session);
+        configASSERT(response.error == (gpu_service_case == 5 ? PVR_GPU_SERVICE_CLOCK : PVR_GPU_SERVICE_ENABLE));
+        configASSERT(get(&power_lease) && !get(&published) && !get(&enabled) && !running);
+        if (gpu_service_case == 5) configASSERT(get(&power_requested) == 8);
+        unsigned count = get(&calls);
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_FAULT);
+        configASSERT(request(PVR_GPU_SERVICE_CLOSE, 100000).result == PVR_GPU_SERVICE_FAULT);
+        vTaskDelay(5); configASSERT(get(&calls) == count);
+        for (unsigned i=0;i<22;++i) for (unsigned j=0;j<4096;++j) configASSERT(guards[i][j] == 0xa5);
+        platform_puts("PASS GPU service: case "); platform_hex(gpu_service_case);
+        platform_puts("; asynchronous power failure retains ownership before firmware startup\n");
+        platform_exit(0);
+    }
+#endif
     struct pvr_gpu_service_request r = {PVR_GPU_SERVICE_STATUS, 0};
     struct pvr_gpu_service_reply reply = {.ticket = 42}; uint64_t ticket, ignored = 99;
     configASSERT(!pvr_gpu_service_send(&service, &r, portMAX_DELAY, &ignored));
@@ -339,6 +426,16 @@ void kernel_main(void)
     config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
     config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate};
     config.enable = enable; config.context = &config;
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+    config.state.gpu_clock_hz = A733_GPU_INITIAL_HZ;
+    config.enable = NULL; config.power = (struct pvr_gpu_service_enable_ops){enable_begin, enable_poll};
+    power_registers[A733_GPU_CCU][0x5c0/4] = 1u << 7;
+    power_registers[A733_GPU_CCU][0x5e0/4] = 1u << 16;
+    power_registers[A733_GPU_R_CCU][0x1ac/4] = 1;
+    const struct a733_gpu_power_ops power_ops = {now, power_acquire, power_release,
+                                               power_read, power_write, power_update};
+    configASSERT(a733_gpu_power_init(&power_controller, &power_ops, &config));
+#endif
     unsigned byte = 0, page = 0;
     for (unsigned i=0;i<22;++i) {
         unsigned n = i < 2 ? (i ? 20480 : 102400) : i == 2 ? 16384 :
@@ -360,6 +457,13 @@ void kernel_main(void)
     uint64_t pa = pages[34]; pages[34] = pages[0];
     configASSERT(!pvr_gpu_service_init(&service, &config, 4, 1) && !service.initialized && !get(&calls));
     pages[34] = pa;
+#ifdef SUNSTONE_GPU_ASYNC_POWER
+    config.enable = enable;
+    configASSERT(!pvr_gpu_service_init(&service, &config, 4, 1) && !service.initialized && !get(&calls));
+    config.enable = NULL; config.power.poll = NULL;
+    configASSERT(!pvr_gpu_service_init(&service, &config, 4, 1) && !service.initialized && !get(&calls));
+    config.power.poll = enable_poll;
+#endif
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     /* Cached shared memory, wrong PA, read-only NC and absent mappings must be
      * refused before any resource or adapter mutation. */

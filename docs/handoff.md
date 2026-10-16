@@ -140,8 +140,12 @@ to uncached CPU mappings and publishes/reclaims cached firmware backing. Two
 emulator cases pass lifecycle integration and retained mapping failure. Board
 allocation, physical cache behavior, and isolation remain unqualified.
 The [power controller](gpu-power.md) now has host/reference evidence for bounded
-GPU clock/reset and power-domain transitions. Shared-resource acquisition and
-physical register operations remain outstanding. [Interrupt delivery](gpu-interrupts.md)
+GPU clock/reset and power-domain transitions. The [resource manager](gpu-resources.md)
+now has host and AArch64 adapter evidence for lease ownership, inherited settings,
+and retained I2C restoration failures. The service's asynchronous power interface
+passes power-controller integration, timeout, and partial-acquisition failures
+in QEMU. Native shared locks, service binding, cold initialization, and physical
+register operations remain outstanding. [Interrupt delivery](gpu-interrupts.md)
 now wakes the privileged worker through a bounded GIC mask/notification/rearm
 path. Two QEMU cases pass cross-core delivery, backlog handling, reopen, and
 retained failures. One native-memory lifecycle case also passes with the updated
@@ -351,8 +355,10 @@ the tool hash and recovery evidence in the application document.
    and `gpu-irq-20261016/failed-enable-disable` for the new power and interrupt
    components. The source-locked power setting is 400 MHz at 800 mV; it is not a
    frequency measurement or performance target. Power-off does not establish
-   memory isolation. The shared-resource manager remains assigned to a worker
-   in `gpu-resources`; native free-list backing, growth/reconstruction, and
+   memory isolation. Reuse `gpu-resources-20261016` for shared leases and the
+   native register/I2C adapter, and `gpu-power-service-20261016` for asynchronous
+   service sequencing. Native platform binding and shared FreeRTOS locks are
+   assigned to `gpu-platform`; native free-list backing, growth/reconstruction, and
    deferred responses are assigned to `gpu-freelist`.
    The [reset-evidence investigation](watchdog-reset-evidence.md) found no
    source-defined retained cause contract; ROM progress words are software

@@ -11,7 +11,7 @@
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
 enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
-    PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED };
+    PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
@@ -35,12 +35,28 @@ struct pvr_gpu_service_irq_ops {
     int (*rearm)(void *);
 };
 
+/* Optional bounded power sequencing in the privileged worker. Supply both
+ * callbacks and leave enable NULL, or use the synchronous enable callback.
+ * begin returns 1 after accepting the operation with the absolute OPEN deadline;
+ * any other result is a retained failure. poll returns 0 while pending, 1 when
+ * stopped-device power/reset/clock ownership is established, or -1 on failure.
+ * The worker invokes one poll per advance and continues processing requests.
+ * Each callback must be bounded and non-reentrant, use the common context/clock,
+ * and retain partial resources on failure. No firmware register operation runs
+ * until completion. After service failure no further power callback runs; only
+ * independently verified recovery may discard or resume the backend state.
+ */
+struct pvr_gpu_service_enable_ops {
+    int (*begin)(void *, uint64_t deadline);
+    int (*poll)(void *);
+};
+
 /* Private platform configuration, copied at init; pointed-to storage stays
  * pinned and exclusively owned throughout the service lifetime. No filesystem
  * or allocator is required: the platform reserves these exact buffers once.
  * Firmware/pages must remain immutable. Buffers must not alias backend state.
- * All operations use one context and monotonic microsecond clock. enable must
- * establish stopped-device power/reset/clock ownership, including on reopen;
+ * All operations use one context and monotonic microsecond clock. The selected
+ * enable interface establishes stopped-device power/reset/clock ownership, including on reopen;
  * its selected rate must match state.gpu_clock_hz. It is bounded and returns
  * 1 on success. Failure can have side effects, so all resources are retained.
  * Queue callbacks address resources 0..4; start/control/stop callbacks address
@@ -61,6 +77,7 @@ struct pvr_gpu_service_config {
     int (*enable)(void *);
     void *context;
     struct pvr_gpu_service_irq_ops irq;
+    struct pvr_gpu_service_enable_ops power;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;

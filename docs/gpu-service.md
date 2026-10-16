@@ -53,9 +53,9 @@ do not isolate malicious tasks or memory corruption.
 
 OPEN assigns a fresh queue epoch and prepares initialization records, MIPS
 firmware mappings, code/data, boot parameters, and command queues. The worker
-then calls the platform enable operation and starts the existing startup
-controller. One absolute deadline covers preparation, startup, compatibility,
-and the health command. The platform enable operation must establish stopped
+then establishes platform power before starting the existing firmware startup
+controller. One absolute deadline covers preparation, power enable, startup,
+compatibility, and the health command. The platform enable operation must establish stopped
 power/reset ownership and the configured GPU clock, including after a reopen.
 
 Successful startup proceeds to compatibility and health checking. The service
@@ -78,10 +78,51 @@ Independent recovery must prove device quiescence before external reclamation.
 Task abandonment also retains resources.
 
 The worker advances one bounded controller step before receiving each request.
-While starting, checking, ready, or stopping, it waits at most one tick for the
+While enabling power, starting, checking, ready, or stopping, it waits at most one tick for the
 next request. Completion and deadlines therefore advance without client status
 polling. Scheduling delays and callback duration can extend the actual interval.
 Cold, stopped, and failed instances sleep until a request arrives.
+
+## Power enable can advance without blocking service requests
+
+The platform selects either one bounded synchronous `enable` callback or the
+paired asynchronous `power.begin` and `power.poll` callbacks. Initialization
+refuses missing pairs or both interfaces together. Both use the common platform
+context and monotonic clock.
+
+After firmware-buffer preparation, asynchronous enable enters `ENABLING`.
+The begin callback receives the absolute OPEN deadline. Each worker advance
+then performs one power poll. A pending result leaves the worker available for
+STATUS requests; CLOSE remains busy until the device is ready. Interrupt
+delivery remains masked during power sequencing.
+
+The worker checks time before and after each poll. Firmware startup begins only
+after successful power completion within the deadline. A power callback failure
+or deadline violation retains session ownership and every partial resource
+acquisition. The service performs no later power callback. Independent recovery
+must reconcile the backend's retained state before it can be discarded.
+
+The `gpu-power-service-model` target connects this interface to the actual
+[bounded A733 power controller](gpu-power.md). Its clocks, power-domain registers,
+and resource leases are modeled. The successful lifecycle case covers power-on,
+firmware startup, shutdown, release, and reopen under a new owner. Separate
+cases cover an unacknowledged power-domain request and failure after resource
+admission. STATUS remains available while power is pending, and expiry occurs
+without further client requests. Both failures retain the lease before any
+firmware startup or publication.
+
+Three asynchronous cases passed. One lifecycle case with the
+[native memory adapter](gpu-memory.md) also passed through synchronous enable.
+The original source comparisons and unchanged resource/interrupt checks were
+reused. Evidence is in `~/.cache/sunstoneos/evidence/gpu-power-service-20261016/`.
+These checks do not exercise the native PMIC backend, physical power, GPU
+firmware instructions, or device isolation.
+
+The shared [resource manager and native adapter](gpu-resources.md) still need
+scheduling-aware platform locks and a binding to these service callbacks.
+Resource contention must remain pending before the power controller's Boolean
+acquire callback is invoked. Cold clock/regulator initialization and physical
+qualification remain required.
 
 ## Emulator evidence covers integration and retained failure
 
@@ -128,7 +169,7 @@ Evidence is retained under `~/.cache/sunstoneos/evidence/gpu-service-20261016/`,
 including source identities, commands, logs, derived images, and stack reports.
 The executable SHA-256 is
 `85d1deb7d67d89ac7c1f6ac9a524ae93a1fa20251c63713512523c74cbf229d2`.
-Its code/constants occupy 202,104 bytes, including the 131,072-byte firmware
+That recorded build's code/constants occupy 202,104 bytes, including the 131,072-byte firmware
 input. It has four initialized data bytes and 684,496 bytes of BSS/reserved
 stacks. The service object occupies 41,832 bytes, including its 32 KiB worker
 stack. The worker's compiler-reported frame is 224 bytes; called functions add
@@ -148,6 +189,9 @@ python3 checks/pvr-gpu-service.py \
 ```
 
 Use `--cases` to select affected cases when existing evidence covers the others.
+For asynchronous power integration, build `gpu-power-service-model` and select
+cases `1 5 6` with that executable. Case 5 exercises power-domain timeout; case 6
+exercises partial acquisition failure.
 The next implementation work is the board backend: reserved allocations and
 native memory integration, power/reset/isolation services, resource-specific events, and
 physical interrupt delivery. Watchdog recovery remains a prerequisite for new

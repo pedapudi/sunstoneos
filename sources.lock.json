@@ -118,5 +118,41 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_power.c",
     "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_power.c",
     "sha256": "5ab4ff9c54cd8060f0feb6b5c8320da5000c1c24a09f30fbf8c03ef283b732d5"
+  },
+  "board-gpu-resources-ccu-gate-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_gate.c",
+    "archive": "gpu-power/drivers/clk/sunxi-ng/ccu_gate.c",
+    "sha256": "3d8c88d8b00d83b64819a88e6cacaa80eef941dd4d1c164d00238ba29054cd51"
+  },
+  "board-gpu-resources-ccu-nm-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_nm.c",
+    "archive": "gpu-power/drivers/clk/sunxi-ng/ccu_nm.c",
+    "sha256": "105b20f6d9826c34b27ef5aa9bf200ecad1e268308cc65bd52e06e254376631f"
+  },
+  "board-gpu-resources-ccu-sdm-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_sdm.h",
+    "archive": "gpu-resources/drivers/clk/sunxi-ng/ccu_sdm.h",
+    "sha256": "3cfd2a05c597f5aac02dd9cf9293aefd9cb634817fe0c28f7bbfb4d5fde2fa59"
+  },
+  "board-gpu-resources-ccu-sun60iw2-rtc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-rtc.c",
+    "archive": "gpu-resources/drivers/clk/sunxi-ng/ccu-sun60iw2-rtc.c",
+    "sha256": "484ef6c6cbdac224484f22ca57db8063e2f83404bfe18c18e32c12ab1bc0a3ea"
+  },
+  "board-gpu-resources-ccu-div-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_div.h",
+    "archive": "gpu-resources/drivers/clk/sunxi-ng/ccu_div.h",
+    "sha256": "a379fcb476803bc3fda7143f79d18cfcecb4320bc9f04facbea2a5b0d7c1d17e"
+  },
+  "board-gpu-resources-ccu-mult-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_mult.h",
+    "archive": "gpu-resources/drivers/clk/sunxi-ng/ccu_mult.h",
+    "sha256": "1ecf95b5e4d35807b4b8fa5dca3b454af5b0924991fcee276e730b8e528d7c79"
   }
 }

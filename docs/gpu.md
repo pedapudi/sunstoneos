@@ -29,7 +29,11 @@ backend still requires physical power, cache, interrupt, and isolation qualifica
 The [power controller](gpu-power.md) has bounded clock/reset/domain sequencing
 with host/reference evidence. [Interrupt delivery](gpu-interrupts.md) now connects
 the worker to GIC mask/rearm operations and passes actual QEMU interrupt delivery.
-Shared-resource management and the physical board bindings remain outstanding.
+The [resource manager](gpu-resources.md) now arbitrates leases and verifies
+inherited clock/rail settings through a native register/I2C adapter. Shared
+scheduling locks, service binding, cold initialization, and physical qualification
+remain outstanding. The [lifecycle service](gpu-service.md) can drive bounded
+asynchronous power steps; its power-controller integration passes in QEMU.
 The [translation-cache invalidation protocol](gpu-flush.md) now publishes changed
 tables and waits for a checked firmware command result in the host model.
 Live mapping edits, service integration, and physical invalidation remain required.

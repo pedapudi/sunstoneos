@@ -87,7 +87,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reclamation, and retained permission failures. Physical coherence and board
   reservation remain unqualified.
   The [power controller](gpu-power.md) has host/reference evidence for GPU
-  clock/reset and domain transitions; shared-resource management remains required.
+  clock/reset and domain transitions. The [resource manager](gpu-resources.md)
+  has host/native-adapter evidence for leases, inherited settings, and retained
+  I2C restoration failures. Its service binding and cold initialization remain
+  required. Asynchronous power sequencing passes in the FreeRTOS service model.
   [Interrupt delivery](gpu-interrupts.md) passes actual QEMU GIC delivery across
   cores, queue saturation, backlog draining, deferred rearm, and retained failures.
   Physical GPU power and interrupt behavior remain unqualified.

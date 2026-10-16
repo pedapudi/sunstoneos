@@ -117,6 +117,20 @@ static int deadline(struct pvr_gpu_service *s, uint64_t duration)
         duration > UINT64_MAX - now) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
     s->last_now = now; s->deadline = now + duration; return 1;
 }
+static int opening_clock(struct pvr_gpu_service *s)
+{
+    uint64_t now;
+    if (!s->config.start.now(s->config.context, &now) || now < s->last_now || now >= s->deadline) {
+        fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
+    }
+    s->last_now = now; return 1;
+}
+static int start_firmware(struct pvr_gpu_service *s)
+{
+    if (pvr_gpu_start_begin(&s->start, s->deadline) != PVR_GPU_START_AGAIN ||
+        s->start.last_now < s->last_now) { fail(s, PVR_GPU_SERVICE_START); return 0; }
+    s->last_now = s->start.last_now; s->phase = PVR_GPU_SERVICE_STARTING; return 1;
+}
 static int prepare(struct pvr_gpu_service *s)
 {
     const struct pvr_gpu_service_config *c = &s->config;
@@ -130,15 +144,16 @@ static int prepare(struct pvr_gpu_service *s)
         pvr_ccb_init(&s->queue, &c->queue, c->context, s->epoch) != PVR_CCB_OK) {
         fail(s, PVR_GPU_SERVICE_PREPARATION); return 0;
     }
-    uint64_t now;
-    if (!c->start.now(c->context, &now) || now < s->last_now || now >= s->deadline) {
-        fail(s, PVR_GPU_SERVICE_CLOCK); return 0;
+    if (!opening_clock(s)) return 0;
+    if (c->power.begin) {
+        s->phase = PVR_GPU_SERVICE_ENABLING;
+        if (c->power.begin(c->context, s->deadline) != 1) {
+            fail(s, PVR_GPU_SERVICE_ENABLE); return 0;
+        }
+        return opening_clock(s);
     }
-    s->last_now = now;
     if (!c->enable(c->context)) { fail(s, PVR_GPU_SERVICE_ENABLE); return 0; }
-    if (pvr_gpu_start_begin(&s->start, s->deadline) != PVR_GPU_START_AGAIN ||
-        s->start.last_now < s->last_now) { fail(s, PVR_GPU_SERVICE_START); return 0; }
-    s->last_now = s->start.last_now; s->phase = PVR_GPU_SERVICE_STARTING; return 1;
+    return start_firmware(s);
 }
 static void advance(struct pvr_gpu_service *s)
 {
@@ -147,6 +162,14 @@ static void advance(struct pvr_gpu_service *s)
     uint64_t now = s->last_now;
     int rearm = 0;
     switch (s->phase) {
+    case PVR_GPU_SERVICE_ENABLING: {
+        if (!opening_clock(s)) return;
+        int r = s->config.power.poll(s->config.context);
+        if (r != 0 && r != 1) { fail(s, PVR_GPU_SERVICE_ENABLE); return; }
+        if (!opening_clock(s)) return;
+        if (r == 1 && !start_firmware(s)) return;
+        return;
+    }
     case PVR_GPU_SERVICE_STARTING: {
         enum pvr_gpu_start_result r = pvr_gpu_start_poll(&s->start);
         now = s->start.last_now;
@@ -224,7 +247,8 @@ static void worker(void *argument)
 #endif
     for (;;) {
         advance(s); /* One bounded step before each request; traffic cannot starve it. */
-        int active = s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING;
+        int active = (s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING) ||
+                     s->phase == PVR_GPU_SERVICE_ENABLING;
         struct pvr_gpu_service_message message;
         if (xQueueReceive(s->requests, &message, active ? 1 : portMAX_DELAY) != pdTRUE) continue;
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
@@ -246,7 +270,8 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
 {
     if (!s || instance || s->initialized || !c || !priority || priority >= configMAX_PRIORITIES ||
         !affinity || (affinity >> configNUMBER_OF_CORES) ||
-        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED || !c->enable ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
+        (!!c->power.begin != !!c->power.poll) || (!!c->enable == !!c->power.begin) ||
         !c->queue.read || !c->queue.write || !c->queue.barrier || !c->queue.kick ||
         !c->start.now || !c->start.read || !c->start.write || !c->start.started || !c->start.publish ||
         c->control.now != c->start.now || !c->control.read32 || !c->control.write32 || !c->control.compat ||

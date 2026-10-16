@@ -60,4 +60,19 @@ if(SUNSTONE_GPU_FIRMWARE)
   target_compile_definitions(gpu-memory-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1
     INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
   set_target_properties(gpu-memory-model PROPERTIES SUFFIX ".elf")
+
+  get_target_property(gpu_power_sources gpu-service-model SOURCES)
+  add_executable(gpu-power-service-model EXCLUDE_FROM_ALL ${gpu_power_sources}
+    drivers/gpu/a733_gpu_power.c)
+  foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
+    get_target_property(value gpu-service-model ${property})
+    set_property(TARGET gpu-power-service-model PROPERTY ${property} "${value}")
+  endforeach()
+  get_target_property(gpu_power_link_options gpu-power-service-model LINK_OPTIONS)
+  list(REMOVE_ITEM gpu_power_link_options "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-service-model.map")
+  set_property(TARGET gpu-power-service-model PROPERTY LINK_OPTIONS "${gpu_power_link_options}")
+  target_link_options(gpu-power-service-model PRIVATE "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-power-service-model.map")
+  target_compile_definitions(gpu-power-service-model PRIVATE SUNSTONE_GPU_ASYNC_POWER=1
+    INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1)
+  set_target_properties(gpu-power-service-model PROPERTIES SUFFIX ".elf")
 endif()

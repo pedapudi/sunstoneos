@@ -14,8 +14,8 @@ def main():
     parser.add_argument("--qemu", type=Path, required=True)
     parser.add_argument("--nm", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--cases", type=int, nargs="+", choices=(1, 2, 3, 4), default=[1, 2, 3],
-                        help="Case 4 requires the native-memory variant")
+    parser.add_argument("--cases", type=int, nargs="+", choices=(1, 2, 3, 4, 5, 6), default=[1, 2, 3],
+                        help="Case 4 requires native memory; cases 5/6 require asynchronous power")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     original = args.elf.read_bytes()
