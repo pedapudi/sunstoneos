@@ -67,7 +67,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   firmware page tables, boot data, and wrapper register values; complete outputs
   match isolated reference functions. The [firmware queue transport](gpu-queues.md)
   passes host checks for publication, return ownership, events, deadlines, and
-  retained failures. These components compile for AArch64. Physical identity,
+  retained failures. Native [initialization records](gpu-fw-state.md) match the
+  reference initializers and pass integration with queue formatting and MIPS
+  mappings. These components compile for AArch64. Physical identity,
   firmware boot, graphics/compute execution, and recovery remain untested.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host

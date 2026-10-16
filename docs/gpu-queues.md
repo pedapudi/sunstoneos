@@ -3,8 +3,9 @@
 The native firmware queue transport is **implemented and host-tested**.
 It formats shared queues, submits commands, collects firmware return statuses,
 and receives firmware events. It has not communicated with a physical GPU.
-The FreeRTOS service, platform memory operations, firmware initialization
-structures, and application GPU job completion remain outstanding.
+The [firmware initialization records](gpu-fw-state.md) now have native
+preparation and host evidence. The FreeRTOS service, platform memory operations,
+and application GPU job completion remain outstanding.
 
 This document assumes familiarity with ring buffers and device drivers.
 The host-command queue is called KCCB in the reference driver. The reverse

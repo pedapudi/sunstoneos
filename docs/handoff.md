@@ -106,6 +106,9 @@ The [MIPS preparation component](gpu-mips.md) now constructs physical mappings,
 boot data, and wrapper register values with host reference agreement.
 The [firmware queue transport](gpu-queues.md) passes host checks for publication
 ordering, completion-slot ownership, events, deadlines, and retained failures.
+Native [initialization records](gpu-fw-state.md) connect nineteen firmware
+resources to the queues. Full allocations match the reference initializers;
+one host check integrates their mappings with firmware staging and queue formatting.
 Firmware boot, graphics/compute execution, and physical GPU qualification remain
 outstanding. Reuse the evidence under `~/.cache/sunstoneos/evidence/gpu-firmware-20261016/`.
 NPU platform resource setup, complete model admission,
@@ -281,9 +284,12 @@ the tool hash and recovery evidence in the application document.
    The [NPU record](npu.md) identifies references, inspection evidence, and the
    implementation sequence.
 
-7. Implement GPU memory contexts and firmware initialization structures; the
-   pinned driver's `pvr_fw.c` initializes the system and OS structures that
-   connect firmware to the queues. Integrate the [checked transport](gpu-queues.md)
+7. Implement GPU memory contexts and platform integration. The native
+   [initialization records](gpu-fw-state.md) now connect queues and firmware
+   resources; reuse `gpu-fw-state-20261016` evidence. The pinned driver's
+   `pvr_mmu.c` and `pvr_fw_startstop.c` describe the remaining GPU address-space
+   and startup sequencing.
+   Integrate the [checked transport](gpu-queues.md)
    with shared allocations, platform memory callbacks, FreeRTOS serialization,
    event handlers, and bounded startup/recovery. GPU job completion remains
    separate from command acceptance. Reuse the `gpu-ccb-20261016` evidence.
