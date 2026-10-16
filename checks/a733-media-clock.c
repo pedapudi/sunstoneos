@@ -8,7 +8,7 @@ struct model {
     uint32_t ccu[0x2000/4],domain[10][3],osc,pck;
     uint64_t time;
     unsigned held,retained,reads,writes,authorize,setup,reenter,fail_write,retain_busy,expire_write;
-    unsigned lock_busy,auth_pending;
+    unsigned lock_busy,auth_pending,expire_final_leave;
     uintptr_t address[64];uint32_t values[64];
     struct a733_media_clock driver;
     struct a733_clock_leases registry;
@@ -64,6 +64,10 @@ static void leave(void *v)
     struct model *m=v;assert(m->held && !m->retained);m->held=0;
     /* An unrelated authorized writer changes neighboring fields between polls. */
     m->ccu[0x5e4/4]^=BIT(20);m->ccu[0x158c/4]^=BIT(5);
+    if (m->expire_final_leave) {
+        m->time=m->driver.config.deadline_us;
+        atomic_store(&m->registry.busy,1);
+    }
 }
 static void retain(void *v) {struct model *m=v;assert(m->held && !m->retained);m->retained=1;}
 static int auth(void *v,const struct a733_media_clock_config *c,const struct a733_clock_token *t,
@@ -142,8 +146,33 @@ static void registry_cases(void)
     assert(t.shared==(A733_CLOCK_AUDIO5|A733_CLOCK_AUDIO1|A733_CLOCK_REF|A733_CLOCK_OSC));
     assert(A733_CLOCK_LOCALS==0x3fc0 && A733_CLOCK_AUDIO_CHANGE==0x3ff8);
 }
-int main(void)
+static void final_retention_case(void)
 {
+    struct model m;setup(&m,A733_MEDIA_ALL);
+    /* The last DSI1 module enable completes before the final verification poll. */
+    unsigned polls=0;
+    while (!m.writes || m.address[m.writes-1]!=CCU+0x1588 || !(m.values[m.writes-1]&BIT(31))) {
+        assert(++polls<70);
+        assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_PENDING);
+    }
+    struct a733_clock_token token=m.driver.token;
+    m.expire_final_leave=1;
+    assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_BUSY);
+    assert(m.driver.fault && !m.held && !m.registry.failed);
+    unsigned reads=m.reads,writes=m.writes;uint64_t time=m.time;
+    assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_BUSY);
+    assert(m.reads==reads && m.writes==writes && m.time==time);
+    assert(!memcmp(&token,&m.driver.token,sizeof(token)));
+    atomic_store(&m.registry.busy,0);
+    assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_RETAINED && m.registry.failed);
+    assert(m.reads==reads && m.writes==writes && m.time==time);
+    terminal(&m,A733_MEDIA_RETAINED);
+    puts("PASS final deadline failure retains ownership through registry BUSY without publishing PREPARED");
+}
+int main(int argc,char **argv)
+{
+    if (argc==2 && !strcmp(argv[1],"--final-retention")) {final_retention_case();return 0;}
+    assert(argc==1);
     struct model m;registry_cases();
     const unsigned profiles[]={A733_MEDIA_ALL,A733_MEDIA_VI,A733_MEDIA_DE,A733_MEDIA_VO0,A733_MEDIA_IOMMU};
     for (unsigned i=0;i<5;++i) {
@@ -195,6 +224,7 @@ int main(void)
     terminal(&m,A733_MEDIA_RETAINED);
     setup(&m,A733_MEDIA_ALL);m.expire_write=1;
     assert(run(&m)==A733_MEDIA_RETAINED && m.writes==1 && m.retained);
+    final_retention_case();
     puts("PASS media preparation, shared ownership, parent gates, quiescence refusal and retained faults");
     return 0;
 }

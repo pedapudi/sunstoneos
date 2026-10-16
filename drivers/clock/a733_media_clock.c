@@ -190,8 +190,8 @@ enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *p)
     if (!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))
         return A733_MEDIA_BUSY;
     if (p->stage==FAULTED) return finish(p,A733_MEDIA_RETAINED);
-    if (p->stage==COMPLETE) return finish(p,A733_MEDIA_PREPARED);
     if (p->fault) return failed(p); /* Metadata-only retry after registry BUSY. */
+    if (p->stage==COMPLETE) return finish(p,A733_MEDIA_PREPARED);
     if (!timely(p)) return failed(p);
     if (p->stage==ACQUIRE) {
         enum a733_clock_result r=a733_clock_acquire(p->registry,p->config.owner,p->shared,p->exclusive,
@@ -217,6 +217,7 @@ enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *p)
         return finish(p,A733_MEDIA_BUSY);
     }
     if (!timely(p) || !stable(p)) return failed(p);
+    unsigned completed=0;
     if (p->stage==BASELINE) {
         if (!baseline(p)) return failed(p);
         p->stage=PROGRAM;
@@ -228,11 +229,13 @@ enum a733_media_clock_result a733_media_clock_poll(struct a733_media_clock *p)
         } else {
             for (unsigned i=0;i<sizeof(changes)/sizeof(*changes);++i)
                 if (selected(p,&changes[i]) && !bits(p,CCU+changes[i].offset,changes[i].mask,changes[i].value)) return failed(p);
-            p->stage=COMPLETE;
+            completed=1;
         }
     }
     if (!timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;
     if (!timely(p)) return failed(p);
-    return finish(p,p->stage==COMPLETE ? A733_MEDIA_PREPARED : A733_MEDIA_PENDING);
+    /* Publish only after all final observations, mutex release and time checks. */
+    if (completed) p->stage=COMPLETE;
+    return finish(p,completed ? A733_MEDIA_PREPARED : A733_MEDIA_PENDING);
 }

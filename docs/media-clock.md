@@ -143,9 +143,15 @@ The source checker decodes the modeled clock trace using pinned parent/mux field
 AArch64 compilation covers the changed registry, controller and native adapter.
 Physical camera, display and IOMMU preparation remain unqualified.
 
+A focused finalization case verifies that a deadline failure after mutex release
+cannot publish `PREPARED` while registry retention is busy. Pending retention
+retries only metadata, preserves the token and terminates in `RETAINED`.
+Evidence for that case and the changed runtime object is under
+`~/.cache/sunstoneos/evidence/media-clock-20261016/final-retention/`.
+
 The recorded focused batch passed the host model under AddressSanitizer and
 UndefinedBehaviorSanitizer, the pinned-source comparison and AArch64 compilation.
-Runtime and adapter objects contain 9,164 bytes of text/read-only data and no
+Runtime and adapter objects contain 9,148 bytes of text/read-only data and no
 static writable data. The largest direct stack frame is 288 bytes in initialization;
 callback and nested-call stack requirements are separate.
 Reusable raw evidence and exact input snapshots are under
