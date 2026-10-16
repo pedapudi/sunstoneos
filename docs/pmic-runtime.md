@@ -69,13 +69,20 @@ snapshot remains meaningful only while the same parent rail lease remains
 live. It proves neither physical wiring nor measured voltage or settling.
 Radio must select its supply mapping from separately admitted board topology.
 
-The initial profile reads DCDC1, DCDC2, DCDC4, DCDC8, BLDO5 and CLDO1. DCDC1
-decoding covers valid selectors through 28; DCDC2/4 through 87; BLDO5/CLDO1
-through 29. DCDC8 decoding stops at selector 101. The pinned bootloader getter
+The provider reads DCDC1, DCDC2, DCDC4, DCDC8, BLDO5, CLDO1, CLDO5 and
+DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
+through 87; BLDO5/CLDO1/CLDO5 through 29. DCDC8 decoding stops at selector 101. The pinned bootloader getter
 uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
 this does not establish the higher-range voltage formula. Such selectors
 retain their raw bytes with `decoded=0`. Required DCDC8 selector 100 is in
 the source-defined linear region and represents 1.8 V.
+
+DC1SW2 reads enable register `0x11` bit4 and the shared DCDC1 selector at
+`0x12` bits4:0. Its range is 1.0–3.8 V in 100 mV steps. CLDO5 reads enable
+register `0x21` bit7 and selector `0x33` bits4:0, covering 0.5–3.4 V in
+100 mV steps. Enable status is independent of selector validity. Out-of-range
+selectors retain their raw bytes with `decoded=0` and no programmed voltage.
+The rail ledger protects DC1SW2 through its DCDC1/DC1SW alias group.
 
 ## Failure retains ownership
 
@@ -153,3 +160,12 @@ The sanitizer executable has SHA-256
 The rail dependency is commit `4ae15a55b51b4b654a6a5f3de660a67b30da6bc3`.
 Its earlier ledger tests remain applicable; this batch exercises the new
 provider's composition with that unchanged dependency.
+
+[The MMC output check](../checks/a733-pmic-mmc.py) separately validates DC1SW2
+and CLDO5 through the actual provider. Both snapshots share one live
+DCDC1/DC1SW2/CLDO5 lease. The check verifies the six-byte register sequence,
+borrow lifetime, reserved selectors and enable status. Its source comparison
+matches 472 valid raw-selector cases against the original getter. The focused
+sanitizer batch and changed provider-core AArch64 compilation passed; existing
+provider scenarios were not repeated. Evidence is retained in
+`~/.cache/sunstoneos/evidence/pmic-mmc-20261016/initial/`.
