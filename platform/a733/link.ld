@@ -32,5 +32,18 @@ SECTIONS {
         . += DEFINED(__runtime_heap_size) ? __runtime_heap_size : 0;
         __heap_end = .;
     } > RAM
+    /* An absent pool preserves the previous image extent and section layout. */
+    .device_pool (NOLOAD) : {
+        . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;
+        __device_pool_start = .;
+        . += DEFINED(__device_pool_size) ? __device_pool_size : 0;
+        __device_pool_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__device_pool_size) || (__device_pool_size % 4096) == 0,
+           "device pool must contain complete pages")
+    ASSERT(!DEFINED(__device_pool_size) || __device_pool_size <= 1048576,
+           "device pool exceeds allocation registry capacity")
+    ASSERT(__device_pool_end <= ORIGIN(RAM) + LENGTH(RAM),
+           "device pool exceeds image RAM reservation")
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }
