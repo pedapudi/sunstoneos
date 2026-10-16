@@ -1,9 +1,10 @@
 # RFCOMM serial channels over native Bluetooth
 
-RFCOMM carries serial-port data over Bluetooth. The client implements one
-outbound serial data channel over the native
-[L2CAP worker](bluetooth-l2cap.md). It selects an advertised server channel from a
-completed [SDP query](bluetooth-sdp.md), establishes the RFCOMM multiplexer,
+RFCOMM carries serial-port data over Bluetooth. The worker implements one
+serial data channel in either connection direction over the native
+[L2CAP worker](bluetooth-l2cap.md). For an outbound connection, it selects an advertised server channel from a
+completed [SDP query](bluetooth-sdp.md). For an incoming connection, it uses a
+registered local server channel. It establishes the RFCOMM multiplexer,
 negotiates credit flow control, and exchanges modem status before accepting data.
 This is software implementation work. Bluetooth headset operation, authentication,
 HFP control, voice transport and physical qualification remain outstanding.
@@ -13,9 +14,9 @@ HFP control, voice transport and physical qualification remain outstanding.
 A caller initializes `bt_rfcomm_registry` before L2CAP and installs
 `bt_rfcomm_admit` as the L2CAP authorization callback. The registry reserves one
 PSM 3 transport per link before opening it. A protocol/service multiplexer
-(PSM) selects the service carried by an L2CAP channel. Only that serialized acquisition can
-pass the PSM 3 callback. Incoming PSM 3 sessions, including simultaneous connection
-attempts, are refused. Other PSMs retain the supplied policy's result, so an
+(PSM) selects the service carried by an L2CAP channel. Only the reserved outbound acquisition or incoming listener can pass the
+PSM 3 callback. A live session excludes a second multiplexer on the same link,
+including a simultaneous connection attempt. Other PSMs retain the supplied policy's result, so an
 RFCOMM session does not exclude SDP or unrelated L2CAP services.
 
 The registry and its callback context must outlive the L2CAP worker, even after
@@ -25,6 +26,22 @@ workers, retained buffers and caller input/output storage must be disjoint.
 A fault preserves the session reservation. Confirmed channel close and explicit
 release are required before another session can use it.
 
+`bt_rfcomm_listen` reserves an incoming server on an existing connected ACL link.
+It requires the local service UUID, server channel, MTU and absolute setup
+deadline. A link marked by FlushOccurred is ineligible. The admission callback
+rechecks the live link and security policy before allowing an incoming PSM 3
+request. It records the precise L2CAP generation about to be allocated. The
+listener adopts only that generation with the matching link and PSM. A refused
+allocation creates no ownership, even if another service later uses that number.
+
+The listener must correspond to a separately published SDP record. Incoming ACL
+establishment, service publication and pairing are separate dependencies. The
+listener does not create them. It preserves delegation to unrelated PSMs;
+applications can chain an SDP server's policy through the registry callback.
+Closing an unused listener is local. If another serialized worker has already
+admitted its channel, close first adopts that channel and retains its backing
+through confirmed teardown or fault.
+
 The separate service authorization callback must establish the actual profile's
 security requirements on the current link. There is no default authorization.
 The worker checks authorization before opening, sending and stepping transport.
@@ -32,7 +49,7 @@ Revocation faults the session before another lower step. Already accepted lower
 copies remain owned and need qualified recovery. SDP identifies a remote service;
 it does not establish authentication, encryption or permission to use it.
 
-The client accepts a matching SDP service record and a server channel from 1 to 30.
+The outbound client accepts a matching SDP service record and a server channel from 1 to 30.
 The descriptor must specify PSM 3 or omit the standard PSM parameter. It copies
 the selected identity; the SDP result can then be released. The lower link's
 immutable generation and channel generation bind all subsequent operations.
@@ -51,7 +68,14 @@ The check establishes acquisition order. It cannot
 identify arbitrary delayed duplicate peer responses that carry no transaction ID.
 The admitted lower transport must preserve order without duplicate delivery.
 
-The client emits one RFCOMM frame per L2CAP packet. It checks the frame's address,
+The incoming responder sends UA for the peer's multiplexer SABM, responds to
+credit-mode parameter negotiation, and accepts the registered data channel's
+SABM. Each transition requires complete UART acceptance of its preceding reply
+and a newer incoming acquisition. Early commands cannot consume a queued reply
+as proof that the peer received it. The responder uses its own command/response
+bit values for UIH, UA and DM. Both directions exchange modem status before OPEN.
+
+The worker emits one RFCOMM frame per L2CAP packet. It checks the frame's address,
 command/response direction, control value, encoded length and frame check sequence
 (FCS). Unnumbered Information with Header check (UIH) data frames cover address and control in the FCS; channel-control
 frames also cover length. The implementation uses the protocol polynomial
@@ -61,7 +85,7 @@ The negotiated maximum data length is 23 to 512 bytes. L2CAP must accommodate th
 length plus framing. Two-byte lengths support data larger than 127 bytes. The
 initial component requires credit flow; a legacy flow negotiation is reported as
 unsupported. Extra data channels receive the Disconnected Mode response DM, leaving the selected
-channel operational. Full legacy flow, incoming sessions, multiple data channels
+channel operational. Full legacy flow, multiple data channels
 and channel renegotiation that changes an open channel's size remain required.
 These limits prevent a claim of complete RFCOMM conformance.
 
@@ -154,3 +178,12 @@ The successful evidence is
 It preserves executed inputs, binaries and source reference material. An earlier
 compile stopped on two formatting warnings; its separate directory preserves
 those inputs. No physical radio operation or performance measurement was run.
+
+The incoming-server check in `checks/bt-rfcomm-server.c` also passed with both
+sanitizers, and the changed RFCOMM object compiled for AArch64. Its evidence is
+`~/.cache/sunstoneos/evidence/bluetooth-rfcomm-server-20261016/model/results.json`.
+The check covers responder frame bytes, reduced remote MTU, negotiated credits,
+exact channel admission, collision and security refusal, premature negotiation,
+and close before and after admission. A refused channel allocation followed by
+an unrelated service's use of that generation does not transfer ownership.
+The outbound scenarios retain their earlier evidence and were not replayed.

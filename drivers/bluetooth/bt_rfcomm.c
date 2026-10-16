@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Original implementation of RFCOMM1.2 and its GSM07.10 basic-mode framing. */
 #include "bt_rfcomm.h"
-enum action { OTHER, MUX, PN, DLC, MSC, DISC, PEER_MSC, PEER_CLOSE, CREDIT, DATA };
+enum action { OTHER, MUX, PN, DLC, MSC, DISC, PEER_MSC, PEER_CLOSE, CREDIT, DATA, MUX_ACCEPT, PN_ACCEPT, DLC_ACCEPT };
 static int overlap(const void *a,size_t an,const void *b,size_t bn)
 {return an && bn && ((uintptr_t)a<=(uintptr_t)b ? (uintptr_t)b-(uintptr_t)a<an : (uintptr_t)a-(uintptr_t)b<bn);}
 static void copy(uint8_t *d,const uint8_t *s,size_t n){for(size_t i=0;i<n;++i)d[i]=s[i];}
@@ -33,6 +33,12 @@ static const struct bt_l2cap_channel *channel(const struct bt_rfcomm *q)
         q->l2cap->channels[i].state!=BT_L2CAP_UNUSED)return &q->l2cap->channels[i];
     return 0;
 }
+static int live_link(const struct bt_l2cap *l,uint64_t link)
+{
+    for(unsigned i=0;i<BT_ACL_LINKS;++i)if(l->acl->links[i].generation==link &&
+        l->acl->links[i].state==BT_ACL_CONNECTED && !l->acl->links[i].flush_seen)return 1;
+    return 0;
+}
 static int authorized(const struct bt_rfcomm *q)
 {return q->registry->authorize_service(q->registry->context,q->link,q->service_uuid,q->server)==1;}
 static int fault(struct bt_rfcomm *q,enum bt_rfcomm_error e)
@@ -48,11 +54,23 @@ int bt_rfcomm_admit(void *p,uint64_t link,uint16_t psm,unsigned incoming)
 {
     struct bt_rfcomm_registry *r=p;if(!r || !r->l2cap || !r->authorize_psm)return -1;
     if(psm!=3)return r->authorize_psm(r->context,link,psm,incoming);
-    if(incoming)return 0;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i)if(r->session[i] && r->session[i]->link==link &&
-        r->session[i]->phase==BT_RFCOMM_OFF && !r->session[i]->channel)
-        return r->authorize_psm(r->context,link,psm,0);
-    return -1;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) {
+        struct bt_rfcomm *q=r->session[i];if(!q || q->link!=link)continue;
+        if(!incoming) {
+            if(!q->incoming && q->phase==BT_RFCOMM_OFF && !q->channel)
+                return r->authorize_psm(r->context,link,psm,0);
+            return -1;
+        }
+        if(!q->incoming || q->phase!=BT_RFCOMM_LISTENING || q->channel || clock_now(q)>=q->deadline)return 0;
+        for(unsigned k=0;k<BT_L2CAP_CHANNELS;++k)if(r->l2cap->channels[k].state!=BT_L2CAP_UNUSED &&
+            r->l2cap->channels[k].link==link && r->l2cap->channels[k].psm==3)return 0;
+        if(!live_link(r->l2cap,link) || !authorized(q))return -1;
+        int allow=r->authorize_psm(r->context,link,psm,1);if(allow!=1)return allow;
+        /* L2CAP publishes this generation synchronously after this callback.
+         * A refused allocation creates no channel and grants no ownership. */
+        q->admission=r->l2cap->next_channel;return 1;
+    }
+    return incoming ? 0 : -1;
 }
 int bt_rfcomm_begin(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,const struct bt_sdp *s,
     unsigned record,unsigned endpoint,uint16_t mtu,uint64_t bound)
@@ -81,6 +99,38 @@ int bt_rfcomm_begin(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,const struc
     uint64_t identity;int result=bt_l2cap_open(r->l2cap,q->link,3,bound,&identity);
     if(result!=1){r->session[slot]=0;*q=(struct bt_rfcomm){0};return result;}
     q->channel=identity;q->phase=BT_RFCOMM_OPENING;return 1;
+}
+int bt_rfcomm_listen(struct bt_rfcomm *q,struct bt_rfcomm_registry *r,uint64_t link,
+    uint16_t uuid,uint8_t server,uint16_t mtu,uint64_t bound)
+{
+    if(!q || !r || !r->l2cap || q->phase!=BT_RFCOMM_OFF || r->l2cap->state!=BT_L2CAP_ACTIVE ||
+       r->l2cap->authorize!=bt_rfcomm_admit || r->l2cap->context!=r || !uuid || !server || server>30 ||
+       mtu<23 || mtu>BT_RFCOMM_MTU || bound<=r->l2cap->acl->hci->transport.now ||
+       overlap(q,sizeof(*q),r,sizeof(*r)) || !lower_disjoint(r->l2cap,q,sizeof(*q)) ||
+       !lower_disjoint(r->l2cap,r,sizeof(*r)))return -1;
+    unsigned slot=BT_ACL_LINKS;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) {
+        if(!r->session[i]){if(slot==BT_ACL_LINKS)slot=i;continue;}
+        if(r->session[i]->link==link || overlap(q,sizeof(*q),r->session[i],sizeof(*q)))return -1;
+    }
+    if(!live_link(r->l2cap,link) || r->authorize_service(r->context,link,uuid,server)!=1)return -1;
+    if(slot==BT_ACL_LINKS)return 0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i)if(r->l2cap->channels[i].state!=BT_L2CAP_UNUSED &&
+        r->l2cap->channels[i].link==link && r->l2cap->channels[i].psm==3)return -1;
+    *q=(struct bt_rfcomm){.registry=r,.l2cap=r->l2cap,.link=link,.deadline=bound,.mtu=mtu,
+        .server=server,.dlci=(uint8_t)(server*2),.service_uuid=uuid,.next_serial=1,
+        .incoming=1,.phase=BT_RFCOMM_LISTENING};r->session[slot]=q;return 1;
+}
+static int adopt(struct bt_rfcomm *q)
+{
+    if(!q->incoming || q->channel || !q->admission)return 0;
+    for(unsigned i=0;i<BT_L2CAP_CHANNELS;++i) {
+        const struct bt_l2cap_channel *c=&q->l2cap->channels[i];
+        if(c->generation!=q->admission || c->state==BT_L2CAP_UNUSED)continue;
+        if(c->psm!=3 || c->link!=q->link)return 0; /* Refused allocation may leave the number unused. */
+        q->channel=c->generation;q->phase=BT_RFCOMM_OPENING;return 1;
+    }
+    return 0;
 }
 /* Reflected x^8+x^2+x+1, initial ones, complemented remainder. */
 static uint8_t fcs(const uint8_t *p,unsigned n)
@@ -118,7 +168,7 @@ static int mcc(struct bt_rfcomm *q,unsigned type,unsigned command,const uint8_t 
     if(n>BT_RFCOMM_MTU-3)return fault(q,BT_RFCOMM_PROTOCOL);
     uint8_t bytes[BT_RFCOMM_MTU];bytes[0]=(uint8_t)(type|(command<<1)|1);
     unsigned at=1+length_put(bytes+1,n);copy(bytes+at,p,n);
-    return frame(q,0,0xef,1,bytes,at+n,0,action,after(clock_now(q),q->l2cap->ertx_us),0);
+    return frame(q,0,0xef,!q->incoming,bytes,at+n,0,action,after(clock_now(q),q->l2cap->ertx_us),0);
 }
 static int start(struct bt_rfcomm *q)
 {
@@ -126,7 +176,7 @@ static int start(struct bt_rfcomm *q)
     struct bt_rfcomm_buffer *b=free_tx(q,0);if(!b)return 1;
     uint64_t serial=q->next_serial;int result;
     if(a==MUX || a==DLC || a==DISC)
-        result=frame(q,a==MUX ? 0 : q->dlci,a==DISC ? 0x53 : 0x3f,1,0,0,0,a,after(clock_now(q),q->l2cap->ertx_us),0);
+        result=frame(q,a==MUX ? 0 : q->dlci,a==DISC ? 0x53 : 0x3f,!q->incoming,0,0,0,a,after(clock_now(q),q->l2cap->ertx_us),0);
     else if(a==PN) {
         uint8_t p[8]={q->dlci,0xf0,7,0,(uint8_t)q->mtu,(uint8_t)(q->mtu>>8),0,BT_RFCOMM_DATA};
         result=mcc(q,0x80,1,p,8,a);if(result==1){b->grant=BT_RFCOMM_DATA;q->reserved_credits+=BT_RFCOMM_DATA;}
@@ -155,6 +205,10 @@ static int transmit_results(struct bt_rfcomm *q)
             if(q->request==b->serial){q->request_sent=1;q->request_after=p->accepted_after;
                 q->timer=after(p->accepted_at,b->action==DLC ? 60000000 : 20000000);}
             if(b->action==PEER_MSC)q->peer_msc=1;
+            if(b->action==MUX_ACCEPT){q->mux_open=1;q->mux_after=p->accepted_after;}
+            if(b->action==PN_ACCEPT){q->pn_ready=1;q->pn_after=p->accepted_after;}
+            if(b->action==DLC_ACCEPT){q->dlc_open=1;q->dlc_after=p->accepted_after;
+                if(q->phase==BT_RFCOMM_NEGOTIATING)q->next_action=MSC;}
             if(b->action==PEER_CLOSE)q->wire_closed=1;
         }
         if(p->state==BT_L2CAP_COMPLETED || p->state==BT_L2CAP_FAILED) {
@@ -187,9 +241,10 @@ static int submit(struct bt_rfcomm *q)
     return 1;
 }
 static int refuse_dlc(struct bt_rfcomm *q,unsigned dlci,unsigned pf)
-{return frame(q,dlci,0x0f|(pf ? 0x10 : 0),0,0,0,0,OTHER,after(clock_now(q),q->l2cap->ertx_us),0);}
+{return frame(q,dlci,0x0f|(pf ? 0x10 : 0),q->incoming,0,0,0,OTHER,after(clock_now(q),q->l2cap->ertx_us),0);}
 static int control(struct bt_rfcomm *q,const struct bt_l2cap_pdu *rx,const uint8_t *p,unsigned n)
 {
+    if(q->incoming && (!q->mux_open || rx->first_record<=q->mux_after))return fault(q,BT_RFCOMM_PROTOCOL);
     unsigned size,w;if(n<2 || !(p[0]&1) || !length_get(p+1,n-1,&size,&w) || size!=n-1-w)return fault(q,BT_RFCOMM_PROTOCOL);
     unsigned type=p[0]&0xfc,command=(p[0]>>1)&1;const uint8_t *v=p+1+w;
     if(type==0x80) {
@@ -197,6 +252,17 @@ static int control(struct bt_rfcomm *q,const struct bt_l2cap_pdu *rx,const uint8
         unsigned dlci=v[0]&63;
         if(command) {
             if(dlci!=q->dlci)return refuse_dlc(q,dlci,1);
+            if(q->incoming && q->phase==BT_RFCOMM_NEGOTIATING && !q->pn_pending) {
+                if(!q->mux_open || rx->first_record<=q->mux_after)return fault(q,BT_RFCOMM_PROTOCOL);
+                if((v[1]&0xf0)!=0xf0)return fault(q,BT_RFCOMM_UNSUPPORTED);
+                unsigned mtu=le16(v+4);if(mtu<23)return fault(q,BT_RFCOMM_PROTOCOL);
+                if(mtu>q->mtu)mtu=q->mtu;
+                struct bt_rfcomm_buffer *b=free_tx(q,0);if(!b)return 0;
+                uint8_t answer[8]={(uint8_t)dlci,0xe0,(uint8_t)(v[2]&63),0,(uint8_t)mtu,(uint8_t)(mtu>>8),0,BT_RFCOMM_DATA};
+                int result=mcc(q,type,0,answer,8,PN_ACCEPT);
+                if(result==1){q->mtu=(uint16_t)mtu;q->tx_credits=v[7]&7;q->pn_pending=1;
+                    b->grant=BT_RFCOMM_DATA;q->reserved_credits+=BT_RFCOMM_DATA;}return result;
+            }
             /* Renegotiation cannot reset credit ownership or increase N1. */
             if(q->phase!=BT_RFCOMM_OPEN || (v[1]&0xf0) || le16(v+4)<23)return refuse_dlc(q,dlci,1);
             uint8_t answer[8];copy(answer,v,8);answer[0]=(uint8_t)dlci;answer[1]=0;answer[2]&=63;answer[3]=0;
@@ -213,7 +279,7 @@ static int control(struct bt_rfcomm *q,const struct bt_l2cap_pdu *rx,const uint8
     if(type==0xe0) {
         if((size!=2 && size!=3) || (v[0]&3)!=3 || !(v[1]&1) || (size==3 && !(v[2]&1)))return fault(q,BT_RFCOMM_PROTOCOL);
         if((v[0]>>2)!=q->dlci)return command ? refuse_dlc(q,v[0]>>2,1) : 1;
-        if(command && !q->dlc_open)return refuse_dlc(q,q->dlci,1);
+        if(command && (!q->dlc_open || (q->incoming && rx->first_record<=q->dlc_after)))return refuse_dlc(q,q->dlci,1);
         if(command) {int result=mcc(q,type,0,v,size,PEER_MSC);if(result==1)q->modem_status=v[1];return result;}
         if(eligible(q,rx,MSC)){if(size!=2 || (v[1]&~2u)!=0x8d)return fault(q,BT_RFCOMM_PROTOCOL);q->own_msc=1;done(q,0);}return 1;
     }
@@ -265,7 +331,7 @@ static int receive_frame(struct bt_rfcomm *q,const struct bt_l2cap_pdu *rx)
     if(ctl!=0xef) {
         if(length || w!=1 || !pf)return fault(q,BT_RFCOMM_PROTOCOL);
         if(ctl==0x63 || ctl==0x0f) {
-            if(!cr)return fault(q,BT_RFCOMM_PROTOCOL);
+            if(cr!=!q->incoming)return fault(q,BT_RFCOMM_PROTOCOL);
             unsigned a=dlci==0 ? MUX : dlci==q->dlci ? q->waiting : OTHER;
             if(!a || !eligible(q,rx,a))return 1;
             if(ctl==0x0f && (a==MUX || a==PN || a==DLC || a==MSC || a==DISC))return fault(q,BT_RFCOMM_REFUSED);
@@ -273,14 +339,22 @@ static int receive_frame(struct bt_rfcomm *q,const struct bt_l2cap_pdu *rx)
             if(a==MUX)done(q,PN);else if(a==DLC){q->dlc_open=1;done(q,MSC);}else {done(q,0);q->wire_closed=1;}
             return 1;
         }
-        if(cr)return fault(q,BT_RFCOMM_PROTOCOL);
-        if(ctl==0x2f)return refuse_dlc(q,dlci,1);
+        if(cr!=q->incoming)return fault(q,BT_RFCOMM_PROTOCOL);
+        if(ctl==0x2f) {
+            if(!q->incoming || q->phase!=BT_RFCOMM_NEGOTIATING)return refuse_dlc(q,dlci,1);
+            unsigned action;
+            if(!dlci && !q->mux_pending && !q->mux_open)action=MUX_ACCEPT;
+            else if(dlci==q->dlci && q->pn_ready && rx->first_record>q->pn_after && !q->dlc_pending && !q->dlc_open)action=DLC_ACCEPT;
+            else return refuse_dlc(q,dlci,1);
+            int result=frame(q,dlci,0x73,1,0,0,0,action,after(clock_now(q),q->l2cap->ertx_us),0);
+            if(result==1){if(action==MUX_ACCEPT)q->mux_pending=1;else q->dlc_pending=1;}return result;
+        }
         if(ctl!=0x43)return fault(q,BT_RFCOMM_PROTOCOL);
         if(dlci && dlci!=q->dlci)return refuse_dlc(q,dlci,1);
-        int result=frame(q,dlci,0x73,0,0,0,0,PEER_CLOSE,after(clock_now(q),q->l2cap->ertx_us),0);
+        int result=frame(q,dlci,0x73,q->incoming,0,0,0,PEER_CLOSE,after(clock_now(q),q->l2cap->ertx_us),0);
         if(result==1)enter_close(q,after(clock_now(q),20000000));return result;
     }
-    if(cr || (!dlci && pf))return fault(q,BT_RFCOMM_PROTOCOL);
+    if(cr!=q->incoming || (!dlci && pf))return fault(q,BT_RFCOMM_PROTOCOL);
     if(!dlci)return control(q,rx,p+at,length);
     if(dlci!=q->dlci)return refuse_dlc(q,dlci,pf);
     if((q->phase!=BT_RFCOMM_OPEN && !(q->phase==BT_RFCOMM_CLOSING && !q->wire_closed && q->dlc_open)) ||
@@ -329,11 +403,21 @@ int bt_rfcomm_step(struct bt_rfcomm *q,unsigned budget,uint64_t bound)
     if(q->phase==BT_RFCOMM_CLOSED)return 0;
     if(!authorized(q))return fault(q,BT_RFCOMM_SECURITY);
     if(bt_l2cap_step(q->l2cap,budget,bound)!=1 || transmit_results(q)!=1)return fault(q,BT_RFCOMM_LOWER);
+    if(q->incoming && !q->channel) {
+        if(!adopt(q)) {
+            if(clock_now(q)>=q->deadline){q->error=BT_RFCOMM_EXPIRED;q->phase=BT_RFCOMM_CLOSED;return 0;}
+            return 1;
+        }
+    }
     const struct bt_l2cap_channel *c=channel(q);if(!c || c->link!=q->link)return fault(q,BT_RFCOMM_LOWER);
     if(c->state==BT_L2CAP_QUARANTINED)return fault(q,BT_RFCOMM_LOWER);
     if(q->phase==BT_RFCOMM_OPENING && c->state==BT_L2CAP_OPEN) {
-        if(c->remote_mtu<q->mtu+6 || c->local_mtu<q->mtu+6)return fault(q,BT_RFCOMM_UNSUPPORTED);
-        q->phase=BT_RFCOMM_NEGOTIATING;q->next_action=MUX;
+        if(q->incoming) {
+            unsigned cap=c->remote_mtu<c->local_mtu ? c->remote_mtu : c->local_mtu;
+            if(cap<29)return fault(q,BT_RFCOMM_UNSUPPORTED);
+            if(q->mtu>cap-6)q->mtu=(uint16_t)(cap-6);
+        } else if(c->remote_mtu<q->mtu+6 || c->local_mtu<q->mtu+6)return fault(q,BT_RFCOMM_UNSUPPORTED);
+        q->phase=BT_RFCOMM_NEGOTIATING;q->next_action=q->incoming ? 0 : MUX;
     }
     if(q->phase==BT_RFCOMM_NEGOTIATING && q->own_msc && q->peer_msc)q->phase=BT_RFCOMM_OPEN;
     uint64_t now=clock_now(q);
@@ -358,7 +442,7 @@ int bt_rfcomm_step(struct bt_rfcomm *q,unsigned budget,uint64_t bound)
         unsigned free=0;for(unsigned i=0;i<BT_RFCOMM_DATA;++i)free+=q->rx[i].state==BT_RFCOMM_FREE;
         if(free>q->rx_credits+q->reserved_credits) {
             unsigned grant=free-q->rx_credits-q->reserved_credits;
-            int result=frame(q,q->dlci,0xff,1,0,0,grant,CREDIT,after(now,q->l2cap->ertx_us),0);
+            int result=frame(q,q->dlci,0xff,!q->incoming,0,0,grant,CREDIT,after(now,q->l2cap->ertx_us),0);
             if(result<0)return -1;if(result==1)q->reserved_credits+=grant;
         }
     }
@@ -369,7 +453,7 @@ int bt_rfcomm_send(struct bt_rfcomm *q,const uint8_t *p,size_t n,uint64_t bound,
 {
     if(!q || q->phase!=BT_RFCOMM_OPEN || !n || n>q->mtu || bound<=clock_now(q) ||
        !external(q,p,n) || !external(q,serial,sizeof(*serial)) || overlap(p,n,serial,sizeof(*serial)) || !authorized(q))return -1;
-    return frame(q,q->dlci,0xef,1,p,(unsigned)n,0,DATA,bound,serial);
+    return frame(q,q->dlci,0xef,!q->incoming,p,(unsigned)n,0,DATA,bound,serial);
 }
 static const struct bt_rfcomm_buffer *oldest(const struct bt_rfcomm_buffer *p,unsigned n,unsigned received)
 {
@@ -401,6 +485,7 @@ int bt_rfcomm_close(struct bt_rfcomm *q,uint64_t bound)
 {
     if(!q || q->phase==BT_RFCOMM_OFF || q->phase==BT_RFCOMM_CLOSED || q->phase==BT_RFCOMM_CLOSING ||
        bound<=clock_now(q) || !authorized(q) || q->l2cap->state!=BT_L2CAP_ACTIVE)return -1;
+    if(q->incoming && !q->channel && !adopt(q)) {q->phase=BT_RFCOMM_CLOSED;return 1;}
     unsigned normal=q->phase==BT_RFCOMM_OPEN;
     enter_close(q,bound);if(normal)q->next_action=DISC;else q->wire_closed=1;
     if(q->held_rx){if(bt_l2cap_release_receive(q->l2cap,q->held_rx)!=1)return fault(q,BT_RFCOMM_LOWER);q->held_rx=0;}
