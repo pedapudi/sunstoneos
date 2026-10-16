@@ -23,7 +23,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A separate [two-core emulator target](smp.md) tests concurrent scheduling.
   [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons there.
   The [secondary power controller](cpu-start.md) matches isolated board-firmware
-  writes for all seven secondary cores and compiles for AArch64. Physical entry,
+  writes for all seven secondary cores and compiles for AArch64. The
+  [secondary entry and mailbox](cpu-entry.md) waits for verified power cleanup
+  before releasing a core to its continuation. Host composition and instruction
+  emulation pass; native objects compile. Physical entry,
   coherence, per-core interrupts and secondary scheduling remain unqualified.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
@@ -63,8 +66,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   shutdown ordering. Its root build target links successfully.
   [DMA0 platform preparation](dma-platform.md) now validates inherited fabric
   clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
-  Host/reference checks and native compilation pass. Production startup binding
-  remains outstanding. [DMA implementation and limits](dma.md) record the evidence. Board integration,
+  Host/reference checks and native compilation pass. The [startup adapter](dma-startup.md)
+  now binds the clock registry, common counter, register mutex and deferred
+  service activation. Focused two-core composition passes and the integrated
+  target links. Physical handoff remains unqualified.
+  [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
 
@@ -142,9 +148,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   complete reference bytes and composes with native VM/client-queue formatting.
   Both compile for AArch64. The [context program producer](gpu-compute-programs.md)
   now constructs executable USC/PDS programs from pinned compiler output and
-  matches complete reference allocations. Proven single-core admission,
-  multicore addressing, numerical jobs, completion fences, service integration
-  and physical execution remain outstanding.
+  matches complete reference allocations. The [fixed numerical job](gpu-compute-job.md)
+  constructs a real compiled shader and command stream, then requires timeline
+  advancement and correct guarded output. Source-byte and host lifecycle checks
+  pass; no GPU instructions executed. Proven single-core admission, multicore
+  addressing, service integration and physical execution remain outstanding.
+
+- MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
+  Complete packet/register comparisons and retained-failure checks pass; native
+  compilation passes. PHY setup, clock/pin ownership, scanout, panel configuration,
+  read transactions and physical qualification remain outstanding.
 
 - Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
   with host sanitizer and AArch64 compile evidence. The
@@ -155,16 +168,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   preparation, enumeration, CMD52/CMD53, interrupt ownership and retained faults.
   Its runtime files compile for AArch64. The [bootstrap transport](radio-transport.md)
   now prepares the SDIO function, performs the fixed setup write and reads both
-  identity words. Host composition and native compilation pass. Physical silicon
-  identity, firmware loading, power/reset bindings, networking, pairing and
-  headset audio remain outstanding.
+  identity words. The [firmware loader](radio-firmware.md) verifies immutable
+  artifacts, uploads Bluetooth patches and Wi-Fi firmware, and waits for start
+  confirmation. Host composition and native compilation pass. Binding response,
+  continuous receive, physical silicon identity, power/reset bindings, networking,
+  pairing and headset audio remain outstanding.
 
 - Camera: **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
-  model; lifecycle checks and native compilation pass. Module electrical binding,
-  CSI/PHY reception, frame DMA, ISP, additional modes and physical qualification
-  remain outstanding. Module availability and electrical compatibility remain
-  unconfirmed.
+  model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)
+  configures local PHY, packet-port and parser state for both exposed port groups;
+  complete register images match source functions. The [camera DMA controller](camera-dma.md)
+  configures one NV16 image and retains buffers until capture, drain and cache
+  synchronization complete. Register comparisons and ownership checks pass.
+  Module electrical binding, global PHY startup, single-image parser mode,
+  ISP/VIPP routing, actual DMA mapping/drain, additional modes and physical
+  qualification remain outstanding. Module availability remains unconfirmed.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)

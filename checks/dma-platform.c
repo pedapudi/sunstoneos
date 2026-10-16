@@ -104,9 +104,17 @@ static void retained(struct model *m,struct a733_dma_platform *p)
         assert(a733_clock_acquire(&m->leases,8,0,A733_CLOCK_DMA0,UINT64_MAX,&out)==A733_CLOCK_BUSY);
     }
 }
-int main(void)
+int main(int argc, char **argv)
 {
     struct model m;struct a733_dma_platform p;struct a733_dma_platform_config c=config(1);
+    if(argc==2 && !strcmp(argv[1],"--pll-input-only")) {
+        setup(&m,&p,config(0));
+        assert(finish(&m,&p)==READY && !m.writes);
+        setup(&m,&p,config(0));m.ccu[0xa0/4]|=2;
+        assert(finish(&m,&p)==RETAINED && !m.writes);retained(&m,&p);
+        puts("DMA inherited PERI0 input divisor: unchanged profile admitted, divided input retained without writes");
+        return 0;
+    }
     setup(&m,&p,c);m.busy_once=1;m.pending_once=1;
     assert(a733_dma_platform_poll(&p)==BUSY && !p.token.id && !m.reads && !m.writes);
     assert(a733_dma_platform_poll(&p)==PENDING && p.token.id && !m.reads);

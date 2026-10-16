@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Preserve selected evidence and inputs before another build overwrites them."""
+
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+
+
+def git(root, *arguments):
+    return subprocess.check_output(["git", "-C", str(root), *arguments], text=True)
+
+
+def copy_file(source, destination):
+    """Hash the copied bytes; refuse a source that changes during the copy."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with source.open("rb") as incoming, destination.open("xb") as outgoing:
+        before = os.fstat(incoming.fileno())
+        while block := incoming.read(1024 * 1024):
+            outgoing.write(block)
+            digest.update(block)
+        after = os.fstat(incoming.fileno())
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if identity(before) != identity(after) or identity(after) != identity(source.stat()):
+        raise RuntimeError(f"Source changed during snapshot: {source}")
+    return {"original": str(source), "bytes": before.st_size,
+            "sha256": digest.hexdigest()}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repository", type=Path, default=Path.cwd())
+    parser.add_argument("--output", type=Path, required=True,
+                        help="New directory outside the repository; never overwritten")
+    parser.add_argument("--source", action="append", default=[],
+                        help="Repository-relative source/configuration/fixture file; repeat as needed")
+    parser.add_argument("--artifact", type=Path, action="append", default=[],
+                        help="Executable, image, log or result file to preserve; repeat as needed")
+    parser.add_argument("--tool", type=Path, action="append", default=[],
+                        help="Tool executable to preserve and hash; does not execute it")
+    parser.add_argument("--note", required=True,
+                        help="Describe the recorded check and any evidence limitations")
+    args = parser.parse_args()
+    root = Path(git(args.repository.resolve(), "rev-parse", "--show-toplevel").strip()).resolve()
+    output = args.output.resolve()
+    if output == root or root in output.parents:
+        parser.error("Evidence output must be outside the repository")
+    if not args.source or not args.artifact:
+        parser.error("Supply at least one --source and one --artifact")
+
+    sources = []
+    for name in args.source:
+        path = (root / name).resolve()
+        if root not in path.parents or not path.is_file():
+            parser.error(f"Source must resolve to a file inside the repository: {name}")
+        sources.append(path)
+    artifacts = [p.resolve() for p in args.artifact]
+    tools = [p.resolve() for p in args.tool]
+    for path in artifacts + tools:
+        if not path.is_file():
+            parser.error(f"Not a file: {path}")
+        if path == output or output in path.parents:
+            parser.error("Snapshot inputs cannot be inside its output directory")
+
+    revision = git(root, "rev-parse", "HEAD").strip()
+    status = git(root, "status", "--porcelain=v1", "--untracked-files=all")
+    output.mkdir(parents=True, exist_ok=False)
+    records = {"sources": {}, "artifacts": [], "tools": []}
+    for path in dict.fromkeys(sources):
+        relative = path.relative_to(root)
+        destination = output / "sources" / relative
+        row = copy_file(path, destination)
+        row["snapshot"] = str(destination.relative_to(output))
+        records["sources"][str(relative)] = row
+    for category, paths in [("artifacts", artifacts), ("tools", tools)]:
+        for index, path in enumerate(dict.fromkeys(paths)):
+            destination = output / category / str(index) / path.name
+            row = copy_file(path, destination)
+            row["snapshot"] = str(destination.relative_to(output))
+            records[category].append(row)
+    if git(root, "rev-parse", "HEAD").strip() != revision:
+        raise RuntimeError("Repository revision changed during snapshot; no manifest published")
+    manifest = {
+        "schema": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "repository": str(root), "revision": revision,
+        "worktree_status_before_copy": status,
+        "note": args.note,
+        "scope": "Selected file preservation only; does not establish execution, passing checks, or complete dependency coverage",
+        **records,
+    }
+    with (output / "manifest.json").open("x") as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.write("\n")
+    print(output / "manifest.json")
+
+
+if __name__ == "__main__":
+    main()

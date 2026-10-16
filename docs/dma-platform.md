@@ -135,7 +135,7 @@ further register access after failure. Independent watchdog protection remains
 a prerequisite because a stalled peripheral access may prevent software from
 checking its deadline.
 
-## Focused evidence covers new admission and ordering behavior
+## Focused evidence covers admission and ordering behavior
 
 The host fixture uses the real shared registry with modeled device registers.
 It checks deferred admission, reset timing, concurrent updates to unrelated
@@ -150,6 +150,14 @@ reset/bus/MBUS order, automatic-gating value, and CPU route value. The native
 adapter has compile evidence; it has not executed against the physical device.
 Existing DMA controller, memory-adapter, FreeRTOS service, audio, and GPU checks
 remain applicable and were not repeated.
+
+PERI0 input-divider bit 1 must be zero, selecting division by one. The A733
+User Manual V1.00, section 4.1.6.6, defines this field even though the kernel
+clock profile omits it. The focused `--pll-input-only` case admits the unchanged
+profile and refuses divide-by-two before writes, retaining ownership.
+Sanitizers and native compilation pass. Evidence is in
+`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`;
+unchanged platform and service behavior retains its earlier evidence.
 
 Raw evidence is in `~/.cache/sunstoneos/evidence/dma-platform-20261016/`.
 The separate `clock-evidence.json` covers registry extension checks;

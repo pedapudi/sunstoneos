@@ -90,8 +90,10 @@ static int clocks(struct a733_gpu_resource_manager *m, uint32_t mask,
     if (!(mask & A733_GPU_RESOURCE_PARENT)) return 1;
     if (!read32(m, CCU, &ref) || !read32(m, CCU + 0xa0, &peri) ||
         !read32(m, CCU + 0xa8, &sdm0) || !read32(m, CCU + 0xac, &sdm1)) return 0;
+    /* User Manual 4.1.6.6: inherited rate calculation requires M1=1. */
     if ((ref & 0xf8000000) != 0xf8000000 || (peri & 0xfe000000) != 0xfe000000 ||
-        (sdm0 & 0x80000000) || (sdm1 & 0x08000000)) return fail(m, A733_GPU_RESOURCE_PLL);
+        (peri & 2) || (sdm0 & 0x80000000) || (sdm1 & 0x08000000))
+        return fail(m, A733_GPU_RESOURCE_PLL);
     uint64_t nref = ((ref >> 8) & 255) + 1, mref = ((ref >> 16) & 127) + 1;
     uint64_t nperi = ((peri >> 8) & 255) + 1, mperi = ((peri >> 20) & 7) + 1;
     if (nref < 80 || nref > 116 || nperi < 53 || nperi > 105 || nref != mref ||

@@ -23,6 +23,11 @@ live task handle and a mask of permitted jobs before scheduler startup.
 The worker's startup hook grants EL1t only while constructing that private task.
 Application tasks have no selectable privilege flag.
 
+When platform preparation needs scheduler-backed mutexes, use
+`dma_service_init_deferred`. The [startup adapter](dma-startup.md) authenticates
+one EL1 bootstrap task and activates the service after platform readiness.
+Until activation, client sends fail and the worker performs no device callbacks.
+
 A job fixes its DMA channel, transfer segments, complete mappings and descriptor
 allocation. RAM jobs admit only RAM-to-RAM transfers. An I2S job additionally
 supplies a trusted format and platform callback profile. Profiles for I2S0
@@ -139,7 +144,7 @@ proof that the peripheral and bus are quiescent before reclaiming resources.
 ## Native deployment requires prepared platform resources
 
 The service assumes reserved DMA RAM, stable translations and the native
-memory/FIFO admission policy. DMA clocks and reset must already be prepared,
+memory/FIFO admission policy. Before service activation, DMA clocks and reset must be prepared,
 CPU channel routing established and DMA interrupt delivery masked for this
 polled implementation. DMA0 register access uses `0x04601000`.
 All participants must preserve these resources for the service lifetime.

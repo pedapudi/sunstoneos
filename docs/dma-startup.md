@@ -152,8 +152,11 @@ observation, registry contention, and refusal after the registry or shared
 register authority becomes uncertain. That mode passed without repeating the
 successful startup or partial-write cases.
 
-The private [CMake fragment](../cmake/dma-startup.cmake) builds the fixture without
-changing the central build. Raw logs, commands, artifact identity, and input
+The [CMake fragment](../cmake/dma-startup.cmake) is included by the central build.
+The integrated `dma-startup-model` target compiles and links; component emulator
+results are reused after matching source and generated-port identities.
+Integration records are in `hardware-integration-20261016d`.
+Raw logs, commands, artifact identity, and input
 hashes are in `~/.cache/sunstoneos/evidence/dma-startup-20261016/`.
 The final observer/refusal check has an archived executable and hash. The earlier
 success and partial-write checks retain logs and source snapshots; their original

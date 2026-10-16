@@ -78,8 +78,9 @@ static int parents_stable(struct a733_dma_platform *p)
     if (!rd(p,CCU,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000)) return 0;
     unsigned n=((ref>>8)&255)+1, m=((ref>>16)&127)+1;
     if (n<80 || n>116 || n!=m) return 0;
+    /* User Manual 4.1.6.6: input divisor M1 is bit 1 plus one. */
     if (!rd(p,CCU+0xa0,&peri) || (peri&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) ||
-        (peri&BIT(24)) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
+        (peri&(BIT(24)|BIT(1))) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
         !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&autogate)) return 0;
     n=((peri>>8)&255)+1;
     if (n<53 || n>105) return 0;

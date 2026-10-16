@@ -103,6 +103,17 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     fresh(); uint64_t token = 0, shared = 0, change = 0;
+    if (!strcmp(argv[1], "--pll-input-only")) {
+        assert(acquire(0, A733_GPU_RESOURCE_PARENT, &token) == A733_GPU_RESOURCE_OK);
+        assert(!model.updates);
+        fresh(); *reg(&model, 0x020020a0) |= 2;
+        assert(acquire(0, A733_GPU_RESOURCE_PARENT, &token) == A733_GPU_RESOURCE_FAULT);
+        assert(manager.error == A733_GPU_RESOURCE_PLL && !model.updates);
+        assert(manager.leases[0].mode == A733_GPU_RESOURCE_RETAINED);
+        terminal();
+        puts("GPU inherited PERI0 input divisor: unchanged profile admitted, divided input retained without writes");
+        return 0;
+    }
     assert(!a733_gpu_resources_init(&manager, &ops, &model));
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_OK);
     assert(token == 1 && model.updates == 3);

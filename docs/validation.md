@@ -33,6 +33,28 @@ Use existing build dependencies and a small evidence record before introducing
 new caching infrastructure. Missing dependency information prevents reuse only
 for checks affected by that uncertainty.
 
+Preserve successful executables, logs and relevant inputs before another build
+can overwrite them. Existing evidence runners may already do this. Otherwise,
+use [tools/evidence-snapshot.py](../tools/evidence-snapshot.py) immediately after
+the check, while that worktree and build output are idle:
+
+```sh
+python3 tools/evidence-snapshot.py --output /absolute/new/evidence-directory \
+  --source path/to/runtime.c --source path/to/header.h \
+  --source path/to/check.c --source path/to/build-configuration \
+  --artifact /absolute/path/to/executed-image \
+  --artifact /absolute/path/to/result.log \
+  --note 'Describe the check, result, and remaining limitations.'
+```
+
+Repeat source and artifact arguments for all relevant dependencies, fixtures,
+generated sources and results. Optional `--tool` arguments preserve tool
+executables without running them. The tool copies selected bytes and hashes,
+records the repository revision and dirty state, and refuses an existing output
+directory. A failed snapshot can leave an incomplete directory without a manifest.
+Select a fresh output after resolving the failure. Snapshotting does not prove
+execution or complete dependency coverage, and does not justify repeating a test.
+
 Build once per changed target. Flash only when the required running image differs.
 Run hardware cases in one controlled session when practical. Do not rebuild or
 reflash between cases that use the same artifact.

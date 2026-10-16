@@ -70,7 +70,8 @@ at `0x02002000`, `0x020020a0`, `0x020020a8`, and `0x020020ac`.
 The check requires the source-defined enable, supply, lock, and output flags.
 It verifies multiplier limits and the reference PLL's divide ratio. It derives
 400 MHz from the peripheral multiplier, output divisor, and fixed divide-by-three
-stage. Enabled modulation is refused. These checks establish programmed settings;
+stage. Peripheral PLL input-divider bit 1 must be zero, selecting division by
+one. Enabled modulation is refused. These checks establish programmed settings;
 they do not measure oscillator or output frequency.
 
 The rail snapshot holds the common PMIC/I²C lock while reading address `0x36`:
@@ -155,6 +156,14 @@ original clock-gate, PLL-rate, and PMIC voltage-decoding functions. Their output
 match the native gate values, 400 MHz parent rate, and 800 mV DCDC4 interpretation.
 Source assertions verify field positions, multiplier/divisor offsets, oscillator
 selection, and modulation controls.
+
+The A733 User Manual V1.00, section 4.1.6.6, additionally defines the peripheral
+PLL input divider omitted from the kernel clock profile. The focused
+`--pll-input-only` host case admits the unchanged divide-by-one configuration
+and refuses divide-by-two before writes, retaining ownership. It passes with
+sanitizers; the changed runtime compiles for AArch64. Evidence is in
+`~/.cache/sunstoneos/evidence/peri0-input-divider-20261016/`.
+Earlier gate, lifetime and native-adapter checks remain reusable.
 
 The [AArch64 harness](../checks/a733-gpu-resources-native.c) and
 [emulator runner](../checks/a733-gpu-resources-emulate.py) execute the native

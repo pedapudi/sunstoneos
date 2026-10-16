@@ -712,5 +712,293 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
     "archive": "cpu-startup/monitor.fex",
     "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632"
+  },
+  "camera-bsp-drivers-vin-Kconfig": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/Kconfig",
+    "archive": "camera/bsp/drivers/vin/Kconfig",
+    "sha256": "f0facec41f199fb83c788ac8f5eda0a9bc0aac07e3e7b7efd8d26ce2f3cec53b"
+  },
+  "camera-bsp-drivers-vin-Makefile": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/Makefile",
+    "archive": "camera/bsp/drivers/vin/Makefile",
+    "sha256": "721027d468315f80b8836fceddfadfb86414e67a2cf497f920aeb82924aac5cb"
+  },
+  "camera-bsp-drivers-vin-platform-platform_cfg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/platform/platform_cfg.h",
+    "archive": "camera/bsp/drivers/vin/platform/platform_cfg.h",
+    "sha256": "c5ed12df0913946fa881b2efc412aedd15cf5a3d15d1b304527012f3a005c6ae"
+  },
+  "camera-bsp-drivers-vin-top_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg.c",
+    "archive": "camera/bsp/drivers/vin/top_reg.c",
+    "sha256": "810e2b59b85096e1a25ec29bea636a9c7b93b727033707f8b3e43d57e963511b"
+  },
+  "camera-bsp-drivers-vin-top_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg.h",
+    "archive": "camera/bsp/drivers/vin/top_reg.h",
+    "sha256": "17b638e61758b29584e14c5e0baea5679c8a82e50617329bf1d4841646d916ea"
+  },
+  "camera-bsp-drivers-vin-top_reg_i-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg_i.h",
+    "archive": "camera/bsp/drivers/vin/top_reg_i.h",
+    "sha256": "a596f73382656b8814089480f609b76d622c80f6f426a30334b94ca7f35c72cb"
+  },
+  "camera-bsp-drivers-vin-utility-bsp_common-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/utility/bsp_common.h",
+    "archive": "camera/bsp/drivers/vin/utility/bsp_common.h",
+    "sha256": "a72a8854139d9b6a1f1fafad2548f84ef9033077fbf80fde3974c52b85104cb6"
+  },
+  "camera-bsp-drivers-vin-utility-vin_io-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/utility/vin_io.h",
+    "archive": "camera/bsp/drivers/vin/utility/vin_io.h",
+    "sha256": "d1feecffcabcc9efedadaade2b64e94c702d063c04d6421875f0eb27e0d88ece"
+  },
+  "camera-bsp-drivers-vin-vin-csi-parser_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-csi/parser_reg.c",
+    "archive": "camera/bsp/drivers/vin/vin-csi/parser_reg.c",
+    "sha256": "3a95de6e3b1bd32bc07f5989895fd2b00860c99a7ce9f8ffe003b5d6f90f8eb8"
+  },
+  "camera-bsp-drivers-vin-vin-csi-parser_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-csi/parser_reg.h",
+    "archive": "camera/bsp/drivers/vin/vin-csi/parser_reg.h",
+    "sha256": "0dbfc03a226100d24cce9a34e3d49b601642652f7f997b7bbd014be6e89c8b05"
+  },
+  "camera-bsp-drivers-vin-vin-csi-parser_reg_i-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-csi/parser_reg_i.h",
+    "archive": "camera/bsp/drivers/vin/vin-csi/parser_reg_i.h",
+    "sha256": "8789c3a43f64f10c954c8a95f35899f64e3fbd2899ecd414da609158f776cd3c"
+  },
+  "camera-bsp-drivers-vin-vin-csi-sunxi_csi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-csi/sunxi_csi.h",
+    "archive": "camera/bsp/drivers/vin/vin-csi/sunxi_csi.h",
+    "sha256": "aab9846b768c70ed00a75d1787bcef5b825fdd3b688409c0c60705ad38277e73"
+  },
+  "camera-bsp-drivers-vin-vin-isp-isp600-isp600_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg.h",
+    "archive": "camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg.h",
+    "sha256": "4b31b9c7fa9274333100ab6cb23814a9360df181eccdbefd5f879446b809d42c"
+  },
+  "camera-bsp-drivers-vin-vin-isp-isp600-isp600_reg_cfg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.c",
+    "archive": "camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.c",
+    "sha256": "74eb4366372f641a84a71363a1edcfc5afdfeb01da7db27fa26ff75a142faa3b"
+  },
+  "camera-bsp-drivers-vin-vin-isp-isp600-isp600_reg_cfg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h",
+    "archive": "camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h",
+    "sha256": "d4701f18876b50d3fd4f87fe05119ffb751568eeac06a31eb83876141fb7fe4a"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-bsp_mipi_csi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/bsp_mipi_csi.c",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/bsp_mipi_csi.c",
+    "sha256": "fe9b8e79b3e2f8e4c409b8fa786839e6fab9132ade77e2cc8a8534f4a2028dc0"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-bsp_mipi_csi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/bsp_mipi_csi.h",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/bsp_mipi_csi.h",
+    "sha256": "bc758a9e5bcb1d5ecb5048d7ac028d9326e135fcadd7323b29d3b0a4c06e20fa"
+  },
+  "camera-bsp-drivers-vin-vin-mipi-protocol-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-mipi/protocol.h",
+    "archive": "camera/bsp/drivers/vin/vin-mipi/protocol.h",
+    "sha256": "6354fdc27d6cb14cd24d5889feb7820aa82ea4e120c4cc9a57beeea3d7e026dc"
+  },
+  "camera-bsp-drivers-vin-vin-video-dma140-dma140_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/dma140/dma140_reg.c",
+    "archive": "camera/bsp/drivers/vin/vin-video/dma140/dma140_reg.c",
+    "sha256": "25841e1ede699400180dd37e4f4dd837730d4a21a276e7bc630c06a4bf9cd7c0"
+  },
+  "camera-bsp-drivers-vin-vin-video-dma140-dma140_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/dma140/dma140_reg.h",
+    "archive": "camera/bsp/drivers/vin/vin-video/dma140/dma140_reg.h",
+    "sha256": "ead254388dbe91c64b8c6e0384477449ac08b0e2b8328e961ef9f00b81e1ef70"
+  },
+  "camera-bsp-drivers-vin-vin-video-dma140-dma140_reg_i-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/dma140/dma140_reg_i.h",
+    "archive": "camera/bsp/drivers/vin/vin-video/dma140/dma140_reg_i.h",
+    "sha256": "0cc2e0ff1e1c3f1754f5f1461918beca539176ffd028bf098cdc4ff1e3121b1b"
+  },
+  "camera-bsp-drivers-vin-vin-vipp-vipp200-vipp200_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.c",
+    "archive": "camera/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.c",
+    "sha256": "bc72ef2ed6e70a0eec8b53a2a536c289931514b5371212974c37c528d5fc5cb8"
+  },
+  "camera-bsp-drivers-vin-vin-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin.c",
+    "archive": "camera/bsp/drivers/vin/vin.c",
+    "sha256": "b84ac10aa78a63aeaa98ed94a01c688dcb5ac49f063ac09c4ef6c874916af249"
+  },
+  "display-bsp-drivers-drm-sunxi_device-hardware-lowlevel_lcd-dsi_v1-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1.c",
+    "sha256": "d00bd765f6c9a97f120ecae9610f53a531d4d7dfe99b07b9bf453bf48ab08880"
+  },
+  "display-bsp-drivers-drm-sunxi_device-hardware-lowlevel_lcd-dsi_v1-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1.h",
+    "sha256": "1a51d36b0cb3f9b49b930771ebe3ac29873930f5a1d3216d25960ea8a154c972"
+  },
+  "display-bsp-drivers-drm-sunxi_device-hardware-lowlevel_lcd-dsi_v1_type-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1_type.h",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_lcd/dsi_v1_type.h",
+    "sha256": "bf93642dddd434ca152467bb21a5e9e9e92f47512f04ab5d22c5bc90851c3159"
+  },
+  "display-bsp-drivers-drm-phy-sunxi_dsi_combophy-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/phy/sunxi_dsi_combophy.c",
+    "archive": "display/bsp/drivers/drm/phy/sunxi_dsi_combophy.c",
+    "sha256": "2e9a21ad8a02cc8f045c42b3a5fa0ecd014d41cb4ac3f6cf0a1b2fe168843de8"
+  },
+  "display-bsp-drivers-drm-phy-sunxi_dsi_combophy_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/phy/sunxi_dsi_combophy_reg.c",
+    "archive": "display/bsp/drivers/drm/phy/sunxi_dsi_combophy_reg.c",
+    "sha256": "3353bde71c31a43258cae12e5049ee41eed89047092c5606d3801cb13799e7b0"
+  },
+  "display-bsp-drivers-drm-phy-sunxi_dsi_combophy_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/phy/sunxi_dsi_combophy_reg.h",
+    "archive": "display/bsp/drivers/drm/phy/sunxi_dsi_combophy_reg.h",
+    "sha256": "a4ccdf0efdf9f79ef555edd000b49665062ed6b881220c3c8099bc632e277350"
+  },
+  "display-bsp-drivers-drm-sunxi_drm_dsi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_drm_dsi.c",
+    "archive": "display/bsp/drivers/drm/sunxi_drm_dsi.c",
+    "sha256": "35dd0abfebb24f4c8bc53e4a109954e23b54c257d1a3a5dc4aa6d5ad639c342e"
+  },
+  "display-bsp-drivers-drm-sunxi_device-sunxi_tcon-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_tcon.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/sunxi_tcon.c",
+    "sha256": "436c0232891f0fdc9381dfc833031beda6ffaf9b4dba8bbc16e07591733f6f6b"
+  },
+  "display-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-tcon_top-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.c",
+    "archive": "display/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.c",
+    "sha256": "53144710599550158839bd0c779c4b5582b0d1443dfe834517dae06b8b98c502"
+  },
+  "display-bsp-drivers-clk-sunxi-ng-ccu-sun60iw2-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+    "archive": "display/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+    "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77"
+  },
+  "display-arch-arm64-boot-dts-allwinner-sun60iw2p1-dtsi": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+    "archive": "display/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+    "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa"
+  },
+  "display-drivers-gpu-drm-sun4i-sun6i_mipi_dsi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c",
+    "archive": "display/drivers/gpu/drm/sun4i/sun6i_mipi_dsi.c",
+    "sha256": "a9f359b8480f456fb224086811b564d43d15c0b735d67898fe9c2779b6c20672"
+  },
+  "display-drivers-gpu-drm-drm_mipi_dsi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_mipi_dsi.c",
+    "archive": "display/drivers/gpu/drm/drm_mipi_dsi.c",
+    "sha256": "27aaa644e3484c17a43fb815ee6305fe0449eec8f2cdc2aa8b24cd441ba0ec1c"
+  },
+  "display-include-video-mipi_display-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/video/mipi_display.h",
+    "archive": "display/include/video/mipi_display.h",
+    "sha256": "36fc5778eda7503f25df5d75dcd8dd70e9bf7df20b387b3adcd05185391f23ab"
+  },
+  "display-arch-arm64-boot-dts-allwinner-sun60i-a733-orangepi-zero3w-dts": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+    "archive": "display/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+    "sha256": "31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39"
+  },
+  "camera-bsp-drivers-vin-vin-video-vin_core-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/vin_core.c",
+    "sha256": "d6813559eb16f3e1d66e09a8c8fedffa5f8c4f3c732cf82d56b9c01e339ca211",
+    "archive": "camera/bsp/drivers/vin/vin-video/vin_core.c"
+  },
+  "camera-bsp-drivers-vin-vin-vipp-sunxi_scaler-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/sunxi_scaler.c",
+    "sha256": "17bebbdd8f8e290a9533f0270d218cedbb718021b80337298ab555863eb0e13d",
+    "archive": "camera/bsp/drivers/vin/vin-vipp/sunxi_scaler.c"
+  },
+  "camera-bsp-drivers-vin-vin-vipp-vipp200-vipp200_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.h",
+    "sha256": "a4fca5385ba8b0ed50ad2e38e7dc5a34fcfb7a77aa9eeb64bd11e3178b1a0072",
+    "archive": "camera/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg.h"
+  },
+  "camera-bsp-drivers-vin-vin-vipp-vipp200-vipp200_reg_i-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h",
+    "sha256": "7bb1d68b1c8e6ad1b947e2225e710cbd17b86cc990f871d9a8805aaf4f7e67e8",
+    "archive": "camera/bsp/drivers/vin/vin-vipp/vipp200/vipp200_reg_i.h"
+  },
+  "cpu-entry-atf-include-arch-aarch64-el3_common_macros-S": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/arch/aarch64/el3_common_macros.S",
+    "sha256": "7434d6898f3600fb1dc1b1f95c5dc00120e3d79a2da93bbdb52c53e64e159611",
+    "archive": "cpu-entry/include/arch/aarch64/el3_common_macros.S"
+  },
+  "cpu-entry-atf-include-arch-aarch64-arch-h": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/arch/aarch64/arch.h",
+    "sha256": "a80ac103594aea664565d3d705c700d27d86d49a1561c37fd8d370aeabb256a5",
+    "archive": "cpu-entry/include/arch/aarch64/arch.h"
+  },
+  "cpu-entry-atf-docs-porting-guide-rst": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/docs/porting-guide.rst",
+    "sha256": "e13da480d90082fae60fd240a90b1d52ef63c781b80ae8b5ee8f26cf810254e3",
+    "archive": "cpu-entry/docs/porting-guide.rst"
+  },
+  "cpu-entry-atf-include-lib-cpus-aarch64-cortex_a55-h": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/cortex_a55.h",
+    "sha256": "75f389303a5ce4670c11e9efd67bf5d233b001568a10506475881f26a34bdc90",
+    "archive": "cpu-entry/include/lib/cpus/aarch64/cortex_a55.h"
+  },
+  "cpu-entry-atf-include-lib-cpus-aarch64-cortex_a76-h": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/cortex_a76.h",
+    "sha256": "1ceecb6bdce5365f1886832806e068635a5cd9ff4c17a4fc799bb1e6bcd49c14",
+    "archive": "cpu-entry/include/lib/cpus/aarch64/cortex_a76.h"
+  },
+  "a733-user-manual-1.00": {
+    "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+    "archive": "camera-research/A733_User_Manual_V1.00.pdf",
+    "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d"
   }
 }

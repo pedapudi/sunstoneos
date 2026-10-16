@@ -23,7 +23,7 @@ The inspected bootloader revision is
 | Address | Source-defined function | Consequence for reset evidence |
 | --- | --- | --- |
 | `0x02050000` | Interrupt enable | An enabled interrupt does not identify a completed reset. |
-| `0x02050004` | Interrupt status | The header does not define timeout-bit semantics, clearing behavior, or retention across reset. Do not treat it as retained reset cause. |
+| `0x02050004` | Interrupt status | The user manual defines bit 0 as interval pending, cleared by writing one. It does not specify retention across reset. Do not treat it as retained reset cause. |
 | `0x02050008` | Software reset (`srst`) | This is a reset command in the reference implementation. It must not be mistaken for a reset-status register. |
 | `0x0205000c` | Feed/control | The reviewed diagnostic feeds once after enabling. It does not feed inside the expiry wait. |
 | `0x02050010`, `0x02050014` | Reset configuration and timer mode | Readback establishes programming before the wait; post-reset values alone do not identify what caused reset. |
@@ -47,6 +47,24 @@ CPUS domains, programmable intervals, interrupts, and reset generation.
 It does not specify which watchdog clocks and reset paths survive a stalled
 interconnect. The presence of the second watchdog is not sufficient evidence
 of that independence.
+
+The pinned A733 User Manual V1.00 adds register semantics in section 8.3.6
+(printed pages 378–381). Configuration bit 8 selects RTC 32 kHz or DCXO/750;
+mode bits 7:4 select the interval. The output register sets reset pulse duration.
+These definitions corroborate the prepared countdown mechanism, but do not
+establish retention of its interrupt status or operation during a stalled bus.
+
+Section 3.1.4 (printed pages 14–17) states that a low FEL input selects the
+mandatory upgrade path before boot-media selection. This agrees with the
+captured ROM branch and supports the pending BOOT/GND procedure. It does not
+replace physical confirmation of that input. Section 9.1.7.16 describes the
+DCXO control register's system-reset status as current assertion/deassertion,
+without a retained cause definition.
+
+The manual is pinned as `a733-user-manual-1.00` in
+[sources.lock.json](../sources.lock.json). Its cached PDF and layout-preserving
+text are under `~/.cache/sunstoneos/sources/camera-research/`.
+This documentation review introduces no new register access or test rerun.
 
 ## ROM writes identify a progress record
 
