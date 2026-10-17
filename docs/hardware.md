@@ -78,8 +78,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   mux 3 for SDC2 and mux 4 for SDC3. Focused host checks cover both routes,
   conflicting ownership and controller refusal; native compilation passes.
   Earlier model evidence used the NAND pin function and cannot establish correct
-  eMMC routing. Physical identification/reads, writes, faster modes, backup and
-  recoverable boot remain outstanding.
+  eMMC routing. The [bounded write primitive](mmc-write.md) snapshots input,
+  authenticates each request and confirms each sector through card status.
+  Focused host checks cover SD/eMMC writes, authority loss and retained partial
+  failure; affected native consumers compile. The native platform remains
+  read-only. Actual range ownership, durable backup and qualified recovery must
+  precede its writer binding. Physical identification/read/write operation,
+  faster modes and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
@@ -134,8 +139,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   target links. Physical handoff remains unqualified. The [native reservation
   pool](memory-reservations.md) supplies linker-owned page allocations and binds
   their lifetime to actual DMA controller and cache completion. Host checks and
-  native linking pass. Cached accelerator preparation is implemented; native DMA
-  service binding, physical memory exclusion and external bus drain remain open.
+  native linking pass. The [native DMA session](dma-pool-session.md) binds the
+  actual startup/service to permanently reserved, narrowly authorized buffers.
+  One two-core composition passes copy/reap, uncertain drain and late shared
+  authority failure. Its copy application compiles with eight-core headers;
+  a complete image still needs genuine platform handoff and entry integration.
+  Physical memory exclusion, external bus drain and larger pool binding remain open.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
@@ -162,9 +171,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   publishing its stable lease; focused clock-admission checks pass.
   The [common clock registry](clock-leases.md) passes host
   composition with I2S and the existing GPU manager; its runtime files compile
-  for AArch64. The privileged DMA service schedules finite capture. Production
-  startup wiring, continuous streaming, playback, Bluetooth PCM and physical
-  qualification remain open.
+  for AArch64. The [stream service](i2s-stream.md) adds bounded capture and playback
+  periods, client-held buffer exclusion and explicit FIFO discontinuities.
+  A two-core composition passes actual resource ownership, delayed DMA drain and
+  retained failures; affected central targets link. Native stream-pool binding,
+  cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and physical
+  continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
@@ -341,8 +353,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel ownership and acceptance-time response fences. The initial
   [hands-free audio gateway](bluetooth-hfp.md) implements service-level setup,
   indicator reporting and gain reports over the actual incoming stack. Host
-  checks and native compilation pass. Mandatory remaining call-control procedures,
-  authentication, additional channel modes and synchronous voice remain outstanding.
+  checks and native compilation pass. [Synchronous headset transport](bluetooth-audio.md)
+  adds actual SCO/eSCO setup and acceptance, CVSD with signed 16-bit PCM over HCI,
+  copied audio buffers and separate controller credits. Focused host checks and
+  nine native consumer compilations pass. Controller capabilities, real security
+  and scheduling providers, physical headset audio, wired PCM routing, wider
+  codecs and mandatory remaining call-control procedures remain outstanding.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses

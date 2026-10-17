@@ -2147,5 +2147,41 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v4p5x.h",
     "archive": "mmc-sdc3/sunxi-mmc-v4p5x.h",
     "sha256": "8c3105a3fd28fda6655fc240130dc0f7f866d166c9e5d092af56b50b01b82275"
+  },
+  "board-mmc-core-ops-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/mmc_ops.c",
+    "archive": "mmc-write/linux-mmc-ops.c",
+    "sha256": "4e42bfe626bbad9ae01a4e32bdffe7543eadf6c23ac02c88191a614f8a62f0c4",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+  },
+  "board-mmc-core-block-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/block.c",
+    "archive": "mmc-write/linux-block.c",
+    "sha256": "be0e9d3d769570f35c5c18cce56f3ca08cddad5a7de4dddc6f6504337be877d7",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+  },
+  "micron-emmc-v441-datasheet": {
+    "url": "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8719/emmc-ps8200-v441-enh-plus-family%20%281%29.pdf",
+    "archive": "mmc-write/micron-emmc-4.41.pdf",
+    "sha256": "4ac8173cd298a762fc5a074f1cf53aa60908d8596ceadfc92a8c4eb2fd00857e",
+    "revision": "Rev. E 7/13 EN"
+  },
+  "board-bluetooth-hci-conn-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_conn.c",
+    "archive": "bluetooth-audio/net/bluetooth/hci_conn.c",
+    "sha256": "3244b3b1d0bb02d679a8710aac5e2672bf1b0f1a6656eaf8f5e92a29d3dc8b48"
+  },
+  "board-bluetooth-sco-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/sco.c",
+    "archive": "bluetooth-audio/net/bluetooth/sco.c",
+    "sha256": "8e353b18d5adea161e42369c669532c47b8c6eb56ba9202e4c15107c2e6ec27a"
+  },
+  "board-bluetooth-hci-core-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_core.c",
+    "archive": "bluetooth-audio/net/bluetooth/hci_core.c",
+    "sha256": "0dd67e642db52459a21f84a11ca1db6f97345defc708384d4d0e44697711259c"
   }
 }

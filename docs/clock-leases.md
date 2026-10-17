@@ -41,6 +41,15 @@ The SDC3 extension assigns bit 58 without changing token layout. Its focused
 storage check covers both corrected routes and ownership conflicts; existing
 registry workloads retain their recorded evidence.
 S_TWI0 includes its autonomous engines and reserves shared APBS1 ancestry.
+PCIe controller and COMB1 PHY scopes are exclusive. Global SERDES configuration
+and the shared USB/PCIe power domain allow stable shared ownership and require
+exclusive ownership for transitions. Selected clock parents, physical power
+and other consumers remain separate prerequisites. These additions allocate
+bits 59–62; bit 63 remains unassigned. The registry fault indicator is atomic,
+with compile-time size, alignment and offset checks preserving its layout.
+Permanent-token owners can observe failure without reentering the registry lock.
+The native DMA composition covers late fault observation; PCIe controller
+validation and integration remain separate.
 The [rail ledger](rail-leases.md) separately coordinates 39 PMIC outputs through
 actual DCDC2 and GPU DCDC4 guards; clock ownership does not grant rail authority.
 
