@@ -127,8 +127,10 @@ int main(int argc,char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--alias")) {
         storage_setup(SUNXI_MMC_SD);
-        struct a733_mmc_platform *alias=(void *)&m.power.words[64];
-        _Static_assert(sizeof(*alias)<=sizeof(m.power.words)-64*sizeof(m.power.words[0]),"alias storage fits");
+        struct a733_mmc_platform *alias=(void *)&m.power.trace[512];
+        _Static_assert(sizeof(*alias)<=sizeof(m.power.trace)-512*sizeof(m.power.trace[0]),"alias storage fits");
+        _Static_assert(_Alignof(struct pmic_model_word)>=_Alignof(struct a733_mmc_platform),"alias alignment");
+        assert(m.power.trace_count<=512);
         assert(!alias->initialized);
         assert(storage_outside(&m,alias,sizeof(*alias))==1);
         assert(m.power.provider.ops.outside(m.power.provider.cookie,alias,sizeof(*alias))==0);

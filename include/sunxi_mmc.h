@@ -8,7 +8,8 @@
 /* Explicit physical slot selection; SDC1 belongs to the radio driver. */
 enum sunxi_mmc_kind { SUNXI_MMC_SD = 1, SUNXI_MMC_EMMC = 2 };
 enum sunxi_mmc_state { SUNXI_MMC_COLD, SUNXI_MMC_IDENTIFY,
-    SUNXI_MMC_READY, SUNXI_MMC_READING, SUNXI_MMC_DONE, SUNXI_MMC_FAULT };
+    SUNXI_MMC_READY, SUNXI_MMC_READING, SUNXI_MMC_DONE, SUNXI_MMC_FAULT,
+    SUNXI_MMC_WRITING };
 enum sunxi_mmc_error { SUNXI_MMC_OK, SUNXI_MMC_IO, SUNXI_MMC_TIME,
     SUNXI_MMC_TIMEOUT, SUNXI_MMC_ADMISSION, SUNXI_MMC_VARIANT,
     SUNXI_MMC_CONTROLLER, SUNXI_MMC_CARD, SUNXI_MMC_UNSUPPORTED };
@@ -57,6 +58,32 @@ struct sunxi_mmc_result {
     enum sunxi_mmc_error error;
     uint32_t interrupts, status, response, stop_response;
     size_t received; /* Diagnostic only unless state is DONE and error is OK. */
+    size_t submitted; /* FIFO bytes attempted; never evidence of media contents. */
+    uint32_t confirmed_blocks; /* CMD13 reported READY+TRAN after these writes. */
+    unsigned write_started; /* Sticky before attempting the first CMD24 write. */
+};
+struct sunxi_mmc_write_request {
+    uintptr_t policy_token;
+    uint64_t first_sector;
+    uint32_t blocks;
+    const uint8_t *source;
+    size_t bytes;
+    uint64_t deadline_us;
+};
+struct sunxi_mmc_write_identity {
+    uintptr_t core, session;
+    enum sunxi_mmc_kind kind;
+    struct sunxi_mmc_card card;
+};
+struct sunxi_mmc_write_authority {
+    void *context;
+    /* Exactly 1 authorizes this exact immutable request for this actual card
+     * session. Bounded, non-reentrant; temporary arguments must not be retained
+     * or changed. The provider must own the range and enforce qualified recovery,
+     * durable backup and physical write-protect policy. No such native provider
+     * exists yet. An arbitrary callback is not evidence of that authority. */
+    int (*admit)(void *,const struct sunxi_mmc_write_identity *,
+                 const struct sunxi_mmc_write_request *);
 };
 struct sunxi_mmc {
     struct sunxi_mmc_config config;
@@ -70,11 +97,16 @@ struct sunxi_mmc {
     size_t data_bytes, position, borrowed_bytes;
     uint16_t setup, protocol;
     uint8_t command_step, response_seen, entered, initialized, admitted;
+    struct sunxi_mmc_write_request write_request;
+    struct sunxi_mmc_write_identity write_identity;
+    struct sunxi_mmc_write_authority write_authority;
+    uint8_t write_payload[SUNXI_MMC_MAX_BLOCKS * SUNXI_MMC_BLOCK_BYTES];
+    unsigned writing;
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
  * callback access. Config, context and callback-owned storage must not overlap
  * the core or read buffer, and must outlive all retained leases. Initialization
- * is pure and permanent. No disposal, hotplug recovery, writes, erase, partition
+ * is pure and permanent. No disposal, hotplug recovery, erase, partition
  * switching or generic command escape exists. External recovery owns faults.
  */
 int sunxi_mmc_init(struct sunxi_mmc *, const struct sunxi_mmc_config *);
@@ -84,10 +116,21 @@ int sunxi_mmc_open(struct sunxi_mmc *, uint64_t absolute_deadline_us);
  */
 int sunxi_mmc_read(struct sunxi_mmc *, uint64_t first_sector, uint32_t blocks,
                    uint8_t *buffer, size_t bytes, uint64_t absolute_deadline_us);
+/* Low-level, default-denied write primitive, below boot/update policy. A missing
+ * authority refuses without callbacks or MMIO. Accepted input is copied into a
+ * fixed 4096-byte private snapshot. The original source stays borrowed until
+ * successful take; a fault retains it and every lease. Source and callback-owned
+ * storage must stay exclusive and disjoint from the core. Request and authority
+ * descriptors are copied; the caller may reuse those descriptors after return.
+ * Writes use CMD24 separately for each sector in the active user area. No atomic
+ * multi-sector, power-loss durability, rollback or readback claim is made.
+ * Existing native platform APIs and register filters remain read-only. */
+int sunxi_mmc_write(struct sunxi_mmc *,const struct sunxi_mmc_write_request *,
+                    const struct sunxi_mmc_write_authority *);
 void sunxi_mmc_poll(struct sunxi_mmc *);
 /* DONE returns to READY and returns the complete buffer to its owner. FAULT
  * copies diagnostics but keeps its buffer and all platform leases retained.
- * out must not overlap the core or read buffer. */
+ * out must not overlap the core or borrowed buffer. */
 int sunxi_mmc_take(struct sunxi_mmc *, struct sunxi_mmc_result *out);
 /* Pure CSD/EXT_CSD capacity decoder. Output is unchanged on refusal; inputs and
  * output must not overlap. EXT_CSD is required only for eMMC. */

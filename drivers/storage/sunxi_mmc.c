@@ -1,4 +1,4 @@
-/* Native read-only storage controller. Source anchors: docs/mmc.md. */
+/* Native storage controller. Source anchors: docs/mmc.md and docs/mmc-write.md. */
 #include "sunxi_mmc.h"
 
 #define START (1u << 31)
@@ -7,6 +7,7 @@
 #define LONG (1u << 7)
 #define CRC (1u << 8)
 #define DATA (1u << 9)
+#define WRITE (1u << 10)
 #define AUTO (1u << 12)
 #define WAIT (1u << 13)
 #define CC (1u << 2)
@@ -14,15 +15,16 @@
 #define ACD (1u << 14)
 #define ERRORS (0xbfc2u | (1u << 18) | (1u << 31))
 /* Includes locked, switch and SD authentication failures. ECC-disabled is
- * informational; erase-reset is also refused in this read-only profile. */
+ * informational; erase-reset is also refused in this bounded profile. */
 #define CARD_ERRORS 0xffffa088u
 #define TRAN_READY 0x900u
 #define BUSY ((1u << 10) | (1u << 9) | (15u << 4))
 #define FIFO_EMPTY (1u << 2)
+#define FIFO_FULL (1u << 3)
 
 enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_CID, P_RCA, P_CSD, P_SELECT, P_STATUS, P_BLOCKLEN, P_EXT,
-       P_EXT_STATUS, P_READ, P_READ_STATUS };
+       P_EXT_STATUS, P_READ, P_READ_STATUS, P_WRITE_PRE, P_WRITE, P_WRITE_STATUS };
 
 static int span(const void *p, size_t n)
 { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
@@ -141,6 +143,72 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
           arg, buffer, bytes);
     return 1;
 }
+static int same_card(const struct sunxi_mmc_card *a,const struct sunxi_mmc_card *b)
+{
+    for(unsigned i=0;i<4;++i)if(a->cid[i]!=b->cid[i]||a->csd[i]!=b->csd[i])return 0;
+    return a->ocr==b->ocr&&a->sectors==b->sectors&&a->rca==b->rca&&
+        a->sector_addressed==b->sector_addressed&&a->ext_revision==b->ext_revision;
+}
+static int same_request(const struct sunxi_mmc_write_request *a,const struct sunxi_mmc_write_request *b)
+{
+    return a->policy_token==b->policy_token&&a->first_sector==b->first_sector&&
+        a->blocks==b->blocks&&a->source==b->source&&a->bytes==b->bytes&&a->deadline_us==b->deadline_us;
+}
+static int writable(const struct sunxi_mmc *h)
+{
+    /* CSD command class4, 512-byte writes, and neither whole-card WP flag.
+     * Per-group protection is never changed; a card WP error remains terminal. */
+    if(!(bits(h->card.csd,84,12)&(1u<<4))||bits(h->card.csd,22,4)!=9||
+       bits(h->card.csd,12,2))return 0;
+    return h->config.kind!=SUNXI_MMC_EMMC||
+        (!(h->ext_csd[179]&7u)&&!h->ext_csd[61]&&!h->ext_csd[15]&&!h->ext_csd[33]&&
+         !(h->ext_csd[171]&5u));
+}
+static int write_admitted(struct sunxi_mmc *h)
+{
+    const struct sunxi_mmc_write_identity *i=&h->write_identity;
+    if(!h->writing||!h->write_authority.admit||i->core!=(uintptr_t)h||
+       i->session!=h->config.token||i->kind!=h->config.kind||!same_card(&i->card,&h->card)||
+       !writable(h)||h->deadline_us!=h->write_request.deadline_us||
+       h->borrowed!=h->write_request.source||h->borrowed_bytes!=h->write_request.bytes)goto fail;
+    struct sunxi_mmc_write_identity identity=*i;
+    struct sunxi_mmc_write_request request=h->write_request;
+    struct sunxi_mmc_write_authority authority=h->write_authority;
+    int result=authority.admit(authority.context,&identity,&request);
+    if(result!=1||identity.core!=(uintptr_t)h||identity.session!=h->config.token||
+       identity.kind!=h->config.kind||!same_card(&identity.card,&h->card)||
+       !same_card(&identity.card,&h->write_identity.card)||
+       identity.core!=h->write_identity.core||identity.session!=h->write_identity.session||
+       identity.kind!=h->write_identity.kind||!same_request(&request,&h->write_request)||
+       authority.admit!=h->write_authority.admit||authority.context!=h->write_authority.context||
+       !writable(h)||h->deadline_us!=request.deadline_us||h->borrowed!=request.source||
+       h->borrowed_bytes!=request.bytes)goto fail;
+    return 1;
+fail: fault(h,SUNXI_MMC_ADMISSION);return 0;
+}
+int sunxi_mmc_write(struct sunxi_mmc *h,const struct sunxi_mmc_write_request *r,
+                    const struct sunxi_mmc_write_authority *a)
+{
+    if(!h||!h->initialized||h->entered||h->state!=SUNXI_MMC_READY||
+       !span(r,sizeof(*r))||!span(a,sizeof(*a))||!a->admit||!r->policy_token||
+       overlap(h,sizeof(*h),r,sizeof(*r))||overlap(h,sizeof(*h),a,sizeof(*a))||
+       !r->blocks||r->blocks>SUNXI_MMC_MAX_BLOCKS||r->bytes!=r->blocks*512u||
+       !span(r->source,r->bytes)||overlap(h,sizeof(*h),r->source,r->bytes)||
+       overlap(r,sizeof(*r),r->source,r->bytes)||overlap(a,sizeof(*a),r->source,r->bytes)||
+       r->deadline_us<=h->last_us||r->first_sector>=h->card.sectors||
+       r->blocks>h->card.sectors-r->first_sector||!writable(h))return 0;
+    uint64_t last=r->first_sector+r->blocks-1;
+    if((h->card.sector_addressed&&last>UINT32_MAX)||
+       (!h->card.sector_addressed&&last>UINT32_MAX/512u))return 0;
+    h->write_request=*r;h->write_authority=*a;
+    h->write_identity=(struct sunxi_mmc_write_identity){(uintptr_t)h,h->config.token,h->config.kind,h->card};
+    for(size_t n=0;n<r->bytes;++n)h->write_payload[n]=r->source[n];
+    h->result=(struct sunxi_mmc_result){0};h->deadline_us=r->deadline_us;
+    h->borrowed=(uint8_t *)r->source;h->borrowed_bytes=r->bytes;
+    h->writing=1;h->state=SUNXI_MMC_WRITING;
+    queue(h,P_WRITE_PRE,13u|RESP|CRC|WAIT,(uint32_t)h->card.rca<<16,0,0);
+    return 1;
+}
 static int interrupts(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -226,10 +294,15 @@ static int command_step(struct sunxi_mmc *h)
             if (!wr(h, 0x10, 512) || !wr(h, 0x14, (uint32_t)h->data_bytes)) return 0;
         }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
-        if (!wr(h, 0x1c, h->argument) || !fence(h) || !wr(h, 0x18, h->command)) return 0;
+        if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
+        if(h->command&WRITE)h->result.write_started=1;
+        if(!wr(h, 0x18, h->command))return 0;
         h->command_step = 2; return 0;
     case 2:
         if (!interrupts(h)) return 0;
+        if((h->command&WRITE)&&(h->seen&DTC)&&h->position<h->data_bytes) {
+            fault(h,SUNXI_MMC_CONTROLLER);return 0;
+        }
         if ((h->seen & CC) && !h->response_seen) {
             if (h->command & LONG) {
                 for (unsigned i = 0; i < 4; ++i)
@@ -245,11 +318,20 @@ static int command_step(struct sunxi_mmc *h)
         }
         if (h->data_bytes) {
             for (unsigned n = 0; n < 16 && h->position < h->data_bytes; ++n) {
+                if((h->command&WRITE)&&!h->response_seen)break;
                 if (!rd(h, 0x3c, &h->result.status)) return 0;
-                if (h->result.status & FIFO_EMPTY) break;
-                if (!rd(h, 0x200, &v)) return 0;
-                for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(v >> (8 * b));
-                if (h->protocol == P_READ) h->result.received = h->position;
+                if(h->command&WRITE) {
+                    if(h->result.status&FIFO_FULL)break;
+                    v=0;for(unsigned b=0;b<4;++b)v|=(uint32_t)h->data[h->position+b]<<(8*b);
+                    h->result.submitted+=4;
+                    if(!wr(h,0x200,v))return 0;
+                    h->position+=4;
+                } else {
+                    if (h->result.status & FIFO_EMPTY) break;
+                    if (!rd(h, 0x200, &v)) return 0;
+                    for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(v >> (8 * b));
+                    if (h->protocol == P_READ) h->result.received = h->position;
+                }
             }
         }
         v = CC | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
@@ -281,6 +363,13 @@ static int ready(struct sunxi_mmc *h)
     if (!card_response(h)) return 0;
     if ((h->response[0] & 0x1f00u) != TRAN_READY) { fault(h, SUNXI_MMC_CARD); return 0; }
     return 1;
+}
+static void next_write(struct sunxi_mmc *h)
+{
+    uint64_t first=h->write_request.first_sector+h->result.confirmed_blocks;
+    uint32_t arg=(uint32_t)(h->card.sector_addressed?first:first*512u);
+    queue(h,P_WRITE,24u|RESP|CRC|DATA|WRITE|WAIT,arg,
+          h->write_payload+h->result.confirmed_blocks*512u,512);
 }
 static void protocol(struct sunxi_mmc *h)
 {
@@ -366,18 +455,36 @@ static void protocol(struct sunxi_mmc *h)
     case P_READ_STATUS:
         if (ready(h)) h->state = SUNXI_MMC_DONE;
         return;
+    case P_WRITE_PRE:
+        if(ready(h))next_write(h);
+        return;
+    case P_WRITE:
+        if(card_response(h))ready_status(h,P_WRITE_STATUS);
+        return;
+    case P_WRITE_STATUS:
+        if(!card_response(h))return;
+        if((r&0x1f00u)==TRAN_READY) {
+            ++h->result.confirmed_blocks;
+            if(h->result.confirmed_blocks==h->write_request.blocks)h->state=SUNXI_MMC_DONE;
+            else next_write(h);
+        } else if(((r>>9)&15u)==7u||((r&0x1f00u)==0x800u)) {
+            if(h->last_us>UINT64_MAX-1000){fault(h,SUNXI_MMC_TIME);return;}
+            h->retry_us=h->last_us+1000;ready_status(h,P_WRITE_STATUS);
+        } else fault(h,SUNXI_MMC_CARD);
+        return;
     default: fault(h, SUNXI_MMC_CARD); return;
     }
 }
 void sunxi_mmc_poll(struct sunxi_mmc *h)
 {
     if (!h || !h->initialized || h->entered ||
-        (h->state != SUNXI_MMC_IDENTIFY && h->state != SUNXI_MMC_READING)) return;
+        (h->state != SUNXI_MMC_IDENTIFY && h->state != SUNXI_MMC_READING&&h->state!=SUNXI_MMC_WRITING)) return;
     h->entered = 1;
     if (!time_ok(h)) goto out;
     if (h->admitted && h->config.ops.retained(h->config.context, h->config.token) != 1) {
         fault(h, SUNXI_MMC_ADMISSION); goto out;
     }
+    if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
     if (h->setup < 6) setup(h);
     else if (h->last_us >= h->retry_us && command_step(h)) protocol(h);
     if (h->state != SUNXI_MMC_FAULT) (void)time_ok(h);
@@ -393,6 +500,7 @@ int sunxi_mmc_take(struct sunxi_mmc *h, struct sunxi_mmc_result *out)
     *out = h->result;
     if (h->state == SUNXI_MMC_DONE) {
         h->state = SUNXI_MMC_READY; h->borrowed = 0; h->borrowed_bytes = 0; h->data = 0; h->data_bytes = 0;
+        h->writing=0;
     }
     return 1;
 }

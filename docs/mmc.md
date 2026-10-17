@@ -1,4 +1,4 @@
-# Read-only SD and eMMC
+# SD and eMMC identification and reads
 
 The native [storage driver](../drivers/storage/sunxi_mmc.c) implements bounded
 card identification and reads through the A733 SD/MMC controller. SD cards use
@@ -45,11 +45,13 @@ refuses a conflicting capacity above 2 GiB in EXT_CSD. The active partition
 must be the user area, the active data sector must be 512 bytes, and bus width,
 high-speed timing and command-queue mode must retain their legacy values.
 
-Only CMD17 and CMD18 expose media data. One request reads 1–8 whole 512-byte
+The read API uses CMD17 and CMD18 to expose media data. One request reads 1–8 whole 512-byte
 blocks. Admission checks the entire range against capacity and the 32-bit
 command argument before any controller access. SDSC/eMMC byte addressing also
-checks the last requested block against byte-address overflow. The driver has
-no write, erase, partition-switch, generic-command or automatic fallback API.
+checks the last requested block against byte-address overflow. A separate
+[bounded write primitive](mmc-write.md) requires explicit policy authority.
+The native platform remains read-only. There is no erase, partition-switch,
+generic-command or automatic fallback API.
 CMD16 changes the volatile read block length; it does not write media contents.
 
 ## Ownership and completion
@@ -169,10 +171,10 @@ Preserved evidence is under
 `~/.cache/sunstoneos/evidence/mmc-read-20261016/`. The original source/model
 batch is in `batch1/`; the final automatic-stop check is in
 `auto-stop-argument/`. Their snapshots retain executed binaries, source inputs,
-reference code and commands. The final AArch64 object contains 6,460 bytes of
-text/read-only data and zero static writable storage. Its largest direct stack
-frame is 848 bytes during initialization; that is not a bound on callback stack
-usage. This compile establishes native buildability, without physical execution.
+reference code and commands. The capacity/identification evidence remains
+scoped to those unchanged paths. The [bounded-write validation](mmc-write.md)
+covers the affected shared command path and current native object compilation.
+Neither compilation nor a model establishes physical storage operation.
 
 ## Remaining storage coverage
 
@@ -183,7 +185,7 @@ attempt. SDC0 card voltage and PF6 configuration must be observed. SDC2 populati
 CMD1 timeout require new evidence before another physical attempt.
 
 SD v1 identification, SDUC, wider buses, higher rates, voltage switching,
-tuning, DMA, interrupts, write/erase operations, eMMC boot/alternate partitions,
+tuning, DMA, interrupts, native write policy, wider write/erase modes, eMMC boot/alternate partitions,
 4 KiB sectors, command queuing, hotplug/recovery and power management remain
 outside the implemented profile. UFS remains tracked separately in
 [storage.md](storage.md). Completing this component does not complete board
