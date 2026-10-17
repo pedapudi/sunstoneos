@@ -18,6 +18,13 @@ static const uint16_t opcodes[]={HCI_OP_RESET,HCI_OP_READ_LOCAL_VERSION,
 static const unsigned returns[]={1,9,65,9,8,7};
 static const uint16_t config_opcodes[]={0x0c01,0x0c05,0x0c16,0x0c15,0x0c1c,0x0c1b,0x0c1a,0x0c19};
 static const unsigned config_returns[]={1,1,1,3,1,5,1,2};
+static const uint16_t audio_opcodes[]={0x0c01,0x0c05,0x0c16,0x0c15,0x0c1c,0x0c1b,0x0c2f,0x0c2e,0x0c5b,0x0c5a,0x0c1a,0x0c19};
+static const unsigned audio_returns[]={1,1,1,3,1,5,1,2,1,2,1,2};
+static unsigned config_count(const struct bt_hci *h){return h->incoming_config.synchronous_audio ? 12 : 8;}
+static uint16_t config_opcode(const struct bt_hci *h,unsigned stage)
+{return h->incoming_config.synchronous_audio ? audio_opcodes[stage] : config_opcodes[stage];}
+static unsigned config_return(const struct bt_hci *h,unsigned stage)
+{return h->incoming_config.synchronous_audio ? audio_returns[stage] : config_returns[stage];}
 /* Core5.4 §7.3.1: all defined Classic events; reserved and LE bits stay0.
  * Command Complete/Status and Number Of Completed Packets are unmaskable. */
 static const uint8_t config_mask[]={0xff,0x9f,0xfb,0xbf,0x07,0xf8,0xbf,0x1d};
@@ -42,13 +49,24 @@ int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
      * after admission. Such failure retains the outer lifetime too. */
     int result=bt_h4_init(&h->transport,b,s,count,deadline);
     if(result!=1) return h->transport.state==BT_H4_FAULT ? fail(h) : -1;
-    h->self=h;h->acl_owner=0;h->incoming_config=(struct bt_hci_incoming_config){0};
-    h->configuration_deadline=0;h->configuration_stage=0;h->configured=0;
+    h->self=h;h->acl_owner=0;h->synchronous_owner=0;h->incoming_config=(struct bt_hci_incoming_config){0};
+    h->configuration_deadline=0;h->configuration_stage=0;h->configured=0;h->synchronous_ready=0;
     h->identity=(struct bt_hci_identity){0};h->initialization_deadline=deadline;
     h->command_timeout_us=timeout;h->command_deadline=0;h->command_tag=0;
     h->stage=0;h->external_command=0;h->credits=1;h->opcode=0;h->last_status=0;h->command_accepted=0;
     h->command=BT_HCI_IDLE;h->state=BT_HCI_INITIALIZING;return 1;
 }
+int bt_hci_synchronous_supported(const struct bt_hci *h)
+{
+    if(!h || h->self!=h || h->identity.valid!=63)return 0;
+    const uint8_t *c=h->identity.supported_commands,*f=h->identity.features,*b=h->identity.buffer_size;
+    return h->identity.version[0]>=7 && h->identity.version[0]<=13 && (c[29]&0x18)==0x18 &&
+        (c[2]&0x20) && (c[10]&0x18)==0x18 && (c[18]&0x0c)==0x0c &&
+        (c[16]&0x20) && (f[1]&8) && (f[2]&1) && b[2]>=2 && le16(b+5);
+}
+int bt_hci_configuration_complete(const struct bt_hci *h)
+{return h && h->self==h && h->configured && h->configuration_stage==config_count(h) &&
+    h->command_tag==6+config_count(h) && h->synchronous_ready==h->incoming_config.synchronous_audio;}
 static int config_authority(struct bt_hci *h)
 {
     const struct bt_hci_incoming_config *c=&h->incoming_config;
@@ -58,7 +76,8 @@ static int config_authority(struct bt_hci *h)
 int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_config *c,
                               uint64_t deadline)
 {
-    if(!h || h->self!=h || !c || !c->current || !c->service_generation || !c->receive_latency_us ||
+    if(!h || h->self!=h || !c || !c->current || !c->service_generation || !c->receive_latency_us || c->synchronous_audio>1 ||
+       (c->synchronous_audio && !bt_hci_synchronous_supported(h)) ||
        h->state!=BT_HCI_IDENTIFIED || h->identity.valid!=63 || h->command_tag!=6 ||
        h->acl_owner || h->configured || h->configuration_stage || h->configuration_deadline ||
        h->command!=BT_HCI_IDLE || h->external_command || deadline<=h->transport.now ||
@@ -86,18 +105,15 @@ int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_conf
 int bt_hci_incoming_bound(struct bt_hci *h,uint64_t response)
 {
     if(!h || h->self!=h || h->state!=BT_HCI_IDENTIFIED || !h->configured ||
-       h->configuration_stage!=8 || !response) return 0;
+       h->configuration_stage!=config_count(h) || !response) return 0;
     uint64_t timeout=(uint64_t)h->incoming_config.accept_timeout_slots*625;
     if(h->incoming_config.receive_latency_us>=timeout ||
        response>=timeout-h->incoming_config.receive_latency_us) return 0;
     return config_authority(h);
 }
-int bt_hci_request(struct bt_hci *h, uint16_t opcode, const uint8_t *p, size_t n,
-                   uint64_t deadline)
+static int request(struct bt_hci *h,uint16_t opcode,const uint8_t *p,size_t n,uint64_t deadline)
 {
-    if(!h || h->self!=h || !deadline || !p || ((opcode!=0x0405 || n!=13) &&
-       (opcode!=0x0406 || n!=3) && (opcode!=0x0409 || n!=7) &&
-       (opcode!=0x040a || n!=7)) || overlaps(h,sizeof(*h),p,n)) return -1;
+    if(!h || h->self!=h || !deadline || !p || overlaps(h,sizeof(*h),p,n))return -1;
     if(h->state!=BT_HCI_IDENTIFIED) return -1;
     if(h->command!=BT_HCI_IDLE || !h->credits ||
        h->transport.tx_offset<h->transport.tx_length) return 0;
@@ -107,6 +123,19 @@ int bt_hci_request(struct bt_hci *h, uint16_t opcode, const uint8_t *p, size_t n
     ++h->command_tag;h->opcode=opcode;h->command_deadline=deadline;
     h->command_accepted=0;h->external_command=1;h->command=BT_HCI_SENDING;
     --h->credits;return 1;
+}
+int bt_hci_request(struct bt_hci *h,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
+{
+    if((op!=0x0405 || n!=13) && (op!=0x0406 || n!=3) && (op!=0x0409 || n!=7) &&
+       (op!=0x040a || n!=7))return -1;
+    return request(h,op,p,n,deadline);
+}
+int bt_hci_synchronous_request(struct bt_hci *h,const void *owner,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
+{
+    if(!h || !owner || h->synchronous_owner!=owner || !h->synchronous_ready ||
+       ((op!=0x041b || n!=2) && (op!=0x043d || n!=59) && (op!=0x043e || n!=63) &&
+        (op!=0x042a || n!=7) && (op!=0x0406 || n!=3)))return -1;
+    return request(h,op,p,n,deadline);
 }
 static int retain(struct bt_hci *h, const struct bt_h4_record *r)
 { return bt_h4_own(&h->transport,r->serial)==1 ? 1 : fail(h); }
@@ -140,16 +169,17 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
     h->credits=credits;
     if(h->state==BT_HCI_CONFIGURING) {
         unsigned stage=h->configuration_stage;
-        if(stage>=8 || cs || n!=3+config_returns[stage]) return bad_record(h,r);
+        if(stage>=config_count(h) || cs || n!=3+config_return(h,stage)) return bad_record(h,r);
         h->last_status=p[5];
         if(p[5]) return bad_record(h,r);
         const struct bt_hci_incoming_config *c=&h->incoming_config;
-        if((stage==3 && le16(p+6)!=c->accept_timeout_slots) ||
-           (stage==5 && (le16(p+6)!=c->page_interval_slots || le16(p+8)!=c->page_window_slots)) ||
-           (stage==7 && p[6]!=2)) return bad_record(h,r);
+        unsigned op=config_opcode(h,stage);
+        if((op==0x0c15 && le16(p+6)!=c->accept_timeout_slots) ||
+           (op==0x0c1b && (le16(p+6)!=c->page_interval_slots || le16(p+8)!=c->page_window_slots)) ||
+           (op==0x0c19 && p[6]!=2) || ((op==0x0c2e || op==0x0c5a) && p[6]!=1)) return bad_record(h,r);
         if(bt_h4_release(&h->transport,r->serial)!=1) return fail(h);
         ++h->configuration_stage;h->command=BT_HCI_IDLE;
-        if(h->configuration_stage==8) {h->configured=1;h->state=BT_HCI_IDENTIFIED;}
+        if(h->configuration_stage==config_count(h)) {h->configured=1;h->synchronous_ready=c->synchronous_audio;h->state=BT_HCI_IDENTIFIED;}
         return 1;
     }
     if(h->external_command) {
@@ -215,17 +245,20 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
        !bt_h4_next(&h->transport,BT_H4_COMPLETE)) {
         const struct bt_hci_incoming_config *c=&h->incoming_config;
         unsigned stage=h->configuration_stage;uint8_t params[8]={0};size_t n=0;
-        if(stage==0) {copy(params,config_mask,8);n=8;}
-        else if(stage==1) n=1;
-        else if(stage==2) {params[0]=(uint8_t)c->accept_timeout_slots;params[1]=(uint8_t)(c->accept_timeout_slots>>8);n=2;}
-        else if(stage==4) {
+        if(stage>=config_count(h))return fail(h);
+        unsigned op=config_opcode(h,stage);
+        if(op==0x0c01) {copy(params,config_mask,8);n=8;}
+        else if(op==0x0c05) n=1;
+        else if(op==0x0c16) {params[0]=(uint8_t)c->accept_timeout_slots;params[1]=(uint8_t)(c->accept_timeout_slots>>8);n=2;}
+        else if(op==0x0c1c) {
             params[0]=(uint8_t)c->page_interval_slots;params[1]=(uint8_t)(c->page_interval_slots>>8);
             params[2]=(uint8_t)c->page_window_slots;params[3]=(uint8_t)(c->page_window_slots>>8);n=4;
-        } else if(stage==6) {params[0]=2;n=1;}
-        if(stage>=8 || h->transport.now>UINT64_MAX-h->command_timeout_us) return fail(h);
+        } else if(op==0x0c1a) {params[0]=2;n=1;}
+        else if(op==0x0c2f || op==0x0c5b) {params[0]=1;n=1;}
+        if(h->transport.now>UINT64_MAX-h->command_timeout_us) return fail(h);
         h->command_deadline=h->transport.now+h->command_timeout_us;
         if(h->command_deadline>h->configuration_deadline) h->command_deadline=h->configuration_deadline;
-        h->opcode=config_opcodes[stage];++h->command_tag;h->command_accepted=0;
+        h->opcode=(uint16_t)op;++h->command_tag;h->command_accepted=0;
         if(bt_h4_command(&h->transport,h->opcode,params,n,h->command_deadline)!=1) return fail(h);
         --h->credits;h->command=BT_HCI_SENDING;
     }

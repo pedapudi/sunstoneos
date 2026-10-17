@@ -90,6 +90,18 @@ int bt_h4_acl(struct bt_h4 *q, uint16_t handle_flags, const uint8_t *p, size_t n
     q->tx_payload=p;q->tx_header=5;q->tx_length=5+n;q->tx_offset=0;q->tx_deadline=deadline;
     return 1;
 }
+int bt_h4_sco(struct bt_h4 *q,uint16_t handle,const uint8_t *p,size_t n,uint64_t deadline)
+{
+    if(!q || !n || n>255 || handle>0xeff || !valid_span(p,n) || !deadline ||
+       overlaps(p,n,q,sizeof(*q)))return -1;
+    if(q->state!=BT_H4_ACTIVE)return -1;
+    if(overlaps(p,n,q->binding.uart,sizeof(*q->binding.uart)))return -1;
+    for(unsigned i=0;i<q->count;++i)if(overlaps(p,n,q->records[i].storage.bytes,q->records[i].storage.capacity))return -1;
+    if(q->tx_offset<q->tx_length)return 0;
+    if(!valid(q,deadline))return -1;
+    q->tx[0]=3;q->tx[1]=(uint8_t)handle;q->tx[2]=(uint8_t)(handle>>8);q->tx[3]=(uint8_t)n;
+    q->tx_payload=p;q->tx_header=4;q->tx_length=4+n;q->tx_offset=0;q->tx_deadline=deadline;return 1;
+}
 static unsigned free_slot(const struct bt_h4 *q)
 {
     for(unsigned i=0;i<q->count;++i) if(q->records[i].owner==BT_H4_FREE) return i;

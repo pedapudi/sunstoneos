@@ -28,7 +28,7 @@ static struct bt_acl_link *link(struct bt_acl *a,uint64_t generation)
 static struct bt_acl_link *handle(struct bt_acl *a,unsigned value)
 {
     for(unsigned i=0;i<BT_ACL_LINKS;++i)
-        if(a->links[i].state>=BT_ACL_CONNECTED && a->links[i].handle==value) return &a->links[i];
+        if(a->links[i].handle_valid && a->links[i].handle==value) return &a->links[i];
     return 0;
 }
 static int equal(const uint8_t *a,const uint8_t *b)
@@ -41,7 +41,7 @@ int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
 {
     if(!a || !h || h->self!=h || h->acl_owner || a->state!=BT_ACL_OFF ||
        h->state!=BT_HCI_IDENTIFIED || h->identity.valid!=63 || h->external_command) return -1;
-    unsigned configured=h->configured && h->configuration_stage==8 && h->command_tag==14;
+    unsigned configured=bt_hci_configuration_complete(h);
     if((!configured && (h->configured || h->command_tag!=6 || h->configuration_deadline)) ||
        h->command!=BT_HCI_IDLE || h->transport.state!=BT_H4_ACTIVE ||
        (!configured && (h->transport.staged || h->transport.assembling!=h->transport.count)) ||
@@ -61,6 +61,15 @@ int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
         .capacity=le16(h->identity.buffer_size+3),.credits=le16(h->identity.buffer_size+3),
         .mtu=le16(h->identity.buffer_size),.active_tx=BT_ACL_TX_SLOTS,
         .command_link=BT_ACL_LINKS,.state=BT_ACL_ACTIVE};return 1;
+}
+int bt_acl_synchronous_register(struct bt_acl *a,const struct bt_acl_synchronous_ops *op,void *ctx)
+{
+    if(!a || a->state!=BT_ACL_ACTIVE || !op || !ctx || a->synchronous || a->hci->synchronous_owner ||
+       !a->hci->synchronous_ready || !op->max_handles || op->max_handles>4 ||
+       !op->prepare || !op->acknowledgement_pending || !op->owns || !op->validate_credits || !op->commit_credits ||
+       !op->validate_disconnect || !op->commit_disconnect || !op->event ||
+       !private(a,op,sizeof(*op)))return -1;
+    a->synchronous=op;a->synchronous_context=ctx;a->hci->synchronous_owner=ctx;return 1;
 }
 int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadline,uint64_t *generation)
 {
@@ -141,22 +150,26 @@ static int release_record(struct bt_acl *a,const struct bt_h4_record *r)
 static int credit_event(struct bt_acl *a,const struct bt_h4_record *r)
 {
     const uint8_t *p=r->storage.bytes;unsigned n=p[1],count=p[2],total=0;
-    if(n!=1+4*count || count>BT_ACL_LINKS) return fault(a);
+    if(n!=1+4*count || count>BT_ACL_LINKS+(a->synchronous ? a->synchronous->max_handles : 0)) return fault(a);
     /* Validate every handle/count, including duplicates, before changing any
      * packet or credit. Retired handles cannot identify a new generation. */
     for(unsigned i=0;i<count;++i) {
         unsigned h=le16(p+3+4*i),c=le16(p+5+4*i),owned=0;
         struct bt_acl_link *l=handle(a,h);
-        if(h>0xeff || !l || !live(l->state)) return fault(a);
+        if(h>0xeff) return fault(a);
         for(unsigned j=0;j<i;++j) if(le16(p+3+4*j)==h) return fault(a);
+        if(!l){if(!a->synchronous || a->synchronous->owns(a->synchronous_context,(uint16_t)h)!=1)return fault(a);continue;}
+        if(!live(l->state))return fault(a);
         for(unsigned j=0;j<BT_ACL_TX_SLOTS;++j)
             if(a->packets[j].state==BT_ACL_SENT && a->packets[j].link_generation==l->generation) ++owned;
         if(c>owned) return fault(a);
         total+=c;
     }
-    if(total>a->capacity-a->credits) return fault(a);
+    if(total>a->capacity-a->credits || (a->synchronous &&
+       a->synchronous->validate_credits(a->synchronous_context,p+3,count)!=1)) return fault(a);
     for(unsigned i=0;i<count;++i) {
         struct bt_acl_link *l=handle(a,le16(p+3+4*i));
+        if(!l)continue;
         for(unsigned c=le16(p+5+4*i);c;--c) {
             struct bt_acl_packet *oldest=0;
             for(unsigned j=0;j<BT_ACL_TX_SLOTS;++j) {
@@ -167,7 +180,9 @@ static int credit_event(struct bt_acl *a,const struct bt_h4_record *r)
             oldest->state=BT_ACL_CREDIT_RETIRED;
         }
     }
-    a->credits+=total;return release_record(a,r);
+    a->credits+=total;
+    if(a->synchronous)a->synchronous->commit_credits(a->synchronous_context,p+3,count);
+    return release_record(a,r);
 }
 static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
 {
@@ -202,6 +217,10 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
 }
 static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 {
+    if(a->synchronous && !(r->type==4 && (r->storage.bytes[0]==0x13 || r->storage.bytes[0]==0x05))){
+        int owned=a->synchronous->event(a->synchronous_context,r);
+        if(owned)return owned==1 ? 1 : fault(a);
+    }
     if(r->type!=4) return 1;
     const uint8_t *p=r->storage.bytes;unsigned event=p[0],n=p[1];
     if(event==0x04) return incoming_request(a,r);
@@ -240,15 +259,20 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
         if(l->state==BT_ACL_REJECTING && !p[2]) return fault(a);
         if(p[2]) {l->status=p[2];l->state=BT_ACL_CLOSED;return release_record(a,r);}
         unsigned h=le16(p+3);
-        if(h>0xeff || handle(a,h) || p[11]!=1 || p[12]>1) return fault(a);
-        l->handle=(uint16_t)h;l->encryption=p[12];l->state=BT_ACL_CONNECTED;
+        if(h>0xeff || handle(a,h) || (a->synchronous && a->synchronous->owns(a->synchronous_context,(uint16_t)h)) || p[11]!=1 || p[12]>1) return fault(a);
+        l->handle=(uint16_t)h;l->handle_valid=1;l->encryption=p[12];l->state=BT_ACL_CONNECTED;
         return release_record(a,r);
     }
     if(event==0x05 || event==0x11) {
         if(n!=(event==0x05 ? 4u : 2u)) return fault(a);
         unsigned h=le16(p+(event==0x05 ? 3 : 2));
         struct bt_acl_link *l=handle(a,h);
-        if(h>0xeff || !l || !live(l->state)) return fault(a);
+        if(h>0xeff)return fault(a);
+        if(!l && event==0x05 && a->synchronous && a->synchronous->owns(a->synchronous_context,(uint16_t)h)==1){
+            if(a->synchronous->validate_disconnect(a->synchronous_context,r)!=1)return fault(a);
+            a->synchronous->commit_disconnect(a->synchronous_context,r);return release_record(a,r);
+        }
+        if(!l || !live(l->state))return fault(a);
         if(event==0x05 && p[2]) {
             if(l->state!=BT_ACL_DISCONNECTING) return fault(a);
             l->status=p[2];l->state=BT_ACL_CONNECTED;return release_record(a,r);
@@ -282,7 +306,9 @@ int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
         deadline=a->links[i].deadline;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].state>=BT_ACL_QUEUED &&
         a->packets[i].state<=BT_ACL_SENT && deadline>a->packets[i].deadline) deadline=a->packets[i].deadline;
+    if(a->synchronous && a->synchronous->prepare(a->synchronous_context)!=1)return fault(a);
     if(bt_hci_step(a->hci,budget,deadline)!=1) return fault(a);
+    if(a->synchronous && a->synchronous->prepare(a->synchronous_context)!=1)return fault(a);
     if(a->active_tx<BT_ACL_TX_SLOTS && a->hci->transport.tx_offset==a->hci->transport.tx_length) {
         a->packets[a->active_tx].state=BT_ACL_SENT;a->active_tx=BT_ACL_TX_SLOTS;
     }
@@ -294,7 +320,8 @@ int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
     }
     if(r) {a->seen_record=r->serial;if(dispatch(a,r)!=1) return -1;}
     if(a->active_tx<BT_ACL_TX_SLOTS || a->hci->command!=BT_HCI_IDLE ||
-       a->command_link<BT_ACL_LINKS) return 1;
+       a->command_link<BT_ACL_LINKS || (a->synchronous &&
+       a->synchronous->acknowledgement_pending(a->synchronous_context))) return 1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) {
         struct bt_acl_link *l=&a->links[i];
         if(l->state!=BT_ACL_CONNECT_QUEUED && l->state!=BT_ACL_DISCONNECT_QUEUED &&

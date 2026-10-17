@@ -20,7 +20,7 @@ struct bt_acl_link {
     uint64_t generation, deadline, command_tag, acknowledgement, request_serial;
     uint16_t handle;
     uint8_t status, reason, encryption, class_of_device[3];
-    unsigned flush_seen, incoming;
+    unsigned flush_seen, incoming, handle_valid;
     enum bt_acl_link_state state;
 };
 struct bt_acl_packet {
@@ -32,8 +32,29 @@ struct bt_acl_packet {
     enum bt_acl_tx_state state;
 };
 enum bt_acl_state { BT_ACL_OFF, BT_ACL_ACTIVE, BT_ACL_FAULT };
+/* One static synchronous protocol owner shares unmaskable controller events.
+ * Every callback is bounded, non-reentrant and runs on the stack owner task.
+ * prepare observes final UART acceptance before event/credit dispatch.
+ * owns includes retired handles. validate_credits is read-only; commit_credits
+ * cannot fail and changes only this owner's entries in the already validated
+ * whole packet. event returns0 retained/unrelated,1 consumed,-1 fault.
+ * disconnect validates first; commit cannot fail or invoke other stack steps.
+ * Immutable table/context/backing outlive the controller generation. */
+struct bt_acl_synchronous_ops {
+    unsigned max_handles;
+    int (*prepare)(void *);
+    int (*acknowledgement_pending)(void *);
+    int (*owns)(void *,uint16_t);
+    int (*validate_credits)(void *,const uint8_t *entries,unsigned count);
+    void (*commit_credits)(void *,const uint8_t *entries,unsigned count);
+    int (*validate_disconnect)(void *,const struct bt_h4_record *);
+    void (*commit_disconnect)(void *,const struct bt_h4_record *);
+    int (*event)(void *,const struct bt_h4_record *);
+};
 struct bt_acl {
     struct bt_hci *hci;
+    const struct bt_acl_synchronous_ops *synchronous;
+    void *synchronous_context;
     struct bt_acl_link links[BT_ACL_LINKS];
     struct bt_acl_packet packets[BT_ACL_TX_SLOTS];
     uint64_t next_link, next_packet, seen_record, incoming_timeout_us;
@@ -50,6 +71,9 @@ struct bt_acl {
  * storage and each other. Keep all backing alive on FAULT. Public structure
  * fields are read-only to callers. Exact1 success,0 capacity/busy,-1 refusal. */
 int bt_acl_init(struct bt_acl *, struct bt_hci *);
+/* Install once after configured audio support, before any synchronous handle.
+ * Existing ACL links may remain. Exact owner identity is retained on fault. */
+int bt_acl_synchronous_register(struct bt_acl *,const struct bt_acl_synchronous_ops *,void *context);
 /* Nonzero Bluetooth peer address; known page-scan mode0..2 and clock offset
  * supplied by a trusted discovery/configuration owner. Requests DM1 only.
  * Output pointers must be disjoint from every owned object and buffer. */
