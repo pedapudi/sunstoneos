@@ -69,14 +69,31 @@ snapshot remains meaningful only while the same parent rail lease remains
 live. It proves neither physical wiring nor measured voltage or settling.
 Radio must select its supply mapping from separately admitted board topology.
 
-The provider reads DCDC1, DCDC2, DCDC4, DCDC8, BLDO2, BLDO5, CLDO1, CLDO5
-and DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
-through 87; BLDO2/BLDO5/CLDO1/CLDO5 through 29. DCDC8 decoding stops at
+The provider reads DCDC1, DCDC2, DCDC4, DCDC8, DCDC9, BLDO2, BLDO5, CLDO1,
+CLDO5, ELDO6 and DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
+through 87; BLDO2/BLDO5/CLDO1/CLDO5 through 29. DCDC8 and DCDC9 decoding stop at
 selector 101. The pinned bootloader getter
 uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
 this does not establish the higher-range voltage formula. Such selectors
 retain their raw bytes with `decoded=0`. Required DCDC8 selector 100 is in
 the source-defined linear region and represents 1.8 V.
+
+DCDC9 reads enable register `0x11` bit0 and selector `0x1a` bits6:0.
+Selectors 0–70 decode as 500 mV plus 10 mV per step. Selectors 71–101 decode
+as 1,200 mV plus 20 mV per step above selector 70, reaching 1,820 mV.
+The higher branch remains undecoded; the table's declared 3.4 V maximum does
+not resolve the getter ambiguity. Selector 70 represents 1.2 V.
+
+ELDO6 reads enable register `0x23` bit3 and selector `0x3f` bits5:0.
+Selectors 0–40 cover 0.5–1.5 V in 25 mV steps; selector 12 represents 0.8 V.
+Selectors 41–63 remain undecoded. Raw bytes and enable state remain available
+independently of voltage decoding for both outputs.
+
+The schematic's detailed sheet 6 connects DCDC9 to `ELDO-INPUT` and U1A's
+ELDOIN pin P12. It connects ELDO6 to `VDD-CPUS` and `VDD-USB`, and SWOUT2 to
+the USB analog supplies. Sheet 2 gives conflicting ELDO and analog-supply
+labels. USB platform admission must resolve the actual board revision and
+wiring separately. A PMIC snapshot cannot select or prove that topology.
 
 BLDO2 reads enable register `0x20` bit7 and selector `0x2b` bits4:0.
 Its source-defined range is 0.5–3.4 V in 100 mV steps; selector 13 represents
@@ -183,3 +200,9 @@ snapshot state machine. Runtime validation is pending in the composed PCIe
 platform check. Its assigned cases cover the 1.8 V snapshot, disabled output,
 valid range endpoints and reserved selectors. No separate provider workload is
 required. This addition does not qualify physical voltage or board wiring.
+
+DCDC9 and ELDO6 runtime validation is pending in the composed USB platform
+check. Its assigned cases cover both asynchronous snapshots, enabled and
+disabled outputs, supported range boundaries, the DCDC9 step transition and
+undecoded selectors. That batch also compiles the actual provider; no separate
+provider workload is scheduled for these additions.

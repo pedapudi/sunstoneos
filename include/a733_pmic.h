@@ -80,8 +80,8 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_l
  * once more to mark its own mutex retained. No client unlocks another task.
  */
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
-/* Nonblocking client metadata. Supports DCDC1/2/4/8, BLDO2/5, CLDO1/2/5
- * and DC1SW2. Snapshot
+/* Nonblocking client metadata. Supports DCDC1/2/4/8/9, BLDO2/5,
+ * CLDO1/2/5, ELDO6 and DC1SW2. Snapshot
  * reads ff/0e/0f/enable/selector/ff at address36 under one mutex. The ledger
  * borrow prevents parent release until reap. A snapshot remains meaningful
  * only under the same still-live parent rail lease. It proves programmed
@@ -94,7 +94,7 @@ enum a733_pmic_status a733_pmic_result(struct a733_pmic *,const struct a733_pmic
     struct a733_pmic_snapshot *);
 enum a733_pmic_status a733_pmic_reap(struct a733_pmic *,const struct a733_pmic_request *);
 /* Pure source-backed decode. Unsupported/reserved selectors leave decoded=0
- * and retain raw bytes. In particular DCDC8's unproven selector>=102 branch is not
+ * and retain raw bytes. In particular the DCDC8/9 selector>=102 branch is not
  * guessed from the bootloader's non-power-of-two ALIGN expression. */
 int a733_pmic_decode(enum a733_rail,uint8_t enable,uint8_t selector,
     struct a733_pmic_snapshot *);
