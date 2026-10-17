@@ -1,6 +1,26 @@
 #include "a733_clock_leases.h"
 #include <stddef.h>
 
+/* Preserve the preceding metadata ABI while publishing faults to consumers
+ * that hold permanent tokens and cannot enter the registry from their I/O path. */
+struct previous_clock_layout {
+    atomic_uint busy;
+    uint64_t next_id,last_now;
+    struct a733_clock_token slots[A733_CLOCK_CLIENTS];
+    int (*now)(void *,uint64_t *);
+    void *context;
+    uint32_t initialized,failed,audio_profile;
+};
+_Static_assert(ATOMIC_INT_LOCK_FREE==2,"registry fault publication must be lock-free");
+_Static_assert(sizeof(atomic_uint)==sizeof(uint32_t),"32-bit atomic required");
+_Static_assert(_Alignof(atomic_uint)==_Alignof(uint32_t),"atomic alignment changed");
+_Static_assert(sizeof(struct a733_clock_leases)==sizeof(struct previous_clock_layout),"registry size changed");
+_Static_assert(_Alignof(struct a733_clock_leases)==_Alignof(struct previous_clock_layout),"registry alignment changed");
+#define SAME_OFFSET(field) _Static_assert(offsetof(struct a733_clock_leases,field)==offsetof(struct previous_clock_layout,field),"registry offset changed: " #field)
+SAME_OFFSET(busy); SAME_OFFSET(next_id); SAME_OFFSET(last_now); SAME_OFFSET(slots);
+SAME_OFFSET(now); SAME_OFFSET(context); SAME_OFFSET(initialized); SAME_OFFSET(failed); SAME_OFFSET(audio_profile);
+#undef SAME_OFFSET
+
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -28,7 +48,7 @@ static enum a733_clock_result enter(struct a733_clock_leases *m)
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&m->busy,&expected,1,memory_order_acquire,memory_order_relaxed))
         return A733_CLOCK_BUSY;
-    if(m->failed) {atomic_store_explicit(&m->busy,0,memory_order_release);return A733_CLOCK_FAULT;}
+    if(atomic_load_explicit(&m->failed,memory_order_acquire)) {atomic_store_explicit(&m->busy,0,memory_order_release);return A733_CLOCK_FAULT;}
     return A733_CLOCK_OK;
 }
 static enum a733_clock_result leave(struct a733_clock_leases *m,enum a733_clock_result r)
@@ -36,7 +56,7 @@ static enum a733_clock_result leave(struct a733_clock_leases *m,enum a733_clock_
 static enum a733_clock_result clock_check(struct a733_clock_leases *m,uint64_t deadline)
 {
     uint64_t now;
-    if(m->now(m->context,&now)!=1 || now<m->last_now) {m->failed=1;return A733_CLOCK_FAULT;}
+    if(m->now(m->context,&now)!=1 || now<m->last_now) {atomic_store_explicit(&m->failed,1,memory_order_release);return A733_CLOCK_FAULT;}
     m->last_now=now;
     return now<deadline ? A733_CLOCK_OK : A733_CLOCK_EXPIRED;
 }
@@ -52,7 +72,7 @@ int a733_clock_leases_init(struct a733_clock_leases *m,int (*now)(void *,uint64_
 {
     if(!m || m->initialized || !now)return 0;
     *m=(struct a733_clock_leases){.next_id=1,.now=now,.context=ctx,.initialized=1};
-    atomic_init(&m->busy,0);return 1;
+    atomic_init(&m->busy,0);atomic_init(&m->failed,0);return 1;
 }
 enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t owner,
     a733_clock_mask_t shared,a733_clock_mask_t exclusive,uint64_t deadline,struct a733_clock_token *out)
@@ -61,7 +81,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
         A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS|A733_CLOCK_MAIN_UARTS|
         A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1|
         A733_CLOCK_SDC1|A733_CLOCK_RADIO_MODULE|A733_CLOCK_S_TWI0|
-        A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3;
+        A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3|A733_CLOCK_PCIE0|A733_CLOCK_COMB1;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
@@ -130,7 +150,7 @@ enum a733_clock_result a733_clock_retain(struct a733_clock_leases *m,const struc
     if(!separate(m,sizeof(*m),token,sizeof(*token)))return A733_CLOCK_INVALID;
     enum a733_clock_result r=enter(m);if(r!=A733_CLOCK_OK)return r;
     if(find(m,token)==A733_CLOCK_CLIENTS)return leave(m,A733_CLOCK_INVALID);
-    m->failed=1;return leave(m,A733_CLOCK_FAULT);
+    atomic_store_explicit(&m->failed,1,memory_order_release);return leave(m,A733_CLOCK_FAULT);
 }
 
 enum a733_clock_result a733_clock_token_status(struct a733_clock_leases *m,const struct a733_clock_token *token)

@@ -70,12 +70,16 @@ typedef uint64_t a733_clock_mask_t;
 #define A733_CLOCK_SDC0       (UINT64_C(1)<<56) /* Complete SDC0 host and dedicated clock/reset. */
 #define A733_CLOCK_SDC2       (UINT64_C(1)<<57) /* Complete SDC2 host and dedicated clock/reset. */
 #define A733_CLOCK_SDC3       (UINT64_C(1)<<58) /* Complete SDC3 eMMC host and dedicated clock/reset. */
+#define A733_CLOCK_PCIE0      (UINT64_C(1)<<59) /* Local controller, clocks/reset, iATU, IRQ and eDMA; exclusive. */
+#define A733_CLOCK_SERDES_COMMON (UINT64_C(1)<<60) /* Global clock/reset and shared SERDES fabric gates. */
+#define A733_CLOCK_COMB1      (UINT64_C(1)<<61) /* PCIe/USB3 lane, PHY, pipe mux and reference gates; exclusive. */
+#define A733_CLOCK_USB_PCIE_DOMAIN (UINT64_C(1)<<62) /* Shared stable PCK domain7; exclusive transitions. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC)
 #define A733_CLOCK_LOCALS  UINT64_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT64_C(0x7ffffffffffffff) /* Bits0-58; unassigned bits refused. */
+#define A733_CLOCK_ALL     UINT64_C(0x7fffffffffffffff) /* Bits0-62; bit63 unassigned. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -87,7 +91,9 @@ struct a733_clock_leases {
     struct a733_clock_token slots[A733_CLOCK_CLIENTS];
     int (*now)(void *, uint64_t *);
     void *context;
-    uint32_t initialized, failed, audio_profile;
+    uint32_t initialized;
+    atomic_uint failed; /* Acquire-load permitted under permanent exact leases. */
+    uint32_t audio_profile;
 };
 /* Private platform object, zero once and initialize before concurrent use.
  * now returns exactly 1, uses monotonic microseconds, and must be bounded and
@@ -141,6 +147,15 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * its controller, IRQ and DMA routes. All four are exclusive-only, with each
  * selected module parent reserved explicitly. Common storage gates/reset stay
  * under FABRIC; stable adoption never authorizes a shared storage reset.
+ * PCIe local ownership grants no global SERDES or domain7 reset. A consumer
+ * separately reserves COMB1 exclusively and SERDES_COMMON/USB_PCIE_DOMAIN
+ * shared for stable adoption, or exclusive for changes. SERDES_COMMON covers
+ * CCU+0x13c0/13c4 and SERDES AHB/MBUS gates; COMB1 covers its RTC reference
+ * gate, local PHY, pipe mux and COMB1 reference controls. Global reset changes
+ * require exclusion of COMB0/USB3 and all other affected users. These scopes
+ * have no implicit parent: actual selected parents and FABRIC must be reserved
+ * explicitly. Neither a token nor domain ownership proves source frequency,
+ * PCK bus-clock ownership, rail stability or physical quiescence.
  * RADIO_MODULE
  * owns shared Wi-Fi/BT reset, firmware and power sequencing; it has no clock
  * ancestor and grants no pin or rail authority. Independent UART/SDIO operations
