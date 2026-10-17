@@ -162,8 +162,9 @@ static void disconnect_event(struct fixture *f,unsigned h)
     struct hci_ev_disconn_complete d={0,(uint16_t)h,0x13};
     event(f,HCI_EV_DISCONN_COMPLETE,&d,sizeof(d));
 }
+#include "bt-config-fixture.h"
 static void enable(struct fixture *f,struct bt_acl *a)
-{ ready(f,a);assert(bt_acl_incoming(a,2000)==1); }
+{ config_ready(f,a);assert(bt_acl_incoming(a,2000)==1); }
 static uint64_t listen_peer(struct bt_acl *a,unsigned address)
 {
     uint8_t peer[]={address,2,3,4,5,6};uint64_t generation=0;

@@ -15,8 +15,10 @@ the platform must schedule bounded task polls and maintain RTS/CTS flow control.
 
 ## A controller generation owns its links and buffers
 
-Initialization requires successful Reset and identity queries, no retained receive
-records, and no earlier external command or ACL owner. The queried capabilities
+Initialization requires successful Reset and identity queries, with no earlier
+external command or ACL owner. Ordinary initialization requires empty receive
+storage. [Completed controller configuration](bluetooth-config.md) permits retained
+receive records and partial frames to pass intact into the ACL owner. The queried capabilities
 must permit BR/EDR, Create Connection and Disconnect. Read Buffer Size supplies
 the ACL fragment limit and controller packet capacity. Packet-based flow control
 must remain selected. LE, SCO and other transmitters cannot independently consume

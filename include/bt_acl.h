@@ -41,8 +41,11 @@ struct bt_acl {
     enum bt_acl_state state;
 };
 /* One serialized task exclusively owns this object and the IDENTIFIED HCI
- * worker. Init requires a fresh bootstrap with all RX records released, no
- * earlier external command/ACL owner and packet-based controller flow control.
+ * worker. Init requires a fresh bootstrap or completed incoming configuration,
+ * no earlier external command/ACL owner and packet-based controller flow control.
+ * The configured path retains staged, partial and owned incoming RX through
+ * handoff. The ordinary bootstrap path requires all RX storage free. HCI keeps
+ * the exact ACL owner address; a duplicate or copied owner is refused.
  * Objects and immutable borrowed payloads must be disjoint from UART, HCI, RX
  * storage and each other. Keep all backing alive on FAULT. Public structure
  * fields are read-only to callers. Exact1 success,0 capacity/busy,-1 refusal. */
@@ -52,10 +55,11 @@ int bt_acl_init(struct bt_acl *, struct bt_hci *);
  * Output pointers must be disjoint from every owned object and buffer. */
 int bt_acl_connect(struct bt_acl *, const struct bt_acl_peer *, uint64_t deadline,
                    uint64_t *link_generation);
-/* Enable incoming ACL handling once, before any attempt. Requires controller
- * Accept/Reject support. The external controller owner must already establish
- * page scan, unmasked Request/Status/Complete events, no automatic acceptance,
- * and an accept timeout exceeding bounded RX latency plus response_timeout_us.
+/* Enable incoming ACL handling once, before any attempt, after successful
+ * bt_hci_configure_incoming. Its exact read-back controller timeout must exceed
+ * authenticated receive latency plus response_timeout_us. The scheduling
+ * authority is checked again here and on every HCI step. Preserved incoming
+ * records are allowed: enable and reserve permitted peers before first ACL poll.
  * This scalar bounds classification through terminal completion; it is not a
  * controller setting. Unknown peers are rejected with reason0x0e. Exhaustion,
  * repeated peer requests and uncertain command outcomes retain a fault. */

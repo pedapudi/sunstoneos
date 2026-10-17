@@ -9,10 +9,11 @@ service authorization require their security owners.
 ## Reserve a peer before its request arrives
 
 One serialized task owns ACL, HCI and UART state. After fresh controller
-identification, `bt_acl_incoming` enables incoming handling once and records a
-response timeout in microseconds. The controller must advertise Accept and
-Reject Connection Request support. Enabling requires idle command ownership,
-no retained receive records and no earlier link attempt.
+identification and [controller configuration](bluetooth-config.md),
+`bt_acl_incoming` enables incoming handling once and records a response timeout
+in microseconds. The controller must advertise Accept and Reject Connection
+Request support. Enabling requires idle command ownership and no earlier link
+attempt. Requests preserved through configured handoff remain owned.
 
 `bt_acl_listen` copies a nonzero peer address and returns its reserved link
 generation. The absolute deadline covers waiting for the request and completing
@@ -68,11 +69,11 @@ events can continue through the bounded H4 receive pool.
 
 ## Controller configuration and pairing remain prerequisites
 
-The platform owner must configure page scan, unmasked Connection Request,
-Command Status and Connection Complete events, and disable automatic connection
-acceptance. This component does not issue those configuration commands.
-The controller's connection accept timeout must exceed the bounded UART receive
-and classification latency plus the configured response timeout.
+The [HCI configuration worker](bluetooth-config.md) sets page scan and event
+policy, disables automatic acceptance and verifies the controller timeout.
+Incoming admission requires its completed state. The actual read-back timeout
+must exceed authenticated receive/classification latency plus the response
+bound. The scheduling provider must establish that latency under real ownership.
 
 The host response deadline begins when the request is classified and is capped
 by the reserved peer's absolute deadline. It bounds the entire local operation,

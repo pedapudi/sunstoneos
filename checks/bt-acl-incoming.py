@@ -15,7 +15,7 @@ a=p.parse_args()
 a.output=a.output.resolve();a.source=a.source.resolve();a.spec=a.spec.resolve()
 root=pathlib.Path(__file__).resolve().parents[1]
 a.output.mkdir(parents=True,exist_ok=False)
-files=['include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h',
+files=['checks/bt-config-fixture.h','include/a733_uart.h','drivers/uart/a733_uart.c','include/bt_h4.h','include/bt_hci.h',
        'drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','checks/bt-acl-incoming.c','checks/bt-acl-incoming.py','include/bt_acl.h','drivers/bluetooth/bt_acl.c']
 manifest={}
 for f in files:

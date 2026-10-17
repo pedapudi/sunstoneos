@@ -16,6 +16,11 @@
 static const uint16_t opcodes[]={HCI_OP_RESET,HCI_OP_READ_LOCAL_VERSION,
     HCI_OP_READ_LOCAL_COMMANDS,HCI_OP_READ_LOCAL_FEATURES,HCI_OP_READ_BUFFER_SIZE,HCI_OP_READ_BD_ADDR};
 static const unsigned returns[]={1,9,65,9,8,7};
+static const uint16_t config_opcodes[]={0x0c01,0x0c05,0x0c16,0x0c15,0x0c1c,0x0c1b,0x0c1a,0x0c19};
+static const unsigned config_returns[]={1,1,1,3,1,5,1,2};
+/* Core5.4 §7.3.1: all defined Classic events; reserved and LE bits stay0.
+ * Command Complete/Status and Number Of Completed Packets are unmaskable. */
+static const uint8_t config_mask[]={0xff,0x9f,0xfb,0xbf,0x07,0xf8,0xbf,0x1d};
 static uint16_t le16(const uint8_t *p) { return (uint16_t)p[0]|((uint16_t)p[1]<<8); }
 static int overlaps(const void *a, size_t an, const void *b, size_t bn)
 {
@@ -37,15 +42,60 @@ int bt_hci_init(struct bt_hci *h, const struct bt_h4_binding *b,
      * after admission. Such failure retains the outer lifetime too. */
     int result=bt_h4_init(&h->transport,b,s,count,deadline);
     if(result!=1) return h->transport.state==BT_H4_FAULT ? fail(h) : -1;
+    h->self=h;h->acl_owner=0;h->incoming_config=(struct bt_hci_incoming_config){0};
+    h->configuration_deadline=0;h->configuration_stage=0;h->configured=0;
     h->identity=(struct bt_hci_identity){0};h->initialization_deadline=deadline;
     h->command_timeout_us=timeout;h->command_deadline=0;h->command_tag=0;
     h->stage=0;h->external_command=0;h->credits=1;h->opcode=0;h->last_status=0;h->command_accepted=0;
     h->command=BT_HCI_IDLE;h->state=BT_HCI_INITIALIZING;return 1;
 }
+static int config_authority(struct bt_hci *h)
+{
+    const struct bt_hci_incoming_config *c=&h->incoming_config;
+    return c->current(c->context,&h->transport.binding,c->service_generation,
+                      c->receive_latency_us)==1 ? 1 : fail(h);
+}
+int bt_hci_configure_incoming(struct bt_hci *h,const struct bt_hci_incoming_config *c,
+                              uint64_t deadline)
+{
+    if(!h || h->self!=h || !c || !c->current || !c->service_generation || !c->receive_latency_us ||
+       h->state!=BT_HCI_IDENTIFIED || h->identity.valid!=63 || h->command_tag!=6 ||
+       h->acl_owner || h->configured || h->configuration_stage || h->configuration_deadline ||
+       h->command!=BT_HCI_IDLE || h->external_command || deadline<=h->transport.now ||
+       c->accept_timeout_slots<0x00a0 || c->accept_timeout_slots>0xb540 ||
+       c->page_interval_slots<0x0012 || c->page_interval_slots>0x1000 || (c->page_interval_slots&1) ||
+       c->page_window_slots<0x0011 || c->page_window_slots>c->page_interval_slots ||
+       c->receive_latency_us>=(uint64_t)c->accept_timeout_slots*625-1 ||
+       overlaps(c,sizeof(*c),h,sizeof(*h)) ||
+       overlaps(c,sizeof(*c),h->transport.binding.uart,sizeof(struct a733_uart)) ||
+       h->transport.state!=BT_H4_ACTIVE || h->transport.staged ||
+       h->transport.assembling!=h->transport.count || h->transport.tx_offset!=h->transport.tx_length ||
+       (h->identity.features[4]&0x20u) || (h->identity.supported_commands[1]&3u)!=3u ||
+       !(h->identity.supported_commands[5]&0x40u) || !(h->identity.supported_commands[6]&1u) ||
+       (h->identity.supported_commands[7]&0xccu)!=0xccu ||
+       (h->identity.supported_commands[8]&3u)!=3u) return -1;
+    for(unsigned i=0;i<h->transport.count;++i)
+        if(h->transport.records[i].owner!=BT_H4_FREE ||
+           overlaps(c,sizeof(*c),h->transport.records[i].storage.bytes,
+                    h->transport.records[i].storage.capacity)) return -1;
+    struct bt_hci_incoming_config copied=*c;
+    if(copied.current(copied.context,&h->transport.binding,copied.service_generation,copied.receive_latency_us)!=1) return -1;
+    h->incoming_config=copied;h->configuration_deadline=deadline;
+    h->state=BT_HCI_CONFIGURING;return 1;
+}
+int bt_hci_incoming_bound(struct bt_hci *h,uint64_t response)
+{
+    if(!h || h->self!=h || h->state!=BT_HCI_IDENTIFIED || !h->configured ||
+       h->configuration_stage!=8 || !response) return 0;
+    uint64_t timeout=(uint64_t)h->incoming_config.accept_timeout_slots*625;
+    if(h->incoming_config.receive_latency_us>=timeout ||
+       response>=timeout-h->incoming_config.receive_latency_us) return 0;
+    return config_authority(h);
+}
 int bt_hci_request(struct bt_hci *h, uint16_t opcode, const uint8_t *p, size_t n,
                    uint64_t deadline)
 {
-    if(!h || !deadline || !p || ((opcode!=0x0405 || n!=13) &&
+    if(!h || h->self!=h || !deadline || !p || ((opcode!=0x0405 || n!=13) &&
        (opcode!=0x0406 || n!=3) && (opcode!=0x0409 || n!=7) &&
        (opcode!=0x040a || n!=7)) || overlaps(h,sizeof(*h),p,n)) return -1;
     if(h->state!=BT_HCI_IDENTIFIED) return -1;
@@ -88,6 +138,20 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
     if(h->command!=BT_HCI_WAITING || opcode!=h->opcode || r->tag!=h->command_tag)
         return retain(h,r);
     h->credits=credits;
+    if(h->state==BT_HCI_CONFIGURING) {
+        unsigned stage=h->configuration_stage;
+        if(stage>=8 || cs || n!=3+config_returns[stage]) return bad_record(h,r);
+        h->last_status=p[5];
+        if(p[5]) return bad_record(h,r);
+        const struct bt_hci_incoming_config *c=&h->incoming_config;
+        if((stage==3 && le16(p+6)!=c->accept_timeout_slots) ||
+           (stage==5 && (le16(p+6)!=c->page_interval_slots || le16(p+8)!=c->page_window_slots)) ||
+           (stage==7 && p[6]!=2)) return bad_record(h,r);
+        if(bt_h4_release(&h->transport,r->serial)!=1) return fail(h);
+        ++h->configuration_stage;h->command=BT_HCI_IDLE;
+        if(h->configuration_stage==8) {h->configured=1;h->state=BT_HCI_IDENTIFIED;}
+        return 1;
+    }
     if(h->external_command) {
         /* Link commands require Status then their separate terminal event.
          * Unknown-command refusal may instead use Complete with status. */
@@ -121,8 +185,11 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
 }
 int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
 {
-    if(!h || !deadline || !budget || budget>BT_H4_BUDGET || h->state==BT_HCI_CLOSED) return -1;
+    if(!h || h->self!=h || !deadline || !budget || budget>BT_H4_BUDGET || h->state==BT_HCI_CLOSED) return -1;
     if(h->state==BT_HCI_FAULT) return -1;
+    if((h->state==BT_HCI_CONFIGURING || h->configured) && config_authority(h)!=1) return -1;
+    if(h->state==BT_HCI_CONFIGURING && deadline>h->configuration_deadline)
+        deadline=h->configuration_deadline;
     if(h->state==BT_HCI_INITIALIZING && deadline>h->initialization_deadline)
         deadline=h->initialization_deadline;
     if(h->command!=BT_HCI_IDLE && deadline>h->command_deadline) deadline=h->command_deadline;
@@ -143,13 +210,32 @@ int bt_hci_step(struct bt_hci *h, unsigned budget, uint64_t deadline)
         if(bt_h4_command(&h->transport,h->opcode,0,0,h->command_deadline)!=1) return fail(h);
         --h->credits;h->command=BT_HCI_SENDING;
     }
+    if(h->state==BT_HCI_CONFIGURING && h->command==BT_HCI_IDLE && h->credits &&
+       !h->transport.staged && h->transport.assembling==h->transport.count &&
+       !bt_h4_next(&h->transport,BT_H4_COMPLETE)) {
+        const struct bt_hci_incoming_config *c=&h->incoming_config;
+        unsigned stage=h->configuration_stage;uint8_t params[8]={0};size_t n=0;
+        if(stage==0) {copy(params,config_mask,8);n=8;}
+        else if(stage==1) n=1;
+        else if(stage==2) {params[0]=(uint8_t)c->accept_timeout_slots;params[1]=(uint8_t)(c->accept_timeout_slots>>8);n=2;}
+        else if(stage==4) {
+            params[0]=(uint8_t)c->page_interval_slots;params[1]=(uint8_t)(c->page_interval_slots>>8);
+            params[2]=(uint8_t)c->page_window_slots;params[3]=(uint8_t)(c->page_window_slots>>8);n=4;
+        } else if(stage==6) {params[0]=2;n=1;}
+        if(stage>=8 || h->transport.now>UINT64_MAX-h->command_timeout_us) return fail(h);
+        h->command_deadline=h->transport.now+h->command_timeout_us;
+        if(h->command_deadline>h->configuration_deadline) h->command_deadline=h->configuration_deadline;
+        h->opcode=config_opcodes[stage];++h->command_tag;h->command_accepted=0;
+        if(bt_h4_command(&h->transport,h->opcode,params,n,h->command_deadline)!=1) return fail(h);
+        --h->credits;h->command=BT_HCI_SENDING;
+    }
     return 1;
 }
 const struct bt_h4_record *bt_hci_next(const struct bt_hci *h)
-{ return h ? bt_h4_next(&h->transport,BT_H4_OWNED) : 0; }
+{ return h && h->self==h ? bt_h4_next(&h->transport,BT_H4_OWNED) : 0; }
 int bt_hci_release(struct bt_hci *h, uint64_t serial)
 {
-    if(!h || h->state==BT_HCI_CLOSED || h->state==BT_HCI_FAULT) return -1;
+    if(!h || h->self!=h || h->state==BT_HCI_CLOSED || h->state==BT_HCI_FAULT) return -1;
     /* Only application-owned packets may be released through this interface. */
     for(unsigned i=0;i<h->transport.count;++i)
         if(h->transport.records[i].serial==serial && h->transport.records[i].owner==BT_H4_OWNED)

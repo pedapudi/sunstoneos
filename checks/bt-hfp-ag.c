@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "rfcomm-server-fixture.h"
+#include "bt-config-fixture.h"
 #include "bt_hfp_ag.h"
 #include "bt_sdp_server.h"
 struct gateway {struct serial_fixture rf;struct bt_sdp_server sdp;struct bt_hfp_ag ag;};
@@ -16,7 +17,7 @@ static unsigned lower_output(struct gateway *g)
  assert(g->rf.d.next_output<g->rf.d.lower.outputs);unsigned n=g->rf.d.next_output++;for(unsigned i=0;i<4;++i)lower_poll(g);return n;}
 static void incoming_start(struct gateway *g)
 {
-    memset(g,0,sizeof(*g));g->rf.allowed=1;struct simulation *s=&g->rf.d.lower;ready(&s->f,&s->a);
+    memset(g,0,sizeof(*g));g->rf.allowed=1;struct simulation *s=&g->rf.d.lower;config_ready(&s->f,&s->a);
     assert(bt_acl_incoming(&s->a,2000)==1);const uint8_t address[]={1,2,3,4,5,6};
     assert(bt_acl_listen(&s->a,address,10000,&s->link)==1 && s->link==1);
     struct hci_ev_conn_request req={{{1,2,3,4,5,6}},{4,4,0x24},1};

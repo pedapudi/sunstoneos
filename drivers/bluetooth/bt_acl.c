@@ -39,18 +39,24 @@ static int pending(enum bt_acl_link_state s)
 { return s!=BT_ACL_UNUSED && s!=BT_ACL_CONNECTED && s!=BT_ACL_CLOSED && s!=BT_ACL_WAIT_REQUEST; }
 int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
 {
-    if(!a || !h || a->state!=BT_ACL_OFF || h->state!=BT_HCI_IDENTIFIED ||
-       h->identity.valid!=63 || h->external_command || h->command_tag!=6 ||
+    if(!a || !h || h->self!=h || h->acl_owner || a->state!=BT_ACL_OFF ||
+       h->state!=BT_HCI_IDENTIFIED || h->identity.valid!=63 || h->external_command) return -1;
+    unsigned configured=h->configured && h->configuration_stage==8 && h->command_tag==14;
+    if((!configured && (h->configured || h->command_tag!=6 || h->configuration_deadline)) ||
        h->command!=BT_HCI_IDLE || h->transport.state!=BT_H4_ACTIVE ||
-       h->transport.staged || h->transport.assembling!=h->transport.count ||
+       (!configured && (h->transport.staged || h->transport.assembling!=h->transport.count)) ||
        h->transport.tx_offset!=h->transport.tx_length ||
        overlap(a,sizeof(*a),h,sizeof(*h)) ||
        overlap(a,sizeof(*a),h->transport.binding.uart,sizeof(struct a733_uart)) ||
        !le16(h->identity.buffer_size) || !le16(h->identity.buffer_size+3) ||
        (h->identity.features[4]&0x20u) || (h->identity.supported_commands[0]&0x30u)!=0x30u) return -1;
     for(unsigned i=0;i<h->transport.count;++i)
-        if(h->transport.records[i].owner!=BT_H4_FREE ||
+        if((!configured && h->transport.records[i].owner!=BT_H4_FREE) ||
            overlap(a,sizeof(*a),h->transport.records[i].storage.bytes,h->transport.records[i].storage.capacity)) return -1;
+    if(configured && bt_hci_incoming_bound(h,1)!=1) return -1;
+    /* One serialized owner: after every admission check, neither assignment
+     * calls external code or can fail. The claimed address cannot be reused. */
+    h->acl_owner=a;
     *a=(struct bt_acl){.hci=h,.next_link=1,.next_packet=1,
         .capacity=le16(h->identity.buffer_size+3),.credits=le16(h->identity.buffer_size+3),
         .mtu=le16(h->identity.buffer_size),.active_tx=BT_ACL_TX_SLOTS,
@@ -58,7 +64,7 @@ int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
 }
 int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadline,uint64_t *generation)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !p || !generation || !private(a,p,sizeof(*p)) ||
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !p || !generation || !private(a,p,sizeof(*p)) ||
        !private(a,generation,sizeof(*generation)) || overlap(p,sizeof(*p),generation,sizeof(*generation)) ||
        deadline<=a->hci->transport.now || p->page_scan_mode>2 || p->role_switch>1) return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i) any|=p->address[i];
@@ -77,18 +83,18 @@ int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadlin
 }
 int bt_acl_incoming(struct bt_acl *a,uint64_t timeout)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !timeout || a->incoming_timeout_us ||
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !timeout || a->incoming_timeout_us ||
        a->next_link!=1 || a->hci->command!=BT_HCI_IDLE ||
-       a->hci->transport.staged || a->hci->transport.assembling!=a->hci->transport.count ||
        (a->hci->identity.supported_commands[1]&3u)!=3u ||
        timeout>UINT64_MAX-a->hci->transport.now) return -1;
-    for(unsigned i=0;i<a->hci->transport.count;++i)
-        if(a->hci->transport.records[i].owner!=BT_H4_FREE) return -1;
+    int bound=bt_hci_incoming_bound(a->hci,timeout);
+    if(bound<0) return fault(a);
+    if(bound!=1) return -1;
     a->incoming_timeout_us=timeout;return 1;
 }
 int bt_acl_listen(struct bt_acl *a,const uint8_t address[6],uint64_t deadline,uint64_t *generation)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !a->incoming_timeout_us ||
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !a->incoming_timeout_us ||
        !private(a,address,6) || !private(a,generation,sizeof(*generation)) ||
        overlap(address,6,generation,sizeof(*generation)) || deadline<=a->hci->transport.now ||
        equal(address,a->hci->identity.address)) return -1;
@@ -107,7 +113,7 @@ int bt_acl_listen(struct bt_acl *a,const uint8_t address[6],uint64_t deadline,ui
 }
 int bt_acl_disconnect(struct bt_acl *a,uint64_t generation,uint64_t deadline)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || deadline<=a->hci->transport.now) return -1;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || deadline<=a->hci->transport.now) return -1;
     struct bt_acl_link *l=link(a,generation);
     if(!l || l->state!=BT_ACL_CONNECTED) return -1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) if(pending(a->links[i].state)) return 0;
@@ -117,7 +123,7 @@ int bt_acl_disconnect(struct bt_acl *a,uint64_t generation,uint64_t deadline)
 int bt_acl_submit(struct bt_acl *a,uint64_t generation,unsigned pb,const uint8_t *bytes,
                   size_t n,uint64_t deadline,uint64_t *serial)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !serial || (pb!=1 && pb!=2) ||
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !serial || (pb!=1 && pb!=2) ||
        !n || n>a->mtu || deadline<=a->hci->transport.now ||
        !private(a,bytes,n) || !private(a,serial,sizeof(*serial)) || overlap(bytes,n,serial,sizeof(*serial))) return -1;
     struct bt_acl_link *l=link(a,generation);
@@ -270,7 +276,7 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 }
 int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !deadline || !budget || budget>BT_H4_BUDGET) return -1;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !deadline || !budget || budget>BT_H4_BUDGET) return -1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i) if((pending(a->links[i].state) ||
         a->links[i].state==BT_ACL_WAIT_REQUEST) && deadline>a->links[i].deadline)
         deadline=a->links[i].deadline;
@@ -325,7 +331,7 @@ int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
 }
 const struct bt_acl_packet *bt_acl_result(const struct bt_acl *a)
 {
-    if(!a || a->state==BT_ACL_OFF) return 0;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state==BT_ACL_OFF) return 0;
     const struct bt_acl_packet *p=0;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].state>=BT_ACL_CREDIT_RETIRED &&
         (!p || a->packets[i].serial<p->serial)) p=&a->packets[i];
@@ -333,19 +339,19 @@ const struct bt_acl_packet *bt_acl_result(const struct bt_acl *a)
 }
 int bt_acl_release(struct bt_acl *a,uint64_t serial)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !serial) return -1;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !serial) return -1;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].serial==serial &&
         a->packets[i].state>=BT_ACL_CREDIT_RETIRED) {a->packets[i].state=BT_ACL_TX_FREE;return 1;}
     return -1;
 }
 const struct bt_h4_record *bt_acl_receive(const struct bt_acl *a)
 {
-    if(!a || a->state==BT_ACL_OFF) return 0;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state==BT_ACL_OFF) return 0;
     const struct bt_h4_record *r=bt_hci_next(a->hci);
     return r && r->serial<=a->seen_record ? r : 0;
 }
 int bt_acl_receive_release(struct bt_acl *a,uint64_t serial)
 {
-    if(!a || a->state!=BT_ACL_ACTIVE || !serial || serial>a->seen_record) return -1;
+    if(!a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->state!=BT_ACL_ACTIVE || !serial || serial>a->seen_record) return -1;
     return bt_hci_release(a->hci,serial);
 }

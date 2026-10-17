@@ -9,7 +9,9 @@ by this component. This document is for driver and platform developers.
 Incoming ACL handling adds Accept and Reject Connection Request to the bounded
 post-identification command set. Both require Command Status and a separate
 Connection Complete owned by the [ACL admission worker](bluetooth-incoming.md).
-Neither command implements pairing or service authorization.
+Neither command implements pairing or service authorization. A separate
+[configuration sequence](bluetooth-config.md) programs event policy, connection
+accept timeout and page scan before incoming ACL admission.
 
 ## The worker requires a live radio and UART generation
 
