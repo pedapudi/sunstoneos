@@ -2,6 +2,8 @@
 #define SUNSTONE_A733_I2S_PLATFORM_H
 #include "a733_i2s.h"
 #include "a733_pins.h"
+#include "a733_i2s_stream.h"
+struct a733_audio_leases;
 
 /* Clock/resource authority is supplied by the platform's common lease service.
  * It must coordinate EVERY writer, including GPU users of the reference PLL.
@@ -68,6 +70,10 @@ struct a733_i2s_platform {
     struct a733_i2s_plan plan;
     uint32_t initial_module, initial_bus;
     unsigned stage, failed, initialized;
+    struct a733_audio_leases *stream_leases;
+    uint64_t stream_deadline;
+    uint32_t route_mask;
+    unsigned stream_mode, register_retained;
 };
 /* No MMIO. Supply expected inherited pin fields and approved electrical fields;
  * selected pins are PB5/6/8, optional PB4, desired function 3. Bank voltage is
@@ -79,4 +85,20 @@ int a733_i2s_platform_init(struct a733_i2s_platform *, struct a733_audio_parent 
 /* Pass binding as cookie to the capture core. It supports 16 kHz, two 32-bit
  * slots, 24.576 MHz module, optional 12.288 MHz MCLK. */
 struct a733_i2s_operations a733_i2s_platform_operations(void);
+/* Stream-only binding to actual common audio leases. PB7 function 3 is DOUT0;
+ * PB8 function 3 is DIN0. PB5/6 and optional PB4 remain shared clock pins.
+ * Bank voltage and external microphone/codec readiness are separate authority.
+ * parent must use leases.operations with leases as cookie. The parent backend
+ * and pin manager MUST use the same platform register mutex and monotonic
+ * provider/history; this initializer cannot discover those physical facts.
+ * Calls remain serialized with parent/leases/pins for platform lifetime.
+ * Stream register wrappers enter that mutex for each access. Failed/late I/O
+ * preserves its held mutex and latches register_retained; no further callbacks.
+ * Expiry first seen after a clean unlock retains tokens, not mutex ownership.
+ * New public fields enlarge private storage: rebuild every embedding consumer.
+ */
+int a733_i2s_platform_stream_init(struct a733_i2s_platform *,struct a733_audio_parent *,
+    struct a733_pins *,struct a733_audio_leases *,uint64_t owner,
+    const struct a733_pin_request *,size_t,enum a733_i2s_direction);
+struct a733_i2s_stream_operations a733_i2s_platform_stream_operations(void);
 #endif

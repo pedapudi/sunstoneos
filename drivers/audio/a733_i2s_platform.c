@@ -1,4 +1,5 @@
 #include "a733_i2s_platform.h"
+#include "a733_audio_leases.h"
 
 #define CCU UINT32_C(0x02002000)
 #define OSC UINT32_C(0x07090160)
@@ -189,26 +190,29 @@ enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p
     return p->stage == P_READY ? READY : PENDING;
 }
 
-int a733_i2s_platform_init(struct a733_i2s_platform *s, struct a733_audio_parent *parent,
-    struct a733_pins *pins, uint64_t owner, const struct a733_pin_request *requests, size_t count)
+static int init_route(struct a733_i2s_platform *s, struct a733_audio_parent *parent,
+    struct a733_pins *pins, uint64_t owner, const struct a733_pin_request *requests, size_t count, unsigned data_pin)
 {
     if (!s || s->initialized || !parent || !parent->initialized || !pins || !pins->initialized ||
         !owner || !requests || (count != 3 && count != 4)) return 0;
     uint32_t mask = 0;
     for (size_t i=0;i<count;++i) {
         unsigned pin = requests[i].pb_pin;
-        if (pin < 4 || pin > 8 || pin == 7 || (mask & BIT(pin)) ||
+        if (pin < 4 || pin > 8 || (pin != 4 && pin != 5 && pin != 6 && pin != data_pin) || (mask & BIT(pin)) ||
             requests[i].desired.function != 3 ||
             !a733_pin_config_valid(pin,requests[i].expected) ||
             !a733_pin_config_valid(pin,requests[i].desired)) return 0;
         mask |= BIT(pin);
     }
-    if (mask != (BIT(5)|BIT(6)|BIT(8)|(count == 4 ? BIT(4) : 0))) return 0;
+    if (mask != (BIT(5)|BIT(6)|BIT(data_pin)|(count == 4 ? BIT(4) : 0))) return 0;
     s->parent=parent; s->pins=pins; s->owner=owner; s->count=count;
     for (size_t i=0;i<count;++i) s->requests[i]=requests[i];
-    s->initialized=1;
+    s->route_mask=mask;s->initialized=1;
     return 1;
 }
+int a733_i2s_platform_init(struct a733_i2s_platform *s,struct a733_audio_parent *parent,
+    struct a733_pins *pins,uint64_t owner,const struct a733_pin_request *requests,size_t count)
+{return init_route(s,parent,pins,owner,requests,count,8);}
 static enum a733_i2s_resource_result local_poll(void *cookie, uint64_t deadline)
 {
     struct a733_i2s_platform *s=cookie;
@@ -252,6 +256,9 @@ static enum a733_i2s_resource_result local_poll(void *cookie, uint64_t deadline)
            update(p,deadline,MODULE,BIT(31),BIT(31));
         if (ok) s->stage=L_READY;
     } else ok=0;
+    if(s->stream_mode && (!ok || !time_ok(p,deadline))) {
+        s->register_retained=1;return local_fail(s);
+    }
     p->ops.leave(p->cookie);
     if (!ok || !time_ok(p,deadline)) return local_fail(s);
     return s->stage == L_READY ? READY : PENDING;
@@ -264,7 +271,7 @@ static enum a733_i2s_resource_result local_acquire(void *cookie,
     if (s->stage != L_IDLE || !plan || !a733_audio_parent_ready(s->parent) ||
         plan->format.module_hz != 24576000 || plan->format.rate_hz != 16000 ||
         plan->format.slot_bits != 32 || (plan->format.mclk_hz && plan->format.mclk_hz != 12288000) ||
-        (plan->format.mclk_hz != 0) != (s->count == 4)) return BUSY;
+        (plan->format.mclk_hz != 0) != (s->count == 4) || plan->pb_mask!=s->route_mask) return BUSY;
     if (!time_ok(s->parent,deadline)) return BUSY;
     s->plan=*plan; s->deadline=deadline; s->stage=L_LEASE;
     /* OPENING owns this context even when the common lease service is busy. */
@@ -286,6 +293,9 @@ static enum a733_i2s_resource_result local_release(void *cookie, uint64_t deadli
             update(p,deadline,BUS,BIT(16),0) && update(p,deadline,BUS,BIT(0),0) &&
             update(p,deadline,MODULE,MODULE_MASK,s->initial_module) &&
             update(p,deadline,BUS,BUS_MASK,s->initial_bus);
+        if(s->stream_mode && (!ok || !time_ok(p,deadline))) {
+            s->register_retained=1;return local_fail(s);
+        }
         p->ops.leave(p->cookie);
         if (!ok || !time_ok(p,deadline)) return local_fail(s);
         s->stage=L_UNPIN;
@@ -343,4 +353,114 @@ struct a733_i2s_operations a733_i2s_platform_operations(void)
 {
     return (struct a733_i2s_operations){local_acquire,local_poll,local_release,
                                        local_now,local_read,local_write};
+}
+
+static int lease_operations_match(const struct a733_audio_parent *p,const struct a733_audio_leases *b)
+{
+    return p->cookie==b && p->ops.acquire==b->operations.acquire &&
+        p->ops.publish==b->operations.publish && p->ops.release==b->operations.release &&
+        p->ops.enter==b->operations.enter && p->ops.leave==b->operations.leave &&
+        p->ops.now_us==b->operations.now_us && p->ops.read==b->operations.read &&
+        p->ops.write==b->operations.write;
+}
+int a733_i2s_platform_stream_init(struct a733_i2s_platform *s,struct a733_audio_parent *p,
+    struct a733_pins *pins,struct a733_audio_leases *leases,uint64_t owner,
+    const struct a733_pin_request *requests,size_t count,enum a733_i2s_direction direction)
+{
+    if(!p || !leases || !leases->initialized || leases->failed || leases->owner!=owner ||
+        !lease_operations_match(p,leases) || (unsigned)direction>A733_I2S_TRANSMIT ||
+        !init_route(s,p,pins,owner,requests,count,direction==A733_I2S_TRANSMIT?7:8))return 0;
+    s->stream_leases=leases;s->stream_mode=1;return 1;
+}
+static enum a733_i2s_resource_result stream_authority(void *cookie,uint64_t deadline,int ready)
+{
+    struct a733_i2s_platform *s=cookie;
+    if(!s || !s->initialized || !s->stream_mode || s->failed || s->register_retained ||
+        (ready && s->stage!=L_READY) || !a733_audio_parent_ready(s->parent))return RETAINED;
+    struct a733_audio_leases *b=s->stream_leases;
+    if(!b || !b->initialized || b->failed || b->owner!=s->owner ||
+        !lease_operations_match(s->parent,b) || s->pins->failed ||
+        !time_ok(s->parent,deadline))return local_fail(s);
+    const struct a733_audio_token actual[]={s->parent->reference,s->parent->audio,s->local};
+    static const enum a733_audio_scope scopes[]={A733_AUDIO_REFERENCE,A733_AUDIO_STABLE,A733_AUDIO_LOCAL};
+    static const a733_clock_mask_t shared[]={A733_CLOCK_REF|A733_CLOCK_OSC,
+        A733_CLOCK_AUDIO5|A733_CLOCK_AUDIO1|A733_CLOCK_REF|A733_CLOCK_OSC,0};
+    for(unsigned i=0;i<(s->local.id?3u:2u);++i) {
+        const struct a733_clock_token *t=&b->tokens[scopes[i]-1];
+        if(actual[i].scope!=scopes[i] || !actual[i].id || actual[i].id!=t->id ||
+            t->owner!=s->owner || t->shared!=shared[i] ||
+            t->exclusive!=(i==2?A733_CLOCK_I2S0:0))return local_fail(s);
+        enum a733_clock_result r=a733_clock_token_status(b->registry,t);
+        if(!time_ok(s->parent,deadline))return local_fail(s);
+        if(r==A733_CLOCK_BUSY)return BUSY;
+        if(r!=A733_CLOCK_OK)return local_fail(s);
+    }
+    if(!s->local.id && (ready || b->tokens[A733_AUDIO_LOCAL-1].id))return local_fail(s);
+    if(!s->pin_lease.id) {
+        if(ready)return local_fail(s);
+        s->stream_deadline=deadline;return READY;
+    }
+    if(s->pin_lease.owner!=s->owner || s->pin_lease.pb_mask!=s->route_mask)
+        return local_fail(s);
+    int held=0;
+    enum a733_pins_result r=a733_pins_held(s->pins,&s->pin_lease,&held,deadline);
+    if(!time_ok(s->parent,deadline))return local_fail(s);
+    if(r==A733_PINS_BUSY)return BUSY;
+    if(r!=A733_PINS_OK || !held || s->pins->failed)return local_fail(s);
+    s->stream_deadline=deadline;return READY;
+}
+static enum a733_i2s_resource_result stream_health(void *cookie,uint64_t deadline)
+{return stream_authority(cookie,deadline,1);}
+static enum a733_i2s_resource_result stream_acquire(void *cookie,const struct a733_i2s_plan *plan,uint64_t deadline)
+{
+    enum a733_i2s_resource_result r=stream_authority(cookie,deadline,0);
+    return r==READY?local_acquire(cookie,plan,deadline):r;
+}
+static enum a733_i2s_resource_result stream_acquire_poll(void *cookie,uint64_t deadline)
+{
+    enum a733_i2s_resource_result r=stream_authority(cookie,deadline,0);
+    return r==READY?local_poll(cookie,deadline):r;
+}
+static enum a733_i2s_resource_result stream_release(void *cookie,uint64_t deadline)
+{
+    enum a733_i2s_resource_result r=stream_authority(cookie,deadline,0);
+    return r==READY?local_release(cookie,deadline):r;
+}
+static int stream_register(struct a733_i2s_platform *s,uintptr_t a,uint32_t *value,int writing)
+{
+    if(!s || s->failed || !s->stream_mode || s->register_retained || s->stage!=L_READY ||
+        !a733_audio_parent_ready(s->parent) || !s->stream_deadline ||
+        a<A733_I2S0_BASE || a>A733_I2S0_BASE+0x74 || (a&3))return 0;
+    struct a733_audio_parent *p=s->parent;
+    if(!time_ok(p,s->stream_deadline)){s->failed=1;return 0;}
+    /* Live-lease queries have completed before entering this mutex. */
+    if(!p->ops.enter(p->cookie,s->stream_deadline)){s->failed=1;return 0;}
+    if(!time_ok(p,s->stream_deadline)) {
+        p->ops.leave(p->cookie);s->failed=1;return 0;
+    }
+    uint32_t observed=0;
+    int ok=writing?p->ops.write(p->cookie,a,*value):p->ops.read(p->cookie,a,&observed);
+    if(ok && writing && a!=A733_I2S0_BASE+12) {
+        uint32_t got;
+        ok=time_ok(p,s->stream_deadline) && p->ops.read(p->cookie,a,&got);
+        /* FIFO flush bits self-clear; all other written fields must match. */
+        uint32_t ignore=a==A733_I2S0_BASE+20 ? (3u<<24):0;
+        if(ok)ok=(got&~ignore)==(*value&~ignore);
+    }
+    if(!ok || !time_ok(p,s->stream_deadline)) {
+        s->register_retained=1;s->failed=1;return 0;
+    }
+    p->ops.leave(p->cookie);
+    if(!time_ok(p,s->stream_deadline)){s->failed=1;return 0;}
+    if(!writing)*value=observed;
+    return 1;
+}
+static int stream_read(void *cookie,uintptr_t a,uint32_t *value)
+{return value && stream_register(cookie,a,value,0);}
+static int stream_write(void *cookie,uintptr_t a,uint32_t value)
+{return stream_register(cookie,a,&value,1);}
+struct a733_i2s_stream_operations a733_i2s_platform_stream_operations(void)
+{
+    return (struct a733_i2s_stream_operations){
+        {stream_acquire,stream_acquire_poll,stream_release,local_now,stream_read,stream_write},stream_health};
 }

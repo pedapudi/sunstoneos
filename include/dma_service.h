@@ -4,6 +4,7 @@
 #include "task.h"
 #include "queue.h"
 #include "dma_service_i2s.h"
+#include "dma_service_i2s_stream.h"
 #include <stdatomic.h>
 
 #define DMA_SERVICE_CLIENTS 8u
@@ -13,9 +14,10 @@
 #define DMA_SERVICE_STACK_WORDS 4096u
 #define DMA_SERVICE_NO_JOB DMA_SERVICE_JOBS
 
-enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S };
+enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S, DMA_SERVICE_I2S_STREAM };
 enum dma_service_operation { DMA_SERVICE_STATUS, DMA_SERVICE_OPEN, DMA_SERVICE_SUBMIT,
-    DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE };
+    DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE,
+    DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT };
 enum dma_service_result { DMA_SERVICE_OK, DMA_SERVICE_INVALID, DMA_SERVICE_DENIED,
     DMA_SERVICE_BUSY, DMA_SERVICE_FAULT };
 enum dma_service_phase { DMA_SERVICE_CLOSED, DMA_SERVICE_OPENING, DMA_SERVICE_READY,
@@ -26,7 +28,8 @@ enum dma_service_outcome { DMA_SERVICE_NO_RESULT, DMA_SERVICE_COMPLETE,
 struct dma_service_request {
     enum dma_service_operation operation;
     unsigned job; /* Index in private startup table; selects its fixed channel. */
-    uint64_t timeout; /* SUBMIT: DMA ticks. I2S OPEN/CLOSE: microseconds. Otherwise zero. */
+    uint64_t timeout; /* SUBMIT: per-period DMA ticks. I2S OPEN/CLOSE: microseconds. Otherwise zero. */
+    uint64_t period_ticket; /* PERIOD_PUT only; exact ticket returned by GET. */
 };
 struct dma_service_reply {
     uint64_t ticket, job_ticket;
@@ -34,6 +37,7 @@ struct dma_service_reply {
     enum dma_service_phase phase;
     enum dma_service_outcome outcome;
     unsigned owns_session, holds_buffers;
+    struct a733_i2s_period period; /* Only a successful PERIOD_GET grants CPU access. */
 };
 /* Metadata is copied at initialization; pointed-to RAM allocations remain
  * reserved/pinned for service lifetime. RAM jobs prohibit FIFO requests.
@@ -51,6 +55,7 @@ struct dma_service_job {
     unsigned channel;
     struct a733_dma_transfer transfer;
     const struct dma_service_i2s_profile *i2s;
+    const struct dma_service_i2s_stream_profile *stream;
 };
 struct dma_service_private_job {
     enum dma_service_kind kind;
@@ -59,6 +64,7 @@ struct dma_service_private_job {
     struct a733_dma_segment segments[DMA_SERVICE_SEGMENTS];
     struct a733_dma_mapping mappings[DMA_SERVICE_MAPPINGS];
     struct dma_service_i2s_profile i2s;
+    struct dma_service_i2s_stream_profile stream;
 };
 struct dma_service_message { struct dma_service_request request; uint64_t ticket; unsigned client; };
 struct dma_service_client {
@@ -75,6 +81,7 @@ struct dma_service_channel {
     enum dma_service_phase phase;
     enum dma_service_outcome outcome;
     struct a733_i2s_capture capture;
+    struct a733_i2s_stream stream;
 };
 /* Trusted private bootstrap configuration, copied before scheduling starts.
  * prepared is bounded and performs no device operations. It authenticates the
@@ -144,6 +151,10 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * One pending reply per task. A collection timeout preserves its ticket.
  * All client waits are finite; outputs unchanged on refusal/timeout.
  * Task abandonment retains session, results and buffers indefinitely.
+ * Stream OPEN reserves the complete ring until CLOSE; GET grants one period
+ * and PUT returns RX storage or commits TX data. REAP requires all client-held
+ * periods returned after a terminal stop. TX completion means DMA consumed
+ * memory, not wire playback. No automatic reclamation after task abandonment.
  * I2S permits one capture per open; after REAP, CLOSE and OPEN before reuse.
  * Worker polls all active channels between requests. Each I2S channel dispatches
  * only through capture APIs, never through an independent generic DMA poll. */

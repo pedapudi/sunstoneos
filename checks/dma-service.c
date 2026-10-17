@@ -138,7 +138,7 @@ static int i2s_write(void *cookie,uintptr_t address,uint32_t value)
 static struct dma_service_reply request(enum dma_service_operation op,unsigned job,uint64_t timeout)
 {
     configASSERT(task_level() == 0);
-    struct dma_service_request r={op,job,timeout}; struct dma_service_reply reply; uint64_t ticket;
+    struct dma_service_request r={op,job,timeout,0}; struct dma_service_reply reply; uint64_t ticket;
     configASSERT(dma_service_send(&service,&r,100,&ticket));
     configASSERT(dma_service_collect(&service,ticket,&reply,100));
     configASSERT(reply.ticket == ticket && task_level() == 0); return reply;
@@ -168,14 +168,14 @@ static void peer(void *unused)
 }
 static void observer(void *unused)
 {
-    (void)unused; struct dma_service_request r={DMA_SERVICE_STATUS,0,0}; uint64_t t=77;
+    (void)unused; struct dma_service_request r={DMA_SERVICE_STATUS,0,0,0}; uint64_t t=77;
     configASSERT(task_level() == 0 && !dma_service_send(&service,&r,0,&t) && t == 77);
     set(&observer_done,1); vTaskSuspend(NULL); configASSERT(0);
 }
 static void client(void *unused)
 {
     (void)unused; wait_flag(&observer_done,1);
-    struct dma_service_request r={DMA_SERVICE_STATUS,0,0}; uint64_t ticket=0;
+    struct dma_service_request r={DMA_SERVICE_STATUS,0,0,0}; uint64_t ticket=0;
     struct dma_service_reply reply={.ticket=123};
     configASSERT(!dma_service_send(&service,&r,portMAX_DELAY,&ticket));
     vTaskSuspend(service.worker); /* Fixture forces a late reply while worker is idle. */
@@ -258,7 +258,7 @@ void kernel_main(void)
         segments[j]=(struct a733_dma_segment){{(uintptr_t)pool+4096,0,4,8},
             {(uintptr_t)pool+8192+destinations[j],0,4,8},64};
         jobs[j]=(struct dma_service_job){DMA_SERVICE_RAM,ch,
-            {{pool+ch*64,(uintptr_t)pool+ch*64,64,A733_DMA_DESCRIPTORS},&segments[j],1,mappings[j],2},NULL};
+            {{pool+ch*64,(uintptr_t)pool+ch*64,64,A733_DMA_DESCRIPTORS},&segments[j],1,mappings[j],2},NULL,NULL};
     }
     jobs[3].kind=DMA_SERVICE_I2S; jobs[3].i2s=&profile;
     jobs[3].transfer.mappings=&mappings[3][1]; jobs[3].transfer.mapping_count=1;
