@@ -69,13 +69,21 @@ snapshot remains meaningful only while the same parent rail lease remains
 live. It proves neither physical wiring nor measured voltage or settling.
 Radio must select its supply mapping from separately admitted board topology.
 
-The provider reads DCDC1, DCDC2, DCDC4, DCDC8, BLDO5, CLDO1, CLDO5 and
-DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
-through 87; BLDO5/CLDO1/CLDO5 through 29. DCDC8 decoding stops at selector 101. The pinned bootloader getter
+The provider reads DCDC1, DCDC2, DCDC4, DCDC8, BLDO2, BLDO5, CLDO1, CLDO5
+and DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
+through 87; BLDO2/BLDO5/CLDO1/CLDO5 through 29. DCDC8 decoding stops at
+selector 101. The pinned bootloader getter
 uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
 this does not establish the higher-range voltage formula. Such selectors
 retain their raw bytes with `decoded=0`. Required DCDC8 selector 100 is in
 the source-defined linear region and represents 1.8 V.
+
+BLDO2 reads enable register `0x20` bit7 and selector `0x2b` bits4:0.
+Its source-defined range is 0.5–3.4 V in 100 mV steps; selector 13 represents
+1.8 V. Selectors 30 and 31 retain their raw bytes with `decoded=0` and no
+programmed voltage. Enable state is decoded independently. The board's PD-bank
+supply uses BLDO2; the PCIe platform must validate the actual snapshot under
+its still-live rail lease before using those pins.
 
 DC1SW2 reads enable register `0x11` bit4 and the shared DCDC1 selector at
 `0x12` bits4:0. Its range is 1.0–3.8 V in 100 mV steps. CLDO5 reads enable
@@ -169,3 +177,9 @@ matches 472 valid raw-selector cases against the original getter. The focused
 sanitizer batch and changed provider-core AArch64 compilation passed; existing
 provider scenarios were not repeated. Evidence is retained in
 `~/.cache/sunstoneos/evidence/pmic-mmc-20261016/initial/`.
+
+The BLDO2 addition uses the same pinned bootloader profile and unchanged
+snapshot state machine. Runtime validation is pending in the composed PCIe
+platform check. Its assigned cases cover the 1.8 V snapshot, disabled output,
+valid range endpoints and reserved selectors. No separate provider workload is
+required. This addition does not qualify physical voltage or board wiring.
