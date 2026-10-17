@@ -459,12 +459,27 @@ static enum a733_pins_result apply_expanded(struct a733_pins *m,const struct exp
     }
     return in_time(m,deadline) ? A733_PINS_OK : (*attempted ? A733_PINS_RECOVERY : A733_PINS_BUSY);
 }
-enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owner,
-    const struct a733_pin_request_banked *r,size_t count,struct a733_pin_lease_banked *out,uint64_t deadline)
+static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
+    const struct a733_pin_request_banked *r,size_t count,
+    const struct a733_pin_output_condition *condition,
+    struct a733_pin_lease_banked *out,uint64_t deadline)
 {
     if (!m || !r || !out || !owner || !count || count>A733_PIN_MAX_REQUESTS || !empty_banked(out) ||
         overlap(m,sizeof(*m),r,count*sizeof(*r)) || overlap(m,sizeof(*m),out,sizeof(*out)) ||
         overlap(out,sizeof(*out),r,count*sizeof(*r))) return A733_PINS_INVALID;
+    struct a733_pin_output_condition expected={0};
+    if (condition) {
+        if (overlap(condition,sizeof(*condition),m,sizeof(*m)) ||
+            overlap(condition,sizeof(*condition),r,count*sizeof(*r)) ||
+            overlap(condition,sizeof(*condition),out,sizeof(*out))) return A733_PINS_INVALID;
+        expected=*condition;
+        uint32_t any=0;
+        for (unsigned b=0;b<A733_PIN_BANKS;++b) {
+            if (expected.levels[b]&~expected.masks[b]) return A733_PINS_INVALID;
+            any|=expected.masks[b];
+        }
+        if (!any) return A733_PINS_INVALID;
+    }
     struct expanded_plan plan[A733_PIN_MAX_REQUESTS];
     uint32_t masks[A733_PIN_BANKS]={0},irqs[A733_PIN_BANKS]={0};
     uint32_t deb_old[A733_PIN_BANKS]={0},deb_new[A733_PIN_BANKS]={0},deb_banks=0;
@@ -480,6 +495,8 @@ enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owne
             r[i].irq_mode>4 || (r[i].debounce & ~DEBOUNCE_MASK)) return A733_PINS_INVALID;
         if (!route_group(old_groups,b,p,r[i].expected) || !route_group(new_groups,b,p,r[i].desired))
             return A733_PINS_INVALID;
+        if ((expected.masks[b]&(1u<<p)) &&
+            (r[i].expected.function!=1 || r[i].desired.function!=1)) return A733_PINS_INVALID;
         masks[b]|=1u<<p;
         routes|=uart_routes(b,p,r[i].expected)|uart_routes(b,p,r[i].desired);
         plan[i]=(struct expanded_plan){b,p,r[i].expected,r[i].desired,r[i].output_value,0,r[i].irq_mode};
@@ -488,6 +505,8 @@ enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owne
             irqs[b]|=1u<<p; deb_new[b]=r[i].debounce;
         }
     }
+    for (unsigned b=0;b<A733_PIN_BANKS;++b)
+        if (expected.masks[b]&~masks[b]) return A733_PINS_INVALID;
     enum a733_pins_result result=enter(m,deadline);
     if (result!=A733_PINS_OK) return result;
     if (m->failed) return leave(m,A733_PINS_RECOVERY);
@@ -528,6 +547,8 @@ enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owne
             if (!rd(m,bank_base(q->b)+0x10,&value)) return leave(m,fault(m));
             old_output[i]=(value>>q->p)&1;
             if (q->b>=A733_PIN_L && old_output[i]!=((m->banks[q->b].latch>>q->p)&1)) return leave(m,fault(m));
+            if ((expected.masks[q->b]&(1u<<q->p)) &&
+                old_output[i]!=((expected.levels[q->b]>>q->p)&1)) return leave(m,A733_PINS_CONFLICT);
         }
         if (q->target.function==14) {
             if (!rd(m,irq_base(q->b)+(q->p/8)*4,&value)) return leave(m,fault(m));
@@ -556,6 +577,19 @@ enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owne
         m->banks[b].irq_pins|=irqs[b];
     }
     return leave(m,result==A733_PINS_OK ? result : fault(m));
+}
+enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *m,uint64_t owner,
+    const struct a733_pin_request_banked *r,size_t count,struct a733_pin_lease_banked *out,uint64_t deadline)
+{
+    return acquire_banked(m,owner,r,count,0,out,deadline);
+}
+enum a733_pins_result a733_pins_acquire_banked_checked(struct a733_pins *m,uint64_t owner,
+    const struct a733_pin_request_banked *r,size_t count,
+    const struct a733_pin_output_condition *condition,
+    struct a733_pin_lease_banked *out,uint64_t deadline)
+{
+    if (!condition) return A733_PINS_INVALID;
+    return acquire_banked(m,owner,r,count,condition,out,deadline);
 }
 static enum a733_pins_result subset(struct a733_pins *m,const struct a733_pin_lease_banked *h,
     unsigned b,uint32_t mask,unsigned function,uint64_t deadline)

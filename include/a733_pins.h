@@ -139,6 +139,24 @@ int a733_pins_init_banks(struct a733_pins *, const struct a733_pins_operations *
     void *, const struct a733_pin_handoff *);
 enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *, uint64_t owner,
     const struct a733_pin_request_banked *, size_t, struct a733_pin_lease_banked *, uint64_t deadline);
+/* Additional inherited GPIO-output conditions for checked acquisition. Each
+ * mask bit selects a requested pin with expected AND desired function 1.
+ * At least one bit must be selected; levels outside masks are invalid. */
+struct a733_pin_output_condition {
+    uint32_t masks[A733_PIN_BANKS], levels[A733_PIN_BANKS];
+};
+/* All input objects and the initially empty output token must be mutually
+ * disjoint and disjoint from manager storage, and remain stable for the call.
+ * The condition is required and copied before locking. Its inherited levels
+ * are checked from the acquisition's DATA observations while holding the
+ * shared register lock, before reserving pins or writing hardware. A mismatch
+ * returns CONFLICT with an empty token and no hardware writes. Read failures
+ * and deadlines retain the ordinary acquisition semantics. B–K conditions
+ * observe driven GPIO DATA levels. L/M also require agreement with the
+ * authenticated bank-latch shadow. Neither proves an external device's state. */
+enum a733_pins_result a733_pins_acquire_banked_checked(struct a733_pins *, uint64_t owner,
+    const struct a733_pin_request_banked *, size_t,
+    const struct a733_pin_output_condition *, struct a733_pin_lease_banked *, uint64_t deadline);
 enum a733_pins_result a733_pins_release_banked(struct a733_pins *,
     struct a733_pin_lease_banked *, unsigned users_quiescent, uint64_t deadline);
 enum a733_pins_result a733_pins_read_inputs_banked(struct a733_pins *,
