@@ -92,6 +92,9 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | --- | --- |
 | Bluetooth worker | Controller policy for incoming connections |
 | Storage worker | Source-backed SDC3 compatibility and mutually exclusive storage routes |
+| Bluetooth audio worker | Synchronous headset transport and routing design |
+| DMA integration worker | Actual cached-pool and native transfer-service binding |
+| Audio worker | Continuous I2S capture/playback ownership design |
 | Independent reviewers | Bluetooth configuration and storage-route correction |
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
