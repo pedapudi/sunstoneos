@@ -12,12 +12,13 @@ int main(void)
     _Static_assert(A733_CLOCK_SDC1==(UINT64_C(1)<<53),"existing SDC1 value");
     _Static_assert(A733_CLOCK_SDC0==(UINT64_C(1)<<56),"SDC0 allocation");
     _Static_assert(A733_CLOCK_SDC2==(UINT64_C(1)<<57),"SDC2 allocation");
+    _Static_assert(A733_CLOCK_SDC3==(UINT64_C(1)<<58),"SDC3 allocation");
     struct a733_clock_leases r={0};
     assert(a733_clock_leases_init(&r,now,NULL));
-    const a733_clock_mask_t local[]={A733_CLOCK_SDC0,A733_CLOCK_SDC1,A733_CLOCK_SDC2};
+    const a733_clock_mask_t local[]={A733_CLOCK_SDC0,A733_CLOCK_SDC1,A733_CLOCK_SDC2,A733_CLOCK_SDC3};
     const a733_clock_mask_t parent=A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
-    struct a733_clock_token live[3],out={.id=999},saved=out;
-    for(unsigned i=0;i<3;++i) {
+    struct a733_clock_token live[4],out={.id=999},saved=out;
+    for(unsigned i=0;i<4;++i) {
         assert(a733_clock_acquire(&r,i+1,A733_CLOCK_REF|A733_CLOCK_FABRIC,local[i],10,&live[i])==A733_CLOCK_OK);
         assert(live[i].exclusive==local[i] && live[i].shared==parent);
         assert(a733_clock_acquire(&r,9,0,local[i],10,&out)==A733_CLOCK_BUSY);
@@ -39,6 +40,15 @@ int main(void)
     assert(a733_clock_release(&r,&out,10)==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[1])==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[2])==A733_CLOCK_OK);
-    assert(a733_clock_acquire(&r,9,0,UINT64_C(1)<<58,10,&out)==A733_CLOCK_INVALID);
-    puts("PASS: independent SDC0/1/2 ownership, explicit stable parents and unchanged token ABI");
+    assert(a733_clock_token_status(&r,&live[3])==A733_CLOCK_OK);
+    assert(a733_clock_acquire(&r,9,0,UINT64_C(1)<<59,10,&out)==A733_CLOCK_INVALID);
+    assert(a733_clock_release(&r,&live[2],10)==A733_CLOCK_OK);
+    assert(a733_clock_release(&r,&live[3],10)==A733_CLOCK_OK);
+    assert(a733_clock_acquire(&r,8,A733_CLOCK_REF|A733_CLOCK_FABRIC,
+        A733_CLOCK_SDC2|A733_CLOCK_SDC3,10,&out)==A733_CLOCK_OK);
+    struct a733_clock_token collision={0};
+    for(unsigned i=2;i<4;++i)
+        assert(a733_clock_acquire(&r,9,0,local[i],10,&collision)==A733_CLOCK_BUSY);
+    assert(!collision.id&&a733_clock_token_status(&r,&live[1])==A733_CLOCK_OK);
+    puts("PASS: SDC0/1/2/3 scopes, joint eMMC exclusion, explicit parents and unchanged token ABI");
 }

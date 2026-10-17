@@ -16,15 +16,17 @@ Neither software ownership nor a successful register read establishes these fact
 
 The selected controller uses a 24 MHz system reference divided by thirty. The
 existing MMC core divides the resulting 800 kHz module clock by two, producing a
-400 kHz card clock. Identification and reads retain one-bit SDR signaling and
-programmed I/O. The public API provides startup polling, card information,
+400 kHz card clock. SD uses SDC0. eMMC defaults to SDC2; setting
+`emmc_host` to `A733_MMC_EMMC_SDC3` selects SDC3. SD rejects that selector.
+Identification and reads retain one-bit SDR signaling and programmed I/O. The public API provides startup polling, card information,
 bounded block reads and result collection. It exposes no raw controller pointer,
 command escape, write, erase, partition switch or recovery operation.
 
 | Selected device | Controller | Clock/reset addresses | Interrupt ID | Active signals |
 | --- | --- | --- | --- | --- |
 | SD | SDC0, `0x04020000` | `0x02002d00` / `0x02002d0c` | 193 | PF1 command, PF2 clock, PF3 data 0; mux 2 |
-| eMMC | SDC2, `0x04022000` | `0x02002d20` / `0x02002d2c` | 195 | PC5 clock, PC6 command, PC10 data 0; mux 2 |
+| eMMC, default | SDC2, `0x04022000` | `0x02002d20` / `0x02002d2c` | 195 | PC5 clock, PC6 command, PC10 data 0; mux 3 |
+| eMMC, explicit selection | SDC3, `0x04023000` | `0x02002d30` / `0x02002d3c` | 196 | Same PC signals; mux 4 |
 
 SD reserves PF0–6. The unused data pins remain inputs with pull-ups, and PF6
 provides active-low card detection. Removal refuses further controller access
@@ -39,7 +41,11 @@ that eMMC is absent or authorize a retry through another controller.
 
 ## Shared ownership precedes hardware access
 
-The binding acquires an exclusive SDC0 or SDC2 clock token. It also reserves the
+SD acquires an exclusive SDC0 clock token. Either eMMC selection acquires SDC2
+and SDC3 together in one exclusive token before hardware access. Both controllers
+share one physical card, so acquiring them independently could admit conflicting
+card operations before pin ownership is established. The actual PC pin lease
+also blocks independently owned SDC2 or SDC3 routes. Each session reserves the
 shared fabric and system-reference ancestors. When an inherited AHB, NSI or MBUS
 profile selects a supported peripheral-PLL output, it reserves and checks that
 parent. The binding never changes a shared parent or storage-fabric gate.
@@ -92,14 +98,17 @@ card identification.
 An actual seven- or twelve-pin ownership token alone cannot establish that remote
 firmware has stopped routing the same peripheral elsewhere. Authenticated
 admission excludes every alternate route and unselected pad writer before
-startup. For eMMC this includes SDC3, NAND and SPIF activity. Later writers must
-honor the same controller and pin ownership.
+startup. For eMMC this includes the unselected eMMC controller, NAND and SPIF
+activity. Later writers must honor the same controller and pin ownership.
 
 Each bounded card step revalidates the actual clock, pin and rail tokens, PMIC
 provider health, card presence, GPIO voltage and clock/reset/interrupt state.
 Pin-manager failure is checked under its common register mutex. All controller
 callbacks execute while that mutex remains held, without recursively calling
-pin-manager operations.
+pin-manager operations. SDC3 additionally requires its normal-DMA request
+bits at offset `0x7c` to remain disabled. This is a read-only admission check;
+an enabled request causes retained refusal. The binding never reads or writes
+the unselected controller's registers.
 
 ## Completion releases only the read buffer
 
@@ -132,41 +141,58 @@ interrupts and clock fields. Manual sections 11.3 and 18.14 define controller an
 GPIO-voltage behavior. The pinned bootloader PMIC table defines output decoding;
 [shared PMIC evidence](pmic-runtime.md) covers the provider.
 
-A native consumer links the two new platform sources, `sunxi_mmc.c`, the common
+A native consumer links the two platform sources, `sunxi_mmc.c`, the common
 clock registry, pin manager and pin tables, rail ledger, PMIC provider, GPU rail
 bridge, shared platform locks and FreeRTOS runtime. No standalone build target
 is needed until an application adopts this binding.
 
-The focused [composition check](../checks/a733-mmc-platform.py) uses the actual
-resource providers and MMC core with modeled MMIO, time and cards. It reuses the
-existing card model without replaying its protocol or capacity suites. Its
-source snapshots include compiler-derived dependencies before execution. Native
-compilation covers the AArch64 SRE configuration; it does not execute native MMIO
-or establish physical qualification.
+The focused [selected-route check](../checks/a733-mmc-sdc3.py) uses the actual
+resource providers and MMC core with modeled MMIO, time and cards. It compares
+the named PC5/PC6/PC10 functions against both the real-silicon pinctrl table and
+the manual's Port C table. It then checks the selected aperture, clock/reset
+addresses, interrupt mask, actual mux readback and a read through each eMMC
+selection. Ownership cases cover the joint controller token and a competing
+real PC pin lease. Version and SDC3 DMA-request mismatches retain ownership.
 
-The focused batch passed both slot compositions, source-identity checks,
-sanitisers and both native object compilations. It covered a read and buffer
-release on each route, invalid-range refusal, controller ownership conflict,
-SD removal, low eMMC reset, failed pin-manager health, wrong supply/voltage
-profiles and uncertain local-clock writes. Reset timing and the absence of
-fallible observations after buffer release were asserted directly.
-A separate narrow check covers rejection of storage that overlaps the PMIC
-adapter's private backing. The admission path delegates to the actual PMIC
-provider's storage guard; the successful card workloads remain reusable.
+The selected-route composition passed under AddressSanitizer and
+UndefinedBehaviorSanitizer. It completed one read through each eMMC selection,
+verified controller and pin conflicts, and refused unsupported observed versions
+and enabled SDC3 DMA requests. The focused clock check passed joint ownership,
+independent SDC1 ownership and unchanged token-layout checks. All three affected
+native source files compiled for AArch64 SRE.
 
 Evidence is preserved under
-`~/.cache/sunstoneos/evidence/mmc-platform-20261016/batch1/`, including exact
-inputs, the extracted reusable card model, compiler commands, executable and
-native objects. The private-storage correction and changed native core are
-recorded in the adjacent `private-storage/` evidence directory. The unchanged
-protocol/capacity evidence remains in
-[the card-driver record](mmc.md).
+`~/.cache/sunstoneos/evidence/mmc-sdc3-20261016/`: `batch1/` records the named
+source checks and compiler-derived dependencies; `continued/` records the
+successful execution, corrected fixture snapshot and native objects. The
+recorded input hashes identify which evidence remains reusable.
 
-SDC3 remains required. It occupies `0x04023000`, uses interrupt 196 and clock/reset
-words at `0x02002d30` and `0x02002d3c`. It shares the eMMC pins through mux 3.
-The manual supplies a separate register description, and the kernel selects its
-v5p6x controller path. The current core explicitly binds eMMC to SDC2. SDC3 needs
-controller-compatibility work and mutually exclusive route admission before use.
+The compatibility names `v4p6x` and `v5p6x` select two initialization functions
+in the pinned kernel's
+[bsp/drivers/mmc/sunxi-mmc-v4p5x.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v4p5x.c).
+Both use the same legacy clock and programmed-I/O register path. The SDC3 path
+uses a smaller DMA descriptor chunk limit and lacks the other path's raw tuning
+callback. These differences remain relevant to future DMA and tuning work.
+Manual section 11.3.9 defines SDC3 separately, including its normal-DMA control.
+
+The existing native initializer retains its default selection. Applications
+using SDC3 call `a733_mmc_platform_native_init_selected` and supply the same
+`emmc_host` value as the platform configuration. Native admission checks both
+card kind and controller selection. Rebuild embedding consumers after the
+platform configuration and adapter layout change. The common clock-token ABI
+and all previously assigned clock-scope values remain unchanged.
+
+The original composition evidence is preserved under
+`~/.cache/sunstoneos/evidence/mmc-platform-20261016/`. Its eMMC fixture selected
+mux 2, which is NAND rather than SDC2. That result establishes modeled controller
+and ownership behavior only; it does not establish a correct eMMC pin route.
+Its source-hash checks also did not compare named pin functions. The corrected
+route requires the named-function and register-readback evidence above. The
+original SD and unchanged [protocol/capacity evidence](mmc.md) retain their
+stated scope. The separate PMIC private-storage refusal remains valid.
+
+Native compilation covers the AArch64 SRE configuration. It does not execute
+native MMIO, prove physical pin routing or qualify storage operation.
 
 The existing core's version admission remains unchanged and requires observed
 version 5.3 or later, below 6.0. A device-tree compatibility string does not prove

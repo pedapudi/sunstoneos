@@ -4,8 +4,9 @@
 #include "a733_pins.h"
 #include "a733_pmic.h"
 #include "sunxi_mmc.h"
-/* Private, permanent provider. SD selects SDC0; eMMC selects SDC2. SDC3 has
- * different register capabilities and is not admitted by this first binding.
+enum a733_mmc_emmc_host { A733_MMC_EMMC_SDC2=0, A733_MMC_EMMC_SDC3=1 };
+/* Private, permanent provider. SD selects SDC0; eMMC explicitly selects SDC2
+ * or SDC3. Zero preserves the existing default SDC2 selection.
  * No close, power change, media write, recovery or raw-command API exists. */
 struct a733_mmc_platform_config {
     uint64_t owner, handoff, topology, deadline_us, lifetime_deadline_us;
@@ -17,6 +18,7 @@ struct a733_mmc_platform_config {
      * Expected mux is input or disabled. Desired route is fixed by this API;
      * caller supplies source-qualified drive/pull fields. Reset is never driven. */
     struct a733_pin_config expected[12], desired[12];
+    enum a733_mmc_emmc_host emmc_host; /* SD requires zero. eMMC mux3/4 respectively. */
 };
 enum a733_mmc_platform_result { A733_MMC_PENDING, A733_MMC_BUSY,
     A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID };

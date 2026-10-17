@@ -8,24 +8,29 @@ struct a733_mmc_platform_native {
     void *owner_task,*admission_cookie;
     int (*admit)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *);
     enum sunxi_mmc_kind kind;
+    enum a733_mmc_emmc_host emmc_host;
     unsigned initialized;
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
  * PMIC, other storage controllers and card data writes are never writable. */
-static inline int a733_mmc_platform_native_address(enum sunxi_mmc_kind kind,uintptr_t a,unsigned writing)
+static inline int a733_mmc_platform_native_address_selected(enum sunxi_mmc_kind kind,
+    enum a733_mmc_emmc_host host,uintptr_t a,unsigned writing)
 {
-    if((kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC)||(a&3))return 0;
-    uintptr_t base=kind==SUNXI_MMC_SD?0x04020000:0x04022000;
+    if((kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC)||(a&3)||
+       (unsigned)host>A733_MMC_EMMC_SDC3||(kind==SUNXI_MMC_SD&&host))return 0;
+    unsigned index=kind==SUNXI_MMC_SD?0:host==A733_MMC_EMMC_SDC3?3:2;
+    uintptr_t base=0x04020000+index*0x1000;
     if(a>=base&&a<=base+0x300) {
         switch(a-base) {
         case 0:case 4:case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:
         case 0x30:case 0x38:case 0x54:case 0x58:case 0x5c:case 0x80:case 0x8c:
         case 0x104:case 0x10c:case 0x140:case 0x144:return 1;
+        case 0x7c:return index==3&&!writing;
         case 0x20:case 0x24:case 0x28:case 0x2c:case 0x3c:case 0x200:case 0x300:return !writing;
         default:return 0;
         }
     }
-    uintptr_t module=kind==SUNXI_MMC_SD?0x02002d00:0x02002d20;
+    uintptr_t module=0x02002d00+index*0x10;
     if(a==module||a==module+0xc)return 1;
     if(a>=0x02002000&&a<0x02004000) {
         switch(a-0x02002000) {
@@ -38,9 +43,15 @@ static inline int a733_mmc_platform_native_address(enum sunxi_mmc_kind kind,uint
     if(a==0x03400198)return 1;
     return !writing&&(a==0x03400000||a==0x03400118||a==0x03400218||a==0x03400318);
 }
+static inline int a733_mmc_platform_native_address(enum sunxi_mmc_kind kind,uintptr_t a,unsigned writing)
+{return a733_mmc_platform_native_address_selected(kind,A733_MMC_EMMC_SDC2,a,writing);}
 /* Designated real FreeRTOS task and same common register mutex as other users.
  * kind is immutable and admission must authenticate this exact selection. */
 int a733_mmc_platform_native_init(struct a733_mmc_platform_native *,
     struct a733_platform_locks *,void *owner_task,enum sunxi_mmc_kind,
+    int (*admit)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *);
+/* Explicit eMMC host selection; the existing initializer retains SDC2 default. */
+int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *,
+    struct a733_platform_locks *,void *owner_task,enum sunxi_mmc_kind,enum a733_mmc_emmc_host,
     int (*admit)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *);
 #endif

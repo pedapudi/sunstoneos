@@ -2,8 +2,10 @@
 
 The native [storage driver](../drivers/storage/sunxi_mmc.c) implements bounded
 card identification and reads through the A733 SD/MMC controller. SD cards use
-SDC0 at `0x04020000`; potential eMMC uses SDC2 at `0x04022000`. The caller selects
-the card type explicitly. SDC1 remains owned by the [SDIO driver](sdio.md).
+SDC0 at `0x04020000`. The [platform binding](mmc-platform.md) selects SDC2 at
+`0x04022000` or SDC3 at `0x04023000` for eMMC, with SDC2 as the default.
+The caller selects the card type explicitly. SDC1 remains owned by the
+[SDIO driver](sdio.md).
 
 This component is implemented and passes the source and controller/card model
 checks below. Physical card identification and reads remain unqualified. The
@@ -174,9 +176,10 @@ usage. This compile establishes native buildability, without physical execution.
 
 ## Remaining storage coverage
 
-Native clock, regulator, pin, reset, presence and recovery bindings are still
-required before a bounded physical identification/read attempt. SDC0 card
-voltage and PF6 configuration must be observed. SDC2 population and the existing
+The native platform binding implements clock, rail, pin, reset and presence
+ownership for SDC0, SDC2 and SDC3. Its cold physical admission and independent
+recovery prerequisites remain required before a bounded identification/read
+attempt. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
 CMD1 timeout require new evidence before another physical attempt.
 
 SD v1 identification, SDUC, wider buses, higher rates, voltage switching,

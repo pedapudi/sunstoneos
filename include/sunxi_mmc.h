@@ -15,7 +15,7 @@ enum sunxi_mmc_error { SUNXI_MMC_OK, SUNXI_MMC_IO, SUNXI_MMC_TIME,
 struct sunxi_mmc_ops {
     /* Every callback is bounded, serialized and non-reentrant. Return exactly
      * 1 for success. Failed writes may have taken effect. Offsets are relative
-     * to SDC0 (SD) or SDC2 (eMMC), selected by the platform binding.
+     * to SDC0 (SD) or SDC2/SDC3 (eMMC), selected by the platform binding.
      */
     int (*read32)(void *, uint32_t, uint32_t *);
     int (*write32)(void *, uint32_t, uint32_t);

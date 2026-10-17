@@ -37,7 +37,7 @@ static int now(void *cookie,uint64_t *v)
 static int admit(void *cookie,const struct a733_mmc_platform_config *c,const struct a733_clock_token *t)
 {
     struct a733_mmc_platform_native *n=cookie;
-    return c->kind==n->kind&&current(n) ? n->admit(n->admission_cookie,c,t) : -1;
+    return c->kind==n->kind&&c->emmc_host==n->emmc_host&&current(n) ? n->admit(n->admission_cookie,c,t) : -1;
 }
 static int enter(void *cookie,uint64_t deadline)
 {
@@ -56,7 +56,7 @@ static void retain(void *cookie)
 }
 static int allowed(struct a733_mmc_platform_native *n,uintptr_t a,unsigned writing)
 {
-    if(!current(n)||!a733_mmc_platform_native_address(n->kind,a,writing))return 0;
+    if(!current(n)||!a733_mmc_platform_native_address_selected(n->kind,n->emmc_host,a,writing))return 0;
     return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
 }
@@ -72,10 +72,11 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_mmc_platform_native *n=cookie;
     if(!allowed(n,a,1))return 0;
-    uintptr_t base=n->kind==SUNXI_MMC_SD?0x04020000:0x04022000;
-    uintptr_t module=n->kind==SUNXI_MMC_SD?0x02002d00:0x02002d20;
+    unsigned index=n->kind==SUNXI_MMC_SD?0:n->emmc_host==A733_MMC_EMMC_SDC3?3:2;
+    uintptr_t base=0x04020000+index*0x1000;
+    uintptr_t module=0x02002d00+index*0x10;
     if(a==0x03400198) {
-        if(v!=(n->kind==SUNXI_MMC_SD?2u:8u))return 0;
+        if(v!=(1u<<(index+1)))return 0;
     } else if(a==module||a==module+0xc) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
         if(a==module&&(v&(mask&~UINT32_C(0x80000000)))!=29)return 0;
@@ -109,13 +110,19 @@ static int outside(void *cookie,const void *v,size_t bytes)
     struct a733_mmc_platform_native *n=cookie;
     return n&&separate(n,sizeof(*n),v,bytes)&&separate(n->locks,sizeof(*n->locks),v,bytes);
 }
-int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
-    struct a733_platform_locks *locks,void *task,enum sunxi_mmc_kind kind,
+int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *n,
+    struct a733_platform_locks *locks,void *task,enum sunxi_mmc_kind kind,enum a733_mmc_emmc_host host,
     int (*admission)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *cookie)
 {
     if(!n||n->initialized||!locks||!locks->initialized||!task||!admission||
-       (kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC))return 0;
-    n->kind=kind;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
+       (kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC)||(unsigned)host>A733_MMC_EMMC_SDC3||
+       (kind==SUNXI_MMC_SD&&host))return 0;
+    n->emmc_host=host;n->kind=kind;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
     n->operations=(struct a733_mmc_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier,outside};
     n->initialized=1;return 1;
 }
+
+int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
+    struct a733_platform_locks *locks,void *task,enum sunxi_mmc_kind kind,
+    int (*admission)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *cookie)
+{return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}

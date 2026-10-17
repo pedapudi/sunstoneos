@@ -45,7 +45,7 @@ static void accessible(struct storage_model *s)
 static int storage_read(void *v,uintptr_t a,uint32_t *out)
 {
     struct storage_model *s=v;++s->accesses;
-    assert(s->power.register_held&&a733_mmc_platform_native_address(s->platform.config.kind,a,0));
+    assert(s->power.register_held&&a733_mmc_platform_native_address_selected(s->platform.config.kind,s->platform.config.emmc_host,a,0));
     if(a>=s->platform.base&&a<=s->platform.base+0x300) {
         accessible(s);return read32(&s->card,(uint32_t)(a-s->platform.base),out);
     }
@@ -54,12 +54,12 @@ static int storage_read(void *v,uintptr_t a,uint32_t *out)
 static int storage_write(void *v,uintptr_t a,uint32_t value)
 {
     struct storage_model *s=v;++s->accesses;++s->writes;
-    assert(s->power.register_held&&s->admitted&&a733_mmc_platform_native_address(s->platform.config.kind,a,1));
+    assert(s->power.register_held&&s->admitted&&a733_mmc_platform_native_address_selected(s->platform.config.kind,s->platform.config.emmc_host,a,1));
     if(a>=s->platform.base&&a<=s->platform.base+0x300) {
         accessible(s);return write32(&s->card,(uint32_t)(a-s->platform.base),value);
     }
     if(a==0x03400198) {
-        assert(value==(s->platform.config.kind==SUNXI_MMC_SD?2u:8u));
+        assert(value==(s->platform.config.kind==SUNXI_MMC_SD?2u:s->platform.config.emmc_host==A733_MMC_EMMC_SDC3?16u:8u));
         *pmic_model_word(&s->power,0x03400118)&=~value;
     } else {
         assert(a==s->platform.module||a==s->platform.bus);
@@ -72,7 +72,7 @@ static int storage_write(void *v,uintptr_t a,uint32_t value)
 }
 static int storage_barrier(void *v)
 {struct storage_model *s=v;assert(s->power.register_held);return 1;}
-static void storage_setup(enum sunxi_mmc_kind kind)
+static void storage_setup_selected(enum sunxi_mmc_kind kind,enum a733_mmc_emmc_host host)
 {
     memset(&m,0,sizeof(m));pmic_model_setup(&m.power);seed(&m.card,&m.platform.core,kind,1);
     m.power.pmic[0x11]=1u<<4;m.power.pmic[0x33]=13;
@@ -87,12 +87,12 @@ static void storage_setup(enum sunxi_mmc_kind kind)
     *pmic_model_word(&m.power,0x02000070)=1;
     *pmic_model_word(&m.power,0x02000190)=2; /* Externally held eMMC reset. */
     struct a733_mmc_platform_config c={.owner=42,.handoff=200,.topology=201,
-        .kind=kind,.deadline_us=1000000,.lifetime_deadline_us=10000000,.voltage_mask=0x00300000,
+        .kind=kind,.emmc_host=host,.deadline_us=1000000,.lifetime_deadline_us=10000000,.voltage_mask=0x00300000,
         .fabric={0,1u<<31,1u<<31},.fabric_hz={24000000,24000000,24000000}};
     const unsigned pins[]={0,1,5,6,8,9,10,11,13,14,15,16};
     for(unsigned i=0;i<(kind==SUNXI_MMC_SD?7u:12u);++i) {
         unsigned pin=kind==SUNXI_MMC_SD?i:pins[i];
-        c.desired[i].function=kind==SUNXI_MMC_SD?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?2:0);
+        c.desired[i].function=kind==SUNXI_MMC_SD?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?3+(unsigned)host:0);
         c.desired[i].pull=1;
     }
     const struct a733_mmc_platform_ops o={storage_now,storage_current,storage_admit,storage_enter,
@@ -100,6 +100,8 @@ static void storage_setup(enum sunxi_mmc_kind kind)
     assert(a733_mmc_platform_init(&m.platform,&c,&o,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
     assert(!m.accesses);
 }
+static void storage_setup(enum sunxi_mmc_kind kind)
+{storage_setup_selected(kind,A733_MMC_EMMC_SDC2);}
 static enum a733_mmc_platform_result step(void)
 {
     m.power.now+=100;m.card.fifo_this_poll=0;
@@ -194,4 +196,5 @@ int main(int argc,char **argv)
         assert(!a733_mmc_platform_native_address(kind,(k==SUNXI_MMC_SD?0x04020000:0x04022000)+0x200,1));
     }
     puts("PASS: real MMC/clock/pin/rail/PMIC composition, selected routes, read release and retained faults");
+    return 0;
 }

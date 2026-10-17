@@ -29,6 +29,8 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
     if(!c||!out||!c->owner||!c->handoff||!c->topology||!c->deadline_us||
        c->lifetime_deadline_us<c->deadline_us||
        (c->kind!=SUNXI_MMC_SD&&c->kind!=SUNXI_MMC_EMMC)||
+       (unsigned)c->emmc_host>A733_MMC_EMMC_SDC3||
+       (c->kind==SUNXI_MMC_SD&&c->emmc_host!=A733_MMC_EMMC_SDC2)||
        !c->voltage_mask||(c->voltage_mask&~UINT32_C(0x00300000)))return 0;
     a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
     for(unsigned i=0;i<3;++i) {
@@ -129,7 +131,7 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     return mode==p->voltage_mode;
 }
 static uint32_t irq_bit(const struct a733_mmc_platform *p)
-{return p->config.kind==SUNXI_MMC_SD?BIT(1):BIT(3);}
+{return p->config.kind==SUNXI_MMC_SD?BIT(1):p->config.emmc_host==A733_MMC_EMMC_SDC3?BIT(4):BIT(3);}
 static int masked(struct a733_mmc_platform *p)
 {
     uint32_t v,mask=irq_bit(p);
@@ -226,7 +228,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
        !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu))||o->outside(cookie,p,sizeof(*p))!=1)return 0;
     unsigned sd=c->kind==SUNXI_MMC_SD,count=sd?7:12,bank=sd?A733_PIN_F:A733_PIN_C;
     for(unsigned i=0;i<count;++i) {
-        unsigned pin=sd?i:emmc_pins[i],fn=sd?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?2:0);
+        unsigned pin=sd?i:emmc_pins[i],fn=sd?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?3+(unsigned)c->emmc_host:0);
         if((c->expected[i].function!=0&&c->expected[i].function!=15)||c->desired[i].function!=fn||
            !a733_pin_config_valid_banked(bank,pin,c->expected[i])||
            !a733_pin_config_valid_banked(bank,pin,c->desired[i]))return 0;
@@ -234,9 +236,10 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
     }
     struct a733_pmic_lifetime identity;
     if(a733_pmic_identity(pmic,&identity)!=A733_PMIC_READY)return 0;
+    unsigned index=sd?0:c->emmc_host==A733_MMC_EMMC_SDC3?3:2;
     *p=(struct a733_mmc_platform){.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,.pins=pins,
         .rails=rails,.pmic=pmic,.power=identity,.shared=shared,.deadline=c->deadline_us,
-        .base=sd?0x04020000:0x04022000,.module=CCU+(sd?0xd00:0xd20),.bus=CCU+(sd?0xd0c:0xd2c)};
+        .base=0x04020000+index*0x1000,.module=CCU+0xd00+index*0x10,.bus=CCU+0xd0c+index*0x10};
     struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained},
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
@@ -246,7 +249,7 @@ static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
 {
     if(p->stage==CLOCK) {
         enum a733_clock_result r=a733_clock_acquire(p->clocks,p->config.owner,p->shared,
-            p->config.kind==SUNXI_MMC_SD?A733_CLOCK_SDC0:A733_CLOCK_SDC2,p->deadline,&p->clock);
+            p->config.kind==SUNXI_MMC_SD?A733_CLOCK_SDC0:(A733_CLOCK_SDC2|A733_CLOCK_SDC3),p->deadline,&p->clock);
         if(r==A733_CLOCK_BUSY)return A733_MMC_BUSY;
         if(r!=A733_CLOCK_OK||!timely(p))return fail(p);
         p->stage=RAIL;return A733_MMC_PENDING;
@@ -299,10 +302,12 @@ static enum a733_mmc_platform_result metadata(struct a733_mmc_platform *p)
 }
 static int running(struct a733_mmc_platform *p)
 {
-    uint32_t module,bus;
-    return !p->pins->failed&&profile(p)&&voltage(p,0)&&masked(p)==1&&
-        rd(p,p->module,&module)&&(module&0x87001f1fu)==0x8000001du&&
-        rd(p,p->bus,&bus)&&(bus&0x10001u)==0x10001u;
+    uint32_t module,bus,ndma;
+    if(p->pins->failed||!profile(p)||!voltage(p,0)||masked(p)!=1||
+       !rd(p,p->module,&module)||(module&0x87001f1fu)!=0x8000001du||
+       !rd(p,p->bus,&bus)||(bus&0x10001u)!=0x10001u)return 0;
+    return p->config.kind!=SUNXI_MMC_EMMC||p->config.emmc_host!=A733_MMC_EMMC_SDC3||
+        (rd(p,p->base+0x7c,&ndma)&&!(ndma&3));
 }
 static enum a733_mmc_platform_result registers(struct a733_mmc_platform *p)
 {

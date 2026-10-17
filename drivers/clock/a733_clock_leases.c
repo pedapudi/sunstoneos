@@ -61,7 +61,7 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
         A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS|A733_CLOCK_MAIN_UARTS|
         A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1|
         A733_CLOCK_SDC1|A733_CLOCK_RADIO_MODULE|A733_CLOCK_S_TWI0|
-        A733_CLOCK_SDC0|A733_CLOCK_SDC2;
+        A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;
