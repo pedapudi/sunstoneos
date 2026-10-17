@@ -53,7 +53,6 @@ int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
         if(a733_smp_counter()/24>=deadline)return 0;
     return 1;
 }
-#ifdef SUNSTONE_A733_CACHED_DEVICES
 int a733_smp_device_preparation_admitted(void)
 {
     uint64_t el, mpidr, control, flags; unsigned index;
@@ -72,7 +71,6 @@ int a733_smp_device_preparation_admitted(void)
             !__atomic_load_n(&probe_finished[c], __ATOMIC_ACQUIRE)) return 0;
     return 1;
 }
-#endif
 uint64_t a733_smp_sgi_value(unsigned interrupt,unsigned target)
 {
     uint64_t value;

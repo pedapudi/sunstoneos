@@ -27,6 +27,15 @@ sizes. The input structure, firmware, authenticated NPU model and callback stora
 remain in the image. The firmware and model bytes must be included in the build
 identity. The firmware clock field must agree with the later admitted GPU clock.
 
+The platform also exports `a733_smp_device_preparation_admitted` independently
+of that option. Native DMA setup can use the same actual boot guard without
+constructing accelerator objects. Removing the conditional compilation leaves
+the guard body unchanged. The affected native platform unit compiles and exports
+the guard; evidence is in
+`~/.cache/sunstoneos/evidence/cached-preparation-guard-20261016/`.
+This change has no new complete-image or runtime result. The previously sealed
+physical observer bundle remains unchanged.
+
 All eight cores complete the existing pre-scheduler barrier before the primary
 calls [the device constructor](../platform/a733-smp-cached/devices.c). Admission
 checks actual barrier completion, primary EL1 identity, enabled caches and the

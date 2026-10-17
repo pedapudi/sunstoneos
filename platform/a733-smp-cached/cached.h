@@ -15,6 +15,10 @@ extern volatile struct a733_cached_record a733_cached_records[8];
 extern struct a733_cached_runtime a733_cached_runtime[8];
 extern uint64_t a733_cached_el3_l1[512],a733_cached_el1_l1[512];
 extern unsigned char a733_cpu_el1_stacks[];
+/* Primary EL1, caches enabled, all eight cores past the boot barrier and
+ * scheduler release still withheld. Available to every native device setup;
+ * this ordering check does not establish physical coherence or recovery. */
+int a733_smp_device_preparation_admitted(void);
 void a733_cached_prepare(uint64_t epoch,uint64_t startup,uint64_t diagnostic,uint64_t token);
 void a733_cached_boot_check(void);
 void a733_cached_block_walks(void);

@@ -198,6 +198,10 @@ cores. The current diagnostic and observer targets link with the extracted table
 constructor. The previously sealed physical observer bundle remains unchanged.
 Current central builds have separate identities and compile/link evidence;
 neither cached image has physical qualification.
+The actual pre-scheduler device guard is now available independently of optional
+accelerator construction. Its body is unchanged and the affected native platform
+unit compiles. A complete DMA application link still requires its pending service
+integration and actual immutable platform handoff.
 
 Focused corrections retain inherited IOMMU page-walk faults, preserve the NPU
 register mutex on uncertain operations before release, and reject uncertain GPU
