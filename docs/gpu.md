@@ -1,46 +1,37 @@
-# GPU firmware preparation and remaining implementation
+# GPU implementation and remaining graphics work
 
-GPU support is **partially implemented with host and emulator evidence**. Native firmware
-decoding, staging, and [MIPS memory/boot preparation](gpu-mips.md) work for the
-pinned A733 image. The GPU has not booted
-firmware or executed a graphics or compute workload in SunstoneOS.
-Physical qualification remains outstanding.
-The [native firmware queue transport](gpu-queues.md) also has host evidence for
-submission, result ownership, events, deadlines, and retained failures.
-Native [initialization records](gpu-fw-state.md) connect the queues to backed
-firmware resources and match the pinned reference initializers.
-Native [GPU workload tables](gpu-vm.md) also match the reference encoders for
-all six page sizes and prepare firmware memory-context records.
-The [startup controller](gpu-start.md) now passes host checks for ordered reset
-release, cache/wrapper setup, minimum delays, and bounded firmware readiness.
-Its complete register traces match the original startup functions.
-The [firmware control worker](gpu-control.md) checks published compatibility,
-requires a health-command result, and services interrupts/events in bounded
-batches. It has host integration and ABI-reference evidence.
-[Bounded shutdown](gpu-stop.md) now implements firmware power handshakes,
-idle/reset checks, and a required platform-isolation callback. Host and reference
-checks pass; physical isolation remains unimplemented and unqualified.
-The [FreeRTOS lifecycle service](gpu-service.md) now integrates preparation,
-startup, control, and shutdown under one privileged worker. A two-core emulator
-check passes ownership, reopen, event service, and retained-failure cases.
-The [native memory adapter](gpu-memory.md) has emulator evidence for translation,
-uncached shared resources, and cached firmware publication/reclamation. The
-backend still requires physical power, cache, interrupt, and isolation qualification.
-The [power controller](gpu-power.md) has bounded clock/reset/domain sequencing
-with host/reference evidence. [Interrupt delivery](gpu-interrupts.md) now connects
-the worker to GIC mask/rearm operations and passes actual QEMU interrupt delivery.
-The [resource manager](gpu-resources.md) now arbitrates leases and verifies
-inherited clock/rail settings through a native register/I2C adapter. Native
-[power binding and shared FreeRTOS locks](gpu-platform.md) now have instruction-model
-and scheduler evidence. Cold initialization and physical qualification remain
-outstanding. The [lifecycle service](gpu-service.md) can drive bounded
-asynchronous power steps; its power-controller integration passes in QEMU.
-The [translation-cache invalidation protocol](gpu-flush.md) now publishes changed
-tables and waits for a checked firmware command result in the host model.
-Live mapping edits, service integration, and physical invalidation remain required.
-[Firmware event dispatch](gpu-events.md) now decodes the delegated ABI and
-resolves owned resources before invoking a handler. Actual backing allocation,
-free-list growth/reconstruction, and response submission remain required.
+GPU support is **partially implemented with host and emulator evidence**.
+SunstoneOS has native firmware preparation, lifecycle control, retained memory
+reservations, free-list management, and a fixed numerical compute submission.
+The GPU has not booted firmware or executed a graphics or compute workload in
+SunstoneOS. Physical qualification remains outstanding.
+
+| Implemented component | Evidence and remaining boundary |
+| --- | --- |
+| [Firmware/MIPS preparation](gpu-mips.md), [initialization records](gpu-fw-state.md), and [queues](gpu-queues.md) | Source comparisons and host checks cover actual buffer construction and firmware transport; firmware execution is unqualified |
+| [Startup](gpu-start.md), [control](gpu-control.md), [shutdown](gpu-stop.md), and [FreeRTOS lifecycle](gpu-service.md) | Ordered state machines and service composition pass; physical startup and independent memory-traffic drain remain required |
+| [Power/resources](gpu-platform.md), [native backend](gpu-backend.md), and [interrupt delivery](gpu-interrupts.md) | Native register, shared-lock and interrupt adapters have instruction/scheduler evidence; board resources and electrical operation remain unqualified |
+| [Firmware reservations](gpu-reserved.md) and [native memory](gpu-memory.md) | Real linker-owned parent leases, firmware buffers and cache/translation operations exist; external exclusion and physical visibility remain required |
+| [Workload VM](gpu-vm.md), [native table publication](gpu-vm-memory.md), and [translation invalidation](gpu-flush.md) | Offline tables and publication exist; live mapping changes and invalidation integration remain required |
+| [Free-list manager](gpu-freelist.md), [event decoding](gpu-events.md), and [lifecycle integration](gpu-freelist-service.md) | Construction, growth, reconstruction, responses and shutdown draining exist; native backing operations and linked render-target recovery remain required |
+| [Fixed compute programs](gpu-compute-programs.md), [numerical job](gpu-compute-job.md), [service](gpu-compute-service.md), and [reservations](gpu-compute-reserved.md) | Actual shader/command generation, reserved memory, publication and guarded output checking exist; simulated completion does not establish GPU execution |
+| [Core-mode admission](gpu-compute-mode.md) | Post-power native observation must establish the supported single-core profile before startup/submission; physical observation remains required |
+
+The [native backend](../platform/a733/gpu_backend.c) forwards the free-list manager's allocation, publication,
+shared-memory and render-target recovery operations with their retained context.
+It does not supply those operations. The manager's page allocation protocol is
+implemented; its native parent-backed allocator and render-target catalogue are
+still missing. Its current bound is 16,384 backing pages per list, or 64 MiB.
+That is an implementation limit, not a final GPU capability limit.
+
+The [fixed-compute constructor](../platform/a733/gpu_compute_reserved.c) presently
+refuses a configuration with free lists enabled. The
+[lifecycle service](../drivers/gpu/pvr_gpu_service.c) rebuilds firmware mappings from its 19 base
+resources and six optional compute objects. A native graphics owner must register
+its free-list and render-target firmware mappings in that actual preparation
+path, reserve their backing beside the existing compute allocations, and publish
+their workload tables before use. Preparing separate allocations without those
+connections would not produce a usable graphics context.
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -113,7 +104,8 @@ two feature-mask words, and 29 feature-parameter words.
 Code totals 102,400 bytes and data totals 20,480 bytes. These are CPU staging
 buffers. The [MIPS preparation component](gpu-mips.md) now constructs firmware
 page tables and boot parameters from caller-supplied physical pages. Platform
-allocation and GPU startup remain outstanding.
+allocation now exists through the reserved firmware constructor. Physical GPU
+startup remains outstanding.
 
 ## Native staging validates bounds before changing buffers
 
@@ -131,9 +123,10 @@ Unaligned source bytes are supported.
 The component limits images to 4 MiB, each allocation to 16 MiB, and program
 headers to 32. It supports the observed MIPS layout and firmware ABI major 1.
 Other processors and layout families remain unsupported by this component.
-It bounds device feature arrays but leaves their complete interpretation to
-the future initializer. Decoding does not authenticate an image or prove
-runtime compatibility; callers must preserve its pinned identity.
+It bounds device feature arrays. Each consuming initializer must validate the
+features and quirks its own hardware profile requires. Decoding does not
+authenticate an image or prove runtime compatibility; callers must preserve its
+pinned identity.
 
 `pvr_fw_stage()` revalidates the source and requires two exact-sized buffers.
 Buffers must be separate from the source, metadata, and each other. It
@@ -179,23 +172,33 @@ live state. Clock/voltage changes require the platform power implementation.
 
 The next implementation steps are:
 
-1. Integrate the lifecycle service's board backend with reserved allocations,
-   native memory operations, physical interrupt delivery, and event-specific resource
-   handlers. Implement and qualify the shutdown isolation callback. Integrate
-   GPU workload contexts, live mapping updates, and translation invalidation.
-   GPU job completion needs
-   separate synchronization.
-   Use the checked MIPS preparation component for firmware mappings and boot data;
-   interpret additional feature parameters as initialization requires them.
-2. Integrate shared-resource management, the checked power controller, and
-   identity checks after independent watchdog recovery is qualified. Boot the pinned firmware and verify its
-   startup/completion protocol on the device.
-3. Adapt the shader compiler and command-generation runtime to native services.
-   Execute bounded compute and offscreen graphics with known results, then
-   integrate display buffers and synchronization.
-4. Qualify faults, cancellation, isolation, concurrent workloads, and power
-   transitions. Optimize performance after complete board functionality,
-   following [validation.md](validation.md).
+1. Bind the existing free-list manager to native parent allocations, protected
+   GPU tables and uncached firmware records. Keep page leases and partial
+   publication failures retained. Build actual render-target records and their
+   linked recovery catalogue; reconstruction must update those records before
+   returning its firmware response. Extend actual service mapping/publication
+   and combined compute/graphics ownership, preserving all existing allocations.
+2. Construct a render context with separate geometry and fragment command rings,
+   context-switch programs, global/local free lists and render-target storage.
+   Generate vertex/fragment shaders, sequencer programs and the complete geometry
+   and fragment control streams for a bounded offscreen image. Publish every
+   context, program, mapping, command and output allocation before submission.
+   Require geometry completion/dependencies, fragment completion and acquired
+   pixel/guard agreement. Command acceptance alone cannot establish rendering.
+3. Integrate the native application with actual shared power, clocks, interrupt
+   routing, resource authority and observed GPU identity. Qualify independent
+   watchdog recovery before board execution. Boot the pinned firmware, execute
+   the existing numerical compute job and the offscreen render, and preserve
+   every lease on failure. [Isolation](gpu-isolation.md) still requires primary
+   evidence of request blocking and completion of accepted external traffic.
+4. Complete reusable context/buffer allocation, cleanup acknowledgements, live
+   mappings and invalidation, repeated jobs, wider graphics/compute workloads,
+   display integration and supported concurrency. The present 2 MiB write-back
+   pool is insufficient for the complete camera/display/accelerator workload;
+   larger authenticated reservations and qualified DRAM remain required. Keep
+   all required resolutions and concurrency in scope. Complete fault recovery,
+   cancellation and power transitions before performance optimization, following
+   [validation.md](validation.md).
 
 [Issue 8](https://github.com/pedapudi/sunstoneos/issues/8) retains full display
 and GPU acceptance requirements. Firmware staging is an intermediate component.
