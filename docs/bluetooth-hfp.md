@@ -144,7 +144,7 @@ particularly sections 2.2–2.4, 4.2, 4.11, 5, 6.1–6.3, 6.7 and 7.2.
 Omitted AT parameter syntax follows sections 3.1 and 4.1 of
 [3GPP TS 27.007 version 6.8.0](https://www.etsi.org/deliver/etsi_ts/127000_127099/127007/06.08.00_60/ts_127007v060800p.pdf),
 which HFP references.
-The cached PDF has SHA256
+The cached HFP 1.9 PDF has SHA256
 `56f5fcce59cc4342c38d13ed44cc87b28ce73d1f2214dc909d121c378575fa41`.
 It is stored outside the repository in
 `~/.cache/sunstoneos/sources/bluetooth-hfp/`.

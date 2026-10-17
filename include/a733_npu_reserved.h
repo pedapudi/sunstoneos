@@ -24,7 +24,7 @@ struct a733_npu_reserved {
     unsigned admitted;
 };
 /* Actual native preparation, no peripheral register access. The existing
- * single-core linker pool must provide a contiguous 1,085,440-byte allocation.
+ * native linker pool must provide a contiguous 1,085,440-byte allocation.
  * Inputs and session metadata must be outside that complete pool. The model is
  * copied and authenticated by npu_convolution_prepare. register_cpu must map
  * the NPU's physical Device page at 0x03600000. Caller provides valid pointers,

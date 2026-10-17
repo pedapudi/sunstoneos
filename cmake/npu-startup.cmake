@@ -14,6 +14,8 @@ add_executable(npu-startup-model EXCLUDE_FROM_ALL
   drivers/clock/a733_clock_leases.c drivers/gpu/a733_gpu_resources.c
   drivers/npu/a733_npu_platform.c drivers/npu/a733_npu_platform_native.c
   drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c
+  drivers/power/a733_pmic_consumer.c drivers/power/a733_pmic.c
+  drivers/power/a733_rail_leases.c drivers/pinctrl/a733_pins.c drivers/pinctrl/a733_pin_tables.c
   checks/npu-startup.c $<TARGET_OBJECTS:npu-startup-native-io>
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${CMAKE_CURRENT_BINARY_DIR}/npu-startup-port.c" "${smp_build}/portASM.S")

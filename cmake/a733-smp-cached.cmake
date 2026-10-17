@@ -19,6 +19,7 @@ set(a733_sources
   platform/a733-smp-cached/platform.c platform/a733-smp-cached/diagnostic.c
   platform/a733/cpu_start.c platform/a733/cpu_entry.c platform/a733/cpu_entry.S
   platform/a733/cpu_entry_native.c platform/a733/cpu_coherence.c platform/a733/cpu_coherence.S
+  platform/a733-smp-cached/memory.c
   platform/a733-smp-cached/continue.c platform/a733-smp-cached/continue.S
   runtime/memory.c runtime/memmove.c checks/fp-context.S)
 list(TRANSFORM a733_sources PREPEND "${a733_root}/")
@@ -32,6 +33,7 @@ set(a733_identity_inputs ${a733_sources}
   "${a733_root}/platform/a733-smp-cached/CMakeLists.txt"
   "${a733_root}/include/a733_cpu_start.h" "${a733_root}/include/a733_cpu_entry.h"
   "${a733_root}/include/a733_cpu_continue.h" "${a733_root}/include/a733_cpu_coherence.h"
+  "${a733_root}/include/a733_cached_memory.h"
   "${a733_root}/platform/a733-smp-cached/cached.h" "${a733_root}/include/FreeRTOSConfig.h"
   "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/platform/a733-smp-cached/boot.h"
   "${a733_root}/platform/a733-smp-cached/link.ld" "${a733_root}/cmake/a733-smp-cached.cmake"

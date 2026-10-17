@@ -47,6 +47,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
   boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
   storage work for this workload; full memory protection/coherence remains untested.
+  [Cached device reservations](cached-device-reservations.md) now prepare actual
+  NPU/GPU buffers under the eight-core boot barrier and matching EL3/EL1 mappings.
+  Emulator checks pass for translation on every core and retained construction.
+  Native application binding and physical exclusion/coherence remain required.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -67,8 +71,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   native compilation passes. Controller access, pin/clock restoration, and ROM
   return are **tested** in the earlier eMMC probe; CMD1 received no response.
   [Physical storage evidence](storage.md) records that negative result. No media
-  device is physically identified. Native platform binding, physical reads,
-  writes, faster modes, backup and recoverable boot remain outstanding.
+  device is physically identified. The [native storage binding](mmc-platform.md)
+  composes SDC0/SDC2 reads with actual clock, pin, rail and PMIC ownership.
+  Host checks and native compilation pass for controller and ownership behavior.
+  Source review found that the eMMC route selected the NAND pin function; its
+  correction and SDC3 implementation are in progress. Earlier model evidence
+  does not establish the correct eMMC pinmux.
+  Physical reads, SDC3, writes, faster modes, backup and recoverable boot remain
+  outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
@@ -76,8 +86,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   compilation pass for shared selectors, snapshot ownership and retained faults.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
-  and native compilation pass. Legacy GPU/NPU reader migration, cold bus startup,
-  recovery, regulator writes and electrical qualification remain open.
+  and native compilation pass. [GPU/NPU consumers](pmic-consumers.md) now retain
+  actual asynchronous observations and supply leases; selecting the shared
+  provider disables their competing inherited-bus readers. Emulator checks pass
+  for both consumers and retained failures. Cold bus startup, recovery, regulator
+  writes and electrical qualification remain open.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
@@ -120,8 +133,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   target links. Physical handoff remains unqualified. The [native reservation
   pool](memory-reservations.md) supplies linker-owned page allocations and binds
   their lifetime to actual DMA controller and cache completion. Host checks and
-  native linking pass. Cached-image integration, physical memory exclusion and
-  external bus drain remain unqualified.
+  native linking pass. Cached accelerator preparation is implemented; native DMA
+  service binding, physical memory exclusion and external bus drain remain open.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
   unimplemented or untested.
@@ -181,8 +194,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reservation remain unqualified. The [native firmware constructor](gpu-reserved.md)
   now reserves actual write-back and uncached linker pools and prepares firmware
   state and MIPS tables. Emulator checks pass for translation, NPU coexistence
-  and retained allocation failure; linker layout checks pass. Compute/VM
-  reservations, cached-image binding and physical exclusion/drain remain open.
+  and retained allocation failure; linker layout checks pass. The
+  [fixed-compute constructor](gpu-compute-reserved.md) now allocates payload,
+  context and planner-sized VM tables, runs actual builders and binds the service.
+  Native instruction checks pass for construction and retained capacity failure.
+  Physical computation, complete application binding, exclusion/drain, free lists
+  and wider GPU workloads remain open.
   The [power controller](gpu-power.md) has host/reference evidence for GPU
   clock/reset and domain transitions. The [resource manager](gpu-resources.md)
   has host/native-adapter evidence for leases, inherited settings, and retained
@@ -294,7 +311,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   replies before transmission. It requires fresh firmware/UART generations and
   scheduled polling with the UART interrupt masked. [Bluetooth ACL/link ownership](bluetooth-acl.md)
   adds outbound BR/EDR connections, bounded packet transmission and controller
-  credit accounting. Host checks and native compilation pass; uncertain partial
+  credit accounting. [Incoming admission](bluetooth-incoming.md) reserves copied
+  peer identities and performs actual HCI acceptance or rejection with ordered
+  completion. Host checks and native compilation pass; uncertain partial
   transfers and disconnect results remain retained. [L2CAP channels](bluetooth-l2cap.md)
   add bounded setup in both directions, configuration, disconnection and data
   fragmentation/reassembly. Composed host checks and native compilation pass.
@@ -305,16 +324,28 @@ implementation is **planned**. Partial results apply only to the stated scope:
   assembles bounded continuation responses and exposes service attributes and
   advertised RFCOMM endpoints. Host checks and native compilation pass.
   Confirmed teardown retains transport buffers until controller completion.
+  The [local SDP server](bluetooth-sdp-server.md) serves search, attribute and
+  combined requests with bounded continuation and explicit audio-gateway records.
+  Host checks and native compilation pass; advertised features require actual
+  application support and do not establish pairing or voice capability.
   [RFCOMM serial channels](bluetooth-rfcomm.md) compose service discovery with
-  outbound credit-based transport, flow control and confirmed teardown. Host
-  checks and native compilation pass, including acceptance-time response fences
-  shared with other Bluetooth workers. Incoming sessions, additional channel
-  modes, authentication and hands-free control/voice remain outstanding.
+  incoming and outbound credit-based transport, flow control and confirmed
+  teardown. Host checks and native compilation pass, including exact incoming
+  channel ownership and acceptance-time response fences. The initial
+  [hands-free audio gateway](bluetooth-hfp.md) implements service-level setup,
+  indicator reporting and gain reports over the actual incoming stack. Host
+  checks and native compilation pass. Mandatory remaining call-control procedures,
+  authentication, additional channel modes and synchronous voice remain outstanding.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
-  one data line at 400 kHz; firmware/transport binding, wider modes, shutdown and
-  physical topology/recovery remain unqualified.
+  one data line at 400 kHz. The [native radio session](radio-session.md) keeps
+  platform startup, transport, receive dispatch and socket polling on one task.
+  Emulator checks pass for actual provider ownership, bounded renewal, a TCP
+  exchange and retained failure. Firmware upload and association checkpoints
+  reuse earlier evidence; uninterrupted physical startup remains unqualified.
+  Production entropy, platform identity, wider modes, shutdown and physical
+  topology/recovery remain outstanding.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
@@ -378,8 +409,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source/model checks and native compilation pass. It preserves shared SRAM
   reset and requires exclusive ownership of that memory's existing users.
   The [startup adapter](npu-startup.md) binds shared clocks, stable DCDC2 supply
-  ownership, native PMIC reads and deferred service activation. Focused two-core
-  checks pass with modeled device registers and real FreeRTOS locks; the central
+  ownership, native PMIC reads and deferred service activation.
+  [Shared-provider admission](pmic-consumers.md) retains two actual observations
+  around the required settling interval and checks their ownership before readiness.
+  Focused native instruction checks pass with modeled scheduling and hardware.
+  Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
   release. [Fixed convolution registration](npu-convolution.md) authenticates
   the complete compiled model, private allocations and commands before startup
@@ -420,8 +454,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   comparisons, native compilation and a relocatable composition link pass.
   Output remains unqualified for production security use: raw-source assessment,
   an assessed profile and current-epoch startup testing are unresolved. Secure
-  access, physical operation, independent engine drain, cipher/hash/asymmetric
-  operations and key handling remain outstanding.
+  access, physical operation and independent engine drain remain outstanding.
+  [SHA-256 streaming](crypto-hash.md) shares the same retained controller and page
+  with entropy. Host checks compare modeled results with independent digests;
+  source/native checks and a relocatable composition link pass. SHA-only sessions
+  require no entropy-quality assertion. [AES-128 block transforms](crypto-cipher.md)
+  use the same retained session for encryption and decryption, with private output
+  staging and successful-task key cleanup. Host checks, independent vectors and
+  native composition pass. Physical hashing/cipher operation, authenticated and
+  wider cipher modes, other hashes, asymmetric operations and secure key handling
+  remain outstanding. Internal hardware key erasure is unproven.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

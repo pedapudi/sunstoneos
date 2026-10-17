@@ -2099,5 +2099,41 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/sunxi-wlan.c",
     "archive": "radio-platform/sunxi-wlan.c",
     "sha256": "b167e148db2e9e55d9eb782c569c0eed8fe3604b4d8a3d7ec9a25e1617156110"
+  },
+  "bluetooth-hfp-HFP_v1-9-pdf": {
+    "revision": "1.9",
+    "url": "https://www.bluetooth.org/DocMan/handlers/DownloadDoc.ashx?doc_id=574215",
+    "archive": "bluetooth-hfp/HFP_v1.9.pdf",
+    "sha256": "56f5fcce59cc4342c38d13ed44cc87b28ce73d1f2214dc909d121c378575fa41"
+  },
+  "bluetooth-hfp-src-shared-hfp-h": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/src/shared/hfp.h",
+    "archive": "bluetooth-hfp/src/shared/hfp.h",
+    "sha256": "257b32d73354b45c0a7b991b7d16b8d8ffd6ebe3688190dda393fe11316c99f4"
+  },
+  "bluetooth-hfp-src-shared-hfp-c": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/src/shared/hfp.c",
+    "archive": "bluetooth-hfp/src/shared/hfp.c",
+    "sha256": "846133c682f102267afdf9d01749403b468f111f52c83e750241a16fd9e2d04f"
+  },
+  "bluetooth-hfp-unit-test-hfp-c": {
+    "revision": "0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36",
+    "url": "https://raw.githubusercontent.com/bluez/bluez/0845b8f6ef2ac004b1c953cf4fe4ca3458cd8e36/unit/test-hfp.c",
+    "archive": "bluetooth-hfp/unit/test-hfp.c",
+    "sha256": "e135fc33d58dee7113f0e52be16a65181746e2638b5aa05f14e091caa9053125"
+  },
+  "gpu-native-pvr_rogue_heap_config-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_rogue_heap_config.h",
+    "archive": "gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination/pvr_rogue_heap_config.h",
+    "sha256": "fa55e94a4b857834afc687de2b8bd73ba101a7770115e8c8fd66ac64c8f56d48"
+  },
+  "bluetooth-core-5-4-hci": {
+    "revision": "5.4",
+    "url": "https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html",
+    "archive": "bluetooth-incoming/hci-Core-54.html",
+    "sha256": "66d656a886aa0f0aa3e62baddffe5c517ce2fcda9886002c58208fe3f000b0e6"
   }
 }

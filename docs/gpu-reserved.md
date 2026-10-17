@@ -58,13 +58,13 @@ recovery, observed identity and independent isolation providers are still
 required. The constructor supplies no success callbacks for those conditions.
 Queue formatting remains the service's responsibility during startup.
 
-## Compute and graphics need additional reservations
+## A separate constructor reserves fixed-compute memory
 
-This constructor supplies firmware resources and MIPS tables. The fixed compute
-path still needs six uncached context/control/timeline pages, 88 write-back
-program and payload pages, and GPU page tables sized by the actual VM planner.
-Those allocations are not created here. The planner's exact count must be
-included when composing compute reservations with the existing NPU session.
+This constructor supplies firmware resources and MIPS tables. The
+[fixed-compute constructor](gpu-compute-reserved.md) adds six uncached
+context/control/timeline pages, 88 write-back program/payload pages and
+12 write-back pages requested by the actual VM planner. Both constructors
+retain their complete parent allocations through the service lifetime.
 The compute path also requires freshly observed single-core hardware capability
 before firmware startup and submission. Free lists, wider workloads and
 graphics require further concrete providers.

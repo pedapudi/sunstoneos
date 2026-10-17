@@ -31,6 +31,10 @@ leaf tables. Together with the NPU parent, one entropy page and the firmware
 constructor, it occupies 400 of 512 write-back pages and 51 of 512 uncached
 pages. This leaves 448 KiB write-back and 1,844 KiB uncached capacity. Those
 figures describe these fixed allocations, not a budget for all board hardware.
+A single 640 × 480 NV16 camera frame requires 600 KiB, exceeding that remaining
+write-back capacity. Concurrent camera/video/DMA workloads require additional
+reservations and a qualified DRAM handoff; the fixed-compute check does not
+establish that broader memory budget.
 
 ## Heap addresses match the actual firmware initialization
 
