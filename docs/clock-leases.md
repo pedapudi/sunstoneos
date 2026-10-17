@@ -32,10 +32,14 @@ ownership without reference-clock ancestry. USB0 and USB1 have independent
 exclusive controller/PHY scopes. Both reserve the shared USB01 reference and
 its reference-clock/oscillator ancestry. Upstream MSI-LITE2 and USB_SYS gates
 remain under FABRIC ownership; local port tokens do not authorize their changes.
-SDC0, SDC1, SDC2, the radio module and S_TWI0 also have independent exclusive
-scopes. Storage-controller tokens do not select their module clock parents;
-platform admission reserves and verifies those parents separately. SDC3 remains
-unassigned and requires its own ownership before use.
+SDC0–3, the radio module and S_TWI0 also have independent exclusive scopes.
+Either eMMC route reserves SDC2 and SDC3 together before hardware access because
+both controllers connect to the same card. The token grants no access to the
+unselected controller. Storage-controller tokens do not select their module
+clock parents; platform admission reserves and verifies those parents separately.
+The SDC3 extension assigns bit 58 without changing token layout. Its focused
+storage check covers both corrected routes and ownership conflicts; existing
+registry workloads retain their recorded evidence.
 S_TWI0 includes its autonomous engines and reserves shared APBS1 ancestry.
 The [rail ledger](rail-leases.md) separately coordinates 39 PMIC outputs through
 actual DCDC2 and GPU DCDC4 guards; clock ownership does not grant rail authority.

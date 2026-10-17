@@ -2135,5 +2135,17 @@
     "url": "https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html",
     "archive": "bluetooth-incoming/hci-Core-54.html",
     "sha256": "66d656a886aa0f0aa3e62baddffe5c517ce2fcda9886002c58208fe3f000b0e6"
+  },
+  "board-mmc-v4p5x-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v4p5x.c",
+    "archive": "mmc-sdc3/sunxi-mmc-v4p5x.c",
+    "sha256": "f7b14c8dce66eefc222ac7d06b8aad041ea132c463a1f035a201dd940fb95f7f"
+  },
+  "board-mmc-v4p5x-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/mmc/sunxi-mmc-v4p5x.h",
+    "archive": "mmc-sdc3/sunxi-mmc-v4p5x.h",
+    "sha256": "8c3105a3fd28fda6655fc240130dc0f7f866d166c9e5d092af56b50b01b82275"
   }
 }

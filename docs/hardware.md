@@ -72,13 +72,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   return are **tested** in the earlier eMMC probe; CMD1 received no response.
   [Physical storage evidence](storage.md) records that negative result. No media
   device is physically identified. The [native storage binding](mmc-platform.md)
-  composes SDC0/SDC2 reads with actual clock, pin, rail and PMIC ownership.
-  Host checks and native compilation pass for controller and ownership behavior.
-  Source review found that the eMMC route selected the NAND pin function; its
-  correction and SDC3 implementation are in progress. Earlier model evidence
-  does not establish the correct eMMC pinmux.
-  Physical reads, SDC3, writes, faster modes, backup and recoverable boot remain
-  outstanding.
+  composes SDC0 reads and explicitly selected SDC2 or SDC3 eMMC reads with actual
+  clock, pin, rail and PMIC ownership. Both eMMC selections reserve the two
+  controllers together because they share one card. The corrected PC route uses
+  mux 3 for SDC2 and mux 4 for SDC3. Focused host checks cover both routes,
+  conflicting ownership and controller refusal; native compilation passes.
+  Earlier model evidence used the NAND pin function and cannot establish correct
+  eMMC routing. Physical identification/reads, writes, faster modes, backup and
+  recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
@@ -309,7 +310,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained receive ownership, command credits and controller identification.
   Host checks and native compilation pass, including exclusion of unread stale
   replies before transmission. It requires fresh firmware/UART generations and
-  scheduled polling with the UART interrupt masked. [Bluetooth ACL/link ownership](bluetooth-acl.md)
+  scheduled polling with the UART interrupt masked. [Controller configuration](bluetooth-config.md)
+  sets Classic events, disables automatic peer acceptance and verifies connection
+  timeout, page-scan activity and page-only scan settings. It preserves complete
+  and partial incoming requests through the transfer to the ACL owner. Focused
+  host checks and seven native consumer compilations pass. Actual firmware/UART
+  binding, authenticated receive-service timing and pairing remain required.
+  [Bluetooth ACL/link ownership](bluetooth-acl.md)
   adds outbound BR/EDR connections, bounded packet transmission and controller
   credit accounting. [Incoming admission](bluetooth-incoming.md) reserves copied
   peer identities and performs actual HCI acceptance or rejection with ordered

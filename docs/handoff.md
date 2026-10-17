@@ -53,7 +53,8 @@ software behavior; physical operation remains unqualified.
 | [Wi-Fi association, data and WPA2](radio-security.md) | Real RSN handshakes, confirmed keys, controlled-port authorization and CCMP replay checks; host checks and native link pass | Native radio/entropy binding and wider security modes |
 | [Native IPv4 networking](radio-network.md) | Actual FreeRTOS+TCP UDP/TCP clients, bounded socket ownership and revocation; emulator checks and native link pass | Production entropy/radio binding, DHCP/DNS/IPv6, servers and reconnect |
 | [Radio receive dispatch](radio-dispatch.md) | One receive owner, bounded events and complete-record retirement; actual networking composition passes | Physical radio binding and safe shutdown |
-| [Incoming Bluetooth links](bluetooth-incoming.md) | Copied peer reservation, actual HCI acceptance/rejection and bounded quarantine; host checks and native compilation pass | Controller scan/event policy, pairing and physical connections |
+| [Bluetooth controller configuration](bluetooth-config.md) | Verified event/scan/timeout settings and incoming request preservation through ACL handoff; focused host checks and seven native consumer compilations pass | Actual firmware/UART binding, authenticated receive-service timing and physical configuration |
+| [Incoming Bluetooth links](bluetooth-incoming.md) | Copied peer reservation, actual HCI acceptance/rejection and bounded quarantine; host checks and native compilation pass | Pairing, native service authority and physical connections |
 | [Bluetooth channels](bluetooth-l2cap.md) | Real UART/HCI/ACL composition, response timers and guarded channel reuse; host checks and native compilation pass | Finite wire/link identities, native binding, security and headset profiles |
 | [Bluetooth service discovery](bluetooth-sdp.md) | Actual L2CAP transactions, bounded attribute/continuation parsing and confirmed teardown; host checks and native compilation pass | Security, profiles and physical peer discovery |
 | [Local Bluetooth discovery](bluetooth-sdp-server.md) | Actual incoming L2CAP queries, bounded continuation and audio-gateway records; host checks and native compilation pass | Actual profile capabilities, pairing and physical discovery |
@@ -73,7 +74,7 @@ software behavior; physical operation remains unqualified.
 | [Display scanout](display-scanout.md) | Actual PHY/DSI/LCD/DE composition and atomic PLL/media adoption; host checks and native compilation pass | Qualified analog profile, memory/panel binding, independent drain and shutdown/release |
 | [I2S capture](i2s.md) | Finite capture, DMA ownership and clock/reset/header-pin binding; host/emulator checks pass | Continuous capture, playback, Bluetooth PCM and attached microphone |
 | [JPEG decode and native binding](video-platform.md) | Parser/executor, admitted cold startup and per-identity reset; host checks and native compilation pass | Board ROM profile, actual memory/cache/drain authority, physical output and remaining codec families |
-| [SD/eMMC reads](mmc-platform.md) | Actual SDC0/SDC2 ownership around identification and bounded reads; host/native checks cover controller behavior | Correct the eMMC pinmux, add SDC3, then physical identity/reads and wider modes |
+| [SD/eMMC reads](mmc-platform.md) | SDC0 plus explicit SDC2/SDC3 selection, corrected eMMC pin functions and joint card ownership; focused host/native checks pass | Physical identity/reads, writes, wider modes and recoverable boot |
 | [GPIO and pins](pins.md) | Shared B–M ownership, GPIO and interrupt setup; host/source checks and native compilation pass | Physical routes, GIC delivery and platform admission |
 | [Thermal sensors](thermal.md) | Calibrated sampling, alarms and critical thresholds; host/source checks and native compilation pass | Physical accuracy, GIC delivery and thermal policy |
 | [SPI platform](spi-platform.md) | Actual clock/pin/GIC binding and bounded master transfers; composed host checks and native compilation pass | Board admission, SPI4 route proof, DMA, advanced modes and physical peers |
@@ -90,12 +91,13 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 
 | Worktree | Assigned work |
 | --- | --- |
-| Bluetooth worker | Controller policy for incoming connections |
-| Storage worker | Source-backed SDC3 compatibility and mutually exclusive storage routes |
-| Bluetooth audio worker | Synchronous headset transport and routing design |
-| DMA integration worker | Actual cached-pool and native transfer-service binding |
-| Audio worker | Continuous I2S capture/playback ownership design |
-| Independent reviewers | Bluetooth configuration and storage-route correction |
+| Bluetooth audio worker | Actual synchronous headset transport, controller credits and copied audio buffers |
+| Storage worker | Bounded SD/eMMC writes under explicit default-deny authority; native platform remains read-only |
+| DMA integration worker | Actual cached-pool and native transfer-service binding, with a copy application |
+| Audio worker | Continuous I2S capture/playback with bounded period ownership |
+| HDMI worker | Actual PHY/controller and TV0 timing, sink discovery and diagnostic output |
+| PCIe worker | Actual shared-resource binding, PHY, link and endpoint configuration |
+| Independent reviewers | Changed runtime ownership, deadlines and retained failures before focused execution |
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -150,7 +152,7 @@ The central integration records `hardware-integration-20261016f`,
 `hardware-integration-20261016i`, `hardware-integration-20261016j`,
 `hardware-integration-20261016k`, `hardware-integration-20261016l` and
 `hardware-integration-20261016m`, `hardware-integration-20261016n` and
-`hardware-integration-20261016o`
+`hardware-integration-20261016o` and `hardware-integration-20261016p`
 preserve source comparisons, build artifacts
 and source-pin verification. Integration reused component execution evidence;
 no unchanged emulator or physical workload was repeated. The JPEG record explicitly
@@ -161,7 +163,7 @@ Observer compiler resource headers lacked historical hashes. These limits remain
 explicit and cannot establish missing final-candidate acceptance evidence.
 
 The shared clock registry now has independent UART, SPI, security-engine and
-RC16M scopes, independent USB ports, SDC0–2, radio-module and S_TWI0 scopes,
+RC16M scopes, independent USB ports, SDC0–3, radio-module and S_TWI0 scopes,
 64-bit masks and 128 slots. Its 32-byte token ABI requires all
 producers and consumers to rebuild together. A focused sanitizer check and
 affected native compile/link checks pass; earlier workload results retain
@@ -177,6 +179,11 @@ with the shared PMIC dependency closure; the convolution object also compiles.
 No existing runtime scenario was repeated for that build integration. The radio
 session adds owned socket polling; the two older fixture consumers compile with
 its current structure layout. Central configuration includes the session target.
+Bluetooth configuration and SDC3 integration reuse their complete native consumer
+compilation evidence. The storage check covers corrected PC pin functions for
+both eMMC selections and joint controller/pin conflicts. Earlier evidence using
+the NAND function does not establish eMMC routing. No additional build or runtime
+replay was required for these two integrations.
 
 The central uncached and cached eight-core diagnostics, GPU compute service and
 NPU startup targets compile and link. The NPU convolution object also compiles. Build success does not establish complete-image execution.
@@ -240,6 +247,8 @@ The dashboard requires no separate status maintenance or recurring browser tests
 5. Bind the integrated WPA2 handshake and secure packet transport to native
    entropy and radio resources. Receive dispatch, incoming links, local discovery,
    both RFCOMM connection directions and initial audio-gateway control are integrated.
+   Controller event/scan configuration and preserved incoming-request handoff are
+   also integrated; native receive-service timing still needs actual authority.
    Production entropy still needs raw-source assessment and current-epoch startup
    evidence. Complete IP configuration/services, wider security modes, interrupts,
    sleep and reconnect. Extend Bluetooth links with pairing, the remaining mandatory
