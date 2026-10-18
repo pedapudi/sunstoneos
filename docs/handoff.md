@@ -317,7 +317,12 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:103`. Its last confirmed physical
+The original board on `3-1` is retained after the updated full eight-core attempt
+on `003:103`. The launch command completed, USB disappeared, and no native
+observer appeared within the bounded window. No scheduler or failure-location
+result was recovered. The host stopped communication; the process, port lock
+and queue claim remain live pending user-confirmed power removal. Evidence is
+under `smp-ns-publication-20261018/full-image/`. Its last confirmed physical
 power removal and fresh DDR/platform preparation are recorded under
 `reconnect-20261018-092/`. Subsequent returning diagnostics preserve that DDR
 continuity. No process or claim from those completed attempts remains active.
@@ -325,9 +330,10 @@ Subsequent diagnostics identified and corrected a group-register verification
 refusal. Core-1 local initialization and restoration now pass under
 `native-local-group-mask-20261018/native/runtime/`. Production EL3 cache adoption
 and restoration also pass under `native-el3-cache-20261018/native-attempt/runtime/`.
-Nonsecure publication, production cached EL1 entry and SMC return now pass under
-`native-ns-publication-20261018/native/runtime/`. Refresh the current
-warm launcher state before its next native execution; preserve DDR continuity.
+Nonsecure publication, production cached EL1 entry and SMC return previously passed
+under `native-ns-publication-20261018/native/runtime/`. That returning result does
+not authorize reuse after the subsequent full-image disappearance. Recover and
+prepare the original board before its next physical operation.
 The second board on `3-3`, instance
 `003:101`, has successful DDR, returning survey, SD initial-register and PMIC
 evidence. Its warm launcher survey and cache-off preparation also pass under
@@ -558,10 +564,14 @@ publication before secondary release. Four routine cases and one actual-boot
 case pass; the snapshot records 89 compiler inputs and 34 linked objects. Reuse
 these results. The final caller order blocks EL1 walks before temporary EL3
 mapping; unchanged routine evidence is explicitly reconciled in
-`publication-reuse.json`. All-core runtime and physical execution of this image
-remain untested. Prepare a fresh package from its symbols and identities; the
-old returning overlay's addresses do not apply. Neither board was accessed for
-this integration, so refresh actual instance and launcher state before testing.
+`publication-reuse.json`. One further instruction-model case reaches cached EL1 on all eight cores.
+The prepared full image was then launched once on the original board; USB
+disappeared and no native observer result arrived. Do not repeat it unchanged.
+The next returning diagnostic should distinguish the new complete-image primary
+publication path from later secondary entry and scheduling. Generate bindings
+from this ELF; the old returning overlay's addresses do not apply. The second
+board was not accessed. The retained original-board process is recorded in
+`full-image/process.json`; only explicit recovery permits closing its claim.
 
 The [GPU publication audit](gpu-single-core-publication.md) supports retaining
 its frozen image under the existing clean-entry contract. PMIC return101 is a

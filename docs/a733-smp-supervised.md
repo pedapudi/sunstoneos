@@ -1031,7 +1031,18 @@ EL3 controls restored and EL1 walks blocked. The four routine cases were reused
 after matching their executed code, table constructor and linked addresses.
 The snapshot preserves 89 compiler inputs and 34 linked-object dependency records.
 
-These checks model architectural registers and cache effects. The updated full
-image has not run on either board; all-core entry, physical interrupt delivery,
-coherence, scheduling and USB result capture remain outstanding. Its next physical
-attempt requires a fresh image-bound launch package and current board admission.
+These checks model architectural registers and cache effects. One additional
+complete-image model case reaches cached EL1 on all eight cores with unimplemented
+PPI bits modeled as read-as-zero/write-ignored. The ELF was reused unchanged.
+
+One physical attempt subsequently ran the launcher on original-board instance
+`003:103`, after a successful returning survey/cache-disable/survey sequence.
+The launch command returned successfully and USB disappeared, but no native
+observer appeared within the nineteen-second capture window. No failure-location
+or scheduler result was recovered. The host issued no further device commands
+and retains its process, lock and claim pending manual recovery. Evidence is in
+`smp-ns-publication-20261018/full-image/`. This does not identify a failed core or
+instruction. Do not repeat the full launch unchanged: first distinguish the new
+complete-image primary publication path from the later secondary/runtime path
+with a source-bound returning diagnostic. All-core physical entry, interrupts,
+coherence, scheduling and USB result capture remain outstanding.
