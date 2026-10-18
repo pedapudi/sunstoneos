@@ -64,6 +64,26 @@ ownership handling. Their modeled admission records cannot authorize hardware.
 Neither application is physically qualified. The first board attempt still
 requires recovery of the quarantined instance.
 
+The [native Bluetooth application](bluetooth-native.md) is integrated with its
+host preparation and shared capture adapter. Firmware bootstrap, UART1 and H4/HCI
+identification connect to actual providers and copied USB output. Four focused
+composition cases and seventeen host/wrapper cases pass. All 420 recovered native
+dependencies are preserved; 176 repository inputs match except for one comment.
+The host's seventeen preserved inputs also match integration. Evidence is under
+`bluetooth-native-20261017/`. Physical identification, pairing/security and
+headset audio remain unqualified.
+
+The [supervised NPU startup](npu-application.md) now supports a disabled PLL with
+live DRAM and a quiescent, already-powered domain. It reuses the existing clock
+and power logic, preserves SRAM reset and makes no power-domain writes. One
+native link and the focused startup/admission cases pass. All 468 inputs are
+preserved; the actual native dependency closure contains 169 files, including
+112 repository inputs with only two comment differences. The saved image is
+reused without rebuilding. Evidence is under `npu-live-20261017/`.
+Modeled startup reaches service activation; worker commands and physical
+inference remain untested. Real supply, clock-source, SRAM-exclusion and
+manual-power-removal admission remain required.
+
 Native HDMI startup, DMA USB observation, GPU graphics resources, storage updates,
 native camera binding and fixed GPU graphics submission are integrated. The
 complete [maintenance image](storage-maintenance-launch.md) connects native
@@ -157,19 +177,14 @@ preserved artifacts match integration; evidence is under
 The HDMI application connects actual providers to a fixed 720p60 colorbar.
 Its central build matches all 65 repository dependencies, and its 17 focused
 software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
-routing and physical output remain outstanding. Cold NPU clock provisioning
-and an unsuitable supply still require a separate implementation and physical
-evidence. NPU and GPU packaging/capture integration is complete at the software
+routing and physical output remain outstanding. NPU startup with an unsuitable
+supply remains unsupported. NPU and GPU packaging/capture integration is complete at the software
 level. Their shared transport remains unchanged by the observer and board
 approval correction. Physical access remains exclusive to the coordinator.
 
-Native JPEG, I2S and Bluetooth integration is in progress in separate worktrees.
-JPEG connects the existing decoder to actual memory translation, shared resources
-and copied USB output. I2S connects capture or recorded playback to the actual DMA
-pool and stream service. Bluetooth connects radio firmware bootstrap, UART1 and
-controller identification without requiring a headset. These applications have
-not completed their builds or focused checks. JPEG and Bluetooth share optional
-board startup callbacks; existing board behavior is unchanged without that option.
+JPEG and Bluetooth share optional board startup callbacks. The camera's supervised
+launch and capture integration is the next device path in development. Its
+existing component evidence remains valid within the recorded scope.
 
 The native PMIC provider now accepts the APBS1 reference-clock parent selected
 by the pinned DDR loader. It verifies the 24 MHz PLL reference and rejects later
@@ -178,8 +193,8 @@ and native compilation pass; source and artifact comparisons are under
 `pmic-parent-20261017/batch1/`. New application builds include this correction.
 Earlier sealed images retain their original provider layout and need rebuilding
 before using the additional parent support. Physical operation remains untested.
-An opt-in early NPU PLL step is also in development; it must preserve shared SRAM
-and measure state after DDR training before any later NPU admission.
+The early-boot NPU PLL draft is preserved without execution. The source-backed
+live-DRAM path supersedes that approach and requires no boot0 overlay.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture

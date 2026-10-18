@@ -413,6 +413,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   nine native consumer compilations pass. Controller capabilities, real security
   and scheduling providers, physical headset audio, wired PCM routing, wider
   codecs and mandatory remaining call-control procedures remain outstanding.
+  The [native Bluetooth application](bluetooth-native.md) connects firmware
+  bootstrap, UART1, H4/HCI identification and copied USB output. Its central
+  image and four focused composition cases pass; seventeen host and launcher
+  wrapper cases pass. These checks use modeled hardware and establish no
+  physical identity, pairing, connection or headset audio.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
@@ -527,8 +532,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   image connects actual PMIC sampling, enabled-PLL retuning and startup token
   adoption; focused checks pass with modeled device responses. Its host path
   passes 33 packaging/capture cases and five frozen-input binding regressions.
-  Disabled-PLL provisioning and unsuitable supply voltage remain unsupported
-  entry conditions. Concrete boot
+  An explicit supervised mode now enables a disabled PLL while DRAM remains
+  active and adopts a quiescent, already-powered NPU domain. Its first native
+  link and focused startup checks pass; modeled startup reaches service
+  activation without power-domain writes or changes to SRAM reset. Unsuitable
+  supply voltage remains unsupported. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 
