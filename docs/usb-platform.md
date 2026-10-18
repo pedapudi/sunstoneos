@@ -66,8 +66,9 @@ deadline bounds initialization; it does not release completed ownership.
 ## Native sequence and admission
 
 The native adapter permits only the addresses and fields used by this device
-profile. PMIC, watchdog, host, soft-connect, DMA and upstream fabric writes are
-refused. All accesses use Device mappings and full-system barriers.
+profile. PMIC, watchdog, host, DMA start and upstream fabric writes are
+refused. The explicit ROM takeover mode also permits interrupt masking,
+soft-disconnect and assertion of the USB0 device reset. All accesses use Device mappings and full-system barriers.
 
 | Register | Operation |
 | --- | --- |
@@ -109,6 +110,52 @@ uncertain register operation also retains the register mutex. If registry fault
 retention is busy, later polls retry only that metadata operation. Terminal
 fault polls issue no callbacks or MMIO. There is no release API until a device
 binding can establish complete shutdown and drain.
+
+## Supervised ROM USB0 takeover
+
+The existing `cold_reference` configuration word is an explicit start mode:
+0 adopts the reference with a cold controller, 1 initializes a cold reference
+and controller, and 2 takes over the ROM device controller. The board session
+layout remains unchanged. Native session admission allows mode 2 only for the
+supervised single-core SD workload; host preparation must bind its takeover
+authority to that image and target.
+
+Mode 2 requires USB0 PHY/reset controls `0x40000000` under mask `0xc0000000`
+and device bus/reset controls `0x01000100` under mask `0x01110111`. The USB0
+host gates and resets must be clear. It reserves the common reference as a
+shared consumer and preserves USB1 and the reference registers.
+
+Before mutation, the provider requires device session, host request and host
+mode clear, and all sixteen internal DMA start bits clear. FIFO bus selection
+is allowed in either state: the pinned `USBC_SelectBus` sets it even for PIO
+on newer controllers. It masks endpoint, bus, DMA and interface interrupts,
+removes soft-connect, and allows the host 150 ms to observe disconnection.
+It then asserts only the device reset for 1 ms, keeping its bus gate enabled,
+deasserts reset, waits 40 microseconds and verifies the detached core before
+continuing through the existing PHY preparation and TinyUSB consumer.
+The 150 ms and 1 ms intervals reuse the physically exercised
+`drivers/usb/a733_usb.c` sequence; the 40 microsecond interval comes from the
+pinned platform initialization.
+
+Clear DMA start bits alone do not establish completed memory writes: the
+pinned DMA disable routine can clear a channel start bit in software. This
+mode therefore still requires evidence that previous USB DMA is drained or
+that the inspected ROM transfer path used PIO throughout this lifetime, plus
+external DMA exclusion/drain. The disconnect interval supplies no bus-drain
+proof. GIC exclusion, exclusive controller access, supplies and supervised
+power-removal recovery remain admission requirements. Any uncertainty retains
+ownership and prevents further MMIO.
+
+The sanitized composition in
+`~/.cache/sunstoneos/evidence/usb-rom-handoff-20261018-final/` passes the
+existing cold cases and actual second-board clock/control inputs, ordered
+ROM takeover, active DMA/host refusal and every failed or ineffective write.
+Native MMIO guards pass in `usb-rom-handoff-20261018-native/`, reusing those
+host results after correcting the linker path. The focused review accepted
+the corrected sequence. Separate session cases accept mode 2 only for the
+supervised single-core SD workload and preserve refusal in other builds.
+These checks model register behavior; ROM transfer provenance, host admission
+and physical takeover remain required evidence.
 
 ## Sources and focused evidence
 

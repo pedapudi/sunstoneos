@@ -28,20 +28,29 @@ int a733_usb_platform_native_write(void *cookie,uintptr_t a,uint32_t v)
     if (a==CCU+0x1340) mask=0x87000000;
     else if (a==CCU+0x1300) mask=BIT(30);
     else if (a==CCU+0x1304) mask=BIT(24)|BIT(8);
+    else if (a==USB+0x40) mask=BIT(6);
+    else if (a==USB+0x48) mask=UINT32_MAX;
+    else if (a==USB+0x50) mask=255;
+    else if (a==USB+0x500) mask=65535;
     else if (a==USB+0x410) mask=0xa8;
     else if (a==USB+0x418) mask=0xf3f;
     else if (a==USB+0x420) mask=1;
-    else if (a==USB+0x400) {mask=0xf000;w1c=0x70;}
+    else if (a==USB+0x400) {mask=0xf00f;w1c=0x70;}
     else return 0;
     __asm__ volatile("dsb sy" ::: "memory");
     uint32_t old=*(volatile const uint32_t *)a;
     if (((v^old)&~(mask|w1c)) || (v&w1c)) return 0;
-    if ((a==CCU+0x1300 || a==CCU+0x1304 || a==USB+0x420) && (old&~v&mask)) return 0;
+    if ((a==CCU+0x1300 || a==USB+0x420) && (old&~v&mask)) return 0;
+    /* ROM takeover may assert only the device reset, keeping its gate on. */
+    if (a==CCU+0x1304 && (old&~v&mask) &&
+        ((old&mask)!=0x01000100 || (v&mask)!=0x100)) return 0;
+    if ((a==USB+0x40 || a==USB+0x48 || a==USB+0x50 || a==USB+0x500) && (v&mask)) return 0;
     if (a==CCU+0x1340 && (((old^v)&0x07000000) && ((old|v)&BIT(31)))) return 0;
     if (a==CCU+0x1340 && ((v>>24)&7)>1) return 0;
     if (a==USB+0x410 && (v&mask)!=0x20) return 0;
     if (a==USB+0x418 && (v&mask)!=0x806) return 0;
-    if (a==USB+0x400 && (v&mask)!=0xf000) return 0;
+    if (a==USB+0x400 && ((v&15) ||
+        ((v&0xf000)!=0xf000 && ((v^old)&0xf000)))) return 0;
     *(volatile uint32_t *)a=v;
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }

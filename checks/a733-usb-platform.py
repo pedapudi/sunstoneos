@@ -22,9 +22,9 @@ def main():
     p.add_argument('--reuse-passed',type=Path,help='Reuse matching completed source/host/object evidence; execute native adapter only')
     a=p.parse_args();root=Path(__file__).resolve().parents[1]
     a.output.mkdir(parents=True,exist_ok=False);snapshot=a.output/'source';snapshot.mkdir()
-    paths=['include/a733_usb_platform.h','include/a733_usb_platform_native.h','include/a733_clock_leases.h',
+    paths=['include/a733_usb_platform.h','include/a733_clock_reference.h','include/a733_usb_platform_native.h','include/a733_clock_leases.h',
            'drivers/usb/a733_usb_platform.c','drivers/usb/a733_usb_platform_native.c',
-           'drivers/clock/a733_clock_leases.c','checks/a733-usb-platform.c','checks/a733-usb-platform.py']
+           'drivers/clock/a733_clock_leases.c','checks/a733-usb-platform.c','checks/a733-usb-rom-handoff.c','checks/a733-usb-platform.py']
     hashes={}
     for path in paths:
         dest=snapshot/path;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(root/path,dest)
@@ -80,6 +80,8 @@ __usbc_otg_t h={0};cell=old;USBC_Phyx_Write(&h,0x188);return cell;}
     if not a.reuse_passed:
         run(flags+[str(snapshot/path) for path in ['checks/a733-usb-platform.c','drivers/usb/a733_usb_platform.c','drivers/clock/a733_clock_leases.c']]+['-o',str(a.output/'platform-check')],'host-build')
         run([str(a.output/'platform-check')],'host-result')
+        run(flags+['-I'+str(snapshot/'checks')]+[str(snapshot/path) for path in ['checks/a733-usb-rom-handoff.c','drivers/usb/a733_usb_platform.c','drivers/clock/a733_clock_leases.c']]+['-o',str(a.output/'rom-check')],'rom-build')
+        run([str(a.output/'rom-check')],'rom-result')
     native=[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-mstrict-align','-mgeneral-regs-only','-O2','-g','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-I'+str(snapshot/'include')]
     if not a.reuse_passed:
         for path in ['drivers/usb/a733_usb_platform.c','drivers/clock/a733_clock_leases.c']:
@@ -111,6 +113,15 @@ __usbc_otg_t h={0};cell=old;USBC_Phyx_Write(&h,0x188);return cell;}
     writecase(0x02003340,0xa0000005,0xa1000005,0)
     writecase(0x02003304,0x20000000,0x21000100,1)
     writecase(0x02003304,0x21000100,0x20000000,0)
+    writecase(0x02003304,0x21000100,0x20000100,1)
+    writecase(0x04100040,0x01400360,0x01400320,1)
+    writecase(0x04100040,0x01400020,0x01400060,0)
+    writecase(0x04100048,0x00040003,0,1)
+    writecase(0x04100050,0xface00ff,0xface0000,1)
+    writecase(0x04100500,0xfaceffff,0xface0000,1)
+    writecase(0x04100400,0x8000c07f,0x8000c000,1)
+    writecase(0x04100400,0x8000307f,0x80003000,1)
+    writecase(0x04100400,0x8000c070,0x80003000,0)
     writecase(0x04100410,0x10000088,0x10000020,1)
     writecase(0x04100418,0xface7040,0xface7846,1)
     writecase(0x04100400,0x80000070,0x8000f000,1)

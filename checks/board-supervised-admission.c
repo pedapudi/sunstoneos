@@ -14,6 +14,14 @@ int main(int argc,char **argv)
     memset(s.image,1,32);memset(s.qualification,2,32);memset(s.recovery,2,32);
     memset(s.wiring,3,32);memset(s.memory,4,32);
     assert(a733_board_session_valid(&s,100));
+    struct a733_board_session takeover=s;takeover.usb0_cold_reference=2;
+#ifdef SUNSTONE_SD_SINGLE_CORE
+    assert(a733_board_session_valid(&takeover,100));
+    takeover.workload=0;assert(!a733_board_session_valid(&takeover,100));
+#else
+    assert(!a733_board_session_valid(&takeover,100));
+#endif
+    takeover=s;takeover.usb0_cold_reference=3;assert(!a733_board_session_valid(&takeover,100));
     struct a733_smp_contract c={.magic=A733_BOARD_CONTRACT_MAGIC,.version=A733_BOARD_CONTRACT_VERSION,
         .bytes=sizeof(c),.epoch=1,.generation=2,.inverse_generation=~UINT64_C(2),.lease=3,.armed_at=24,
         .startup_deadline=24000024,.diagnostic_deadline=1440000024,.expires_at=1440000024,

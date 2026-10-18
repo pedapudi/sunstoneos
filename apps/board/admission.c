@@ -37,7 +37,12 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        s->minimum_reload_us||s->maximum_recovery_us||s->guard_us||s->reset_by_us||
        s->rtc_control||s->rtc_divider||s->rtc_source||s->deadline_us||s->session_start_ticks||s->reload_after_ticks||
 #endif
-       s->usb0_cold_reference!=1)return 0;
+#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_SD_SINGLE_CORE)
+       (s->usb0_cold_reference!=1 && (s->usb0_cold_reference!=2 || s->workload!=2))
+#else
+       s->usb0_cold_reference!=1
+#endif
+       )return 0;
     if(a733_board_host_workload(s->workload)){
         if(!s->latch_identity||!s->latch_owner||s->latch_known_mask!=0x3fff||(s->latch_value&~UINT32_C(0x3fff))||
        s->source_min_mv<4750||s->source_max_mv>5500||s->source_min_mv>s->source_max_mv||

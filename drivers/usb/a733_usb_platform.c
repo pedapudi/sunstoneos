@@ -8,7 +8,8 @@
 #define W1C UINT32_C(0x70)
 enum { ACQUIRE, AUTHORIZE, BASELINE, REF_OFF, REF_SELECT, REF_ENABLE, WAIT_REF,
     DEVICE_RESET, DEVICE_GATE, WAIT_DEVICE, CORE_CHECK, PHY_CONTROL, PHY_RESET,
-    ROUTE, TUNE, FORCE_DEVICE, VERIFY, PUBLISH, COMPLETE, FAULTED };
+    ROUTE, TUNE, FORCE_DEVICE, VERIFY, PUBLISH, COMPLETE, FAULTED, ROM_CHECK, ROM_MASK, ROM_DISCONNECT, ROM_WAIT_DISCONNECT,
+    ROM_RESET_ASSERT, ROM_WAIT_RESET, ROM_RESET_RELEASE, ROM_WAIT_RELEASE, ROM_CORE_CHECK };
 static const uint32_t fabric_offsets[]={0x500,0x580,0x588};
 static const uint32_t fabric_masks[]={0x0300001f,0x8700001f,0x8700001f};
 static const unsigned parent_mhz[3][8]={
@@ -23,7 +24,7 @@ int a733_usb_platform_init(struct a733_usb_platform *p,const struct a733_usb_pla
     const struct a733_usb_platform_ops *o,void *cookie,struct a733_clock_leases *registry)
 {
     if (!p || p->initialized || !c || !o || !registry || !c->owner || !c->handoff ||
-        !c->deadline_us || c->cold_reference>1 || !o->now_us || !o->authorize ||
+        !c->deadline_us || c->cold_reference>A733_USB_ROM_DEVICE || !o->now_us || !o->authorize ||
         !o->enter || !o->leave || !o->retain || !o->read || !o->write) return 0;
     const void *objects[]={p,c,o,registry};
     const size_t sizes[]={sizeof(*p),sizeof(*c),sizeof(*o),sizeof(*registry)};
@@ -39,7 +40,7 @@ int a733_usb_platform_init(struct a733_usb_platform *p,const struct a733_usb_pla
         if (mhz[i]!=24) shared|=A733_CLOCK_PERI0;
     }
     a733_clock_mask_t exclusive=A733_CLOCK_USB0;
-    if (c->cold_reference) exclusive|=A733_CLOCK_USB01_REF;
+    if (c->cold_reference==A733_USB_COLD_REFERENCE) exclusive|=A733_CLOCK_USB01_REF;
     else shared|=A733_CLOCK_USB01_REF;
     *p=(struct a733_usb_platform){.config=*c,.ops=*o,.registry=registry,.cookie=cookie,
         .shared=shared,.exclusive=exclusive,.initialized=1,.self=(uintptr_t)p};
@@ -115,7 +116,7 @@ static int cold(struct a733_usb_platform *p)
 {
     uint32_t osc,v;
     if (!bits(p,CCU+0x1300,0xc0000000u,0) || !bits(p,CCU+0x1304,0x01110111,0)) return 0;
-    if (p->config.cold_reference) {
+    if (p->config.cold_reference==A733_USB_COLD_REFERENCE) {
         if (!bits(p,CCU+0x1308,0xc0000000u,0) || !bits(p,CCU+0x130c,0x00110011,0) ||
             !rd(p,UINT32_C(0x07090160),&osc)) return 0;
         /* Manual4.1.6.198: selector0 SYS_CLK24M; selector1 raw DCXO. */
@@ -125,6 +126,25 @@ static int cold(struct a733_usb_platform *p)
     if (!rd(p,CCU+0x1340,&v)) return 0;
     p->reference=v&REF_MASK;
     return (p->reference==BIT(31) || p->reference==(BIT(31)|BIT(24))) && reference_valid(p);
+}
+/* A device-only, PIO ROM handoff. These observations reject a running DMA
+ * engine; they do not establish completion of previously issued bus writes. */
+static int rom_baseline(struct a733_usb_platform *p)
+{
+    uint32_t v;
+    if (!bits(p,CCU+0x1300,0xc0000000u,BIT(30)) ||
+        !bits(p,CCU+0x1304,0x01110111,0x01000100) ||
+        !rd(p,CCU+0x1340,&v)) return 0;
+    p->reference=v&REF_MASK;
+    return (p->reference==BIT(31) || p->reference==(BIT(31)|BIT(24))) && reference_valid(p);
+}
+static int rom_pio(struct a733_usb_platform *p)
+{
+    /* PCTL/DEVCTL: no host session/request/mode. VEND0 bus selection
+     * is fixed to one on newer hardware even for PIO (pinned USBC_SelectBus). */
+    if (!bits(p,USB+0x40,BIT(8)|BIT(9)|BIT(10),0)) return 0;
+    for (unsigned i=0;i<16;++i) if (!bits(p,USB+0x540+i*16,BIT(31),0)) return 0;
+    return 1;
 }
 static int core_detached(struct a733_usb_platform *p)
 {
@@ -176,7 +196,7 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
         return finish(p,A733_USB_PLATFORM_PENDING);
     }
     if (p->stage==PUBLISH) {
-        if (p->config.cold_reference) {
+        if (p->config.cold_reference==A733_USB_COLD_REFERENCE) {
             struct a733_clock_token replacement;
             cr=a733_clock_publish_stable(p->registry,&p->token,A733_CLOCK_USB01_REF,
                 p->config.deadline_us,&replacement);
@@ -187,7 +207,8 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
         if (!timely(p)) return failed(p);
         p->stage=COMPLETE;return finish(p,A733_USB_PLATFORM_PREPARED);
     }
-    if (p->stage==WAIT_REF || p->stage==WAIT_DEVICE) {
+    if (p->stage==WAIT_REF || p->stage==WAIT_DEVICE ||
+        p->stage==ROM_WAIT_DISCONNECT || p->stage==ROM_WAIT_RESET || p->stage==ROM_WAIT_RELEASE) {
         if (p->last_now<p->wait_until) return finish(p,A733_USB_PLATFORM_PENDING);
         ++p->stage;return finish(p,A733_USB_PLATFORM_PENDING);
     }
@@ -200,7 +221,19 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     if (!timely(p)) return failed(p);
     int ok=0;
     switch (p->stage) {
-    case BASELINE:ok=stable(p)&&cold(p);break;
+    case BASELINE:ok=stable(p)&&(p->config.cold_reference==A733_USB_ROM_DEVICE?rom_baseline(p):cold(p));break;
+    case ROM_CHECK:ok=rom_baseline(p)&&rom_pio(p);break;
+    case ROM_MASK:ok=rom_pio(p)&&update(p,USB+0x48,UINT32_MAX,0,0)&&
+        update(p,USB+0x50,255,0,0)&&update(p,USB+0x500,65535,0,0)&&
+        update(p,USB+0x400,15,0,W1C);break;
+    /* Same disconnect/reset intervals as the physically exercised PIO path in
+     * a733_usb_prepare(). The disconnect interval is not a bus-drain proof. */
+    case ROM_DISCONNECT:ok=rom_pio(p)&&update(p,USB+0x40,BIT(6),0,0)&&wait_start(p,150000);break;
+    case ROM_RESET_ASSERT:ok=rom_pio(p)&&core_detached(p)&&
+        update(p,CCU+0x1304,BIT(24),0,0)&&wait_start(p,1000);break;
+    case ROM_RESET_RELEASE:ok=bits(p,CCU+0x1304,0x01110111,0x100)&&
+        update(p,CCU+0x1304,BIT(24),BIT(24),0)&&wait_start(p,40);break;
+    case ROM_CORE_CHECK:ok=core_detached(p);break;
     case REF_OFF:ok=update(p,CCU+0x1340,BIT(31),0,0);break;
     case REF_SELECT:ok=bits(p,CCU+0x1340,BIT(31),0)&&update(p,CCU+0x1340,0x07000000,p->reference&0x07000000,0);break;
     case REF_ENABLE:ok=update(p,CCU+0x1340,BIT(31),BIT(31),0)&&wait_start(p,10);break;
@@ -222,7 +255,9 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     if (!ok || !timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;
     if (!timely(p)) return failed(p);
-    if (p->stage==BASELINE && !p->config.cold_reference) p->stage=DEVICE_RESET;
+    if (p->stage==BASELINE && p->config.cold_reference==A733_USB_ROM_DEVICE) p->stage=ROM_CHECK;
+    else if (p->stage==ROM_CORE_CHECK) p->stage=PHY_CONTROL;
+    else if (p->stage==BASELINE && !p->config.cold_reference) p->stage=DEVICE_RESET;
     else ++p->stage;
     return finish(p,A733_USB_PLATFORM_PENDING);
 }

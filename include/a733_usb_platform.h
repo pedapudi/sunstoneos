@@ -4,13 +4,15 @@
 #include <stdint.h>
 #include "a733_clock_leases.h"
 
-/* USB0 device-only cold profile for the board's fixed-sink power connector.
+enum a733_usb_start_mode { A733_USB_ADOPT_REFERENCE=0, A733_USB_COLD_REFERENCE=1,
+    A733_USB_ROM_DEVICE=2 };
+/* USB0 device-only profile for the board's fixed-sink power connector.
  * The controller stays disconnected. Host, USB1, USB2 and role swaps require
  * their own controller/power bindings; this profile never drives VBUS. */
 struct a733_usb_platform_config {
     uint64_t owner, handoff, deadline_us;
     uint32_t fabric[3], rate_hz[3]; /* AHB, NSI, MBUS masked profiles. */
-    unsigned cold_reference; /* 1 initializes USB01_REF; 0 adopts a 24 MHz reference. */
+    unsigned cold_reference; /* enum a733_usb_start_mode; retained ABI word. */
 };
 enum a733_usb_platform_result { A733_USB_PLATFORM_PENDING, A733_USB_PLATFORM_BUSY,
     A733_USB_PLATFORM_PREPARED, A733_USB_PLATFORM_RETAINED, A733_USB_PLATFORM_INVALID };
@@ -28,6 +30,10 @@ struct a733_usb_platform_ops {
      * removal of every board power source. This supplies no autonomous cutoff
      * or live DMA-drain guarantee. Initial external DMA exclusion/drain and
      * reset safety remain required. Host/source ports need separate authority.
+     * ROM_DEVICE additionally requires a supervised PIO ROM lifetime with no
+     * prior undrained USB DMA, no concurrent ROM/firmware controller access,
+     * and exclusive USB0 takeover authority. Active DMA is refused, never
+     * stopped speculatively. The 150 ms detach interval is not bus-drain proof.
      * Cold reference also excludes all USB1/remote PHY consumers. Supplies
      * include VDD-USB, VCC33-USB and VCC33-18-USB; no voltage is programmed here.
      * 0 waits without mutation; other results fail. A native rail/connector

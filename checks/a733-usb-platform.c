@@ -12,7 +12,7 @@ struct fixture {
     struct a733_clock_leases registry;
     struct a733_usb_platform_config config;
     struct word word[64];unsigned count,reads,writes,leaves,retains,authorized,locked;
-    unsigned auth_result,fail_write,stick_write,expire_final,final_seen,tight_wait;
+    unsigned rom,reset_seen,auth_result,fail_write,stick_write,expire_final,final_seen,tight_wait;
     uint64_t now,ref_enabled,device_enabled;
     struct a733_clock_token before;
 };
@@ -59,17 +59,24 @@ static int writereg(void *c,uintptr_t a,uint32_t v)
             f->ref_enabled=f->now;
         }break;
     case 0x1304:mask=0x01000100;assert(f->now-f->ref_enabled>=10);
-        if(v&0x100)f->device_enabled=f->now;break;
+        if(f->rom){
+            if(!(v&0x01000000)){assert(f->now-f->ref_enabled>=150000);f->reset_seen=1;f->device_enabled=f->now;}
+            else if(!(old&0x01000000)){assert(f->reset_seen && f->now-f->device_enabled>=1000);f->device_enabled=f->now;}
+        }else if(v&0x100)f->device_enabled=f->now;break;
     case 0x1300:mask=0x40000000;assert((*reg(f,U+0x410)&0xa8)==0x20);break;
     default:
-        if(a==U+0x410)mask=0xa8;
+        if(a==U+0x40){mask=64;assert(f->rom);f->ref_enabled=f->now;}
+        else if(a==U+0x48){mask=UINT32_MAX;assert(f->rom);}
+        else if(a==U+0x50){mask=255;assert(f->rom);}
+        else if(a==U+0x500){mask=65535;assert(f->rom);}
+        else if(a==U+0x410)mask=0xa8;
         else if(a==U+0x418)mask=0xf3f;
         else if(a==U+0x420)mask=1;
         else if(a==U+0x400){
-            mask=0xf000;assert(!(v&0x70));
+            mask=f->rom?0xf00f:0xf000;assert(!(v&0x70));
             /* Pending edge flags are W1C: zero must preserve them. */
             assert(((v^old)&~(mask|0x70))==0);
-            *reg(f,a)=(v&~0x70)|(old&0x70);return 1;
+            if(f->writes!=f->stick_write)*reg(f,a)=(v&~0x70)|(old&0x70);return 1;
         }else assert(!"Unexpected or unowned MMIO write");
     }
     assert(((v^old)&~mask)==0);
@@ -96,7 +103,7 @@ static void init(struct fixture *f,unsigned cold)
 }
 static enum a733_usb_platform_result run(struct fixture *f)
 {
-    for(unsigned i=0;i<300;++i){
+    for(unsigned i=0;i<3000;++i){
         enum a733_usb_platform_result r=a733_usb_platform_poll(&f->p);
         if(r!=A733_USB_PLATFORM_PENDING)return r;
         f->now+=100;
@@ -145,7 +152,7 @@ int main(void)
         const uint32_t value[]={0x40000000,0x01000100,1,0,0};*reg(&f,address[i])=value[i];
         assert(run(&f)==A733_USB_PLATFORM_RETAINED && !f.writes);terminal(&f);
     }
-    init(&f,0);*reg(&f,C+0x1340)=0x80000000;
+    init(&f,0);*reg(&f,C+0x1340)=0x82000000;
     assert(run(&f)==A733_USB_PLATFORM_RETAINED && !f.writes);
     for(unsigned i=0;i<16;++i){
         init(&f,1);*reg(&f,U+0x540+16*i)=0x80000000;
@@ -165,4 +172,5 @@ int main(void)
     assert(f.reads==reads && f.writes==writes && f.p.token.id==f.before.id);
     atomic_store(&f.registry.busy,0);assert(run(&f)==A733_USB_PLATFORM_RETAINED);terminal(&f);
     puts("PASS: cold/adopted reference, native ownership, source delays, detached core, all DMA refusals and retained failures");
+    return 0;
 }
