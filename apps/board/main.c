@@ -1,4 +1,5 @@
 #include "application.h"
+#include "session.h"
 #include "cached.h"
 #include "a733_memory_uncached.h"
 #include "platform.h"
@@ -8,6 +9,7 @@
 struct board_application board;
 struct board_provider providers;
 static struct board_radio radio;
+static struct board_radio_profile admitted_profile;
 #ifdef SUNSTONE_BOARD_SUPERVISED
 static struct board_radio_profile runtime_profile;
 static uint8_t runtime_profile_digest[32];
@@ -157,7 +159,9 @@ static const struct board_radio_profile *radio_profile(void)
         struct aarch64_translation t;
         if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return NULL;
     }
-    const struct board_radio_profile *p=(const void *)(uintptr_t)s->radio_profile_address;
+    const volatile uint8_t *source=(const void *)(uintptr_t)s->radio_profile_address;
+    for(size_t i=0;i<sizeof(admitted_profile);++i)((uint8_t *)&admitted_profile)[i]=source[i];
+    const struct board_radio_profile *p=&admitted_profile;
     uint8_t hash[32];storage_digest_bytes(p,sizeof(*p),hash);
     if(memcmp(hash,s->radio_profile_digest,32))return NULL;
 #ifdef SUNSTONE_BOARD_SUPERVISED
@@ -199,8 +203,9 @@ static int host_admit(void *context,const struct a733_usb2_platform_config *c)
 void a733_smp_diagnostic_start(void)
 {
     if(!a733_smp_device_preparation_admitted())platform_panic("board bootstrap",1);
-    volatile const uint8_t *source=(void *)A733_BOARD_SESSION_ADDRESS;
-    for(unsigned i=0;i<sizeof(board.session);++i)((uint8_t *)&board.session)[i]=source[i];
+    const struct a733_board_session *source=board_session_snapshot();
+    if(!source)platform_panic("board sealed session",2);
+    board.session=*source;
     if(!a733_board_session_valid(&board.session,a733_smp_counter())||
        board.session.epoch!=a733_cached_runtime[0].epoch||
 #ifndef SUNSTONE_BOARD_SUPERVISED

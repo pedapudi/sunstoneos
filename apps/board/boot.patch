@@ -8,7 +8,10 @@
  #include "a733_cpu_continue.h"
  #include <stddef.h>
  static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
-@@ -87,6 +88,10 @@
+@@ -86,7 +87,13 @@
+     RESULT->status=UINT64_MAX;RESULT->stage=1;
++    extern int board_session_prepare(const struct a733_smp_contract *);
++    if(!board_session_prepare(&admission))a733_smp_stop(3,0x30c);
      #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
      if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
      #endif

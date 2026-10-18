@@ -3,7 +3,6 @@
 #include "boot.h"
 #include <string.h>
 struct bluetooth_application bluetooth;
-struct bluetooth_profile bluetooth_profile;
 static StaticTask_t owner_storage;
 static StackType_t owner_stack[4096];
 static TaskHandle_t owner;
@@ -30,7 +29,7 @@ int board_application_task_privileged(void (*entry)(void *),void *context)
 {return !context&&entry==bluetooth_owner;}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
-    const struct bluetooth_profile *p=(const void *)BLUETOOTH_PROFILE_ADDRESS;
+    const struct bluetooth_profile *p=bluetooth_admitted_profile();
     const struct a733_board_session *s=&board.session;
     if(!pins||!bluetooth_boot_profile(s,p)||pins->authorized[A733_PIN_G]||pins->authorized[A733_PIN_M])return 0;
     for(uintptr_t page=BLUETOOTH_PROFILE_ADDRESS;page<0x43100000;page+=4096){
@@ -44,21 +43,20 @@ int board_application_pins(struct a733_pin_handoff *pins)
         if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
     }
 #endif
-    memset(&bluetooth_profile,0,sizeof(bluetooth_profile));
-    memcpy(&bluetooth_profile,p,p->bytes);
     pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;
     pins->latch[1]=p->pm_latch;return 1;
 }
 int board_application_start(void)
 {
-    if(owner||!bluetooth_boot_profile(&board.session,&bluetooth_profile))return 0;
+    const struct bluetooth_profile *p=bluetooth_admitted_profile();
+    if(owner||!bluetooth_boot_profile(&board.session,p))return 0;
     owner=xTaskCreateStatic(bluetooth_owner,"bluetooth",4096,NULL,4,owner_stack,&owner_storage);
     if(!owner)return 0;
-    int ready=bluetooth_application_init(&bluetooth,&bluetooth_profile,&providers.shared,bluetooth_chip_id(),
+    int ready=bluetooth_application_init(&bluetooth,p,&providers.shared,bluetooth_chip_id(),
         owner,&board.watchdog_state,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence);
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
-    if(ready&&bluetooth_profile.version==3)
-        ready=bluetooth_recognition_start(&bluetooth,&bluetooth_profile.recognition,bluetooth.deadline);
+    if(ready&&p->version==3)
+        ready=bluetooth_recognition_start(&bluetooth,&p->recognition,bluetooth.deadline);
 #endif
     return ready;
 }
