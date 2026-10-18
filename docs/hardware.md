@@ -474,7 +474,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   buffers, tables and hardware leases remain reserved. Complete image admission,
   module electrical binding, physical DMA/coherence and drain, additional modes
   and physical qualification remain outstanding.
-  Module availability remains unconfirmed.
+  No MIPI camera is connected; physical capture qualification awaits a module.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
@@ -625,11 +625,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | Bluetooth controller and profiles | Bonds, BLE HID, hands-free audio gateway and voice packets | Firmware, HCI transport, SCO/eSCO routing, codec support |
 | Audio controllers | I2S input/output and other routed audio functions; timestamped PCM | No microphone present; schematic routes I2S0 to the header and I2S1 PCM to Bluetooth; qualify both |
 | CSI receivers and PHYs | Camera capture, modes, synchronization, errors, frame buffers | Schematic routes four lanes each to CAM1/MCSIA and CAM2/MCSIB; qualify sensors, DMA, and clocks |
-| OV5640 | Sensor control, supported MIPI modes, exposure and frame delivery | Confirm module wiring and availability; upstream sensor reference |
+| OV5640 | Sensor control, supported MIPI modes, exposure and frame delivery | No module connected; confirm wiring when available; upstream sensor reference |
 | Image processing | Pixel conversion, ISP controls, scaling, exposure/white-balance integration | Sensor tuning, buffer formats, documented dimensions |
 | Display engine | Scanout, composition, synchronization and supported formats | Buffer sharing, display clocks, bandwidth |
 | HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY |
-| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; panel undecided; timings, power sequence, touch separate |
+| MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; no display connected, panel undecided; timings, power sequence, touch separate |
 | DisplayPort | Output and applicable Type-C integration | Verify board routing, shared PHY and monitor |
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership |

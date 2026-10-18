@@ -149,7 +149,7 @@ launch analysis must identify the next useful change before another attempt.
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
 nine focused application checks pass, including central integration. The camera
-module and physical launch conditions remain unqualified. The
+module is not connected; physical launch conditions remain unqualified. The
 [native GPU application](gpu-application.md) also integrates actual providers,
 firmware, fixed rendering and copied USB output. Its central build and focused
 retention/revocation checks pass. Missing physical isolation prevents shutdown
@@ -396,7 +396,7 @@ recordings and model identities remain the reference.
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
    audio, display, codecs, PCIe and power transitions. OV5640 is the first camera;
-   module availability remains unconfirmed and the DSI panel is undecided.
+   no MIPI camera or display is connected, and the DSI panel is undecided.
    No microphone is available. Recorded audio remains the mimus fixture.
 6. Qualify unchanged-model mimus with paced input and all cores. After every
    required hardware function works, optimize and measure complete recognition,
