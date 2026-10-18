@@ -77,8 +77,10 @@ static int deadline(struct a733_npu_controller *c)
 }
 static int check_configuration(struct a733_npu_controller *c)
 {
+    /* The pinned page-directory setup writes exactly 0x21. Reject unsupported
+     * extra control state; this readback does not prove engine confinement. */
     return verify(c, 0x3b4, c->mmu.pd_entry, UINT32_MAX) &&
-           verify(c, 0x388, 0x21, 0x21) && verify(c, 0x14, IRQ_ENABLE, UINT32_MAX);
+           verify(c, 0x388, 0x21, UINT32_MAX) && verify(c, 0x14, IRQ_ENABLE, UINT32_MAX);
 }
 static int trigger(struct a733_npu_controller *c)
 {

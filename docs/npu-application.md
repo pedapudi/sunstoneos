@@ -295,3 +295,94 @@ preserved reviewed observer ELF/manifest and current launcher sources. The NPU
 image was reused; frozen observer and live-board artifacts were not modified.
 No physical test occurred. The instruction check models service completion and
 output and cannot establish physical inference or effective confinement.
+
+## First physical inference prerequisites
+
+The current frozen image under `npu-models-20261018/native-final/` remains a
+software-validation artifact. Its modeled responses and nonzero evidence fields
+provide no physical startup authority. A coordinator must prepare a separately
+reviewed session before using the supervised launcher.
+
+The ordinary RAM path has a concrete source contract. The pinned VIPLite
+[`vip_drv_hardware.c`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2/vip_drv_hardware.c)
+function `vipdrv_hw_pdmode_setup_mmu` programs directory register `+0x3b4`
+with `(physical_root >> 12) << 4 | 1` and control register `+0x388` with `0x21`.
+The native controller now requires the complete control word to equal `0x21`
+before triggering, accepting completion or closing. Additional bits cause a
+retained fault. This conservative supported-state check does not identify the
+meaning of unspecified bits or establish effective translation.
+
+The source's
+[`vip_drv_mmu.c`](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2/memory/vip_drv_mmu.c)
+encodes a leaf entry from physical bits 12–31, physical bits 32–39 in entry
+bits 4–11, write permission in bit 2, exception enable in bit 1 and presence
+in bit 0. The native builder uses that encoding with 32-bit device addresses
+and 40-bit physical addresses. Unmapped entries contain `2`. A source encoding
+and a modeled table walk establish software intent, not physical permissions.
+
+The native reservation maps only these device ranges. Each end is exclusive;
+physical addresses come from the retained parent allocation, never from these
+device addresses.
+
+| Purpose | Device range | Device permission |
+| --- | --- | --- |
+| Descriptor | `0xe0000000..0xe0001000` | Read |
+| Coefficients | `0xe0002000..0xe0003000` | Read |
+| Model commands | `0xe0004000..0xe0084000` | Read |
+| Input | `0xe0085000..0xe0086000` | Read |
+| Output | `0xe0087000..0xe0088000` | Read/write |
+| Bootstrap commands | `0xe0089000..0xe0109000` | Read |
+
+The internal SRAM route is separate. Source `mmu_map_vip_sram` reserves virtual
+space beginning at `0x400000` without filling ordinary RAM leaves. The native
+bootstrap programs that base through state register `0x0e4e`, and the trusted
+convolution initializes the AXI SRAM base/end states `0x0e4f` and `0x0e50` to zero.
+The complete 512 KiB SRAM and CPU alias `0x74000..0xf4000` must remain exclusive
+and powered. None of these source observations proves that every engine address
+passes through ordinary RAM translation. The reference driver's build option
+`vpmdHARDWARE_BYPASS_MODE` suppresses engine triggering; its name supplies no
+proof about address-translation bypass.
+
+A first inference can run trusted application code and a fixed reviewed model.
+Protection against hostile tasks, arbitrary models and concurrent clients is
+subsequent OS isolation qualification. Exclusive ownership of all disposable
+board RAM can remove conflicts with unrelated RAM allocations, but it cannot
+protect executing code, tables, the recovery path or peripheral registers from
+an unconstrained engine address. The current admission therefore still requires
+a source-backed account of the selected model's address modes and access bounds,
+or effective independently established hardware confinement. No broader RAM
+ownership claim or reviewed hash supplies that account.
+
+The smallest useful coordinator observations precede command submission:
+
+- Establish the target identity and its independent DDR/recovery record. Confirm
+  that the image, session, remote CPUs and every DMA writer satisfy the existing
+  exclusive-memory and cache-adoption contract.
+- Capture the admitted oscillator, PLL reference, PLL_NPU, selected shared-parent
+  gates, fabric selectors and independent DRAM/PHY sources. Mode 3 requires the
+  disabled-PLL state and an already-ON, quiescent NPU domain; unsupported partial
+  states remain refusals.
+- Read DCDC2 through the existing PMIC service and confirm enabled, settled
+  800 mV under retained PMIC and pin ownership. The application supplies no
+  voltage change. Confirm local reset/gate and shared SRAM ownership prerequisites.
+- Complete a focused review of command/descriptor address modes, prefetch bounds,
+  internal SRAM routing and alternate physical-address routes. If existing vendor
+  source cannot establish a route, obtain authoritative register documentation
+  or a separately reviewed, bounded hardware observation. A successful output
+  alone cannot establish confinement.
+
+After those prerequisites are established, freeze the selected model, native
+ELF, raw session and admission records with the existing preparation tool.
+Queue one supervised RAM-only attempt using the documented launcher command.
+Capture both matched outputs through USB before recovery. Retain all resources
+on success, timeout or failure until confirmed full board power removal; stop
+communication at the first transport failure. This proposal establishes no
+physical observation and does not authorize bypassing the image's admission.
+
+Focused software evidence for the exact MMU-control check resides under
+`~/.cache/sunstoneos/evidence/npu-first-physical-20261018/`. The sanitizer check
+flips each of the 32 control bits at submission, active completion and close.
+Every deviation refuses progress and retains the controller without later
+callbacks. The changed controller also compiles for AArch64. Existing model,
+cache-maintenance, service and numerical-reference evidence remains applicable
+to its original inputs; no physical command or performance measurement occurred.

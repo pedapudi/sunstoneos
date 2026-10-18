@@ -164,10 +164,37 @@ static void check_bootstrap(void)
     for (unsigned i = A733_NPU_BOOTSTRAP_BYTES; i < sizeof(bootstrap); ++i) assert(bootstrap[i] == 0xa5);
 }
 
-int main(void)
+static void check_mmu_control(void)
+{
+    /* Every single-bit deviation must refuse submission, visibility and close.
+     * Device behavior is modeled; these checks do not identify bypass fields. */
+    for (unsigned bit = 0; bit < 32; ++bit) {
+        struct device d; struct a733_npu_controller c;
+        started(&d, &c); d.reg[0x388/4] ^= UINT32_C(1) << bit;
+        assert(!a733_npu_submit(&c, &task, 1000));
+        assert(c.fault == A733_NPU_REGISTER && d.triggers == 1 && d.finished == 1);
+        retained(&d, &c);
+        started(&d, &c); assert(a733_npu_submit(&c, &task, 1000));
+        d.reg[0x388/4] ^= UINT32_C(1) << bit; d.now += 40;
+        assert(a733_npu_poll(&c) == A733_NPU_FAULT);
+        assert(c.fault == A733_NPU_REGISTER && d.finished == 1);
+        retained(&d, &c);
+        started(&d, &c); d.reg[0x388/4] ^= UINT32_C(1) << bit;
+        unsigned writes = d.writes;
+        assert(!a733_npu_close(&c) && c.fault == A733_NPU_REGISTER);
+        assert(d.writes == writes); retained(&d, &c);
+    }
+    puts("PASS NPU MMU control: all single-bit deviations retain submission, completion and close");
+}
+
+int main(int argc, char **argv)
 {
     struct a733_npu_region region = {0x51000000, 1048576, 0x10000000, A733_NPU_PAGE_4K, 0};
     assert(a733_npu_mmu_build(tables, sizeof(tables), 0x49000000, &region, 1, &mmu));
+    if (argc == 2 && !strcmp(argv[1], "--mmu-control-only")) {
+        check_mmu_control(); return 0;
+    }
+    assert(argc == 1);
     check_bootstrap();
     struct device d; struct a733_npu_controller c;
     started(&d, &c);
