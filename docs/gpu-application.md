@@ -107,3 +107,70 @@ repository dependencies match the reviewed worker snapshot. Central artifacts,
 generated sources, firmware bytes and actual compiler dependency files are under
 `central-snapshot/`, with the image identity in `central-integration.json` beside
 the original batch. No runtime case was repeated for central integration.
+
+## Supervised RAM-only admission
+
+`SUNSTONE_GPU_SUPERVISED=ON` selects a separate supervised contract and preserves
+the default watchdog mode. The supervised image checks that the watchdog and
+reset redirect are disabled. Its SRAM launcher stamps the actual session start,
+a one-second startup deadline and a sixty-second observation deadline. Uploaded
+watchdog settings and software timestamps are refused. These deadlines bound
+cooperating software. They cannot stop GPU DMA, an interconnect stall or a
+stalled CPU.
+
+The supervised contract retains the exact large-memory layout. Its copied
+288-byte record includes both the complete session digest and the digest of
+reviewed GPU entry evidence. EL3 seals the admitted session before EL1 uses it.
+The latter digest must match the session's qualification field. Native startup
+still uses the actual shared PMIC/resource providers, power controller, mapping
+checks, firmware, render rings, timelines and output validation.
+
+`apps/gpu-render/prepare.py` prepares immutable input files offline. It requires
+the final ELF manifest, a supervised session template and reviewed entry evidence
+bound to the image and target. It reuses the existing supervised platform and
+manual recovery requirements. Additional raw evidence must establish ownership
+of the complete GPU RAM reservations, actual 400 MHz parent and settled 800 mV
+supply, shared register/PMIC exclusion, remote-master exclusion, intended Device
+mappings and initial GPU request exclusion with no outstanding traffic. The
+initial-isolation evidence must describe complete power removal and the absence
+of later GPU activity. Holding buffers after execution cannot establish those
+initial conditions. Neither a record digest nor nonzero ownership metadata
+proves the physical facts described by that record.
+
+The bundle freezes every referenced evidence byte string, the final ELF,
+launcher, session, contract and exact upload spans. Later validation uses the
+frozen evidence and reconstructs the session and contract. Preparation never
+opens a USB device. The coordinator owns physical target selection, exclusive
+access, protected upload and one bounded attempt. No actual prerequisite record
+is supplied by the repository's software fixtures.
+
+The image enumerates as `1f3a:efe8` with product `sunstoneos native GPU` and
+serial `sunstoneos-a733-gpu`. The observer checks that identity before copying
+pixels. Other applications can use the same permitted PID; the PID alone does
+not select a GPU image.
+
+Success, failure, lost transport and elapsed observation time all retain GPU
+backing, power leases and ownership until complete whole-board power removal.
+A USB reconnection alone does not establish that the SoC or GPU supply lost
+power. The coordinator must wait for explicit recovery and must not reuse these
+resources, restore their backing or resume a failed session after a timeout.
+There is no automatic retry, shutdown or resource release in supervised mode.
+Physical watchdog work remains deferred; this mode supplies no claim of
+independent fault recovery.
+
+The reviewed supervised software batch passes the root CMake image build,
+default admission/session/startup/watchdog-boot unit compilation, offline bundle
+validation, SRAM handoff/refusal cases and native admission/refusal cases. The
+native admission fixture initially placed PMIC pins in the Type-C fields and
+was correctly refused. Only that fixture was corrected; the failed native stage
+and later unexecuted frozen-input checks resumed. Earlier passing package and
+launcher cases were preserved. No GPU job, controller case or physical device
+was executed in this batch. Existing render evidence continues to cover poisoned
+output and retained failures rather than successful rendering.
+
+Raw evidence is under
+`~/.cache/sunstoneos/evidence/gpu-supervised-20261017/batch1/`, including the
+linked ELF and manifest, actual compiler dependency files, default objects,
+modeled prerequisite fixtures, frozen bundle, launcher results and native case
+results. Modeled prerequisites are explicitly labeled as software fixtures and
+must never be used for physical admission.

@@ -1,4 +1,5 @@
 #include "application.h"
+#include "session.h"
 #include "a733_device_memory_layout.h"
 #include "platform.h"
 #include "a733_maintenance_watchdog_internal.h"
@@ -84,14 +85,34 @@ void a733_smp_diagnostic_start(void)
     if(!sealed)platform_panic("GPU immutable session",2);
     memcpy(&app.session,sealed,sizeof(app.session));
     struct a733_board_session *s=&app.session;
-    if(!a733_board_session_valid(s,a733_smp_counter())||s->workload||s->epoch!=a733_cached_runtime[0].epoch||
-       s->deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline)platform_panic("GPU session",2);
+    if(!a733_board_session_valid(s,a733_smp_counter())||
+#ifndef SUNSTONE_GPU_SUPERVISED
+       s->workload||
+#else
+       s->workload!=2||
+#endif
+       s->epoch!=a733_cached_runtime[0].epoch||
+#ifndef SUNSTONE_GPU_SUPERVISED
+       s->deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline
+#else
+       a733_cached_runtime[0].startup_deadline<A733_SMP_COUNTER_HZ
+#endif
+       )platform_panic("GPU session",2);
+#ifdef SUNSTONE_GPU_SUPERVISED
+    s->session_start_ticks=a733_cached_runtime[0].startup_deadline-A733_SMP_COUNTER_HZ;
+    s->deadline_us=a733_cached_runtime[0].diagnostic_deadline/24;
+#else
     struct a733_watchdog_window window={s->deadline_us,s->guard_us,s->rtc_control,s->rtc_divider,s->rtc_source};
     if(!a733_watchdog_hw_admit(&window))platform_panic("GPU watchdog",2);
+#endif
     struct a733_native_usb_config b={.identity=s->generation};
     b.pmic.owner=s->pmic_owner;b.pmic.identity=s->generation;b.pmic.startup_deadline=s->deadline_us;
     for(unsigned i=0;i<2;++i)b.pmic.pins[i]=(struct a733_pin_config){s->pmic_pins[i][0],s->pmic_pins[i][1],s->pmic_pins[i][2]};
+#ifdef SUNSTONE_GPU_SUPERVISED
+    b.pins.authorized[A733_PIN_L]=3u;
+#else
     b.pins.authorized[A733_PIN_L]=3u|(1u<<8)|(1u<<9)|(1u<<12)|(1u<<13);
+#endif
     b.pins.latch[0]=(struct a733_pin_latch_handoff){s->latch_identity,s->latch_owner,s->latch_known_mask,s->latch_value};
     b.usb.owner=s->usb0_owner;b.usb.handoff=s->generation;b.usb.deadline_us=s->deadline_us;b.usb.cold_reference=s->usb0_cold_reference;
     memcpy(b.usb_supply_uv,s->usb_supply_uv,sizeof(b.usb_supply_uv));

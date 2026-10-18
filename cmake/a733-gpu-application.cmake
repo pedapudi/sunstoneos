@@ -5,6 +5,7 @@ endif()
 if(NOT TARGET sunstone-a733-storage-maintenance)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
+option(SUNSTONE_GPU_SUPERVISED "Use reviewed one-attempt supervised RAM-only GPU admission" OFF)
 set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
 if(NOT SUNSTONE_GPU_FIRMWARE)
   message(STATUS "Native GPU application requires SUNSTONE_GPU_FIRMWARE")
@@ -34,11 +35,17 @@ foreach(pair "boot.c|boot.patch" "platform.c|platform.patch")
   apply_build_patch("${gpu_app_build}/${source}" "${gpu_app_root}/platform/a733-smp-cached/${source}"
     "${gpu_app_root}/apps/gpu-render/${patch}")
 endforeach()
+set(gpu_app_boot "${gpu_app_build}/boot.c")
+if(SUNSTONE_GPU_SUPERVISED)
+  apply_build_patch("${gpu_app_build}/boot-supervised.c" "${gpu_app_boot}"
+    "${gpu_app_root}/platform/a733-smp-supervised/boot.patch")
+  set(gpu_app_boot "${gpu_app_build}/boot-supervised.c")
+endif()
 apply_build_patch("${gpu_app_build}/link.ld" "${gpu_app_root}/platform/a733-smp-cached/link-devices.ld"
   "${gpu_app_root}/apps/gpu-render/link.patch")
 file(WRITE "${gpu_app_build}/firmware.S" ".section .rodata.gpu_firmware,\"a\"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n.incbin \"${SUNSTONE_GPU_FIRMWARE}\"\n.global gpu_firmware_end\ngpu_firmware_end:\n")
 set(gpu_app_extra
-  apps/gpu-render/main.c apps/gpu-render/admission.c apps/gpu-render/usb.c
+  apps/gpu-render/main.c apps/gpu-render/admission.c apps/gpu-render/session.c apps/gpu-render/usb.c
   platform/a733/device_memory_layout.c platform/a733/memory_reservations.c platform/a733/memory_uncached.c
   runtime/device_memory_pool.c platform/a733/gpu_reserved.c platform/a733/gpu_compute_reserved.c
   platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c platform/a733/gpu_backend.c
@@ -54,7 +61,7 @@ set(gpu_app_extra
 set_source_files_properties("${gpu_app_root}/drivers/gpu/a733_gpu_platform_native.c" PROPERTIES
   COMPILE_OPTIONS "-iquote${gpu_app_root}/platform/a733")
 list(TRANSFORM gpu_app_extra PREPEND "${gpu_app_root}/")
-list(APPEND gpu_app_sources ${gpu_app_extra} "${gpu_app_build}/boot.c" "${gpu_app_build}/platform.c" "${gpu_app_build}/firmware.S")
+list(APPEND gpu_app_sources ${gpu_app_extra} "${gpu_app_boot}" "${gpu_app_build}/platform.c" "${gpu_app_build}/firmware.S")
 list(REMOVE_DUPLICATES gpu_app_sources)
 add_executable(sunstone-a733-gpu-render EXCLUDE_FROM_ALL ${gpu_app_sources})
 foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS)
@@ -64,7 +71,14 @@ endforeach()
 target_include_directories(sunstone-a733-gpu-render BEFORE PRIVATE "${gpu_app_root}/apps/gpu-render")
 target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_SECURE_MONITOR=1
   SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_USB=1 SUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1
-  A733_SMP_CONTRACT_MAGIC=0x4153373347504331ULL A733_SMP_RESULT_MAGIC=0x4153373347505231ULL)
+)
+if(SUNSTONE_GPU_SUPERVISED)
+  target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_GPU_SUPERVISED=1
+    A733_SMP_CONTRACT_MAGIC=0x4153373347534332ULL A733_SMP_RESULT_MAGIC=0x4153373347535232ULL)
+else()
+  target_compile_definitions(sunstone-a733-gpu-render PRIVATE
+    A733_SMP_CONTRACT_MAGIC=0x4153373347504331ULL A733_SMP_RESULT_MAGIC=0x4153373347505231ULL)
+endif()
 target_link_options(sunstone-a733-gpu-render PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-T,${gpu_app_build}/link.ld" "-Wl,-Map,${gpu_app_build}/image.map")
 set_target_properties(sunstone-a733-gpu-render PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${gpu_app_build}/link.ld")
@@ -74,6 +88,7 @@ file(GLOB gpu_app_headers "${gpu_app_root}/apps/gpu-render/*.h")
 set(gpu_app_inputs ${storage_inputs} ${gpu_app_sources} ${gpu_app_headers} "${SUNSTONE_GPU_FIRMWARE}"
   "${CMAKE_CURRENT_LIST_FILE}" "${gpu_app_root}/apps/gpu-render/boot.patch"
   "${gpu_app_root}/apps/gpu-render/platform.patch" "${gpu_app_root}/apps/gpu-render/link.patch"
+  "${gpu_app_root}/platform/a733-smp-supervised/boot.patch"
   "${gpu_app_root}/platform/a733-smp-cached/link-devices.ld" "${gpu_app_build}/link.ld")
 list(REMOVE_DUPLICATES gpu_app_inputs)
 get_target_property(gpu_app_options sunstone-a733-gpu-render COMPILE_OPTIONS)
@@ -94,3 +109,15 @@ string(REPLACE ";" "\n" gpu_app_input_lines "${gpu_app_inputs}")
 file(WRITE "${gpu_app_build}/identity-inputs.txt" "${gpu_app_input_lines}\n")
 target_sources(sunstone-a733-gpu-render PRIVATE "${gpu_app_build}/build-id.c")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gpu_app_inputs})
+
+if(SUNSTONE_GPU_SUPERVISED)
+  set(gpu_app_manifest_script [=[
+file(SHA256 "${IMAGE}" digest)
+file(WRITE "@gpu_app_build@/manifest.json" "{\"target\":\"sunstone-a733-gpu-render\",\"execution_profile\":\"gpu-supervised-v2\",\"build_id\":\"@gpu_app_build_id@\",\"final_elf\":\"${digest}\"}\n")
+]=])
+  string(CONFIGURE "${gpu_app_manifest_script}" gpu_app_manifest_script @ONLY)
+  file(WRITE "${gpu_app_build}/finish-manifest.cmake" "${gpu_app_manifest_script}")
+  add_custom_command(TARGET sunstone-a733-gpu-render POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" "-DIMAGE=$<TARGET_FILE:sunstone-a733-gpu-render>"
+      -P "${gpu_app_build}/finish-manifest.cmake" VERBATIM)
+endif()

@@ -15,7 +15,7 @@ void a733_usb_assert(void){stop();}
 uint32_t tusb_time_millis_api(void){return (uint32_t)(a733_smp_counter()/24000);}
 void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!gpu_application_live(NULL))stop();vTaskDelay(pdMS_TO_TICKS(ms));}
 static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,
-    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefea,.bcdDevice=0x0100,
+    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefe8,.bcdDevice=0x0100,
     .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
 static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
 static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};

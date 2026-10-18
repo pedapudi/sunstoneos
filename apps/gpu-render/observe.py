@@ -29,9 +29,11 @@ def main():
         parser.error('use a fresh output path and timeout in (0,30] seconds')
     import usb.core
     import usb.util
-    device = usb.core.find(idVendor=0x1f3a, idProduct=0xefea, bus=args.bus, address=args.address)
+    device = usb.core.find(idVendor=0x1f3a, idProduct=0xefe8, bus=args.bus, address=args.address)
     if device is None:
         raise RuntimeError('selected running device is absent')
+    if (usb.util.get_string(device, device.iProduct), usb.util.get_string(device, device.iSerialNumber)) != ('sunstoneos native GPU', 'sunstoneos-a733-gpu'):
+        raise RuntimeError('selected USB descriptor is not the GPU application')
     # The running image configures the interface. No reset or configuration write.
     usb.util.claim_interface(device, 0)
     try:
