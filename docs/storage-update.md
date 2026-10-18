@@ -105,9 +105,20 @@ The service lives in `drivers/storage/a733_storage_update.c`. Its concrete
 platform writer is separate from the default read-only entry points. The USB
 mailbox has one producer and one worker. Its response copy-out returns mailbox
 storage to the producer; actual USB IN completion is a separate transport event.
-The native bootstrap, MMC worker and USB task bind actual PMIC, platform and
-transport ownership. USB completion is reported to the maintenance watchdog.
-Their focused validation and the complete maintenance image remain pending.
+The native implementation in `platform/a733-storage-update` uses three static
+FreeRTOS tasks for the shared PMIC provider, storage operations and USB. One
+permanent bootstrap object contains their common clock, mutex, pin and rail
+managers. The storage task owns the service; the USB task owns framing and actual
+IN completion. The maintenance lease binds these same objects and task handles.
+The dedicated launcher and complete image require separate integration evidence.
+
+USB preparation acquires real shared supply leases and checks copied snapshots
+from the common PMIC provider. The immutable boot record supplies the qualified
+voltage targets. Supported selector values alone do not establish safe board
+voltages or resolve the schematic's conflicting supply summaries. Provider
+faults block subsequent USB register access; transient metadata contention waits
+within the existing watchdog bound. A completed mailbox response cannot renew
+the watchdog until its entire USB IN transfer has completed.
 
 The host implementation is `tools/storage-update.py`. Its `prepare` command
 constructs artifacts only. A physical launcher must establish actual target,
@@ -126,6 +137,22 @@ The connected core/host batch passes under AddressSanitizer and
 UndefinedBehaviorSanitizer. Eight streaming SHA-256 boundary vectors match the
 host reference. The affected native units and existing embedding fixtures
 compile; their old protocol workloads were not rerun. Evidence is preserved in
-`~/.cache/sunstoneos/evidence/storage-update-20261017/batch1`. Native task, mutex and
-USB execution remain outside that result. The [watchdog composition](maintenance-watchdog.md)
-has separate focused evidence; it does not establish complete image execution.
+`~/.cache/sunstoneos/evidence/storage-update-20261017/batch1`. Native task, mutex,
+USB and watchdog execution remain outside that result. The
+[watchdog composition](maintenance-watchdog.md) has separate focused evidence;
+it does not establish complete image execution.
+
+The additive check `checks/a733-storage-native.py` covers the new supply
+profiles, native C write-admission guards and USB framing/provider guards. It
+models CPU privilege, task ownership, register access and completed USB
+preparation. It compiles the original AArch64 adapter and native task units.
+It does not execute bootstrap or establish physical recovery. The full host
+backup, update and restoration workload is reused from the connected batch.
+
+The additive cases pass under AddressSanitizer and UndefinedBehaviorSanitizer.
+Evidence in `~/.cache/sunstoneos/evidence/storage-update-20261017/native1`
+contains the successful PMIC and MMC guard checks. The successful USB guard
+check and four original AArch64 compilations are preserved in `native2`.
+The USB fixture uses aborting stubs for unexecuted task entry points retained by
+sanitizer metadata. The merged PMIC source includes
+the display supply profile alongside the two new USB supply profiles.
