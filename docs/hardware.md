@@ -107,8 +107,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pending or active interrupts. Controls restore and ROM returns after observed
   OFF under `native-local-interrupt-read-20261018/native/runtime/`. The returning
   overlay now includes the corrected production controller and bounded local
-  restoration; five instruction cases pass. Physical interrupt initialization
-  remains unresolved.
+  restoration; five instruction cases pass. One physical initialization attempt
+  produced no ROM return or result buffer. Its failure location remains unknown,
+  and original-board ownership is retained pending physical recovery. Interrupt
+  initialization remains unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

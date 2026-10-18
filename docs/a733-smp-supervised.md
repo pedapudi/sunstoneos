@@ -867,4 +867,12 @@ Five focused instruction cases pass: initialization and restoration, one rejecte
 power request, refusal of a pending interrupt, retained restoration mismatch,
 and retained wake timeout. The actual linked controller executes in these cases;
 GIC, system-register and power responses are modeled. Evidence is under
-`native-local-interrupt-init-20261018/`. Physical execution remains pending.
+`native-local-interrupt-init-20261018/`.
+
+One physical attempt did not return to ROM. Uploads and the execution request
+completed, but no new FEL instance appeared and no result buffer was available.
+The host stopped device communication and retained its process, queue claim and
+board lock. This result does not identify whether CPU-interface access, controller
+initialization or cleanup failed. The model pass does not qualify those operations.
+The original board requires physical recovery before another operation; the
+second board was not involved. Do not repeat the same launch.

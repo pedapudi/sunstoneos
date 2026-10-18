@@ -112,8 +112,10 @@ checks converter disable independently of publication; resources remain retained
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
-queues. The original board is on port `3-1`, now USB instance `003:090` after a
-successful diagnostic return. The second is on `3-3`, instance `003:088`, and
+queues. The original board on port `3-1` is retained after the interrupt
+initialization attempt failed to return from instance `003:091`. Physical
+recovery was requested; do not send further commands to that instance.
+The second is on `3-3`, instance `003:088`, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
 12 GiB; full capacity and device admission remain unqualified. Multicore work
@@ -303,12 +305,14 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board is on port `3-1`, currently instance `003:089`. The second
-board is on port `3-3`, instance `003:088`. Both respond as A733 and have working
-session permissions. The common access helper selects each physical port through
-`SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
+The original board on `3-1` requires physical recovery after the failed
+initialization attempt from `003:091`. Its retained runner PID is recorded in
+`native-local-interrupt-init-20261018/native/process.json`; verify that process
+before closing its claim after recovery. The second board on `3-3`, instance
+`003:088`, has successful DDR, returning survey and SD initial-register evidence.
+Both have reconnect permissions. The common access helper selects each port
+through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
 Queue assignments are in [the board-test procedure](board-test-queue.md).
-The second board still requires DDR and platform qualification.
 
 The first DDR preparation after reconnecting the original board refused ambiguous
 two-device discovery before any USB command. Explicit port selection resolved
@@ -331,7 +335,7 @@ scheduling remain unproven.
 Core 1 powers on, reaches native entry at EL3, accepts RELEASE and completes
 CPU/DSU preparation. It identifies as Cortex-A55 r2p0 with MPIDR `0x81000100`.
 Its observed SCTLR_EL1 is `0x00c50838` and TCR_EL1 is zero. No workaround writes
-are required. The diagnostic stops before target translation-control writes and
+are required. The preparation diagnostic stopped before target translation-control writes and
 redistributor access. Matching shutdown acknowledgment, actual PPU OFF, shared
 control restoration and DRAM restoration all pass. All 50 host transactions
 succeeded. The runner exited, its queue claim closed, and ROM returned as
@@ -462,7 +466,10 @@ The primary agent handles all further multicore work directly.
    returns after observed OFF. The returning overlay now compiles the corrected
    production controller and restores local state before shutdown. Five focused
    instruction cases pass under `native-local-interrupt-init-20261018/`;
-   physical initialization remains pending. Qualify local interrupts, remaining
+   one physical attempt produced no ROM return or result buffer. Its process,
+   claim and original-board lock remain retained pending requested physical
+   recovery. No failure location is established; the same launch must not repeat.
+   Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
    intentional watchdog expiry and unattended fault tests remain deferred;
