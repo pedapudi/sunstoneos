@@ -19,7 +19,9 @@ struct a733_ce_session {
     const void *client;
     size_t client_bytes;
     uint64_t generation,next_generation;
-    unsigned initialized,kind,fault,terminal;
+    unsigned initialized,kind;
+    atomic_uint fault; /* Acquire-load permits copied consumers to observe retention. */
+    unsigned terminal;
 };
 /* Zero once. One actual session owns one DEVICE page and one retained CE token.
  * The existing pool service lock serializes EVERY operation and all consumer

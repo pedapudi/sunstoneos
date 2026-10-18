@@ -1,5 +1,24 @@
 #include "a733_ce_session.h"
 #include <stddef.h>
+struct previous_session_layout {
+    uintptr_t self;
+    __typeof__(((struct a733_ce_session *)0)->binding) binding;
+    struct a733_ce controller;
+    const void *client;
+    size_t client_bytes;
+    uint64_t generation,next_generation;
+    unsigned initialized,kind,fault,terminal;
+};
+_Static_assert(ATOMIC_INT_LOCK_FREE==2,"session fault observation must be lock-free");
+_Static_assert(sizeof(atomic_uint)==sizeof(unsigned),"session fault width changed");
+_Static_assert(_Alignof(atomic_uint)==_Alignof(unsigned),"session fault alignment changed");
+_Static_assert(sizeof(struct a733_ce_session)==sizeof(struct previous_session_layout),"session size changed");
+_Static_assert(_Alignof(struct a733_ce_session)==_Alignof(struct previous_session_layout),"session alignment changed");
+#define SAME_OFFSET(field) _Static_assert(offsetof(struct a733_ce_session,field)==offsetof(struct previous_session_layout,field),"session offset changed: " #field)
+SAME_OFFSET(self);SAME_OFFSET(binding);SAME_OFFSET(controller);SAME_OFFSET(client);
+SAME_OFFSET(client_bytes);SAME_OFFSET(generation);SAME_OFFSET(next_generation);
+SAME_OFFSET(initialized);SAME_OFFSET(kind);SAME_OFFSET(fault);SAME_OFFSET(terminal);
+#undef SAME_OFFSET
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -48,7 +67,7 @@ int a733_ce_session_bind(struct a733_ce_session *s,struct device_memory_pool *po
     if (!a733_ce_init(&s->controller,&config,o,cookie,registry,token,(struct a733_ce_memory *)e.cpu)) return 0;
     s->self=(uintptr_t)s;s->binding.pool=pool;s->binding.lease=lease;s->binding.extent=e;
     s->binding.registry=registry;s->binding.token=*token;s->binding.config=config;s->binding.ops=*o;s->binding.cookie=cookie;
-    s->next_generation=1;s->initialized=1;
+    s->next_generation=1;atomic_init(&s->fault,0);s->initialized=1;
     device_memory_lookup(pool,lease)->state=DEVICE_MEMORY_DEVICE;
     return 1;
 }
@@ -59,7 +78,7 @@ int a733_ce_session_outside(const struct a733_ce_session *s,const void *p,size_t
 enum a733_ce_result a733_ce_session_retain(struct a733_ce_session *s)
 {
     if (!s || !s->initialized) return A733_CE_INVALID;
-    s->fault=1;
+    atomic_store_explicit(&s->fault,1,memory_order_release);
     (void)device_memory_retain(s->binding.pool,s->binding.lease);
     if (a733_clock_retain(s->binding.registry,&s->binding.token)==A733_CLOCK_BUSY) return A733_CE_BUSY;
     s->terminal=1;return A733_CE_RETAINED;
