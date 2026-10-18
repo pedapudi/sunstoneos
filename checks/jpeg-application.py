@@ -19,6 +19,50 @@ ROOT = Path(__file__).resolve().parents[1]
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
+def collect_dependencies(build):
+    """Recover every object actually linked into this image, including ASM."""
+    import re
+    build=Path(build).resolve()
+    link=build/'CMakeFiles/sunstone-a733-jpeg.dir/link.txt'
+    objects=[(build/name).resolve() for name in shlex.split(link.read_text()) if name.endswith(('.obj','.o'))]
+    commands=json.loads((build/'compile_commands.json').read_text())
+    commands={(Path(c['directory'])/c['output']).resolve():c for c in commands}
+    errors=[];dependencies={};actual=[];records={};asm={}
+    for obj in objects:
+        target=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
+        if target in asm:continue
+        entries={};current=None
+        if target.is_file():
+            for line in target.read_text().splitlines():
+                if not line or line.startswith('#'):continue
+                if not line.startswith(' '):current=(build/line).resolve();entries[current]=[]
+                elif current is not None:entries[current].append(Path(line.strip()))
+        asm[target]=entries
+    for obj in objects:
+        command=commands.get(obj)
+        if not obj.is_file() or command is None:
+            errors.append('Missing linked object/command: '+str(obj));continue
+        actual.append(command);source=Path(command['file']).resolve();dep=Path(str(obj)+'.d')
+        if dep.is_file():
+            names=shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]);paths=[(build/n).resolve() for n in names]
+        else:
+            dep=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
+            paths=asm[dep].get(obj,[])
+            if source.suffix!='.S' or not paths:
+                errors.append('Missing compiler dependency record: '+str(obj));continue
+        if source not in paths:errors.append('Dependency record omits source: '+str(source))
+        # The generated fixed assembly embeds two immutable binary inputs.
+        if source.suffix=='.S':
+            paths+= [Path(name) for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
+        for path in paths:
+            if not path.is_file():errors.append('Missing dependency: '+str(path))
+            else:dependencies[str(path)]=sha(path)
+        records[str(obj)]={'record':str(dep),'record_sha256':sha(dep),'source':str(source)}
+    if not objects or not dependencies:errors.append('Empty linked-object/dependency discovery')
+    if len(records)!=len(objects):errors.append('Incomplete linked-object dependency coverage')
+    if errors:raise RuntimeError('JPEG dependency setup failed:\n'+'\n'.join(errors))
+    return dependencies,actual,records
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -84,6 +128,17 @@ def main():
         steps[label] = {'command':command,'exit':result.returncode}
         steps_path.write_text(json.dumps(steps,indent=2)+'\n')
         result.check_returncode()
+    host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'checks'),'-I'+str(source/'platform/a733-smp-cached')]
+    jobs={
+        'admission':['apps/jpeg/admission.c','drivers/storage/storage_digest.c','checks/jpeg-application-admission.c'],
+        'retained':['drivers/video/a733_video_jpeg.c','drivers/video/a733_video_jpeg_run.c','drivers/video/a733_video_platform.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','checks/jpeg-application-retained.c'],
+        'iommu':['drivers/iommu/a733_iommu.c','checks/jpeg-application-iommu.c']}
+    compile_failures=[]
+    for name,files in jobs.items():
+        try:run(name+'-build',host+[source/f for f in files]+['-o',out/name])
+        except subprocess.CalledProcessError:compile_failures.append(name+'-build')
+    if compile_failures:
+        raise RuntimeError('JPEG fixture compilation failed: '+', '.join(compile_failures)+'; inspect individual logs and steps.json')
     toolchain = out/'toolchain.cmake'
     if not toolchain.exists():
         toolchain.write_text(f'set(SUNSTONE_LLD "{linker}" CACHE FILEPATH "")\ninclude("{source}/cmake/aarch64-clang.cmake")\nset(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_ASM_COMPILER "{compiler}")\n')
@@ -97,14 +152,9 @@ def main():
         f'-DSUNSTONE_NETWORK_C_HEADERS={out}/dependencies/headers','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON','-DSUNSTONE_BOARD_SUPERVISED=ON',f'-DSUNSTONE_JPEG_FIXTURE={out}/fixture.jpg',f'-DSUNSTONE_JPEG_REFERENCE={out}/reference.yuv'])
     run('build',['cmake','--build',build,'--target','sunstone-a733-jpeg','-j4'])
     image = build/'sunstone-a733-jpeg.elf'
-    dependencies = {}
-    for dep in build.rglob('*.o.d'):
-        for name in dep.read_text().replace('\\\n',' ').split(':',1)[1].split():
-            p = Path(name)
-            if p.is_file():dependencies[str(p.resolve())]=sha(p)
-    commands = json.loads((build/'compile_commands.json').read_text())
-    actual_commands=[unit for unit in commands if str(Path(unit['file']).resolve()) in dependencies]
+    dependencies,actual_commands,records=collect_dependencies(build)
     (out/'compiled-commands.json').write_text(json.dumps(actual_commands,indent=2)+'\n')
+    (out/'dependency-records.json').write_text(json.dumps(records,indent=2)+'\n')
     for name in dependencies:
         p=Path(name)
         if not p.is_relative_to(out):
@@ -113,13 +163,7 @@ def main():
             if not saved.exists():shutil.copy2(p,saved)
             assert sha(saved)==dependencies[name]
     (out/'compiled-dependencies.json').write_text(json.dumps(dependencies,indent=2)+'\n')
-    host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'checks'),'-I'+str(source/'platform/a733-smp-cached')]
-    jobs={
-        'admission':['apps/jpeg/admission.c','drivers/storage/storage_digest.c','checks/jpeg-application-admission.c'],
-        'retained':['drivers/video/a733_video_jpeg.c','drivers/video/a733_video_jpeg_run.c','drivers/video/a733_video_platform.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','checks/jpeg-application-retained.c'],
-        'iommu':['drivers/iommu/a733_iommu.c','checks/jpeg-application-iommu.c']}
     for name,files in jobs.items():
-        run(name+'-build',host+[source/f for f in files]+['-o',out/name])
         extra=[out/'session.bin'] if name=='admission' else [out/'fixture.jpg'] if name=='retained' else []
         if name=='iommu' and steps.get('iommu-policy',{}).get('exit')==0:extra=['--translation-only']
         run(name,[out/name,*extra])

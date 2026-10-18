@@ -135,3 +135,21 @@ Existing codec, cold-start, IOMMU, provider and scheduler evidence was reused.
 No board or persistent storage was accessed. Stable inherited VE/IOMMU clocks,
 real initial isolation and board electrical/memory authority remain physical
 entry prerequisites.
+
+The harness compiles all three sanitizer fixtures before native configuration
+or host-case execution. Independent compilation failures retain separate logs
+and are reported together. Before native instruction cases, its setup check
+reports missing ELF symbols, named DWARF layout members and fixed fixture,
+reference or session geometry in one diagnostic. It uses the public
+`board_usb0_task` entry and explicit provider boundaries because static helpers
+may be inlined. C return values are interpreted as 32-bit W0 values. Layout lookup skips
+anonymous DWARF members, and source comparison ignores generated Python bytecode.
+
+Dependency collection follows every object in the actual JPEG link command.
+This build has 164 linked objects: 158 compiler `.obj.d` records and six assembly
+records in CMake's `depend.internal`. The assembly fixture's embedded JPEG and
+reference are included. Missing object coverage or empty discovery fails setup.
+The batch manifests now contain 419 inputs and 164 compile commands. Original
+empty manifests and the setup-only validation record are preserved in
+`batch1/setup-followup/`. No image rebuild or runtime case was repeated for this
+repair.

@@ -7,7 +7,59 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 
+def setup(image,out):
+    """Validate fixture prerequisites without executing native instructions."""
+    errors=[];symbols={};segments=[];layouts={};reference=b'';session=b''
+    try:
+        with image.open('rb') as f:
+            elf=ELFFile(f);symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            segments=[(int(s['p_vaddr']),bytes(s.data())) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
+            layouts={}
+            for cu in elf.get_dwarf_info().iter_CUs():
+                for die in cu.iter_DIEs():
+                    name=die.attributes.get('DW_AT_name')
+                    if die.tag=='DW_TAG_structure_type' and name:
+                        fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
+                        if fields:layouts[name.value.decode()]=fields
+    except Exception as error:errors.append('ELF/DWARF: '+str(error))
+    required_symbols={
+        'jpeg','board','jpeg_copied','jpeg_response','a733_smp_build_id','jpeg_task',
+        'a733_video_jpeg_begin_retained','a733_video_platform_retained_copy',
+        'a733_iommu_init_decoder','board_application_start','board_usb0_task',
+        'board_live','a733_iommu_scan','a733_iommu_poll','device_memory_describe','jpeg_load',
+        'vTaskDelay','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init',
+        'tud_task_ext','tud_vendor_n_available','tud_vendor_n_read'}
+    for name in sorted(required_symbols):
+        if not symbols.get(name):errors.append('Missing ELF symbol: '+name)
+    for name in ('a733_watchdog_hw_admit','a733_watchdog_hw_reload'):
+        if name in symbols:errors.append('Unexpected armed watchdog symbol: '+name)
+    members={'jpeg_application':['input','luma','chroma','iommu','copy_step','payload','digest','result'],
+        'a733_iommu':['fault'],'a733_iommu_fault':['scanned_masters']}
+    for structure,names in members.items():
+        for name in names:
+            if name not in layouts.get(structure,{}):errors.append('Missing DWARF member: '+structure+'.'+name)
+    for name in ('reference.yuv','session.bin','fixture.jpg'):
+        try:data=(out/name).read_bytes()
+        except OSError as error:errors.append(str(error));continue
+        if name=='reference.yuv':
+            reference=data
+            if data!=bytes([128])*2304:errors.append('Reference must be2304 samples of128')
+        elif name=='fixture.jpg':
+            if len(data)!=155 or hashlib.sha256(data).hexdigest()!='3689fc87a6594a114026b65c2e104589ae3a872188bce0cb12ae08ab92ede398':errors.append('Fixed155-byte fixture differs')
+        else:
+            session=data
+            if len(data)!=856:errors.append('Session must be856bytes')
+            else:
+                if struct.unpack_from('<3Q',data)!=(0x4153373342535332,2,592) or struct.unpack_from('<I',data,400)[0]!=2:errors.append('Session requires supervised board selection2')
+                if struct.unpack_from('<3Q',data,592)!=(0x415337334a504132,1,856):errors.append('JPEG session extension differs')
+                if data[112:184]!=bytes(72):errors.append('Uploaded session must have zero timer/deadline fields')
+    report={'result':'FAIL' if errors else 'PASS','errors':errors,'required_symbols':sorted(required_symbols),'required_members':members,'reference_bytes':len(reference),'session_bytes':len(session),'native_instructions_executed':False}
+    (out/'jpeg-setup.json').write_text(json.dumps(report,indent=2)+'\n')
+    if errors:raise RuntimeError('JPEG instruction setup failed:\n'+'\n'.join(errors))
+    return symbols,segments,layouts,reference,session
+
 def run(image,out,source,compiler,linker,steps,steps_path):
+    symbols,segments,layouts,reference,session=setup(image,out)
     def passed(name,**detail):
         steps[name]={'exit':0,**detail};steps_path.write_text(json.dumps(steps,indent=2)+'\n')
     def module(name,path):
@@ -20,19 +72,6 @@ def run(image,out,source,compiler,linker,steps,steps_path):
         (out/'armed-parent-refusal.log').write_text(result.stdout+result.stderr)
         assert result.returncode and 'JPEG cannot inherit an armed board target' in result.stderr
         passed('armed-parent-refused')
-    with image.open('rb') as f:
-        elf=ELFFile(f);symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
-        segments=[(int(s['p_vaddr']),bytes(s.data())) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
-        layouts={}
-        for cu in elf.get_dwarf_info().iter_CUs():
-            for die in cu.iter_DIEs():
-                name=die.attributes.get('DW_AT_name')
-                if die.tag=='DW_TAG_structure_type' and name:
-                    fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
-                    if fields:layouts[name.value.decode()]=fields
-    assert 'a733_watchdog_hw_admit' not in symbols and 'a733_watchdog_hw_reload' not in symbols
-    assert {'jpeg_task','a733_video_jpeg_begin_retained','a733_video_platform_retained_copy','a733_iommu_init_decoder','board_application_start'}<=set(symbols)
-    reference=(out/'reference.yuv').read_bytes();assert len(reference)==2304
     layout=layouts['jpeg_application'];io=layouts['a733_iommu'];fault=layouts['a733_iommu_fault']
     (out/'jpeg-layouts.json').write_text(json.dumps(layouts,indent=2)+'\n')
     for variant in ['verified','pixel-mismatch','physical-guard','unused-tail','iommu-fault','codec-error','post-copy-fault','post-copy-error']:
