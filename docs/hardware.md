@@ -90,6 +90,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   then verifies shutdown acknowledgment and actual OFF. Shared control and DRAM
   restoration pass, and ROM returns. Evidence is under
   `reconnect-20261018-086/native/runtime/`.
+  The updated complete-image primary setup now also passes in a returning
+  diagnostic, including Nonsecure publication and exact EL3/EL1 control
+  restoration. ROM returns as `003:109` after saved DRAM restoration; evidence
+  is under `primary-publication-probe-20261018/physical-108/`. This result ends
+  before GIC configuration and secondary release.
   The remaining secondary cores, per-core interrupt setup, cache coherence and
   scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
@@ -215,6 +220,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   two successive sets across all five sensors. One affected image, admission
   checks, 13 modeled native cases and four host cases pass; all 175 compiled
   repository inputs match integration under `thermal-application-20261018/`.
+  A boot-CPU-only profile also passes thirteen startup/IRQ/provider cases and
+  six host cases under `thermal-single-core-20261018/`. All 576 frozen inputs
+  match integration; calibration, thresholds and service code are unchanged.
   Existing calibration and controller evidence was reused. Physical acquisition,
   accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
   policy, rate changes and regulator control remain outstanding.

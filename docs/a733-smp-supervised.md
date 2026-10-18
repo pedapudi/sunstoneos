@@ -1040,7 +1040,8 @@ One physical attempt subsequently ran the launcher on original-board instance
 The launch command returned successfully and USB disappeared, but no native
 observer appeared within the nineteen-second capture window. No failure-location
 or scheduler result was recovered. The host issued no further device commands
-and retains its process, lock and claim pending manual recovery. Evidence is in
+and retained its process, lock and claim until the subsequent user-confirmed
+reconnect. Recovery and the returning diagnostic are recorded below. Evidence is in
 `smp-ns-publication-20261018/full-image/`. This does not identify a failed core or
 instruction. Do not repeat the full launch unchanged: first distinguish the new
 complete-image primary publication path from the later secondary/runtime path
@@ -1060,7 +1061,7 @@ the production revision plan requests no workaround writes. It records original
 EL1 and EL3 controls, observes successful preparation, verifies EL3 restoration,
 and restores the original EL1 SCTLR and TCR with readbacks. A restoration mismatch
 parks without requesting reset. The success path uses the previously exercised
-RVBAR/RMR return sequence. Physical return of this overlay remains unverified.
+RVBAR/RMR return sequence. Physical return of this overlay now passes on the original board.
 
 The overlay occupies `0x41020000..0x41024000`; its 256-byte report starts at
 `0x42018000`, outside native allocated sections and BSS clearing. The builder
@@ -1074,6 +1075,23 @@ cases. The first executes actual boot, all 42,165 publication lines, control
 restoration and the return request. It permits only the two return-vector MMIO
 writes. The second resumes the captured restoration boundary and injects a
 readback mismatch; execution retains control without reset, and the host decoder
-rejects the report. The shared startup prefix runs once. These results model
-instructions and registers; physical cache visibility and USB return remain
-outstanding. Host transport integration and review are required before deployment.
+rejects the report. The shared startup prefix runs once. The instruction cases do not establish physical cache visibility or USB return.
+
+The existing `tools/run-native-startup-probe.py` now accepts this profile through
+`tools/primary-publication-host.py`. It verifies the patched bytes against the
+original ELF, derives saved intervals from allocated sections, and reuses common
+queue, locking, transfer, return and restoration handling. Five focused host cases
+cover success, transport failure, absent return, an invalid report with safe DRAM
+restoration, and changed-input refusal. A fixture repair preserves the logged
+command before parsing its arguments; the earlier successful case was reused.
+
+One physical attempt on fresh instance `003:108` passes. Primary preparation
+completes, EL1 controls show the expected blocked walks, all four EL3 controls
+match their originals, and both EL1 controls restore with matching readbacks.
+The host receives the nonce-bound report, restores every saved DRAM interval,
+and confirms responsive ROM as `003:109`. All 43 transactions succeed; the runner
+exits and its claim closes as passed. Evidence is under
+`primary-publication-probe-20261018/physical-108/`. Later GIC configuration,
+secondary startup, interrupt delivery and scheduling remain unobserved in the
+full-image attempt. This result establishes primary preparation on the recovered
+board; it does not identify the cause of the earlier missing observer.

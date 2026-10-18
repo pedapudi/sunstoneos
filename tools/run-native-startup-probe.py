@@ -315,25 +315,37 @@ def claimed(a,expected):
 
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
-    profile=manifest_profile(m)
-    require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
-    require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
-    require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
-    require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
-    frozen={name:(a.build/name).read_bytes() for name in m['files']}
-    require(all(Path(n).name==n and hashlib.sha256(b).hexdigest()==m['files'][n] for n,b in frozen.items()),'Frozen build changed.')
+    primary = None
+    is_primary = m.get('schema') == 'a733-primary-publication-probe-v1'
     prepared=supervised.validate_bundle(a.bundle)
-    require(prepared['image_sha256']==NATIVE and prepared['launcher_sha256']==LAUNCH,'Native/launcher identity differs.')
+    if is_primary:
+        primary=module('primary_publication_host',ROOT/'tools/primary-publication-host.py')
+        frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
+        native=primary.probe.NATIVE;profile=primary.PROFILE
+    else:
+        profile=manifest_profile(m)
+        require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
+        require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
+        require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
+        require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
+        frozen={name:(a.build/name).read_bytes() for name in m['files']}
+        require(all(Path(n).name==n and hashlib.sha256(b).hexdigest()==m['files'][n] for n,b in frozen.items()),'Frozen build changed.')
+        native=NATIVE;dram=DRAM
+    require(prepared['image_sha256']==native and prepared['launcher_sha256']==LAUNCH,'Native/launcher identity differs.')
     survey_raw=a.survey.read_bytes();survey=json.loads(survey_raw);caller=caller_interval(survey)
     require(all(survey['result']['launcher_gates'].values()),'Actual A32 launcher gates fail; establish cache-off state separately.')
     software_raw=a.software.read_bytes();software=json.loads(software_raw)
-    require(software.get('schema')=='a733-native-startup-software-v1' and software.get('physical_access') is False and
-            software.get('execution_profile')==profile and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
+    if is_primary:
+        primary.validate_software(software,manifest_hash)
+    else:
+        require(software.get('schema')=='a733-native-startup-software-v1' and software.get('physical_access') is False and
+                software.get('execution_profile')==profile and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
     expected={a.build/'manifest.json':manifest_hash,a.software.resolve():hashlib.sha256(software_raw).hexdigest(),
               a.survey.resolve():hashlib.sha256(survey_raw).hexdigest(),(a.bundle/'prepared.json').resolve():prepared['_prepared_sha256']}
     recovery,recovery_hash=claimed(a,expected);require(digest(a.fel)==base.FEL_HASH,'Pinned FEL executable required.')
     a.evidence.mkdir(parents=True,exist_ok=False)
     record={'physical_access':True,'complete':False,'launch_attempted':False,'transactions':[],'claim':a.claim,'owner':a.owner,
+        'execution_profile':profile,'native_sha256':native,
         'manifest_sha256':expected[a.build/'manifest.json'],'recovery_sha256':recovery_hash,'caller_interval':caller,'sram_after_warm_return':'Owned by new ROM; old bytes are evidence only.'}
     def journal():save(a.evidence/'session.json',record)
     access=module('startup_access',ROOT/'tools/usb-access.py');sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
@@ -341,7 +353,7 @@ def run(a):
     with access.board_lock() as node:
         access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False
         require(survey.get('identity')==identity and survey.get('port')==port.name and recovery.get('identity')==identity and recovery.get('port')==port.name,'Survey/recovery covers another live instance.')
-        supervised.validate_admission(json.loads(prepared['_frozen']['admission.json']),NATIVE,identity,port.name)
+        supervised.validate_admission(json.loads(prepared['_frozen']['admission.json']),native,identity,port.name)
         record.update(initial_identity=identity,initial_node=str(node),port=port.name);journal()
         def transaction(*arguments,pass_fds=()):
             nonlocal failed
@@ -360,17 +372,21 @@ def run(a):
             words=transaction('readl','0x20','readl','0x24','readl','0x28','readl','0x3c','readl','0x40')
             require([int(v,16) for v in words.split()]==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL destination changed.')
             backups={}
-            for name,address,size in (*DRAM,*base.REGIONS,('caller-evidence',*caller)):
+            for name,address,size in (*dram,*base.REGIONS,('caller-evidence',*caller)):
                 path=a.evidence/(name+'-before.bin');transaction('read',hex(address),str(size),path)
                 data=path.read_bytes();require(len(data)==size,'Short backup.');base.sync_file(path);backups[name]=data
-            nonce=secrets.token_bytes(16);initial=bytearray(0x4000);initial[0x2000+240:0x2000+256]=nonce;record['nonce']=nonce.hex();dirty=True;journal()
+            nonce=secrets.token_bytes(16);initial=bytearray(0x4000)
+            if not is_primary:initial[0x2000+240:0x2000+256]=nonce
+            record['nonce']=nonce.hex();dirty=True;journal()
             uploads=[(s['address'],frozen[s['name']],s['name']) for s in m['payloads']]
             uploads += [(0x41020000,frozen['overlay.bin'],'overlay.bin'),(0x42000000,bytes(initial),'result.bin'),
                         (0x42004000,prepared['_frozen']['contract.bin'],'contract.bin'),(0x52c00,prepared['_frozen']['request.bin'],'request.bin'),
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
+            if is_primary:
+                uploads.insert(0,(primary.probe.REPORT[0],primary.initial_report(nonce),'primary-report.bin'))
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native core1 diagnostic with verified local restoration and target-owned OFF',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native returning CPU diagnostic with verified restoration',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -380,98 +396,101 @@ def run(a):
                 node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
-            for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x7000),
+            for name,address,size in ([('report',primary.probe.REPORT[0],primary.probe.REPORT[1])] if is_primary else [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x7000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('el1-cache',0x42002b20,256),('ns-publication',0x42002c20,128),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('el1-cache',0x42002b20,256),('ns-publication',0x42002c20,128),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]):
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
-                record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
-                record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
-                record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
-                record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
-                record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
-                record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
-                record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
-                record['local_initialization']=local_initialization_snapshot((a.evidence/'local-initialization.bin').read_bytes())
-                record['el3_cache']=el3_cache_snapshot((a.evidence/'el3-cache.bin').read_bytes())
-                if m.get('el3_cache',False) or m.get('el1_cache',False):validate_el3_cache(record['el3_cache'])
-                record['el1_cache']=el1_cache_snapshot((a.evidence/'el1-cache.bin').read_bytes())
-                if m.get('el1_cache',False):validate_el1_cache(record['el1_cache'],m['el1_smc_return'])
-                record['ns_publication']=ns_publication_snapshot((a.evidence/'ns-publication.bin').read_bytes())
-                if m.get('el1_cache',False):validate_ns_publication(record['ns_publication'],record['el3_cache'],m['el1_call_word'])
-                record['controller_access']=controller_access_snapshot((a.evidence/'controller-access.bin').read_bytes())
-                record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
-                observation=record['observation'];activation=record['activation'];secondary=record['secondary']
-                require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
-                require(activation['state']==5 and activation['epoch']==activation['request']==activation['ack']==observation['epoch'] and not activation['last_ppu']&15, 'No matching observed-OFF handshake.')
-                require(record['redistributor']['state']==1 and record['redistributor']['writes_attempted']==0 and not any(record['redistributor']['typers']), 'Redistributor boundary crossed.')
-                require(secondary['command']['state']==secondary['report']['state']==2 and secondary['command']['epoch']==observation['epoch'], 'Actual RELEASE not observed.')
-                require(record['gic']['state']==3 and record['gic']['configuration']['state']==3 and record['result']['restore_state']==3, 'Restoration incomplete.')
-                record['preparation_observed']=observation['origin']==3
-                if record['preparation_observed']:
-                    walks=observation['walks']
-                    require(walks['state']==2 and walks['restored_sctlr1']==observation['SCTLR_EL1'] and
-                        walks['restored_tcr1']==observation['TCR_EL1'], 'Target control restoration incomplete.')
-                    require(walks['blocked_sctlr1']==(observation['SCTLR_EL1']|1) and
-                        walks['blocked_tcr1']==(observation['TCR_EL1']|0x800080), 'Target walk blocking differs.')
-                    require(walks['typer']>>32==0x100, 'Observed frame is not core 1.')
-                    record['target_walks_and_frame_observed']=True
-                    local=record['local_interrupts']
-                    require(local['base']==0x03480000 and local['state'] in (2,3), 'Local interrupt observation incomplete.')
-                    record['local_interrupts_observed']=local['state']==2
-                    init=record['local_initialization']
-                    if local['state']==2:
-                        require(init['state'] in (3,4) and init['epoch']==observation['epoch'] and init['core']==1,'Local initialization did not complete or refuse safely.')
-                        before_power=init['state']==4 and init['stopped_before_power']==1
-                        before_wake=init['state']==4 and init['stopped_before_wake']==1
-                        after_wake=init['state']==4 and init['stopped_after_wake']==1
-                        refusal=init['state']==4 and init['controller_refusal_restored']==1
-                        if init['cpu_interface_observed']:
-                            require(m.get('stop_after_cpu_interface') is True and init['state']==4 and
-                                (init['sre_after']&7)==7 and not (init['igrpen0']&1 or init['igrpen1']&3) and
-                                not any(init[k] for k in ('controller_state','phase','error','writes','cleanup_writes',
-                                                         'cleanup_error','stopped_before_power','stopped_before_wake','stopped_after_wake')),
-                                'CPU-interface-only boundary differs.')
-                        if m.get('stop_after_cpu_interface'):
-                            require(init['cpu_interface_observed']==1,'CPU-interface observation missing.')
-                        if before_power:
-                            require(m['stop_before_power'] and init['controller_state']==5 and init['error']==1 and
-                                init['writes']==2 and init['cleanup_writes']==1 and init['cleanup_error']==0,
-                                'Pre-write boundary differs.')
-                        if before_wake:
-                            require(m.get('stop_before_wake') is True and init['controller_state']==5 and init['phase']==8 and
-                                init['error']==1 and init['writes']>=3 and init['cleanup_writes']==1 and
-                                not any(init[k] for k in ('cleanup_error','stopped_before_power','cpu_interface_observed')),
-                                'Pre-wake boundary differs.')
-                        if after_wake:
-                            require(m.get('stop_after_wake') is True and init['controller_state']==5 and init['phase']==10 and
-                                init['error']==1 and init['writes']>=4 and init['cleanup_writes']==2 and
-                                not any(init[k] for k in ('awake_waker','cleanup_error','stopped_before_power','stopped_before_wake','cpu_interface_observed')),
-                                'Wake/sleep boundary differs.')
-                        if refusal:
-                            require(profile==PROFILE and init['controller_state']==5 and 10<=init['phase']<=26 and
-                                init['error'] in (1,2,3,4) and init['writes']>=4 and init['cleanup_writes']==7 and
-                                not any(init[k] for k in ('cleanup_error','stopped_before_power','stopped_before_wake','stopped_after_wake','cpu_interface_observed')),
-                                'Restored controller refusal differs.')
-                        if init['state']==3 or before_power or before_wake or after_wake or refusal:
-                            if init['state']==3:
-                                require(not m['stop_before_power'] and not m.get('stop_before_wake',False) and not m.get('stop_after_wake',False) and
-                                    init['stopped_before_power']==init['stopped_before_wake']==init['stopped_after_wake']==0 and
-                                    init['controller_state']==2 and init['error']==init['cleanup_error']==0,
-                                    'Local initialization differs.')
-                            require(init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
-                                'Local control restoration differs.')
-                            require(all(init[k]==local[k] for k in ('waker','enable','pending','active','group','modifier','config','priority')) and
-                                init['pwrr']==local['pwrr_after'], 'Local interrupt restoration differs.')
-                    record['before_power_observed']=init['state']==4 and init['stopped_before_power']==1
-                    record['cpu_interface_observed']=init['cpu_interface_observed']==1
-                    record['before_wake_observed']=init['state']==4 and init['stopped_before_wake']==1
-                    record['wake_sleep_observed']=init['state']==4 and init['stopped_after_wake']==1
-                    record['local_initialization_observed']=init['state']==3
-                    record['controller_refusal_observed']=init['state']==4 and init['controller_refusal_restored']==1
+                if is_primary:
+                    record['result']=primary.probe.decode((a.evidence/'report.bin').read_bytes(),nonce)
+                else:
+                    record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
+                    record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
+                    record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
+                    record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
+                    record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
+                    record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
+                    record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
+                    record['local_initialization']=local_initialization_snapshot((a.evidence/'local-initialization.bin').read_bytes())
+                    record['el3_cache']=el3_cache_snapshot((a.evidence/'el3-cache.bin').read_bytes())
+                    if m.get('el3_cache',False) or m.get('el1_cache',False):validate_el3_cache(record['el3_cache'])
+                    record['el1_cache']=el1_cache_snapshot((a.evidence/'el1-cache.bin').read_bytes())
+                    if m.get('el1_cache',False):validate_el1_cache(record['el1_cache'],m['el1_smc_return'])
+                    record['ns_publication']=ns_publication_snapshot((a.evidence/'ns-publication.bin').read_bytes())
+                    if m.get('el1_cache',False):validate_ns_publication(record['ns_publication'],record['el3_cache'],m['el1_call_word'])
+                    record['controller_access']=controller_access_snapshot((a.evidence/'controller-access.bin').read_bytes())
+                    record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
+                    observation=record['observation'];activation=record['activation'];secondary=record['secondary']
+                    require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
+                    require(activation['state']==5 and activation['epoch']==activation['request']==activation['ack']==observation['epoch'] and not activation['last_ppu']&15, 'No matching observed-OFF handshake.')
+                    require(record['redistributor']['state']==1 and record['redistributor']['writes_attempted']==0 and not any(record['redistributor']['typers']), 'Redistributor boundary crossed.')
+                    require(secondary['command']['state']==secondary['report']['state']==2 and secondary['command']['epoch']==observation['epoch'], 'Actual RELEASE not observed.')
+                    require(record['gic']['state']==3 and record['gic']['configuration']['state']==3 and record['result']['restore_state']==3, 'Restoration incomplete.')
+                    record['preparation_observed']=observation['origin']==3
+                    if record['preparation_observed']:
+                        walks=observation['walks']
+                        require(walks['state']==2 and walks['restored_sctlr1']==observation['SCTLR_EL1'] and
+                            walks['restored_tcr1']==observation['TCR_EL1'], 'Target control restoration incomplete.')
+                        require(walks['blocked_sctlr1']==(observation['SCTLR_EL1']|1) and
+                            walks['blocked_tcr1']==(observation['TCR_EL1']|0x800080), 'Target walk blocking differs.')
+                        require(walks['typer']>>32==0x100, 'Observed frame is not core 1.')
+                        record['target_walks_and_frame_observed']=True
+                        local=record['local_interrupts']
+                        require(local['base']==0x03480000 and local['state'] in (2,3), 'Local interrupt observation incomplete.')
+                        record['local_interrupts_observed']=local['state']==2
+                        init=record['local_initialization']
+                        if local['state']==2:
+                            require(init['state'] in (3,4) and init['epoch']==observation['epoch'] and init['core']==1,'Local initialization did not complete or refuse safely.')
+                            before_power=init['state']==4 and init['stopped_before_power']==1
+                            before_wake=init['state']==4 and init['stopped_before_wake']==1
+                            after_wake=init['state']==4 and init['stopped_after_wake']==1
+                            refusal=init['state']==4 and init['controller_refusal_restored']==1
+                            if init['cpu_interface_observed']:
+                                require(m.get('stop_after_cpu_interface') is True and init['state']==4 and
+                                    (init['sre_after']&7)==7 and not (init['igrpen0']&1 or init['igrpen1']&3) and
+                                    not any(init[k] for k in ('controller_state','phase','error','writes','cleanup_writes',
+                                                             'cleanup_error','stopped_before_power','stopped_before_wake','stopped_after_wake')),
+                                    'CPU-interface-only boundary differs.')
+                            if m.get('stop_after_cpu_interface'):
+                                require(init['cpu_interface_observed']==1,'CPU-interface observation missing.')
+                            if before_power:
+                                require(m['stop_before_power'] and init['controller_state']==5 and init['error']==1 and
+                                    init['writes']==2 and init['cleanup_writes']==1 and init['cleanup_error']==0,
+                                    'Pre-write boundary differs.')
+                            if before_wake:
+                                require(m.get('stop_before_wake') is True and init['controller_state']==5 and init['phase']==8 and
+                                    init['error']==1 and init['writes']>=3 and init['cleanup_writes']==1 and
+                                    not any(init[k] for k in ('cleanup_error','stopped_before_power','cpu_interface_observed')),
+                                    'Pre-wake boundary differs.')
+                            if after_wake:
+                                require(m.get('stop_after_wake') is True and init['controller_state']==5 and init['phase']==10 and
+                                    init['error']==1 and init['writes']>=4 and init['cleanup_writes']==2 and
+                                    not any(init[k] for k in ('awake_waker','cleanup_error','stopped_before_power','stopped_before_wake','cpu_interface_observed')),
+                                    'Wake/sleep boundary differs.')
+                            if refusal:
+                                require(profile==PROFILE and init['controller_state']==5 and 10<=init['phase']<=26 and
+                                    init['error'] in (1,2,3,4) and init['writes']>=4 and init['cleanup_writes']==7 and
+                                    not any(init[k] for k in ('cleanup_error','stopped_before_power','stopped_before_wake','stopped_after_wake','cpu_interface_observed')),
+                                    'Restored controller refusal differs.')
+                            if init['state']==3 or before_power or before_wake or after_wake or refusal:
+                                if init['state']==3:
+                                    require(not m['stop_before_power'] and not m.get('stop_before_wake',False) and not m.get('stop_after_wake',False) and
+                                        init['stopped_before_power']==init['stopped_before_wake']==init['stopped_after_wake']==0 and
+                                        init['controller_state']==2 and init['error']==init['cleanup_error']==0,
+                                        'Local initialization differs.')
+                                require(init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
+                                    'Local control restoration differs.')
+                                require(all(init[k]==local[k] for k in ('waker','enable','pending','active','group','modifier','config','priority')) and
+                                    init['pwrr']==local['pwrr_after'], 'Local interrupt restoration differs.')
+                        record['before_power_observed']=init['state']==4 and init['stopped_before_power']==1
+                        record['cpu_interface_observed']=init['cpu_interface_observed']==1
+                        record['before_wake_observed']=init['state']==4 and init['stopped_before_wake']==1
+                        record['wake_sleep_observed']=init['state']==4 and init['stopped_after_wake']==1
+                        record['local_initialization_observed']=init['state']==3
+                        record['controller_refusal_observed']=init['state']==4 and init['controller_refusal_restored']==1
             except (ValueError,struct.error) as e:error=e
-            for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
+            for name,address,size in dram:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
             if error:raise error
         except BaseException as error:
