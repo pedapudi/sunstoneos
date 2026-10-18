@@ -64,9 +64,13 @@ and repeated inference. Two additional model shapes match CPU references in the
 external simulator. The native image builds; implementation review and focused
 native checks remain in progress. Physical inference remains unqualified.
 
-Combined thermal/ADC monitoring and reusable read-only microSD access continue
-in separate worktrees. Continuous fan/LED control and the PCIe supply-contract
-correction are now integrated with focused software evidence. The coordinator
+Combined thermal/ADC monitoring is integrated with repeated copied samples,
+shared-parent ownership and readback-confirmed converter disable on stop.
+Thirteen controller stop cases, twenty modeled native composition/USB cases and
+four host groups pass under `monitor-application-20261018/`. Integration reuses
+the frozen image; physical sampling, analog drain and recovery remain unqualified.
+Reusable read-only microSD access continues in its separate worktree. Continuous
+fan/LED control and the PCIe supply correction are also integrated. The coordinator
 alone performs physical board tests; independent software work proceeds in parallel.
 
 The RTC USB integration check is complete. Five cases execute the actual native
@@ -83,11 +87,10 @@ APBS0 stability ownership and actual PMIC source/divider validation, plus atomic
 publication of a stable GPADC24M parent. Two new focused checks pass under
 `pwm-service-20261018/prerequisite/`; integration reuses their frozen artifacts.
 The provider's new internal APBS0 field requires matching caller/fixture layouts
-in the next native images. The monitor owner imports the complete prerequisite
-rather than editing the registry concurrently. Normal monitor
-stop must distinguish halted publication from stopped converters; fan updates
-may introduce an explicit low interval. Device-specific reviews cover those
-behaviors before execution. Only the coordinator may operate the board.
+in the next native images. The combined monitor image includes the complete prerequisite. Its stop path
+checks converter disable independently of publication; resources remain retained.
+Fan updates may introduce an explicit low interval. Only the coordinator may
+operate the board.
 No physical test is running. Host metadata still identifies the quarantined
 instance; physical power removal and reconnection remain required.
 

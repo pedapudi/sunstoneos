@@ -135,6 +135,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   under `rtc-usb-native-20261018/` without a rebuild. The fitted board revision,
   physical operation, UTC accuracy, USB hardware and full provider initialization
   remain unqualified. Independent watchdog evidence is recorded above.
+- Combined monitoring: **implemented** [repeated thermal/ADC sampling](monitor-application.md)
+  through separate native owners with a shared stable clock parent and copied
+  coherent snapshots. Stop requires both owners to verify converter-disable
+  readback; all resources remain retained. Thirteen controller stop cases,
+  twenty modeled native composition/USB cases and four host groups pass, and
+  one native image links under `monitor-application-20261018/`. Physical sampling,
+  interrupt delivery, analog drain and recovery remain unqualified.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
