@@ -220,3 +220,8 @@ endif()
 if(SUNSTONE_A733_PWM)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pwm.cmake")
 endif()
+
+option(SUNSTONE_A733_ADC "Build the supervised native GPADC board monitor" OFF)
+if(SUNSTONE_A733_ADC)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-adc.cmake")
+endif()

@@ -85,7 +85,7 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *,const struct a733_pmic_l
  */
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *);
 /* Nonblocking client metadata. Supports DCDC1/2/4/8/9, BLDO1/2/5,
- * CLDO1/2/5, ELDO6 and DC1SW2. Snapshot
+ * CLDO1/2/3/5, ELDO6 and DC1SW2. Snapshot
  * reads ff/0e/0f/enable/selector/ff at address36 under one mutex. The ledger
  * borrow prevents parent release until reap. A snapshot remains meaningful
  * only under the same still-live parent rail lease. It proves programmed
