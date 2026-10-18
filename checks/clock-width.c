@@ -40,10 +40,10 @@ static void coexistence(void)
     assert(a733_clock_token_status(&r,&live[0])==A733_CLOCK_OK);
     for(unsigned i=0;i<sizeof(live)/sizeof(*live);++i)
         assert(a733_clock_release(&r,&live[i],10)==A733_CLOCK_OK);
-    for(unsigned bit=0;bit<64;++bit) {
-        if(A733_CLOCK_ALL&(UINT64_C(1)<<bit))continue;
-        assert(a733_clock_acquire(&r,99,UINT64_C(1)<<bit,0,10,&out)==A733_CLOCK_INVALID && out.id==999);
-        assert(a733_clock_acquire(&r,99,0,UINT64_C(1)<<bit,10,&out)==A733_CLOCK_INVALID && out.id==999);
+    for(unsigned bit=0;bit<128;++bit) {
+        if(A733_CLOCK_ALL&(A733_CLOCK_BIT(bit)))continue;
+        assert(a733_clock_acquire(&r,99,A733_CLOCK_BIT(bit),0,10,&out)==A733_CLOCK_INVALID && out.id==999);
+        assert(a733_clock_acquire(&r,99,0,A733_CLOCK_BIT(bit),10,&out)==A733_CLOCK_INVALID && out.id==999);
     }
     assert(a733_clock_acquire(&r,1,A733_CLOCK_RC16M,0,10,&live[0])==A733_CLOCK_OK);
     assert(live[0].shared==A733_CLOCK_RC16M && !live[0].exclusive);
@@ -77,7 +77,7 @@ static void compatibility_and_capacity(void)
     struct a733_clock_leases r;fresh(&r);
     struct a733_clock_token t,u;
     _Static_assert(A733_CLOCK_LOCALS==0x3fc0 && A733_CLOCK_AUDIO_CHANGE==0x3ff8,"audio scopes retain values");
-    _Static_assert(sizeof(a733_clock_mask_t)==8 && sizeof(struct a733_clock_token)==32,"private token width");
+    _Static_assert(sizeof(a733_clock_mask_t)==16 && sizeof(struct a733_clock_token)==48,"private token width");
     assert(a733_clock_acquire(&r,1,0,A733_CLOCK_AUDIO_CHANGE,10,&t)==A733_CLOCK_OK);
     assert(t.shared==(A733_CLOCK_REF|A733_CLOCK_OSC));
     assert(a733_clock_publish_audio(&r,&t,10,&u)==A733_CLOCK_OK && r.audio_profile==1);
@@ -125,5 +125,5 @@ static void high_bit_race(void)
 int main(void)
 {
     coexistence();publication();compatibility_and_capacity();high_bit_race();
-    puts("PASS: 64-bit clock ownership, independent controllers, parents, publication, capacity and contention");
+    puts("PASS: 128-bit clock ownership, independent controllers, parents, publication, capacity and contention");
 }

@@ -7,8 +7,8 @@ static int now(void *cookie,uint64_t *out)
 {(void)cookie;*out=1;return 1;}
 int main(void)
 {
-    _Static_assert(sizeof(a733_clock_mask_t)==8,"64-bit masks");
-    _Static_assert(sizeof(struct a733_clock_token)==32,"token ABI unchanged");
+    _Static_assert(sizeof(a733_clock_mask_t)==16,"128-bit masks");
+    _Static_assert(sizeof(struct a733_clock_token)==48,"private token ABI");
     _Static_assert(A733_CLOCK_SDC1==(UINT64_C(1)<<53),"existing SDC1 value");
     _Static_assert(A733_CLOCK_SDC0==(UINT64_C(1)<<56),"SDC0 allocation");
     _Static_assert(A733_CLOCK_SDC2==(UINT64_C(1)<<57),"SDC2 allocation");
@@ -41,7 +41,7 @@ int main(void)
     assert(a733_clock_token_status(&r,&live[1])==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[2])==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[3])==A733_CLOCK_OK);
-    assert(a733_clock_acquire(&r,9,0,UINT64_C(1)<<59,10,&out)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&r,9,0,A733_CLOCK_BIT(65),10,&out)==A733_CLOCK_INVALID);
     assert(a733_clock_release(&r,&live[2],10)==A733_CLOCK_OK);
     assert(a733_clock_release(&r,&live[3],10)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&r,8,A733_CLOCK_REF|A733_CLOCK_FABRIC,
@@ -50,5 +50,5 @@ int main(void)
     for(unsigned i=2;i<4;++i)
         assert(a733_clock_acquire(&r,9,0,local[i],10,&collision)==A733_CLOCK_BUSY);
     assert(!collision.id&&a733_clock_token_status(&r,&live[1])==A733_CLOCK_OK);
-    puts("PASS: SDC0/1/2/3 scopes, joint eMMC exclusion, explicit parents and unchanged token ABI");
+    puts("PASS: SDC0/1/2/3 scopes, joint eMMC exclusion, explicit parents and current private token ABI");
 }

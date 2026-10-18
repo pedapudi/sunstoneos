@@ -1,25 +1,23 @@
 #include "a733_clock_leases.h"
 #include <stddef.h>
 
-/* Preserve the preceding metadata ABI while publishing faults to consumers
- * that hold permanent tokens and cannot enter the registry from their I/O path. */
-struct previous_clock_layout {
-    atomic_uint busy;
-    uint64_t next_id,last_now;
-    struct a733_clock_token slots[A733_CLOCK_CLIENTS];
-    int (*now)(void *,uint64_t *);
-    void *context;
-    uint32_t initialized,failed,audio_profile;
-};
+/* Masks and tokens are private metadata under the existing 32-bit lock.
+ * Wider masks require rebuilding every consumer; no 128-bit atomic is used. */
 _Static_assert(ATOMIC_INT_LOCK_FREE==2,"registry fault publication must be lock-free");
 _Static_assert(sizeof(atomic_uint)==sizeof(uint32_t),"32-bit atomic required");
-_Static_assert(_Alignof(atomic_uint)==_Alignof(uint32_t),"atomic alignment changed");
-_Static_assert(sizeof(struct a733_clock_leases)==sizeof(struct previous_clock_layout),"registry size changed");
-_Static_assert(_Alignof(struct a733_clock_leases)==_Alignof(struct previous_clock_layout),"registry alignment changed");
-#define SAME_OFFSET(field) _Static_assert(offsetof(struct a733_clock_leases,field)==offsetof(struct previous_clock_layout,field),"registry offset changed: " #field)
-SAME_OFFSET(busy); SAME_OFFSET(next_id); SAME_OFFSET(last_now); SAME_OFFSET(slots);
-SAME_OFFSET(now); SAME_OFFSET(context); SAME_OFFSET(initialized); SAME_OFFSET(failed); SAME_OFFSET(audio_profile);
-#undef SAME_OFFSET
+_Static_assert(_Alignof(atomic_uint)==_Alignof(uint32_t),"32-bit atomic alignment required");
+_Static_assert(sizeof(a733_clock_mask_t)==16 && _Alignof(a733_clock_mask_t)==16,"128-bit mask ABI");
+_Static_assert(sizeof(struct a733_clock_token)==48 && _Alignof(struct a733_clock_token)==16,"private token ABI");
+#define OFFSET(type,field,value) _Static_assert(offsetof(struct type,field)==value,"private ABI offset: " #field)
+OFFSET(a733_clock_token,id,0); OFFSET(a733_clock_token,owner,8);
+OFFSET(a733_clock_token,shared,16); OFFSET(a733_clock_token,exclusive,32);
+_Static_assert(sizeof(struct a733_clock_leases)==6208 && _Alignof(struct a733_clock_leases)==16,"private registry ABI");
+OFFSET(a733_clock_leases,busy,0); OFFSET(a733_clock_leases,next_id,8);
+OFFSET(a733_clock_leases,last_now,16); OFFSET(a733_clock_leases,slots,32);
+OFFSET(a733_clock_leases,now,6176); OFFSET(a733_clock_leases,context,6184);
+OFFSET(a733_clock_leases,initialized,6192); OFFSET(a733_clock_leases,failed,6196);
+OFFSET(a733_clock_leases,audio_profile,6200);
+#undef OFFSET
 
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
@@ -29,6 +27,7 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
 static a733_clock_mask_t parents(a733_clock_mask_t mask)
 {
     a733_clock_mask_t p=0;
+    if(mask&A733_CLOCK_TWI11)p|=A733_CLOCK_FABRIC;
     if(mask&(A733_CLOCK_USB0|A733_CLOCK_USB1))p|=A733_CLOCK_USB01_REF;
     if(mask&A733_CLOCK_MAIN_UARTS)p|=A733_CLOCK_APB_UART;
     if(mask&(A733_CLOCK_S_UARTS|A733_CLOCK_S_TWI0))p|=A733_CLOCK_APBS1;
@@ -81,7 +80,8 @@ enum a733_clock_result a733_clock_acquire(struct a733_clock_leases *m,uint64_t o
         A733_CLOCK_MEDIA_LOCALS|A733_CLOCK_THS|A733_CLOCK_MAIN_UARTS|
         A733_CLOCK_S_UARTS|A733_CLOCK_SPIS|A733_CLOCK_CE|A733_CLOCK_USB0|A733_CLOCK_USB1|
         A733_CLOCK_SDC1|A733_CLOCK_RADIO_MODULE|A733_CLOCK_S_TWI0|
-        A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3|A733_CLOCK_PCIE0|A733_CLOCK_COMB1;
+        A733_CLOCK_SDC0|A733_CLOCK_SDC2|A733_CLOCK_SDC3|A733_CLOCK_PCIE0|A733_CLOCK_COMB1|
+        A733_CLOCK_TWI11;
     if(!owner || !(shared|exclusive) || ((shared|exclusive)&~A733_CLOCK_ALL) ||
         (shared&exclusive) || (shared&local) ||
         !separate(m,sizeof(*m),out,sizeof(*out)))return A733_CLOCK_INVALID;

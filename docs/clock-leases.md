@@ -37,16 +37,20 @@ Either eMMC route reserves SDC2 and SDC3 together before hardware access because
 both controllers connect to the same card. The token grants no access to the
 unselected controller. Storage-controller tokens do not select their module
 clock parents; platform admission reserves and verifies those parents separately.
-The SDC3 extension assigns bit 58 without changing token layout. Its focused
-storage check covers both corrected routes and ownership conflicts; existing
-registry workloads retain their recorded evidence.
+SDC3 uses bit 58. Its focused storage check covers both corrected routes and
+ownership conflicts in the recorded build.
 S_TWI0 includes its autonomous engines and reserves shared APBS1 ancestry.
 PCIe controller and COMB1 PHY scopes are exclusive. Global SERDES configuration
 and the shared USB/PCIe power domain allow stable shared ownership and require
 exclusive ownership for transitions. Selected clock parents, physical power
 and other consumers remain separate prerequisites. These additions allocate
-bits 59–62; bit 63 remains unassigned. The registry fault indicator is atomic,
-with compile-time size, alignment and offset checks preserving its layout.
+bits 59–62. VO1 uses bit 63 for both TV paths, HDMI/eDP and their shared
+TOP, PLL, clock, reset and power-domain controls. TWI11 uses bit 64 for its
+controller and CCU+0xeac gate0/reset16. Its exclusive token holds FABRIC shared
+to prevent APB1 retuning. Native admission must separately establish the selected
+APB1 source and rate, pin ownership and exclusion of remote writers.
+Bits 65–127 remain invalid, including for the pending independent USB2 scope.
+The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller
 validation and integration remain separate.
@@ -70,13 +74,30 @@ conflicting acquisition does not call the clock callback. Successful metadata
 changes require a monotonic microsecond observation before their deadline.
 Callbacks must be bounded and non-reentrant.
 
-Scope masks are 64-bit values. Each token occupies 32 bytes; the fixed token
-array occupies 4096 bytes. Rebuild all token producers and consumers together
-after this ABI change. Older binaries cannot exchange these tokens with the
-current registry. The wider registry passed one focused sanitizer check;
-affected native images linked and existing callback fixtures compiled without
-repeating their scenarios. Evidence is retained under
-`~/.cache/sunstoneos/evidence/clock-width-20261016/`.
+Scope masks are 128-bit unsigned integers. Tokens occupy 48 bytes with
+16-byte alignment; the fixed array of 128 tokens occupies 6144 bytes. The
+native registry occupies 6208 bytes with 16-byte alignment. Its 32-bit atomic
+lock serializes mask operations; no 128-bit atomic or dynamic allocation is
+required. The 128 reservation slots count active tokens, independently of the
+number of scope bits.
+
+Every producer and consumer must rebuild together because token size,
+alignment, containing structures and mask-valued function arguments have
+changed. Tokens remain private runtime metadata and have no wire or persistent
+format. Historical evidence remains valid for its recorded sources and ABI;
+it does not establish execution of a rebuilt image.
+
+The focused `checks/clock-wide.c` check covers independent TWI11 and VO1
+ownership, FABRIC conflicts, upper-half token authentication, stable publication
+and retained faults. It also checks refusal of every unassigned high bit.
+The check passed once with AddressSanitizer and UndefinedBehaviorSanitizer.
+`checks/clock-wide.py` compiled 61 production consumers reached through the
+common clock header with the cached eight-core configuration. The radio session
+also used its existing networking allocation options and pinned TCP headers.
+Older
+MMC, PCIe and width fixtures receive compatible width or invalid-bit assertions
+and are compiled without replaying their scenarios. Results and input identities
+are recorded under `~/.cache/sunstoneos/evidence/clock-wide-20261017/`.
 
 An expired release keeps its reservation. Clock failure or regression prevents
 further registry mutations and preserves existing tokens. An owner can also

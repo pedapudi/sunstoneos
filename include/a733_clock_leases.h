@@ -3,84 +3,86 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-typedef uint64_t a733_clock_mask_t;
+typedef unsigned __int128 a733_clock_mask_t;
+#define A733_CLOCK_BIT(n) ((a733_clock_mask_t)1 << (n))
 
-/* 128 simultaneous reservations: space for one owner of each of 64 possible
- * scopes plus 64 additional shared/coordination leases. Exhaustion returns BUSY.
- * The slot array occupies 4096 bytes; no dynamic allocation occurs.
+/* 128 simultaneous reservations, including shared and exclusive leases.
+ * Exhaustion returns BUSY. Scope capacity and reservation capacity are separate.
+ * The slot array occupies 6144 bytes; no dynamic allocation occurs.
  * Tokens are private runtime metadata, not a persistent or wire ABI. All
  * producers and consumers must be rebuilt together when this layout changes. */
 #define A733_CLOCK_CLIENTS 128u
-#define A733_CLOCK_OSC       (UINT64_C(1)<<0)
-#define A733_CLOCK_REF       (UINT64_C(1)<<1)
-#define A733_CLOCK_PERI0     (UINT64_C(1)<<2)
-#define A733_CLOCK_AUDIO1    (UINT64_C(1)<<3)
-#define A733_CLOCK_AUDIO2    (UINT64_C(1)<<4) /* AUDIO1 DIV2 output. */
-#define A733_CLOCK_AUDIO5    (UINT64_C(1)<<5) /* AUDIO1 DIV5 output. */
-#define A733_CLOCK_I2S0      (UINT64_C(1)<<6)
-#define A733_CLOCK_I2S1      (UINT64_C(1)<<7)
-#define A733_CLOCK_I2S2      (UINT64_C(1)<<8)
-#define A733_CLOCK_I2S3      (UINT64_C(1)<<9)
-#define A733_CLOCK_I2S4      (UINT64_C(1)<<10)
-#define A733_CLOCK_ASRC     (UINT64_C(1)<<11)
-#define A733_CLOCK_OWA_TX   (UINT64_C(1)<<12)
-#define A733_CLOCK_DMIC     (UINT64_C(1)<<13)
-#define A733_CLOCK_FABRIC   (UINT64_C(1)<<14) /* AHB/NSI/MBUS/APB1 sources, divisors and global gates. */
-#define A733_CLOCK_DMA0     (UINT64_C(1)<<15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
-#define A733_CLOCK_PLL_NPU  (UINT64_C(1)<<16) /* Also selectable by MBUS, DRAM0 and video clocks. */
-#define A733_CLOCK_NPU      (UINT64_C(1)<<17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
-#define A733_POWER_DCDC2    (UINT64_C(1)<<18) /* Stable rail or exclusive change authority; no clock parent. */
-#define A733_CLOCK_PLL_VIDEO0 (UINT64_C(1)<<19)
-#define A733_CLOCK_PLL_DE     (UINT64_C(1)<<20)
-#define A733_CLOCK_VI         (UINT64_C(1)<<21) /* All CSI/ISP/analog/MCLK and VI domain controls. */
-#define A733_CLOCK_DE_SYS     (UINT64_C(1)<<22) /* Both DE outputs, DMA, routes, SRAM and domain. */
-#define A733_CLOCK_VO0        (UINT64_C(1)<<23) /* VO0 shared words, LCD/DSI/LVDS and domain. */
-#define A733_CLOCK_IOMMU_SYS  (UINT64_C(1)<<24) /* Both banks; master exclusion remains separate. */
-#define A733_CLOCK_PLL_VE0    (UINT64_C(1)<<25)
-#define A733_CLOCK_PLL_VE1    (UINT64_C(1)<<26)
-#define A733_CLOCK_VE_DEC     (UINT64_C(1)<<27) /* Decoder clocks, reset, routes and domain 2. */
-#define A733_CLOCK_DISPLL1    (UINT64_C(1)<<28) /* Local display PLL1, DCXO parent. */
-#define A733_CLOCK_THS        (UINT64_C(1)<<29) /* THS controller, bus gate/reset and IRQ; exclusive. */
-#define A733_CLOCK_GPADC24M   (UINT64_C(1)<<30) /* Shared ADC clock word and all its source/gate writers. */
-#define A733_CLOCK_APB_UART   (UINT64_C(1)<<31) /* Main UART source/divider, CCU+0x538. */
-#define A733_CLOCK_APBS1      (UINT64_C(1)<<32) /* S UART/TWI source/divider, R_CCU+0x10. */
-#define A733_CLOCK_UART0      (UINT64_C(1)<<33)
-#define A733_CLOCK_UART1      (UINT64_C(1)<<34)
-#define A733_CLOCK_UART2      (UINT64_C(1)<<35)
-#define A733_CLOCK_UART3      (UINT64_C(1)<<36)
-#define A733_CLOCK_UART4      (UINT64_C(1)<<37)
-#define A733_CLOCK_UART5      (UINT64_C(1)<<38)
-#define A733_CLOCK_UART6      (UINT64_C(1)<<39)
-#define A733_CLOCK_S_UART0    (UINT64_C(1)<<40)
-#define A733_CLOCK_S_UART1    (UINT64_C(1)<<41)
-#define A733_CLOCK_SPI0       (UINT64_C(1)<<42)
-#define A733_CLOCK_SPI1       (UINT64_C(1)<<43)
-#define A733_CLOCK_SPI2       (UINT64_C(1)<<44)
-#define A733_CLOCK_SPI3       (UINT64_C(1)<<45)
-#define A733_CLOCK_SPI4       (UINT64_C(1)<<46)
-#define A733_CLOCK_S_SPI      (UINT64_C(1)<<47)
-#define A733_CLOCK_CE         (UINT64_C(1)<<48) /* Complete secure/nonsecure CE controller. */
-#define A733_CLOCK_RC16M      (UINT64_C(1)<<49) /* Independent internal oscillator; no PLL parent. */
-#define A733_CLOCK_USB01_REF  (UINT64_C(1)<<50) /* USB0/1 reference mux/gate at CCU+0x1340. */
-#define A733_CLOCK_USB0       (UINT64_C(1)<<51) /* Complete USB0 port; exclusive. */
-#define A733_CLOCK_USB1       (UINT64_C(1)<<52) /* Complete USB1 port; exclusive. */
-#define A733_CLOCK_SDC1       (UINT64_C(1)<<53) /* Complete SDC1 host and dedicated clock/reset. */
-#define A733_CLOCK_RADIO_MODULE (UINT64_C(1)<<54) /* Shared Wi-Fi/BT module lifecycle; exclusive. */
-#define A733_CLOCK_S_TWI0     (UINT64_C(1)<<55) /* Complete S_TWI0 including autonomous engines. */
-#define A733_CLOCK_SDC0       (UINT64_C(1)<<56) /* Complete SDC0 host and dedicated clock/reset. */
-#define A733_CLOCK_SDC2       (UINT64_C(1)<<57) /* Complete SDC2 host and dedicated clock/reset. */
-#define A733_CLOCK_SDC3       (UINT64_C(1)<<58) /* Complete SDC3 eMMC host and dedicated clock/reset. */
-#define A733_CLOCK_PCIE0      (UINT64_C(1)<<59) /* Local controller, clocks/reset, iATU, IRQ and eDMA; exclusive. */
-#define A733_CLOCK_SERDES_COMMON (UINT64_C(1)<<60) /* Global clock/reset and shared SERDES fabric gates. */
-#define A733_CLOCK_COMB1      (UINT64_C(1)<<61) /* PCIe/USB3 lane, PHY, pipe mux and reference gates; exclusive. */
-#define A733_CLOCK_USB_PCIE_DOMAIN (UINT64_C(1)<<62) /* Shared stable PCK domain7; exclusive transitions. */
-#define A733_CLOCK_VO1        (UINT64_C(1)<<63) /* Both TV paths, HDMI/eDP, TOP/PLL, CCU and PCK domain10; exclusive. */
+#define A733_CLOCK_OSC       A733_CLOCK_BIT(0)
+#define A733_CLOCK_REF       A733_CLOCK_BIT(1)
+#define A733_CLOCK_PERI0     A733_CLOCK_BIT(2)
+#define A733_CLOCK_AUDIO1    A733_CLOCK_BIT(3)
+#define A733_CLOCK_AUDIO2    A733_CLOCK_BIT(4) /* AUDIO1 DIV2 output. */
+#define A733_CLOCK_AUDIO5    A733_CLOCK_BIT(5) /* AUDIO1 DIV5 output. */
+#define A733_CLOCK_I2S0      A733_CLOCK_BIT(6)
+#define A733_CLOCK_I2S1      A733_CLOCK_BIT(7)
+#define A733_CLOCK_I2S2      A733_CLOCK_BIT(8)
+#define A733_CLOCK_I2S3      A733_CLOCK_BIT(9)
+#define A733_CLOCK_I2S4      A733_CLOCK_BIT(10)
+#define A733_CLOCK_ASRC     A733_CLOCK_BIT(11)
+#define A733_CLOCK_OWA_TX   A733_CLOCK_BIT(12)
+#define A733_CLOCK_DMIC     A733_CLOCK_BIT(13)
+#define A733_CLOCK_FABRIC   A733_CLOCK_BIT(14) /* AHB/NSI/MBUS/APB1 sources, divisors and global gates. */
+#define A733_CLOCK_DMA0     A733_CLOCK_BIT(15) /* Controller, own bus/MBUS leaf gates, reset/routes; exclusive. */
+#define A733_CLOCK_PLL_NPU  A733_CLOCK_BIT(16) /* Also selectable by MBUS, DRAM0 and video clocks. */
+#define A733_CLOCK_NPU      A733_CLOCK_BIT(17) /* Module, own bus/leaf gates, resets and PCK domain 4; exclusive. */
+#define A733_POWER_DCDC2    A733_CLOCK_BIT(18) /* Stable rail or exclusive change authority; no clock parent. */
+#define A733_CLOCK_PLL_VIDEO0 A733_CLOCK_BIT(19)
+#define A733_CLOCK_PLL_DE     A733_CLOCK_BIT(20)
+#define A733_CLOCK_VI         A733_CLOCK_BIT(21) /* All CSI/ISP/analog/MCLK and VI domain controls. */
+#define A733_CLOCK_DE_SYS     A733_CLOCK_BIT(22) /* Both DE outputs, DMA, routes, SRAM and domain. */
+#define A733_CLOCK_VO0        A733_CLOCK_BIT(23) /* VO0 shared words, LCD/DSI/LVDS and domain. */
+#define A733_CLOCK_IOMMU_SYS  A733_CLOCK_BIT(24) /* Both banks; master exclusion remains separate. */
+#define A733_CLOCK_PLL_VE0    A733_CLOCK_BIT(25)
+#define A733_CLOCK_PLL_VE1    A733_CLOCK_BIT(26)
+#define A733_CLOCK_VE_DEC     A733_CLOCK_BIT(27) /* Decoder clocks, reset, routes and domain 2. */
+#define A733_CLOCK_DISPLL1    A733_CLOCK_BIT(28) /* Local display PLL1, DCXO parent. */
+#define A733_CLOCK_THS        A733_CLOCK_BIT(29) /* THS controller, bus gate/reset and IRQ; exclusive. */
+#define A733_CLOCK_GPADC24M   A733_CLOCK_BIT(30) /* Shared ADC clock word and all its source/gate writers. */
+#define A733_CLOCK_APB_UART   A733_CLOCK_BIT(31) /* Main UART source/divider, CCU+0x538. */
+#define A733_CLOCK_APBS1      A733_CLOCK_BIT(32) /* S UART/TWI source/divider, R_CCU+0x10. */
+#define A733_CLOCK_UART0      A733_CLOCK_BIT(33)
+#define A733_CLOCK_UART1      A733_CLOCK_BIT(34)
+#define A733_CLOCK_UART2      A733_CLOCK_BIT(35)
+#define A733_CLOCK_UART3      A733_CLOCK_BIT(36)
+#define A733_CLOCK_UART4      A733_CLOCK_BIT(37)
+#define A733_CLOCK_UART5      A733_CLOCK_BIT(38)
+#define A733_CLOCK_UART6      A733_CLOCK_BIT(39)
+#define A733_CLOCK_S_UART0    A733_CLOCK_BIT(40)
+#define A733_CLOCK_S_UART1    A733_CLOCK_BIT(41)
+#define A733_CLOCK_SPI0       A733_CLOCK_BIT(42)
+#define A733_CLOCK_SPI1       A733_CLOCK_BIT(43)
+#define A733_CLOCK_SPI2       A733_CLOCK_BIT(44)
+#define A733_CLOCK_SPI3       A733_CLOCK_BIT(45)
+#define A733_CLOCK_SPI4       A733_CLOCK_BIT(46)
+#define A733_CLOCK_S_SPI      A733_CLOCK_BIT(47)
+#define A733_CLOCK_CE         A733_CLOCK_BIT(48) /* Complete secure/nonsecure CE controller. */
+#define A733_CLOCK_RC16M      A733_CLOCK_BIT(49) /* Independent internal oscillator; no PLL parent. */
+#define A733_CLOCK_USB01_REF  A733_CLOCK_BIT(50) /* USB0/1 reference mux/gate at CCU+0x1340. */
+#define A733_CLOCK_USB0       A733_CLOCK_BIT(51) /* Complete USB0 port; exclusive. */
+#define A733_CLOCK_USB1       A733_CLOCK_BIT(52) /* Complete USB1 port; exclusive. */
+#define A733_CLOCK_SDC1       A733_CLOCK_BIT(53) /* Complete SDC1 host and dedicated clock/reset. */
+#define A733_CLOCK_RADIO_MODULE A733_CLOCK_BIT(54) /* Shared Wi-Fi/BT module lifecycle; exclusive. */
+#define A733_CLOCK_S_TWI0     A733_CLOCK_BIT(55) /* Complete S_TWI0 including autonomous engines. */
+#define A733_CLOCK_SDC0       A733_CLOCK_BIT(56) /* Complete SDC0 host and dedicated clock/reset. */
+#define A733_CLOCK_SDC2       A733_CLOCK_BIT(57) /* Complete SDC2 host and dedicated clock/reset. */
+#define A733_CLOCK_SDC3       A733_CLOCK_BIT(58) /* Complete SDC3 eMMC host and dedicated clock/reset. */
+#define A733_CLOCK_PCIE0      A733_CLOCK_BIT(59) /* Local controller, clocks/reset, iATU, IRQ and eDMA; exclusive. */
+#define A733_CLOCK_SERDES_COMMON A733_CLOCK_BIT(60) /* Global clock/reset and shared SERDES fabric gates. */
+#define A733_CLOCK_COMB1      A733_CLOCK_BIT(61) /* PCIe/USB3 lane, PHY, pipe mux and reference gates; exclusive. */
+#define A733_CLOCK_USB_PCIE_DOMAIN A733_CLOCK_BIT(62) /* Shared stable PCK domain7; exclusive transitions. */
+#define A733_CLOCK_VO1        A733_CLOCK_BIT(63) /* Both TV paths, HDMI/eDP, TOP/PLL, CCU and PCK domain10; exclusive. */
+#define A733_CLOCK_TWI11      A733_CLOCK_BIT(64) /* Controller, CCU+0xeac gate0/reset16; exclusive. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC|A733_CLOCK_VO1)
-#define A733_CLOCK_LOCALS  UINT64_C(0x3fc0)
-#define A733_CLOCK_ALL     UINT64_MAX /* All64 assigned scopes; VO1 is exclusive-only. */
+#define A733_CLOCK_LOCALS  ((a733_clock_mask_t)0x3fc0)
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(65)-1) /* Bits0–64 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -164,7 +166,10 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * S_TWI0 owns 0x07083000, all legacy/autonomous PMU/DRV engines and DMA,
  * R_CCU+0x19c gate0/reset16 and IRQ235; it reserves APBS1 -> REF -> OSC.
  * Every remote and local engine writer must be excluded before admission.
- * PL0/PL1 and electrical authority remain separate. FABRIC additionally covers
+ * PL0/PL1 and electrical authority remain separate. TWI11 owns its controller
+ * and CCU+0xeac gate0/reset16, with FABRIC held shared for APB1 stability.
+ * Actual APB1 source/rate, pins and remote exclusion require separate admission.
+ * FABRIC additionally covers
  * STORE_AHB/SD-monitor CCU+0x5c0 bits24/29, STORE_MBUS+0x5e0 bit30 and
  * MSI-LITE1+0x59c gate0/reset16/17. These shared storage fields cannot be
  * changed under an SDC1 token; exclusive FABRIC excludes all other consumers.
