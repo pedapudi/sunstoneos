@@ -54,4 +54,17 @@ int board_live(void *);
 void board_fail(void *);
 void board_usb0_task(void *);
 void board_host_task(void *);
+#ifdef SUNSTONE_BOARD_APPLICATION
+#ifndef SUNSTONE_BOARD_SUPERVISED
+#error Board application hooks require supervised startup
+#endif
+/* Fixed image-owned callbacks, not dynamically registered extensions.
+ * Match exact task entry/context pairs. Validate the complete immutable image
+ * session before extending pin authority or constructing application tasks.
+ * pins runs before provider construction; start runs after shared task binding.
+ * Both run before the scheduler and return exactly 1 on success. */
+int board_application_task_privileged(void (*)(void *),void *);
+int board_application_pins(struct a733_pin_handoff *);
+int board_application_start(void);
+#endif
 #endif

@@ -179,7 +179,11 @@ static const struct board_radio_profile *radio_profile(void)
     return p;
 }
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
-{return !context&&(entry==pmic||entry==typec||entry==power||entry==board_host_task||entry==board_usb0_task||entry==radio_owner||entry==radio_client||entry==supervise);}
+{
+#ifdef SUNSTONE_BOARD_APPLICATION
+    if(board_application_task_privileged(entry,context)==1)return 1;
+#endif
+return !context&&(entry==pmic||entry==typec||entry==power||entry==board_host_task||entry==board_usb0_task||entry==radio_owner||entry==radio_client||entry==supervise);}
 static int host_admit(void *context,const struct a733_usb2_platform_config *c)
 {
     struct board_application *b=context;
@@ -239,6 +243,9 @@ void a733_smp_diagnostic_start(void)
     b.usb.owner=s->usb0_owner;b.usb.handoff=s->generation;b.usb.deadline_us=s->deadline_us;b.usb.cold_reference=s->usb0_cold_reference;
     for(unsigned i=0;i<4;++i)b.usb_supply_uv[i]=s->usb_supply_uv[i];
     for(unsigned i=0;i<3;++i){b.usb.fabric[i]=s->fabric[i];b.usb.rate_hz[i]=s->fabric_hz[i];}
+#ifdef SUNSTONE_BOARD_APPLICATION
+    if(board_application_pins(&b.pins)!=1)platform_panic("board application pins",10);
+#endif
     if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
     TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
     const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
@@ -285,5 +292,8 @@ void a733_smp_diagnostic_start(void)
            board_radio_chip_id(),board.handles[5],board.handles[6],&board.watchdog_state))
             platform_panic("board radio",9);
     }
+#ifdef SUNSTONE_BOARD_APPLICATION
+    if(board_application_start()!=1)platform_panic("board application startup",11);
+#endif
     vTaskStartScheduler();platform_panic("board scheduler returned",9);
 }
