@@ -23,8 +23,11 @@ SERIAL='sunstoneos-a733-bluetooth'
 
 def capture(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
     preparation.profile_check(profile,session)
-    if len(profile)==752:
-        return capture_pcm(exchange,session,profile,evidence,record,save,deadline,now,pause)
+    if len(profile)>=752:
+        result=capture_pcm(exchange,session,profile,evidence,record,save,deadline,now,pause)
+        if len(profile)==832 and result['state']=='captured':
+            return capture_recognition(exchange,session,profile,evidence,record,save,deadline,result,now,pause)
+        return result
     record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved');save()
     for sequence in range(1,2401):
         require(now()<deadline,'Bluetooth capture deadline expired.')
@@ -78,11 +81,48 @@ def capture_pcm(exchange,session,profile,evidence,record,save,deadline,now=time.
     for name,data in [('bluetooth-8k-s16le.pcm',captured[0]),('bluetooth-pcm-records.bin',captured[1])]:
         supervisor.durable_frame(evidence/name,data)
     require(now()<deadline,'Headset capture deadline expired before durable publication.')
-    record['bluetooth_result']='observed-success';record['durable_result']=identity.copy()
+    record['bluetooth_result']='capture-complete' if len(profile)==832 else 'observed-success';record['durable_result']=identity.copy()
     try:save()
     except BaseException:
         record['bluetooth_result']='unobserved';record.pop('durable_result',None);raise
     return identity
+
+
+def capture_recognition(exchange,session,profile,evidence,record,save,deadline,capture,now=time.monotonic,pause=time.sleep):
+    text=bytearray();identity=None
+    record['bluetooth_result']='unobserved';record.pop('durable_result',None);save()
+    for sequence in range(1,2601):
+        require(now()<deadline,'Headset recognition capture deadline expired.')
+        count=min(1024,identity['bytes']-len(text)) if identity else 1
+        frame=exchange(struct.pack('<BBHI',3,0,count,len(text)),min(500,max(1,int((deadline-now())*1000))))
+        path=evidence/f'bluetooth-transcription-{sequence:04}.bin';supervisor.durable_frame(path,frame)
+        result,data=decoder.decode_recognition(frame,session,profile,len(text),count)
+        entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),**result}
+        record.setdefault('bluetooth_frames',[]).append(entry);save()
+        require(now()<deadline,'Recognition response arrived after capture deadline.')
+        if result['state']=='pending':
+            require(identity is None,'Completed transcription regressed to pending.')
+            pause(min(.025,max(0,deadline-now())));continue
+        if result['state']=='retained-failure':
+            record['bluetooth_result']='observed-failure';record['durable_result']=entry.copy();save();return result
+        for key in ('firmware_generation','uart_generation','acl_generation','audio_generation'):
+            require(result[key]==capture[key],'Recognition belongs to another capture lifetime.')
+        require(result['pcm_sha256']==capture['sha256'],'Recognition used different captured PCM.')
+        if identity is None:identity=result
+        require(identity==result,'Immutable transcription changed between chunks.')
+        text.extend(data)
+        if len(text)<identity['bytes']:continue
+        require(hashlib.sha256(text).hexdigest()==identity['text_sha256'],'Copied transcript digest differs.')
+        decoded=text.decode('utf-8')
+        require('\nFORMATTED ' in decoded,'Completed recognition lacks formatted transcription.')
+        supervisor.durable_frame(evidence/'bluetooth-transcription.log',text)
+        require(now()<deadline,'Recognition expired before durable publication.')
+        record['bluetooth_result']='observed-success';record['durable_result']=identity.copy()
+        try:save()
+        except BaseException:
+            record['bluetooth_result']='unobserved';record.pop('durable_result',None);raise
+        return identity
+    raise supervisor.CaptureWindowExpired('Headset recognition exhausted bounded request budget.')
 
 
 def capture_device(device,same,deadline,session,profile,evidence,record,save):
@@ -90,12 +130,12 @@ def capture_device(device,same,deadline,session,profile,evidence,record,save):
         same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete Bluetooth request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'Bluetooth capture deadline expired after write.')
-        return bytes(device.read(0x81,1184 if len(profile)==752 else 177,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,1232 if len(profile)==832 else 1184 if len(profile)==752 else 177,timeout=min(timeout,remaining)))
     return capture(exchange,session,profile,evidence,record,save,deadline)
 
 
 def source_files():
-    return [('bluetooth-host-tool.py',Path(__file__)),('bluetooth-preparation.py',Path(preparation.__file__)),
+    return [('bluetooth-model-pin.json',ROOT/'apps/bluetooth/recognition-models.json'),('bluetooth-host-tool.py',Path(__file__)),('bluetooth-preparation.py',Path(preparation.__file__)),
         ('bluetooth-decoder.py',Path(decoder.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 

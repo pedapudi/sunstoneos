@@ -80,6 +80,13 @@ int bluetooth_headset_retain(struct bluetooth_application *a)
 static int fail(void){return bluetooth_headset_retain(voice.app);}
 static uint64_t cap(uint64_t now,uint64_t duration,uint64_t limit)
 {uint64_t end=now>UINT64_MAX-duration?UINT64_MAX:now+duration;return end<limit?end:limit;}
+static uint64_t stage_deadline(const struct bluetooth_application *a,uint64_t duration)
+{
+    /* Recognition reserves the final20s of the existing60s supervised session.
+     * This allocation is not a physical inference-time qualification. */
+    if(a->profile->version==3&&duration>40000000)duration=40000000;
+    return a->started+duration;
+}
 static int upper_init(struct bluetooth_application *a)
 {
     const struct bluetooth_headset_profile *p=&a->profile->headset;
@@ -105,7 +112,7 @@ static int control_step(struct bluetooth_application *a)
 }
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
-    if(!a||a->profile->version!=2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
+    if(!a||a->profile->version<2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
     if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
     if(!live(a)||now<voice.last_owner||now-voice.last_owner>a->profile->headset.receive_latency_us)return fail();
     voice.last_owner=now;
@@ -117,7 +124,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
             .page_interval_slots=p->page_interval,.page_window_slots=p->page_window,
             .service_generation=p->scheduling_authority,.receive_latency_us=p->receive_latency_us,.synchronous_audio=1,
             .current=scheduling,.context=&context};
-        voice.operation_deadline=a->started+48000000;
+        voice.operation_deadline=stage_deadline(a,48000000);
         if(bt_hci_configure_incoming(&a->hci,&voice.incoming,voice.operation_deadline)!=1)return fail();
         voice.stage=CONFIGURING;return 0;
     }
@@ -129,7 +136,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(voice.stage==SECURITY_CONFIG){
         if(bt_security_step(&voice.security,64,voice.operation_deadline)!=1)return fail();
         if(!voice.security.configured)return 0;
-        voice.operation_deadline=a->started+53000000;
+        voice.operation_deadline=stage_deadline(a,53000000);
         int result;
         if(p->incoming){
             result=bt_acl_incoming(&voice.acl,p->response_timeout_us);
@@ -149,7 +156,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
             voice.auth_started=1;voice.stage=AUTHENTICATE;
         }
         uint64_t generation;unsigned sc;int r=security(voice.link,&generation,&sc);if(r<0)return fail();if(!r)return 0;
-        voice.operation_deadline=a->started+56000000;
+        voice.operation_deadline=stage_deadline(a,56000000);
         if(p->incoming){
             if(bt_rfcomm_listen(&voice.rfcomm,&voice.registry,voice.link,0x111f,(uint8_t)p->server_channel,p->mtu,voice.operation_deadline)!=1)return fail();
             voice.stage=CONTROL;
@@ -180,7 +187,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     }
     if(voice.stage==AG){
         if(voice.ag.phase!=BT_HFP_AG_READY)return 0;
-        voice.operation_deadline=a->started+58000000;
+        voice.operation_deadline=stage_deadline(a,58000000);
         if(bt_sco_open(&voice.audio,&voice.ag,0,voice.operation_deadline,&voice.stream)!=1)return fail();
         voice.stage=AUDIO;return 0;
     }
@@ -191,7 +198,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(voice.stage==AUDIO){
         if(l->phase==BT_SCO_CLOSED||l->phase==BT_SCO_RETAINED)return fail();
         if(l->phase!=BT_SCO_OPEN)return 0;
-        voice.capture_deadline=cap(now,p->capture_timeout_us,a->started+59000000);
+        voice.capture_deadline=cap(now,p->capture_timeout_us,stage_deadline(a,59000000));
         voice.operation_deadline=voice.capture_deadline;voice.next_silence=now;
         voice.silence_bytes=voice.audio.mtu&~1u;if(voice.silence_bytes>254)voice.silence_bytes=254;
         if(!voice.silence_bytes)return fail();voice.stage=CAPTURE;
@@ -215,8 +222,8 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
             /* Let the already accepted UART packet finish before disconnect;
              * no new application silence frame is admitted beyond this point. */
             if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
-            if(bt_sco_close(&voice.audio,voice.stream,a->started+59500000)!=1)return fail();
-            voice.operation_deadline=a->started+59500000;voice.stage=CLOSE;return 0;
+            if(bt_sco_close(&voice.audio,voice.stream,stage_deadline(a,59500000))!=1)return fail();
+            voice.operation_deadline=stage_deadline(a,59500000);voice.stage=CLOSE;return 0;
         }
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
@@ -238,7 +245,7 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
 int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_t offset,size_t bytes,
                           uint8_t out[1024],size_t *copied,struct bluetooth_pcm_snapshot *snapshot)
 {
-    if(!a||a->self!=a||a->profile->version!=2||kind>1||!bytes||bytes>1024||
+    if(!a||a->self!=a||a->profile->version<2||kind>1||!bytes||bytes>1024||
         !separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))||
         !separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
     const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};

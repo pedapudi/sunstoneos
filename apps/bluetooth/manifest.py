@@ -10,10 +10,12 @@ if __name__ == '__main__':
     for name in ['image', 'build-id', 'output']:
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--security-inputs',type=Path)
+    p.add_argument('--recognition-inputs',type=Path)
     a = p.parse_args()
     identity = a.build_id.read_text().strip()
     assert len(bytes.fromhex(identity)) == 32
     a.output.write_text(json.dumps({'target': 'sunstone-a733-bluetooth',
         'execution_profile': 'bluetooth-supervised-v1', 'final_elf': hashlib.sha256(a.image.read_bytes()).hexdigest(),
         'build_id': identity,
+        'recognition_provider': json.loads(a.recognition_inputs.read_text()) if a.recognition_inputs else None,
         'headset_provider': json.loads(a.security_inputs.read_text()) if a.security_inputs else None, 'scope': 'Actual native ELF linkage; no physical SID, radio, UART or HCI qualification.'}, indent=2) + '\n')

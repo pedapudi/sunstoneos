@@ -6,9 +6,12 @@
 #define separate headset_separate
 #include "../apps/bluetooth/headset.c"
 #undef separate
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine completion. */
+#endif
 static size_t output_cursor;
 static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss;
-static uint16_t local_cid;static unsigned handoff;
+static uint16_t local_cid;static unsigned handoff,speech;
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static void acl_in(unsigned cid,const uint8_t *p,unsigned n)
@@ -115,13 +118,26 @@ static void setup(void)
           .server_channel=7,.scheduling_authority=17,.scheduling_evidence={1},.receive_latency_us=1000,
           .response_timeout_us=2000,.samples=4,.mtu=128,.accept_slots=0x1fa0,.page_interval=0x800,.page_window=0x12,
           .line_timeout_us=1000000,.capture_timeout_us=1000000}};
+    if(speech){profile.headset.samples=24000;profile.headset.capture_timeout_us=5000000;}
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    profile.version=3;profile.bytes=832;
+    memcpy(profile.recognition.bytes,bluetooth_model_bytes,sizeof(bluetooth_model_bytes));
+    memcpy(profile.recognition.sha256,bluetooth_model_sha256,sizeof(bluetooth_model_sha256));
+#endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest));
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    assert(app.radio_config.deadline_us==30000000&&app.session_config.bootstrap_deadline==30000000&&app.hci_deadline==35000000&&app.deadline==59990000);
+    assert(stage_deadline(&app,48000000)==40000000&&stage_deadline(&app,59500000)==40000000);
+    profile.recognition.sha256[0][0]^=1;storage_digest_bytes(&profile,profile.bytes,digest);
+    assert(!bluetooth_profile_valid(&profile,digest));profile.recognition.sha256[0][0]^=1;
+    storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));
+#endif
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;bootstrap_ready=1;
 }
 int main(int argc,char **argv)
 {
-    assert(argc==2);deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");setup();
+    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");setup();
     if(handoff){
         until(SECURITY_CONFIG);struct bt_h4 *h=&app.hci.transport;
         assert(h->assembling<h->count&&voice.acl.l2cap_owner==&voice.l2cap);
@@ -157,7 +173,17 @@ int main(int argc,char **argv)
     const uint8_t connect[]={3,0,0x61,0};sig_in(2,50,connect,4);until(AG);
     assert(rf_stage);const char *at="AT+BRSF=0\rAT+CIND=?\rAT+CIND?\rAT+CMER=3,,,1\r";rf_in(14,0xef,(const uint8_t *)at,(unsigned)strlen(at),-1);at_sent=1;
     until(CAPTURE);assert(at_sent&&voice.ag.phase==BT_HFP_AG_READY);
+    if(speech){
+        assert(argc==4);FILE *input=fopen(argv[2],"rb");assert(input);
+        uint8_t data[48000];assert(fread(data,1,sizeof(data),input)==sizeof(data)&&fgetc(input)==EOF&&!fclose(input));
+        for(unsigned offset=0;offset<sizeof(data);){unsigned count=sizeof(data)-offset;if(count>255)count=255;
+            uint8_t header[]={3,0,0,(uint8_t)count};bytes(&wire,header,4);bytes(&wire,data+offset,count);
+            for(unsigned i=0;i<4;++i)assert(pump()>=0);offset+=count;
+        }
+        audio_injected=1;
+    }else {
     uint8_t pcm1[]={3,0,(uint8_t)(loss?0x10:0),3,1,2,3},pcm2[]={3,0,0,5,4,5,6,7,8};bytes(&wire,pcm1,sizeof(pcm1));bytes(&wire,pcm2,sizeof(pcm2));audio_injected=1;
+    }
     until(CLOSE);assert(audio_injected);
     uint8_t out[1024];size_t copied;struct bluetooth_pcm_snapshot snapshot;
     assert(bluetooth_headset_copy(&app,0,0,8,out,&copied,&snapshot)==0&&!copied&&!snapshot.bytes);
@@ -166,6 +192,15 @@ int main(int argc,char **argv)
     const uint8_t closed[]={0,0,0,0x13};event(&wire,5,closed,sizeof(closed));disconnected=1;
     if(loss){assert(pump()==-1);assert(bluetooth_headset_copy(&app,0,0,8,out,&copied,&snapshot)==-1);puts("PASS loss metadata prevents successful PCM publication");return 0;}
     until(DONE);assert(disconnected);
+    if(speech){
+        assert(voice.snapshot.bytes==48000&&!voice.snapshot.loss_packets);
+        FILE *output=fopen(argv[3],"wb");assert(output);
+        for(unsigned offset=0;offset<48000;){size_t count=48000-offset;if(count>1024)count=1024;
+            assert(bluetooth_headset_copy(&app,0,offset,count,out,&copied,&snapshot)==1&&copied==count);
+            assert(fwrite(out,1,copied,output)==copied);offset+=(unsigned)count;
+        }
+        assert(!fclose(output));puts("PASS actual modeled security/control/SCO disconnect and48000 copied speech bytes");return 0;
+    }
     assert(bluetooth_headset_copy(&app,0,0,8,out,&copied,&snapshot)==1&&copied==8&&!memcmp(out,"\1\2\3\4\5\6\7\10",8));
     assert(snapshot.records==2&&!snapshot.loss_packets&&snapshot.bytes==8);
     assert(bluetooth_headset_copy(&app,1,0,48,out,&copied,&snapshot)==1&&copied==48);

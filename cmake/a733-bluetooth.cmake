@@ -38,6 +38,45 @@ endif()
       "${bluetooth_root}/include/bt_security_port.h" "${bluetooth_security_build}/zephyr-security-wire.h")
     list(APPEND bluetooth_manifest_security --security-inputs "${bluetooth_security_build}/security-inputs.json")
   endif()
+  option(SUNSTONE_BLUETOOTH_MIMUS "Recognize a finite authenticated headset capture with unchanged Mimus" OFF)
+  set(bluetooth_manifest_recognition)
+  set(bluetooth_recognition_sources)
+  set(bluetooth_recognition_inputs)
+  if(SUNSTONE_BLUETOOTH_MIMUS)
+    if(NOT SUNSTONE_BT_SECURITY_DIR OR NOT TARGET mimus_asr_smp)
+      message(FATAL_ERROR "Headset recognition requires pinned security and existing SMP Mimus/newlib targets")
+    endif()
+    set(bluetooth_recognition_sources
+      "${bluetooth_root}/apps/bluetooth/recognition.cc" "${bluetooth_root}/apps/bluetooth/pcm.c"
+      "${bluetooth_root}/apps/mimus/recorded.cc" "${bluetooth_root}/apps/mimus/platform.cc"
+      "${bluetooth_root}/runtime/newlib.c" "${bluetooth_root}/runtime/newlib_smp.c"
+      "${bluetooth_root}/runtime/newlib_syscalls_smp.c" "${bluetooth_root}/runtime/new_delete.cc"
+      "${bluetooth_root}/runtime/cxx_terminate.cc"
+      "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc")
+    list(APPEND bluetooth_manifest_recognition --recognition-inputs "${bluetooth_root}/apps/bluetooth/recognition-models.json")
+    file(READ "${bluetooth_root}/apps/bluetooth/recognition-models.json" bluetooth_models)
+    set(bluetooth_model_sizes "")
+    set(bluetooth_model_hashes "")
+    foreach(index RANGE 0 1)
+      string(JSON bytes GET "${bluetooth_models}" models ${index} bytes)
+      string(JSON hash GET "${bluetooth_models}" models ${index} sha256)
+      string(APPEND bluetooth_model_sizes "${bytes},")
+      string(REGEX REPLACE "(..)" "0x\\1," hash_bytes "${hash}")
+      string(APPEND bluetooth_model_hashes "{${hash_bytes}},")
+    endforeach()
+    file(WRITE "${bluetooth_build}/recognition-models.h"
+      "static const uint64_t bluetooth_model_bytes[2]={${bluetooth_model_sizes}};\nstatic const uint8_t bluetooth_model_sha256[2][32]={${bluetooth_model_hashes}};\n")
+    apply_build_patch("${bluetooth_build}/recognition-link.ld" "${storage_build}/link.ld" "${bluetooth_root}/apps/mimus/link.patch")
+    get_target_property(bluetooth_asr_inputs mimus_asr_smp SOURCES)
+    file(GLOB_RECURSE bluetooth_asr_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
+      "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
+    set(bluetooth_recognition_inputs ${bluetooth_recognition_sources} ${bluetooth_asr_inputs} ${bluetooth_asr_headers}
+      "${bluetooth_root}/apps/bluetooth/recognition-models.json" "${bluetooth_root}/apps/mimus/recorded.h"
+      "${bluetooth_root}/apps/mimus/source.json" "${bluetooth_root}/apps/mimus/link.patch"
+      "${bluetooth_build}/recognition-models.h" "${bluetooth_build}/recognition-link.ld"
+      "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
+      "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a" "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
+  endif()
   file(READ "${bluetooth_root}/apps/board/usb0.c" bluetooth_usb_base)
   set(bluetooth_stop "static _Noreturn void stop(void){for(;;)vTaskDelay(1);}")
   string(FIND "${bluetooth_usb_base}" "${bluetooth_stop}" bluetooth_stop_at)
@@ -57,7 +96,10 @@ endif()
       drivers/bluetooth/bt_h4.c drivers/bluetooth/bt_hci.c)
     list(APPEND bluetooth_sources "${bluetooth_root}/${source}")
   endforeach()
-  list(APPEND bluetooth_sources ${bluetooth_security_sources})
+  if(SUNSTONE_BLUETOOTH_MIMUS)
+    list(REMOVE_ITEM bluetooth_sources "${bluetooth_root}/runtime/memory.c" "${bluetooth_root}/runtime/memmove.c")
+  endif()
+  list(APPEND bluetooth_sources ${bluetooth_security_sources} ${bluetooth_recognition_sources})
   add_executable(sunstone-a733-bluetooth EXCLUDE_FROM_ALL ${bluetooth_sources}
     $<TARGET_OBJECTS:a733-board-usb2-host>)
   foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS LINK_OPTIONS LINK_DEPENDS)
@@ -78,11 +120,28 @@ endif()
     target_include_directories(sunstone-a733-bluetooth PRIVATE "${bluetooth_security_build}")
   endif()
   target_include_directories(sunstone-a733-bluetooth BEFORE PRIVATE "${bluetooth_root}/apps/bluetooth" "${bluetooth_build}")
+  if(SUNSTONE_BLUETOOTH_MIMUS)
+    get_target_property(bluetooth_includes sunstone-a733-bluetooth INCLUDE_DIRECTORIES)
+    list(REMOVE_ITEM bluetooth_includes "${bluetooth_root}/runtime/include" "${SUNSTONE_NETWORK_C_HEADERS}")
+    set_property(TARGET sunstone-a733-bluetooth PROPERTY INCLUDE_DIRECTORIES "${bluetooth_includes}")
+    sunstone_smp_compile(sunstone-a733-bluetooth)
+    target_include_directories(sunstone-a733-bluetooth PRIVATE "${MIMUS_DIR}/firmware/components/pipeline/include")
+    target_compile_definitions(sunstone-a733-bluetooth PRIVATE SUNSTONE_BLUETOOTH_RECOGNITION=1 "$<$<COMPILE_LANGUAGE:CXX>:SUNSTONE_MIMUS_NATIVE=1>")
+    target_link_libraries(sunstone-a733-bluetooth PRIVATE mimus_asr_smp
+      "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
+      "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a" "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
+  endif()
   get_target_property(bluetooth_link sunstone-a733-bluetooth LINK_OPTIONS)
   list(FILTER bluetooth_link EXCLUDE REGEX "Map,")
   set_property(TARGET sunstone-a733-bluetooth PROPERTY LINK_OPTIONS "${bluetooth_link}")
+  if(SUNSTONE_BLUETOOTH_MIMUS)
+    list(FILTER bluetooth_link EXCLUDE REGEX "-T,")
+    set_property(TARGET sunstone-a733-bluetooth PROPERTY LINK_OPTIONS "${bluetooth_link}")
+    target_link_options(sunstone-a733-bluetooth PRIVATE "-Wl,-T,${bluetooth_build}/recognition-link.ld"
+      -Wl,--wrap=_impure_ptr -Wl,--defsym=__runtime_heap_size=4194304)
+  endif()
   target_link_options(sunstone-a733-bluetooth PRIVATE "-Wl,-Map,${bluetooth_build}/image.map")
-  set(bluetooth_inputs ${board_inputs} ${bluetooth_sources} ${bluetooth_security_inputs} "${CMAKE_CURRENT_LIST_FILE}" "${bluetooth_build}/bluetooth-usb-base.c")
+  set(bluetooth_inputs ${board_inputs} ${bluetooth_sources} ${bluetooth_security_inputs} ${bluetooth_recognition_inputs} "${CMAKE_CURRENT_LIST_FILE}" "${bluetooth_build}/bluetooth-usb-base.c")
   file(GLOB bluetooth_headers "${bluetooth_root}/apps/bluetooth/*.h")
   list(APPEND bluetooth_inputs ${bluetooth_headers} "${bluetooth_root}/apps/bluetooth/manifest.py")
   list(REMOVE_DUPLICATES bluetooth_inputs)
@@ -101,5 +160,5 @@ endif()
   add_custom_command(TARGET sunstone-a733-bluetooth POST_BUILD
     COMMAND "${Python3_EXECUTABLE}" "${bluetooth_root}/apps/bluetooth/manifest.py"
       --image "$<TARGET_FILE:sunstone-a733-bluetooth>" --build-id "${bluetooth_build}/build-id.txt"
-      --output "${bluetooth_build}/image-manifest.json" ${bluetooth_manifest_security}
-    VERBATIM)
+      --output "${bluetooth_build}/image-manifest.json" ${bluetooth_manifest_security} ${bluetooth_manifest_recognition}
+    COMMAND_EXPAND_LISTS VERBATIM)

@@ -15,12 +15,13 @@ spec = importlib.util.spec_from_file_location('bluetooth_board_preparation', ROO
 board = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(board)
 require, digest = board.require, board.digest
+MODEL_PIN=json.loads((Path(__file__).with_name("recognition-models.json")).read_text())
 SCHEMA = 'a733-bluetooth-supervised-bundle-v1'
 
 
 def profile_check(data, session):
-    require(len(data) in (624,752) and struct.unpack_from('<QII', data) == (0x3150465442535353, 1 if len(data)==624 else 2, len(data)), 'Bluetooth profile geometry differs.')
-    if len(data)==752:
+    require(len(data) in (624,752,832) and struct.unpack_from('<QII', data) == (0x3150465442535353, {624:1,752:2,832:3}.get(len(data),0), len(data)), 'Bluetooth profile geometry differs.')
+    if len(data)>=752:
         mode,incoming=struct.unpack_from('<2I',data,624)
         minimum,channel=struct.unpack_from('<2I',data,656)
         authority=struct.unpack_from('<Q',data,664)[0]
@@ -33,6 +34,10 @@ def profile_check(data, session):
                 slots>=0xa0 and 0x12<=interval<=0x1000 and not interval%2 and 0x11<=window<=interval and
                 line and 0<capture<=5000000 and scan<=2 and role<=1 and not any(data[744:752]),
                 'Invalid immutable headset policy or discovery metadata.')
+    if len(data)==832:
+        require(struct.unpack_from('<2Q',data,752)==tuple(m['bytes'] for m in MODEL_PIN['models']) and
+                data[768:832]==b''.join(bytes.fromhex(m['sha256']) for m in MODEL_PIN['models']),
+                'Unchanged admitted Mimus model identities required.')
     require(struct.unpack_from('<I', session, 400)[0] == 2 and hashlib.sha256(data).digest() == session[320:352], 'Bluetooth profile/session identity differs.')
     require(struct.unpack_from('<Q', data, 24)[0] == struct.unpack_from('<Q', session, 312)[0] != 0, 'Actual secure SID authority required.')
     require(all(struct.unpack_from('<Q', data, offset)[0] == 0 for offset in (184, 192, 200, 360, 368)), 'Runtime handoffs/deadlines must be absent from immutable input.')
@@ -58,7 +63,7 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
             require(not frozen, 'Bluetooth evidence missing from frozen bundle.')
             cache[item['path']] = Path(item['path']).read_bytes()
         require(hashlib.sha256(cache[item['path']]).hexdigest() == item['sha256'] and bytes.fromhex(item['sha256']) == profile[offset:offset + 32], 'Bluetooth authority evidence differs.')
-    if len(profile)==752:
+    if len(profile)>=752:
         require(manifest.get('headset_provider',{}).get('commit')=='64e98eb5278d790f3b3e5279ca8b39b45097bbc0',
                 'Pinned native security provider required for headset capture.')
         item=record.get('bluetooth_scheduling')
@@ -69,6 +74,30 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
             cache[item['path']]=Path(item['path']).read_bytes()
         require(hashlib.sha256(cache[item['path']]).hexdigest()==item['sha256'] and
                 bytes.fromhex(item['sha256'])==profile[672:704],'Scheduling authority evidence differs.')
+    if len(profile)==832:
+        require(manifest.get('recognition_provider')==MODEL_PIN,'Native unchanged Mimus provider required.')
+        def evidence(item):
+            require(isinstance(item,dict) and set(item)=={'path','sha256'} and Path(item['path']).is_absolute(),'Invalid recognition evidence reference.')
+            if item['path'] not in cache:
+                require(not frozen,'Recognition input missing from frozen bundle.')
+                cache[item['path']]=Path(item['path']).read_bytes()
+            data=cache[item['path']]
+            require(hashlib.sha256(data).hexdigest()==item['sha256'],'Recognition evidence/model changed.')
+            return data
+        ddr=json.loads(evidence(record.get('bluetooth_mimus_ddr')))
+        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==record.get('identity') and
+                ddr.get('port')==record.get('port') and ddr.get('image_sha256')==image_hash and
+                all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and
+                ddr.get('ranges')==[[0x44000000,0x45000000],[0x46000000,0x47000000]] and ddr.get('evidence'),
+                'Exclusive model and recognition arena DDR reservation required.')
+        for ref in ddr['evidence']:evidence(ref)
+        models=record.get('bluetooth_models')
+        require(isinstance(models,list) and len(models)==2,'Exactly two unchanged Mimus assets required.')
+        for index,(item,pin) in enumerate(zip(models,MODEL_PIN['models'])):
+            require(set(item)=={'path','sha256','address'} and item['address']==0x44000000+index*0x800000 and
+                    item['sha256']==pin['sha256'],'Model address or unchanged weight identity differs.')
+            data=evidence({k:item[k] for k in ('path','sha256')})
+            require(len(data)==pin['bytes'],'Model extent differs from admitted profile.')
     return spans
 
 
@@ -128,6 +157,9 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
     uploads += [{'name': 'session.bin', 'address': 0x41f00000}, {'name': 'profile.bin', 'address': 0x43000000}]
     for index, ((address, size), data) in enumerate(zip(spans, snapshots)):
         name = f'firmware-{index}.bin';(output / name).write_bytes(data);uploads.append({'name': name, 'address': address})
+    if len(profile_data)==832:
+        for index,item in enumerate(record['bluetooth_models']):
+            name=f'model-{index}.bin';(output/name).write_bytes(cache[item['path']]);uploads.append({'name':name,'address':item['address']})
     request, contract = board.request_bytes(entry, identity, epoch, generation, lease, session)
     for name, data in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]:
         (output / name).write_bytes(data)
@@ -170,6 +202,11 @@ def validate_bundle(bundle):
     for index, ((address, size), item) in enumerate(zip(spans, admitted['payloads'])):
         name = f'firmware-{index}.bin';require(len((bundle / name).read_bytes()) == size and digest(bundle / name) == item['sha256'] and int(item['address']) == address, 'Firmware changed.')
         expected.append({'name': name, 'address': address})
+    if len((bundle/'profile.bin').read_bytes())==832:
+        for index,item in enumerate(admitted['bluetooth_models']):
+            name=f'model-{index}.bin'
+            require((bundle/name).read_bytes()==cache[item['path']],'Uploaded model differs from immutable admitted bytes.')
+            expected.append({'name':name,'address':item['address']})
     require(len(admitted['payloads']) == 4 and p['segments'] == expected and
         p['backup_sizes'] == {n: s for n, a, s in board.base.REGIONS} and
         0 < (bundle / 'launch.bin').stat().st_size <= 0xc00, 'Unsealed upload map or SRAM reservation.')

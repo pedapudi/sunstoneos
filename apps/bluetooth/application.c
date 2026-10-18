@@ -37,6 +37,13 @@ int board_application_pins(struct a733_pin_handoff *pins)
         struct aarch64_translation t;
         if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
     }
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    if(p->version==3)for(uintptr_t page=BLUETOOTH_MODEL_BASE;page<UINT64_C(0x47000000);page+=4096){
+        if(page>=UINT64_C(0x45000000)&&page<UINT64_C(0x46000000))continue;
+        struct aarch64_translation t;
+        if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
+    }
+#endif
     memset(&bluetooth_profile,0,sizeof(bluetooth_profile));
     memcpy(&bluetooth_profile,p,p->bytes);
     pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;
@@ -47,6 +54,11 @@ int board_application_start(void)
     if(owner||!bluetooth_boot_profile(&board.session,&bluetooth_profile))return 0;
     owner=xTaskCreateStatic(bluetooth_owner,"bluetooth",4096,NULL,4,owner_stack,&owner_storage);
     if(!owner)return 0;
-    return bluetooth_application_init(&bluetooth,&bluetooth_profile,&providers.shared,bluetooth_chip_id(),
+    int ready=bluetooth_application_init(&bluetooth,&bluetooth_profile,&providers.shared,bluetooth_chip_id(),
         owner,&board.watchdog_state,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence);
+#ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    if(ready&&bluetooth_profile.version==3)
+        ready=bluetooth_recognition_start(&bluetooth,&bluetooth_profile.recognition,bluetooth.deadline);
+#endif
+    return ready;
 }

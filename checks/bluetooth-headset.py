@@ -14,19 +14,23 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--setup-only',action='store_true')
+p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
-p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy'])
+p.add_argument('--speech-input',type=Path)
+p.add_argument('--speech-output',type=Path)
+p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech'])
 a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 cache=Path('/home/sunil/.cache/sunstoneos');security=a.build/'bluetooth-application/security'
 reference=cache/'evidence/bluetooth-native-20261017/composition'
 cc='/usr/bin/clang-21';commands=[]
 common=['-std=c11','-Wall','-Wextra','-Wno-unused-function','-Wno-sign-compare','-Wno-for-loop-analysis','-g','-O1',
         '-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer',
-        '-DSUNSTONE_BLUETOOTH_HEADSET=1','-Inetwork/include','-Iinclude','-I'+str(reference),'-I'+str(security),
+        '-DSUNSTONE_BLUETOOTH_HEADSET=1','-Inetwork/include','-Iinclude','-I'+str(reference),'-I'+str(security),'-I'+str(a.build/'bluetooth-application'),
         '-I'+str(cache/'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'),
         '-I'+str(cache/'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/ARM_AARCH64_SRE'),
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/include'),
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/portable/Compiler/GCC')]
+if a.recognition_profile:common.append('-DSUNSTONE_BLUETOOTH_RECOGNITION=1')
 sources=['drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c',
          'drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_rfcomm.c',
          'drivers/bluetooth/bt_hfp_ag.c','drivers/bluetooth/bt_sco.c','drivers/bluetooth/bt_security.c',
@@ -79,5 +83,9 @@ for name,identity in json.loads((out/'setup-inputs.json').read_text()).items():
     if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=identity['sha256'] or hashlib.sha256((out/identity['snapshot']).read_bytes()).hexdigest()!=identity['sha256']:
         sys.exit('Refused changed fixture input: '+name)
 for case in a.case or ('success','justworks','keyreplace','deadline','loss','handoff','security-pending'):
-    if run(case,[exe,case]):sys.exit('Stopped after new case failure: '+case)
+    cmd=[exe,case]
+    if case=='speech':
+        assert a.speech_input and a.speech_output
+        cmd += [a.speech_input,a.speech_output]
+    if run(case,cmd):sys.exit('Stopped after new case failure: '+case)
 print('New native headset composition cases passed; hardware is modeled.')

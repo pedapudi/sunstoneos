@@ -5,6 +5,7 @@
 #include "a733_uart_platform_native.h"
 #include "a733_native_usb.h"
 #include "bt_hci.h"
+#include "recognition.h"
 #include "../board/identity.h"
 #define BLUETOOTH_PROFILE_MAGIC UINT64_C(0x3150465442535353)
 #define BLUETOOTH_PROFILE_ADDRESS UINT64_C(0x43000000)
@@ -41,8 +42,9 @@ struct bluetooth_profile {
     uint64_t session_owner,runtime_lease_us,renew_margin_us;
     uint64_t command_timeout_us,frame_timeout_us,binding_timeout_us;
     struct bluetooth_headset_profile headset;
+    struct bluetooth_recognition_profile recognition;
 };
-_Static_assert(sizeof(struct bluetooth_profile)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
+_Static_assert(sizeof(struct bluetooth_profile)==832&&offsetof(struct bluetooth_profile,recognition)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
     "Bluetooth offline profile geometry");
 /* One actual owner task. Providers, profiles, identity and all buffers remain
  * disjoint and retained through terminal failure and manual power removal. */

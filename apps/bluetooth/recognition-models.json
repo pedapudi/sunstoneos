@@ -1,0 +1,8 @@
+{
+  "source": "Existing prepared mimus-bench models; tensor bodies unchanged",
+  "target": 8,
+  "models": [
+    {"name": "base.mimus", "bytes": 7501968, "sha256": "f73ccd024645387d2679eea97ae11d0c33f5e4be81b39a9430d1f5d285e8089d", "source_sha256": "1a11d1717eb67fa8e04ac3d16b9a065e09669aecc4ee2dfacd5c82b9a1a22ae9"},
+    {"name": "overlay.mimus", "bytes": 6560592, "sha256": "d877604c759b688e46f7f9b4346c7d87496faf6ee64cbb8f1f9837652aade6b2", "source_sha256": "864967a4b52a86e0544ffae0d5be457c12a22d20c790e72b6181ef80464a1b77"}
+  ]
+}

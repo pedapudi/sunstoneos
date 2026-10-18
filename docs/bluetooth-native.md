@@ -202,8 +202,9 @@ The one-byte identification request retains its original reply format.
 The host saves each raw frame before decoding. It checks immutable identity
 across chunks, packet extents and loss, the complete PCM digest and the capture
 deadline before publishing success. The saved `bluetooth-8k-s16le.pcm` is copied
-audio output. Mimus currently accepts finite contiguous 16 kHz input; live input,
-resampling and headset-to-recognition integration remain outstanding.
+audio output. The finite recognition extension below converts this capture to the existing
+Mimus input format. Continuous input and physical headset-to-recognition
+qualification remain outstanding.
 
 The affected native ELF links with the pinned security sources. Eight focused
 composition cases pass with AddressSanitizer and UndefinedBehaviorSanitizer:
@@ -231,3 +232,115 @@ secure SID and transport evidence, scheduling/buffer/RTS-CTS evidence, and one
 identified headset before a physical capture request can run. No headset is
 currently confirmed. Physical pairing, control, audio capture and recognition
 qualification remain required.
+
+
+## Finite headset transcription with unchanged Mimus
+
+`SUNSTONE_BLUETOOTH_MIMUS=ON` adds one finite transcription to the headset image.
+The 832-byte profile includes the existing headset policy and the exact base
+and punctuation model lengths and SHA256 hashes. The model pin is
+`apps/bluetooth/recognition-models.json`; tensor bodies and recognition arithmetic
+remain unchanged. The 624-byte identification and 752-byte capture profiles
+retain their original behavior.
+
+The fixed memory layout separates models from radio firmware and profiles:
+
+| Range | Use |
+| --- | --- |
+| `0x43000000..0x43100000` | Existing Bluetooth profile and four firmware assets |
+| `0x44000000..0x44800000` | Base model, at most 8 MiB |
+| `0x44800000..0x45000000` | Punctuation overlay, at most 8 MiB |
+| `0x46000000..0x47000000` | Existing 16 MiB recognition arena |
+
+Preparation requires exclusive DDR evidence for both model slots and the arena,
+with cache publication and remote-writer exclusions. It freezes exact admitted
+model bytes into the upload bundle and revalidates their hashes, sizes and
+addresses. Native startup checks the mapped ranges; the recognition task hashes
+both models in bounded chunks before loading them. Native USB exposes copied
+results and cannot replace model assets during this lifetime.
+
+The Bluetooth task retains priority 4. A priority-3 recognition task waits for
+the completed copied capture. It rejects failure, packet loss, changing capture
+identity and a mismatching complete PCM digest. Only a complete capture whose
+synchronous link has actually disconnected can enter conversion. The task owns
+static 48,000-byte PCM, 96,044-byte WAV, 97,280-byte internal scratch and
+65,536-byte text buffers through the entire attempt.
+
+Conversion produces 16 kHz mono signed 16-bit little-endian WAV data. Each
+8 kHz sample emits itself and the average of itself and the next sample. The
+sum uses signed 32-bit arithmetic; division rounds toward zero, including
+negative odd sums. The last sample is held for the final interpolated value.
+An input of N samples produces 2N samples and retains the same duration.
+This linear interpolation has limited image suppression and cannot restore
+frequency content absent from the narrowband headset input. Matching converted
+input can establish software parity; original 16 kHz recordings are a different
+input condition.
+
+The existing recorded engine is shared through `apps/mimus/recorded.h`.
+Its model loader, recognizer, WAV parser, metrics and punctuation/formatting
+sequence are preserved. The existing recorded caller passes its original
+scratch and the default null stop pointer. Capture integrations may pass a stop
+flag to the recognizer's existing cancellation checkpoints. The shared function
+checks cancellation around finite load, create, parse, recognition and formatting
+stages. It returns after all temporary engine/model objects are destroyed.
+
+The image reuses SMP newlib task reentrancy, locks and the existing 4 MiB heap
+and initializer-array linker patch. Runtime initialization completes before the
+scheduler starts. Only the recognition task appends to its private text buffer;
+USB cannot read that buffer until final release publication. The Bluetooth and
+USB tasks do not allocate through this C++ heap. Their actual receive-service
+bound during recognition still requires physical scheduling evidence.
+
+The unchanged supervised session lasts 60 seconds. The transcription profile
+bounds firmware bootstrap at 30 seconds, HCI identification at 35 seconds and
+capture plus confirmed synchronous disconnect at 40 seconds. The application
+ends at 59.99 seconds. This reserves less than 20 seconds after the application
+margin for model loading, recognition and output; host transfer and publication
+also consume that interval. These are failure bounds, not measured A55 execution
+guarantees. No physical result establishes that the complete attempt fits.
+
+Shared revocation stops publication immediately. The model loader has no
+mid-load cancellation hook, so finite load work may continue until its next
+stage check. Recognition uses its existing stop checkpoints. Failed or expired
+attempts retain all inputs, heap allocations and protocol ownership while work
+unwinds. Neither a failed result nor a parked task authorizes resource reuse;
+complete-board power removal remains required.
+
+An eight-byte request with kind 3, zero reserved byte, little-endian count and
+byte offset copies at most 1024 transcript bytes. A successful response has a
+208-byte header identifying the original session and controller/link generations,
+input/output sample counts and PCM, converted-WAV and text digests. Pending and
+failed replies publish no producer metadata. The host saves raw frames, verifies
+capture identity and complete text digest, checks the deadline and then saves
+the formatted transcription. No keyboard events are generated.
+
+The native image links the actual Bluetooth stack, converter, shared recorded
+engine, model library, C++ runtime and USB adapter. The focused software batch
+passes one new modeled security/control/SCO capture containing 24,000 samples,
+then executes the actual converter and unchanged portable-host recognition and
+formatter on its copied bytes. Features, log probabilities, frames, words,
+punctuation, capitals and formatted text match a host reference using the same
+converted WAV. Failed capture, loss, model hash, expiry and mid-recognition
+revocation prevent successful copied publication. The converter checks signed
+rounding, endpoints, mono/rate declarations and its exact 96,044-byte maximum.
+
+The original supervised recorded caller also compiles and links with unchanged
+frozen objects and its default null stop pointer. Its recordings were not replayed.
+The first host reference used forced final punctuation instead of the recorded
+caller's automatic mode; that oracle failure is preserved. Only the corrected
+reference/parity step was resumed. Model/range/schema and copied-result host
+checks also pass. Those USB frames are constructed from the real recognition
+snapshot; native USB serialization has source review and native link coverage.
+Scheduler, registers, peer radio behavior and DDR evidence remain modeled.
+
+The final ELF SHA256 is
+`3f469086547f200d33a2eba2dd34def1ba3d8975847aa9e0a78874c11abdde53`.
+The final dependency snapshot covers 185 executable objects, 33 ASR archive
+objects and 756 source/header inputs. Compilation records confirm that C startup
+omits the legacy packed-asset Mimus macro while C++ retains native timing.
+Exact inputs, executable snapshots, compiler commands, dependencies and raw
+results are under `~/.cache/sunstoneos/evidence/bluetooth-mimus-native-20261017`.
+The software checks establish the finite integration and matching converted-input
+reference behavior. An identified headset, actual pairing/control/audio operation,
+concurrent receive-service bounds and physical transcription within the supervised
+window remain unqualified. Continuous dictation remains outside this finite path.
