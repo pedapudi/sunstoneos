@@ -65,7 +65,9 @@ The board image still requires a qualified hardware-watchdog window. The separat
 remain disabled. Its native build and focused startup, admission and host checks
 pass, including central integration. USB capture leaves the board running until
 manual reconnection; successful capture retains the board claim and lock.
-Fresh physical entry admission remains incomplete.
+The first physical attempt produced no USB observer within the capture window.
+Uploads and the execution request succeeded, but no scheduler result arrived.
+The board instance is quarantined pending manual reconnection.
 
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
@@ -126,7 +128,7 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The reconnected board remains `003:065` on port `3-1`, with valid session access.
+The last tested board instance was `003:065` on port `3-1`, with valid session access.
 Fresh RAM-only DDR initialization passed once through the existing loader:
 12,288 MiB reported, board setup result zero, and two distinct 4 KiB RAM pages
 matched. The loader returned to FEL without a reset or persistent write.
@@ -139,8 +141,17 @@ condition. The follow-up `supervised-master-state-20261017-193555/` records
 E902 clock gates disabled, DMA0/1 reset asserted and clocks gated, and MBUS gates
 `0x4`. Its `ce/` record shows the crypto engine enabled; `ce-idle/` records zero
 secure/nonsecure interrupt, task-status, trigger and error fields. No control was
-changed. The draft physical-entry assessment is under
-`smp-supervised-20261017/physical-entry/`; review it before admitting launch.
+changed. The reviewed physical-entry assessment and failed observation are under
+`smp-supervised-20261017/physical-entry/`. Its `runtime/session.json` records one
+execution request, no transport failure and no native observer within 19 seconds.
+The host stopped board traffic and retained the test claim and exclusive lock.
+Manual reconnection has been requested; do not contact the quarantined instance.
+
+Source inspection found that the launcher rejects a zero counter-frequency
+declaration, although earlier board evidence records that initial value. Native
+startup sets the declaration only after the launcher. This may explain the
+missing observer, but the physical cause remains unconfirmed. A focused correction
+and a way to report a clean launcher refusal are under software review.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -149,8 +160,8 @@ watchdog. The boot input was high, so it cannot currently protect a reset from
 storage boot. The user confirmed automatic FEL entry after disconnecting and
 reattaching USB, with a microSD card inserted and no button held. Preserve that
 card. No watchdog was armed and no reset was issued.
-The failed UFS instance `003:063` remains quarantined. Only the fresh DDR
-evidence applies to the current instance; older RAM assets and signatures do not.
+The failed UFS instance `003:063` remains quarantined. DDR evidence applies only
+to the instance on which it was collected; reconnecting invalidates RAM contents.
 The [SRAM configuration trial](watchdog.md) now verifies ROM-redirect and
 watchdog reset-policy writes with complete register/workspace restoration.
 It never enables the timer. Timer enabling, expiry, and reset retention remain
@@ -248,11 +259,11 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Review the drafted fresh physical-entry assessment for the tested supervised
-   all-core observer. DDR, secondary-core, auxiliary-core/DMA and CE-idle evidence
-   are available. Confirm the reset/firmware provenance assessment, then prepare
-   one bounded attempt with manual reconnection after USB capture or failure. Preserve storage,
-   honor actual admission requirements and stop at the first transport failure.
+1. Resolve the supervised observer's missing result before another physical
+   attempt. Review and check the counter-frequency admission correction and
+   clean-refusal reporting. After confirmed manual reconnection, close the held
+   test and refresh the board's DDR and entry evidence. Preserve storage, honor
+   actual admission requirements and stop at the first transport failure.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed; no cable move or
    power command was requested.
