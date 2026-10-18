@@ -67,8 +67,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   model; automatic ROM return and DRAM restoration pass. Native CPU/DSU identity
   and planning also pass, with no requested workaround writes. EL1 walk blocking,
   exact control restoration and GIC admission reads pass physically. Both GIC
-  affinity-routing bits are already set. GIC setup, cache activation and later
-  startup remain unresolved.
+  affinity-routing bits are already set. Complete distributor setup and exact
+  restoration of its control and SPI enables now pass physically. Secondary
+  setup, cache activation and scheduling remain unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -431,9 +432,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   bootstrap, UART1, H4/HCI identification and copied USB output. Its headset mode
   reuses Zephyr secure pairing and RAM key policy, requires observed authentication
   and encryption, and publishes copied 8 kHz PCM after synchronous disconnect.
-  Eight focused composition cases and the native link pass. Outgoing composition,
-  native USB audio framing, physical headset operation and mimus input remain
-  unqualified. The earlier identification cases remain valid for that mode.
+  Finite capture-to-mimus is also integrated through bounded 8-to-16 kHz
+  conversion and the existing recognizer and formatter. Its native image links;
+  actual host recognition matches the same converted-input reference, and
+  mid-recognition cancellation suppresses copied output. Outgoing composition,
+  native USB audio framing, physical headset operation and inference timing
+  remain unqualified. The earlier identification evidence remains valid.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses

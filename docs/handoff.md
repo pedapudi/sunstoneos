@@ -42,11 +42,15 @@ substantive correctness risks. The coordinator alone operates the board.
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
   writes. EL1 walk blocking, exact control restoration and interrupt-controller
-  reads also pass. Interrupt setup and later multicore startup remain unresolved.
-- Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
-  audio capture are integrated. Eight focused composition cases pass. Native
-  capture-to-mimus integration is in progress, using the existing recorded
-  inference path and unchanged model. Physical headset operation remains untested.
+  reads also pass. Complete distributor setup and restoration now pass physically.
+  Secondary setup, cache activation and multicore scheduling remain unresolved.
+- Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
+  native mimus transcription are integrated. The image links; actual host
+  recognition matches the reference for the same converted audio, and cancellation
+  prevents copied publication. All 209 preserved repository inputs match
+  integration. Physical headset operation, native USB serialization and execution
+  within the supervised window remain unqualified. Evidence is under
+  `bluetooth-mimus-native-20261017/`.
 - I2S: finite capture-to-mimus is integrated for one to five seconds of 16 kHz
   mono audio. The native image links, and focused capture, admission, cancellation
   and copied-output checks pass. All 155 preserved repository inputs match
@@ -289,33 +293,29 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:079` on port `3-1`, with automatic USB access.
+The current board instance is `003:080` on port `3-1`, with automatic USB access.
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
 BSS clearing, admission, table construction, cache publication and CPU/DSU
 planning. Observed MIDR is `0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is
 `0x073fc237`; no workaround writes are requested.
 
-Native EL1 walk blocking and interrupt-controller reads now pass physically.
-The diagnostic temporarily sets SCTLR_EL1.M and both TCR_EL1 walk-disable bits,
-then restores SCTLR_EL1 to `0x00c50838` and TCR_EL1 to zero with exact readbacks.
-It stops before the first interrupt-controller write. GICD_CTLR is `0x37`, so
-both affinity-routing bits are already set; GICD_TYPER is `0x007b0408`.
-Interrupt setup, cache activation and multicore operation remain unproven.
+Native EL1 walk blocking and complete interrupt-distributor setup now pass
+physically. The diagnostic stops before secondary setup. It restores SCTLR_EL1
+to `0x00c50838` and TCR_EL1 to zero with exact readbacks, then restores the
+interrupt distributor. GICD_CTLR changes from `0x37` to native terminal `0x33`
+and returns to its original value. All eight SPI-enable banks match their saved
+values; both affinity-routing bits remain set. Secondary setup, cache activation
+and multicore scheduling remain unproven.
 
-All 43 transactions passed, including copied results and reviewed DRAM
+All 44 transactions passed, including copied results and reviewed DRAM
 restoration. The runner exited and its queue claim closed. Old SRAM was left
-to the returned ROM. Evidence is under `startup-stage-20261017-078/native/`.
-The next investigation covers interrupt-controller setup and later startup,
-using the observed routing state to define valid restoration.
+to the returned ROM. Evidence is under `startup-stage-20261017-079/native/`.
+The next investigation covers native setup after the distributor checkpoint.
 
-Before this attempt, the guarded cache-off helper ran once at SRAM address
-`0x73000`, with its bytes backed up and restored on the same ROM instance.
-One subsequent survey established every launcher predicate and ROM caller SP
-`0x000f2200`. Evidence is under `startup-stage-20261017-078/cache-off/` and
-`survey/`. The current `003:079` instance has also passed its guarded cache-off
-helper and returning survey; the queue has no active claim. Those records are
-under `startup-stage-20261017-079/`. A future warm-return instance needs its own
-verified launch state.
+Before this attempt, the guarded cache-off helper and returning survey passed
+on `003:079`; evidence is under `startup-stage-20261017-079/cache-off/` and
+`survey/`. The new `003:080` instance needs its own verified launch state before
+another launch. The queue has no active claim.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -444,8 +444,8 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose GIC distributor setup and later startup before secondary activation.
-   EL1 walk blocking, exact restoration and GIC admission reads pass physically.
+1. Diagnose native setup after the distributor checkpoint before another full
+   multicore launch. Complete distributor setup and exact restoration pass physically.
    Review restoration and ROM-return conditions before the next hardware change;
    preserve the native layout and reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
