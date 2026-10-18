@@ -46,7 +46,9 @@ substantive correctness risks. The coordinator alone operates the board.
   reads also pass. Complete distributor setup and restoration now pass physically.
   Core 1 now powers on, reaches native entry and powers itself off. The primary
   verifies OFF and restores saved state before returning to ROM. Execution after
-  RELEASE, cache coherence and scheduling remain unresolved.
+  RELEASE, cache coherence and scheduling remain unresolved. The diagnostic for
+  secondary interrupt initialization passes five focused software cases, but its
+  physical launch did not return. Source diagnosis continues without board access.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. The image links; actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -62,7 +64,9 @@ substantive correctness risks. The coordinator alone operates the board.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
-  Evidence is under `jpeg-nonconstant-20261017/`.
+  Evidence is under `jpeg-nonconstant-20261017/`. A focused correction is binding
+  the complete session to its admitted digest and revoking board liveness before
+  USB failure parks execution. Existing decode evidence remains applicable.
 - H.264: the fixed Baseline IDR fixture matches its CPU reference, and selected
   A733 runtime register traces pass after a structure-field audit. Native driver,
   application and copied-output integration are in progress.
@@ -71,7 +75,9 @@ substantive correctness risks. The coordinator alone operates the board.
   inputs match integration. A physical snapshot confirms the adopted CE clocks.
   Predecessor task completion, future launch exclusion, secure status access
   and memory authority remain physical prerequisites. A boot-path audit is
-  investigating the predecessor handoff. No board crypto command has executed.
+  investigating the predecessor handoff. Inspection of the actual DDR initializer
+  found no crypto launch path; actual ROM/FEL history remains unresolved. No board
+  crypto command has executed.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -90,7 +96,11 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:083` on port `3-1`, with automatic USB access.
+The last board instance is `003:083` on port `3-1`. Its diagnostic did not return
+and the instance is quarantined. Runner session `81427` retains the board lock
+and queue claim `5ab543c3a907541e29e1bbfe08963deef489cb022ae96b6262a867959dd8b9d3`.
+Do not send further device commands or terminate the ownership holder before
+coordinator recovery review. Physical reconnection remains required.
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
 BSS clearing, admission, table construction, cache publication and CPU/DSU
 planning. Observed MIDR is `0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is
@@ -117,9 +127,13 @@ Fresh reads before that launch established all seven secondaries OFF with clear
 request bits; see `startup-stage-20261017-080/cpu-state/session.json`. The next
 investigation covers RELEASE through secondary interrupt preparation, before
 cache enable. Return requires interrupt quiescence, saved redistributor-state
-restoration and observed target OFF. The current `003:083` instance has passed
-the guarded cache-off helper and returning launch-state survey; its next native
-diagnostic has not run. Both preparation claims are closed.
+restoration and observed target OFF. Instance `003:083` passed the guarded
+cache-off helper and returning launch-state survey. Its subsequent diagnostic
+attempted native RELEASE through secondary interrupt initialization. All 27
+host transactions completed, including launch, but no new ROM instance appeared
+within ten seconds. No result was recovered, so the failing instruction and
+target state remain unknown. Memory backups and ownership remain retained;
+there was no retry. Evidence is under `startup-stage-20261017-083/native/runtime/`.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -150,6 +164,10 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
   `native-secondary-off-probe-20261017/` contains the frozen probe
   and five focused cases. Earlier distributor evidence remains under
   `startup-stage-20261017-079/`.
+  `native-secondary-gic-ready-probe-20261018/` records the integrated interrupt
+  initialization diagnostic and five focused cases. Only its corrected timeout
+  fixture was repeated. The physical attempt and retained backups are under
+  `startup-stage-20261017-083/native/runtime/`; no result or restoration was observed.
 - Crypto clocks: `crypto-clocks-20261018-082/session.json` records 13 read-only
   CCU/RTC observations. The CE clock, gates and reset releases are enabled;
   these observations do not prove engine quiescence or secure-register access.
@@ -158,6 +176,8 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
   repository input. The original admission-fixture sanitizer failure is retained,
   and only the corrected admission case was repeated. The modeled-authority
   package is not deployable; physical admission requires actual evidence.
+  `ce-predecessor-20261018/assessment.md` records the bounded DDR/ROM source audit
+  and the proposed ROM observation. Board recovery precedes that observation.
 - Bluetooth: `bluetooth-mimus-native-20261017/integration.json` reconciles all
   changed files and preserved inputs. Its `native-final/manifest.json` identifies
   the image; `composition/` holds actual host recognition and cancellation.
@@ -205,10 +225,11 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose native RELEASE through secondary interrupt preparation before another
-   full multicore launch. Core-1 activation, entry and target-owned shutdown now
-   pass physically. Extend verified cleanup to the reached redistributor state;
-   preserve the native layout and reuse completed instruction cases.
+1. Diagnose the non-returning secondary interrupt-initialization attempt before
+   another board launch. Core-1 activation, entry and target-owned shutdown before
+   RELEASE pass physically. The later diagnostic has no physical result; inspect
+   hardware assumptions and model gaps before selecting another observation.
+   Preserve the held claim and backups until physical recovery is confirmed.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image under its reviewed recovery procedure.

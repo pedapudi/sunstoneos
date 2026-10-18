@@ -73,7 +73,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   native entry at EL3 and powers itself off before RELEASE. The primary observes
   actual OFF before restoring control, reset configuration, GIC and DRAM state.
   Execution after RELEASE, the remaining secondary cores, cache coherence and
-  scheduling remain unresolved.
+  scheduling remain unresolved. A diagnostic through secondary interrupt
+  initialization passes five focused software cases. Its physical launch did
+  not return, and no result was recovered. The board remains quarantined with
+  its lock and backups retained; source diagnosis continues before another attempt.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
