@@ -30,7 +30,8 @@ int main(void)
     assert(a733_clock_acquire(&registry,3,A733_CLOCK_TWI11,0,10,&out)==A733_CLOCK_INVALID);
     same(&out,&saved);
     assert(observations==before);
-    for(unsigned bit=67;bit<128;++bit) {
+    for(unsigned bit=0;bit<128;++bit) {
+        if(A733_CLOCK_BIT(bit)&A733_CLOCK_ALL)continue;
         assert(a733_clock_acquire(&registry,3,A733_CLOCK_BIT(bit),0,10,&out)==A733_CLOCK_INVALID);
         assert(a733_clock_acquire(&registry,3,0,A733_CLOCK_BIT(bit),10,&out)==A733_CLOCK_INVALID);
         same(&out,&saved);

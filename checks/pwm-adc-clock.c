@@ -7,7 +7,7 @@ int main(void)
 {
  struct a733_clock_leases m={0};struct a733_clock_token pwm={0},adc={0},ths={0},change={0};
  assert(a733_clock_leases_init(&m,now,NULL));
- assert(a733_clock_acquire(&m,1,0,A733_CLOCK_BIT(69),100,&change)==A733_CLOCK_INVALID);
+ assert(a733_clock_acquire(&m,1,0,(A733_CLOCK_ALL+1),100,&change)==A733_CLOCK_INVALID);
  assert(a733_clock_acquire(&m,1,A733_CLOCK_PWM0,0,100,&pwm)==A733_CLOCK_INVALID);
  assert(a733_clock_acquire(&m,1,0,A733_CLOCK_PWM0,100,&pwm)==A733_CLOCK_OK);
  assert(pwm.exclusive==A733_CLOCK_BIT(67)&&pwm.shared==(A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC));
