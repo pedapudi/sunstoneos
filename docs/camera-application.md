@@ -1,66 +1,82 @@
-# Native OV5640 application
+# Native OV5640 capture and supervised observation
 
-The dedicated `sunstone-a733-camera` image connects the existing native OV5640
-binding, shared providers and USB0 device transport. It captures one 640 × 480
-NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma bytes.
-Physical camera operation remains unqualified, and module availability is
-unconfirmed.
+The dedicated `sunstone-a733-camera` image connects the existing OV5640 binding,
+shared providers and USB0 device transport. It retains one 640 × 480 NV16 frame:
+307,200 luminance bytes followed by 307,200 interleaved chroma bytes. No MIPI
+camera is connected; physical capture waits for the accessory and remains unqualified.
 
-The image reuses the maintained cached boot, EL3 exception routing and native USB provider
-construction. It starts three privileged FreeRTOS tasks for the PMIC provider,
-USB0 and camera ownership. It does not start storage workers or source power.
-The immutable session page binds the camera record, shared provider settings,
-media configuration, memory evidence and recovery evidence to the exact image,
-epoch, generation and lease. The protected launch contract hashes the complete
-session. Creating hashes or setting proof fields does not establish authority.
+The default image preserves its qualified watchdog admission requirements.
+`SUNSTONE_CAMERA_SUPERVISED=ON` selects a separate session and launch ABI for
+supervised RAM-only use. Its terminal path retains every CPU, device, lease and
+allocation until manual whole-board power removal. It neither arms a watchdog
+nor claims independent automatic recovery. The supervised native initializer
+accepts an explicit manual-recovery record; the default initializer continues
+to require its original recovery record.
 
-Primary preparation constructs the camera and reserves both its device-owned
-backing and a separate CPU-owned output allocation before starting the scheduler.
-At that point, media and rail headers describe future providers without claiming
-live leases. The camera task obtains actual rail and PCK leases, initializes the
-media controller, and advances the native camera. The PMIC task independently
-services supply observations. Only the camera task uses the cached singleton allocator after startup;
-USB reads published output without touching allocator metadata.
+Both modes require actual module reset wiring, qualified supplies and bank
+voltage, authenticated analog trim and receiver timing, stable clocks and pin
+ownership. All ten IOMMU masters and remote firmware must be excluded, and prior
+transactions and page walks must be resolved. Both banks start disabled; both
+banks and every master's register domain remain accessible through the final
+fault scan. The qualified memory contract must cover coherence, aliases and the
+four-kibibyte prefetch guards. Supervision changes none of these conditions.
+
+Primary preparation constructs the camera and reserves its device-owned backing
+and a separate CPU-owned output allocation before starting FreeRTOS. Media and
+rail headers describe future providers without claiming live leases. One camera
+task obtains the actual rail and PCK leases, initializes media and advances the
+existing sensor, CSI, route and camera DMA controllers. The PMIC provider and
+USB0 run independently. Only the camera owner uses the cached singleton
+allocator during preparation.
 
 The camera task copies both completed planes through the native copy interface.
-It publishes output only after both copies succeed and its deadline remains live.
-A failed or cancelled capture leaves every resource reserved. Partial output is
-unavailable. Cancellation stops further camera advancement; it does not issue a
-bus STOP, assert reset, release buffers or claim that transactions drained.
-The fixed admitted recovery window bounds the image lifetime. This image neither
-arms nor reloads the watchdog and requires genuine launch/recovery admission.
-Intentional watchdog expiry remains deferred.
+It publishes output only after both copies succeed and the deadline remains
+live. USB reads the immutable output without accessing allocator metadata.
+Failed or cancelled capture retains every resource. Partial copies are
+unavailable. Cancellation stops further advancement without issuing bus STOP,
+asserting reset, releasing memory or claiming that transactions drained. A USB
+assertion or invalid interface revokes application admission and the common
+counter provider before parking. Subsequent native operations refuse that
+provider; an already executing bounded callback may finish.
 
-USB requests contain three little-endian 32-bit values: operation, byte offset
-and requested byte count. Operation zero queries state; operation one reads at
-most 4,096 bytes; operation two cancels. State zero means startup, one means
-capture pending, two means complete output and three means retained failure.
-Responses include the epoch, generation and complete session SHA256 before
-payload bytes. The USB task handles one request at a time and retains its response
-until the transport reports completion. The host capture command requires an
-explicit USB bus/address, epoch, generation and session digest. It stops on any
-transport failure and never retries a refused capture automatically.
+The supervised session is a value-only immutable record. Uploaded provider
+and camera deadlines are zero. The native runtime derives its absolute deadline
+from the live sixty-second launch contract while retaining the original session
+for response identity. The host's durable capture window is shorter than the
+native deadline. A deadline never authorizes reset, resource release or reuse.
 
-Build the image through `apps/camera/CMakeLists.txt` with the existing AArch64
-Clang toolchain and pinned FreeRTOS/TinyUSB paths. The build fragment is
-`cmake/a733-camera-application.cmake`. Raw NV16 capture uses
-`apps/camera/observe.py`; callers must hold the project board lock and satisfy
-physical launch admission before opening the explicitly selected device.
+`apps/camera/prepare.py` adapts the maintained supervised launcher and validates
+the actual ELF, linked build identity, DWARF session layout and complete upload
+membership. It freezes the session, entry evidence, image and launcher. Required
+entry facts include physical module/reset/supply admission, all-master exclusion
+and prior drain, powered register access, guard qualification, PMIC/USB sink
+ownership, DDR ownership and manual whole-board power removal. Hashes and flags
+identify reviewed facts; creating them does not establish those facts.
 
-Actual launch still requires qualified memory coherence and guard extent,
-remote-firmware exclusion, resolved inherited transactions for all ten IOMMU
-masters, accessible register domains, module supplies, reset wiring, receiver
-timing, analog trim, USB sink ownership and independent bounded recovery.
-The [native camera record](camera-native.md) defines these conditions. The
-application supplies executable wiring; software checks cannot establish them.
+The admission record binds exact shared, camera and media configuration hashes.
+For `camera_sha256`, the helper zeroes only the repeated `camera.evidence` digest
+before hashing that camera record, avoiding a circular admission hash. The
+complete session hash still covers the actual digest, and admission requires
+that it equal the top-level evidence digest. No reset, drain, guard, voltage,
+timing or ownership field is excluded from the configuration hash.
 
-The affected image build and nine application boundary cases pass. The cases
-cover immutable admission, complete output publication, a failed second-plane
-copy, cancellation, expired deadlines, transient resource contention, USB frame
-reads, pending-frame refusal and USB cancellation. Application fixtures model
-native controller boundaries or endpoint I/O; the unchanged native camera
-composition evidence supplies controller coverage. No board was queried.
-Exact sources, dependencies, objects, linked images and check results are retained
-under `~/.cache/sunstoneos/evidence/camera-application-20261017/batch1/`.
-The native image SHA256 is
-`5498d15ed2b683be334da4bd4d051d1e47ca8566c70f48d6af229571b75575fa`.
+`tools/check-a733-camera-supervised.py` uses the shared `run_session` path,
+coordinator claim, exclusive target lock, frozen approval binding, protected SRAM
+backup and one-attempt transport policy. It accepts USB identity `1f3a:efe8` only
+with product `sunstoneos native camera` and serial `sunstoneos-a733-camera`.
+`apps/camera/observe.py` decodes saved responses offline and opens no device.
+Physical preparation and capture remain the board coordinator's responsibility.
+
+The wire format retains the existing twelve-byte request and seventy-two-byte
+response header. Reads return at most 4,096 bytes. The collector validates epoch,
+generation and the immutable session digest on every response. It records all
+fragments and requires all 150 chunks before publishing a 614,400-byte NV16
+artifact and metadata. A failed transfer, inconsistent response, deadline or
+journal failure leaves success unestablished and requires manual recovery.
+
+The root CMake fragment selects the supervised mode without a separate startup
+framework. Build `sunstone-a733-camera` with the pinned FreeRTOS/TinyUSB sources
+and existing AArch64 toolchain. The [native camera contract](camera-native.md)
+retains the device ownership and completed-frame requirements. Continuous
+capture, wider modes, interrupts and general reclamation remain outside this
+single-frame application and still require implementation and qualification.

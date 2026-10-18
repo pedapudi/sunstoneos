@@ -173,8 +173,11 @@ static int mmu_admit(void *v,const struct a733_iommu_tables *tables,uint64_t d,s
     struct a733_camera_native *n=v;
     if(!authority(n) || !timely(n,d) || tables!=&n->capture.iommu.tables ||
        tables->words!=(void *)n->extent.cpu || tables->physical!=n->extent.physical)return -1;
-    *a=(struct a733_iommu_admission){n->boot.lease,(uint16_t)n->boot.excluded_masters,
-        (uint16_t)n->boot.powered_masters,1,1,1,1};return 1;
+    *a=(struct a733_iommu_admission){.token=n->boot.lease,
+        .excluded_masters=(uint16_t)n->boot.excluded_masters,.powered_masters=(uint16_t)n->boot.powered_masters,
+        .inherited_resolved=1,.transactions_drained=1,.clocks_held=1,
+        .recovery_qualified=!!(n->boot.proof&A733_CAMERA_RECOVERY_QUALIFIED),
+        .retained_power_removal=!!(n->boot.proof&A733_CAMERA_MANUAL_POWER_REMOVAL)};return 1;
 }
 static int mmu_read(void *v,uint64_t t,uint32_t o,uint32_t *x,uint64_t d)
 {return o<0x20000?read_word(v,t,(uintptr_t)A733_IOMMU_BASE+o,x,d):-1;}
@@ -308,12 +311,12 @@ static int dma_sync(void *v,uint64_t t,uint64_t d)
        !n->capture.sampled || !n->capture.fenced || n->capture.route.events!=0x100)return -1;
     return cache(n,AARCH64_CACHE_INVALIDATE,n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES,2u*PLANE_BYTES,d);
 }
-static int boot_valid(const struct a733_camera_boot_record *b)
+static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised)
 {
-    if(b->version!=1 || b->bytes!=sizeof(*b) || !b->owner || !b->epoch || !b->generation ||
+    if(b->version!=(supervised?2u:1u) || b->bytes!=sizeof(*b) || !b->owner || !b->epoch || !b->generation ||
        !b->lease || !b->deadline_us || !(b->build[0]|b->build[1]|b->build[2]|b->build[3]) ||
        !(b->evidence[0]|b->evidence[1]|b->evidence[2]|b->evidence[3]) ||
-       b->proof!=A733_CAMERA_REQUIRED_PROOF ||
+       b->proof!=(supervised?A733_CAMERA_SUPERVISED_PROOF:A733_CAMERA_REQUIRED_PROOF) ||
        (b->origin!=A733_CAMERA_COLD_RESET && b->origin!=A733_CAMERA_RESOLVED_RESET_HANDOFF) ||
        b->excluded_masters!=A733_IOMMU_REAL_MASTERS || b->powered_masters!=A733_IOMMU_REAL_MASTERS ||
        b->raw_trim!=0xb00 || b->parameter_guard_bytes!=4096 || b->plane_guard_bytes!=4096 ||
@@ -336,7 +339,7 @@ static int boot_valid(const struct a733_camera_boot_record *b)
     return 1;
 }
 extern int a733_smp_device_preparation_admitted(void);
-int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
+static int initialize(struct a733_camera_native *n,const struct a733_camera_native_config *c,unsigned supervised)
 {
     if(!n || n->self || instance || !c || !c->boot || !c->media || !c->clocks || !c->pins ||
        !c->rails || !c->rail_parent || !c->pmic || !c->locks || !c->task ||
@@ -348,7 +351,7 @@ int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camer
        c->media->config.camera_mclk_mask!=2 || c->media->config.deadline_us!=c->boot->deadline_us ||
        c->pmic->clocks!=c->clocks || c->pmic->rails!=c->rails || c->pmic->pins!=c->pins ||
        c->rail_parent->owner!=c->boot->owner ||
-       !boot_valid(c->boot) || !separate(n,sizeof(*n),c,sizeof(*c)) ||
+       !boot_valid(c->boot,supervised) || !separate(n,sizeof(*n),c,sizeof(*c)) ||
        !separate(n,sizeof(*n),c->boot,sizeof(*c->boot)) ||
        !separate(n,sizeof(*n),c->media,sizeof(*c->media)) ||
        !separate(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
@@ -389,9 +392,13 @@ int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camer
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
         .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain}};
-    if(a733_camera_capture_init(&n->capture,&capture)!=1)return fail(n);
+    if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1)return fail(n);
     return 1;
 }
+int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
+{return initialize(n,c,0);}
+int a733_camera_native_supervised_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
+{return initialize(n,c,1);}
 static int pin_acquire(struct a733_camera_native *n)
 {
     struct a733_pin_request_banked r[A733_CAMERA_NATIVE_PIN_COUNT]={0};

@@ -115,7 +115,7 @@ static int callbacks(const struct a733_camera_capture_config *c){
         c->dma.admit && c->dma.read && c->dma.write && c->dma.drain &&
         c->dma.sync_cpu && c->dma.release;
 }
-int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c){
+static int initialize(struct a733_camera_capture *s,const struct a733_camera_capture_config *c,unsigned supervised){
     if(!s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
        overlap(s,sizeof(*s),c,sizeof(*c)) || (c->context && overlap(s,sizeof(*s),c->context,1)) ||
        !callbacks(c) || !c->frame_id || !c->table_words || ((uintptr_t)c->table_words&16383) ||
@@ -147,11 +147,15 @@ int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_cam
     struct a733_route_config rc={c->memory[0].iova,c->memory[0].bytes,c->receiver.parser};
     struct a733_camera_dma_config dc={
         {c->memory[1].iova,c->memory[1].bytes},{c->memory[2].iova,c->memory[2].bytes},c->frame_id,0};
-    if(a733_camera_platform_init(&s->analog,&a,s)!=1 || a733_iommu_init(&s->iommu,&i,s,&s->tables)!=1 ||
+    if((supervised?a733_camera_platform_supervised_init(&s->analog,&a,s):a733_camera_platform_init(&s->analog,&a,s))!=1 || (supervised?a733_iommu_init_camera_supervised(&s->iommu,&i,s,&s->tables):a733_iommu_init(&s->iommu,&i,s,&s->tables))!=1 ||
        ov5640_init(&s->sensor,&o,s,c->color_bars)!=1 || a733_camera_route_init(&s->route,&r,s,&rc)!=1 ||
        a733_csi_init(&s->receiver,&v,s,&c->receiver)!=1 || a733_camera_dma_init(&s->dma,&d,s,&dc)!=1)return fail(s);
     return 1;
 }
+int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)
+{return initialize(s,c,0);}
+int a733_camera_capture_supervised_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)
+{return initialize(s,c,1);}
 int a733_camera_capture_open(struct a733_camera_capture *s,uint64_t d){
     if(!s || !s->initialized || s->entered || s->state!=A733_CAPTURE_NEW || !d)return -1;
     s->deadline=d;s->state=A733_CAPTURE_ACQUIRE;return 1;

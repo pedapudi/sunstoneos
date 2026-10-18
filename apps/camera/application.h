@@ -6,7 +6,7 @@
 #include "task.h"
 #define CAMERA_FRAME_BYTES (2u*A733_CAMERA_NATIVE_PLANE_BYTES)
 struct camera_application {
-    struct camera_session session;
+    struct camera_session admitted,session;
     struct a733_native_usb shared;
     struct a733_media_clock media;
     struct a733_camera_native camera;

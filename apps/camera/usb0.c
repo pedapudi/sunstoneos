@@ -6,7 +6,7 @@
 #include "device/dcd.h"
 #include <string.h>
 static unsigned polling;
-static _Noreturn void stop(void){for(;;)vTaskDelay(1);}
+static _Noreturn void stop(void){camera_fail(NULL);for(;;)vTaskDelay(1);}
 void a733_usb_prepare(void)
 {for(;;){int r=a733_native_usb_health(&app.shared);if(r<0||!camera_live(NULL))stop();if(r==1)return;vTaskDelay(1);}}
 void a733_usb_poll_enable(bool enable){if(!camera_live(NULL))stop();polling=enable;}
@@ -16,7 +16,7 @@ void a733_usb_assert(void){stop();}
 uint32_t tusb_time_millis_api(void){return (uint32_t)(a733_smp_counter()/24000);}
 void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!camera_live(NULL))stop();vTaskDelay(pdMS_TO_TICKS(ms));}
 static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,
-    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefea,.bcdDevice=0x0100,
+    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefe8,.bcdDevice=0x0100,
     .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
 static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
 static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
@@ -68,7 +68,13 @@ static void exchange(void)
  put32(response+16,count);put32(response+20,CAMERA_FRAME_BYTES);
  put32(response+24,(uint32_t)app.session.epoch);put32(response+28,(uint32_t)(app.session.epoch>>32));
  put32(response+32,(uint32_t)app.session.generation);put32(response+36,(uint32_t)(app.session.generation>>32));
- storage_digest_bytes(&app.session,sizeof(app.session),response+40);
+ storage_digest_bytes(
+#ifdef SUNSTONE_CAMERA_SUPERVISED
+ &app.admitted,sizeof(app.admitted),
+#else
+ &app.session,sizeof(app.session),
+#endif
+ response+40);
  response_sent=response_transferred=0;response_bytes=72+count;
 }
 void camera_usb0_task(void *unused)

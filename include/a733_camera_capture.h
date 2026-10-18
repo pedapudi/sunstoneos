@@ -103,6 +103,10 @@ struct a733_camera_capture {
  * the object but does not touch hardware. No allocations or hidden retries.
  */
 int a733_camera_capture_init(struct a733_camera_capture *,const struct a733_camera_capture_config *);
+/* Same controller path, explicit manual-power-removal retained lifetime.
+ * All non-recovery physical admission requirements remain unchanged. */
+int a733_camera_capture_supervised_init(struct a733_camera_capture *,
+    const struct a733_camera_capture_config *);
 int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
 /* Source-defined still-frame access while every resource stays reserved.
  * After actual CAPTURE_DONE, stop the sensor, sample CSI errors, verify all

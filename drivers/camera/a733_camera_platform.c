@@ -29,13 +29,17 @@ static int overlap(const void *a,size_t an,const void *b,size_t bn){
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
     return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
 }
-int a733_camera_platform_init(struct a733_camera_platform *s,
-    const struct a733_camera_platform_ops *o,void *ctx){
+static int initialize(struct a733_camera_platform *s,
+    const struct a733_camera_platform_ops *o,void *ctx,uint32_t proof){
     if(!s || !o || s->initialized || s->state!=A733_CAMERA_PLATFORM_NEW ||
        overlap(s,sizeof(*s),o,sizeof(*o)) || (ctx && overlap(s,sizeof(*s),ctx,1)) ||
        !o->now_us || !o->admit || !o->read || !o->write)return -1;
-    s->ops=*o;s->context=ctx;s->initialized=1;return 1;
+    s->ops=*o;s->context=ctx;s->required_proof=proof;s->initialized=1;return 1;
 }
+int a733_camera_platform_init(struct a733_camera_platform *s,const struct a733_camera_platform_ops *o,void *ctx)
+{return initialize(s,o,ctx,A733_CAMERA_REQUIRED_PROOF);}
+int a733_camera_platform_supervised_init(struct a733_camera_platform *s,const struct a733_camera_platform_ops *o,void *ctx)
+{return initialize(s,o,ctx,A733_CAMERA_SUPERVISED_PROOF);}
 int a733_camera_platform_open(struct a733_camera_platform *s,uint64_t d){
     if(!s || !s->initialized || s->state!=A733_CAMERA_PLATFORM_NEW || !d || d<=s->now)return -1;
     s->deadline=d;s->state=A733_CAMERA_PLATFORM_ADMIT;return 1;
@@ -80,7 +84,7 @@ int a733_camera_platform_poll(struct a733_camera_platform *s){
         s->admission=a;
         if(r<0 || r>1 || (r && !a.token) || tick(s)!=1)return fault(s);
         if(!r)return 0;
-        if(a.proof!=A733_CAMERA_REQUIRED_PROOF ||
+        if(a.proof!=s->required_proof ||
            (a.origin!=A733_CAMERA_COLD_RESET && a.origin!=A733_CAMERA_RESOLVED_RESET_HANDOFF))return fault(s);
         s->state=A733_CAMERA_PLATFORM_CHECK;return 0;
     }

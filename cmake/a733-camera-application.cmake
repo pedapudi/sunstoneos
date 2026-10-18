@@ -2,6 +2,7 @@
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
+option(SUNSTONE_CAMERA_SUPERVISED "Retained camera session with manual whole-board power removal" OFF)
 set(camera_root "${SUNSTONE_SOURCE_ROOT}")
 set(camera_build "${CMAKE_CURRENT_BINARY_DIR}/camera-application")
 file(MAKE_DIRECTORY "${camera_build}")
@@ -16,6 +17,12 @@ foreach(source IN ITEMS
  list(REMOVE_ITEM camera_sources "${camera_root}/${source}")
 endforeach()
 list(REMOVE_ITEM camera_sources "${storage_build}/build-id.c")
+if(SUNSTONE_CAMERA_SUPERVISED)
+ list(REMOVE_ITEM camera_sources "${storage_build}/boot.c" "${camera_root}/platform/a733/maintenance_watchdog.c")
+ apply_build_patch("${camera_build}/boot.c" "${storage_build}/boot.c"
+  "${camera_root}/platform/a733-smp-supervised/boot.patch")
+ list(APPEND camera_sources "${camera_build}/boot.c")
+endif()
 # Retain maintained boot/platform/EL3 return mechanics. Its boot patch publishes
 # the immutable 4KiB session page and does not decode a storage grant.
 foreach(source IN ITEMS apps/camera/main.c apps/camera/admission.c apps/camera/capture.c apps/camera/usb0.c
@@ -34,12 +41,21 @@ target_include_directories(sunstone-a733-camera BEFORE PRIVATE "${camera_root}/a
  "${camera_root}/drivers/usb" "${TINYUSB_DIR}/src" "${camera_root}/include"
  "${camera_root}/runtime/include" "${FREERTOS_DIR}/include" "${storage_base}")
 target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
- SUNSTONE_A733_USB=1 A733_SMP_CONTRACT_MAGIC=0x4153373343414332ULL A733_SMP_RESULT_MAGIC=0x4153373343415232ULL)
+ SUNSTONE_A733_USB=1)
+if(NOT SUNSTONE_CAMERA_SUPERVISED)
+ target_compile_definitions(sunstone-a733-camera PRIVATE
+  A733_SMP_CONTRACT_MAGIC=0x4153373343414332ULL A733_SMP_RESULT_MAGIC=0x4153373343415232ULL)
+endif()
+if(SUNSTONE_CAMERA_SUPERVISED)
+ target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_CAMERA_SUPERVISED=1)
+ set_property(TARGET sunstone-a733-camera APPEND PROPERTY COMPILE_DEFINITIONS
+  A733_SMP_CONTRACT_MAGIC=0x4153373343414333ULL A733_SMP_RESULT_MAGIC=0x4153373343415233ULL)
+endif()
 file(GLOB camera_headers "${camera_root}/apps/camera/*.h")
 set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
- "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt")
+ "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
-set(camera_identity "native-camera-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;640x480;NV16;USB0-sink;retained")
+set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;640x480;NV16;USB0-sink;retained")
 foreach(input IN LISTS camera_inputs)
  file(SHA256 "${input}" camera_digest)
  string(APPEND camera_identity "${camera_digest}")

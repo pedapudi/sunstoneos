@@ -14,7 +14,13 @@ static int authorize(void *v,const struct a733_media_clock_config *c,
  if(v!=&app||!current()||c!=&app.media.config||
     memcmp(c,&app.session.media,sizeof(*c))||
     memcmp(&app.camera.boot,&app.session.camera,sizeof(app.camera.boot))||
-    !camera_session_valid(&app.session,a733_smp_counter())||
+    !camera_session_valid(
+#ifdef SUNSTONE_CAMERA_SUPERVISED
+     &app.admitted,
+#else
+     &app.session,
+#endif
+     a733_smp_counter())||
     t->owner!=app.session.camera.owner)return -1;
  enum a733_clock_result clock=a733_clock_token_status(&app.shared.clocks,t);
  enum a733_gpu_resource_result pck=a733_gpu_resources_status(&app.shared.gpu,app.session.pck_client,p);

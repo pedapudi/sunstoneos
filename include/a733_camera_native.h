@@ -74,6 +74,10 @@ struct a733_camera_native {
  * This does not qualify the4KiB guard policy; the boot evidence must do so.
  * Parent/media/pin/rail/provider objects remain private and platform-lived. */
 int a733_camera_native_init(struct a733_camera_native *,const struct a733_camera_native_config *);
+/* Version2 boot record and exact SUPERVISED_PROOF; same retained providers and
+ * controllers. Manual whole-board power removal replaces watchdog admission,
+ * never actual reset/drain/exclusion, mapped guards or live ownership. */
+int a733_camera_native_supervised_init(struct a733_camera_native *,const struct a733_camera_native_config *);
 /* Designated EL1 task advances actual media-token delegation, rail borrows and
  * queued PMIC observations, checked pins, TWI, MCLK and the full capture path.
  * PMIC's existing provider task must run independently. Missing/faulted/late

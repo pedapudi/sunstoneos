@@ -86,7 +86,8 @@ static int analog_write(void *p,uint64_t t,uint16_t o,uint32_t v,uint64_t d){
 }
 static int mmu_admit(void *p,const struct a733_iommu_tables *x,uint64_t d,struct a733_iommu_admission *a){
     struct model *m=p;assert(m->global_held && m->now<d && x->count==3 && x->words==table);
-    *a=(struct a733_iommu_admission){202,A733_IOMMU_REAL_MASTERS,A733_IOMMU_REAL_MASTERS,1,1,1,1};
+    *a=(struct a733_iommu_admission){.token=202,.excluded_masters=A733_IOMMU_REAL_MASTERS,.powered_masters=A733_IOMMU_REAL_MASTERS,
+        .inherited_resolved=1,.transactions_drained=1,.clocks_held=1,.recovery_qualified=1,.retained_power_removal=0};
     return operation(m);
 }
 static int mmu_read(void *p,uint64_t t,uint32_t o,uint32_t *v,uint64_t d){

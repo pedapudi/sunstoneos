@@ -3,8 +3,18 @@
 #include "a733_camera_native.h"
 #include "a733_native_usb.h"
 #define A733_STORAGE_SESSION_ADDRESS UINT64_C(0x41f00000)
+#ifdef SUNSTONE_CAMERA_SUPERVISED
+#define CAMERA_SESSION_MAGIC UINT64_C(0x4153373343415332)
+#define CAMERA_CONTRACT_MAGIC UINT64_C(0x4153373343414333)
+#define CAMERA_SESSION_VERSION 2u
+#define CAMERA_CONTRACT_VERSION 3u
+#else
+#define CAMERA_SESSION_VERSION 1u
+#define CAMERA_CONTRACT_VERSION 1u
 #define CAMERA_SESSION_MAGIC UINT64_C(0x4153373343414131)
 #define CAMERA_CONTRACT_MAGIC UINT64_C(0x4153373343414332)
+#endif
+#define CAMERA_SESSION_SECONDS 60u
 /* Pointer-free immutable launch input, published with the existing contract.
  * Evidence must cover media domains, reset, all masters, electrical wiring,
  * memory coherence/guards, USB sink ownership and bounded independent recovery.

@@ -19,9 +19,11 @@ enum a733_camera_proof {
     A733_CAMERA_PINS_QUALIFIED = 1u << 6,
     A733_CAMERA_RAW_TRIM_APPROVED = 1u << 7,
     A733_CAMERA_RECOVERY_QUALIFIED = 1u << 8,
-    A733_CAMERA_TRANSACTIONS_DRAINED = 1u << 9
+    A733_CAMERA_TRANSACTIONS_DRAINED = 1u << 9,
+    A733_CAMERA_MANUAL_POWER_REMOVAL = 1u << 10
 };
 #define A733_CAMERA_REQUIRED_PROOF 0x3ffu
+#define A733_CAMERA_SUPERVISED_PROOF 0x6ffu
 struct a733_camera_admission {
     uint64_t token;
     uint32_t proof;
@@ -68,6 +70,7 @@ struct a733_camera_platform {
     struct a733_camera_admission admission;
     void *context;
     uint64_t now,deadline;
+    uint32_t required_proof;
     uint32_t observed[8],saved,calibration;
     enum a733_camera_platform_state state;
     uint8_t index,phase,initialized;
@@ -80,6 +83,12 @@ struct a733_camera_platform {
  */
 int a733_camera_platform_init(struct a733_camera_platform *,
     const struct a733_camera_platform_ops *,void *context);
+/* Explicit retained-lifetime mode replaces only qualified independent recovery
+ * with externally supervised whole-board power removal. Reset, exclusion,
+ * quiet/drained transactions, clocks, pins, power and trim remain mandatory.
+ * Neither deadline nor reconnection authorizes release or reuse. */
+int a733_camera_platform_supervised_init(struct a733_camera_platform *,
+    const struct a733_camera_platform_ops *,void *);
 int a733_camera_platform_open(struct a733_camera_platform *,uint64_t deadline);
 /* At most one admission/MMIO operation per poll plus monotonic time checks. */
 int a733_camera_platform_poll(struct a733_camera_platform *);
