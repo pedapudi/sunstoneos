@@ -55,6 +55,11 @@ static int now(struct a733_radio_session *s,uint64_t *out)
         *out>=s->platform->config.lifetime_deadline_us)return 0;
     s->last_now=*out;return 1;
 }
+enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
+{
+    if(!enter(s))return A733_SESSION_INVALID;
+    return leave(s,fail(s));
+}
 static enum a733_radio_session_result live(struct a733_radio_session *s)
 {
     enum a733_radio_platform_result r=a733_radio_platform_live(s->platform,&s->borrow,s->deadline);
@@ -201,6 +206,7 @@ int a733_radio_session_start_security(struct a733_radio_session *s,const struct 
 {
     if(!enter(s))return 0;
     int ok=outside(s,config,sizeof(*config))&&admission(s,deadline)&&
+        aic8800_transport_attachment_ready(&s->transport)&&
         aic8800_supplicant_init(&s->supplicant,config)&&
         aic8800_transport_start_security(&s->transport,&s->security,&s->supplicant,deadline);
     /* Once initialized, failed attachment cannot be retried with changed keys. */
@@ -211,6 +217,7 @@ int a733_radio_session_start_network(struct a733_radio_session *s,const struct s
 {
     if(!enter(s))return 0;
     int ok=outside(s,config,sizeof(*config))&&s->stage==MANAGEMENT&&admission(s,s->deadline)&&
+        aic8800_transport_attachment_ready(&s->transport)&&
         config->bootstrap==s->config.owner_task&&config->network.transport==&s->transport&&
         config->network.dispatcher==&s->dispatcher&&sunstone_net_init_owned(&s->sockets,config)&&
         sunstone_net_activate(&s->sockets);

@@ -66,6 +66,7 @@ struct aic8800_sdio_transport {
     enum aic8800_transport_error error;
     enum aic8800_codec_result codec_result;
     uint64_t deadline, wait_until, enable_deadline;
+    uint64_t completed_transfers; /* Owner-only successful nonempty CMD53 count. */
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
     const void *receive_owner;
@@ -187,4 +188,8 @@ int aic8800_transport_receive_view(const struct aic8800_sdio_transport *,const v
 int aic8800_transport_retire_record(struct aic8800_sdio_transport *,const void *,const uint8_t *,size_t);
 int aic8800_transport_consume_receive(struct aic8800_sdio_transport *,const void *);
 void aic8800_transport_fault_receive(struct aic8800_sdio_transport *,const void *);
+/* Serialized owner query for a drained runtime/data boundary. No authority or
+ * deadline extension; permits session attachment to retry transient activity
+ * before consuming supplicant or socket-service private storage. */
+int aic8800_transport_attachment_ready(const struct aic8800_sdio_transport *);
 #endif

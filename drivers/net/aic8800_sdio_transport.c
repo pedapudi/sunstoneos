@@ -190,6 +190,11 @@ static int runtime_idle(const struct aic8800_sdio_transport *t)
         t->cursor == t->rx_bytes && t->card->host->state == SUNXI_SDIO_READY &&
         (t->phase == RUNTIME_STEP || t->phase == RX_STATUS);
 }
+int aic8800_transport_attachment_ready(const struct aic8800_sdio_transport *t)
+{
+    return runtime_idle(t)&&t->data&&t->data->state==AIC8800_DATA_IDLE&&
+        !t->data_tx&&!t->security_tx;
+}
 int aic8800_transport_start_wifi(struct aic8800_sdio_transport *t, struct aic8800_wifi *w, uint64_t deadline)
 {
     if (!runtime_idle(t) || t->wifi || !independent(t, w, sizeof(*w)) || !w->initialized ||
@@ -582,6 +587,9 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
         t->pending = 0;
         if (!observe(t, &now)) goto out;
         completed(t, now);
+        if(t->state!=AIC8800_TRANSPORT_FAULT&&t->card->host->request.command==53&&
+            t->last_result.error==SUNXI_SDIO_NO_ERROR&&t->last_result.transferred&&
+            t->completed_transfers!=UINT64_MAX)++t->completed_transfers;
         /* Parsing a newly received aggregate starts on the next worker call. */
         if (t->phase == PARSE) goto post;
     }

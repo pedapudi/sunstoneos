@@ -1,0 +1,125 @@
+/* Application orchestration only. Lower protocol proofs are reused; their
+ * observations below are explicit checkpoints, not RF or entropy evidence. */
+#include "../apps/board/radio.c"
+#include <assert.h>
+#include <stdio.h>
+static struct board_radio app;
+static struct a733_native_usb shared;
+static struct a733_ce_entropy source;
+static struct a733_ce_session engine;
+static const struct board_radio_chip_id id={7,{0x11223344,0x55667788,0x99aabbcc,0xddeeff00}};
+static TaskHandle_t task=(TaskHandle_t)(uintptr_t)1;
+static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
+static uint64_t time_us=100;
+static unsigned entropy_calls,session_calls,retained,connects,security_calls,network_calls,submitted,received;
+static int entropy_failed,boundary;
+static int client_model;
+static struct sunstone_net_request copied_request;
+static uint64_t copied_ticket;
+static enum a733_radio_session_result session_result=A733_SESSION_MANAGEMENT;
+TaskHandle_t xTaskGetCurrentTaskHandle(void){return task;}
+BaseType_t xTaskGetSchedulerState(void){return scheduler;}
+int a733_counter_clock_now(void *p,uint64_t *n){assert(p==&shared.counter);*n=time_us;return 1;}
+int a733_radio_entropy_init(struct a733_radio_entropy *e,const struct a733_radio_entropy_config *c)
+{assert(e==&app.entropy&&c->source==&source&&c->clock==&shared.counter);return 1;}
+enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy *e)
+{assert(e==&app.entropy);++entropy_calls;return entropy_failed?A733_RADIO_ENTROPY_RETAINED:A733_RADIO_ENTROPY_READY;}
+int a733_radio_entropy_bytes(void *p,uint8_t *o,size_t n){(void)p;(void)o;(void)n;return 0;}
+int a733_radio_entropy_random32(void *p,uint32_t *o){(void)p;(void)o;return 0;}
+int a733_radio_entropy_sequence(void *p,uint32_t a,uint16_t b,uint32_t c,uint16_t d,uint32_t *o)
+{(void)p;(void)a;(void)b;(void)c;(void)d;(void)o;return 0;}
+int a733_radio_platform_native_init(struct a733_radio_platform_native *n,struct a733_platform_locks *l,
+    void *owner,int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *p)
+{assert(n==&app.native&&l==&shared.locks&&owner==task&&admit);(void)p;return 1;}
+int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_radio_platform_config *c,
+    const struct a733_radio_platform_ops *o,void *cookie,struct a733_clock_leases *cl,
+    struct a733_pins *pi,struct a733_rail_leases *ra,struct a733_pmic *pm)
+{assert(p==&app.platform&&c==&app.config.platform&&o==&app.native.operations&&cookie==&app.native&&
+ cl==&shared.clocks&&pi==&shared.pins&&ra==&shared.rails&&pm==&shared.pmic);p->config=*c;return 1;}
+int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platform *p,
+    const struct a733_radio_session_config *c)
+{
+    assert(s==&app.session&&p==&app.platform&&c->owner_task==task);
+    uint8_t output[16];assert(c->runtime.read_platform_id(c->runtime.context,output));
+    assert(output[0]==0x44&&output[3]==0x11&&output[15]==0xdd);
+    s->deadline=9000;return 1;
+}
+enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
+{assert(s==&app.session&&entropy_calls>session_calls);++session_calls;return session_result;}
+enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)
+{assert(s==&app.session);++retained;s->fault=1;return A733_SESSION_RETAINED;}
+int a733_radio_session_connect(struct a733_radio_session *s,const struct aic8800_wifi_target *t,uint64_t deadline)
+{assert(s==&app.session&&t==&app.config.target&&deadline==1100);++connects;s->wifi.link=AIC8800_WIFI_CONNECTING;return 1;}
+int a733_radio_session_start_security(struct a733_radio_session *s,const struct aic8800_supplicant_config *c,uint64_t d)
+{assert(s==&app.session&&c->entropy==a733_radio_entropy_bytes&&c->entropy_context==&app.entropy&&d==2100);
+ ++security_calls;return boundary;}
+int a733_radio_session_start_network(struct a733_radio_session *s,const struct sunstone_net_config *c)
+{assert(s==&app.session&&c->network.transport==&s->transport&&c->network.dispatcher==&s->dispatcher&&
+ c->network.random32==a733_radio_entropy_random32&&c->network.sequence==a733_radio_entropy_sequence&&
+ c->network.entropy_context==&app.entropy);++network_calls;return 1;}
+int aic8800_network_ready(const struct aic8800_network *n){assert(n==&app.session.sockets.network);return 1;}
+int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *e)
+{assert(s==&app.session&&e==&app.startup_event);return 1;}
+int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *d)
+{assert(s==&app.session&&d==&app.diagnostic);return 1;}
+int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
+{assert(s==&app.session.sockets&&r->timeout==3);++submitted;*ticket=42+submitted-1;
+ copied_request=*r;copied_ticket=*ticket;return 1;}
+int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *r,TickType_t wait)
+{
+ assert(s==&app.session.sockets&&wait==(client_model?0:3));++received;memset(r,0,sizeof(*r));
+ r->ticket=copied_ticket;r->result=client_model?SUNSTONE_NET_OK:SUNSTONE_NET_LINK_LOST;r->handle=5;
+ if(client_model&&copied_request.operation==SUNSTONE_NET_SEND)r->stack_result=2;
+ if(client_model&&copied_request.operation==SUNSTONE_NET_RECEIVE){
+    r->bytes=2;memcpy(r->payload,app.startup_profile->response+app.client_received,2);
+ }return 1;
+}
+static int admission(void *p,const struct a733_radio_platform_config *c,const struct a733_clock_token *t)
+{(void)p;(void)c;(void)t;return 0;}
+int main(void)
+{
+    shared.used=1;source.engine=&engine;engine.binding.registry=&shared.clocks;
+    struct board_radio_config c={.shared=&shared,.chip_id=&id,.admit=admission,
+        .platform={.lifetime_deadline_us=10000},.session={.owner_task=task,.bootstrap_deadline=500},
+        .entropy={.source=&source,.owner=task,.clock=&shared.counter,.qualification_record=9},
+        .target={.security=AIC8800_WIFI_WPA2_PSK_CCMP,.beacon_evidence=8},
+        .security={.beacon_record=8,.entropy_record=9},.network={.bootstrap=task,.network={.entropy_record=9}},
+        .startup_deadline_us=8000,.association_timeout_us=1000,.security_timeout_us=2000};
+    c.chip_id=NULL;assert(!board_radio_init(&app,&c)&&!app.self);c.chip_id=&id;
+    c.security.beacon_record=7;assert(!board_radio_init(&app,&c)&&!app.self);c.security.beacon_record=8;
+    assert(board_radio_init(&app,&c));assert(!board_radio_init(&app,&c));
+    struct sunstone_net_request request={.timeout=3};uint64_t ticket=0;
+    struct sunstone_net_reply reply;
+    assert(!board_radio_submit(&app,&request,&ticket));scheduler=taskSCHEDULER_RUNNING;
+    task=(TaskHandle_t)(uintptr_t)2;assert(board_radio_poll(&app)==BOARD_RADIO_INVALID&&!entropy_calls);
+    task=c.session.owner_task;
+    app.session.dispatcher.initialized=1;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&connects==1&&app.startup_events==1&&app.diagnostic_records==1);
+    app.session.wifi.link=AIC8800_WIFI_SECURITY_PENDING;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&security_calls==1&&app.stage==CONNECTING);
+    boundary=1;assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&app.stage==SECURING);
+    app.session.wifi.link=AIC8800_WIFI_SECURED;app.session.supplicant.state=AIC8800_SUPPLICANT_AUTHORIZED;
+    assert(board_radio_poll(&app)==BOARD_RADIO_PENDING&&network_calls==1);
+    assert(board_radio_poll(&app)==BOARD_RADIO_NETWORK);
+    assert(board_radio_submit(&app,&request,&ticket)&&ticket==42&&submitted==1);
+    struct board_radio_profile profile={.client_deadline_us=9500,.client_timeout_ticks=3,
+        .peer_port=80,.request_bytes=4,.response_bytes=4,.request={1,2,3,4},.response={5,6,7,8}};
+    app.startup_profile=&profile;app.config.network.clients[0]=(TaskHandle_t)(uintptr_t)2;
+    task=app.config.network.clients[0];client_model=1;
+    unsigned iteration=0;
+    while(board_radio_client_poll(&app)==0)assert(++iteration<15);
+    assert(app.client_stage==5&&app.client_sent==4&&app.client_received==4&&
+        copied_request.operation==SUNSTONE_NET_CLOSE&&app.client_handle==5);
+    client_model=0;task=c.session.owner_task;
+    uint64_t progress=0,deadline=0;app.session.transport.completed_transfers=3;
+    assert(board_radio_poll(&app)==BOARD_RADIO_NETWORK);
+    assert(board_radio_watchdog(&app,&progress,&deadline)==1&&progress==3&&deadline==9000);
+    entropy_failed=1;unsigned calls=session_calls;
+    assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&session_calls==calls&&retained==1);
+    assert(!board_radio_submit(&app,&request,&ticket));
+    assert(board_radio_receive(&app,&reply,3)&&reply.result==SUNSTONE_NET_LINK_LOST);
+    assert(board_radio_watchdog(&app,&progress,&deadline)==-1&&board_radio_completed_transfers(&app)==0);
+    unsigned polls=entropy_calls;assert(board_radio_poll(&app)==BOARD_RADIO_RETAINED&&entropy_calls==polls+1);
+    puts("PASS board radio: provider wiring, observed WPA2 checkpoints, copied sockets and retained entropy fault");
+    return 0;
+}

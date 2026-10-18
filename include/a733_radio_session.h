@@ -48,6 +48,9 @@ struct a733_radio_session {
 int a733_radio_session_init(struct a733_radio_session *,struct a733_radio_platform *,
     const struct a733_radio_session_config *);
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *);
+/* Owner-only external prerequisite failure. Closes network admission before
+ * further protocol work and retains the existing complete resource graph. */
+enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *);
 /* Serialized owner task only. Each admission directly authenticates the real
  * platform borrow. Deadlines must fit the current runtime lease. RF, association
  * and open-port authority remain explicit lower-layer inputs. */
