@@ -178,3 +178,28 @@ compiles remain preserved. Native C boot uses the I2S session path; the existing
 native mimus timing definition applies only to the C++ engine and adapter.
 No captured speech, transcript accuracy, inference deadline or physical I2S
 operation is qualified by these software results.
+
+## Retained launch session
+
+The I2S image now seals its complete admitted session during primary EL3 boot.
+It copies and rehashes the session against the private contract, validates the
+copy and publishes the session together with its readiness receipt before cached
+setup. A failed seal cannot be retried. Application startup obtains only that
+retained copy before creating any shared provider; its runtime deadline changes
+remain separate from the admitted bytes.
+
+The transcription profile's sealed bytes include capture duration and fixed model
+identities. Later changes to the live session cannot replace those values, DMA
+ownership or evidence. The local boot patch follows the maintained supervised
+patch and leaves shared boot sources unchanged. Existing DMA, audio, model and
+physical qualification evidence is reused without replay.
+
+The focused correction passed five binding checks against the transcription
+image in `~/.cache/sunstoneos/evidence/i2s-binding-20261018/`. Nominal records use
+the final build ID, embedded PCM digest, pinned model identities and hashes of
+written software-only evidence. The checks refuse shape-valid DMA-owner and
+capture-duration changes before sealing, refuse failed publication, and verify
+that later live changes cannot reach the first provider. Publication includes
+all session bytes and the readiness receipt. Cache publication, the counter and
+provider entry are modeled. One native link includes the unchanged recognizer;
+no audio, DMA, inference or model result was executed again.

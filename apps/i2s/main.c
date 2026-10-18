@@ -1,4 +1,5 @@
 #include "application.h"
+#include "snapshot.h"
 #include "a733_i2s_platform_native.h"
 #include "aarch64_device_memory.h"
 #include "cached.h"
@@ -62,8 +63,9 @@ int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
 void a733_smp_diagnostic_start(void)
 {
  if(!a733_smp_device_preparation_admitted())platform_panic("I2S primary",1);
- volatile const uint8_t *source=(void *)A733_STORAGE_SESSION_ADDRESS;
- for(unsigned i=0;i<sizeof(app.admitted);++i)((uint8_t *)&app.admitted)[i]=source[i];
+ const struct i2s_session *source=i2s_admitted_session();
+ if(!source)platform_panic("I2S sealed session",2);
+ app.admitted=*source;
  if(!i2s_session_valid(&app.admitted)||app.admitted.epoch!=a733_cached_runtime[0].epoch)
   platform_panic("I2S admission",2);
  app.session=app.admitted;app.deadline=a733_cached_runtime[0].diagnostic_deadline/24;
