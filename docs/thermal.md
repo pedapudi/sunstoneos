@@ -1,7 +1,9 @@
 # Native A733 thermal monitoring
 
 The thermal driver implements cold initialization, factory calibration and
-polling for the A733's five physical sensors. It also programs alarm, hysteresis
+polling for the A733's five physical sensors. The supervised
+[thermal application](thermal-application.md) binds it to the native shared
+providers, deferred interrupt service and copied USB observation. It also programs alarm, hysteresis
 and critical-temperature interrupt thresholds and collects their pending events.
 Physical temperature accuracy and interrupt delivery remain unqualified.
 
@@ -81,7 +83,9 @@ Both use the same documented period field.
 
 The platform must authenticate readable SID shadows, AVCC/ADC and digital supply
 stability, Device mappings, register security permissions, remote-writer exclusion
-and independent recovery.
+and reviewed operation-specific recovery. A supervised RAM-only session keeps
+every resource until confirmed whole-board power removal; its software deadline
+cannot recover a stalled MMIO access.
 No thermal PCK domain is described by the source. The board schematic labels for
 analog supplies require physical revision/rail confirmation; this driver changes
 no voltage, PCK policy or eFuse contents.
@@ -125,8 +129,9 @@ access and retains the mutex. Transient registry contention releases the mutex
 without accessing the controller and permits another attempt within the deadline.
 
 Successful initialization keeps all leases and clocks live. The driver provides
-no release or power-down API. Sleep, interrupt lifecycle integration, thermal
-policy and physical accuracy qualification remain outstanding.
+no release or power-down API. The finite application supplies deferred interrupt
+servicing; physical interrupt delivery remains unqualified. Sleep, thermal policy
+and physical accuracy qualification remain outstanding.
 
 ## References and focused validation
 

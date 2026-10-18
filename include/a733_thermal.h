@@ -34,8 +34,11 @@ struct a733_thermal_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate exact live token/owner/handoff; APB1 stability, AVCC/ADC and
      * digital supplies; exclusive THS and remote-writer handoff; readable SID
-     * shadows; Device mappings and register security permissions; independent
-     * recovery; GIC INTID71 owned/masked.
+     * shadows; Device mappings and register security permissions;
+     * operation-specific recovery (qualified independent reset, or reviewed
+     * supervised permanent retention until confirmed whole-board power removal);
+     * GIC INTID71 owned/masked. A software deadline cannot recover a stalled
+     * MMIO access; the selected physical recovery path must be qualified.
      * Cold GPADC configuration additionally excludes ALL GPADC/THS consumers.
      * IRQ delivery is allowed only after the caller binds its actual GIC route
      * and deferred service. This callback supplies authority, not clock evidence. */

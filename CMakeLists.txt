@@ -184,3 +184,8 @@ option(SUNSTONE_A733_CRYPTO "Build supervised native CE SHA/AES diagnostic" OFF)
 if(SUNSTONE_A733_CRYPTO)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-crypto.cmake")
 endif()
+
+option(SUNSTONE_A733_THERMAL "Build supervised native thermal monitoring" OFF)
+if(SUNSTONE_A733_THERMAL)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-thermal.cmake")
+endif()
