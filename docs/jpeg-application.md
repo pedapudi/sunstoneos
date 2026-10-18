@@ -224,3 +224,38 @@ the actual parser, preparation, private copy, exact comparison and USB frame cod
 they do not run a hardware JPEG decoder. Existing guard, provider and supervised
 lifecycle evidence is reused. Physical decoder startup, table programming,
 FIFO/device memory behavior and copied pixels remain unqualified.
+
+## Retained session and USB failure
+
+The JPEG boot patch copies the entire 856-byte session during primary EL3
+admission, before provider construction or secondary startup. It hashes the
+copied bytes against the private admitted contract and validates their complete
+layout. Successful coherence publication makes that one retained snapshot
+available to the later application. A failed seal cannot be retried in the same
+image, and failed publication exposes no snapshot.
+
+JPEG's fixed USB0-only workload does not need the board radio identity helper.
+Its local boot patch replaces that helper's live session read with the seal hook;
+the shared boot source is unchanged. Provider setup and application startup both
+require the sealed board prefix to match the board's admitted prefix. Startup
+consumes the retained extension instead of rereading the live session address.
+A disagreement refuses construction. Later changes to the live extension cannot
+replace admitted owner, clock, evidence or fixture identities.
+
+Every JPEG USB terminal stop now calls `board_fail` before parking. That revokes
+shared liveness, including eligibility for a result already published by the
+JPEG task. The decoder task observes revoked liveness and marks its result as
+failed; USB remains parked and sends no further queued bytes. This change does
+not establish hardware quiescence or release any retained resource.
+
+The focused sealing record is
+`~/.cache/sunstoneos/evidence/jpeg-sealing-20261018/`. The sanitizer fixture
+passed copied-session mutation, failed publication and once-only checks. Six
+linked instruction cases passed retained-extension use, prefix disagreement
+refusal and USB failure revocation through the actual board liveness functions.
+Cache publication, USB provider observations and scheduler boundaries were
+modeled. The native image linked with the JPEG boot hook and without the inherited
+board boot object. The first host compile required a fixture-only declaration
+for the architecture-guarded cache-publication boundary; that failure is retained.
+The existing nonconstant JPEG/reference bytes and numerical evidence were reused.
+No decoder or copied-pixel case was rerun.

@@ -38,10 +38,14 @@ set(jpeg_build "${CMAKE_CURRENT_BINARY_DIR}/jpeg-application")
 file(MAKE_DIRECTORY "${jpeg_build}")
 get_target_property(jpeg_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM jpeg_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
+ "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/board/usb0.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/board/admission.c" "${board_build}/build-id.c")
 # Keep normal source inclusion, actual boot and provider source identities.
-foreach(source IN ITEMS apps/jpeg/main.c apps/jpeg/native.c apps/jpeg/usb0.c apps/jpeg/admission.c
+apply_build_patch("${jpeg_build}/boot.c" "${board_build}/boot-supervised.c"
+ "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/boot.patch")
+list(APPEND jpeg_sources "${jpeg_build}/boot.c")
+foreach(source IN ITEMS apps/jpeg/main.c apps/jpeg/native.c apps/jpeg/usb0.c apps/jpeg/admission.c apps/jpeg/snapshot.c
  drivers/video/a733_video_jpeg.c drivers/video/a733_video_jpeg_run.c drivers/video/a733_video_platform.c
  drivers/iommu/a733_iommu.c)
  list(APPEND jpeg_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
@@ -66,6 +70,7 @@ if(jpeg_links)
 endif()
 file(GLOB jpeg_headers "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/*.h")
 set(jpeg_inputs ${jpeg_sources} ${jpeg_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/fixtures.json" "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/fixture.py"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_jpeg_application.h" "${CMAKE_CURRENT_LIST_FILE}"
  "${SUNSTONE_JPEG_FIXTURE}" "${SUNSTONE_JPEG_REFERENCE}")
