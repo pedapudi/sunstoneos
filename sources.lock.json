@@ -2527,5 +2527,35 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/mmc/mmc.c",
     "sha256": "53a56404640fe7f2e92823cb66e7b2a184b76e39281e5b6c1fd85e8c4b050267",
     "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/mmc/mmc.c"
+  },
+  "cpu-audit-drivers-irqchip-irq-gic-v3-c": {
+    "revision": "e5f0a698b34ed76002dc5cff3804a61c80233a7a",
+    "url": "https://raw.githubusercontent.com/torvalds/linux/e5f0a698b34ed76002dc5cff3804a61c80233a7a/drivers/irqchip/irq-gic-v3.c",
+    "sha256": "6a032578e4714afd6b97d729054731cdcc4ff0f5f2170eef0663739b01dcaac7",
+    "archive": "cpu-audit/linux-e5f0a698b34ed76002dc5cff3804a61c80233a7a/drivers/irqchip/irq-gic-v3.c"
+  },
+  "cpu-audit-arch-arm64-kernel-psci-c": {
+    "revision": "e5f0a698b34ed76002dc5cff3804a61c80233a7a",
+    "url": "https://raw.githubusercontent.com/torvalds/linux/e5f0a698b34ed76002dc5cff3804a61c80233a7a/arch/arm64/kernel/psci.c",
+    "sha256": "634062ea1c0034439a07d48abafd03081ee81466d88658f80354b24f2acf9e4d",
+    "archive": "cpu-audit/linux-e5f0a698b34ed76002dc5cff3804a61c80233a7a/arch/arm64/kernel/psci.c"
+  },
+  "cpu-audit-documentation-arch-arm64-booting-rst": {
+    "revision": "e5f0a698b34ed76002dc5cff3804a61c80233a7a",
+    "url": "https://raw.githubusercontent.com/torvalds/linux/e5f0a698b34ed76002dc5cff3804a61c80233a7a/Documentation/arch/arm64/booting.rst",
+    "sha256": "60c67fd291bd34504d7e01802659aa519bc0efe8f0530322e3ee739cfa9a4071",
+    "archive": "cpu-audit/linux-e5f0a698b34ed76002dc5cff3804a61c80233a7a/Documentation/arch/arm64/booting.rst"
+  },
+  "cpu-audit-arm-gic-software-overview": {
+    "revision": "DAI0492B",
+    "url": "https://documentation-service.arm.com/static/5f1068720daa596235e7f6ef",
+    "sha256": "bd57b0ad529aa942877fbe8edd5fc23c524a9c29a32105a2e7d4a6adfeca11e5",
+    "archive": "cpu-audit/arm-gic-software-overview.pdf"
+  },
+  "cpu-audit-arm-gic-architecture": {
+    "revision": "IHI 0069G",
+    "url": "https://documentation-service.arm.com/static/601412d54ccc190e5e681269",
+    "sha256": "f5461ced0b908141c87f655e602ff6340a90f14028ea009239c388ed69b78ac6",
+    "archive": "cpu-audit/arm-gic-architecture-ihi0069g.pdf"
   }
 }

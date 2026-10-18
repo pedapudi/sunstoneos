@@ -10,6 +10,10 @@ for the primary agent. Do not delegate this work. Apply the
 [board operations skill](../sunstone-a733-board/SKILL.md) for physical execution.
 Use [current startup evidence](../../../docs/a733-smp-supervised.md) to establish
 what has run; a successful instruction model is not a physical checkpoint.
+Read the [Arm/Linux comparison](../../../docs/a733-multicore-reference-audit.md)
+before changing the unobserved interrupt-initialization interval. Linux delegates
+CPU power-on to PSCI firmware; its kernel driver alone is not the direct EL3
+startup contract. Distinguish required ordering from permitted reference choices.
 
 ## Follow the actual native control flow
 
