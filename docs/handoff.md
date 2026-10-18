@@ -442,9 +442,18 @@ twelve focused policy cases pass and the native image was reused.
 
 The second-board register batch under `second-board-20261018-3-3/sd-initial-state/`
 completed with the SD clock gated, reset asserted, and IRQ 193 disabled, inactive
-and not pending. PF mux `0x0f3f3f33` retains ROM-selected functions that the current
-SD admission rejects. An offline integration change is checking that pin handoff;
-voltage, ownership and complete-image startup still need actual admission.
+and not pending. PF mux `0x0f3f3f33` assigns four pins to JTAG and disables the
+remaining three. The integrated read-only path now admits that exact pattern
+with explicit JTAG/debug-client exclusion, then uses the existing banked pin
+handoff. Focused provider, five host-policy cases and native session parsing pass.
+Only three affected objects were rebuilt; 163 original objects were reused.
+Evidence is under `second-board-20261018-3-3/sd-rom-pins/`.
+
+The board reports adaptive PF voltage mode with sensed and selected 3.3 V.
+The existing manual-mode-only profile rejects this state. A separate source review
+is assessing adaptive-mode admission with stable rail and writer exclusion.
+The image is not yet eligible: exact pull/drive fields, clock/supply ownership,
+electrical admission and its eight-core startup dependency remain outstanding.
 
 ## Next actions
 
