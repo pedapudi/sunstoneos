@@ -262,3 +262,61 @@ Its caller SP was `0x000f2200`. SRAM restoration and ROM response passed. Eviden
 is under `startup-stage-20261017-074/survey/`. The launcher requires instruction
 caching disabled; the earlier cold-entry survey cannot authorize this warm state.
 Review the existing returning cache-off helper before the next staged launch.
+
+## Returning native initialization checkpoint
+
+`tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
+preserved native ELF with SHA-256
+`b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
+The native code, data, BSS and stack addresses remain unchanged. Twenty verified
+instruction replacements redirect the C boot entry, the cache preparation entry,
+the terminal stop, the initial park and sixteen EL3 exception slots. The C entry
+replacement records the initialized stack and replays its displaced instruction.
+The original stack selection, BSS clearing, boot-state validation and admission
+checks execute. The normal checkpoint returns before the first instruction of
+`a733_cached_prepare`, before cache, coherence, GIC or secondary initialization.
+
+The overlay occupies `0x41020000..0x41021000`. Its nonce-bound 256-byte report at
+`0x42002000` is outside the native result structure. It records C entry, stack
+addresses, terminal checkpoint, architectural state and counter, native refusal
+arguments, or exception slot and fault registers. Initial-state differences and
+native refusals remain report data. A wrong exception level records its checkpoint
+and parks because the demonstrated EL3 return cannot run there. Each returning
+checkpoint uses RVBAR `0x20`, high word zero and `RMR_EL3 = 2`.
+
+Physical execution requires the unchanged corrected A32 launcher with SHA-256
+`2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea`, a
+fresh admission bundle, a completed survey for the current ROM instance and a
+reviewed queue claim. Every actual launcher gate must pass. Warm ROM may enable
+the instruction cache; a survey with that bit set does not authorize execution.
+The existing returning cache-off helper is a separate reviewed operation. It
+requires disabled MMU and data cache before clearing the instruction-cache bit.
+A subsequent survey must establish the resulting state.
+
+The actual A32 launcher saves sixty bytes on its ROM caller stack before using
+its private stack. The host validates the surveyed SP and rejects overlap with
+its explicit SRAM reservations. It durably preserves those sixty bytes as
+evidence, together with every SRAM upload interval and every DRAM interval the
+diagnostic writes. After warm return, the new ROM owns SRAM; the host never
+restores the obsolete caller stack or other old SRAM bytes into that instance.
+It verifies the returned ROM service, durably copies the diagnostic, native
+result and admission records, then restores and verifies the affected DRAM.
+Any transport failure or absent return retains ownership and stops requests.
+
+Prepare the overlay with `run-native-startup-probe.py prepare`, using the same
+explicit tool and observer arguments as the stackless entry probe. Run
+`checks/native-startup-probe.py` with `--build`, the preserved corrected
+`--bundle`, `--output` and `--objdump`. The physical runner additionally requires
+a fresh `--bundle`, `--survey`, `--software`, `--database`, `--claim`, `--owner`,
+`--fel` and `--evidence`. Queue prerequisites are `supervised-ram-recovery` and
+`native-startup-software`; submitted artifacts bind the exact overlay manifest,
+software record, survey session and fresh bundle manifest.
+
+One overlay build and six focused instruction cases pass: normal native
+initialization, invalid contract, changed watchdog state, an injected BSS-write
+exception, initial cache rejection and a wrong exception level. These cases use
+the patched native instructions with modeled architectural registers and MMIO.
+They establish the observation boundaries and write restrictions, not physical
+memory operation or recovery. Evidence is under
+`~/.cache/sunstoneos/evidence/native-startup-probe-20261017/`. Physical startup
+failure remains unresolved until the coordinator executes the reviewed stage.
