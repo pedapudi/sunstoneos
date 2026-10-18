@@ -174,3 +174,24 @@ directory. The queue prerequisites are `supervised-ram-recovery` and
 binary. On the first transport error, instance change or uncertain SRAM state,
 the runner stops all traffic and retains ownership for manual recovery review.
 It never retries or automatically reconnects.
+
+## SCR access before the local transition
+
+The failed physical attempt reached neither a native USB result nor a readable
+refusal report. The old assembly launcher read SCR before initializing a report.
+The returning DDR wrapper recorded CPSR mode `0x13` (SVC), rather than Monitor
+mode `0x16`. SCR access depends on the exception and security context; a read
+can trap before the launcher reaches its return path. The previously exercised
+pinned `reset64` helper reads RMR and requests the local transition without
+reading SCR. This difference identifies a concrete possible early failure,
+but does not prove where either failed physical attempt stopped.
+
+The corrected launcher omits only the SCR read and its associated NS-bit test.
+It preserves the SCTLR, endian, SVC-mode and primary-MPIDR checks, the full
+contract admission and the RVBAR/RMR sequence. The native entry still checks
+`CurrentEL == 12`, primary topology and disabled MMU/cache state before using
+its stack or accessing memory. EL3 execution establishes its secure exception
+context; the boot monitor repeats admission before CPU/coherence startup.
+Reviewed secure/nonsecure memory authority and every other external prerequisite
+remain required. A returning survey with the remaining gates satisfied justifies
+one reviewed corrected launch; a failed gate or transport stops that sequence.

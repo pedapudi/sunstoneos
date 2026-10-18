@@ -19,9 +19,6 @@ a733_smp_launch:
     and r0, r0, #0x1f
     cmp r0, #0x13
     bne a733_smp_launch_park
-    mrc p15, 0, r0, c1, c1, 0
-    tst r0, #1
-    bne a733_smp_launch_park
     mrc p15, 0, r0, c0, c0, 5
     ldr r1, =0xc1000000
     bic r0, r0, r1
