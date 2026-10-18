@@ -81,6 +81,33 @@ separate reference.
 The [Cortex-A55 technical reference manual](https://documentation-service.arm.com/static/5e7e1405b471823cb9de57ae)
 describes the reset vector and execution-state controls.
 
+## Binary dependencies and replacement order
+
+The native OS uses source-built FreeRTOS, TinyUSB, Newlib, FreeRTOS+TCP and
+selected wpa_supplicant security code where the application requires them.
+Linux drivers provide implementation references; Linux is not a board runtime.
+The following opaque dependencies have distinct execution roles:
+
+| Dependency | Current use | Documentation and remaining gap |
+| --- | --- | --- |
+| Board boot0 | Selected power, clock and DDR-training routines execute during RAM bring-up | [Boot record](boot.md) and source lock identify the exact binary, reviewed entry points and physical observations. A separate license assessment is not recorded. |
+| PowerVR firmware | Native GPU loader stages code for the internal MIPS processor | [GPU record](gpu.md) pins hardware selection, firmware ABI, hash and accompanying license. Physical firmware execution remains unqualified. |
+| AIC8800D80 firmware | Native SDIO loader uploads Wi-Fi code and Bluetooth data, patches and configuration | [Firmware record](radio-firmware.md) specifies revision selection, lengths, hashes and protocol. [Radio provenance](radio.md) records unresolved redistribution terms. Physical radio operation remains unqualified. |
+| ACUITY/Vivante tools | Host compiler and simulator generate and inspect NPU model artifacts | [Compiler record](npu-compiler.md) and its lock file retain package identities, versions and license locations. These tools do not run inside FreeRTOS. |
+| NPU SDK binaries | Host analysis and isolated instruction comparisons establish model-loading behavior | [NPU record](npu.md) identifies the inspected libraries and executable. Native decoding and assembly replace the inspected loading behavior for the supported profiles; general compatibility remains incomplete. |
+
+GPU and radio firmware are supplied as immutable memory spans; these loaders
+do not require a runtime filesystem. Published artifact availability does not
+establish hardware compatibility or redistribution rights.
+
+After complete hardware functionality and performance tuning, investigate source
+replacements for remaining opaque dependencies. Retain the working binaries as
+comparison references. Prefer replacements with a concrete compatibility or
+maintenance benefit, and verify each against the supported hardware operations.
+The native NPU toolkit remains tracked in issue 12. Replacing embedded GPU or
+radio firmware is separate from implementing the A733 host drivers; complete
+replacement is not established by the current reverse-engineering evidence.
+
 ## Local compatibility patches
 
 - The FreeRTOS patch adds the missing `memset` declaration and uses 64-bit
