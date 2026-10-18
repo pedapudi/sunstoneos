@@ -68,4 +68,19 @@ ABI. The new image compiles its changed providers and consumers together.
 Exact inputs, generated PCM, objects, executables, dependency files and results
 are preserved under
 `~/.cache/sunstoneos/evidence/i2s-application-20261017/batch1/`.
-The image SHA256 is `5ca467059193e10335dad7f697529b430d1eaa538a4fbb57134aabbe037fff73`.
+The current image SHA256 is
+`fcb6c30270177f3bba15163c7d4cad4cce29659c9a589a592463e55fa958d841`.
+
+USB0 uses the supervised access-rule identity `1f3a:efe8`. The observer requires
+the exact I2S product and serial before configuring that explicitly selected
+device. A USB assertion or invalid interface revokes application admission and
+the shared counter provider before parking. Subsequent DMA device/cache callbacks
+and startup/lease operations refuse the faulted provider; active reservations
+remain held. No failure callback performs MMIO, drain, reset or release.
+
+Four focused USB correction checks pass: descriptor identity, assertion cutoff,
+invalid-interface cutoff and observer identity/refusal. The correction reuses
+64 unchanged objects, compiles the application failure handler, USB object and
+build identity, and relinks the image. Those artifacts and comparison records
+are under the existing evidence directory's `usb-fix/` subdirectory. The original
+image and twelve successful cases remain preserved without replay.

@@ -7,6 +7,9 @@ volatile unsigned i2s_check_result;
 void vTaskDelay(TickType_t ticks)
 {i2s_check_result=100+(unsigned)ticks;__asm__ volatile("brk #0");for(;;){}}
 int i2s_live(void *v){(void)v;return 1;}
+/* This framing fixture treats any terminal USB path as failure. The separate
+ * cutoff fixture executes the actual metadata revocation implementation. */
+void i2s_fail(void *v){(void)v;i2s_check_result=90;}
 uint32_t tud_vendor_n_available(uint8_t i){return i?0:input_read<5?5-input_read:12-input_read;}
 uint32_t tud_vendor_n_read(uint8_t i,void *out,uint32_t n)
 {if(i||n>12-input_read)return 0;memcpy(out,input+input_read,n);input_read+=n;return n;}

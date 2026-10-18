@@ -7,7 +7,14 @@ struct i2s_application app;
 int i2s_live(void *unused)
 {(void)unused;return !atomic_load_explicit(&app.fatal,memory_order_acquire)&&a733_smp_counter()/24<app.deadline;}
 void i2s_fail(void *unused)
-{(void)unused;atomic_store_explicit(&app.fatal,1,memory_order_release);}
+{
+ (void)unused;
+ atomic_store_explicit(&app.fatal,1,memory_order_release);
+ /* Revoke the common time provider as metadata only. DMA worker callbacks
+  * inspect this fault before device/cache access; startup and lease callbacks
+  * also refuse subsequent time samples. Keep every active reservation held. */
+ atomic_store_explicit(&app.shared.counter.failed,1,memory_order_release);
+}
 void a733_storage_maintenance_stop(void){i2s_fail(NULL);}
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name){(void)task;platform_panic(name,2);}
 static _Noreturn void dma_fatal(void *unused)

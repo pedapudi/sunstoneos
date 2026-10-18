@@ -20,8 +20,10 @@ metadata=a.output.with_suffix(a.output.suffix+'.json')
 if a.output.exists() or metadata.exists():p.error('output or metadata already exists')
 identity=bytes.fromhex(a.session_sha256)
 if len(identity)!=32:p.error('session digest must contain 32 bytes')
-d=usb.core.find(idVendor=0x1f3a,idProduct=0xefea,bus=a.bus,address=a.address)
+d=usb.core.find(idVendor=0x1f3a,idProduct=0xefe8,bus=a.bus,address=a.address)
 if d is None:raise SystemExit('selected device is absent')
+if d.product!='sunstoneos native I2S' or d.serial_number!='sunstoneos-a733-i2s':
+    raise SystemExit('selected device is not the native I2S application')
 # One bounded exchange per request. Any transport failure terminates the process.
 # Callers must hold the project board lock and establish launch/recovery authority.
 d.set_configuration()
