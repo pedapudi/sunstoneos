@@ -1,0 +1,11 @@
+--- a/platform/a733-smp-cached/platform.c
++++ b/platform/a733-smp-cached/platform.c
+@@ -80,6 +80,8 @@
+ _Noreturn void a733_smp_exit_privileged(unsigned status,uint64_t detail)
+ {
+     __asm__ volatile("msr daifset,#15":::"memory");
++    extern void a733_storage_maintenance_stop(void);
++    a733_storage_maintenance_stop();
+     unsigned c=core();
+     if(c<8 && status)__atomic_store_n(&a733_smp_core_results[c].failure,detail?detail:status,__ATOMIC_RELEASE);
+     a733_cached_smc(status,detail);

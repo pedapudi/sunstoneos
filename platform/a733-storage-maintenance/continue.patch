@@ -1,0 +1,76 @@
+--- a/platform/a733-smp-cached/continue.S
++++ b/platform/a733-smp-cached/continue.S
+@@ -273,6 +273,58 @@
+ 1:  dsb sy
+     str x2, [x1, #16]
+     dsb sy
++    // All fatal paths converge here without using an EL1 stack or RAM.
++    // Ordinary NS WB memory is safe only after every EL3 context adopted it.
++    mrs x3, sctlr_el3
++    mov x4, #0x1005
++    and x5, x3, x4
++    cmp x5, x4
++    b.ne .Lpark
++    tbnz x3, #25, .Lpark
++    mrs x4, tcr_el3
++    mov x5, #0x3019
++    movk x5, #0x8082, lsl #16
++    cmp x4, x5
++    b.ne .Lpark
++    mrs x4, mair_el3
++    mov x5, #0xff00
++    movk x5, #0x44, lsl #16
++    cmp x4, x5
++    b.ne .Lpark
++    mrs x4, scr_el3
++    tbnz x4, #9, .Lpark
++    adrp x4, a733_cached_el3_l1
++    add x4, x4, :lo12:a733_cached_el3_l1
++    mrs x5, ttbr0_el3
++    cmp x4, x5
++    b.ne .Lpark
++    adrp x5, a733_cached_records
++    add x5, x5, :lo12:a733_cached_records
++    add x6, x5, x19, lsl #7
++    ldr x6, [x6, #64]
++    cmp x3, x6
++    b.ne .Lpark
++    mov x6, #8
++.Lstorage_adopted:
++    ldr x7, [x5, #64]
++    mov x8, #0x1005
++    and x7, x7, x8
++    cmp x7, x8
++    b.ne .Lpark
++    ldr x7, [x5, #72]
++    cmp x7, x4
++    b.ne .Lpark
++    add x5, x5, #128
++    subs x6, x6, #1
++    b.ne .Lstorage_adopted
++    // Use this core's reserved Secure Device stack regardless of the fault's SP.
++    adrp x3, a733_cpu_entry_stacks
++    add x3, x3, :lo12:a733_cpu_entry_stacks
++    add x4, x19, #1
++    add x3, x3, x4, lsl #12
++    msr spsel, #1
++    mov sp, x3
++    bl a733_storage_maintenance_stop
+     cbnz x19, .Lpark
+     mov x0, x20
+     mov x1, x21
+@@ -307,10 +359,11 @@
+     b \handler
+     .space 124
+ .endm
+-// Current EL with SP0 is never an admitted runtime context.
+-.rept 4
++// The private storage tasks run at EL1t on their trusted SP_EL0.
++    vector .Lsync_bhb
++    vector .Lirq_bhb
+     vector a733_cached_cold_fault
+-.endr
++    vector a733_cached_cold_fault
+ .rept 2
+     vector .Lsync_bhb
+     vector .Lirq_bhb

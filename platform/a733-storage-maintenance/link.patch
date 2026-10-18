@@ -1,0 +1,15 @@
+--- a/platform/a733-smp-cached/link.ld
++++ b/platform/a733-smp-cached/link.ld
+@@ -62,7 +62,11 @@
+            (__device_pool_end <= 0x41c00000 && __uncached_pool_start == 0x41c00000 &&
+             __uncached_pool_end == 0x41e00000),
+            "uncached pool overlaps image state or write-back pool")
+-    ASSERT(__bss_end <= 0x42000000, "EL1 allocations exceed RAM")
++    ASSERT(__bss_end <= 0x41f00000 && __device_pool_end <= 0x41f00000 &&
++           __uncached_pool_end <= 0x41f00000, "storage session overlaps mutable RAM")
++    .storage_session 0x41f00000 (NOLOAD) : {
++        __storage_session_start = .; . += 4096; __storage_session_end = .;
++    } > RAM
+     ASSERT(__a733_smp_boot_stack_top <= 0x421f0000, "monitor allocations exceed RAM")
+     ASSERT(__tables_end <= 0x42200000, "tables exceed reservation")
+     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
