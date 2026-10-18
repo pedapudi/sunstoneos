@@ -19,7 +19,7 @@ uint32_t tud_vendor_n_write(uint8_t interface,const void *buffer,uint32_t bytes)
 uint32_t tud_vendor_n_write_flush(uint8_t interface){(void)interface;return 0;}
 void board_check_run(unsigned mode)
 {
-    profile.magic=BOARD_RADIO_PROFILE_MAGIC;profile.version=1;profile.bytes=sizeof(profile);profile.response_bytes=5;
+    profile.magic=BOARD_RADIO_PROFILE_MAGIC;profile.version=3;profile.bytes=sizeof(profile);profile.response_bytes=5;
     board.session=(struct a733_board_session){.magic=A733_BOARD_SESSION_MAGIC,.version=1,.bytes=sizeof(board.session),.epoch=7,.generation=8,.workload=1};
     storage_digest_bytes(&profile,sizeof(profile),board.session.radio_profile_digest);
     atomic_init(&board.result,mode==2?0:1);atomic_init(&board.radio_result,2);atomic_init(&board.radio_bytes,5);

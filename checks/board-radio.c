@@ -98,7 +98,7 @@ static int admission(void *p,const struct a733_radio_platform_config *c,const st
 {(void)p;(void)c;(void)t;return 0;}
 int main(void)
 {
-    struct board_radio_profile admitted={.magic=BOARD_RADIO_PROFILE_MAGIC,.version=1,.bytes=sizeof(admitted),
+    struct board_radio_profile admitted={.magic=BOARD_RADIO_PROFILE_MAGIC,.version=3,.bytes=sizeof(admitted),
         .platform_authority=1,.ce_authority=2,.secure_ce_authority=3,.entropy_record=4,
         .characterization_record=5,.startup_test_record=6,.health_enable_epoch=7,
         .platform_evidence={1},.ce_evidence={2},.entropy_evidence={3},

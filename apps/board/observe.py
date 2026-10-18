@@ -32,10 +32,13 @@ def decode(frame, session, profile=None):
     elif workload in (1,3):
         if profile is None or hashlib.sha256(profile).digest()!=digest:
             raise ValueError('admitted radio profile required')
-        expected_version=2 if struct.unpack_from('<Q',session)[0]==0x4153373342535332 else 1
-        if len(profile)<528 or struct.unpack_from('<QII',profile)!=(0x3152464f52545353,expected_version,len(profile)):
+        expected_version=4 if struct.unpack_from('<Q',session)[0]==0x4153373342535332 else 3
+        if len(profile)!=1872 or struct.unpack_from('<QII',profile)!=(0x3152464f52545353,expected_version,len(profile)):
             raise ValueError('invalid radio profile')
-        expected=struct.unpack_from('<H',profile,len(profile)-520)[0]
+        policy,dns,reserved,address_timeout,lease_cap=struct.unpack_from('<B4s3sII',profile,1856)
+        if policy not in (0,1) or reserved!=bytes(3) or (policy==0 and (address_timeout or lease_cap)) or (policy==1 and (not address_timeout or not lease_cap)):
+            raise ValueError('invalid fixed/DHCP radio address policy')
+        expected=struct.unpack_from('<H',profile,1336)[0]
         if not 0<expected<=256 or radio_state==0 or radio_bytes!=(expected if radio_state==2 else 0):
             raise ValueError('invalid checked radio result')
     else:

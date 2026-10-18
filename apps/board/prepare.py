@@ -34,8 +34,13 @@ def session_check(raw):
     return workload
 
 def profile_spans(data,session,payload_spans=None):
-    require(len(data)==1856 and struct.unpack_from('<QII',data)==(0x3152464f52545353,2,1856),
+    require(len(data)==1872 and struct.unpack_from('<QII',data)==(0x3152464f52545353,4,1872),
         'Unsupported fixed radio profile geometry.')
+    policy,dns,reserved,address_timeout,lease_cap=struct.unpack_from('<B4s3sII',data,1856)
+    require(policy in (0,1) and reserved==bytes(3) and
+        ((policy==0 and address_timeout==lease_cap==0) or
+         (policy==1 and 0<address_timeout<=(1<<63)-1 and 0<lease_cap<=(1<<63)-1)),
+        'Invalid fixed/DHCP radio address policy.')
     require(struct.unpack_from('<QQ',session,352)==(0x43000000,len(data)) and
         hashlib.sha256(data).digest()==session[368:400],'Profile address/length/digest differs from session.')
     require(all(struct.unpack_from('<Q',data,offset)[0]==0 for offset in (192,200,208,344,360,1232,1288,1320)),

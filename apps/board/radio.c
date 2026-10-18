@@ -224,7 +224,7 @@ static int startup_profile_valid(const struct board_radio_profile *f,const uint8
     const struct board_radio_chip_id *id)
 {
     if(!f||!expected||!id||
-        f->magic!=BOARD_RADIO_PROFILE_MAGIC||f->version!=1||f->bytes!=sizeof(*f)||f->reserved||
+        f->magic!=BOARD_RADIO_PROFILE_MAGIC||f->version!=BOARD_RADIO_PROFILE_VERSION||f->bytes!=sizeof(*f)||f->reserved||!board_radio_profile_network_valid(f)||
         !f->platform_authority||!f->ce_authority||!f->secure_ce_authority||
         !evidence(f->platform_evidence)||!evidence(f->ce_evidence)||!evidence(f->entropy_evidence)||
         !f->entropy_record||!f->characterization_record||!f->startup_test_record||!f->health_enable_epoch||
@@ -284,9 +284,11 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         .ap_rsn_bytes=f->ap_rsn_bytes};
     memcpy(c.security.pmk,f->pmk,sizeof(f->pmk));memcpy(c.security.ap_rsn,f->ap_rsn,sizeof(f->ap_rsn));
     c.network=(struct sunstone_net_config){.bootstrap=owner,.clients={client},.network={
-        .entropy_record=f->entropy_record,.tx_timeout=f->tx_timeout_us,.queue_timeout=f->queue_timeout_ticks}};
+        .entropy_record=f->entropy_record,.tx_timeout=f->tx_timeout_us,.queue_timeout=f->queue_timeout_ticks,
+        .dhcp=f->network_dhcp,.address_timeout=(TickType_t)f->address_timeout_ticks,
+        .lease_cap=(TickType_t)f->lease_cap_ticks}};
     memcpy(c.network.network.address,f->address,4);memcpy(c.network.network.netmask,f->netmask,4);
-    memcpy(c.network.network.gateway,f->gateway,4);
+    memcpy(c.network.network.gateway,f->gateway,4);memcpy(c.network.network.dns,f->network_dns,4);
     if(!board_radio_init(r,&c))return 0;
     r->startup_profile=f;return 1;
 }

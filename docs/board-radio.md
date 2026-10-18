@@ -24,6 +24,28 @@ read-only range `0x43010000..0x43100000`. Boot authority must establish those
 mappings and exclude uploads, DMA and remote writers throughout the lifetime.
 The existing firmware engine verifies the pinned artifact lengths and hashes.
 
+The startup profile occupies 1,872 bytes. Runtime and watchdog profiles use
+version 3; supervised uploads use version 4 and convert to runtime version 3
+after authentication. Earlier sizes and versions are refused. The appended
+network fields preserve every preceding field offset, including the checked
+response length at byte 1,336 and response data at byte 1,600.
+
+| Offset | Wire field | Meaning |
+| --- | --- | --- |
+| 1,856 | `uint8_t network_dhcp` | Zero selects fixed IPv4; one selects DHCP. |
+| 1,857 | `uint8_t network_dns[4]` | Optional IPv4 DNS server; all zero leaves it unspecified. |
+| 1,861 | `uint8_t network_reserved[3]` | Must be zero. |
+| 1,864 | `uint32_t address_timeout_ticks` | DHCP address acquisition timeout in FreeRTOS ticks. |
+| 1,868 | `uint32_t lease_cap_ticks` | Maximum DHCP lease lifetime in FreeRTOS ticks. |
+
+Fixed addressing requires both timing fields to be zero. DHCP requires both
+to be nonzero and no greater than half the runtime maximum tick value. The
+board uses 64-bit ticks, so every nonzero 32-bit wire value meets that upper
+bound. Startup widens these values to `TickType_t` and passes the policy,
+DNS server and timers to the actual network configuration. The profile digest
+covers the appended fields. The supervised preparation tool and result
+observer enforce the same wire policy and fixed response-length offset.
+
 Native startup allocates one actual cached-pool CE page, obtains a CE token
 from the shared registry and constructs the real entropy client under the
 common pool mutex. Other CE clients must use that same session and mutex.
@@ -106,3 +128,10 @@ Host fixtures model lower protocol observations; unused native callback-table
 boundaries abort if invoked. These checks do not execute the native startup
 constructor or qualify physical CE, SID, RF, WPA2 or IPv4 operation. The complete
 native board image supplies the real constructor and provider linkage.
+
+The focused addressing check is `checks/board-addressing.py`. It compiles its
+host fixture before execution and tests authenticated fixed and DHCP profiles,
+reserved bytes, missing timers, incompatible sizes and versions, supervised
+conversion, DNS digest coverage and copied-result decoding. Lower providers
+remain explicit unused fixtures. DHCP acquisition, DNS traffic and physical
+radio operation require separate network and board evidence.

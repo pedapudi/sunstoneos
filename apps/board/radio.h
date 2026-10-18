@@ -51,6 +51,11 @@ struct board_radio {
 /* Pointer-free immutable boot profile, authenticated by the board session.
  * Evidence describes actual external qualification; no field qualifies CE.
  * Firmware addresses name retained read-only image spans, not upload commands. */
+#define BOARD_RADIO_PROFILE_VERSION 3u
+#define BOARD_RADIO_PROFILE_SUPERVISED_VERSION 4u
+#define BOARD_RADIO_PROFILE_BYTES 1872u
+#define BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET 1336u
+#define BOARD_RADIO_PROFILE_NETWORK_OFFSET 1856u
 #define BOARD_RADIO_PROFILE_MAGIC UINT64_C(0x3152464f52545353)
 struct board_radio_profile {
     uint64_t magic;uint32_t version,bytes;
@@ -75,7 +80,19 @@ struct board_radio_profile {
     uint64_t client_deadline_us;
     uint8_t peer_address[4];uint16_t peer_port,request_bytes,response_bytes,reserved;
     uint8_t request[256],response[256];
+    uint8_t network_dhcp,network_dns[4],network_reserved[3];
+    uint32_t address_timeout_ticks,lease_cap_ticks;
 };
+/* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.
+ * Fixed addressing has no acquisition/lease timer; optional DNS is independent. */
+static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
+{
+    if(!p||p->network_dhcp>1||p->network_reserved[0]||p->network_reserved[1]||p->network_reserved[2])return 0;
+    if(!p->network_dhcp)return !p->address_timeout_ticks&&!p->lease_cap_ticks;
+    return p->address_timeout_ticks&&p->lease_cap_ticks&&
+        (TickType_t)p->address_timeout_ticks<=portMAX_DELAY/2&&
+        (TickType_t)p->lease_cap_ticks<=portMAX_DELAY/2;
+}
 /* Keep beside the actual shared native_usb provider, outside radio/source
  * storage. Every future cached-pool or CE consumer must share pool_mutex. */
 struct board_radio_ce_provider {

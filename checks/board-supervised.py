@@ -38,10 +38,10 @@ def run(image,out,source,compiler,command,steps,steps_path):
     spec=importlib.util.spec_from_file_location('board_prepare',source/'apps/board/prepare.py')
     prepare=importlib.util.module_from_spec(spec);spec.loader.exec_module(prepare)
     if steps.get('supervised-profile-spans',{}).get('exit')!=0:
-        profile=bytearray(1856);struct.pack_into('<QII',profile,0,0x3152464f52545353,2,1856)
+        profile=bytearray(1872);struct.pack_into('<QII',profile,0,0x3152464f52545353,4,1872)
         addresses=[0x43010000,0x43011000,0x43012000,0x43013000];lengths=[32]*4
         struct.pack_into('<4Q',profile,432,*addresses);struct.pack_into('<4Q',profile,464,*lengths)
-        session=bytearray(raw);struct.pack_into('<QQ',session,352,0x43000000,1856)
+        session=bytearray(raw);struct.pack_into('<QQ',session,352,0x43000000,1872)
         session[368:400]=hashlib.sha256(profile).digest();spans=list(zip(addresses,lengths))
         assert prepare.profile_spans(profile,session,spans)==spans
         for bad in [spans[:-1],spans[:-1]+[(addresses[-1],33)]]:
@@ -74,12 +74,12 @@ def run(image,out,source,compiler,command,steps,steps_path):
         if steps.get(label,{}).get('exit')==0:continue
         cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);cpu.mem_map(0x40000000,0x4000000);cpu.mem_map(0x50000000,0x10000)
         for address,data in segments:cpu.mem_write(address,data)
-        profile=bytearray(1856);struct.pack_into('<QII',profile,0,0x3152464f52545353,2,1856)
+        profile=bytearray(1872);struct.pack_into('<QII',profile,0,0x3152464f52545353,4,1872)
         profile[88:120]=bytes(range(32)) # Preserve actual qualification bytes exactly; not proof of qualification.
         if mutation is not None:struct.pack_into('<Q',profile,mutation,1)
         session=bytearray(raw);struct.pack_into('<Q',session,160,60000001);struct.pack_into('<Q',session,168,24)
         session[368:400]=hashlib.sha256(profile).digest()
-        cpu.mem_write(0x43000000,bytes(profile));cpu.mem_write(0x43200000,bytes([0xcc])*1856);cpu.mem_write(0x43300000,bytes(session))
+        cpu.mem_write(0x43000000,bytes(profile));cpu.mem_write(0x43200000,bytes([0xcc])*1872);cpu.mem_write(0x43300000,bytes(session))
         for index,value in enumerate([0x43200000,0x43000000,0x43300000,0x43201000]):cpu.reg_write(UC_ARM64_REG_X0+index,value)
         cpu.reg_write(UC_ARM64_REG_SP,0x5000fff0);cpu.reg_write(UC_ARM64_REG_LR,0x50000000)
         stopped=[]
@@ -88,12 +88,12 @@ def run(image,out,source,compiler,command,steps,steps_path):
         cpu.hook_add(UC_HOOK_CODE,finish);cpu.emu_start(symbols['board_radio_profile_runtime'],0,count=1000000)
         assert stopped
         if mutation is None:
-            expected=bytearray(profile);struct.pack_into('<I',expected,8,1)
+            expected=bytearray(profile);struct.pack_into('<I',expected,8,3)
             for offset,value in [(192,2),(344,2),(200,40000001),(208,59990001),(360,40000001),
                                  (1232,40000001),(1288,50000001),(1320,59990001)]:struct.pack_into('<Q',expected,offset,value)
-            assert cpu.reg_read(UC_ARM64_REG_X0)==1 and bytes(cpu.mem_read(0x43200000,1856))==expected
+            assert cpu.reg_read(UC_ARM64_REG_X0)==1 and bytes(cpu.mem_read(0x43200000,1872))==expected
             assert bytes(cpu.mem_read(0x43201000,32))==hashlib.sha256(expected).digest()
-        else:assert cpu.reg_read(UC_ARM64_REG_X0)==0 and bytes(cpu.mem_read(0x43200000,1856))==bytes([0xcc])*1856
+        else:assert cpu.reg_read(UC_ARM64_REG_X0)==0 and bytes(cpu.mem_read(0x43200000,1872))==bytes([0xcc])*1872
         steps[label]={'exit':0};steps_path.write_text(json.dumps(steps,indent=2)+'\n')
     labels=['supervised-usb0-startup','supervised-radio-binding','supervised-software-cutoff','supervised-radio-retention']
     for mode,label in enumerate(labels):

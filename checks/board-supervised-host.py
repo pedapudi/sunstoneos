@@ -37,10 +37,10 @@ def session(workload):
     struct.pack_into('<I',raw,400,workload)
     profile=None
     if workload&1:
-        profile=bytearray(1856);struct.pack_into('<QII',profile,0,0x3152464f52545353,2,len(profile))
+        profile=bytearray(1872);struct.pack_into('<QII',profile,0,0x3152464f52545353,4,len(profile))
         struct.pack_into('<4Q',profile,432,*[0x43010000+n*4096 for n in range(4)])
         struct.pack_into('<4Q',profile,464,*([4096]*4))
-        struct.pack_into('<H',profile,len(profile)-520,3);profile=bytes(profile)
+        struct.pack_into('<H',profile,1336,3);profile=bytes(profile)
         raw[368:400]=hashlib.sha256(profile).digest();struct.pack_into('<2Q',raw,352,0x43000000,len(profile))
     return bytes(raw),profile
 

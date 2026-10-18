@@ -9,9 +9,15 @@
 #include "radio.h"
 _Static_assert(offsetof(struct a733_board_session,radio_profile_digest)==368,"observer session digest");
 _Static_assert(offsetof(struct a733_board_session,workload)==400,"observer workload");
-_Static_assert(offsetof(struct board_radio_profile,response_bytes)==sizeof(struct board_radio_profile)-520,
+_Static_assert(offsetof(struct board_radio_profile,response_bytes)==BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET,
     "observer response extent");
-_Static_assert(sizeof(struct board_radio_profile)==1856 &&
+_Static_assert(offsetof(struct board_radio_profile,response)==1600 &&
+    offsetof(struct board_radio_profile,network_dhcp)==BOARD_RADIO_PROFILE_NETWORK_OFFSET &&
+    offsetof(struct board_radio_profile,network_dns)==1857 &&
+    offsetof(struct board_radio_profile,network_reserved)==1861 &&
+    offsetof(struct board_radio_profile,address_timeout_ticks)==1864 &&
+    offsetof(struct board_radio_profile,lease_cap_ticks)==1868 && sizeof(TickType_t)==8,"network wire suffix");
+_Static_assert(sizeof(struct board_radio_profile)==BOARD_RADIO_PROFILE_BYTES &&
     offsetof(struct board_radio_profile,firmware_address)==432 &&
     offsetof(struct board_radio_profile,firmware_bytes)==464,"offline profile wire geometry");
 _Static_assert(offsetof(struct board_radio_profile,platform)==184 &&
