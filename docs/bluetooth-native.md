@@ -94,3 +94,23 @@ bootstrap-only session readiness, actual shared PM3/PM4 pin acquisition and
 the actual copied result serializer. Existing UART, firmware and HCI protocol
 suites are reused. The full native image link covers real providers separately;
 the models establish no physical controller operation.
+
+The reviewed native image links with the actual shared providers. The focused
+application, bootstrap session, wake-pin and UART deadline cases pass with
+AddressSanitizer and UndefinedBehaviorSanitizer. The offline admission/result
+mutations and the ARM SRAM launcher compile/link also pass. The final ELF SHA256
+is `93a51a0e8b2d5003b1e1709a23706bb90fda6e0fb58a73a797859bc662cf21bc`.
+Exact source, dependency, tool and generated-artifact inputs are retained under
+`~/.cache/sunstoneos/evidence/bluetooth-native-20261017`.
+
+The first wake fixture omitted the required clock lease before entering its
+isolated pin-acquisition checkpoint. Its failure and prior artifact are
+preserved. The corrected baseline acquires that lease through the actual
+platform ACQUIRE step and checks owner, token health, deadline and pin-provider
+initialization before entering PINS. An audit of the remaining fixtures found
+no other omitted entry prerequisites: the UART case uses actual initialization
+through READY, the session case uses actual bootstrap initialization with
+explicit modeled lower-worker completion, and the application case starts at
+its actual public initializer. Completed cases were reused; only the affected
+wake fixture was rebuilt and resumed. These host results establish no physical
+firmware upload or controller identification.

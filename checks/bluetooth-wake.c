@@ -15,6 +15,10 @@ int main(void)
     uint32_t pm2_before=*pmic_model_word(&r.power,pm2.mux_address)&(15u<<pm2.mux_shift);
     /* Earlier admission/resource proofs supply this single new metadata
      * boundary; no card enumeration or firmware operation is replayed. */
+    assert(metadata(&r.radio)==A733_RADIO_PENDING&&r.radio.clock.id);
+    assert(r.radio.clock.owner==r.radio.config.owner&&
+        a733_clock_token_status(&r.power.clocks,&r.radio.clock)==A733_CLOCK_OK&&
+        r.radio.deadline>r.power.now&&r.power.pins.initialized&&radio_current(&r));
     r.radio.stage=PINS;
     assert(metadata(&r.radio)==A733_RADIO_PENDING);
     assert(r.radio.pin_lease.masks[A733_PIN_G]==0x3f&&r.radio.pin_lease.masks[A733_PIN_M]==0x1b);
