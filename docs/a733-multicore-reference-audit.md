@@ -2,7 +2,8 @@
 
 The current failure is unresolved. Core 1 has physically reached EL3, completed
 CPU preparation and returned through verified shutdown. Its local interrupt
-snapshot and EL3 GIC-interface observation also returned successfully. The full initialization attempt returned
+snapshot, EL3 GIC-interface observation and redistributor power handshake also
+returned successfully. The full initialization attempt returned
 neither a report nor ROM access. That result does not identify a failing register.
 
 This comparison is for developers changing A733 startup. It distinguishes
@@ -41,7 +42,7 @@ qualify a complete firmware replacement.
 | Boundary | Reference requirement | SunstoneOS evidence and remaining gap |
 | --- | --- | --- |
 | CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | Core 1 entry, release, CPU preparation and shutdown passed. Other cores remain unqualified. |
-| Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller implements the pinned Arm sequence. The observed core-1 frame permits access, but the initialization attempt has no returned result. |
+| Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered core-1 frame. A transition from powered-off remains unqualified. |
 | Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Physical wake completion has not been observed. |
 | System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |
 | Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | Software checks pass; physical per-core delivery and scheduling remain unqualified. |
@@ -121,8 +122,27 @@ The controller and local cleanup write counts remain zero. Matching shutdown,
 independently observed OFF, shared-state restoration and saved DRAM comparison
 all pass; ROM returns as `003:094`. This establishes the interface interval for
 the observed state. It does not identify the earlier initialization failure.
-The next observation can start from controller discovery and the power-write
-boundary while preserving this successful entry and return path.
+Controller discovery and core wake-control preparation also pass physically under
+`native-before-power-current-20261018/native/runtime/`. The callback refuses the
+first power write before issuing it. The local bank and wake control restore;
+matched shutdown/OFF and ROM return complete as `003:095`.
+
+The next profile completes the production power handshake and refuses the first
+WAKER write before MMIO. Its compiled callback records this distinct boundary.
+Cleanup requires the original PWRR and unchanged local bank, then restores core
+wake control before shutdown. Three instruction cases pass: normal completion,
+one rejected power request and retained refusal on a changed baseline. A fixture
+repair advances modeled time after any secondary parks without acknowledgment;
+only the affected refusal case was rerun.
+
+Physical execution passes under `native-before-wake-20261018/native/runtime/`.
+The controller reaches phase 8 with three attempted writes: core wake control,
+PWRR zero and the refused WAKER write. PWRR remains `0x100`, WAKER remains `6`,
+and the saved local interrupt state matches. Matching shutdown, observed OFF,
+shared-state restoration and saved DRAM comparison pass; ROM returns as
+`003:096`. This establishes the handshake for an already-powered frame, not a
+power-off-to-on transition. Redistributor wake, local configuration and their
+cleanup remain the unobserved interval of the earlier failure.
 
 Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.

@@ -115,7 +115,7 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:094` after a successful interface-only diagnostic. Fresh DDR,
+instance `003:096` after successful interface, discovery and power-handshake diagnostics. Fresh DDR,
 survey and all-secondary-OFF checks passed on `003:092` before that launch.
 The diagnostic returned normally and its process and queue claim closed.
 The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
@@ -308,16 +308,19 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:094`. The user confirmed power
+The original board on `3-1` returned as `003:096`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
-The subsequent CPU-interface diagnostic returned normally. Refresh the current
+Subsequent interface, controller-discovery and power-handshake diagnostics
+returned normally. The latest evidence is under
+`native-before-wake-20261018/native/runtime/`. Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
 `003:093`, has successful DDR, returning survey, SD initial-register and PMIC
-evidence. Preserve its recorded DDR continuity through the normal return; refresh
-the warm launcher survey without repeating DDR training.
+evidence. Its warm launcher survey and cache-off preparation also pass under
+`warm-093-preparation/`; DMA0 remains reset with both bus gates masked. Preserve
+its recorded DDR continuity without repeating training.
 Both have reconnect permissions. The common access helper selects each port
 through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
 Queue assignments are in [the board-test procedure](board-test-queue.md).
@@ -558,8 +561,9 @@ The primary agent handles all further multicore work directly.
    diagnostic refusals that currently produce no returned report.
    A narrower overlay now stops before the first redistributor write and verifies
    unchanged local state before shutdown. Two instruction cases pass under
-   `native-before-power-20261018/`; it has no physical result. Hold that attempt
-   until the source trace supports a specific question and observable outcomes.
+   `native-before-power-20261018/`. The identical payload passes physically under
+   `native-before-power-current-20261018/`, with unchanged local state and ROM
+   return as `003:095`.
    The interface-only profile now stops after EL3 GIC access and group-enable
    reads, before calling the controller. Three focused instruction cases pass
    under `native-cpu-interface-20261018/`, including retained SRE and group-enable
@@ -567,8 +571,13 @@ The primary agent handles all further multicore work directly.
    writes in that interval. Physical execution also passes: SRE changes from
    `0x9` to `0xf`, both group-enable reads are zero, and matched shutdown/OFF,
    shared-state restoration and saved DRAM comparison succeed. ROM returns as
-   `003:094`. Next inspect controller discovery through the power-write boundary;
-   do not repeat the full initialization attempt without isolating its outcome.
+   `003:094`. The power-handshake profile then passes physically under
+   `native-before-wake-20261018/`: PWRR remains `0x100`, WAKER remains `6`, and
+   the callback refuses WAKER before writing it. Local state and wake control
+   restore, matched shutdown/OFF completes, and ROM returns as `003:096`.
+   Three focused instruction cases cover completion, one rejected power request
+   and retained baseline mismatch. Next isolate redistributor wake and local
+   configuration; the earlier full-initialization failure remains unexplained.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
@@ -580,12 +589,20 @@ The primary agent handles all further multicore work directly.
    Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)
    and its existing entry requirements. USB enumeration alone does not establish
    diagnostic success.
-3. Use the integrated read-only SD application for initial card identification
+3. The second board's single-core SD launch candidate is prepared under
+   `second-board-20261018-3-3/single-core-admission/candidate-093/`. Its remaining
+   card-state question is whether board and card were unpowered before initial
+   attachment. ROM source shows native initialization without a 1.8 V request,
+   but cannot establish an unknown card's state. Await that factual answer before
+   setting the native 3.3 V signaling admission. Use the integrated read-only SD application for initial card identification
    and a sector-zero read after actual controller, memory and supply admission.
    Preserve the inserted card's contents. The separate maintenance image needs
    card/range ownership, protected backups and its qualified watchdog procedure;
    it is not the first discovery path.
-4. Establish actual power, memory and recovery admission for the integrated GPU,
+4. GPU work is adapting the existing single-core startup for initial compute
+   validation independently of SMP. It must preserve sealed memory admission,
+   protected page tables and the required all-core mode. No physical GPU result
+   exists. Establish actual power, memory and recovery admission for the integrated GPU,
    NPU, codec, RTC and thermal applications. Their internal operations can advance
    without camera, display or microphone accessories. Retained buffers do not
    establish completed device writes or permit resource reuse. The larger memory

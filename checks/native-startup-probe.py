@@ -20,7 +20,8 @@ m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle
 assert bundle['image_sha256']==host.NATIVE and bundle['launcher_sha256']==host.LAUNCH
 before_power=m.get('stop_before_power',False)
 after_interface=m.get('stop_after_cpu_interface',False)
-profile=host.execution_profile(before_power,after_interface)
+before_wake=m.get('stop_before_wake',False)
+profile=host.execution_profile(before_power,after_interface,before_wake)
 assert m.get('execution_profile')==profile
 ops={};labels={}
 for path in (a.bundle/'image.elf',a.build/'overlay.elf'):
@@ -105,8 +106,13 @@ def check(name,scenario='normal'):
                 cleanup_state=struct.unpack('<Q',uc.mem_read(0x42002100,8))[0]
                 activation_state=struct.unpack('<Q',uc.mem_read(0x42002400,8))[0]
                 rdist_state=struct.unpack('<Q',uc.mem_read(0x42002500,8))[0]
-                step=500000 if ((scenario=='wake-timeout' and rdist_writes) or (scenario in ('cleanup-fault','prepower-baseline-fault') and secondary_terminal) or scenario in ('capture-fault','frame-read-fault','target-restore-fault') and secondary_terminal or scenario=='wake-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
-                if scenario in ('interface-group-enabled','interface-sre-refusal') and secondary_terminal:step=500000
+                # Any parked secondary without a shutdown ACK leaves only the
+                # primary deadline running. Advance that modeled wait by state,
+                # so adding a refusal case does not need another scenario list.
+                ack=struct.unpack('<Q',uc.mem_read(0x42002418,8))[0]
+                retained_wait=secondary_terminal and not ack
+                step=500000 if (retained_wait or scenario=='wake-timeout' and rdist_writes or
+                    secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
                 value=(ticks[-1] if ticks else 200)+step;ticks.append(value)
             else:assert key in registers,(name,key,hex(address));value=registers[key]
             uc.reg_write(UC_ARM64_REG_X0+int(read[1]),value);uc.reg_write(UC_ARM64_REG_PC,address+4)
@@ -150,7 +156,7 @@ def check(name,scenario='normal'):
                     gbase+0x300:'active',gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
                 data=rdist[keys[address]]
                 if address==rbase and rdist['rwp']:data|=8;rdist['rwp']-=1
-                if address==gbase+0x80 and (scenario=='cleanup-fault' and init['state']==2 or scenario=='prepower-baseline-fault' and init['stopped_before_power']):data^=1
+                if address==gbase+0x80 and (scenario=='cleanup-fault' and init['state']==2 or scenario=='prepower-baseline-fault' and init['stopped_before_power'] or scenario=='prewake-baseline-fault' and init['stopped_before_wake']):data^=1
             uc.mem_write(address,data.to_bytes(size,'little'));typer_reads.append(address);return
         if address in power_registers:
             assert size==4;power_reads.append(address)
@@ -173,6 +179,7 @@ def check(name,scenario='normal'):
         if address==0x42005118 and value:commands.append(value)
         if 0x03460000<=address<0x03560000:
             assert not before_power,'Early diagnostic cannot write a redistributor.'
+            if before_wake:assert address==rbase+0x24,'Power-only diagnostic cannot write WAKER or SGI/PPI state.'
             assert size==4 and active[0]==1
             assert struct.unpack('<Q',uc.mem_read(0x42002900,8))[0]==2
             assert not (per_core[1]['icc_igrpen0_el1']&1 or per_core[1]['icc_igrpen1_el3']&3)
@@ -257,9 +264,11 @@ def check(name,scenario='normal'):
         if scenario=='interface-group-enabled':assert initialization['igrpen1']==2
         else:assert initialization['sre_after']==0 and injected
         reports.append({'name':name,'retained':True,'initialization':initialization,'activation':activation});return
-    if scenario=='prepower-baseline-fault':
-        assert before_power and stopped==['park'] and observation['state']==1 and not activation['ack']
-        assert initialization['stopped_before_power']==1 and initialization['state']==1 and not rdist_writes
+    if scenario in ('prepower-baseline-fault','prewake-baseline-fault'):
+        assert stopped==['park'] and observation['state']==1 and not activation['ack']
+        assert initialization['state']==1
+        if before_power:assert initialization['stopped_before_power']==1 and not rdist_writes
+        else:assert before_wake and initialization['stopped_before_wake']==1 and rdist_writes==[[rbase+0x24,0]]
         assert initialization['controller_state']==5 and initialization['error']==1
         assert initialization['group']!=original_rdist['group'] and not initialization['cleanup_writes']
         reports.append({'name':name,'retained':True,'initialization':initialization,'activation':activation});return
@@ -305,7 +314,7 @@ def check(name,scenario='normal'):
     assert secondary['power']['state']==2 and secondary['power']['step']==18 and secondary['power']['writes_attempted']==7
     expected_power=[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
         [1,2,0x07050224,0x40],[1,2,0x07050204,0x10002],[0,4,0x07050204,0x10000],[0,4,0x07050224,0x40]]
-    if initialization['state']==3 or initialization['stopped_before_power']:expected_power[4:4]=[[1,1,0x07050204,0x10000],[1,1,0x07050204,0x10000]]
+    if initialization['state']==3 or initialization['stopped_before_power'] or initialization['stopped_before_wake']:expected_power[4:4]=[[1,1,0x07050204,0x10000],[1,1,0x07050204,0x10000]]
     assert power_writes==expected_power
     assert observation['core']==1 and observation['MPIDR_EL1']==0x81000100
     assert observation['gicr_state']==rdist_record['state']==1
@@ -342,9 +351,16 @@ def check(name,scenario='normal'):
         assert not any(initialization[k] for k in ('controller_state','phase','error','writes','cleanup_error',
                                                   'cleanup_writes','stopped_before_power'))
         assert typer_reads==expected_frame_reads and not rdist_writes and not sleep_attempted
-    elif before_power:
-        assert initialization['state']==4 and initialization['stopped_before_power']==1 and not rdist_writes
-        assert initialization['controller_state']==5 and initialization['error']==1 and initialization['writes']==2
+    elif before_power or before_wake:
+        assert initialization['state']==4
+        if before_power:
+            assert initialization['stopped_before_power']==1 and not rdist_writes and initialization['writes']==2
+        else:
+            assert initialization['stopped_before_wake']==1 and initialization['phase']==8
+            assert not initialization['stopped_before_power'] and not initialization['cpu_interface_observed']
+            assert initialization['writes']==(4 if scenario=='power-reject' else 3)
+            assert rdist_writes==[[rbase+0x24,0]]*(2 if scenario=='power-reject' else 1)
+        assert initialization['controller_state']==5 and initialization['error']==1
         assert initialization['cleanup_writes']==1 and initialization['cleanup_error']==0
         assert initialization['epoch']==bundle['epoch'] and initialization['core']==1
         assert initialization['redistributor']==rbase and initialization['sre_after']==7
@@ -374,6 +390,10 @@ if after_interface:
 elif before_power:
     check('pre-power-boundary-and-unchanged-local-state')
     check('pre-power-state-mismatch-retains-without-shutdown','prepower-baseline-fault')
+elif before_wake:
+    check('power-handshake-and-asleep-state-restored')
+    check('power-handshake-retries-rejected-request','power-reject')
+    check('pre-wake-state-mismatch-retains-without-shutdown','prewake-baseline-fault')
 else:
     check('current-controller-ready-and-local-state-restored')
     check('current-controller-retries-one-rejected-power-request','power-reject')

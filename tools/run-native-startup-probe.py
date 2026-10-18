@@ -26,10 +26,11 @@ OVERLAY=(0x41020000,0x4000)
 PROFILE='core1-local-interrupt-init-v1'
 EARLY_PROFILE='core1-before-redistributor-write-v1'
 INTERFACE_PROFILE='core1-cpu-interface-only-v1'
+POWER_PROFILE='core1-before-redistributor-wake-v1'
 
-def execution_profile(before_power,after_interface):
-    require(not (before_power and after_interface),'Choose one diagnostic boundary.')
-    return INTERFACE_PROFILE if after_interface else EARLY_PROFILE if before_power else PROFILE
+def execution_profile(before_power,after_interface,before_wake=False):
+    require(sum((before_power,after_interface,before_wake))<=1,'Choose one diagnostic boundary.')
+    return POWER_PROFILE if before_wake else INTERFACE_PROFILE if after_interface else EARLY_PROFILE if before_power else PROFILE
 SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
     'boot/a733/native-local-interrupt-probe.c','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
@@ -57,7 +58,7 @@ def prepare(a):
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
     a.build.mkdir(parents=True,exist_ok=False)
-    profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface)
+    profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake)
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],
         [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
@@ -70,6 +71,7 @@ def prepare(a):
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
             '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_PROBE_STOP_BEFORE_POWER=1'] if a.stop_before_power else []),
             *(['-DSUNSTONE_PROBE_STOP_AFTER_CPU_INTERFACE=1'] if a.stop_after_cpu_interface else []),
+            *(['-DSUNSTONE_PROBE_STOP_BEFORE_WAKE=1'] if a.stop_before_wake else []),
             '-I',ROOT/'include','-I',ROOT/'runtime/include','-c',source,'-o',obj])
     commands.extend([[a.lld,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
         [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']])
@@ -108,6 +110,7 @@ def prepare(a):
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':profile,'native_sha256':NATIVE,
         'stop_before_power':a.stop_before_power,
         'stop_after_cpu_interface':a.stop_after_cpu_interface,
+        'stop_before_wake':a.stop_before_wake,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
         'sources':{name:digest(ROOT/name) for name in SOURCES},
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
@@ -177,7 +180,7 @@ def local_initialization_snapshot(raw):
     names=('state','epoch','core','deadline','controller_state','phase','error','writes',
         'redistributor','original_control','restored_control','sre_before','sre_after',
         'igrpen0','igrpen1','waker','enable','pending','active','group','modifier',
-        'config','priority','pwrr','cleanup_error','cleanup_writes','stopped_before_power','cpu_interface_observed')
+        'config','priority','pwrr','cleanup_error','cleanup_writes','stopped_before_power','cpu_interface_observed','stopped_before_wake')
     return dict(zip(names,struct.unpack('<32Q',raw)))
 
 def activation_snapshot(raw):
@@ -226,7 +229,8 @@ def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     require(type(m.get('stop_before_power')) is bool,'Missing diagnostic boundary.')
     require(type(m.get('stop_after_cpu_interface',False)) is bool,'Invalid CPU-interface boundary.')
-    profile=execution_profile(m['stop_before_power'],m.get('stop_after_cpu_interface',False))
+    require(type(m.get('stop_before_wake',False)) is bool,'Invalid redistributor wake boundary.')
+    profile=execution_profile(m['stop_before_power'],m.get('stop_after_cpu_interface',False),m.get('stop_before_wake',False))
     require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
     require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
@@ -328,11 +332,12 @@ def run(a):
                     if local['state']==2:
                         require(init['state'] in (3,4) and init['epoch']==observation['epoch'] and init['core']==1,'Local initialization did not complete or refuse safely.')
                         before_power=init['state']==4 and init['stopped_before_power']==1
+                        before_wake=init['state']==4 and init['stopped_before_wake']==1
                         if init['cpu_interface_observed']:
                             require(m.get('stop_after_cpu_interface') is True and init['state']==4 and
                                 (init['sre_after']&7)==7 and not (init['igrpen0']&1 or init['igrpen1']&3) and
                                 not any(init[k] for k in ('controller_state','phase','error','writes','cleanup_writes',
-                                                         'cleanup_error','stopped_before_power')),
+                                                         'cleanup_error','stopped_before_power','stopped_before_wake')),
                                 'CPU-interface-only boundary differs.')
                         if m.get('stop_after_cpu_interface'):
                             require(init['cpu_interface_observed']==1,'CPU-interface observation missing.')
@@ -340,9 +345,15 @@ def run(a):
                             require(m['stop_before_power'] and init['controller_state']==5 and init['error']==1 and
                                 init['writes']==2 and init['cleanup_writes']==1 and init['cleanup_error']==0,
                                 'Pre-write boundary differs.')
-                        if init['state']==3 or before_power:
+                        if before_wake:
+                            require(m.get('stop_before_wake') is True and init['controller_state']==5 and init['phase']==8 and
+                                init['error']==1 and init['writes']>=3 and init['cleanup_writes']==1 and
+                                not any(init[k] for k in ('cleanup_error','stopped_before_power','cpu_interface_observed')),
+                                'Pre-wake boundary differs.')
+                        if init['state']==3 or before_power or before_wake:
                             if init['state']==3:
-                                require(not m['stop_before_power'] and init['stopped_before_power']==0 and
+                                require(not m['stop_before_power'] and not m.get('stop_before_wake',False) and
+                                    init['stopped_before_power']==init['stopped_before_wake']==0 and
                                     init['controller_state']==2 and init['error']==init['cleanup_error']==0,
                                     'Local initialization differs.')
                             require(init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
@@ -351,6 +362,7 @@ def run(a):
                                 init['pwrr']==local['pwrr_after'], 'Local interrupt restoration differs.')
                     record['before_power_observed']=init['state']==4 and init['stopped_before_power']==1
                     record['cpu_interface_observed']=init['cpu_interface_observed']==1
+                    record['before_wake_observed']=init['state']==4 and init['stopped_before_wake']==1
                     record['local_initialization_observed']=init['state']==3
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
@@ -373,6 +385,7 @@ def main():
     boundary=build.add_mutually_exclusive_group()
     boundary.add_argument('--stop-before-power',action='store_true',help='Stop before the first redistributor write and restore unchanged local state.')
     boundary.add_argument('--stop-after-cpu-interface',action='store_true',help='Observe EL3 GIC access and disabled groups without invoking the local controller.')
+    boundary.add_argument('--stop-before-wake',action='store_true',help='Complete the redistributor power handshake, then stop before WAKER and preserve the asleep state.')
     live=sub.add_parser('run')
     for name in ('build','bundle','software','survey','database','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
     live.add_argument('--claim',required=True);live.add_argument('--owner',required=True);a=p.parse_args()

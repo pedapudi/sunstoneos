@@ -10,7 +10,7 @@ struct result {
     uint64_t redistributor, original_control, restored_control, sre_before, sre_after;
     uint64_t igrpen0, igrpen1, waker, enable, pending, active, group, modifier;
     uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power;
-    uint64_t cpu_interface_observed, reserved[4];
+    uint64_t cpu_interface_observed, stopped_before_wake, reserved[3];
 };
 _Static_assert(sizeof(struct result)==256,"Host result layout");
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
@@ -41,6 +41,13 @@ static int write32(void *context,uintptr_t a,uint32_t v)
         volatile struct result *r=(void *)UINT32_C(0x42002980);
         r->stopped_before_power=1;
         return 0; /* Deliberate callback refusal; no redistributor write occurs. */
+    }
+#endif
+#if defined(SUNSTONE_PROBE_STOP_BEFORE_WAKE)
+    if(a==0x03480014) {
+        volatile struct result *r=(void *)UINT32_C(0x42002980);
+        r->stopped_before_wake=1;
+        return 0; /* Power handshake completed; do not wake the interface. */
     }
 #endif
     if(a!=0x07050204 && a!=0x03480014 && a!=0x03480024 &&
@@ -138,11 +145,13 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
     while(a733_cpu_continue_poll(&state)==A733_CONTINUE_PENDING) {}
     r->controller_state=state.state;r->phase=state.phase;r->error=state.error;
     r->writes=state.writes_attempted;r->redistributor=state.redistributor;
-#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER)
-    if(r->stopped_before_power && state.state==A733_CONTINUE_RETAINED &&
-       state.redistributor==b->base && state.writes_attempted==2) {
-        /* Only the core wake-control write ran. Verify the untouched local bank
-         * and restore that control before the existing target shutdown. */
+#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER) || defined(SUNSTONE_PROBE_STOP_BEFORE_WAKE)
+    if(((r->stopped_before_power && state.writes_attempted==2) ||
+        (r->stopped_before_wake && state.writes_attempted>=3)) &&
+       state.state==A733_CONTINUE_RETAINED && state.redistributor==b->base) {
+        /* No WAKER or SGI/PPI writes ran. A completed power-on request leaves
+         * this initially powered frame on. Require its exact original state
+         * before restoring core wake control and using the asleep shutdown. */
         r->pwrr=load(0x03480024);
         if(r->pwrr!=b->pwrr)return 0;
         r->waker=load(0x03480014);r->enable=load(0x03490100);
