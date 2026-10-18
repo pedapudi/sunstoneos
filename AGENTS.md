@@ -72,6 +72,29 @@ handoff, or final response does not invalidate successful test evidence.
 - Keep handoffs concise: changed behavior, exact inputs, result, remaining gap.
   Use existing evidence tools; do not add a reporting system for bookkeeping.
 
+## Development and board-test pipeline
+
+- Assign complete device paths: native image, host launch and capture, focused
+  checks, and a bounded physical test request. Agree on their shared interfaces
+  early so host integration can proceed alongside native implementation.
+- Finish current assignments before opening more work. Default to three active
+  device paths; add another only when it has independent ownership and will not
+  delay integration or physical testing of completed work.
+- The coordinator integrates completed paths and prepares the next eligible
+  board test while workers continue implementation. Prioritize tests that unblock
+  shared startup or several devices, then ready paths with available peripherals.
+- Freeze each submitted image and its required inputs in the existing evidence
+  directory. Workers may continue editing and building in separate directories
+  while that image waits or runs. Physical results apply to the frozen inputs.
+- Waiting for the board does not block software work. Pause only work whose next
+  decision depends on the physical result; continue independent integration gaps.
+- Review ownership and hardware risks early. Check fixture compatibility before
+  a long batch, and resume only affected steps after a fixture repair. Review
+  changed behavior and unresolved findings without repeating accepted reviews.
+- Use the existing queue, evidence records and dashboard. Group physical cases
+  only when their resource ownership and recovery conditions permit safe reuse.
+  A retained or failed session still requires its prescribed recovery.
+
 ## Hardware access
 
 - Parallel workers develop in isolated worktrees and use separate build/evidence
