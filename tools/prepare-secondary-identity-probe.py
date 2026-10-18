@@ -33,7 +33,9 @@ def cached_patch_points(native):
 
 
 def prepare(args):
-    coherent=getattr(args,"coherent",False)
+    interrupts=getattr(args,"interrupts",False)
+    coherent=getattr(args,"coherent",False) or interrupts
+    extension=0x41020800 if interrupts else EXTENSION
     cached=getattr(args,"cached",False) or coherent
     local=getattr(args,"local",False) or cached
     report=(REPORT[0],0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else REPORT
@@ -55,11 +57,11 @@ def prepare(args):
         native={n:address(n) for n in names}
     require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
-    require(len(frozen['overlay.bin'])<=EXTENSION-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
+    require(len(frozen['overlay.bin'])<=extension-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
     args.output.mkdir(parents=True,exist_ok=False)
     link=args.output/'identity.ld'
-    link.write_text('''ENTRY(identity_primary_gate)
-SECTIONS {
+    vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
+    link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+'''
  . = 0x41021000;
  .text : { *(.text .text.*) *(.rodata .rodata.*) }
  .data : { *(.data .data.*) }
@@ -75,12 +77,14 @@ SECTIONS {
     if local:units += [('boot/a733/secondary-local-probe.c','local.o'),('boot/a733/secondary-distributor-probe.c','distributor.o')]
     if cached:units += [('boot/a733/native-el3-cache-probe.S','el3-cache.o'),('boot/a733/native-el1-cache-probe.S','el1-cache.o')]
     if coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
+    if interrupts:units += [('boot/a733/secondary-interrupt-probe.S','interrupt.o')]
     for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
             '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_SECONDARY_LOCAL=1'] if local else []),
             *(['-DSUNSTONE_SECONDARY_CACHE=1','-DSUNSTONE_PROBE_EL1_CACHE=1'] if cached else []),
-            *(['-DSUNSTONE_SECONDARY_COHERENCE=1'] if coherent else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
+            *(['-DSUNSTONE_SECONDARY_COHERENCE=1'] if coherent else []),
+            *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
     if cached:
@@ -109,7 +113,7 @@ SECTIONS {
     require(struct.unpack_from('<Q',overlay,offset+4*displacement)[0]==0x08001004,'Return destination differs.')
     replacement=branch(return_address,hooks['identity_primary_gate'])
     struct.pack_into('<I',overlay,offset,replacement)
-    overlay+=bytes(EXTENSION-primary.probe.OVERLAY[0]-len(overlay))
+    overlay+=bytes(extension-primary.probe.OVERLAY[0]-len(overlay))
     overlay+=(args.output/'identity.bin').read_bytes()
     require(len(overlay)<=primary.probe.OVERLAY[1],'Composite overlay too large.')
     (args.output/'overlay.bin').write_bytes(overlay)
@@ -138,7 +142,8 @@ SECTIONS {
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
     if coherent:names+=('boot/a733/secondary-coherence-probe.S',)
-    manifest={'schema':'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
+    if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
+    manifest={'schema':'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
@@ -146,7 +151,7 @@ SECTIONS {
         'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('Prepared sequential '+('concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
+    print('Prepared sequential '+('timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
 
 if __name__=='__main__':
@@ -156,4 +161,5 @@ if __name__=='__main__':
     parser.add_argument("--local",action="store_true",help="Include actual CPU preparation and local GIC setup/restoration")
     parser.add_argument("--cached",action="store_true",help="Include production cached EL1 entry and restored SMC return")
     parser.add_argument("--coherent",action="store_true",help="Run seven concurrent EL1 shared-memory participants before restored return")
+    parser.add_argument("--interrupts",action="store_true",help="Deliver one timer PPI and peer SGI on every secondary before cleaned return")
     prepare(parser.parse_args())

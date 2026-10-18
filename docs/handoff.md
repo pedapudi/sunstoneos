@@ -1,20 +1,30 @@
 # Current work
 
-All seven secondary cores now pass concurrent cached shared-memory exchange
-on the original board. Each performs 32 atomic increments and 32 ordered payload
-transfers. All participants stop writing before each cleans the shared page
-through its Nonsecure mapping. After exact control/local-state restoration and
-independently observed OFF on every target, the primary copies the resulting
-4 KiB physical page; every byte matches the expected content. Shared distributor
-and saved DRAM restoration also pass. Evidence:
-`secondary-coherence-probe-20261018/physical-113/runtime/`.
-The runner exited and its claim closed as passed. Current ROM is `003:114`,
-identity `[7,2753,1097073,0,0]`, on port `3-1`. No reconnect is needed.
-Interrupt delivery, boot-CPU participation in cached exchange and eight-core
-FreeRTOS scheduling remain outstanding. Preserve DDR continuity and refresh
-warm launcher state before the next native operation. The demonstrated cache
-cleanup covers the known single-page write set; general OS teardown remains
-unqualified.
+All seven secondary cores now pass timer and inter-core interrupt delivery on
+the original board. Each receives one timer PPI30 and one peer SGI0 during
+concurrent cached execution. Every participant stops delivery with no pending or
+active interrupts, restores its timer priority, completes shared-page cache
+cleaning and restores the Secure priority mask before shutdown. Matching OFF,
+the complete physical-page comparison, shared GIC restoration and saved DRAM
+restoration pass. Evidence: `secondary-interrupt-probe-20261018/physical-114/runtime/`.
+The runner exited and its claim closed as passed. Current ROM is `003:115`,
+identity `[7,2770,1097074,0,0]`, on port `3-1`. No reconnect is needed.
+
+The production cached entry now initializes the Secure interrupt priority mask
+before entering Nonsecure EL1. Arm's access rules can otherwise ignore the EL1
+write. The physical diagnostic supplied this correction around the previous
+frozen ELF; the complete FreeRTOS image still needs rebuilding with it.
+The dedicated interrupt model now represents Secure mask restrictions and
+Nonsecure priority scaling. The broader scheduling model still needs the same
+correction before its next run. Three focused instruction cases and six host
+groups pass under `secondary-interrupt-probe-20261018/`; the source audit records
+the Arm/TF-A references and GIC-600 errata scope.
+
+Boot-CPU participation, general task-context handling, broader runtime memory
+cleanup and eight-core FreeRTOS scheduling remain outstanding. Preserve DDR
+continuity and refresh warm launcher state before the next native operation.
+The demonstrated interrupt cleanup covers SGI0/PPI30 and a single shared page;
+it does not qualify general peripheral interrupt or OS shutdown.
 
 The second board completed the 21-register PMIC probe and returned as `003:112`,
 identity `[7,2745,1097071,0,0]`, on port `3-3`. DCDC2 is enabled and programmed
@@ -383,15 +393,15 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned successfully as `003:114`, identity
-`[7,2753,1097073,0,0]`, after concurrent cached exchange across all seven
-secondaries. The shared counter reaches 224, and 224 ordered payload transfers
-complete. Every target cleans all 64 lines of the shared page and restores its
-translation/local interrupt state before matching shutdown acknowledgment and
-independently observed OFF. The copied physical page matches all 4,096 expected
-bytes. Shared distributor and saved DRAM restoration pass; all 45 host
-transactions succeed. The runner exited and its claim closed as passed.
-Evidence: `secondary-coherence-probe-20261018/physical-113/runtime/`.
+The original board on `3-1` returned successfully as `003:115`, identity
+`[7,2770,1097074,0,0]`, after seven-secondary cached exchange and timer/peer
+interrupt delivery. Each target handles one PPI30 and one SGI0, then disables
+delivery and confirms no pending or active interrupt. Priority restoration,
+64-line cache cleaning, target control/local-state restoration and observed OFF
+all pass. The copied 4 KiB physical page matches completely. Shared distributor
+and saved DRAM restoration pass; all 45 host transactions succeed. The runner
+exited and its claim closed. Evidence:
+`secondary-interrupt-probe-20261018/physical-114/runtime/`.
 
 The preceding primary-preparation diagnostic returned as `003:109`.
 Its report confirms completed preparation and exact EL3/EL1 control restoration;
@@ -633,49 +643,21 @@ does not call. Input comparisons are under
 
 ## Next actions
 
-The updated complete supervised eight-core image is frozen under
-`smp-ns-publication-20261018/`: ELF SHA-256
+Rebuild the complete eight-core image with Secure PMR initialization in
+`platform/a733-smp-cached/continue.S`. The old frozen ELF under
+`smp-ns-publication-20261018/` has hash
 `762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
-It includes required-interrupt-mask verification and Nonsecure code/data/table
-publication before secondary release. Four routine cases and one actual-boot
-case pass; the snapshot records 89 compiler inputs and 34 linked objects. Reuse
-these results. The final caller order blocks EL1 walks before temporary EL3
-mapping; unchanged routine evidence is explicitly reconciled in
-`publication-reuse.json`. One further instruction-model case reaches cached EL1 on all eight cores.
-The prepared full image was then launched once on the original board; USB
-disappeared and no native observer result arrived. Do not repeat it unchanged.
-The returning primary-setup diagnostic now passes physically on that complete
-image. Its unchanged production preparation function completes before the return
-checkpoint; the checked EL3/EL1 controls and saved DRAM restore, and ROM returns
-as `003:109`. Two instruction cases and five host cases cover the overlay,
-restoration and retained failure. Evidence is under
-`primary-publication-probe-20261018/`. Host transport uses the existing runner;
-only its `run` function changed, adding the new profile while retaining common
-queue, lock, transfer and failure handling. Successful cases were reused after a
-fixture command-log repair. The next CPU observation must address later startup;
-primary preparation success on this recovered run does not locate the earlier
-unobserved full-image failure. Do not reuse old fixed overlay addresses.
-The second board was not accessed.
+Its returning diagnostics now establish preparation, all-secondary cached
+execution, shared-memory exchange and SGI/PPI delivery. The interrupt overlay
+supplies the PMR correction; it does not change the original ELF. Rebuilding
+changes the overlay ABI, so derive new symbol/patch bindings if another overlay
+is needed. Preserve existing successful evidence for unchanged components.
 
-A returning sequential survey for cores 2–7 is prepared under
-`secondary-identity-probe-20261018/`. It calls the complete image's unchanged
-power and entry controllers, records each core's identity and reset controls,
-and requires matching shutdown acknowledgment plus observed OFF before restoring
-its configuration. Three instruction cases and five host cases pass. The primary
-preparation prefix was reused for the two failure cases. The first board's warm
-survey, unchanged cache-off helper and follow-up survey pass on `003:109`;
-DDR continuity is preserved. The sequential survey then passed physically on
-all six targets and returned as `003:110`. Cores 2–5 identify as A55 r2p0;
-cores 6–7 identify as A76 r4p1. The A76 targets reported different nonzero
-TCR_EL1 values, reinforcing the requirement to preserve each target's own
-controls. All six PPU observations had OFF in the low state bits. The runner
-exited and its claim closed. No reconnect is needed.
-
-Production CPU preparation and local initialization now also pass on all seven
-secondaries under `secondary-local-probe-20261018/physical-110/`. Next extend
-the core-1 cached-entry result to the remaining cores, then establish concurrent
-coherence and delivery. Do not repeat the unobserved full launch unchanged.
-Interrupt delivery, mutable cache coherence and scheduling remain outstanding.
+The complete-image instruction model previously treated PMR as unrestricted.
+Port the Secure/Nonsecure access semantics from the dedicated interrupt model
+before using it to validate the corrected scheduling image. Review the real
+context handlers and the complete runtime write set before physical execution;
+the single-page diagnostic does not establish general cache cleanup.
 
 The [GPU publication audit](gpu-single-core-publication.md) supports retaining
 its frozen image under the existing clean-entry contract. PMIC return101 is a
@@ -693,18 +675,19 @@ recordings and model identities remain the reference.
 The primary agent handles all further multicore diagnosis, implementation,
 review and physical tests directly. All seven secondaries pass production CPU
 preparation, local interrupt initialization, cached EL3/EL1 entry, concurrent
-shared-memory exchange, explicit cache cleaning and restored shutdown. Current
-physical evidence: `secondary-coherence-probe-20261018/physical-113/runtime/`.
+shared-memory exchange, timer/peer interrupt delivery, explicit cache cleaning
+and restored shutdown. Current physical evidence:
+`secondary-interrupt-probe-20261018/physical-114/runtime/`.
 The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
 observations.
 
-1. Establish per-core timer and inter-core interrupt delivery using the proven
-   entry and cleanup paths. Revisit GIC shutdown errata before enabling delivery.
-   The shared-memory result covers a single owned page across seven secondaries;
-   boot-CPU participation and broader runtime memory use remain unqualified.
-   Preserve the final-store barrier and Nonsecure clean/invalidate completion
-   before shutdown. Preserve DDR continuity and refresh warm launcher state.
+1. Integrate the Secure PMR correction into the full runtime image and its
+   model, then establish boot-CPU participation and real task-context handling.
+   Preserve final-store synchronization and Nonsecure cache-clean completion
+   for the complete write set before shutdown. The prior interrupt result does
+   not establish SPI/LPI shutdown; review the applicable errata when enabling
+   those sources. Preserve DDR continuity and refresh warm launcher state.
 2. Qualify eight-core FreeRTOS scheduling and representative concurrent workloads
    through the supervised observer. The earlier full launch remains unobserved;
    do not repeat it unchanged without a correction or a narrower diagnostic

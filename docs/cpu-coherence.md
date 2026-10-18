@@ -7,9 +7,11 @@ Production preparation and cached EL3/EL1 entry pass physically on every seconda
 A returning diagnostic also passes concurrent atomic increments and ordered
 payload exchange across all seven secondaries, with explicit cache cleaning and
 a matching final physical-memory copy. Evidence:
-`secondary-coherence-probe-20261018/physical-113/`. Boot-CPU participation,
-interrupt delivery, broader runtime memory use and eight-core FreeRTOS scheduling
-remain unqualified.
+`secondary-coherence-probe-20261018/physical-113/`. Timer PPI30 and peer SGI0
+delivery also pass on every secondary, followed by quiescence, cache cleaning
+and restored shutdown under `secondary-interrupt-probe-20261018/physical-114/`.
+Boot-CPU participation, general task-context handling, broader runtime memory
+use and eight-core FreeRTOS scheduling remain unqualified.
 
 The A733 contains six Cortex-A55 cores, two Cortex-A76 cores and a DynamIQ Shared
 Unit (DSU), which connects their private caches to a shared cache and snoop

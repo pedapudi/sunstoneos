@@ -111,8 +111,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   secondaries. Every target cleans the single shared page before restored shutdown;
   its final 4 KiB physical copy matches exactly. ROM and DRAM restoration pass
   under `secondary-coherence-probe-20261018/physical-113/`. This establishes
-  coherent cached exchange for that workload. Boot-CPU participation, interrupt
-  delivery, broader runtime memory use and eight-core scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
+  coherent cached exchange for that workload. A subsequent diagnostic passes one
+  timer PPI30 and one peer SGI0 on every secondary, followed by disabled delivery,
+  empty pending/active state, cache cleaning, restored shutdown and ROM return.
+  Evidence: `secondary-interrupt-probe-20261018/physical-114/`. Boot-CPU
+  participation, general interrupt/task-context handling, broader runtime memory
+  use and eight-core scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;
@@ -146,8 +150,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   WAKER `0` while awake and restored `6` before shutdown. Full local configuration
   and restoration now pass under `native-local-group-mask-20261018/`. The driver
   now checks required SGI/timer bits instead of requiring unimplemented PPI group
-  bits to read as one. Matching OFF and ROM return pass. Interrupt delivery,
-  coherent cached execution and scheduling remain unqualified.
+  bits to read as one. Matching OFF and ROM return pass. These early runs cover
+  initialization; the later cached exchange and SGI/PPI results appear above.
   Core 1 also passes production EL3 translation/cache adoption and exact control
   restoration under `native-el3-cache-20261018/native-attempt/runtime/`.
   Local cleanup, observed OFF, shared-state/DRAM restoration and ROM return pass.

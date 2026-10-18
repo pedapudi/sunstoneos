@@ -76,6 +76,13 @@ a733_cached_enter_el1:
     msr icc_ctlr_el3, xzr
     msr icc_igrpen0_el1, xzr
     msr icc_igrpen1_el3, xzr
+    // With SCR.FIQ=1, NS PMR writes are ignored while the Secure mask is
+    // below 0x80. Initialize its Secure view before entering Nonsecure EL1.
+    mov x2, #255
+    msr icc_pmr_el1, x2
+    isb
+    mrs x3, icc_pmr_el1
+    tbz x3, #7, a733_cached_el3_fault
     // Architectural RES1 bits4/5 accompany NS, FIQ routing, HCE and RW.
     mov x2, #0x535
     msr scr_el3, x2

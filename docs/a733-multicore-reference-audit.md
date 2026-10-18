@@ -10,9 +10,11 @@ initialization, restoration and shutdown under
 and exact translation restoration also pass separately on every secondary under
 `secondary-cache-probe-20261018/physical-111/`. Concurrent cached exchange across
 a single owned page also passes on all seven secondaries under
-`secondary-coherence-probe-20261018/physical-113/`. Boot-CPU participation,
-interrupt delivery, broader runtime memory use and FreeRTOS scheduling remain
-unqualified.
+`secondary-coherence-probe-20261018/physical-113/`. Timer PPI30 and peer SGI0
+delivery also pass on every secondary under
+`secondary-interrupt-probe-20261018/physical-114/`, followed by quiescence and
+restored shutdown. Boot-CPU participation, general task-context handling, broader
+runtime memory use and FreeRTOS scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
@@ -45,6 +47,54 @@ monitor helpers in [CPU startup](cpu-start.md). The experimental A733 TF-A port
 is supplementary evidence; its incomplete power-management functions do not
 qualify a complete firmware replacement.
 
+## EL3 must initialize the priority mask before Nonsecure delivery
+
+Arm IHI 0069G section 4.8.1 specifies that, with `SCR_EL3.FIQ=1`, a Secure
+priority mask below `0x80` makes Nonsecure `ICC_PMR_EL1` reads return zero and
+writes ignored. SunstoneOS's cached entry selected that routing but initialized
+PMR only after entering Nonsecure EL1. That write could therefore leave all
+interrupts masked. The pinned TF-A `gicv3_cpuif_enable` initializes PMR from
+Secure state before handing control back.
+
+The production entry now initializes PMR at EL3 and checks that its readback is
+in the Nonsecure-accessible range. The returning interrupt diagnostic uses the
+previous frozen ELF, so its EL3 helper supplies the correction and restores the
+original mask after delivery stops. The instruction model starts with Secure
+PMR zero and implements ignored Nonsecure writes, priority-bit rounding and
+Nonsecure read scaling. This corrects an omission in the earlier model; source
+review alone does not locate the earlier full-launch failures.
+
+Section 4.8.4 also specifies that Nonsecure priority accesses expose half the
+Secure priority levels. A maximum Nonsecure mask can round down to `0xf0`.
+The diagnostic therefore sets timer PPI30 to Nonsecure priority `0xa0`, verifies
+it and restores the original priority word before shutdown. SGI0's configured
+Secure priority `0xf0` appears as Nonsecure `0xe0`; the diagnostic requires a
+Nonsecure PMR greater than `0xe0` before enabling delivery.
+
+The new handler uses only reserved registers and the existing shared page. It
+requires exactly one timer interrupt and one peer SGI per secondary. All
+participants finish sending and receiving before masking IRQs, disabling their
+timers and interrupt groups, and requiring empty pending/active state. Cache
+cleaning and independently observed OFF remain prerequisites for shared cleanup.
+This narrow diagnostic does not establish general task-context handling or
+FreeRTOS scheduling.
+
+The cached GIC-600 errata notice, SDEN-892601 version 12.0, limits erratum
+2384374's affected packets to SPIs and LPIs. Both remain disabled in this
+SGI/PPI-only diagnostic. Erratum 1014611 can defer another SGI/PPI until the
+previous interrupt is deactivated; the handler uses combined EOI/deactivation
+before returning and does not depend on nested delivery. These exclusions do
+not qualify shutdown after general peripheral interrupt use.
+
+
+The corrected interrupt diagnostic passes physically under
+`secondary-interrupt-probe-20261018/physical-114/runtime/`. All seven targets
+handle one timer interrupt and one peer SGI, then report disabled delivery and
+empty pending/active state. The physical page, target restoration/OFF, shared
+restoration and saved DRAM all match. ROM returns as `003:115`; the runner exits
+and its queue claim closes. The result demonstrates this dedicated interrupt interval. The full FreeRTOS
+scheduler and general context-switch handler remain unqualified.
+
 ## Power, wake and interrupt delivery have separate requirements
 
 | Boundary | Reference requirement | SunstoneOS evidence and remaining gap |
@@ -52,9 +102,9 @@ qualify a complete firmware replacement.
 | CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | All seven secondaries pass entry, release, production CPU preparation and shutdown. |
 | Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered frames of all seven secondaries. A transition from powered-off remains unqualified. |
 | Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. All seven secondaries pass wake and return-to-sleep physically with delivery disabled. |
-| System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |
-| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | All seven secondaries pass local configuration and restoration physically with delivery disabled. Per-core delivery and scheduling remain unqualified. |
-| Shutdown | Disable CPU-interface groups, synchronize, complete the sleep handshake, then power down. Applicable errata remain part of the sequence. | Earlier core-1 shutdown passed without enabling delivery. This does not qualify shutdown after normal interrupt use. |
+| System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. The separate interrupt diagnostic now establishes SGI0/PPI30 delivery. |
+| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | All seven secondaries pass local configuration and restoration physically with delivery disabled. The later diagnostic also passes SGI0/PPI30 delivery on every secondary; scheduling remains unqualified. |
+| Shutdown | Disable CPU-interface groups, synchronize, complete the sleep handshake, then power down. Applicable errata remain part of the sequence. | Earlier core-1 shutdown passed without enabling delivery. The later SGI0/PPI30 diagnostic passes bounded quiescence before shutdown; general peripheral interrupt shutdown remains unqualified. |
 
 The [GIC-600 manual](https://documentation-service.arm.com/static/5e7ddddacbfe76649ba53034),
 section 3.6.1, and pinned

@@ -87,6 +87,20 @@ interrupt delivery or shutdown. The narrow returning diagnostic's exclusion of
 depends on its disabled interrupt groups, SPI enables and LPIs. Revisit that
 reasoning before enabling delivery; it does not qualify general shutdown.
 
+Initialize the Secure view of `ICC_PMR_EL1` at EL3 before entering Nonsecure EL1.
+With `SCR_EL3.FIQ=1`, a Secure mask below `0x80` makes Nonsecure reads return
+zero and Nonsecure writes ignored (IHI 0069G section 4.8.1). An EL1 write of
+`255` alone therefore does not establish interrupt admission. The pinned TF-A
+`gicv3_cpuif_enable` initializes the Secure mask. Verify the effective Nonsecure
+mask before delivery. Models must represent this restriction and the implemented
+priority bits, rather than treating PMR as an unrestricted shared variable.
+
+Nonsecure priority accesses expose half the Secure priority levels (IHI 0069G
+section 4.8.4). Five implemented Secure priority bits can leave only four in the
+Nonsecure view. A maximum mask can round down to `0xf0`; an interrupt at that
+same priority remains masked. Set a known admitted priority, preserve neighboring
+fields and restore the original value during returning diagnostics.
+
 ## Match diagnostics to the exact executable
 
 The startup overlay patches a particular frozen ELF. Its addresses, displaced

@@ -8,7 +8,20 @@
 .global el1_smc_return
 .type native_el1_cache_probe,%function
 native_el1_cache_probe:
+#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+    stp x19, x20, [sp, #-112]!
+    // The frozen production entry predates Secure PMR initialization. Mirror
+    // the corrected entry, saving its original value on the Device stack.
+    mrs x2, icc_pmr_el1
+    str x2, [sp, #96]
+    mov x2, #255
+    msr icc_pmr_el1, x2
+    isb
+    mrs x2, icc_pmr_el1
+    tbz x2, #7, .Lel1_park
+#else
     stp x19, x20, [sp, #-96]!
+#endif
     stp x21, x22, [sp, #16]
     stp x23, x24, [sp, #32]
     stp x25, x26, [sp, #48]
@@ -241,6 +254,14 @@ el1_return_checkpoint:
     verify ttbr0_el1, 48, 208
     verify ttbr1_el1, 56, 216
     verify mair_el1, 64, 224
+#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+    ldr x16, [sp, #96]
+    msr icc_pmr_el1, x16
+    isb
+    mrs x17, icc_pmr_el1
+    cmp x16, x17
+    b.ne .Lel1_refuse
+#endif
     mov x16, #3
     dsb sy
     str x16, [x19]
@@ -249,7 +270,11 @@ el1_return_checkpoint:
     ldp x25, x26, [sp, #48]
     ldp x27, x28, [sp, #64]
     ldp x29, x30, [sp, #80]
+#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+    ldp x19, x20, [sp], #112
+#else
     ldp x19, x20, [sp], #96
+#endif
     ret
 .Lel1_refuse:
     mov x16, #1

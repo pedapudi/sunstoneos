@@ -1248,6 +1248,39 @@ transactions succeed. ROM returns as `003:114`, identity
 Implementation: local commit `464c96c`.
 
 The result covers cached coherent exchange across five A55 secondaries and both
-A76 cores with a known single-page write set. Boot-CPU participation, interrupt
-delivery, general runtime cache teardown and eight-core FreeRTOS scheduling
+A76 cores with a known single-page write set. The subsequent interrupt result
+is recorded below. Boot-CPU participation, general runtime cache teardown and
+eight-core FreeRTOS scheduling remain outstanding.
+
+## Seven secondaries handle timer and peer interrupts before restored return
+
+`--interrupts` extends the concurrent cached diagnostic with one timer PPI30 and
+one peer SGI0 per secondary. The [reference audit](a733-multicore-reference-audit.md)
+records the Secure priority-mask correction, Nonsecure priority scaling and
+applicable GIC-600 errata. The stackless handler uses reserved registers and
+writes only the existing shared page. The host requires matching delivery counts,
+epochs, disabled groups and empty pending/active state in the copied physical page.
+
+Every participant finishes receiving before any disables its timer and interrupt
+group. It then verifies quiescence and restores the timer priority and vector
+base. The existing final-store barrier and Nonsecure cache cleaning precede
+return to EL3. The diagnostic restores the original Secure priority mask before
+local cleanup and independently observed OFF. The production source has the same
+EL3 mask initialization; the frozen ELF receives it through the diagnostic helper.
+
+Three instruction cases cover normal completion, an unexpected interrupt and
+an interrupt left pending during shutdown. The model represents Secure PMR access
+restrictions, Nonsecure priority scaling and priority-bit rounding. Six host groups
+cover successful capture, retained transport failure, restored invalid reports,
+changed inputs, incomplete delivery and nonquiescent interrupt state. These checks
+support control flow and report validation; the physical result establishes delivery.
+
+Physical execution passes under
+`secondary-interrupt-probe-20261018/physical-114/runtime/`. Every secondary handles
+one timer interrupt and one peer interrupt. Interrupt quiescence, shared-page
+cleaning and comparison, target restoration/OFF, shared restoration and saved DRAM
+restoration pass. All 45 host transactions succeed. ROM returns as `003:115`,
+identity `[7,2770,1097074,0,0]`; the runner exits and its claim closes as passed.
+No reconnect is needed. General context saving, boot-CPU workload participation,
+SPI/LPI shutdown, broader runtime memory cleanup and eight-core FreeRTOS scheduling
 remain outstanding.

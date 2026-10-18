@@ -105,6 +105,11 @@ identity_coherence_el1:
     str x27, [x18, #24]
     str x28, [x18, #32]
     str x26, [x18, #40]
+#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+    mov x25, x30
+    bl identity_interrupt_el1
+    mov x30, x25
+#endif
     add x16, x18, #16
     stlr x21, [x16]
     all_ready 16
