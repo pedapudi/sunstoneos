@@ -20,7 +20,7 @@ REQUEST_MAGIC=0x4153373350434c31
 
 FACTS={
  'initial':['board_v12_fpc_topology_verified','cold_trusted_endpoint_with_perst_asserted','all_comb1_usb3_clients_excluded','remote_secure_writers_excluded','irq168_175_184_185_owned_masked','endpoint_config_read_authorized','no_inherited_endpoint_dma'],
- 'electrical':['external_endpoint_power_stable','perst_pd22_active_low','pd23_not_driven','pd_bank_1v8_stable','comb1_analog_supplies_stable','device_mappings_security_verified'],
+ 'electrical':['external_endpoint_power_stable','perst_pd22_active_low','pd23_not_driven','pd_bank_bldo1_route_verified','pd_bank_bldo1_1v8_stable','dcdc2_comb1_core_route_verified','dcdc2_core_0v8_stable','comb1_analog_supplies_stable','device_mappings_security_verified'],
  'clocks':['shared_serdes100mhz_ready','pck7_on_effective','autonomous_pcie_power_disabled','stable_peri0_ref_osc_fabric','no_global_retune_reset_writers'],
  'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}
 
@@ -76,6 +76,17 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         require(fact.get('schema')=='a733-pcie-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'PCIe authority is not bound to image/target.')
         require(all(fact.get(k) is True for k in FACTS[key]),'Required PCIe physical fact absent.')
         if key=='initial':require((fact.get('vendor'),fact.get('device'))==struct.unpack_from('<2H',raw,788),'Endpoint identity authority differs.')
+        if key=='electrical':
+            routes=fact.get('comb1_analog_supply_routes')
+            require(isinstance(routes,list) and routes,'Fitted COMB1 analog routes must be identified independently.')
+            seen=set()
+            for route in routes:
+                require(isinstance(route,dict) and all(isinstance(route.get(k),str) and route[k].strip() for k in ('net','source')) and
+                        type(route.get('voltage_uv')) is int and route['voltage_uv']>0 and
+                        all(route.get(k) is True for k in ('route_verified','stable','lifetime_writers_excluded')),
+                        'COMB1 analog route lacks actual source/stability/writer authority.')
+                require(route['net'] not in seen,'Duplicate COMB1 analog net.');seen.add(route['net'])
+
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):

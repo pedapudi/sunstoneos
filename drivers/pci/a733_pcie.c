@@ -8,7 +8,7 @@
 #define IRQ_MASK UINT32_C(0x0300ff00)
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,PCK,SUPPLY,PINS,BASELINE,ENABLE,PHY,RC,
     RESET_WAIT,RESET_RELEASE,TRAIN,LINK,IDENTIFY,READY };
-static const enum a733_rail supplies[]={A733_RAIL_DCDC2,A733_RAIL_BLDO2};
+static const enum a733_rail supplies[]={A733_RAIL_DCDC2,A733_RAIL_BLDO1};
 static const uint32_t uv[]={800000,1800000};
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
@@ -260,7 +260,7 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
         if(r!=A733_CLOCK_OK)return finish(p,fault(p));++p->phase;
     } else if(p->phase==RAIL) {
         enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,
-            A733_RAIL_BIT(A733_RAIL_DCDC2)|A733_RAIL_BIT(A733_RAIL_BLDO2),0,p->deadline,&p->rail);
+            A733_RAIL_BIT(A733_RAIL_DCDC2)|A733_RAIL_BIT(A733_RAIL_BLDO1),0,p->deadline,&p->rail);
         if(r==A733_RAIL_BUSY)return finish(p,A733_PCIE_PENDING);
         if(r!=A733_RAIL_PENDING)return finish(p,fault(p));++p->phase;
     } else if(p->phase==RAIL_WAIT) {

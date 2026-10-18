@@ -46,7 +46,7 @@ set(pcie_inputs ${pcie_sources} ${pcie_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/apps/pcie/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES pcie_inputs)
-set(pcie_identity "native-pcie1;supervised60;x1gen1-direct-config;final-capability-audit;retained;${CMAKE_C_COMPILER_VERSION}")
+set(pcie_identity "native-pcie1;bldo1-pd-bank;supervised60;x1gen1-direct-config;final-capability-audit;retained;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS pcie_inputs)
  file(SHA256 "${input}" pcie_hash)
  string(APPEND pcie_identity "${pcie_hash}")

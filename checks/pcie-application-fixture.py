@@ -21,6 +21,7 @@ def produce(image,out):
  for i,(key,required) in enumerate(prep.FACTS.items()):
   value=dict(**target,schema='a733-pcie-'+key+'-v1',reviewed=True,**{k:True for k in required})
   if key=='initial':value.update(vendor=0x1234,device=0x5678)
+  if key=='electrical':value['comb1_analog_supply_routes']=[dict(net='MODELED-COMB1-ANALOG',source='SOFTWARE-MODEL-NOT-A-BOARD-RAIL',voltage_uv=1800000,route_verified=True,stable=True,lifetime_writers_excluded=True)]
   refs[key]=record(key+'.json',value);raw[648+32*i:680+32*i]=bytes.fromhex(refs[key]['sha256'])
  template=out/'session-template.bin';template.write_bytes(raw);prep.session_check(raw)
  conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}

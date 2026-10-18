@@ -60,6 +60,8 @@ struct a733_pcie {
     struct a733_gpu_resource_lease pck_lease;
     struct a733_pmic_lifetime pmic_lifetime;
     struct a733_pmic_request request;
+    /* DCDC2 core0.8V, then BLDO1 PD-bank1.8V; analog routing remains
+     * separately authenticated for the fitted board. No BLDO2 inference. */
     struct a733_pmic_snapshot supplies[2];
     struct a733_pcie_endpoint endpoint;
     atomic_uint busy;

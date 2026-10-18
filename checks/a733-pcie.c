@@ -99,7 +99,7 @@ static void setup(void)
 {
     memset(&port,0,sizeof(port));trace_count=reg_retained=stall_phy=stall_atu=bad_caps=late_fault=raise_before_adopt=0;
     phy_done=reset_rise=0;pmic_model_setup(&model);
-    model.pmic[0x20]=0x80;model.pmic[0x2b]=13;
+    model.pmic[0x20]=0x40;model.pmic[0x2a]=13;
     *pmic_model_word(&model,0x02002000)=0xf8636300;
     *pmic_model_word(&model,0x020020a0)=0xfe106300;
     *pmic_model_word(&model,0x02003908)=0x0a060a06;
@@ -154,9 +154,9 @@ static void decode(void)
 {
     const unsigned codes[]={0,13,29,30,31};
     for(unsigned i=0;i<5;++i)for(unsigned enable=0;enable<3;++enable) {
-        uint8_t raw=enable==0?0:enable==1?0x80:0x7f;
+        uint8_t raw=enable==0?0:enable==1?0x40:0xbf;
         struct a733_pmic_snapshot s;
-        assert(a733_pmic_decode(A733_RAIL_BLDO2,raw,codes[i],&s));
+        assert(a733_pmic_decode(A733_RAIL_BLDO1,raw,codes[i],&s));
         assert(s.enable==raw&&s.selector==codes[i]&&s.enabled==(enable==1));
         assert(s.decoded==(codes[i]<=29)&&s.programmed_uv==(codes[i]<=29?(500+100*codes[i])*1000:0));
     }
@@ -196,7 +196,7 @@ static void pin_conditions(void)
 int main(int argc,char **argv)
 {
     setup();assert(complete()==A733_PCIE_READY);
-    assert(port.supplies[1].rail==A733_RAIL_BLDO2&&port.supplies[1].programmed_uv==1800000);
+    assert(port.supplies[1].rail==A733_RAIL_BLDO1&&port.supplies[1].programmed_uv==1800000);
     assert(port.supplies[0].programmed_uv==800000&&reset_rise-phy_done>=100000);
     if(argc==2&&!strcmp(argv[1],"--trace")) {
         for(unsigned i=0;i<trace_count;++i)if(a733_pcie_phy_address(trace[i].address,trace[i].width,1)||
@@ -223,4 +223,5 @@ int main(int argc,char **argv)
     setup();stall_atu=1;retained();
     setup();late_fault=1;retained();assert(!late_fault);
     puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/config and retained failures");
+    return 0;
 }

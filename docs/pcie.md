@@ -27,25 +27,30 @@ disabled pins. It never drives PD23 or infers connector power from a device-tree
 supply name. The board owner authenticates the exact carrier, endpoint, signal
 voltage, reset polarity and power sequence before admission.
 
-The initial profile follows sheet 2's VDD-COMB1 assignment to DCDC2 at 0.8 V
-and its PD-bank assignment to BLDO2 at 1.8 V. The later fan/LED routing review
-identifies VCC-PD on BLDO1 in the detailed power sheet. These assignments conflict;
-the current PCIe profile is not ready for physical use until the fitted board's
-PD supply and the profile's rail ownership agree. A BLDO2 snapshot cannot establish
-BLDO1 stability. Reconcile the wiring and update the application contract before
-an attempt; do not infer a regulator substitution from a device-tree name.
+The fixed native profile reserves DCDC2 for the 0.8 V core supply and BLDO1
+for the 1.8 V PD bank. The detailed power drawing on sheet 6 identifies U1B
+pin P6 as BLDO1, with C19 at 2.2 µF. Its lower-left branch connects VCC-PD,
+VCC-PL, VCC-IO and VCC-PE. The summary on sheet 2 instead lists VCC-PD under
+BLDO2. It is not sufficient evidence of fitted-board routing. Admission requires
+the actual BLDO1-to-PD route and stable 1.8 V separately from the core route.
 
-The current runtime acquires DCDC2 and BLDO2 stable rail reservations and obtains
-page/identity/enable/selector/page snapshots through the shared PMIC provider.
-BLDO2 uses enable register 0x20 bit 7 and selector register 0x2b; selector 13
-programs 1.8 V. These observations prove programmed settings, not measured
-voltage or board wiring.
+The runtime obtains page/identity/enable/selector/page snapshots through the
+shared PMIC provider. BLDO1 uses enable register 0x20 bit 6 and selector register
+0x2a; selector 13 programs 1.8 V. BLDO2's bit 7 and selector 0x2b cannot establish
+PD-bank stability. Programmed settings do not establish measured voltage or
+actual board wiring. Shared BLDO1 reservations coexist with stable PD/PL/PE
+readers; an exclusive writer blocks PCIe before pin, PCK or controller mutation.
+No regulator value is written.
 
-The board device tree names BLDO1 as PCIe 1.8 V and DCDC1 as PCIe 3.3 V, and
-names CLDO5 as SERDES 1.8 V. The schematic instead places BLDO1 on PE/PK/camera
-supplies and labels CLDO5-derived analog power for COMB0. Those names do not
-establish the external FPC power circuit or every COMB1 analog supply. The
-authenticated electrical handoff must resolve the actual board topology.
+The core and analog consumers are separate. Sheet 2 names VDD-COMB1 under
+DCDC2; sheet 6's detailed DCDC2 branch names VDD-COMB0. The fitted core route
+and stable 0.8 V therefore remain explicit physical admission requirements.
+The selected DTS names BLDO1 as PCIe 1.8 V, DCDC1 as PCIe 3.3 V and CLDO5 as
+SERDES 1.8 V. Sheet 6 names CLDO5's analog net AVDD-H-COMB0. None of these
+labels identifies a separate COMB1 analog consumer of BLDO2. The application
+requires the fitted COMB1 analog net, actual source, voltage and exclusion of
+writers for the retained lifetime. It does not guess an analog rail or infer
+external FPC endpoint power from a device-tree supply name.
 
 ## Shared providers retain one lifetime
 
@@ -146,7 +151,7 @@ by the manual despite the source helper's automatic-gating name.
 
 The focused check composes the actual clock registry, rail ledger, PMIC provider,
 PCK resource manager and pin manager. It compares PHY and CFG0 programming with
-executed primary-source helpers, checks BLDO2 decode boundaries and exercises
+executed primary-source helpers, checks PMIC decode boundaries and exercises
 inherited-state, timing, deadline and retained-fault cases. Hardware responses
 and mutex scheduling are modeled. The reviewed batch passed with address and
 undefined-behavior sanitizers. The PCIe runtime, shared PMIC provider and changed

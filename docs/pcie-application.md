@@ -17,7 +17,7 @@ session can extend pin authority to PD20–23.
 One task owns the existing controller and native adapter. It uses the same clock
 registry, rail ledger, PCK manager, pin manager, PMIC provider and register mutex
 as USB. The controller reserves PCIE0/COMB1 exclusively, holds the shared parent
-and domain scopes, obtains DCDC2/BLDO2 snapshots and checks inherited PERST low
+and domain scopes, obtains DCDC2/BLDO1 snapshots and checks inherited PERST low
 before startup. Shared SERDES 100 MHz and PCK 7 must already be ready. The existing
 PHY/controller sequence changes only its admitted local state. It does not
 reset or retune shared SERDES, drive PD23 or alter PMIC voltages. COMB1 USB3 users
@@ -112,3 +112,52 @@ resource evidence is reused. These results establish application composition and
 copied-output behavior; they establish no physical link, endpoint safety,
 electrical qualification or stalled-MMIO recovery. The frozen fixture names no
 physical port and cannot authorize a device attempt.
+
+
+## PD-bank power binds to the fitted BLDO1 route
+
+The fixed port's two read-only PMIC consumers are DCDC2 core power at 0.8 V
+and BLDO1 PD-bank power at 1.8 V. The detailed V1.2 power sheet places BLDO1
+at U1B P6 and C19, then connects VCC-PD/PL/IO/PE. The summary sheet's BLDO2
+assignment conflicts with that drawing. Neither establishes the fitted board
+revision; admission must verify actual routing before a hardware attempt.
+
+Electrical evidence separately authenticates the BLDO1-to-PD route and stable
+1.8 V, the DCDC2-to-COMB1 core route and stable 0.8 V, external endpoint power,
+and fitted COMB1 analog supplies. The analog list identifies each net, source,
+voltage, routing verification and stable supply, with writers excluded for the
+retained lifetime. Generic analog stability or an old BLDO2-only PD claim cannot
+substitute for those records. All records remain bound to the actual image and
+board/port identity. Software fixture records are explicitly nondeployable.
+
+The shared PMIC/rail/clock/pin providers are reused. PCIe's BLDO1 reservation
+permits compatible stable readers and excludes voltage writers. Its snapshot
+uses enable register 0x20 bit 6 and selector 0x2a; no BLDO2 read is accepted as
+PD evidence. No additional COMB1 analog rail is invented or programmed. The
+PHY sequence, configuration getter, retained-failure policy and old protocol
+reference evidence remain separate from this wiring correction.
+
+The corrected image and focused evidence are preserved under
+`~/.cache/sunstoneos/evidence/pcie-pd-rail-native-20261018/`. ELF SHA256 is
+`95e4bf229ad1666ab2e566f201816b1f54857b26d2c4e3674522789ac684c48c`;
+the generated build ID is
+`7215c7c0eccba5dc7d072846e47499c9b6d6e87f134874d6c612f08a0aeb406d`.
+Independent review reconciled 174 compiled repository inputs, 417 dependencies
+and 3,028 runtime hashes. The new nominal producer and validators use the actual
+linked identity and current APBS0/PMIC structure layout.
+
+The composed provider cases accept correct BLDO1 with BLDO2 absent, refuse
+BLDO2-only power and disabled/wrong-voltage BLDO1 before pin/PHY use, preserve a
+compatible BLDO1 reader and block an exclusive writer before pin/PCK/controller
+mutation. Selected final native instructions request the DCDC2/BLDO1 shared
+mask and BLDO1 PMIC snapshot. Host negatives require their specific electrical
+policy refusal, including absent fitted analog routing and missing writer
+exclusion. Hardware and selected native metadata boundaries remain modeled.
+Old PHY/reference, getter and protocol suites were not replayed.
+
+Setup failures from cached-source aliases, a renamed fixture entry's missing
+explicit return, and CMake entry selection remain preserved with their inputs
+and recipes. Passed setup steps were reused. The native image was linked once;
+no production workaround or shared-provider edit was required. Fitted-board
+PD/core/analog routing, measured supply stability and the actual endpoint remain
+physical admission prerequisites.
