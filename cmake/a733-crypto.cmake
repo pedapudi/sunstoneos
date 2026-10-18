@@ -57,3 +57,5 @@ target_link_options(sunstone-a733-crypto PRIVATE -nostdlib -static -Wl,--gc-sect
  -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--defsym=__device_pool_size=2097152
  "-Wl,-T,${storage_build}/link.ld" "-Wl,-Map,${crypto_build}/image.map")
 set_target_properties(sunstone-a733-crypto PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
+
+include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-crypto-single-core.cmake")

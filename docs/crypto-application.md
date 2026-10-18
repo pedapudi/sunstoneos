@@ -127,3 +127,59 @@ the affected native link and remaining instruction cases resumed. The fixed
 vectors, CE clients and prior arithmetic/reference evidence were unchanged and
 were not replayed. The corrected image supersedes the earlier mutable-session
 handoff; physical admission remains separately blocked.
+
+## Independent boot-CPU image
+
+The target `sunstone-a733-crypto-single-core` runs the same fixed SHA-256/AES
+application on the boot CPU. Configure the standalone
+`apps/crypto-single-core` project with the existing pinned toolchain, FreeRTOS,
+TinyUSB and board-provider dependencies, or select the crypto application from
+the repository root. The all-core crypto target remains available.
+
+Crypto-local patches reuse the accepted retained single-core monitor, runtime
+and board-provider startup. They seal both the board prefix and the complete
+824-byte crypto session at EL3. Retained EL1 copies survive BSS clearing while
+the actual EL1 translation tables deny access to the monitor contract, saved
+state and tables. Startup checks every secondary power/control/mode word before
+provider initialization. The SRE kernel runs the existing trusted tasks on the
+boot CPU and restores the preparation exception mask after static task creation.
+
+CE registers retain outer-shareable Device mappings. The retained cacheable CE
+page belongs to the compact 2 MiB write-back pool; the board USB provider retains
+its separate 2 MiB non-cacheable pool. The monitor disables all SPIs, including
+CE interrupts 200 and 201. The unchanged CE client polls completion and preserves
+its cache maintenance, both-world admission, shared-clock token, common register
+mutex and permanent failure retention. No CE operation, TRNG feature or entropy
+claim is added by the startup change.
+
+Host preparation binds `crypto-single-core-supervised-v1` to immutable ELF
+geometry, the boot entry and the absence of secondary-startup symbols. It requires
+USB ROM-device takeover mode 2 and the corresponding primary-cache, secondary-OFF,
+ROM PIO, IRQ and supply evidence. The all-core profile retains mode 1. Existing
+crypto-specific predecessor-DMA, secure-bank, clock, memory and supervision
+requirements still apply. Bundle validation repeats the profile checks against
+frozen inputs before capture.
+
+The frozen image is
+`~/.cache/sunstoneos/evidence/crypto-single-core-20261018/image.elf`, with SHA-256
+`59625fdc1fe6a375ad6f196b9fc5009d1e110b9ee51d5018ab5330fec221d7e7`.
+Its compiler closure preserves 415 source/header inputs and 161 linked objects.
+Twelve focused startup checks cover sealed copies, EL1 BSS clearing, actual
+Device/write-back/non-cacheable descriptor walks, protected-monitor refusal,
+native CE/provider/task construction, exception masks and startup refusals.
+Six host groups cover package/profile binding, frozen-condition retention and
+copied output capture. The accepted SHA/AES output frame is reused without
+running arithmetic again. CPU registers, counter, GIC and cache publication
+remain modeled; the software admission facts establish no physical authority.
+Focused source/ELF review found no software blocker.
+
+The preserved `host/MODEL-NOT-DEPLOYABLE-bundle` is a software fixture and must
+never deploy. The coordinator must establish the unresolved CE predecessor-DMA,
+both-world exclusion and secure-bank permissions before preparing an actual
+bundle. Bind that bundle to the selected board's current DDR/cache/alias,
+secondary-OFF, USB ROM PIO, supply, clock and recovery evidence. Use the existing
+crypto preparation and supervised capture tools for one RAM-only attempt. Success
+requires the complete matching 160-byte copied result. Stop after the first
+transport failure and retain all resources until confirmed removal of every
+board power source, including after success. Physical CE execution remains
+unqualified; this independent startup does not close the existing admission gaps.
