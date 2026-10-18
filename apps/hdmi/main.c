@@ -1,4 +1,5 @@
 #include "application.h"
+#include "snapshot.h"
 #include "cached.h"
 #include "platform.h"
 #include <stddef.h>
@@ -42,9 +43,9 @@ int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
 void a733_smp_diagnostic_start(void)
 {
     if(!a733_smp_device_preparation_admitted())platform_panic("HDMI startup",1);
-    /* Boot authenticated this complete immutable page before publishing it. */
-    const volatile uint8_t *source=(const void *)A733_STORAGE_SESSION_ADDRESS;
-    for(unsigned i=0;i<sizeof(app.session);++i)((uint8_t *)&app.session)[i]=source[i];
+    const struct hdmi_session *source=hdmi_admitted_session();
+    if(!source)platform_panic("HDMI sealed session",2);
+    app.session=*source;
     if(!hdmi_session_valid(&app.session)||memcmp(app.session.image,a733_smp_build_id,32)||
        app.session.epoch!=a733_cached_runtime[0].epoch)platform_panic("HDMI session",2);
     app.deadline=a733_cached_runtime[0].diagnostic_deadline/24;

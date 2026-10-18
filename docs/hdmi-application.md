@@ -124,3 +124,28 @@ remains the non-DMA hardware pattern. The framebuffer image requires additional
 initial-isolation and memory admission, and retains its complete DMA allocation
 through stop or failure. See [the framebuffer image](hdmi-framebuffer.md) for its
 memory layout, provider bindings and physical qualification requirements.
+
+## Retained launch session
+
+The HDMI-local boot patch now seals the entire session before cached setup.
+The EL3 hook rehashes its private copy against the admitted contract, validates
+it and checks the supervisor identity. The existing wire contract uses its first
+reserved word for that identity rather than a session address; the seal preserves
+that ABI. Publication covers the session and readiness receipt. Failed attempts
+cannot be retried, and failed publication exposes no copy.
+
+Application startup consumes only the retained session before initializing the
+counter, clocks or other providers. Later mutations of the live page cannot
+replace owner, analog evidence or framebuffer isolation settings. Shared boot
+sources, display programming and framebuffer geometry are unchanged. Existing
+provider and physical-output qualification limits remain in force.
+
+Five focused binding checks passed against the framebuffer-enabled image in
+`~/.cache/sunstoneos/evidence/hdmi-binding-20261018/`. The nominal record uses the
+final ELF's typed layout and build ID, with exact hashes of written software-only
+evidence records validated by production preparation. The checks accept the real
+contract, refuse shape-valid pre-seal owner/evidence changes and failed
+publication, and verify the retained copy at the first counter-initialization
+boundary. Publication includes readiness as well as every session byte. The
+counter, cache publication and provider entry are modeled. The sole generated
+HDMI boot seals before cached setup. No display bring-up or output was replayed.
