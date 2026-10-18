@@ -38,12 +38,13 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 Three independent paths are active, with physical access reserved for the coordinator:
 
-- Startup diagnosis: extend the physically passed A64 capture through actual stack,
-  initialization and admission checks, returning before cache preparation.
+- Startup diagnosis: extend the physically passed native initialization checkpoint
+  through page-table construction, returning before cache publication.
 - Bluetooth: adapt source-available pairing/security logic and connect the existing
   hands-free and synchronous audio providers. Live mimus input still needs an adapter.
-- Wi-Fi networking: connect the pinned FreeRTOS+TCP DHCP and DNS implementations
-  with bounded request ownership, address lifecycle and callback cancellation.
+- Wi-Fi networking: finish the board profile and combined image link for the
+  integrated DHCP lease and copied DNS request paths. Four focused stack cases
+  pass; an earlier unexplained DNS deadline miss remains a timing limitation.
 
 Native I2S and JPEG device paths are integrated. The [I2S application](i2s-application.md)
 connects DMA0 capture or recorded playback to retained buffers and USB0 output.
@@ -261,27 +262,27 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:074` on port `3-1`, with automatic USB access.
-The returning A64 diagnostic reached EL3, copied its report, returned to ROM and
-restored both overwritten DRAM spans. Initial EL3 and EL1 control registers were
-both `0x00c50838`; all recorded entry predicates passed without an exception.
-The counter advanced, and its frequency declaration remained zero. This rules
-out the suspected initial EL1 control-state failure for this run. It does not
-qualify cache setup, coherence or multicore startup.
+The current board instance is `003:075` on port `3-1`, with automatic USB access.
+The returning native diagnostic passed through the actual corrected A32 launcher,
+stack setup, BSS clearing and admission checks. It reached the checkpoint before
+cache preparation with no refusal or exception. CNTFRQ was initialized to 24 MHz;
+both EL3 and EL1 control registers were `0x00c50838`. This establishes the early
+native startup path. Cache setup, coherence and multicore operation remain unproven.
 
-Evidence is under `a64-entry-probe-20261017/physical-073/`; the completed queue
-claim and runner released board ownership. The preceding power-reconnected
-instance passed fresh DDR initialization and a returning A32 survey under
-`supervised-reconnect-20261017-073/`. The warm diagnostic return preserved the
-checked memory; no further DDR initialization was needed for restoration.
-A returning A32 survey on the current instance recorded ROM caller SP
-`0x000f2200` and SCTLR `0x00c51838`. Instruction caching is enabled after the
-warm ROM return, so the existing launcher refuses its cache-state predicate.
-The survey restored SRAM and returned normally; its evidence is under
-`startup-stage-20261017-074/survey/`. Before staged native initialization, review
-and reuse the existing cache-off helper, then verify the required entry state.
-The user may be away for several hours. Continue with a specific returning
-startup diagnostic before another full-image attempt.
+The diagnostic returned automatically to ROM. Its copied report and all reviewed
+DRAM restoration comparisons passed; the runner exited and the queue claim closed.
+Old SRAM was left to the returned ROM. Evidence is under
+`startup-stage-20261017-074/native/`. The next diagnostic will cover page-table
+construction and return before cache publication.
+
+Before this attempt, a warm-return survey found instruction caching enabled.
+The existing 40-byte cache-off helper ran once at fresh SRAM address `0x73000`;
+its bytes were backed up and restored on the same ROM instance. A subsequent
+survey established every launcher predicate and ROM caller SP `0x000f2200`.
+Evidence is under `startup-stage-20261017-074/cache-off/` and `cache-off-survey/`.
+A future warm-return instance needs its own verified launch state.
+The user may be away for several hours; continue bounded returning diagnostics
+before another full-image attempt.
 
 On the earlier instance `003:072`, fresh DDR initialization reported 12,288 MiB and two
 4 KiB pages matched. Thirty-nine read-only control/status values matched the
@@ -408,10 +409,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Extend the passed returning A64 capture through actual stack, initialization
-   and admission checks, then return before cache preparation. Preserve the
-   original native layout and verify every diagnostic instruction change. Reuse
-   the working return path and refresh admission for the selected diagnostic.
+1. Extend the physically passed native initialization checkpoint through actual
+   page-table construction, then return before cache publication. Preserve the
+   original native layout, back up the table interval and verify the changed
+   return hook. Refresh admission and launch-state evidence for the current ROM.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.

@@ -253,15 +253,17 @@ recorded both SCTLR banks as `0x00c50838`, and satisfied every captured entry
 predicate. The counter advanced; CNTFRQ remained zero. ROM returned on USB instance
 `003:074`, and both overwritten DRAM spans were restored and compared. Evidence
 is under `a64-entry-probe-20261017/physical-073/`. The initial EL1-state hypothesis
-is excluded for this run. Actual stack initialization, admission and later cached
-startup remain to be isolated before repeating the full launch.
+is excluded for this run. The native initialization checkpoint below extends
+this physical evidence through stack setup and admission.
 
 The following returning A32 survey on the same warm-returned ROM instance found
 SCTLR `0x00c51838`, with instruction caching enabled and MMU/data caching disabled.
 Its caller SP was `0x000f2200`. SRAM restoration and ROM response passed. Evidence
 is under `startup-stage-20261017-074/survey/`. The launcher requires instruction
 caching disabled; the earlier cold-entry survey cannot authorize this warm state.
-Review the existing returning cache-off helper before the next staged launch.
+The unchanged returning cache-off helper subsequently ran at fresh SRAM address
+`0x73000`. Same-instance restoration and a follow-up survey passed, establishing
+every launcher predicate before the native initialization checkpoint.
 
 ## Returning native initialization checkpoint
 
@@ -318,5 +320,14 @@ exception, initial cache rejection and a wrong exception level. These cases use
 the patched native instructions with modeled architectural registers and MMIO.
 They establish the observation boundaries and write restrictions, not physical
 memory operation or recovery. Evidence is under
-`~/.cache/sunstoneos/evidence/native-startup-probe-20261017/`. Physical startup
-failure remains unresolved until the coordinator executes the reviewed stage.
+`~/.cache/sunstoneos/evidence/native-startup-probe-20261017/`. The physical result
+below applies to the reviewed initialization stage; later startup remains unresolved.
+
+The native initialization checkpoint passed physically on 2026-10-17. The actual
+launcher, stack setup, BSS clearing and admission reached checkpoint 2 before
+cache preparation. No refusal or exception was recorded. The report captured
+stack top `0x42014000`, terminal SP `0x42013f50`, CNTFRQ 24 MHz and both SCTLR banks
+as `0x00c50838`. The board returned automatically as USB instance `003:075`.
+Copied reports and all reviewed DRAM restoration comparisons passed. Evidence
+is under `startup-stage-20261017-074/native/`. Cache preparation and subsequent
+startup stages remain unresolved; this result does not establish multicore operation.
