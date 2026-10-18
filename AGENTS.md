@@ -12,6 +12,11 @@ of application requirements. Project issues hold work scope and dependencies.
   drivers, by adapting OS interfaces to FreeRTOS. Native execution does not
   require an independent rewrite. Replace source-available components only for
   a demonstrated incompatibility or requirement the existing code cannot meet.
+- Prioritize documentation of third-party software usage, provenance, execution
+  location, source availability and license status. Keep dependency issues current.
+  Defer replacement of opaque firmware and development tools until complete
+  hardware functionality and performance tuning; existing dependencies may serve
+  both stages. This does not defer driver integration needed for FreeRTOS operation.
 - Complete onboard hardware support and local mimus execution are separate
   completion requirements. A CPU fallback does not satisfy accelerator support.
 - Work on isolated branches or worktrees. Preserve other workers' changes.

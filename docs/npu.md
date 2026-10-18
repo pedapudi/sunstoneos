@@ -108,9 +108,11 @@ FreeRTOS requirement; the board runtime remains native.
 
 [Issue 12](https://github.com/pedapudi/sunstoneos/issues/12) tracks an
 in-repository compiler and development toolkit with native FreeRTOS execution.
-This replacement of external tools is deferred until complete hardware support.
-Published compiler dependencies remain acceptable during bring-up. CPU, GPU,
-and NPU optimization follows the [validation schedule](validation.md).
+This replacement of external tools is deferred until complete hardware support
+and performance tuning. Documenting their provenance, execution role and license
+status takes priority over replacement. Published compiler dependencies remain
+acceptable during bring-up and optimization. CPU, GPU and NPU optimization
+follows the [validation schedule](validation.md).
 
 ## Structural inspection is implemented
 

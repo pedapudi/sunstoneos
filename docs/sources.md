@@ -83,6 +83,17 @@ describes the reset vector and execution-state controls.
 
 ## Binary dependencies and replacement order
 
+Document actual dependency use before considering replacement. Record origin,
+version and hash, execution location, source availability, compatibility limits
+and license status. The tracking issues assign boot dependencies to
+[issue 1](https://github.com/pedapudi/sunstoneos/issues/1), platform sources and
+reference binaries to [issue 2](https://github.com/pedapudi/sunstoneos/issues/2),
+radio dependencies to [issue 5](https://github.com/pedapudi/sunstoneos/issues/5),
+GPU dependencies to [issue 8](https://github.com/pedapudi/sunstoneos/issues/8),
+and NPU tools to [issue 9](https://github.com/pedapudi/sunstoneos/issues/9).
+[Issue 11](https://github.com/pedapudi/sunstoneos/issues/11) tracks the final-image
+dependency inventory and unresolved documentation requirements.
+
 The native OS uses source-built FreeRTOS, TinyUSB, Newlib, FreeRTOS+TCP and
 selected wpa_supplicant security code where the application requires them.
 Linux drivers provide implementation references; Linux is not a board runtime.
