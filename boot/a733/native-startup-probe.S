@@ -3,6 +3,7 @@
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
 .global write_checkpoint, failed_checkpoint
+.global block_checkpoint
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -14,8 +15,27 @@ boot_checkpoint:
     br x17
 cached_checkpoint:
     ldr x16, =0x42002000
+    ldr w17, [x8]              // Live checkpoint CTLR, not the earlier native read.
+    str x17, [x16, #192]
+    mov w17, w21
+    str x17, [x16, #200]
+    mov w17, w19
+    str x17, [x16, #208]
+    mov x17, #1
+    str x17, [x16, #216]
     mov x17, #2
     b publish
+block_checkpoint:
+    ldr x16, =0x42002000
+    mrs x17, sctlr_el1
+    str x17, [x16, #152]
+    mrs x17, tcr_el1
+    str x17, [x16, #160]
+    mov x17, #1
+    str x17, [x16, #168]        // Originals are complete before any mutation.
+    mrs x16, tcr_el1           // Displaced native instruction.
+    ldr x17, =0x41008268
+    br x17
 stop_checkpoint:
     ldr x16, =0x42002000
     str x0, [x16, #96]
@@ -52,6 +72,53 @@ publish:
     str x17, [x16, #48]
     cmp x17, #12
     b.ne park                  // A wrong EL cannot use the EL3 return.
+    ldr x17, [x16, #168]
+    cbz x17, snapshot_bank
+    cmp x17, #1
+    b.eq restore_bank
+    cmp x17, #3
+    b.eq verify_bank
+    b park                     // In-progress, failed or unknown restoration: no retry.
+restore_bank:
+    mov x17, #2
+    str x17, [x16, #168]
+    mrs x17, sctlr_el1
+    str x17, [x16, #224]
+    mrs x17, tcr_el1
+    str x17, [x16, #232]
+    isb
+    ldr x14, [x16, #152]
+    msr sctlr_el1, x14
+    isb
+    ldr x15, [x16, #160]
+    msr tcr_el1, x15
+    isb
+verify_bank:
+    mov x17, #2
+    str x17, [x16, #168]
+    ldr x14, [x16, #152]
+    ldr x15, [x16, #160]
+    mrs x17, sctlr_el1
+    str x17, [x16, #176]
+    cmp x17, x14
+    b.ne restore_failed
+    mrs x17, tcr_el1
+    str x17, [x16, #184]
+    cmp x17, x15
+    b.ne restore_failed
+    mov x17, #3
+    str x17, [x16, #168]
+    b snapshot
+restore_failed:
+    mov x17, #4
+    str x17, [x16, #168]
+    b park
+snapshot_bank:
+    mrs x17, sctlr_el1
+    str x17, [x16, #224]
+    mrs x17, tcr_el1
+    str x17, [x16, #232]
+snapshot:
     mrs x17, mpidr_el1
     str x17, [x16, #56]
     mrs x17, sctlr_el3

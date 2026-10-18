@@ -265,13 +265,13 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native CPU/DSU planning checkpoint
+## Returning native walk-blocking and GIC-read checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty-three verified
-instruction replacements redirect the C boot entry, successful CPU/DSU planning,
+The native code, data, BSS and stack addresses remain unchanged. Twenty-four verified
+instruction replacements redirect the C boot entry, walk blocking, the first GIC write,
 the first requested control write, both planning failure parks, the terminal stop,
 the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
@@ -279,12 +279,23 @@ The original stack selection, BSS clearing, boot-state validation and admission
 checks execute. Cache preparation then checks core identity and deadlines and
 constructs five translation-table pages. Three publication calls clean the native
 code, data/BSS and tables to the point of coherency with `DC CVAC` and `DSB SY`.
-Native CPU/DSU identification and planning then execute. The normal checkpoint
-at `0x41008264` returns before `a733_cached_block_walks` changes TCR_EL1 and sets
-SCTLR_EL1.M. A guard at `0x41004440` captures the first proposed implementation
-control or patch write before it executes. Both native preparation failure parks
-return their diagnostic state. Cache activation, GIC and secondary initialization
-remain outside this stage.
+Native CPU/DSU identification and planning then execute. A guard at `0x41004440`
+captures the first proposed implementation control or patch write before it
+executes. Both native preparation failure parks return their diagnostic state.
+The complete native `a733_cached_block_walks` sequence executes after its original
+SCTLR_EL1 and TCR_EL1 values have been saved. It sets TCR_EL1.EPD0/EPD1 and
+SCTLR_EL1.M while EL3 remains untranslated. Native GIC CTLR/TYPER reads and
+security admission follow. The normal checkpoint replaces the first GIC store
+at `0x410003d0`, recording the live checkpoint CTLR, TYPER and proposed store
+value. No GIC write or secondary activation executes.
+
+Every returning path restores saved SCTLR_EL1, executes ISB, restores saved
+TCR_EL1 and executes ISB. Exact readbacks must match before ROM return. Restore
+state 1 means both originals are saved; state 2 covers every restoration or
+verification read and write; state 3 means verified restoration. An exception
+in state 2, unknown state or failed readback parks and retains ownership. A late
+exception after state 3 re-verifies under state 2. This prevents a faulting
+restoration read from repeatedly re-entering the same operation.
 
 The physical boot CPU is Cortex-A55 r2p0. The pinned TF-A reset code and native
 planner request no CPU workaround writes for that revision. Conditional DSU
@@ -297,7 +308,8 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 2 means native planning completed without a control write. Checkpoint
+Checkpoint 2 means native walk blocking and GIC reads completed before any GIC
+write, with verified EL1 restoration. Checkpoint
 6 records a requested register and value before that write; checkpoint 7 records
 a native failure park. Checkpoint 5 retains exception registers, including the
 faulting instruction address. The host copies the 184-byte native controller at
@@ -305,6 +317,15 @@ faulting instruction address. The host copies the 184-byte native controller at
 revision plan, poll index, phase and native error state. Both intervals already
 belong to the backed-up monitor BSS. Unknown DSU revisions and register-access
 failures remain observed outcomes rather than inferred board properties.
+
+Full distributor setup sets GICD_CTLR.ARE_S/ARE_NS. Clearing either enabled bit
+is architecturally unpredictable, so restoring an arbitrary saved CTLR is not a
+valid general rollback. The [GIC specification](https://documentation-service.arm.com/static/601412d54ccc190e5e681269),
+section 2.3.3, establishes this restriction. The existing
+[single-core monitor cleanup](../platform/a733/monitor.c) writes its saved CTLR
+after enabling affinity routing. Its cleanup is a pending correctness issue
+when that write would clear either ARE bit. This diagnostic obtains live GIC
+state before deciding how to exercise distributor setup.
 
 Publication covers `0x41000000..0x41200000`, `0x41200000..0x41290d10` and
 `0x421f0000..0x421f5000`. It visits every 64-byte line in order; the last data
@@ -387,12 +408,19 @@ their modeled hash. Evidence is under
 `~/.cache/sunstoneos/evidence/startup-stage-20261017-076/native/runtime/`.
 Its focused instruction evidence remains under `native-publication-probe-20261017/`.
 
-One affected build and four focused native planning cases pass: preparation
-without writes, a captured first DSU write, an unsupported DSU revision and an
-exception while reading DSU identity. The cases verify captured controller state,
-the existing return mechanism and exclusion of all control writes. Architectural
-reads, admission MMIO and `DC CVAC` are modeled; cache effects and physical register
-access remain unqualified. Earlier startup, table and publication evidence remains
-valid for unchanged code. Planning evidence is under
-`~/.cache/sunstoneos/evidence/native-planning-probe-20261017/`. Actual CPU/DSU
-planning and later startup still require physical evidence.
+Native CPU/DSU planning physically passed once. The controller reached PREPARED
+without a requested write or refusal; the core record reached state 1. The DSU
+revision byte was `0x41` and every workaround mask was zero. All 43 transactions
+and DRAM restoration passed, returning as USB instance `003:078`. Evidence is
+under `~/.cache/sunstoneos/evidence/startup-stage-20261017-077/native/runtime/`;
+its four focused instruction cases remain under `native-planning-probe-20261017/`.
+
+Four focused walk-blocking/GIC-read cases pass: normal reads and restoration,
+native GIC security refusal, an exception after EL1.M is set, and a restoration
+write exception that retains ownership. Review then moved the in-progress flag
+before restoration and verification reads. Those completed cases are preserved;
+one new focused case verifies guarded reads and a late verification fault that
+parks without retry or ROM return. Final corrected artifacts and that case are
+under `~/.cache/sunstoneos/evidence/native-walks-gic-read-probe-20261017/restore-fix/`.
+Architectural reads, admission MMIO and `DC CVAC` are modeled; physical walk
+blocking, EL1 restoration and subsequent GIC startup still require evidence.

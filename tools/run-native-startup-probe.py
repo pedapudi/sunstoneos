@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture native CPU/DSU planning, refusing every control write before ROM return."""
+"""Run native EL1 walk blocking and GIC reads, restore EL1, and return before GIC writes."""
 import argparse
 import hashlib
 import importlib.util
@@ -56,7 +56,8 @@ def prepare(a):
     def patch(address,old,target):
         offset=address-0x41000000;require(struct.unpack_from('<I',code,offset)[0]==old,'Native instruction differs.')
         new=branch(address,target);struct.pack_into('<I',code,offset,new);patches.append([address,old,new])
-    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x41008264,0xd5382050,'cached_checkpoint'),
+    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x410003d0,0xb9000113,'cached_checkpoint'),
+                            (0x41008264,0xd5382050,'block_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint'),
                             (0x41004440,0xd5384243,'write_checkpoint'),(0x41004d50,0xd503205f,'failed_checkpoint'),
                             (0x41004d7c,0xd503205f,'failed_checkpoint')]:
@@ -73,7 +74,7 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
-        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint')},
+        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce):
@@ -82,6 +83,8 @@ def decode(raw,nonce):
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
+    names=('saved_sctlr1','saved_tcr1','restore_state','restored_sctlr1','restored_tcr1','live_gicd_ctlr','gicd_typer','proposed_gicd_ctlr','gic_snapshot_valid','checkpoint_sctlr1','checkpoint_tcr1')
+    result.update(zip(names,v[19:30]))
     return result
 
 def controller_snapshot(raw,core_raw):
@@ -171,7 +174,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Read-only native CPU/DSU planning and forced-FEL return',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native EL1 walk blocking, restoration and read-only GIC checkpoint',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:

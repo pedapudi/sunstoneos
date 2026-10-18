@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute native CPU/DSU planning exits; architectural reads and maintenance are modeled."""
+"""Execute native EL1 walk blocking, GIC reads and guarded EL1 restoration."""
 import argparse
 import hashlib
 import importlib.util
@@ -13,13 +13,17 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('build','bundle','output','objdump'):p.add_argument('--'+name,type=Path,required=True)
+p.add_argument('--restore-read-fault-only',action='store_true')
+p.add_argument('--prior-software',type=Path)
 a=p.parse_args();spec=importlib.util.spec_from_file_location('startup_host',ROOT/'tools/run-native-startup-probe.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle/'prepared.json').read_bytes())
 assert bundle['image_sha256']==host.NATIVE and bundle['launcher_sha256']==host.LAUNCH
-ops={}
+ops={};labels={}
 for path in (a.bundle/'image.elf',a.build/'overlay.elf'):
     result=subprocess.run([str(a.objdump),'-d','--no-show-raw-insn',str(path)],capture_output=True,text=True,check=True).stdout
     for line in result.splitlines():
+        label=re.match(r'^([0-9a-f]+) <([^>]+)>:$',line)
+        if label:labels[label[2]]=int(label[1],16)
         match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
         if match:ops[int(match[1],16)]=match[2].strip()
 # Patch branches need actual decoding, rather than the old ELF's disassembly.
@@ -27,7 +31,7 @@ for address,old,new in m['patches']:ops[address]=''
 nonce=bytes(range(1,17));reports=[]
 def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
-    for address,size in [(0x41000000,0x1200000),(0x02050000,0x1000),(0x07050000,0x1000),(0x08001000,0x1000)]:cpu.mem_map(address,size)
+    for address,size in [(0x41000000,0x1200000),(0x02050000,0x1000),(0x03400000,0x1000),(0x07050000,0x1000),(0x08001000,0x1000)]:cpu.mem_map(address,size)
     for item in m['payloads']:cpu.mem_write(item['address'],(a.build/item['name']).read_bytes())
     cpu.mem_write(0x41020000,(a.build/'overlay.bin').read_bytes())
     for address,size in [(0x41201000,0x8fd10),(0x42005000,0xa590)]:cpu.mem_write(address,b'\xa5'*size)
@@ -38,17 +42,23 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
     if mutate:struct.pack_into('<Q',contract,40,0)
     cpu.mem_write(0x42004000,bytes(contract));cpu.mem_write(host.REPORT+240,nonce)
     if watchdog:cpu.mem_write(0x02050014,struct.pack('<I',1))
+    gic_ctlr=0x45 if scenario=='security' else 5
+    cpu.mem_write(0x03400000,struct.pack('<2I',gic_ctlr,0x17))
     cpu.reg_write(UC_ARM64_REG_SP,0x41414100)
     registers={'currentel':el,'mpidr_el1':0x81000000,'sctlr_el3':sctlr,'sctlr_el1':0xc50838,
                'cntfrq_el0':0,'daif':0x3c0,'ctr_el0':0x8444c004,'midr_el1':0x412fd050,'clidr_el1':0x124,
-               'id_aa64mmfr0_el1':2,'s3_0_c15_c3_1':0x30,'s3_0_c15_c3_0':0,'s3_0_c15_c3_3':1<<40,
+               'id_aa64mmfr0_el1':2,'s3_0_c15_c3_1':0x41,'s3_0_c15_c3_0':0,'s3_0_c15_c3_3':1<<40,
+               'tcr_el1':0x200003019,
                'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
     if scenario=='write':registers.update(s3_0_c15_c3_1=0,s3_0_c15_c3_0=0x800)
     if scenario=='unknown':registers['s3_0_c15_c3_1']=0x90
     writes=[];controls=[];ticks=[];stopped=[];entered=[];injected=[];publication=[];cleaned=[]
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     def instruction(uc,address,size,unused):
-        assert address not in (0x41008268,0x41004444),'Control-write guards must not be crossed.'
+        assert address!=0x41004444,'CPU/DSU write guard must not be crossed.'
+        if scenario=='block-fault' and address==0x41008284 and not injected:
+            registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0);injected.append(True)
+            uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
         if address==0x41004558:
             assert len(publication)<3 and (not publication or publication[-1]['barriers']==1)
             begin,end=ranges[len(publication)]
@@ -75,6 +85,17 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
         read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
         if read:
             key=read[2].lower()
+            if scenario=='restore-read-fault' and address>=0x41020000:
+                saved_state=struct.unpack('<Q',uc.mem_read(host.REPORT+168,8))[0]
+                if key in ('sctlr_el1','tcr_el1') and labels['restore_bank']<=address<labels['snapshot_bank']:
+                    assert saved_state==2,'Every restoration/verification read must be guarded.'
+                    if len(injected)==1:
+                        registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0);injected.append(True)
+                        uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
+                if key=='mpidr_el1' and saved_state==3 and not injected:
+                    # A late fault after successful restoration re-enters state3.
+                    registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0);injected.append(True)
+                    uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
             if scenario=='read-fault' and key=='s3_0_c15_c3_1':
                 registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0)
                 uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
@@ -85,7 +106,11 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
             if 'DAIFSet' in text or 'SPSel' in text:uc.reg_write(UC_ARM64_REG_PC,address+4);return
             write=re.match(r'msr\s+(\S+),\s*(x\d+|xzr)',text,re.I);assert write,(name,text)
             key=write[1].rstrip(',').lower();value=0 if write[2]=='xzr' else uc.reg_read(UC_ARM64_REG_X0+int(write[2][1:]));controls.append([key,value])
-            assert key in ('vbar_el3','cntfrq_el0','cntps_ctl_el1','cntp_ctl_el0','cntv_ctl_el0','rmr_el3'),(name,key)
+            assert key in ('vbar_el3','cntfrq_el0','cntps_ctl_el1','cntp_ctl_el0','cntv_ctl_el0','rmr_el3','sctlr_el1','tcr_el1'),(name,key)
+            if scenario=='restore-fault' and key=='sctlr_el1' and address>=0x41020000:
+                assert not injected and struct.unpack('<Q',uc.mem_read(host.REPORT+168,8))[0]==2
+                registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0);injected.append(True)
+                uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
             if key=='rmr_el3':
                 assert value==2 and writes[-2:]==[(0x08001004,4,0x20),(0x08001008,4,0)];stopped.append('return');uc.emu_stop()
             else:
@@ -96,6 +121,19 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
         if address<0x41000000:writes.append((address,size,value))
     cpu.hook_add(UC_HOOK_CODE,instruction);cpu.hook_add(UC_HOOK_MEM_WRITE,write)
     cpu.emu_start(0x41000000,0x41021000,count=1500000)
+    if scenario=='restore-read-fault':
+        assert stopped==['park'] and len(injected)==2
+        assert struct.unpack('<Q',cpu.mem_read(host.REPORT+168,8))[0]==2
+        assert [item for item in controls if item[0] in ('sctlr_el1','tcr_el1')]==[
+            ['tcr_el1',0x200803099],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0x200003019]]
+        assert not any(item[0]=='rmr_el3' for item in controls)
+        reports.append({'name':name,'late_verification_read_fault_retained':True,'system_writes':controls});return
+    if scenario=='restore-fault':
+        assert stopped==['park'] and injected
+        assert struct.unpack('<Q',cpu.mem_read(host.REPORT+168,8))[0]==2
+        assert len([item for item in controls if item[0]=='sctlr_el1'])==2
+        assert not any(item[0]=='rmr_el3' for item in controls)
+        reports.append({'name':name,'restore_fault_retained':True,'system_writes':controls});return
     if el!=12:
         assert stopped==['park'] and not controls and not entered
         reports.append({'name':name,'wrong_el_park':True});return
@@ -103,7 +141,17 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
     raw=bytes(cpu.mem_read(host.REPORT,256));result=host.decode(raw,nonce)
     controller=host.controller_snapshot(bytes(cpu.mem_read(0x4200e480,184)),bytes(cpu.mem_read(0x4200e080,128)))
     assert result['SCTLR_EL3']==sctlr and result['SCTLR_EL1']==0xc50838
-    if scenario=='write':
+    assert result['saved_sctlr1']==0xc50838 and result['saved_tcr1']==0x200003019
+    assert result['restored_sctlr1']==0xc50838 and result['restored_tcr1']==0x200003019 and result['restore_state']==3
+    assert result['checkpoint_sctlr1']==0xc50839 and result['checkpoint_tcr1']==0x200803099
+    assert [item for item in controls if item[0] in ('sctlr_el1','tcr_el1')]==[
+        ['tcr_el1',0x200803099],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0x200003019]]
+    if scenario=='security':
+        assert result['checkpoint']==3 and result['status']==2 and result['detail']==2
+        assert result['gic_snapshot_valid']==0
+    elif scenario=='block-fault':
+        assert result['checkpoint']==5 and result['elr']==0x41008284 and result['vector']==4
+    elif scenario=='write':
         assert result['checkpoint']==6 and result['requested_register']==14 and result['requested_value']==(1<<40)|0x18000
         assert controller['state']==2 and controller['index']==4 and controller['phase']==1
         assert controller['plan']['clusteractlr']==0x18000 and not controller['error']
@@ -123,7 +171,7 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
         assert entered and result['checkpoint']==2 and result['entered_c']==1 and result['entry_sp']==0x42014000
         assert result['CNTFRQ_EL0']==24000000
         assert controller['state']==4 and not controller['error'] and controller['plan']['revision']==0x20
-        assert controller['identity']['midr']==0x412fd050 and controller['identity']['clusteridr']==0x30
+        assert controller['identity']['midr']==0x412fd050 and controller['identity']['clusteridr']==0x41
         assert not any(controller['plan'][key] for key in ('actlr','actlr2','actlr3','ectlr','clusteractlr','patch'))
         assert controller['core_record']['state']==1 and not controller['core_record']['error']
         assert struct.unpack('<Q',cpu.mem_read(0x42000020,8))[0]==0xffffffffffffffff
@@ -139,16 +187,27 @@ def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr
             if 0x421f0000<=address<0x421f5000:expected|=0x308
             if address in (0x421f2000,0x421f3000):expected|=0x20
             assert words[2048+i]==expected,(i,hex(words[2048+i]),hex(expected))
-        assert result['terminal_sp']==0x42013f10
+        assert result['terminal_sp']==0x42013f50
+        assert result['gic_snapshot_valid']==1 and result['live_gicd_ctlr']==gic_ctlr
+        assert result['gicd_typer']==0x17 and result['proposed_gicd_ctlr']==0
         result['table_sha256']=hashlib.sha256(tables).hexdigest()
         (a.output.parent/'modeled-tables.bin').write_bytes(tables)
     assert len(publication)==3 and all(item['barriers']==1 for item in publication)
     reports.append({'name':name,'result':result,'controller':controller,'system_writes':controls,'mmio_writes':writes,'publication':publication})
-check('native-planning-complete-before-block-walks')
-check('first-dsu-control-write-captured',scenario='write')
-check('unsupported-dsu-native-failure-return',scenario='unknown')
-check('dsu-register-read-exception-return',scenario='read-fault')
+prior_evidence=None
+if a.restore_read_fault_only:
+    assert a.prior_software is not None
+    prior_raw=a.prior_software.read_bytes();prior=json.loads(prior_raw)
+    assert prior['schema']=='a733-native-startup-software-v1' and prior['physical_access'] is False and len(prior['cases'])==4
+    prior_evidence={'path':str(a.prior_software.resolve()),'sha256':hashlib.sha256(prior_raw).hexdigest(),'case_count':4,
+                    'scope':'Prior four exits reused; correction only guards snapshot/readback reads before they can fault.'}
+else:
+    check('native-walk-blocking-and-gic-read-before-first-write')
+    check('native-gic-security-refusal-restores-el1',scenario='security')
+    check('native-block-walk-exception-restores-el1',scenario='block-fault')
+    check('restore-exception-retains-without-retry',scenario='restore-fault')
+check('late-verified-state-read-fault-retains-without-retry',scenario='restore-read-fault')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
-    'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
+    'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,'reused_evidence':prior_evidence,
     'limits':'Actual patched native startup instructions with modeled system registers, counter, read-only admission MMIO and intercepted DC CVAC. Exact maintenance addresses and barriers checked; cache state and effects are not modeled. No physical cache, return, memory or board qualification.'},indent=2)+'\n')
-print('PASS four native CPU/DSU planning exits; every control write and block-walk mutation excluded.')
+print('PASS focused native walk-blocking/GIC-read exits; restoration-read fault retains without retry.')
