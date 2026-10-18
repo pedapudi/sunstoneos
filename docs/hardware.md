@@ -107,7 +107,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
-- Thermal: **implemented** [controller](thermal.md) and
+- Thermal and frequency control: **implemented** [controller](thermal.md) and
   [native application](thermal-application.md). The controller
   implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
   critical thresholds, and interrupt-status acknowledgement. Host checks, source
