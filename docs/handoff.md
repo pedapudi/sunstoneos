@@ -131,13 +131,11 @@ checks converter disable independently of publication; resources remain retained
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
-queues. The original board on port `3-1` requires recovery after the subsequent
-full eight-core attempt on `003:103`: USB disappeared and no native observer
-result arrived. Its process, port lock and queue claim remain retained. Earlier
-core1 Nonsecure publication, cached EL1 entry, SMC return, exact restoration and
-matching shutdown/OFF passed; those narrower results remain valid. That DDR
-lifetime began with initialization and all-secondary-OFF checks on `003:092`.
-Do not communicate with or reuse the original board before explicit recovery.
+queues. The failed full eight-core attempt on `003:103` has been recovered;
+its process exited and its claim closed after the user reconnected the board.
+The current board state appears below. Earlier core-1 Nonsecure publication,
+cached EL1 entry, SMC return, restoration and matching shutdown/OFF remain valid
+for their recorded scope.
 The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -597,6 +595,15 @@ fixture command-log repair. The next CPU observation must address later startup;
 primary preparation success on this recovered run does not locate the earlier
 unobserved full-image failure. Do not reuse old fixed overlay addresses.
 The second board was not accessed.
+
+A returning sequential survey for cores 2–7 is prepared under
+`secondary-identity-probe-20261018/`. It calls the complete image's unchanged
+power and entry controllers, records each core's identity and reset controls,
+and requires matching shutdown acknowledgment plus observed OFF before restoring
+its configuration. Three instruction cases and five host cases pass. The primary
+preparation prefix was reused for the two failure cases. The first board's warm
+survey, unchanged cache-off helper and follow-up survey pass on `003:109`;
+DDR continuity is preserved. Physical secondary execution remains pending.
 
 The [GPU publication audit](gpu-single-core-publication.md) supports retaining
 its frozen image under the existing clean-entry contract. PMIC return101 is a

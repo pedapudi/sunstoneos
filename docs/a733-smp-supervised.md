@@ -1095,3 +1095,36 @@ exits and its claim closes as passed. Evidence is under
 secondary startup, interrupt delivery and scheduling remain unobserved in the
 full-image attempt. This result establishes primary preparation on the recovered
 board; it does not identify the cause of the earlier missing observer.
+
+## Sequential secondary identity survey
+
+The returning survey in `boot/a733/secondary-identity-probe.*` observes cores 2–7
+before their interrupt or cache initialization. It extends the demonstrated
+primary-preparation overlay on the same frozen complete image. The extension
+calls the production power and mailbox controllers, then redirects the fixed
+secondary continuation after its RELEASED acknowledgment. Core 1 is excluded
+because its entry and shutdown already have physical evidence.
+
+Each target records MIDR, MPIDR, translation controls and cluster identification.
+The primary requests shutdown only after matching the production entry report.
+The target enables CPU power-down, completes the barrier required by A76 erratum
+2743102, requests shutdown and publishes its epoch acknowledgment before WFI.
+The primary independently observes OFF before restoring RVBAR, architecture,
+mode and control registers. A failed check parks with ownership retained.
+The power-down ordering follows the pinned TF-A `cortex_a76_core_pwr_dwn`
+implementation referenced in [CPU coherence](cpu-coherence.md).
+
+The combined report occupies `0x42018000..0x42018a00`; the extension fits inside
+the existing overlay reservation. The existing host runner saves and restores
+both report allocations and validates the completion mask, per-core identity,
+matching acknowledgments, OFF and restoration records. It binds the report to
+the uploaded epoch and primary nonce. The A32 launcher fills absolute deadlines
+at execution, so the uploaded contract template is not a deadline observation.
+
+Evidence is under `secondary-identity-probe-20261018/`. Three instruction cases
+cover sequential execution and restoration of all six targets, acknowledgment
+without OFF, and restoration-readback failure. Five host cases cover the expanded
+report and backup ranges, retained transport failure and rejection of incomplete
+results or changed reservations. CPU registers, power states and host transport
+are modeled. Physical secondary execution remains pending. The original board's
+warm launcher preparation passes on `003:109` without repeating DDR training.

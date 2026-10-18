@@ -28,7 +28,7 @@ class Retained(Exception):
     pass
 
 
-def run_case(args, case, software):
+def run_case(args, case, software, report_transform=None):
     directory = args.output/case
     directory.mkdir()
     survey = json.loads(args.survey.read_text())
@@ -74,6 +74,8 @@ def run_case(args, case, software):
             if case == 'invalid-report-restored':
                 r[3] = 3
             data = struct.pack('<32Q', *r)
+            if report_transform is not None:
+                data = report_transform(data, dram, case)
             array, offset = memory(primary.probe.REPORT[0], len(data))
             array[offset:offset+len(data)] = data
             sram[0x52000:0x52008] = b'NEW-ROM!'

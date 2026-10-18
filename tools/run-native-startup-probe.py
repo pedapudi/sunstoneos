@@ -316,10 +316,11 @@ def claimed(a,expected):
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     primary = None
-    is_primary = m.get('schema') == 'a733-primary-publication-probe-v1'
+    is_identity = m.get('schema') == 'a733-secondary-identity-probe-v1'
+    is_primary = is_identity or m.get('schema') == 'a733-primary-publication-probe-v1'
     prepared=supervised.validate_bundle(a.bundle)
     if is_primary:
-        primary=module('primary_publication_host',ROOT/'tools/primary-publication-host.py')
+        primary=module('returning_cpu_host',ROOT/'tools'/('secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
         frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
         native=primary.probe.NATIVE;profile=primary.PROFILE
     else:
@@ -404,6 +405,10 @@ def run(a):
             try:
                 if is_primary:
                     record['result']=primary.probe.decode((a.evidence/'report.bin').read_bytes(),nonce)
+                    if is_identity:
+                        contract=prepared['_frozen']['contract.bin']
+                        require(record['result']['epoch']==struct.unpack_from('<Q',contract,24)[0],
+                                'Secondary survey covers a different startup contract.')
                 else:
                     record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
                     record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
