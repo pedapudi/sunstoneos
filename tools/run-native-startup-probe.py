@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run native distributor setup, restore affected GIC/EL1 state, and return before secondary setup."""
+"""Capture first-secondary admission and power preflight before any CPU control write."""
 import argparse
 import hashlib
 import importlib.util
@@ -56,7 +56,8 @@ def prepare(a):
     def patch(address,old,target):
         offset=address-0x41000000;require(struct.unpack_from('<I',code,offset)[0]==old,'Native instruction differs.')
         new=branch(address,target);struct.pack_into('<I',code,offset,new);patches.append([address,old,new])
-    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x41000450,0xb201f3f8,'cached_checkpoint'),
+    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x4100a1e4,0xd5384248,'cached_checkpoint'),
+                            (0x410034d4,0x2a1f03e0,'prearm_checkpoint'),
                             (0x410003d0,0xb9000113,'gic_begin'),
                             (0x41008264,0xd5382050,'block_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint'),
@@ -75,15 +76,16 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
-        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin')},
+        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce):
     require(len(raw)==256,'Short startup report.');v=struct.unpack('<32Q',raw)
-    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,9) and raw[240:]==nonce,'Startup report identity differs.')
+    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,11) and raw[240:]==nonce,'Startup report identity differs.')
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
+    if v[3]==9:result.update(proposed_power_address=v[12],proposed_power_value=v[13])
     names=('saved_sctlr1','saved_tcr1','restore_state','restored_sctlr1','restored_tcr1','live_gicd_ctlr','gicd_typer','proposed_gicd_ctlr','gic_snapshot_valid','checkpoint_sctlr1','checkpoint_tcr1')
     result.update(zip(names,v[19:30]))
     return result
@@ -103,7 +105,19 @@ def gic_snapshot(raw):
     result=dict(zip(('state','original_ctlr','typer','banks','terminal_ctlr','cleanup_deadline','error'),struct.unpack_from('<7Q',raw)))
     result['original_spi']=list(struct.unpack_from('<32I',raw,64))
     result['restored_spi']=list(struct.unpack_from('<32I',raw,192))
+    result['prearm']=dict(zip(('core','reason','status_before','control','mode','status_after','state','counter'),struct.unpack_from('<8Q',raw,320)))
     return result
+
+def secondary_snapshot(power,owner,mailbox):
+    require(len(power)==128 and len(owner)==248 and len(mailbox)==256,'Short secondary snapshot.')
+    p=dict(zip(('boot_mpidr','entry','lease','deadline'),struct.unpack_from('<4Q',power,40)))
+    p['core']=struct.unpack_from('<I',power,72)[0];p['last_now']=struct.unpack_from('<Q',power,80)[0]
+    p.update(zip(('control','mode','architecture','power_status','state','error','step','initialized','entered','writes_attempted'),struct.unpack_from('<10I',power,88)))
+    o=dict(zip(('last_now','deadline','lease'),struct.unpack_from('<3Q',owner,192)))
+    o.update(zip(('core','phase','initialized','entered','writes_attempted','state','error'),struct.unpack_from('<7I',owner,216)))
+    command=dict(zip(('magic','epoch','core','state','inverse_epoch'),struct.unpack_from('<5Q',mailbox)))
+    report=dict(zip(('epoch','core','midr','mpidr','sctlr','state','esr','far','elr','spsr','reason'),struct.unpack_from('<11Q',mailbox,128)))
+    return {'power':p,'owner':o,'command':command,'report':report}
 
 def caller_interval(survey):
     require(survey.get('complete') is True and survey.get('sram_restored') is True and survey.get('rom_usable') is True,'Completed current returning survey required.')
@@ -182,7 +196,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native distributor setup with verified GIC/EL1 restoration',2):
+            with usb_guard.reenumeration('sunstoneos-a733','First-secondary admission/preflight with no CPU control writes',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -193,13 +207,15 @@ def run(a):
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
-                                      ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512)]:
+                                      ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
+                                      ('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
                 record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
                 record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
                 record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
+                record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()

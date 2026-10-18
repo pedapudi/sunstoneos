@@ -265,14 +265,14 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native distributor checkpoint
+## Returning first-secondary admission and power-preflight checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty-five verified
+The native code, data, BSS and stack addresses remain unchanged. Twenty-six verified
 instruction replacements redirect the C boot entry, walk blocking, the first GIC write,
-completed distributor setup,
+mailbox admission and the first secondary hardware write,
 the first requested control write, both planning failure parks, the terminal stop,
 the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
@@ -291,8 +291,21 @@ diagnostic captures CTLR, TYPER and every SPI-enable word. It requires both
 affinity-routing bits already set, DS clear and no pending distributor write.
 The native proposed CTLR must preserve the saved non-group bits. Only a complete
 snapshot permits the displaced store to execute. Native distributor setup then
-runs through its final CTLR verification. The normal checkpoint at `0x41000450`
-returns before secondary setup.
+runs through its final CTLR verification. The first secondary's power and entry
+controllers initialize and validate their linked allocations. A pre-arm gate then
+requires OFF power status, clear hotplug control/mode request bits, and another
+OFF read within the startup deadline. This gate precedes every command write
+and SEV. It requires fresh external evidence that all secondaries are OFF and
+that no other firmware or power writer can change those resources; checking
+the target alone does not establish those conditions.
+
+After admission, the original callback publishes its ARM command and SEV. Native
+power preflight reads OFF status, control, mode and reset architecture. The
+checkpoint at `0x4100a1e4` captures the first proposed CPU configuration/power
+write before the callback executes. No secondary configuration, power-request
+or reset-release write occurs. SEV does not request PPU power; the admitted OFF
+state prevents an executing secondary from observing the command. Actual CPU
+activation requires a separate return and quiescence argument.
 
 Every returning path restores saved SCTLR_EL1, executes ISB, restores saved
 TCR_EL1 and executes ISB. Exact readbacks must match before ROM return. Restore
@@ -330,8 +343,9 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 2 means the complete native distributor phase succeeded, with
-verified EL1 and distributor restoration. Checkpoint
+Checkpoint 9 captures the first proposed secondary hardware-write address and
+32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
+refuses pre-arm admission before command publication or SEV. Checkpoint
 6 records a requested register and value before that write; checkpoint 7 records
 a native failure park. Checkpoint 5 retains exception registers, including the
 faulting instruction address. Checkpoint 8 refuses unsafe GIC snapshot admission
@@ -340,6 +354,16 @@ before any GIC write. The host copies the 184-byte native controller at
 revision plan, poll index, phase and native error state. Both intervals already
 belong to the backed-up monitor BSS. Unknown DSU revisions and register-access
 failures remain observed outcomes rather than inferred board properties.
+
+The copied GIC snapshot's unused tail holds the 64-byte pre-arm record at
+`0x42002240`: core, refusal reason, initial power status, control, mode, repeated
+status, gate state and counter. State 1 admits the original ARM callback;
+state 2 refuses it. Reasons distinguish invalid core, non-OFF status, active
+control/mode request, changed status or expired/regressing time. The host also
+copies the first power controller, entry controller and mailbox from monitor BSS.
+Their poll phase and error identify native admission or preflight failure.
+`writes_attempted == 1` can precede the guarded callback even though no hardware
+write executed; it records the controller's attempt, not a completed bus operation.
 
 Full distributor setup sets GICD_CTLR.ARE_S/ARE_NS. Clearing either enabled bit
 is architecturally unpredictable, so restoring an arbitrary saved CTLR is not a
@@ -448,11 +472,20 @@ returned as USB instance `003:079`. Evidence is under
 Its completed instruction cases remain under
 `native-walks-gic-read-probe-20261017/restore-fix/` and its linked earlier evidence.
 
-One affected build and five distributor instruction cases pass: complete native
-setup and restoration, unsafe affinity-routing admission, native final-control
-refusal, an exception after partial SPI disabling, and cleanup RWP timeout.
-The cases model write-one-clear/write-one-set enable registers, write completion,
-architectural reads and cache maintenance. They check exact affected-state
-restoration and retained failure. Evidence is under
-`~/.cache/sunstoneos/evidence/native-distributor-probe-20261017/`. Physical
-distributor restoration and subsequent secondary startup remain unqualified.
+The complete distributor stage physically passed once. Original CTLR was
+`0x37`, native terminal CTLR was `0x33`, and all eight saved SPI-enable words
+matched their restored readbacks. Only bank 5 bit 28 was enabled on entry.
+EL1 and GIC restoration both verified; all 44 transactions and DRAM restoration
+passed, returning as USB instance `003:080`. Evidence is under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-079/native/runtime/`;
+its five instruction cases remain under `native-distributor-probe-20261017/`.
+
+One affected build and three first-secondary instruction cases pass: admitted
+ARM and native preflight before the first hardware write, non-OFF refusal before
+command publication/SEV, and a native power-status read exception after admitted
+ARM. The cases check raw gate fields, mailbox contents, proposed address/value,
+controller phases and zero secondary hardware writes. Register reads, event
+execution, GIC completion and cache maintenance are modeled; external ownership
+and physical OFF stability require the current board evidence. Artifacts are
+under `~/.cache/sunstoneos/evidence/native-secondary-preflight-probe-20261017/`.
+Physical first-secondary preflight and actual secondary startup remain unqualified.

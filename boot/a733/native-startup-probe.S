@@ -3,7 +3,7 @@
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
 .global write_checkpoint, failed_checkpoint
-.global block_checkpoint, gic_begin
+.global block_checkpoint, gic_begin, prearm_checkpoint
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -15,7 +15,86 @@ boot_checkpoint:
     br x17
 cached_checkpoint:
     ldr x16, =0x42002000
+    str x1, [x16, #96]
+    mov w17, w2
+    str x17, [x16, #104]
+    mov x17, #9
+    b publish
+prearm_checkpoint:
+    ldr x12, =0x42002240
+    mov w9, w1
+    str x9, [x12]
+    sub w10, w9, #1
+    cmp w10, #6
+    b.hi prearm_invalid
+    isb
+    mrs x15, cntpct_el0
+    str x15, [x12, #56]
+    ldr x13, =0x4200e008
+    ldr x13, [x13]
+    cmp x15, x13
+    b.hs prearm_late
+    ldr x8, =0x07052008
+    add x8, x8, x9, lsl #12
+    dsb sy
+    ldr w10, [x8]
+    dsb sy
+    str x10, [x12, #16]
+    tst w10, #15
+    b.ne prearm_not_off
+    ldr x11, =0x07050200
+    add x11, x11, x9, lsl #2
+    dsb sy
+    ldr w10, [x11]
+    dsb sy
+    str x10, [x12, #24]
+    tbnz w10, #0, prearm_control
+    dsb sy
+    ldr w10, [x11, #32]
+    dsb sy
+    str x10, [x12, #32]
+    tbnz w10, #0, prearm_mode
+    dsb sy
+    ldr w10, [x8]
+    dsb sy
+    str x10, [x12, #40]
+    tst w10, #15
+    b.ne prearm_changed
+    isb
+    mrs x17, cntpct_el0
+    str x17, [x12, #56]
+    cmp x17, x15
+    b.lo prearm_late
+    cmp x17, x13
+    b.hs prearm_late
+    mov x17, #1
+    str x17, [x12, #48]
+    mov w0, wzr               // Displaced native arm instruction; w1/x2 retained.
+    ldr x17, =0x410034d8
+    br x17
+prearm_invalid:
+    mov x17, #1
+    b prearm_refused
+prearm_not_off:
     mov x17, #2
+    b prearm_refused
+prearm_control:
+    mov x17, #3
+    b prearm_refused
+prearm_mode:
+    mov x17, #4
+    b prearm_refused
+prearm_changed:
+    mov x17, #5
+    b prearm_refused
+prearm_late:
+    mov x17, #6
+prearm_refused:
+    str x17, [x12, #8]
+    mov x17, #2
+    str x17, [x12, #48]
+    ldr x16, =0x42002000
+    mov x17, #10
     b publish
 gic_begin:
     ldr x16, =0x42002000
