@@ -158,7 +158,8 @@ and host checks pass under `rtc-calendar-native-20261018/`. The RTC target uses
 six seconds for startup within its unchanged 60-second lifetime; other targets
 retain the one-second default. The source and frozen image reconcile with the
 unrelated additive SD API declaration. Earlier alarm and IRQ evidence was reused.
-Runtime calendar updates, alarm wake, calibration, reset-cause reporting and
+Runtime calendar updates are now in development through the owner task and
+existing RTC application. Alarm wake, calibration, reset-cause reporting and
 retention qualification remain required work.
 
 The [native PCIe application](pcie-application.md) now connects the root-port
@@ -188,6 +189,10 @@ Native SPI application integration is in development. Route and population
 research precedes selection of a usable board controller and transfer profile.
 The application will connect the existing controller and shared providers;
 physical transfers require an identified peer and verified wiring and voltage.
+
+PWM and ADC route and population research is in progress. A native PWM path
+will follow for a confirmed usable channel; the same schematic audit will
+identify which ADC functions are available before a separate implementation.
 
 
 ## Observed host and device state
