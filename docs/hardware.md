@@ -132,11 +132,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Local cleanup, observed OFF, shared-state/DRAM restoration and ROM return pass.
   This probe writes only Device memory during the cached interval; it does not
   establish cached EL1 execution or cross-core coherence.
-  The subsequent production EL1-entry diagnostic passes three modeled cases,
-  but its physical EL1 record is empty despite a verified new upload. The board
-  returned ROM with observed OFF and DRAM restoration; only the EL3 interval is
-  observed. Executable visibility across cache enablement is under review under
-  `native-el1-cache-20261018/`. Cached EL1 execution remains unqualified.
+  Core 1 now also completes production cached EL1 entry and SMC return after
+  explicit Nonsecure code/table publication. Physical readbacks, exact EL1/EL3
+  control restoration, local cleanup, observed OFF and ROM return pass under
+  `native-ns-publication-20261018/`. Four affected modeled cases pass. This executes
+  immutable code without EL1 data stores; mutable cached memory, interrupt
+  delivery, other cores and scheduling remain unqualified. The earlier empty EL1
+  report remains preserved as a failed observation, not a successful entry.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

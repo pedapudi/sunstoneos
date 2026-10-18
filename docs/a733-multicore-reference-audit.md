@@ -209,12 +209,20 @@ it warns that system caches can require maintenance by address rather than
 set/way. See its
 [cache requirements](https://github.com/torvalds/linux/blob/e5f0a698b34ed76002dc5cff3804a61c80233a7a/Documentation/arch/arm64/booting.rst).
 
-This is a source-backed gap in warm-image publication, not proof of the latest
-physical failure's cause. The cached-EL1 attempt returned only the EL3 result,
-although its copied upload contains the new EL1 call. A correction must establish
-executable visibility for the actual address spaces and cache levels before
-another launch. A model that represents both physical address spaces with one
-unconditionally coherent byte array cannot verify this property.
+The first cached-EL1 attempt returned only the EL3 result despite a verified
+new upload. The corrected diagnostic maintains Nonsecure code and EL1 table
+aliases through temporary EL3 mappings while executing Secure noncacheable code.
+It now completes production cached EL1 entry, SMC return, exact restoration and
+shutdown physically under `native-ns-publication-20261018/`. This resolves the
+missing interval for that diagnostic. The earlier attempt has no instruction
+trace that proves exactly which stale entry it consumed.
+
+The instruction model now checks security-selected maintenance and rejects a
+missing Nonsecure code invalidation. Its cache model remains scoped; a shared
+coherent byte array alone cannot verify publication across physical address
+spaces. The corrected helper admits known clean immutable aliases, not arbitrary
+dirty runtime state. General warm replacement still needs explicit data ownership
+and cleanup before uploads.
 
 The second board's returning PMIC probe executed its newly added voltage-selector
 read. That supports the particular boot-CPU transition used there. Device-image

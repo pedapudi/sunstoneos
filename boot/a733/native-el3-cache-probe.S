@@ -26,6 +26,11 @@ native_el3_cache_probe:
     str x2, [x19, #56]
     mrs x2, scr_el3
     str x2, [x19, #64]
+#ifdef SUNSTONE_PROBE_EL1_CACHE
+    ldr x0, [x19, #8]
+    mov x1, x20
+    bl native_ns_publication
+#endif
     bl probe_production_allow_ns_code
     cmp w0, #1
     b.ne .Lrefuse
@@ -50,6 +55,8 @@ native_el3_cache_probe:
 #ifdef SUNSTONE_PROBE_EL1_CACHE
     ldr x0, [x19, #8]
     mov x1, x20
+.global native_el1_call
+native_el1_call:
     bl native_el1_cache_probe
 #endif
     // No dirty Normal-memory lines exist from this interval. Complete Device

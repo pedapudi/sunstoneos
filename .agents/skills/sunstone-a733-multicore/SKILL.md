@@ -139,3 +139,12 @@ Keep changed-interval observations explicit. A valid shutdown and ROM return can
 coexist with a missing new interval. Treat that interval as unobserved and review
 code visibility before repeating its launch. The instruction model's shared byte
 array does not model security-tagged cache lines or system-cache retention.
+
+The returning diagnostic now supplies a physically demonstrated publication path
+in `boot/a733/native-ns-publication.S`: temporary Secure executable/Device data
+mappings plus a nonexecutable Nonsecure maintenance alias, followed by exact
+control restoration. Reuse its accepted evidence for unchanged inputs. Its
+`DC IVAC` scope assumes clean immutable code/table lines and excludes dirty
+runtime data. Do not generalize that assumption to a running OS or use broad
+cache discard to avoid proving ownership. The host saves both temporary table
+pages as part of the existing exclusive RAM reservation.

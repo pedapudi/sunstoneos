@@ -41,7 +41,7 @@ atexit.register(lambda:a.output.with_suffix('.partial.json').write_text(json.dum
 def check(name,scenario='normal'):
     if a.case and name!=a.case:return
     cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
-    for address,size in [(0x41000000,0x1200000),(0x02050000,0x1000),(0x03400000,0x1000),(0x03460000,0x100000),(0x07050000,0x5000),(0x08001000,0x2000)]:cpu.mem_map(address,size)
+    for address,size in [(0x41000000,0x1200000),(0x81000000,0x200000),(0x02050000,0x1000),(0x03400000,0x1000),(0x03460000,0x100000),(0x07050000,0x5000),(0x08001000,0x2000)]:cpu.mem_map(address,size)
     for item in m['payloads']:cpu.mem_write(item['address'],(a.build/item['name']).read_bytes())
     cpu.mem_write(0x41020000,(a.build/'overlay.bin').read_bytes());cpu.mem_write(host.REPORT+240,nonce)
     contract=bytearray((a.bundle/'contract.bin').read_bytes());start=100
@@ -77,6 +77,7 @@ def check(name,scenario='normal'):
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     cache_operations=[];cache_memory={'fetches':0,'reads':0,'writes':0}
     el1_memory={'fetches':0,'reads':0,'writes':0};transitions=[]
+    ns_invalidated=set();secure_table_cleaned=[]
     def mapped_access(uc,address,size,write=False,fetch=False):
         regs=per_core[active[0]]
         level=regs['currentel']//4
@@ -86,17 +87,24 @@ def check(name,scenario='normal'):
         if not regs[f'sctlr_el{level}']&1:return
         assert el3_cache and active[0]==1
         assert regs[f'tcr_el{level}']==(0x200803019 if level==1 else 0x80823019) and regs[f'mair_el{level}']==0x44ff00
-        table=regs[f'ttbr0_el{level}']
+        table=regs[f'ttbr0_el{level}'];temporary=level==3 and table==0x421f5000
         for shift in (30,21,12):
-            desc=struct.unpack('<Q',uc.mem_read(table+((address>>shift)&511)*8,8))[0]
+            slot=table+((address>>shift)&511)*8
+            if level==1:assert slot&~63 in ns_invalidated,'EL1 table alias must be maintained'
+            desc=struct.unpack('<Q',uc.mem_read(slot,8))[0]
             if shift==12 or desc&3!=3:break
             table=desc&0x0000fffffffff000
         assert desc&3==(3 if shift==12 else 1) and desc&(1<<10),('invalid mapping',hex(address))
         pa=(desc&0x0000fffffffff000&~((1<<shift)-1))|(address&((1<<shift)-1))
-        assert pa==address and address//(1<<shift)==(address+size-1)//(1<<shift)
+        alias=0x81000000<=address<0x81200000
+        assert pa==(address-0x40000000 if alias else address) and address//(1<<shift)==(address+size-1)//(1<<shift)
         if fetch:
             assert 0x41000000<=address<0x41200000 and not desc&(1<<(53 if level==1 else 54))
-            if level==3:assert desc&(1<<5) and not regs['scr_el3']&0x200
+            if temporary:
+                assert not desc&(1<<5) and (desc>>2)&7==2 and not regs['sctlr_el3']&0x1004
+            elif level==3:
+                assert desc&(1<<5) and not regs['scr_el3']&0x200
+                if el1_cache:assert address&~63 in ns_invalidated,'Nonsecure instruction alias must be maintained'
             else:assert (desc>>6)&3==3  # Frozen image maps code read-only at EL0/EL1.
             cache_memory['fetches']+=1
         elif write:
@@ -104,6 +112,9 @@ def check(name,scenario='normal'):
             assert (desc>>2)&7==0 and not desc&((1<<5)|(1<<7)) and address%size==0
             cache_memory['writes']+=1
         else:
+            if alias:
+                assert temporary and desc&(1<<5) and desc&(1<<54) and (desc>>2)&7==2
+                return
             assert (0x42000000<=address and address+size<=0x421f0000 and (desc>>2)&7==0) or (0x41000000<=address and address+size<=0x41200000 and desc&(1<<7))
             cache_memory['reads']+=1
     def instruction(uc,address,size,unused):
@@ -154,7 +165,22 @@ def check(name,scenario='normal'):
             assert struct.unpack('<Q',uc.mem_read(0x42005118,8))[0] in (1,2)
             events.append([active[0],address])
         if re.match(r'dc\s+cvac,\s*x0$',text,re.I):
-            assert address==0x410045e0;cleaned.append(uc.reg_read(UC_ARM64_REG_X0));uc.reg_write(UC_ARM64_REG_PC,address+4);return
+            if address==0x410045e0:cleaned.append(uc.reg_read(UC_ARM64_REG_X0))
+            else:
+                assert el1_cache and active[0]==1 and not registers['sctlr_el3']&1
+                va=uc.reg_read(UC_ARM64_REG_X0);assert 0x421f5000<=va<0x421f7000 and va%64==0
+                secure_table_cleaned.append(va)
+            uc.reg_write(UC_ARM64_REG_PC,address+4);return
+        if re.fullmatch(r'dc\s+ivac,\s*x0',text,re.I):
+            assert el1_cache and active[0]==1 and registers['ttbr0_el3']==0x421f5000
+            assert registers['sctlr_el3']==0xc50839
+            root=struct.unpack('<Q',uc.mem_read(0x421f5010,8))[0]
+            assert root==0x0040000040000769,'VA maintenance must target an NS/RW/NC/XN alias'
+            va=uc.reg_read(UC_ARM64_REG_X0);pa=va-0x40000000
+            assert (0x41000000<=pa<0x41200000 or 0x421f2000<=pa<0x421f4000) and pa%64==0
+            if scenario=='ns-maintenance-missed' and pa==labels['native_el1_call']&~63:injected.append(True)
+            else:ns_invalidated.add(pa)
+            uc.reg_write(UC_ARM64_REG_PC,address+4);return
         if re.match(r'(dc|ic|tlbi)\s',text,re.I):
             assert el3_cache and active[0]==1 and re.fullmatch(r'(ic\s+iallu|tlbi\s+(alle3|vmalle1))',text,re.I),text
             cache_operations.append(text);uc.reg_write(UC_ARM64_REG_PC,address+4);return
@@ -204,6 +230,9 @@ def check(name,scenario='normal'):
             uc.emu_stop()
     def read(uc,access,address,size,value,unused):
         mapped_access(uc,address,size)
+        if 0x81000000<=address<0x81200000:
+            pa=address-0x40000000;data=bytes(uc.mem_read(pa,size)) if pa&~63 in ns_invalidated else bytes(size)
+            uc.mem_write(address,data);return
         if 0x03460000<=address<0x03560000:
             assert active[0]==1
             assert per_core[1]['sctlr_el1']==0xc50839 and per_core[1]['tcr_el1']==0x800080
@@ -332,12 +361,22 @@ def check(name,scenario='normal'):
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
     initialization=host.local_initialization_snapshot(bytes(cpu.mem_read(0x42002980,256)))
     cache=host.el3_cache_snapshot(bytes(cpu.mem_read(0x42002a80,160)))
+    ns=host.ns_publication_snapshot(bytes(cpu.mem_read(0x42002c20,128)))
     el1=host.el1_cache_snapshot(bytes(cpu.mem_read(0x42002b20,256)))
     controller_access=host.controller_access_snapshot(bytes(cpu.mem_read(0x42002960,32)))
     a.output.with_suffix('.last-observation.json').write_text(json.dumps({
-        'case':name,'assertions_complete':False,'stopped':stopped,'el3_cache':cache,'el1_cache':el1,
+        'case':name,'assertions_complete':False,'stopped':stopped,'el3_cache':cache,'el1_cache':el1,'ns_publication':ns,
         'initialization':initialization,'activation':activation,
         'rdist_writes':rdist_writes,'secondary_terminal':secondary_terminal,'controller_access':controller_access},indent=2)+'\n')
+    if scenario=='ns-maintenance-missed':
+        assert stopped==['park'] and injected and not activation['ack'] and not el1['state']
+        assert ns['state']==1 and ns['failure']==1 and ns['secure_word']!=ns['nonsecure_word']
+        assert not initialization['cleanup_writes']
+        reports.append({'name':name,'ns_publication':ns,'retained':True});return
+    if el1_cache:
+        host.validate_ns_publication(ns,cache,m['el1_call_word'])
+        assert secure_table_cleaned==list(range(0x421f5000,0x421f7000,64))
+        assert ns_invalidated==set(range(0x41000000,0x41200000,64))|set(range(0x421f2000,0x421f4000,64))
     if scenario in ('el1-smc-refusal','el1-restore-refusal'):
         assert el1_cache and stopped==['park'] and injected and not activation['ack']
         assert el1['state']==(1 if scenario=='el1-smc-refusal' else 2) and el1['failure']==1
@@ -352,7 +391,7 @@ def check(name,scenario='normal'):
     if el3_cache:
         host.validate_el3_cache(cache)
         assert cache['epoch']==activation['epoch'] and all(cache_memory.values())
-        assert len(cache_operations)==(11 if el1_cache else 6) and cache_operations.count('ic\tiallu')==(3 if el1_cache else 2)
+        assert len(cache_operations)==(16 if el1_cache else 6) and cache_operations.count('ic\tiallu')==(4 if el1_cache else 2)
     if el1_cache:
         host.validate_el1_cache(el1,m['el1_smc_return'])
         assert el1['epoch']==activation['epoch'] and transitions==['eret-el1','smc-el3']
@@ -505,9 +544,10 @@ def check(name,scenario='normal'):
     assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
-    reports.append({'name':name,'el1_cache':el1,'el1_memory':el1_memory,'transitions':transitions,'el3_cache':cache,'cache_memory':cache_memory,'cache_operations':cache_operations,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization,'controller_access':controller_access})
+    reports.append({'name':name,'ns_publication':ns,'el1_cache':el1,'el1_memory':el1_memory,'transitions':transitions,'el3_cache':cache,'cache_memory':cache_memory,'cache_operations':cache_operations,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization,'controller_access':controller_access})
 if el1_cache:
     check('production-el1-adoption-smc-and-restoration')
+    check('nonsecure-code-alias-mismatch-retains','ns-maintenance-missed')
     check('el1-smc-identity-refusal-retains','el1-smc-refusal')
     check('el1-restoration-readback-refusal-retains','el1-restore-refusal')
 elif el3_cache:

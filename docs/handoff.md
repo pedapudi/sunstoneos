@@ -115,11 +115,11 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:102` after the cached-EL1 diagnostic returned without an EL1
-observation. EL3 adoption/restoration, shutdown/OFF and DRAM restoration passed;
-EL1 execution remains unobserved. The process exited and the failed claim closed.
-The original-board queue is halted pending executable-visibility review. DDR
-continuity began with the initialization and all-secondary-OFF checks on `003:092`.
+instance `003:103` after successful Nonsecure publication, production cached EL1
+entry, SMC return and exact control restoration. Matching shutdown/OFF and DRAM
+restoration passed. The process exited and its successful queue claim closed.
+DDR continuity began with initialization and all-secondary-OFF checks on `003:092`.
+The new instance still needs a fresh launcher survey before another native run.
 The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -311,15 +311,16 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:102`. The user confirmed power
-removal; the coordinator verified the changed USB instance and stopped the
-identified old runner. Its process exited, its claim closed and its queue resumed.
-Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
+The original board on `3-1` returned as `003:103`. Its last confirmed physical
+power removal and fresh DDR/platform preparation are recorded under
+`reconnect-20261018-092/`. Subsequent returning diagnostics preserve that DDR
+continuity. No process or claim from those completed attempts remains active.
 Subsequent diagnostics identified and corrected a group-register verification
 refusal. Core-1 local initialization and restoration now pass under
 `native-local-group-mask-20261018/native/runtime/`. Production EL3 cache adoption
 and restoration also pass under `native-el3-cache-20261018/native-attempt/runtime/`.
-Refresh the current
+Nonsecure publication, production cached EL1 entry and SMC return now pass under
+`native-ns-publication-20261018/native/runtime/`. Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
 `003:101`, has successful DDR, returning survey, SD initial-register and PMIC
@@ -597,22 +598,25 @@ The primary agent handles all further multicore work directly.
    It executes the production adoption helpers, restores all five saved
    controls, completes local cleanup and observed OFF, and returns as `003:100`.
    Four instruction cases cover adoption, inherited SIF and retained readback
-   failures. Next qualify cached EL1 continuation,
-   interrupt delivery, remaining cores, cache coherence and scheduling. Preserve failed-attempt backups and
+   failures. Cached EL1 entry now passes as described below; interrupt delivery,
+   remaining cores, cache coherence and scheduling still require qualification. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
    intentional watchdog expiry and unattended fault tests remain deferred;
    USB power-control work is closed.
 
-The next cached-EL1 diagnostic is implemented and passes three modeled cases:
-production entry/SMC/restoration, unexpected SMC rejection and failed restoration
-retention. Its physical attempt returned normal ROM as `003:102`, with matching
-OFF and DRAM restoration, but the new EL1 report is entirely zero. The uploaded
-overlay matches its frozen bytes and contains the EL1 call. Only the earlier
-EL3-only interval is observed. Evidence is under `native-el1-cache-20261018/`.
-The cause is unresolved; stale executable visibility across cache enablement is
-a hypothesis under review. The child exited and its failed claim closed; the
-original-board queue is halted pending that review. No unchanged retry is allowed.
-No transport failure occurred, and no reconnect is requested on this evidence.
+Core 1 now passes production cached EL1 entry and SMC return after explicit
+Nonsecure code/table publication. Four affected modeled cases pass, including
+retention when one code alias remains stale. The physical result under
+`native-ns-publication-20261018/native/runtime/` records all 32,768 code lines and
+128 table lines maintained, matching changed instructions through both physical
+address spaces, and exact restoration of temporary, EL1 and EL3 controls.
+Local cleanup, matching shutdown/OFF and DRAM restoration pass; ROM returned
+`003:103`. The process and claim closed successfully. The earlier missing-EL1
+attempt remains preserved under `native-el1-cache-20261018/` and is not counted
+as an EL1 success. Reuse the corrected publication for subsequent diagnostics.
+Next extend the proven entry to interrupt delivery, mutable cached memory,
+remaining cores and FreeRTOS scheduling. Maintenance currently admits only clean
+immutable aliases; arbitrary dirty runtime data needs its own ownership/cleanup.
 
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.

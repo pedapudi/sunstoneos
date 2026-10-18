@@ -29,7 +29,7 @@ INTERFACE_PROFILE='core1-cpu-interface-only-v1'
 POWER_PROFILE='core1-before-redistributor-wake-v1'
 WAKE_PROFILE='core1-redistributor-wake-sleep-v1'
 CACHE_PROFILE='core1-el3-cache-restore-v1'
-EL1_CACHE_PROFILE='core1-el1-cache-restore-v1'
+EL1_CACHE_PROFILE='core1-el1-cache-restore-v2'
 
 def execution_profile(before_power,after_interface,before_wake=False,after_wake=False,el3_cache=False,el1_cache=False):
     require(sum((before_power,after_interface,before_wake,after_wake,el3_cache,el1_cache))<=1,'Choose one diagnostic boundary.')
@@ -48,7 +48,7 @@ def manifest_profile(m):
     return profile
 
 SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
-    'boot/a733/native-local-interrupt-probe.c','boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S','platform/a733/cpu_continue.c',
+    'boot/a733/native-local-interrupt-probe.c','boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S','boot/a733/native-ns-publication.S','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
     'runtime/memory.c','runtime/include/string.h','include/a733_cpu_continue.h',
     'include/a733_cpu_entry.h','include/a733_cpu_start.h')
@@ -58,7 +58,7 @@ DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
       ('el1-bss',0x41201000,0x8fd10),('result',0x42000000,0x4000),
       ('contract',0x42004000,0x1000),('monitor-bss',0x42005000,0xa590),
       ('boot-stack',0x42010000,0x4000),('overlay',*OVERLAY),
-      ('tables',0x421f0000,0x5000))
+      ('tables',0x421f0000,0x7000))
 
 def branch(source,target):
     offset=target-source;require(offset%4==0 and -(1<<27)<=offset<(1<<27),'Branch out of range.')
@@ -101,6 +101,8 @@ def prepare(a):
         obj=a.build/'el1-cache.o';objects.append(obj)
         commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-el1-cache-probe.S','-o',obj])
         link_symbols.append('--defsym=probe_production_enter_el1='+hex(symbols['a733_cached_enter_el1']))
+        obj=a.build/'ns-publication.o';objects.append(obj)
+        commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-ns-publication.S','-o',obj])
     commands.extend([[a.lld,*link_symbols,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
         [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']])
     for command in commands:
@@ -142,6 +144,7 @@ def prepare(a):
         'stop_before_wake':a.stop_before_wake,
         'stop_after_wake':a.stop_after_wake,'el3_cache':a.el3_cache,'el1_cache':a.el1_cache,
         'el1_smc_return':hooks.get('el1_smc_return'),
+        'el1_call_word':(branch(hooks['native_el1_call'],hooks['native_el1_cache_probe'])|0x80000000 if a.el1_cache else None),
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
         'sources':{name:digest(ROOT/name) for name in SOURCES},
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
@@ -248,6 +251,21 @@ def validate_el1_cache(r,return_address):
         mpidr=0x81000100,igrpen1=0),'EL1 production entry readbacks differ.')
     require(r['esr']==0x5e000733 and r['elr']==return_address and r['spsr']&0x3ff==0x3c5 and
         r['vector']==8 and r['return_el']==12,'EL1 SMC return identity differs.')
+
+def ns_publication_snapshot(raw):
+    require(len(raw)==128,'Short Nonsecure publication record.')
+    names=('state','epoch','deadline','code_lines','table_lines','ttbr','sctlr','tcr','mair',
+        'restored_sctlr','restored_tcr','restored_ttbr','restored_mair','failure','secure_word','nonsecure_word')
+    return dict(zip(names,struct.unpack('<16Q',raw)))
+
+def validate_ns_publication(r,cache,call_word):
+    require(r['state']==3 and not r['failure'] and r['epoch']==cache['epoch'],'Nonsecure publication incomplete.')
+    require(r['code_lines']==32768 and r['table_lines']==128 and
+        r['ttbr']==0x421f5000 and r['sctlr']==cache['original']['sctlr']|1 and
+        r['tcr']==0x80823019 and r['mair']==0x44ff00,'Nonsecure publication mapping or extent differs.')
+    require(all(r['restored_'+n]==cache['original'][n] for n in ('sctlr','tcr','ttbr','mair')),
+        'Publication controls did not restore.')
+    require(r['secure_word']==r['nonsecure_word']==call_word,'Changed instruction aliases differ.')
 
 def controller_access_snapshot(raw):
     require(len(raw)==32,'Short controller access record.')
@@ -362,9 +380,9 @@ def run(a):
                 node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
-            for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
+            for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x7000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('el1-cache',0x42002b20,256),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('el1-cache',0x42002b20,256),('ns-publication',0x42002c20,128),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -380,6 +398,8 @@ def run(a):
                 if m.get('el3_cache',False) or m.get('el1_cache',False):validate_el3_cache(record['el3_cache'])
                 record['el1_cache']=el1_cache_snapshot((a.evidence/'el1-cache.bin').read_bytes())
                 if m.get('el1_cache',False):validate_el1_cache(record['el1_cache'],m['el1_smc_return'])
+                record['ns_publication']=ns_publication_snapshot((a.evidence/'ns-publication.bin').read_bytes())
+                if m.get('el1_cache',False):validate_ns_publication(record['ns_publication'],record['el3_cache'],m['el1_call_word'])
                 record['controller_access']=controller_access_snapshot((a.evidence/'controller-access.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
                 observation=record['observation'];activation=record['activation'];secondary=record['secondary']

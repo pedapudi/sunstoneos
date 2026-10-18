@@ -960,7 +960,7 @@ access. Its terminal claim was closed, the typo was corrected, and the shared
 validator passed nominal and invalid-type checks. The accepted image and four
 instruction cases were reused for the single physical attempt.
 
-## Cached EL1 diagnostic has no physical observation yet
+## Core 1 enters cached EL1 and returns after Nonsecure publication
 
 `tools/run-native-startup-probe.py prepare --el1-cache` invokes the frozen
 production EL3-to-EL1 entry and EL1 cache helper. A checkpoint replaces the first
@@ -977,11 +977,30 @@ and the existing TF-A-based walk-blocking order. Interrupt delivery, EL1 stack
 access, mutable cached data, other cores and scheduling remain outside this
 checkpoint.
 
-Three instruction cases pass under `native-el1-cache-20261018/`, including
-unexpected SMC rejection and failed restoration retention. The physical attempt
-returned ROM as `003:102` with matching shutdown/OFF and restored DRAM. However,
-the EL1 report is entirely zero, so the attempt failed its required observation.
-The copied upload matches the new binary and its EL1 call. Only the prior EL3
-interval is observed. Stale executable visibility across cache enablement is an
-unconfirmed explanation; no unchanged physical retry is permitted. The failed
-claim is closed and the original-board queue is halted pending corrective review.
+The first physical attempt returned ROM as `003:102` with matching shutdown/OFF
+and restored DRAM, but its EL1 report was entirely zero. The copied upload matched
+the new binary. Evidence under `native-el1-cache-20261018/` retains that failure.
+
+The corrected diagnostic first creates temporary EL3 mappings at
+`0x421f5000..0x421f7000`. Executing code stays Secure Normal-noncacheable; stack
+and reports stay Secure Device. An additional nonexecutable Nonsecure alias
+permits `DC IVAC` over the immutable code and EL1 table pages. Caches remain
+disabled during maintenance. Barriers and instruction-cache invalidation precede
+comparison of the changed call instruction through both physical address spaces.
+The original EL3 controls restore before production cached entry.
+
+Four affected instruction cases pass, including retention when one Nonsecure
+code line remains stale. Physical execution also passes under
+`native-ns-publication-20261018/native/runtime/`: 32,768 code lines and 128 table
+lines were maintained, the instruction comparisons match, and EL1 returns through
+the expected SMC vector. SCTLR_EL1 reads `0x30d01805`, TCR_EL1 `0x200803019`,
+and TTBR0_EL1 `0x421f2000`. All five saved EL1 controls restore exactly.
+Temporary and production EL3 controls, local interrupts and shared state restore;
+matching shutdown/OFF and DRAM restoration complete. ROM returns as `003:103`.
+
+This maintenance admits only known clean immutable aliases from the recorded
+startup history. It does not discard arbitrary dirty runtime data or establish
+general warm OS replacement. The model checks security-selected maintenance
+coverage and actual descriptors; it does not simulate the complete DSU cache.
+Interrupt delivery, mutable cached memory, other cores and scheduling remain
+required physical work.
