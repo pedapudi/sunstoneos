@@ -6,7 +6,7 @@ NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma bytes
 Physical camera operation remains unqualified, and module availability is
 unconfirmed.
 
-The image reuses the maintained cached boot, EL3 return and native USB provider
+The image reuses the maintained cached boot, EL3 exception routing and native USB provider
 construction. It starts three privileged FreeRTOS tasks for the PMIC provider,
 USB0 and camera ownership. It does not start storage workers or source power.
 The immutable session page binds the camera record, shared provider settings,
@@ -19,7 +19,7 @@ backing and a separate CPU-owned output allocation before starting the scheduler
 At that point, media and rail headers describe future providers without claiming
 live leases. The camera task obtains actual rail and PCK leases, initializes the
 media controller, and advances the native camera. The PMIC task independently
-services supply observations. Only this task uses the cached singleton allocator;
+services supply observations. Only the camera task uses the cached singleton allocator after startup;
 USB reads published output without touching allocator metadata.
 
 The camera task copies both completed planes through the native copy interface.

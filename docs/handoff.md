@@ -60,13 +60,19 @@ the central board image build pass. All 156 actual repository dependencies match
 the preserved application snapshot; no runtime checks were repeated for integration.
 Full native startup, physical transfers and entropy qualification remain untested.
 
-The board image still requires a qualified hardware-watchdog window. A Sol 6.1
-worker is implementing a separate supervised all-core observer that requires the
-watchdog to remain disabled. Its intended completion is USB result capture and
-manual reconnection; it does not claim a software return to ROM after all-core
-entry. A second worker owns a separate native camera application. Both use
-isolated worktrees and request Astra source review before focused execution.
-Neither may access the board. Root owns central integration and physical tests.
+The board image still requires a qualified hardware-watchdog window. The separate
+[supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
+remain disabled. Its native build and focused startup, admission and host checks
+pass, including central integration. USB capture leaves the board running until
+manual reconnection; successful capture retains the board claim and lock.
+Fresh physical entry admission remains incomplete.
+
+The [native camera application](camera-application.md) connects actual providers,
+OV5640 capture, retained full-frame copies and USB0 output. Its native build and
+nine focused application checks pass, including central integration. The camera
+module and physical launch conditions remain unqualified. A Sol 6.1 worker is
+finishing fixed GPU application integration after Astra source review. Root owns
+central integration and physical tests; workers have no board access.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
@@ -76,8 +82,8 @@ cases exercise submission and retained failures with poisoned output, so they do
 not establish successful GPU rendering. Native camera evidence and matching
 integrated source identities are recorded in `camera-native-20261017/handoff.json`.
 Its `root-reconcile.json` records the shared clock and PMIC profile extensions;
-the camera's exercised scopes and rail decoding are unchanged. Complete
-image/provider admission and physical capture remain outstanding.
+the camera's exercised scopes and rail decoding are unchanged. Complete native
+application linkage now passes; physical admission and capture remain outstanding.
 
 The compact DMA image includes native result frames, privilege routing and a
 host capture path. Focused checks passed on the linked image using refused
@@ -116,10 +122,16 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The user disconnected and reconnected the board. It now enumerates at `003:065`
-as `1f3a:efe8`; the reconnect rule and current node permissions pass the host
-check. No ROM command has been sent to this new instance. Reidentify it under
-the board lock before protocol work, and treat DDR as uninitialized.
+The reconnected board remains `003:065` on port `3-1`, with valid session access.
+Fresh RAM-only DDR initialization passed once through the existing loader:
+12,288 MiB reported, board setup result zero, and two distinct 4 KiB RAM pages
+matched. The loader returned to FEL without a reset or persistent write.
+Evidence is under `supervised-ddr-20261017-192435/`. A subsequent read-only
+snapshot found all seven secondary cores inactive by the startup driver's
+criteria, inherited USB0 clocks/reset state, and a disabled watchdog. Its record
+is `supervised-entry-state-20261017-193112/result.json`. These observations do not
+by themselves establish auxiliary-core/DMA exclusion or every cached-entry
+condition. Resolve the remaining source-backed entry conditions before launch.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -128,8 +140,8 @@ watchdog. The boot input was high, so it cannot currently protect a reset from
 storage boot. The user confirmed automatic FEL entry after disconnecting and
 reattaching USB, with a microSD card inserted and no button held. Preserve that
 card. No watchdog was armed and no reset was issued.
-The failed UFS instance `003:063` remains quarantined. DDR must be reinitialized;
-do not reuse previous RAM assets or signatures.
+The failed UFS instance `003:063` remains quarantined. Only the fresh DDR
+evidence applies to the current instance; older RAM assets and signatures do not.
 The [SRAM configuration trial](watchdog.md) now verifies ROM-redirect and
 watchdog reset-policy writes with complete register/workspace restoration.
 It never enables the timer. Timer enabling, expiry, and reset retention remain
@@ -167,7 +179,10 @@ entropy, Type-C and USB host handoffs and `root-reconcile.json` records are unde
 application evidence is under `board-radio-20261017/` and
 `board-application-20261017/`. The latter includes central build inputs and
 artifacts in `central-snapshot/`; `central-integration.json` references matching
-external inputs already preserved by the worker. Storage native
+external inputs already preserved by the worker. Camera and supervised observer
+central records are under `camera-application-20261017/` and
+`smp-supervised-20261017/`. All 105 camera and 30 observer repository dependencies
+match their worker snapshots; runtime cases were not repeated. Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
 `native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
 evidence and central source reconciliation are under `storage-maintenance-20261017/`.
@@ -220,10 +235,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Complete and review the separate supervised all-core observer. Its intended
-   recovery is manual reconnection after USB capture or failure. Prepare one
-   bounded RAM-only physical attempt after its software checks and real entry
-   admission are complete. Preserve storage,
+1. Finish fresh physical entry admission for the tested supervised all-core
+   observer. DDR and secondary-core inactivity evidence are available. Resolve
+   auxiliary-core/DMA ownership and reset/firmware provenance, then prepare one
+   bounded attempt with manual reconnection after USB capture or failure. Preserve storage,
    honor actual admission requirements and stop at the first transport failure.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed; no cable move or
@@ -232,10 +247,9 @@ recordings and model identities remain the reference.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
    conditions by itself.
-3. Connect the integrated native camera and fixed GPU render service to complete
-   application startup. Bind
-   immutable boot admission, genuine resource ownership and qualified memory
-   to executable applications. Retained buffers permit neither invented drain
+3. Integrate the completed fixed GPU application when its preserved evidence
+   arrives. Native camera application linkage is complete; actual camera memory,
+   module and boot admission remain required before physical capture. Retained buffers permit neither invented drain
    nor resource reuse. The larger memory profile supplies capacity; physical
    exclusion, coherence and device mappings remain required.
 4. Qualify all-core startup, interrupts, scheduler results and coherent memory

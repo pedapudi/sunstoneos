@@ -98,3 +98,9 @@ The [native board application](board-application.md) is available as
 freestanding C headers. It links USB0 output, USB2 host reads and native radio
 startup. Its immutable session still requires qualified hardware-watchdog,
 memory and power admission before physical execution.
+
+The `sunstone-a733-camera` target connects native OV5640 capture to USB0 output.
+The separate `a733-smp-supervised` target runs the all-core observer with the
+watchdog disabled and manual recovery. Both are available through the central
+build. Their component documents describe distinct physical admission requirements:
+[camera](camera-application.md) and [supervised observer](a733-smp-supervised.md).

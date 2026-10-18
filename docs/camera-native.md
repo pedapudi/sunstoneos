@@ -9,8 +9,9 @@ produce these planes without an ISP image-processing pipeline.
 The implementation uses the existing clock registry, media controller, rail
 ledger, queued PMIC provider, banked pin manager, system IOMMU and singleton
 memory allocator. It executes the existing sensor, analog calibration, CSI,
-route and DMA controllers. Physical operation is unqualified. A camera-specific
-protected boot handoff and executable camera image remain integration requirements.
+route and DMA controllers. The [native camera application](camera-application.md) connects these providers
+to executable startup and USB output. Physical operation and its protected boot
+admission remain unqualified.
 
 ## Boot admission and wiring
 
