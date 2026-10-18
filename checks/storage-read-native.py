@@ -33,6 +33,12 @@ class Machine:
   self.image=image;self.session=session;self.variant=variant;self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.reg_write(UC_ARM64_REG_PSTATE,5)
   for a,n in [(0x02000000,0x06000000),(0x40000000,0x04000000),(0x50000000,0x01000000)]:self.cpu.mem_map(a,n)
   for a,data in image.parts:self.cpu.mem_write(a,data)
+  # This fixture bypasses scheduler entry. The SRE port starts with9999 to
+  # prohibit early task-context I/O, then restores initial task nesting0.
+  # Model that actual normal-task state only for the single-core port symbols.
+  if 'ullCriticalNesting' in image.symbols:
+   self.cpu.mem_write(image.address('ullCriticalNesting'),bytes(8))
+   self.cpu.mem_write(image.address('ullPortInterruptNesting'),bytes(8))
   self.base=image.address('storage_read');self.layout=image.layouts['storage_read_application'];self.platform=self.base+self.layout['platform'];self.p=image.layouts['a733_mmc_platform'];self.core=self.platform+self.p['core'];self.c=image.layouts['sunxi_mmc'];self.native=self.base+self.layout['native'];self.n=image.layouts['a733_mmc_platform_native'];self.board=image.address('board');self.shared=image.address('providers')+image.layouts['board_provider']['shared'];self.usb=image.layouts['a733_native_usb']
   self.time=1000000;self.held=False;self.appheld=False;self.finished=False;self.retained=False;self.trace=[];self.commands=[];self.fifo=0;self.total=0;self.data_command=0;self.state=0;self.ocr=0;self.tx=[];self.request=None;self.max_tx=768
   self.cpu.mem_write(self.base,session);self.cpu.mem_write(self.board,session[:592]);self.write(self.board+160,61000000,8);self.write(self.base+self.layout['handle'],1,8);self.write(self.base+self.layout['mutex'],1,8)

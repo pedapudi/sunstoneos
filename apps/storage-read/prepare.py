@@ -25,7 +25,7 @@ def inherited_mux(raw):
 
 def session_check(raw):
     require(len(raw)==880,'SD0 read session must be 880 bytes.')
-    require(board.session_check(raw[:592])==2,'SD0 read requires USB0/provider selection 2.')
+    require(board.session_check(raw[:592],usb_reference_modes=(1,2))==2,'SD0 read requires USB0/provider selection 2.')
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373352444131,2,880),'Invalid storage_read session extension.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid storage_read owner.')
@@ -61,7 +61,7 @@ def embedded_reference(image,session):
     off=first-int(parts[0]['p_vaddr']);require(parts[0].data()[off:off+32]==session[48:80],'Template and const SD0 build ID differ.')
     return None
 
-def image_manifest_check(manifest,image):
+def image_manifest_check(manifest,image,session=None):
     """Bind a supported execution profile to the actual immutable ELF startup."""
     import io
     from elftools.elf.elffile import ELFFile
@@ -71,6 +71,9 @@ def image_manifest_check(manifest,image):
     require(target in profiles and manifest.get('execution_profile')==profiles[target] and
             manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),
             'Tested STORAGE_READ image manifest required.')
+    if session is not None:
+        require(struct.unpack_from('<I',session,532)[0]==1 or target=='sunstone-a733-storage-read-single-core',
+                'ROM USB0 takeover requires the single-core SD0 image.')
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image symbols absent.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
@@ -158,6 +161,22 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
             'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}[key]
         require(all(fact.get(k) is True for k in required),'Required STORAGE_READ physical fact absent.')
+    if struct.unpack_from('<I',raw,532)[0]==2:
+        # The existing platform reference is retained by board.validate_admission.
+        # Its USB ownership condition must now authorize this exact ROM takeover,
+        # rather than treating the common cold-master word as that authority.
+        platform=json.loads(cache[record['platform']['path']])
+        ref=platform['conditions']['usb-clock-power-reset-ownership']
+        fact=json.loads(cache[ref['path']])
+        require(fact.get('schema')=='a733-usb0-rom-takeover-v1' and
+                fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and
+                fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,
+                'Reviewed ROM USB0 takeover is not bound to this image/target.')
+        required=['all_usb0_clients_excluded','usb1_clients_excluded','external_dma_and_remote_writers_excluded',
+                  'rom_usb0_pio_no_undrained_dma',
+                  'authorize_one_disconnect_and_device_reset','preserve_usb1_and_shared_reference',
+                  'whole_board_power_removal_on_uncertainty']
+        require(all(fact.get(key) is True for key in required),'Required ROM USB0 takeover authority absent.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
@@ -166,7 +185,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    image_manifest_check(mf,snapshots['image.elf'])
+    image_manifest_check(mf,snapshots['image.elf'],raw)
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -204,6 +223,7 @@ def validate_bundle(bundle):
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'STORAGE_READ protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'STORAGE_READ initial report backing changed.')
     raw=data['session.bin'];session_check(raw)
+    image_manifest_check(manifest,data['image.elf'],raw)
     template=data['session-template.bin'];cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
     validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:data['image.elf']));require(identity.hex()==p['build_id'],'STORAGE_READ build identity changed.')

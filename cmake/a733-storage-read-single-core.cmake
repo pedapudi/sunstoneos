@@ -36,7 +36,7 @@ foreach(target sunstone-a733-storage-read-single-core a733-sd-single-core-usb2-h
  set_property(TARGET ${target} PROPERTY COMPILE_OPTIONS "${sdsc_options}")
  target_include_directories(${target} BEFORE PRIVATE "${sdsc_app}" "${sdsc_port}")
  target_include_directories(${target} PRIVATE ${sdsc_includes})
- target_compile_definitions(${target} PRIVATE ${sdsc_definitions} GUEST=1)
+ target_compile_definitions(${target} PRIVATE ${sdsc_definitions} GUEST=1 SUNSTONE_SD_SINGLE_CORE=1)
 endforeach()
 target_include_directories(a733-sd-single-core-usb2-host BEFORE PRIVATE "${sdsc_root}/drivers/usb/host")
 target_compile_options(a733-sd-single-core-usb2-host PRIVATE "SHELL:-include ${sdsc_root}/apps/board/host-symbols.h")

@@ -129,6 +129,14 @@ SD0 translation. Device mappings are outer-shareable; the private PIO buffer
 remains cacheable and inner-shareable. The diagnostic log shares the correctly
 aligned non-cacheable result block.
 
+The existing USB0 handoff word may select mode 2 only for this image profile.
+Its reviewed USB ownership evidence must authorize one ROM device takeover,
+exclude other clients and DMA writers, and establish that ROM used PIO with no
+undrained DMA. The driver checks the exact inherited device-only state and
+inactive DMA channels before disconnect stabilization and its bounded local
+reset. Elapsed stabilization time does not establish DMA completion. USB1 and
+the shared 24 MHz reference remain reserved and unchanged.
+
 The secure timer expires at the existing admitted session deadline. Expiry,
 exceptions and fatal exits halt with all controller, provider, buffer and lock
 ownership retained. They perform no reset or resource release. Recovery requires
@@ -141,6 +149,18 @@ The image has its own immutable startup marker and manifest profile,
 ELF entry, read-only marker and service geometry. The existing host still requires
 both native reads and every requested USB range. This image supports independent
 peripheral qualification; all-core FreeRTOS support remains required.
+
+One native link and focused software checks pass for this profile: twelve
+startup/admission cases, native two-client repeated reads, USB fragmentation and
+acknowledgement, and common host acceptance of two ranges plus both native reads.
+The compiled closure contains 161 objects and 407 inputs. Evidence is under
+`~/.cache/sunstoneos/evidence/sd-single-core-20261018/`; the ELF SHA-256 is
+`3e43f74e28881003e979fc900d6c7d0bd613e4001ce2d64100d2890ca6367344`.
+The checks model GIC registers, cache publication, the hardware translation walk,
+card/MMIO effects, scheduling and USB completion. They execute table construction,
+sealed-session consumers and static task/provider construction, stopping before
+scheduler entry in the startup check. Physical startup, ROM takeover and SD/USB
+operation on the selected board remain unqualified.
 
 ## Two copied client slots share one controller buffer
 

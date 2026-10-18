@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Execute admitted single-core storage startup; hardware effects remain modeled."""
-import argparse, hashlib, importlib.util, json, struct
+import argparse, hashlib, importlib.util, json, re, struct, subprocess
 from pathlib import Path
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import *
@@ -17,6 +17,7 @@ class Machine:
         for address,data in image.parts:self.cpu.mem_write(address,data)
         self.raw=bytes(session);self.variant=variant;self.finished=False;self.parked=False
         self.publications=[];self.writes=[];self.time=24000000
+        self.sysregs={'icc_iar0_el1':29,'icc_pmr_el1':0xf0,'cntfrq_el0':24000000,'esr_el3':0,'elr_el3':0,'far_el3':0,'sctlr_el1':0x30d00800,'mair_el1':0,'tcr_el1':0,'ttbr0_el1':0,'par_el1':0}
         self.cpu.reg_write(UC_ARM64_REG_PSTATE,0x3cd)
         self.cpu.mem_write(0x41f00000,self.raw)
         self.write(0x03400000,0x37);self.write(0x03400004,7)
@@ -41,7 +42,27 @@ class Machine:
         self.cpu.reg_write(UC_ARM64_REG_X0,v);self.cpu.reg_write(UC_ARM64_REG_PC,self.cpu.reg_read(UC_ARM64_REG_LR))
     def hook(self,cpu,a,size,_):
         instruction=int.from_bytes(cpu.mem_read(a,4),'little')
-        if a==0x50fff000:self.finished=True;cpu.emu_stop();return
+        if a==0x43fff000:self.finished=True;cpu.emu_stop();return
+        if a==self.e.address('platform_panic'):
+            pointer=cpu.reg_read(UC_ARM64_REG_X0);text=bytes(cpu.mem_read(pointer,160)).split(b'\0',1)[0]
+            raise AssertionError(('Actual native startup panic',text,cpu.reg_read(UC_ARM64_REG_X1)))
+        text=self.e.ops.get(a,'')
+        hardware=r'(?:icc_\S+|cntfrq_el0|cntps_\S+|cntp_\S+|scr_el3|hcr_el2|sctlr_el1|mair_el1|tcr_el1|ttbr0_el1|par_el1|cnthctl_el2|cntvoff_el2|cptr_el[23]|esr_el3|elr_el3|far_el3)'
+        read=re.match(r'mrs\s+x(\d+),\s*('+hardware+r')$',text,re.I)
+        write=re.match(r'msr\s+('+hardware+r'),\s*x(\d+|zr)$',text,re.I)
+        if read:
+            key=read[2].lower();assert key in self.sysregs,key
+            cpu.reg_write(UC_ARM64_REG_X0+int(read[1]),self.sysregs[key])
+            cpu.reg_write(UC_ARM64_REG_PC,a+4);return
+        if write:
+            key=write[1].lower();value=0 if write[2].lower()=='zr' else cpu.reg_read(UC_ARM64_REG_X0+int(write[2]))
+            self.sysregs[key]=value&0xf0 if key=='icc_pmr_el1' else value
+            cpu.reg_write(UC_ARM64_REG_PC,a+4);return
+        translation=re.match(r'at\s+s1e1([rw]),\s*x(\d+)$',text,re.I)
+        if translation:
+            va=cpu.reg_read(UC_ARM64_REG_X0+int(translation[2]))
+            self.sysregs['par_el1']=self.translate(va,translation[1].lower()=='w')
+            cpu.reg_write(UC_ARM64_REG_PC,a+4);return
         # The architectural counter and publication are the explicit model
         # boundaries. Admission, copying, SHA-256 and GIC sequencing execute.
         if instruction&0xffffffe0==0xd53be020:
@@ -57,21 +78,53 @@ class Machine:
         if instruction==0xd503205f:
             self.parked=True;cpu.emu_stop();return
         if getattr(self,'stop_at',None)==a:self.finished=True;cpu.emu_stop()
+    def translate(self,va,write):
+        # Model the architecture's hardware walk over the descriptors actually
+        # written by platform_init, never a fabricated identity/attribute tuple.
+        assert self.sysregs['tcr_el1']==0x200803519,hex(self.sysregs['tcr_el1'])
+        table=self.sysregs['ttbr0_el1']&0x0000fffffffff000
+        for shift in (30,21,12):
+            entry=self.read(table+((va>>shift)&511)*8)
+            kind=entry&3
+            if kind==3 and shift!=12:
+                assert entry==(entry&0x0000fffffffff000)|3,'Unsupported table descriptor flags'
+                table=entry&0x0000fffffffff000;continue
+            if not ((kind==1 and shift!=12) or (kind==3 and shift==12)):return 1
+            # Block descriptors cannot carry lower output-address bits.
+            if entry&(((1<<shift)-1)&~4095):return 1
+            if not entry&(1<<10) or (write and entry&(1<<7)):return 1
+            physical=(entry&0x0000fffffffff000&~((1<<shift)-1))|(va&((1<<shift)-1))
+            attr=(self.sysregs['mair_el1']>>(((entry>>2)&7)*8))&255
+            return (physical&~4095)|(attr<<56)|(((entry>>8)&3)<<7)
+        return 1
     def call(self,name,*args):
         self.finished=False;self.parked=False
-        self.cpu.reg_write(UC_ARM64_REG_SP,0x50ffeff0)
-        self.cpu.reg_write(UC_ARM64_REG_LR,0x50fff000)
+        self.cpu.reg_write(UC_ARM64_REG_SP,0x43ffeff0)
+        self.cpu.reg_write(UC_ARM64_REG_LR,0x43fff000)
         for i,value in enumerate(args):self.cpu.reg_write(UC_ARM64_REG_X0+i,value)
-        self.cpu.emu_start(self.e.address(name),0,count=3000000)
+        try:self.cpu.emu_start(self.e.address(name),0,count=3000000)
+        except Exception:
+            pc=self.cpu.reg_read(UC_ARM64_REG_PC)
+            print('Failed modeled instruction',name,hex(pc),self.e.ops.get(pc,''))
+            print('MMU context',[(n,hex(self.cpu.cpr_read(*r))) for n,r in [('sctlr',(3,0,1,0,0)),('ttbr0',(3,0,2,0,0)),('tcr',(3,0,2,0,2)),('esr1',(3,0,5,2,0)),('far1',(3,0,6,0,0))]])
+            raise
         assert self.finished or self.parked,name
         return self.cpu.reg_read(UC_ARM64_REG_X0)
 def run(image,session,out):
     out.mkdir(parents=True,exist_ok=False)
     native=module('sd_single_core_image',ROOT/'checks/storage-read-native.py')
-    e=native.Image(image);e.path=image;raw=session.read_bytes();results={}
+    e=native.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
+    disassembly=subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True)
+    for line in disassembly.splitlines():
+        match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
+        if match:e.ops[int(match[1],16)]=match[2].strip()
     assert not any(n in e.symbols and e.symbols[n]-{0} for n in
       ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset'))
     m=Machine(e,raw);m.call('sd_single_core_monitor_init');assert not m.parked
+    assert m.sysregs['scr_el3']==0x505 and m.sysregs['icc_igrpen0_el1']==1
+    assert m.sysregs['cntps_cval_el1']==struct.unpack_from('<Q',m.contract,96)[0]
+    assert m.sysregs['cntps_ctl_el1']==1
+    assert not m.read(0x03470080,4)&(1<<29) and m.read(0x03470080,4)&(1<<30)
     board=m.call('board_session_snapshot');sd=m.call('storage_read_admitted_session')
     assert bytes(m.cpu.mem_read(board,592))==raw[:592] and bytes(m.cpu.mem_read(sd,880))==raw
     lo=e.address('__monitor_state_start');hi=e.address('__monitor_state_end')
@@ -82,18 +135,20 @@ def run(image,session,out):
     m.finished=False;m.cpu.emu_start(e.address('_start'),0,count=3000000);assert m.finished
     assert bytes(m.cpu.mem_read(lo,hi-lo))==before
     results['sealed-session-survives-upload-mutation-and-el1-bss-clear']=True
-    # Execute the real platform table construction and MMU enable, then inspect
-    # its descriptors and the actual AT/PAR translator used by SD admission.
+    (out/'completed-cases.json').write_text(json.dumps(results,indent=2)+'\n')
+    # Execute the real platform table construction and modeled MMU register programming, then inspect
+    # its descriptors and the native AT/PAR consumer used by SD admission.
+    # The hardware table walk is modeled from those actual descriptors.
     m.stop_at=e.address('a733_smp_diagnostic_start')
-    m.cpu.reg_write(UC_ARM64_REG_CP_REG,(3,0,1,0,0,0x30d00800))
+    m.sysregs['sctlr_el1']=0x30d00800
     m.call('kernel_main');assert m.finished and not m.parked
     level1=e.address('level1');level2=e.address('level2')
     assert m.read(level1)&0x31f==0x201 and m.read(level1+8)==level2|3
     assert m.read(level2+16*8)==0x42000000|0x400|0x300|8|1
-    assert m.call('aarch64_device_translate',0x04020000,1,0x50010000)==1
-    assert struct.unpack('<QII',m.cpu.mem_read(0x50010000,16))==(0x04020000,0,2)
-    assert m.call('aarch64_device_translate',e.address('storage_read'),1,0x50010000)==1
-    assert struct.unpack('<QII',m.cpu.mem_read(0x50010000,16))==(e.address('storage_read'),0xff,3)
+    assert m.call('aarch64_device_translate',0x04020000,1,0x43010000)==1
+    assert struct.unpack('<QII',m.cpu.mem_read(0x43010000,16))==(0x04020000,0,2)
+    assert m.call('aarch64_device_translate',e.address('storage_read'),1,0x43010000)==1
+    assert struct.unpack('<QII',m.cpu.mem_read(0x43010000,16))==(e.address('storage_read'),0xff,3)
     assert m.call('a733_smp_device_preparation_admitted')==1
     results['actual-platform-mappings-and-single-core-preparation']=True
     # Run the unchanged board constructor and actual kernel static-task/queue
@@ -127,14 +182,14 @@ def run(image,session,out):
         f=Machine(e,raw);f.call('sd_single_core_monitor_init')
         if name=='sd_single_core_exception':
             # IRQ number and group acknowledge are modeled system-register state.
-            f.cpu.reg_write(UC_ARM64_REG_CP_REG,(3,0,12,8,0,29))
+            f.sysregs['icc_iar0_el1']=29
         f.call(name,*args);assert f.parked and f.read(0x42000000+24)==5
         if name=='a733_smp_stop':assert f.read(0x42000000+32)==7 and f.read(0x42000000+40)==0xabc
         else:assert f.read(0x42000000+32)==2 and f.read(0x42000000+40)==29
         results[name+'-retains']=True
     (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,
       image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),
-      cases=results,scope='Actual linked single-core monitor admission, full-session SHA-256/publication, retained terminal paths and EL1 BSS clearing. Counter, cache publication, GIC/MMIO and interrupt state modeled; no physical boot or storage claims.'),indent=2)+'\n')
+      cases=results,scope='Actual linked single-core monitor admission, full-session SHA-256/publication, retained terminal paths and EL1 BSS clearing. Counter, cache publication, GIC/MMIO/interrupt state and hardware table walk modeled from actual produced descriptors; no physical boot or storage claims.'),indent=2)+'\n')
     print('PASS single-core storage session and retained lifetime')
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

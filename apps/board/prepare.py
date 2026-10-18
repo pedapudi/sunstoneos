@@ -27,9 +27,10 @@ def request_bytes(address,identity,epoch,generation,lease,session):
     contract=struct.pack('<6Q',0,2,224,epoch,generation,generation^((1<<64)-1))+identity
     contract+=struct.pack('<14Q',0,0,0,0,lease,0,0,0,0,0,0,0,0x41f00000,592)+h
     return request,contract+bytes(4096-len(contract))
-def session_check(raw):
+def session_check(raw,usb_reference_modes=(1,)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
+    require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
     workload=struct.unpack_from('<I',raw,400)[0];require(workload<=3,'Unsupported fixed workload.')
     return workload
 
