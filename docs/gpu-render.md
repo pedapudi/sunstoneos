@@ -30,7 +30,7 @@ The graphics address space contains these mappings:
 | Purpose | GPU address | Permissions and size |
 | --- | --- | --- |
 | Fixed general-heap fence and reserved static data | `0x8000000000` | Writable, 4 KiB, bypass GPU system cache |
-| Render-target state | `0x8004000000` onward | Existing protected resource layout |
+| Render-target state | `0x8004000000` onward | Writable, existing render-resource layout |
 | Free-list tables | `0x8006000000` onward | Firmware-protected, bypass GPU system cache |
 | Context-switch state, output and border table | `0x8008000000` | Writable, 344 KiB, bypass GPU system cache |
 | Programmable data sequencer programs | `0xda00000000` | Read-only, 4 KiB |
