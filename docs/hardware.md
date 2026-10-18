@@ -226,7 +226,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks, 13 modeled native cases and four host cases pass; all 175 compiled
   repository inputs match integration under `thermal-application-20261018/`.
   A boot-CPU-only profile also passes thirteen startup/IRQ/provider cases and
-  six host cases under `thermal-single-core-20261018/`. All 576 frozen inputs
+  six host cases under `thermal-single-core-20261018/`. The subsequent clock fix
+  supports normalized 24 MHz references from 19.2/26 MHz oscillators and chooses
+  the matching GPADC source. One focused sanitized driver check and review pass
+  under `thermal-clock-reference-20261018/`; the unchanged startup layout allows
+  reuse of earlier startup and host cases. All 581 frozen inputs
   match integration; calibration, thresholds and service code are unchanged.
   Existing calibration and controller evidence was reused. Physical acquisition,
   accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal

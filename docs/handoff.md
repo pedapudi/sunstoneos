@@ -55,6 +55,15 @@ repository and 243 external frozen inputs match integration. Calibration,
 thresholds and repeated acquisition code are unchanged. Physical acquisition,
 interrupt delivery and accuracy remain outstanding.
 
+The thermal driver now accepts normalized 24 MHz references from 19.2, 24 and
+26 MHz oscillators. Cold setup selects normalized SYS24 when raw DCXO is not
+24 MHz; adoption rejects an incorrect active source. One focused ASan/UBSan
+check and Astra review pass under `thermal-clock-reference-20261018/`. All 338
+repository and 243 external frozen inputs match integration. Relevant image
+layout is unchanged, so the accepted startup and host cases were reused.
+The second board still needs current APB1/GPADC clock observations and physical
+supply, ownership, entry and recovery admission before thermal acquisition.
+
 The complete board application now has a boot-CPU-only profile with actual USB,
 radio, crypto entropy and network providers. All four workload selectors pass
 startup instruction checks. Fifteen startup cases, nine host cases and one
