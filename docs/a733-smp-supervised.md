@@ -1211,3 +1211,43 @@ and Device-memory monitor writes. Concurrent shared-memory coherence, interrupt
 delivery and FreeRTOS scheduling remain outstanding. Runtime cache shutdown with
 dirty Normal memory requires its own maintenance protocol; the diagnostic does
 not exercise that case.
+
+## Concurrent cached exchange across all seven secondaries
+
+The returning diagnostic releases all seven secondary cores before waiting for
+their completed workload. An early identity record permits the primary to start
+the next target; final readiness still requires complete cached execution,
+control restoration and local interrupt cleanup. The boot CPU remains at EL3.
+Its unused first EL1 stack page provides the shared data area inside native BSS,
+so existing initialization, Nonsecure publication and host backup apply.
+
+Every secondary performs 32 exclusive atomic increments, followed by 32 ordered
+payload transfers through release/acquire synchronization. The final-store
+barrier requires every participant to finish writing before any starts cache
+cleaning. Each target executes Nonsecure `DC CIVAC` over all 64 lines and
+`DSB SY`, then returns through SMC and the demonstrated restoration path.
+After matching acknowledgment and independently observed OFF on every target,
+the primary copies the 4 KiB physical page into the Device-memory report.
+The host validates every byte, including unused space, against the live epoch.
+
+Three instruction cases cover success, corrupted payload and failed EL3
+restoration. Six host cases cover capture, expanded backup, transport failure,
+incomplete cleaning evidence, changed inputs and an incorrect physical-memory
+copy. The successful instruction case was reused after correcting a fault-case
+assertion to allow waiting peers to reach the deadline. No native rebuild or
+successful case replay was needed. These models do not simulate physical caches.
+
+Physical execution passes under
+`secondary-coherence-probe-20261018/physical-113/runtime/`. All seven targets
+complete the exchange, 224 total atomic increments and 224 total payload
+transfers. Every target reports 64 cleaned lines; the copied physical page
+matches all 4,096 expected bytes. Exact target control/local-state restoration,
+shared distributor restoration and saved DRAM restoration pass. All 45 host
+transactions succeed. ROM returns as `003:114`, identity
+`[7,2753,1097073,0,0]`; the runner exits and its queue claim closes as passed.
+Implementation: local commit `464c96c`.
+
+The result covers cached coherent exchange across five A55 secondaries and both
+A76 cores with a known single-page write set. Boot-CPU participation, interrupt
+delivery, general runtime cache teardown and eight-core FreeRTOS scheduling
+remain outstanding.

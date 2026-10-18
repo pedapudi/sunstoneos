@@ -106,8 +106,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `secondary-cache-probe-20261018/physical-111/`. Translation and local interrupt
   controls restore before each shutdown; shared state and saved DRAM restore
   before responsive ROM return as `003:113`. Each target runs separately with
-  no EL1 data stores or interrupt delivery. Concurrent cache coherence,
-  interrupt delivery and scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
+  no EL1 data stores or interrupt delivery. A subsequent concurrent diagnostic
+  passes 224 atomic increments and 224 ordered payload transfers across all seven
+  secondaries. Every target cleans the single shared page before restored shutdown;
+  its final 4 KiB physical copy matches exactly. ROM and DRAM restoration pass
+  under `secondary-coherence-probe-20261018/physical-113/`. This establishes
+  coherent cached exchange for that workload. Boot-CPU participation, interrupt
+  delivery, broader runtime memory use and eight-core scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;

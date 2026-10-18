@@ -1,16 +1,20 @@
 # Current work
 
-All seven secondary cores now pass cached EL3 and EL1 execution on the original
-board. Each target completes production CPU and local interrupt preparation,
-returns from EL1 through SMC, restores its translation and interrupt controls,
-and reaches independently observed OFF before shared cleanup. Saved DRAM also
-restores. Evidence: `secondary-cache-probe-20261018/physical-111/runtime/`.
-The runner exited and its claim closed as passed. Current ROM is `003:113`,
-identity `[7,2749,1097072,0,0]`, on port `3-1`. No reconnect is needed.
-Concurrent shared-memory coherence, interrupt delivery and FreeRTOS scheduling
-remain outstanding. Preserve DDR continuity and refresh warm launcher state
-before the next native operation. The cached interval performs no EL1 data
-stores and no interrupt delivery; it does not qualify runtime cache shutdown.
+All seven secondary cores now pass concurrent cached shared-memory exchange
+on the original board. Each performs 32 atomic increments and 32 ordered payload
+transfers. All participants stop writing before each cleans the shared page
+through its Nonsecure mapping. After exact control/local-state restoration and
+independently observed OFF on every target, the primary copies the resulting
+4 KiB physical page; every byte matches the expected content. Shared distributor
+and saved DRAM restoration also pass. Evidence:
+`secondary-coherence-probe-20261018/physical-113/runtime/`.
+The runner exited and its claim closed as passed. Current ROM is `003:114`,
+identity `[7,2753,1097073,0,0]`, on port `3-1`. No reconnect is needed.
+Interrupt delivery, boot-CPU participation in cached exchange and eight-core
+FreeRTOS scheduling remain outstanding. Preserve DDR continuity and refresh
+warm launcher state before the next native operation. The demonstrated cache
+cleanup covers the known single-page write set; general OS teardown remains
+unqualified.
 
 The second board completed the 21-register PMIC probe and returned as `003:112`,
 identity `[7,2745,1097071,0,0]`, on port `3-3`. DCDC2 is enabled and programmed
@@ -379,13 +383,15 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned successfully as `003:113`, identity
-`[7,2749,1097072,0,0]`, after sequential cached EL3/EL1 entry on all seven
-secondaries. Every target returned through SMC and restored its translation
-controls and local interrupt state before matching shutdown acknowledgment and
-independently observed OFF. Shared distributor and saved DRAM restoration pass.
-All 45 host transactions succeeded; the runner exited and its claim closed.
-Evidence: `secondary-cache-probe-20261018/physical-111/runtime/`.
+The original board on `3-1` returned successfully as `003:114`, identity
+`[7,2753,1097073,0,0]`, after concurrent cached exchange across all seven
+secondaries. The shared counter reaches 224, and 224 ordered payload transfers
+complete. Every target cleans all 64 lines of the shared page and restores its
+translation/local interrupt state before matching shutdown acknowledgment and
+independently observed OFF. The copied physical page matches all 4,096 expected
+bytes. Shared distributor and saved DRAM restoration pass; all 45 host
+transactions succeed. The runner exited and its claim closed as passed.
+Evidence: `secondary-coherence-probe-20261018/physical-113/runtime/`.
 
 The preceding primary-preparation diagnostic returned as `003:109`.
 Its report confirms completed preparation and exact EL3/EL1 control restoration;
@@ -685,22 +691,21 @@ Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
 The primary agent handles all further multicore diagnosis, implementation,
-review and physical tests directly. All seven secondaries now pass production
-CPU preparation, local interrupt initialization, cached EL3/EL1 entry, SMC return,
-exact control restoration and shutdown. The current physical evidence is
-`secondary-cache-probe-20261018/physical-111/runtime/`. The
-[Arm/Linux audit](a733-multicore-reference-audit.md) and
+review and physical tests directly. All seven secondaries pass production CPU
+preparation, local interrupt initialization, cached EL3/EL1 entry, concurrent
+shared-memory exchange, explicit cache cleaning and restored shutdown. Current
+physical evidence: `secondary-coherence-probe-20261018/physical-113/runtime/`.
+The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
-observations, including the corrected unimplemented interrupt-bit check.
+observations.
 
-1. Establish concurrent shared-memory coherence and interrupt delivery using
-   the demonstrated entry and restoration paths. The existing returning
-   diagnostic permits only immutable cached code and Device-memory monitor
-   writes. A mutable-data test must define ownership, synchronization and cache
-   cleaning before shutdown; do not discard dirty Normal memory. Revisit GIC
-   shutdown errata before enabling interrupt delivery. Preserve current DDR
-   continuity and refresh warm launcher state before the next operation.
-2. Qualify all-core FreeRTOS scheduling and representative concurrent workloads
+1. Establish per-core timer and inter-core interrupt delivery using the proven
+   entry and cleanup paths. Revisit GIC shutdown errata before enabling delivery.
+   The shared-memory result covers a single owned page across seven secondaries;
+   boot-CPU participation and broader runtime memory use remain unqualified.
+   Preserve the final-store barrier and Nonsecure clean/invalidate completion
+   before shutdown. Preserve DDR continuity and refresh warm launcher state.
+2. Qualify eight-core FreeRTOS scheduling and representative concurrent workloads
    through the supervised observer. The earlier full launch remains unobserved;
    do not repeat it unchanged without a correction or a narrower diagnostic
    justified by new evidence. Preserve the sealed

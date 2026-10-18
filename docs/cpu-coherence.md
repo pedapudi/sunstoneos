@@ -2,9 +2,14 @@
 
 The [CPU coherence component](../platform/a733/cpu_coherence.c) supplies revision
 admission, reset workarounds, immutable translation tables and cold cache-entry
-primitives for the A733. It is implemented and checked on the host and in an
-instruction emulator. No boot image calls it yet. Physical cache coherence,
-exception integration and complete processor support remain unqualified.
+primitives for the A733. The cached FreeRTOS image calls these components.
+Production preparation and cached EL3/EL1 entry pass physically on every secondary.
+A returning diagnostic also passes concurrent atomic increments and ordered
+payload exchange across all seven secondaries, with explicit cache cleaning and
+a matching final physical-memory copy. Evidence:
+`secondary-coherence-probe-20261018/physical-113/`. Boot-CPU participation,
+interrupt delivery, broader runtime memory use and eight-core FreeRTOS scheduling
+remain unqualified.
 
 The A733 contains six Cortex-A55 cores, two Cortex-A76 cores and a DynamIQ Shared
 Unit (DSU), which connects their private caches to a shared cache and snoop
@@ -16,7 +21,9 @@ they do not establish the attached board's current cache, reset or ownership sta
 The physical boot-CPU record at
 `~/.cache/sunstoneos/evidence/a733-sram/result.json` reports MIDR `0x412fd050`,
 a Cortex-A55 r2p0. MIDR identifies the CPU implementation and revision.
-The other seven MIDRs and the DSU revision still require physical observation.
+Physical secondary records identify cores 1–5 as A55 r2p0 and cores 6–7 as
+A76 r4p1. The [startup record](a733-smp-supervised.md) holds their observations,
+preparation and restoration results.
 
 ## Reset controls follow a bounded revision policy
 

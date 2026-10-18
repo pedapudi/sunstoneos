@@ -8,8 +8,11 @@ return on core 1. All seven secondaries now also pass production CPU preparation
 initialization, restoration and shutdown under
 `secondary-local-probe-20261018/physical-110/`. Cached EL3/EL1 entry, SMC return
 and exact translation restoration also pass separately on every secondary under
-`secondary-cache-probe-20261018/physical-111/`. Concurrent shared-memory coherence,
-interrupt delivery and FreeRTOS SMP scheduling remain unqualified.
+`secondary-cache-probe-20261018/physical-111/`. Concurrent cached exchange across
+a single owned page also passes on all seven secondaries under
+`secondary-coherence-probe-20261018/physical-113/`. Boot-CPU participation,
+interrupt delivery, broader runtime memory use and FreeRTOS scheduling remain
+unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
@@ -232,3 +235,26 @@ The second board's returning PMIC probe executed its newly added voltage-selecto
 read. That supports the particular boot-CPU transition used there. Device-image
 admission must assess its own startup and prior cache ownership; the CPU result
 does not invalidate unrelated physical evidence.
+
+## Concurrent data writes require matching cache cleaning
+
+The returning concurrent diagnostic borrows the boot CPU's first EL1 stack page.
+The boot CPU remains at EL3, and native BSS initialization and the accepted
+Nonsecure publication cover the page before any secondary starts. Production
+translation tables map the page as Nonsecure, write-back, inner-shareable memory.
+Every secondary performs 32 exclusive atomic increments and 32 ordered payload
+transfers using release/acquire synchronization.
+
+Each participant publishes its final store before the all-participant completion
+barrier. It then cleans and invalidates every line through the Nonsecure mapping
+and completes `DSB SY`. No Normal-memory store follows. This follows the pinned
+[TF-A range-flush sequence](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/lib/aarch64/cache_helpers.S).
+Arm's cached TrustZone guide, sections 3.4–3.5, explains why maintenance must
+address the physical security state used by the writers; its source and hash
+are in `cpu-audit/reference-cache.json` under the local source cache.
+
+Physical execution passes under `secondary-coherence-probe-20261018/physical-113/`.
+Every secondary completes its cache cleaning, restoration and observed shutdown.
+Only then does the uncached primary copy the physical page; all 4,096 bytes match
+the expected epoch-bound result. This establishes the tested exchange and
+cleanup protocol. It does not qualify arbitrary dirty OS data or DMA reclamation.
