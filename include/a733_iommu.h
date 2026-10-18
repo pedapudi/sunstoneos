@@ -53,7 +53,7 @@ struct a733_iommu_admission {
     uint64_t token;
     uint16_t excluded_masters, powered_masters;
     uint8_t inherited_resolved, transactions_drained, clocks_held, recovery_qualified;
-    /* Decoder-only supervised mode: permanent retention until confirmed whole-
+    /* Explicit supervised mode: permanent retention until confirmed whole-
      * board power removal; never substitutes for initial transaction drain. */
     uint8_t retained_power_removal;
 };
@@ -105,7 +105,7 @@ struct a733_iommu {
     unsigned index, phase;
     uint16_t translated_masters, accessible_masters;
     enum a733_iommu_state state;
-    uint8_t initialized;
+    uint8_t initialized, camera_supervised;
 };
 /* Zeroed fresh storage, one privileged serialized caller, no callback reentry.
  * Initial cold install only: both ENABLE registers must already be zero;
@@ -117,6 +117,13 @@ struct a733_iommu {
  */
 int a733_iommu_init(struct a733_iommu *, const struct a733_iommu_ops *,
                     void *, const struct a733_iommu_tables *);
+/* Same CSI translation and all-ten-master accessibility as the default camera
+ * initializer. Requires explicit retained power-removal admission instead of
+ * watchdog qualification; all initial reset/drain/exclusion facts stay required.
+ * Retains every table, buffer and device resource until whole-board power removal.
+ * No timeout, reconnection or completed frame establishes global drain/reuse. */
+int a733_iommu_init_camera_supervised(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 /* Fixed decoder profile translates6/7 only. Both banks and all ten masters
  * remain exclusively excluded/drained at entry. Only6/7 must be powered; every
  * skipped master must remain physically quiescent and unavailable for the whole

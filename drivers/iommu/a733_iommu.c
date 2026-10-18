@@ -150,8 +150,9 @@ static int admitted(const struct a733_iommu *s)
     return a->token && a->excluded_masters==A733_IOMMU_REAL_MASTERS &&
         a->powered_masters==s->accessible_masters && a->inherited_resolved==1 &&
         a->transactions_drained==1 && a->clocks_held==1 &&
-        (a->recovery_qualified==1 || (s->translated_masters==0xc0 &&
-         a->recovery_qualified==0 && a->retained_power_removal==1));
+        (s->camera_supervised ? (a->recovery_qualified==0 && a->retained_power_removal==1) :
+         (a->recovery_qualified==1 || (s->translated_masters==0xc0 &&
+          a->recovery_qualified==0 && a->retained_power_removal==1)));
 }
 int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
                     void *ctx,const struct a733_iommu_tables *t)
@@ -166,6 +167,13 @@ int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
         if(t->spans[i].iova+t->spans[i].bytes>UINT64_C(0x100000000))return -1;
     *s=(struct a733_iommu){.ops=*ops,.tables=*t,.context=ctx,.initialized=1,
         .translated_masters=2,.accessible_masters=A733_IOMMU_REAL_MASTERS};return 1;
+}
+int a733_iommu_init_camera_supervised(struct a733_iommu *s,const struct a733_iommu_ops *ops,
+    void *ctx,const struct a733_iommu_tables *tables)
+{
+    int r=a733_iommu_init(s,ops,ctx,tables);
+    if(r==1)s->camera_supervised=1;
+    return r;
 }
 int a733_iommu_init_decoder(struct a733_iommu *s,const struct a733_iommu_ops *ops,
     void *ctx,const struct a733_iommu_tables *tables)
