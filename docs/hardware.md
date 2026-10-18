@@ -139,6 +139,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   immutable code without EL1 data stores; mutable cached memory, interrupt
   delivery, other cores and scheduling remain unqualified. The earlier empty EL1
   report remains preserved as a failed observation, not a successful entry.
+  The complete supervised eight-core image now includes this publication path
+  for code and initial data together with the corrected interrupt mask. Four
+  routine cases and one actual-boot instruction case pass under
+  `smp-ns-publication-20261018/`; its physical execution remains outstanding.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

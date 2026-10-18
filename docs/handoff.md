@@ -550,6 +550,26 @@ does not call. Input comparisons are under
 
 ## Next actions
 
+The updated complete supervised eight-core image is frozen under
+`smp-ns-publication-20261018/`: ELF SHA-256
+`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
+It includes required-interrupt-mask verification and Nonsecure code/data/table
+publication before secondary release. Four routine cases and one actual-boot
+case pass; the snapshot records 89 compiler inputs and 34 linked objects. Reuse
+these results. The final caller order blocks EL1 walks before temporary EL3
+mapping; unchanged routine evidence is explicitly reconciled in
+`publication-reuse.json`. All-core runtime and physical execution of this image
+remain untested. Prepare a fresh package from its symbols and identities; the
+old returning overlay's addresses do not apply. Neither board was accessed for
+this integration, so refresh actual instance and launcher state before testing.
+
+The [GPU publication audit](gpu-single-core-publication.md) supports retaining
+its frozen image under the existing clean-entry contract. PMIC return101 is a
+candidate preceding cache cleanup; current entry state and continuous sole-writer
+history must still be bound before upload. Do not infer an additional system
+cache or rebuild the GPU image merely from the separate CPU publication finding.
+
+
 The accepted [goal](goal.md) prioritizes complete native device integration.
 After hardware functionality, warm mimus recognition must finish within 0.05
 times audio duration; 0.01 times is a stretch target for bounded investigation.

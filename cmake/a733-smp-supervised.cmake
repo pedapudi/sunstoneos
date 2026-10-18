@@ -16,6 +16,7 @@ apply_build_patch("${a733_build}/portmacro.h" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-macro.patch")
 set(a733_sources
   platform/a733-smp-cached/start.S platform/a733-smp-supervised/admission.c
+  platform/a733-smp-supervised/publication.S
   platform/a733-smp-cached/platform.c platform/a733-smp-observe/diagnostic.c
   platform/a733/cpu_start.c platform/a733/cpu_entry.c platform/a733/cpu_entry.S
   platform/a733/cpu_entry_native.c platform/a733/cpu_coherence.c platform/a733/cpu_coherence.S
@@ -104,6 +105,7 @@ target_include_directories(a733-smp-supervised PRIVATE "${a733_root}/platform/a7
   "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src" "${a733_root}/platform/a733-smp-cached"
   "${a733_root}/include" "${a733_root}/runtime/include" "${FREERTOS_DIR}/include" "${a733_build}")
 target_compile_definitions(a733-smp-supervised PRIVATE SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_USB=1
+  SUNSTONE_SUPERVISED_NS_PUBLICATION=1
   A733_SMP_CONTRACT_MAGIC=0x4153373353554333ULL A733_SMP_RESULT_MAGIC=0x4153373353555231ULL)
 target_compile_options(a733-smp-supervised PRIVATE -march=armv8-a -mstrict-align
   $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>

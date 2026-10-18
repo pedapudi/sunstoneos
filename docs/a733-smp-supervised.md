@@ -1004,3 +1004,34 @@ general warm OS replacement. The model checks security-selected maintenance
 coverage and actual descriptors; it does not simulate the complete DSU cache.
 Interrupt delivery, mutable cached memory, other cores and scheduling remain
 required physical work.
+
+## The complete supervised image now publishes Nonsecure aliases
+
+The complete eight-core image includes the corrected required-interrupt mask
+and a boot-time Nonsecure publication routine in
+`platform/a733-smp-supervised/publication.S`. After Secure publication and the
+primary CPU's revision setup and EL1 walk blocking, it temporarily maps Secure
+noncacheable code and a nonexecutable Nonsecure maintenance alias. It invalidates
+known-clean aliases for code, initialized data, BSS, stacks and both EL1 table
+pages, completes instruction maintenance, and restores the original EL3 controls
+before any secondary release. The existing exclusion of dirty aliases and other
+writers remains required; this does not implement arbitrary warm OS replacement.
+
+The routine adds two temporary table pages within the existing monitor reservation.
+All table references use linked symbols. This image has a new layout and must not
+use the old returning overlay's fixed patch addresses.
+
+Evidence under `smp-ns-publication-20261018/` records ELF SHA-256
+`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
+Four instruction cases cover complete publication, expiry before entry, expiry
+during maintenance with restoration, and retained restoration failure. A subsequent
+caller-ordering change has one new actual-boot case: all 42,165 required lines
+are maintained before the first secondary power-owner construction, with original
+EL3 controls restored and EL1 walks blocked. The four routine cases were reused
+after matching their executed code, table constructor and linked addresses.
+The snapshot preserves 89 compiler inputs and 34 linked-object dependency records.
+
+These checks model architectural registers and cache effects. The updated full
+image has not run on either board; all-core entry, physical interrupt delivery,
+coherence, scheduling and USB result capture remain outstanding. Its next physical
+attempt requires a fresh image-bound launch package and current board admission.

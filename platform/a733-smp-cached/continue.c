@@ -81,8 +81,12 @@ void a733_cached_prepare(uint64_t epoch,uint64_t startup,uint64_t diagnostic,uin
        a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,startup)!=1 ||
        a733_cpu_coherence_publish((uintptr_t)__tables_start,__tables_end-__tables_start,startup)!=1)
         a733_smp_stop(2,0x102);
-    /* No subsequent CPU access to any table page, including reads. */
     prepare_core(0);
+#if defined(SUNSTONE_SUPERVISED_NS_PUBLICATION)
+    extern int a733_supervised_ns_publish(uint64_t deadline);
+    if(a733_supervised_ns_publish(startup)!=1)a733_smp_stop(2,0x108);
+#endif
+    /* No subsequent CPU access to any table page, including reads. */
 }
 static void local_boot(unsigned c,uint64_t epoch)
 {
