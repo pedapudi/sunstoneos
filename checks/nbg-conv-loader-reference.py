@@ -29,7 +29,14 @@ def main():
     loader = importlib.util.module_from_spec(spec); spec.loader.exec_module(loader)
     sdk, model = args.sdk.read_bytes(), args.model.read_bytes()
     assert hashlib.sha256(sdk).hexdigest() == loader.SDK_SHA
-    assert hashlib.sha256(model).hexdigest() == MODEL_SHA
+    catalogue=json.loads((Path(__file__).resolve().parents[1]/'tools/npu-models.json').read_text())['models']
+    selected=next((v for v in catalogue if v['model']['sha256']==hashlib.sha256(model).hexdigest() and v['model']['bytes']==len(model)),None)
+    assert selected is not None, 'Model is absent from reviewed build-time catalogue'
+    selected_sha=selected['model']['sha256']
+    assert struct.unpack_from('<I',model,4)[0]==0x20000
+    directory_count=struct.unpack_from('<I',model,56)[0]
+    sections={struct.unpack_from('<I',model,60+i*44)[0]:struct.unpack_from('<QQ',model,64+i*44) for i in range(directory_count)}
+    assert all(sections[t][1]==112 for t in (1,2))
     args.output.mkdir(parents=True, exist_ok=False)
     ref = loader.Reference(sdk, 0xe0000000)
     error, network, reached = None, 0, False
@@ -42,7 +49,7 @@ def main():
         ref.snapshot(args.output, 'created', network)
         ref.call('vip_prepare_network', network)
         ref.snapshot(args.output, 'prepared', network)
-        for tensor, operation in ((880, 'vip_set_input'), (992, 'vip_set_output')):
+        for tensor, operation in ((sections[1][0], 'vip_set_input'), (sections[2][0], 'vip_set_output')):
             params = bytearray(48)
             params[:32] = model[tensor:tensor + 32]
             assert struct.unpack_from('<I', model, tensor + 36)[0] == 2
@@ -65,7 +72,7 @@ def main():
                   network=network, pc=hex(ref.uc.reg_read(UC_ARM64_REG_PC) - loader.BASE),
                   allocations=ref.allocations, calls=ref.calls, logs=ref.logs,
                   tasks=ref.tasks, bindings=ref.bindings, physical_access=False,
-                  sdk_sha256=loader.SDK_SHA, model_sha256=MODEL_SHA,
+                  sdk_sha256=loader.SDK_SHA, model_sha256=selected_sha,
                   comparison=None, video_base=0xe0000000)
     (args.output/'trace.json').write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(dict(result=report['result'], error=error,

@@ -14,7 +14,8 @@
 -static unsigned ready,initialized,received,sent,response_bytes,complete;
 +static unsigned initialized,received,sent,response_bytes,complete;
  static uint32_t sequence;
- static uint8_t challenge[32],request[64],response[528] __attribute__((aligned(64)));
+-static uint8_t challenge[32],request[64],response[528] __attribute__((aligned(64)));
++static uint8_t challenge[32],request[64],response[1040] __attribute__((aligned(64)));
  extern void *volatile pxCurrentTCBs[];
  extern unsigned char a733_observe_svc_return[];
  static const tusb_desc_device_t device={
@@ -43,7 +44,7 @@
      for(unsigned i=0;i<32;++i){if(sequence && challenge[i]!=next_challenge[i])a733_observe_failure(7);challenge[i]=next_challenge[i];}
      sequence=next;
 -    uint32_t header[4]={A733_OBSERVE_MESSAGE_MAGIC,sequence,A733_OBSERVE_COMMAND|UINT32_C(0x80000000),512};
-+    uint32_t header[4]={A733_OBSERVE_MESSAGE_MAGIC,sequence,A733_NPU_APPLICATION_COMMAND|UINT32_C(0x80000000),512};
++    uint32_t header[4]={A733_OBSERVE_MESSAGE_MAGIC,sequence,A733_NPU_APPLICATION_COMMAND|UINT32_C(0x80000000),1024};
      memcpy(response,header,16);
 -    const struct a733_observe_snapshot *s=__atomic_load_n(&ready,__ATOMIC_ACQUIRE)?&snapshot:NULL;
 -    if(!a733_observe_frame(response+16,&a733_observe_identity,s,challenge,a733_smp_build_id))a733_observe_failure(8);

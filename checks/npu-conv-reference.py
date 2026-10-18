@@ -42,10 +42,12 @@ def main():
                     "invalid UINT8 tensor")
         return values.reshape(shape)
 
-    in_name = "input_2_out0_1_3_8_8"
-    out_name = "attach_output_out0_0_out0_1_2_6_6"
-    expected = np.load(str(path("expected.npy")), allow_pickle=False).reshape(1, 2, 6, 6)
-    raw_input = np.load(str(path("input.npy")), allow_pickle=False).reshape(1, 3, 8, 8)
+    expected = np.load(str(path("expected.npy")), allow_pickle=False)
+    raw_input = np.load(str(path("input.npy")), allow_pickle=False)
+    _, channels, height, width = expected.shape
+    input_width = raw_input.shape[-1]
+    in_name = f"input_2_out0_1_3_{input_width}_{input_width}"
+    out_name = f"attach_output_out0_0_out0_1_{channels}_{height}_{width}"
     require(np.array_equal(tensor("float-reference", in_name, raw_input.shape), raw_input),
             "floating-point input preprocessing changed values")
     require(np.array_equal(tensor("float-reference", out_name, expected.shape), expected),
@@ -53,7 +55,7 @@ def main():
     quantized_input = tensor("quantized-reference", in_name, raw_input.shape, True)
     quantized_output = tensor("quantized-reference", out_name, expected.shape, True)
     simulator_input = np.fromfile(str(path("export_nbg_unify/input_0.dat")), dtype=np.uint8)
-    simulator_output = np.fromfile(str(path("export_nbg_unify/output0_6_6_2_1.dat")), dtype=np.uint8)
+    simulator_output = np.fromfile(str(path(f"export_nbg_unify/output0_{width}_{height}_{channels}_1.dat")), dtype=np.uint8)
     require(np.array_equal(simulator_input, quantized_input.ravel()), "simulator input differs")
     require(np.array_equal(simulator_output, quantized_output.ravel()), "simulator output differs")
     quant = yaml.safe_load(path("conv3x3_uint8.quantize").read_text())["quantize_parameters"]
@@ -71,9 +73,9 @@ def main():
         blob = p.read_bytes()
         identities.append(dict(path=str(p.relative_to(root)), bytes=len(blob),
                                sha256=hashlib.sha256(blob).hexdigest()))
-    report = dict(result="pass", float_input_values=192, float_output_values=72,
+    report = dict(result="pass", float_input_values=int(raw_input.size), float_output_values=int(expected.size),
                   float_reference_exact=True, simulator_input_exact=True,
-                  quantized_reference_exact=True, simulator_output_bytes=72,
+                  quantized_reference_exact=True, simulator_output_bytes=int(simulator_output.size),
                   max_code_difference=0, max_float_error=float(np.max(np.abs(difference))),
                   rms_float_error=float(np.sqrt(np.mean(difference * difference))),
                   nbg_version=hex(version), target=hex(target), nbg_bytes=len(model),
@@ -81,7 +83,7 @@ def main():
                   physical_access=False, native_loader_execution=False, inputs=identities)
     with args.report.open("x") as output:
         output.write(json.dumps(report, indent=2) + "\n")
-    print("PASS convolution references: exact float calculation and 72 simulator output bytes")
+    print(f"PASS convolution references: exact float calculation and {simulator_output.size} simulator output bytes")
 
 
 if __name__ == "__main__":

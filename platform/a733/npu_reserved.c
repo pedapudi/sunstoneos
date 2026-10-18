@@ -13,7 +13,7 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
     void (*fatal)(void *), void *cookie)
 {
     if (!s || s->admitted || s->convolution.prepared || atomic_load(&s->convolution.failed) ||
-        !owner || !model || model_bytes != NPU_CONVOLUTION_MODEL_BYTES || !fatal ||
+        !owner || !model || (!model_bytes || model_bytes > NPU_CONVOLUTION_MODEL_CAPACITY) || !fatal ||
         !registers || (registers & 4095) || registers > UINTPTR_MAX - 4096 ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
         !disjoint((uintptr_t)s, sizeof(*s), (uintptr_t)model, model_bytes) ||

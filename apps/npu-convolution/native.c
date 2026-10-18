@@ -64,7 +64,8 @@ static _Noreturn void fatal(void *unused)
 unsigned a733_npu_application_health(void)
 {
     if(!app.used)return 0;
-    if(atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
+    if(atomic_load_explicit(&app.reserved.convolution.failed,memory_order_acquire) ||
+       atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.locks.retained,memory_order_acquire))
         a733_npu_application_fail(17);
@@ -202,9 +203,12 @@ int a733_npu_application_init(TaskHandle_t client)
     if(app.used || !client || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
        !a733_smp_device_preparation_admitted() || !a733_npu_application_observer_admit() ||
        !image(&app,sizeof(app),1) || !image(b,sizeof(*b),0) ||
-       !image(a733_npu_application_model,NPU_CONVOLUTION_MODEL_BYTES,0) ||
-       !image(a733_npu_application_input,NPU_CONVOLUTION_INPUT_BYTES,0) ||
-       !image(a733_npu_application_reference,NPU_CONVOLUTION_OUTPUT_BYTES,0) ||
+       (!a733_npu_application_model_bytes || a733_npu_application_model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) ||
+       (!a733_npu_application_input_bytes || a733_npu_application_input_bytes>NPU_CONVOLUTION_IO_CAPACITY) ||
+       (!a733_npu_application_reference_bytes || a733_npu_application_reference_bytes>NPU_CONVOLUTION_IO_CAPACITY) ||
+       !image(a733_npu_application_model,a733_npu_application_model_bytes,0) ||
+       !image(a733_npu_application_input,a733_npu_application_input_bytes,0) ||
+       !image(a733_npu_application_reference,a733_npu_application_reference_bytes,0) ||
        !p->npu_owner || !p->pmic_owner || !p->usb_owner || !p->bridge_owner ||
        p->npu_owner==p->pmic_owner || p->npu_owner==p->usb_owner || p->pmic_owner==p->usb_owner ||
        p->bridge_owner==p->npu_owner || p->bridge_owner==p->pmic_owner || p->bridge_owner==p->usb_owner ||
@@ -225,7 +229,7 @@ int a733_npu_application_init(TaskHandle_t client)
        a733_clock_acquire(&app.registry,p->usb_owner,A733_CLOCK_FABRIC,
            A733_CLOCK_USB0|A733_CLOCK_USB01_REF,deadline,&app.usb)!=A733_CLOCK_OK)goto failed;
     if(!a733_npu_reserved_prepare(&app.reserved,p->npu_owner,a733_npu_application_model,
-        NPU_CONVOLUTION_MODEL_BYTES,0x03600000,fatal,NULL))goto failed;
+        a733_npu_application_model_bytes,0x03600000,fatal,NULL))goto failed;
     app.lease=app.reserved.lease;app.extent=app.reserved.extent;
     app.pool=app.reserved.pool;app.backing=app.pool->backing;
     app.allocation=*device_memory_lookup(app.reserved.pool,app.lease);

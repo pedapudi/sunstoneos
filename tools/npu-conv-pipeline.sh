@@ -2,8 +2,8 @@
 # Run inside the pinned compiler image with the repository mounted read-only.
 # The destination must be new and writable. This script performs no device I/O.
 set -euo pipefail
-if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 NEW_OUTPUT_DIRECTORY" >&2
+if [ "$#" -ne 1 ] && [ "$#" -ne 3 ]; then
+    echo "Usage: $0 NEW_OUTPUT_DIRECTORY [WIDTH OUTPUT_CHANNELS]" >&2
     exit 2
 fi
 fixture_source=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -11,7 +11,11 @@ fixture_output=$(realpath -m -- "$1")
 fixture_compiler=/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py
 fixture_sdk=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools
 
-python3 "$fixture_source/tools/npu-conv-fixture.py" "$fixture_output"
+if [ "$#" -eq 3 ]; then
+    python3 "$fixture_source/tools/npu-conv-fixture.py" "$fixture_output" --width "$2" --channels "$3"
+else
+    python3 "$fixture_source/tools/npu-conv-fixture.py" "$fixture_output"
+fi
 cd -- "$fixture_output"
 timeout 120 python3 "$fixture_compiler" import onnx --model conv3x3.onnx \
     --output-model conv3x3.json --output-data conv3x3.data > import.log 2>&1
@@ -56,6 +60,6 @@ timeout 120 make -f makefile.linux USE_IDE_LIB=1 \
     VIVANTE_SDK_DIR="$fixture_sdk/vsimulator" > ../simulator-build.log 2>&1
 export LD_LIBRARY_PATH="$fixture_sdk/vsimulator/lib:$fixture_sdk/common/lib"
 timeout 120 ./conv3x3 network_binary.nb \
-    ../quantized-reference/iter_0_input_2_out0_1_3_8_8.qnt.tensor > ../simulator.log 2>&1
+    ../quantized-reference/iter_0_input_*.qnt.tensor > ../simulator.log 2>&1
 cd ..
 python3 "$fixture_source/checks/npu-conv-reference.py" . reference-check.json

@@ -46,7 +46,8 @@ def main():
     reference = module('reference', root/'checks/nbg-loader-reference.py')
     data = args.model.read_bytes()
     model_sha = hashlib.sha256(data).hexdigest()
-    directory = model_sha == 'db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca'
+    catalogue=json.loads((root/'tools/npu-models.json').read_text())['models']
+    directory = any(model_sha==v['model']['sha256'] and len(data)==v['model']['bytes'] for v in catalogue)
     assert directory or model_sha == reference.MODEL_SHA
     # The convolution capture deliberately has no previous comparison. Verify
     # its hashes and intercepted-submission status, then perform that comparison.

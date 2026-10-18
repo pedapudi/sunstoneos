@@ -4,7 +4,9 @@
 #include "a733_npu_startup.h"
 #include "nbg_assembly.h"
 
-#define NPU_CONVOLUTION_MODEL_BYTES 1928u
+#define NPU_CONVOLUTION_MODEL_BYTES 1928u /* Baseline artifact only. */
+#define NPU_CONVOLUTION_MODEL_CAPACITY 8192u
+#define NPU_CONVOLUTION_IO_CAPACITY 512u
 #define NPU_CONVOLUTION_INPUT_BYTES 192u
 #define NPU_CONVOLUTION_OUTPUT_BYTES 72u
 #define NPU_CONVOLUTION_COMMAND_BYTES 524288u
@@ -31,7 +33,9 @@ struct npu_convolution_config {
  * disjoint, pinned and inaccessible to other writers for this session. Shared
  * SMP mappings do not enforce that condition against hostile tasks. */
 struct npu_convolution {
-    unsigned char model[NPU_CONVOLUTION_MODEL_BYTES];
+    unsigned char model[NPU_CONVOLUTION_MODEL_CAPACITY];
+    size_t model_bytes, input_bytes, output_bytes;
+    unsigned model_index;
     struct a733_npu_buffer buffers[NPU_CONVOLUTION_BUFFERS];
     unsigned char immutable_digest[4][32];
     struct a733_npu_native native;
@@ -47,7 +51,8 @@ struct npu_convolution {
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
- * accepts only the documented compiled 1x3x8x8 -> 1x2x6x6 UINT8 convolution.
+ * accepts only the three reviewed complete UINT8 compiled models in the private
+ * catalogue. Select once for the context lifetime; no runtime upload or switch.
  * Six buffers have exact sizes 4K,4K,512K,4K,4K,512K and roles READ,READ,
  * COMMAND,READ,WRITE,BOOTSTRAP. CPU/PA/device ranges must be exclusive and
  * disjoint from context, source/config, tables and device registers. Native
@@ -59,7 +64,8 @@ struct npu_convolution {
  * publication checks their digests. Input/output are accessed only through the
  * client API below. Full mapped command tails contain END pairs.
  *
- * Successful preparation admits this fixed artifact only. Physical PD-mode
+ * Successful preparation admits the selected trusted compiled artifact only;
+ * hashes and checksums do not prove hardware access extents or confinement. Physical PD-mode
  * confinement, SRAM ownership/routing, independent recovery, remote exclusion,
  * power/clock/reset and secure attribution remain independent prerequisites. */
 int npu_convolution_prepare(struct npu_convolution *,const struct npu_convolution_config *);
@@ -86,7 +92,7 @@ int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
 /* Single designated client task, finite queue waits. Only OPEN, STATUS, SUBMIT
- * and REAP are exposed. SUBMIT copies exactly 192 bytes and always selects
+ * and REAP are exposed. SUBMIT copies exactly the selected input_bytes and always selects
  * command 1. Other operations require NULL/zero input. OPEN/SUBMIT require
  * finite positive microsecond deadlines; STATUS/REAP use zero timeout.
  *
@@ -102,7 +108,7 @@ int npu_convolution_send(struct npu_convolution *,enum npu_service_operation,
     const void *input,size_t bytes,uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
 int npu_convolution_collect(struct npu_convolution *,uint64_t ticket,
     struct npu_service_reply *,TickType_t wait);
-/* Copy 72 bytes only after matching successful DONE with cache finish, before
+/* Copy exactly output_bytes only after matching successful DONE with cache finish, before
  * explicit REAP. Refusal preserves output. Reap clears access to that result;
  * all allocations nevertheless remain reserved for the complete session. */
 int npu_convolution_output(struct npu_convolution *,void *,size_t bytes);

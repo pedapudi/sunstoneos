@@ -317,7 +317,7 @@ def transport(npu,prepared,bundle,reference,directory,status):
     def preload(*args):prepared['_backup_hashes']={};events.append('preload-reused')
     def write(endpoint,data,timeout):assert endpoint==2;packet[0]=bytes(data);events.append('usb-write');return len(data)
     def read(endpoint,length,timeout):
-        assert endpoint==0x81 and length==528;events.append('usb-read')
+        assert endpoint==0x81 and length==1040;events.append('usb-read')
         return frame(npu,prepared,packet[0][32:64],struct.unpack_from('<I',packet[0],4)[0],reference,0 if status=='success' else 3)
     device=types.SimpleNamespace(bcdDevice=0x0101,set_configuration=lambda n:None,write=write,read=read)
     usb=types.ModuleType('usb');core=types.ModuleType('usb.core');usb.core=core

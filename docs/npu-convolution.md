@@ -1,19 +1,37 @@
-# Fixed trusted convolution registration and ownership
+# Trusted compiled convolution registration and ownership
 
-The native registration component admits one compiled UINT8 convolution and
-connects its private allocations to the NPU service. Its model identity,
-relocations, publication and client ownership pass focused emulator checks.
-Physical execution and memory confinement remain unqualified.
+The native registration component admits a privileged build-time catalogue of
+three compiled UINT8 convolutions. Model selection occurs before the scheduler
+starts and remains fixed for that context's lifetime. Applications copy inputs,
+submit repeated inference requests, collect matching completion, copy results and
+explicitly reap each job. Physical NPU execution remains unqualified.
 
-The accepted binary has 1,928 bytes and SHA-256
-`db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
-It contains one neural operation for target `0x1000003b`, format `0x20000`.
-The input is `1×3×8×8` UINT8, 192 bytes, scale `0.01568627543747425` and zero
-point 127. The output is `1×2×6×6` UINT8, 72 bytes, scale
-`0.02028186246752739` and zero point 108. Input values may vary; shapes,
-quantization, weights, instructions and relocation records are fixed.
+All entries target `0x1000003b` and use NBG format `0x20000`, one neural operation,
+a 3×3 convolution without padding, and unit stride. Tensor order below is NCHW:
+batch, channel, height, width.
 
-The implementation copies the complete binary before hashing or parsing it.
+| Catalogue entry | Input | Output | Model bytes | Input/output bytes |
+| --- | --- | --- | ---: | ---: |
+| `conv8` | `1×3×8×8` | `1×2×6×6` | 1,928 | 192 / 72 |
+| `conv10` | `1×3×10×10` | `1×2×8×8` | 1,928 | 300 / 128 |
+| `conv12` | `1×3×12×12` | `1×4×10×10` | 2,056 | 432 / 400 |
+
+[The catalogue](../tools/npu-models.json) records complete model/input/reference
+identities, exact tensor dimensions and quantization, coefficient bytes and SRAM
+requirements. The native table also fixes those model identities and metadata.
+Each accepted model passes the existing decoder, checksums and assembler policy
+before native mappings are constructed. Other models, formats and operation
+sequences are refused. Neither a caller-supplied hash nor a checksum adds an entry.
+
+The catalogue contains trusted executable input produced by the pinned external
+compiler. It is not a verifier for arbitrary model descriptors. Coefficient
+streams can contain compression and traversal metadata. Complete actual engine
+access extents, prefetch and alternate SRAM routes remain unresolved. Independently
+effective hardware confinement remains a physical admission prerequisite.
+
+The implementation copies the selected complete binary before hashing or parsing it.
+Its private copy has an 8 KiB capacity and deterministic zeroed unused bytes;
+only the selected model length is decoded and hashed.
 The private SHA-256 helper follows sections 4–6 of the
 [NIST Secure Hash Standard](https://csrc.nist.gov/pubs/fips/180-4/upd1/final).
 It supplies artifact identity only. There is no general cryptographic interface.
@@ -41,7 +59,8 @@ come from those allocation records; the assembler applies only the accepted
 relocations. CPU, physical and device ranges must satisfy the existing
 [memory policy](npu-memory.md). Leave unused device ranges unmapped.
 
-The full model hash fixes descriptor bytes and relocation semantics. Separate
+The selected full model hash fixes descriptor bytes, coefficients and relocation semantics.
+Exact catalogue tensor metadata and assembly allocation sizes are checked independently. Separate
 digests bind the assembled descriptor, coefficients and complete command
 allocations, including their padding. Publication checks those digests before
 native cache maintenance or device submission. Command 0 is bootstrap; command 1
@@ -79,9 +98,9 @@ One live client task uses `npu_convolution_send` and
 `npu_convolution_collect`. Its supported sequence is:
 
 1. OPEN, then request STATUS until a copied reply reports READY.
-2. SUBMIT a 192-byte input. The wrapper copies it before queuing command 1.
+2. SUBMIT an input with the selected catalogue length. The wrapper copies it before queuing command 1.
 3. Request STATUS until DONE identifies the matching submission ticket.
-4. Copy 72 output bytes with `npu_convolution_output`.
+4. Copy the selected output length with `npu_convolution_output`.
 5. Explicitly REAP before submitting another input.
 
 A finite collect timeout preserves the pending ticket. The client must collect
@@ -97,9 +116,13 @@ not enforce this contract against malicious privileged or unprivileged code.
 
 ## Physical admission remains required
 
-Physical execution requires qualified independent watchdog recovery and ROM
-return, effective page-directory translation and permissions, exclusive NPU and
-remote-controller handoffs, and valid power/clock/reset preparation. The native
+Physical execution requires an operation-specific reviewed recovery plan,
+effective page-directory translation and permissions, exclusive NPU and
+remote-controller handoffs, and valid power/clock/reset preparation. The watchdog
+image retains its independently qualified watchdog/ROM-return admission
+requirement. The supervised RAM-only image may use its admitted monitor-return
+contract and manual whole-board power removal after uncertainty. Manual recovery
+does not replace the selected image's enforced admission conditions. The native
 adapter uses the documented controller page at physical `0x03600000`.
 
 Internal SRAM has a separate route from ordinary RAM page tables. Reserve all
@@ -110,7 +133,11 @@ An absent RAM page-table entry does not protect this SRAM path.
 The initial platform profile uses inherited 492 MHz/800 mV settings. Unsuitable
 inherited PLL state still requires cold provisioning. A general descriptor
 verifier is unnecessary for this immutable privileged entry once all access
-routes are constrained; this implementation does not admit arbitrary models.
+routes are constrained; the trusted catalogue does not admit arbitrary models.
+Runtime upload, hot switching, concurrent models, larger allocations, working
+pools, other operators and generalized graph support remain unsupported. The
+current private input/output API has a 512-byte capacity per tensor. These limits
+do not establish complete NPU or mimus accelerator support.
 Export physical output before reset. Post-reset DRAM retention is not a qualified
 result channel.
 
@@ -146,3 +173,26 @@ Configure `NPU_CONVOLUTION_FIXTURES` to that destination and build
 and `startup`. Archive executable and input identities before execution. The
 private CMake fragment also defines the independent `npu-convolution` native
 object target.
+
+## Variable shapes and repeated inference pass focused software checks
+
+Evidence is under `~/.cache/sunstoneos/evidence/npu-models-20261018/`.
+Two compiler runs varied spatial dimensions and output channels. Their saved
+floating-point results match the independent integer arithmetic reference.
+Their simulator results match every quantized CPU reference byte: 128 and 400
+bytes. SDK preparation captures stop before device submission. Native assembly
+matches all captured descriptors, coefficients, command bytes and allocations
+after address relocation and the existing completion-event adjustment.
+
+The affected native image selects the 12×12 model. The actual constructor,
+permanent memory reservation, copied 432-byte input, copied 400-byte output and
+application client execute in the focused instruction check. Two distinct jobs
+complete and receive successful matching REAP replies before success publication.
+A first-result mismatch followed by a matching second result remains a mismatch.
+A second REAP reply with the wrong job ticket faults the wrapper and refuses
+success. The result includes both job identities and the first output digest.
+
+Architecture registers, translation/cache effects, service replies and produced
+output are modeled. Injected reference output checks copying, lifetime and result
+verification; it does not execute numerical inference. No peripheral MMIO or board
+communication occurred. Earlier fixed-model and constituent checks were reused.

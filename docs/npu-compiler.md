@@ -144,3 +144,32 @@ matches the saved SDK allocations and command image after address and
 completion-event adjustments. The older format still passes its focused checks.
 Physical inference, complete descriptor admission,
 and all other NPU capabilities remain required by [issue 9](https://github.com/pedapudi/sunstoneos/issues/9).
+
+## Two additional shapes support the native trusted catalogue
+
+The pinned compiler produced two additional no-padding, unit-stride 3×3 UINT8
+convolutions: `1×3×10×10` to `1×2×8×8`, and `1×3×12×12` to `1×4×10×10`.
+This was a finite two-case investigation of geometry, coefficient allocation and
+reusable native application access. It did not measure performance or modify
+mimus models or weights.
+
+Saved float outputs match the exact arithmetic reference. Quantized CPU and
+simulator outputs match all 128 and 400 bytes respectively. The emitted models
+are 1,928 and 2,056 bytes; coefficients occupy 256 and 384 bytes. Both request
+101,376 bytes of internal SRAM. SDK captures allocate 192 descriptor bytes,
+136 command bytes, 384/512 coefficient bytes, 384/512 input bytes and 192/512
+output bytes, including their observed padding. Native assembly matches these
+captures after relocation and completion-event adjustment.
+
+Exact model/input/reference identities and tensor metadata are in
+[the reviewed catalogue](../tools/npu-models.json). Raw compiler sources, logs,
+models, references, SDK captures and comparisons are under
+`~/.cache/sunstoneos/evidence/npu-models-20261018/`. The original compiler-source
+snapshots identify the commands that produced these bytes. The maintained
+fixture/pipeline tools accept optional width and output-channel arguments for
+the declared cases; their consolidation did not rerun compiler work.
+
+These results authenticate the selected build-time artifacts and reproduce their
+allocation preparation. They do not establish physical memory confinement or
+numerical inference on the board. The native catalogue remains limited to its
+three reviewed complete models.

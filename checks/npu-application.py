@@ -55,7 +55,7 @@ def build(args,out):
         inputs.update(Path(p) for p in shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]))
     inputs.update([Path(__file__),ROOT/'checks/a733-smp-cached.py',ROOT/'apps/npu-convolution/observe.py',
         ROOT/'tools/check-a733-smp-observe.py',ROOT/'tools/check-a733-smp.py',
-        ROOT/'cmake/aarch64-clang.cmake',b/'compile_commands.json',b/'npu-convolution/identity-inputs.txt'])
+        ROOT/'cmake/aarch64-clang.cmake',ROOT/'tools/npu-models.json',ROOT/'drivers/npu/npu_models.inc',b/'compile_commands.json',b/'npu-convolution/identity-inputs.txt'])
     import capstone, unicorn, elftools
     inputs.update([Path(sys.executable),Path(shutil.which('clang')),args.lld,
                    Path(capstone.__file__),Path(unicorn.__file__),Path(elftools.__file__)])
@@ -73,7 +73,7 @@ def build(args,out):
         assert layout['__bss_end']<=layout['__device_pool_start']<layout['__device_pool_end']<=0x41f00000
         assert layout['__device_pool_end']-layout['__device_pool_start']==2097152
     save(out/'layout.json',layout)
-    save(out/'image-manifest.json',{'target':'a733-npu-convolution','protocol_version':1,'final_elf':sha(image),
+    save(out/'image-manifest.json',{'target':'a733-npu-convolution','protocol_version':2,'final_elf':sha(image),
         'physical_access':False,'refusal_fixture':True})
     return image
 
@@ -164,10 +164,14 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
     with image.open('rb') as stream:
         dwarf=ELFFile(stream).get_dwarf_info()
         dies=[d for cu in dwarf.iter_CUs() for d in cu.iter_DIEs()]
+        app_dies=[d for cu in dwarf.iter_CUs() if cu.get_top_DIE().attributes['DW_AT_name'].value.decode().endswith('/apps/npu-convolution/native.c') for d in cu.iter_DIEs()]
         def layout(name,variable=False):
-            die=next(d for d in dies if d.attributes.get('DW_AT_name') and
+            candidates=[d for d in (app_dies if variable else dies) if d.attributes.get('DW_AT_name') and
                 d.attributes['DW_AT_name'].value.decode()==name and
-                d.tag==('DW_TAG_variable' if variable else 'DW_TAG_structure_type'))
+                d.tag==('DW_TAG_variable' if variable else 'DW_TAG_structure_type') and (variable or 'DW_AT_byte_size' in d.attributes)]
+            assert candidates,('Missing actual producer DWARF',name)
+            if variable:assert len(candidates)==1,('Ambiguous actual producer',name)
+            die=candidates[0]
             if variable:die=die.get_DIE_from_attribute('DW_AT_type')
             fields={d.attributes['DW_AT_name'].value.decode():d.attributes['DW_AT_data_member_location'].value
                 for d in die.iter_children() if d.tag=='DW_TAG_member'}
@@ -224,16 +228,19 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
     constructed=bytes(m.ram)
     input_address=q(c+conv['buffers']+3*buffer_size+buffer['cpu'])
     output_address=q(c+conv['buffers']+4*buffer_size+buffer['cpu'])
-    expected=m.read(sym['a733_npu_application_reference'],72)
+    input_bytes=q(sym['a733_npu_application_input_bytes']);output_bytes=q(sym['a733_npu_application_reference_bytes'])
+    assert (q(c+conv['input_bytes']),q(c+conv['output_bytes']))==(input_bytes,output_bytes)
+    assert output_bytes==400 and input_bytes==432, 'This focused batch selects the largest reviewed model'
+    expected=m.read(sym['a733_npu_application_reference'],output_bytes)
     challenge=hashlib.sha256(b'bounded NPU application publication').digest()
     def frame(sequence):
-        write(scratch+512,challenge);write(scratch+1024,host.request(sequence,prepared,challenge))
-        assert call('a733_npu_application_request',scratch+1024,sym['a733_observe_identity'],scratch+1100,scratch+1152)==1
-        assert m.read(scratch+1152,32)==challenge
-        assert call('a733_npu_application_frame',scratch,sym['a733_observe_identity'],scratch+512,sym['a733_smp_build_id'])==1
-        return struct.pack('<4I',host.MESSAGE_MAGIC,sequence,0x80000033,512)+m.read(scratch,512)
+        write(scratch+1536,challenge);write(scratch+2048,host.request(sequence,prepared,challenge))
+        assert call('a733_npu_application_request',scratch+2048,sym['a733_observe_identity'],scratch+2200,scratch+2304)==1
+        assert m.read(scratch+2304,32)==challenge
+        assert call('a733_npu_application_frame',scratch,sym['a733_observe_identity'],scratch+1536,sym['a733_smp_build_id'])==1
+        return struct.pack('<4I',host.MESSAGE_MAGIC,sequence,0x80000033,1024)+m.read(scratch,1024)
     frames={};operations_by_case={}
-    for case in ('match','mismatch','service-fault'):
+    for case in ('match','first-mismatch','second-reap-ticket'):
         saved_case=out/('case-'+case+'.json')
         if reuse_preparation and saved_case.exists():
             prior=json.loads(saved_case.read_text());assert prior['image_sha256']==sha(image)
@@ -253,7 +260,7 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
                 word(cpu.reg_read(model.UC_ARM64_REG_X3),len(operations))
                 if op==2:
                     job[0]=len(operations)
-                    assert command==1 and m.read(input_address,192)==m.read(sym['a733_npu_application_input'],192)
+                    assert command==1 and m.read(input_address,input_bytes)==m.read(sym['a733_npu_application_input'],input_bytes)
                 returned(1)
             elif pc==sym['npu_service_collect']:
                 op=pending[0]
@@ -263,8 +270,8 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
                 uint(dest+reply['state'],state);uint(dest+reply['owns_session'],1)
                 word(dest+reply['job_ticket'],job[0])
                 if op==0:
-                    if case=='service-fault':uint(dest+reply['result'],4)
-                    else:write(output_address,bytes([expected[0]^1])+expected[1:] if case=='mismatch' else expected)
+                    write(output_address,bytes([expected[0]^1])+expected[1:] if case=='first-mismatch' and operations.count(2)==1 else expected)
+                if op==4 and case=='second-reap-ticket' and operations.count(4)==2:word(dest+reply['job_ticket'],job[0]+1)
                 returned(1)
             elif pc==sym['vTaskDelay']:returned(0)
         hook=u.hook_add(model.UC_HOOK_CODE,boundary)
@@ -278,22 +285,12 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
             else:run(1,sym['client'],sym['vTaskSuspend'])
         finally:u.hook_del(hook)
         complete=struct.unpack('<I',m.read(sym['a733_npu_application_result']+result['complete'],4))[0]
-        assert complete=={'match':1,'mismatch':2,'service-fault':0}[case]
-        assert operations==([1,2,0] if case=='service-fault' else [1,2,0,4])
+        assert complete=={'match':1,'first-mismatch':2,'second-reap-ticket':0}[case]
+        assert operations==[1,2,0,4,2,0,4]
         encoded=frame(2);decoded=host.response(encoded,2,prepared,challenge)
-        assert decoded['status']=={'match':'success','mismatch':'mismatch','service-fault':'fault'}[case]
+        assert decoded['status']=={'match':'success','first-mismatch':'mismatch','second-reap-ticket':'fault'}[case]
         frames[case]=encoded;operations_by_case[case]=operations
-        if case=='match':
-            uint(app_address+app['registry']+registry['failed'],1)
-            late=frame(3);assert host.response(late,3,prepared,challenge)['status']=='fault'
-            uint(app_address+app['worker_admitted'],1)
-            word(sym['pxCurrentTCBs'],q(c+conv['service']+service['worker']))
-            before=m.device_io
-            assert call(q(sym['a733_npu_application_operations']),c+conv['native'],0,scratch+1200)==0
-            assert m.device_io==before
-            assert struct.unpack('<I',m.read(allocation_address+allocation['state'],4))[0]==2
-            frames['late-provider-fault']=late
-        labels=['pending','match','late-provider-fault'] if case=='match' else [case]
+        labels=['pending','match'] if case=='match' else [case]
         for label in labels:(out/(label+'.bin')).write_bytes(frames[label])
         save(saved_case,{'image_sha256':sha(image),'producer':producer,'operations':operations,
                         'frames':{label:sha(out/(label+'.bin')) for label in labels}})
@@ -306,7 +303,7 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
     assert record['npu_result']=='observed-success'
     for label,data in frames.items():(out/(label+'.bin')).write_bytes(data)
     bad=bytearray(frames['match']);bad[16+280]^=1
-    bad[16+480:]=hashlib.sha256(bad[16:16+480]).digest()
+    bad[16+992:]=hashlib.sha256(bad[16:16+992]).digest()
     try:host.response(bytes(bad),2,prepared,challenge)
     except ValueError:pass
     else:raise AssertionError('Changed output escaped its independent digest')

@@ -3,6 +3,7 @@
 #include "boot.h"
 #include "cached.h"
 #include "result.h"
+#include <string.h>
 #ifdef SUNSTONE_NPU_SUPERVISED
 #include "session.h"
 #endif
@@ -32,7 +33,7 @@ static struct npu_service_reply request(struct npu_convolution *c,enum npu_servi
         if(npu_convolution_collect(c,ticket,&reply,5))break;
         /* A finite collect timeout preserves this exact outstanding ticket. */
     }
-    if(reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT ||
+    if(atomic_load_explicit(&c->failed,memory_order_acquire) || reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT ||
        !reply.owns_session || reply.canceled)retained(8);
     return reply;
 }
@@ -51,20 +52,29 @@ static void client(void *unused)
         vTaskDelay(1);reply=request(c,NPU_SERVICE_STATUS,NULL,0,0);
     }
     a733_npu_application_result.start=a733_smp_counter();
-    reply=request(c,NPU_SERVICE_SUBMIT,a733_npu_application_input,NPU_CONVOLUTION_INPUT_BYTES,1000000);
-    uint64_t job=reply.job_ticket;
-    if(!job)retained(12);
+    unsigned mismatch=0;uint64_t previous=0,job=0;
+    for(unsigned iteration=0;iteration<2;++iteration) {
+    memset(a733_npu_application_result.output,0,sizeof(a733_npu_application_result.output));
+    reply=request(c,NPU_SERVICE_SUBMIT,a733_npu_application_input,a733_npu_application_input_bytes,1000000);
+    job=reply.job_ticket;
+    if(!job || job==previous)retained(12);
     while(reply.state!=A733_NPU_DONE) {
         if(reply.state!=A733_NPU_RUNNING || reply.job_ticket!=job)retained(13);
         vTaskDelay(1);reply=request(c,NPU_SERVICE_STATUS,NULL,0,0);
     }
     if(reply.job_ticket!=job || !npu_convolution_output(c,a733_npu_application_result.output,
-        NPU_CONVOLUTION_OUTPUT_BYTES))retained(14);
-    unsigned mismatch=0;
-    for(unsigned i=0;i<NPU_CONVOLUTION_OUTPUT_BYTES;++i)
+        a733_npu_application_reference_bytes))retained(14);
+    for(unsigned i=0;i<a733_npu_application_reference_bytes;++i)
         mismatch|=a733_npu_application_result.output[i]^a733_npu_application_reference[i];
     reply=request(c,NPU_SERVICE_REAP,NULL,0,0);
     if(reply.state!=A733_NPU_READY || !live())retained(15);
+    if(iteration==0) {previous=job;
+        a733_observe_digest(a733_npu_application_result.output,a733_npu_application_reference_bytes,
+            a733_npu_application_result.first_digest);
+    }
+    }
+    a733_npu_application_result.previous_job=previous;
+    a733_npu_application_result.jobs=2;
     a733_npu_application_result.job=job;
     a733_npu_application_result.end=a733_smp_counter();
     atomic_store_explicit(&a733_npu_application_result.complete,mismatch ? 2 : 1,memory_order_release);

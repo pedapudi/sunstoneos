@@ -112,7 +112,7 @@ list(APPEND npu_sources ${npu_units}
   "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
   "${npu_build}/tinyusb/dcd_sunxi_musb.c")
 set(npu_inputs ${a733_identity_inputs} ${npu_sources}
-  "${a733_root}/apps/npu-convolution/artifacts.py" "${A733_NPU_MODEL}" "${A733_NPU_INPUT}" "${A733_NPU_REFERENCE}"
+  "${a733_root}/apps/npu-convolution/artifacts.py" "${a733_root}/tools/npu-models.json" "${a733_root}/drivers/npu/npu_models.inc" "${A733_NPU_MODEL}" "${A733_NPU_INPUT}" "${A733_NPU_REFERENCE}"
   "${CMAKE_CURRENT_LIST_FILE}" "${a733_root}/apps/npu-convolution/continue.patch"
   "${a733_root}/patches/freertos-smp-privileged.patch")
 file(GLOB_RECURSE npu_usb_headers "${TINYUSB_DIR}/src/*.h")

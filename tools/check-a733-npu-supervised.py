@@ -51,13 +51,14 @@ def capture_device(device,same,deadline,prepared,evidence,record,save):
         same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete NPU request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'NPU deadline expired after write.')
-        return bytes(device.read(0x81,528,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,1040,timeout=min(timeout,remaining)))
     return capture(exchange,prepared,challenge,evidence,record,save,deadline)
 
 
 def source_files():
     return [('npu-host-tool.py',Path(__file__)),('npu-preparation.py',Path(preparation.__file__)),
         ('npu-protocol.py',Path(protocol.__file__)),('npu-artifacts.py',ROOT/'apps/npu-convolution/artifacts.py'),
+        ('npu-catalogue.json',ROOT/'tools/npu-models.json'),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 

@@ -29,18 +29,21 @@ struct a733_npu_application_boot {
 };
 extern const struct a733_npu_application_boot a733_npu_application_boot;
 const struct a733_npu_application_boot *a733_npu_application_boot_record(void);
-extern const unsigned char a733_npu_application_model[NPU_CONVOLUTION_MODEL_BYTES];
-extern const unsigned char a733_npu_application_input[NPU_CONVOLUTION_INPUT_BYTES];
-extern const unsigned char a733_npu_application_reference[NPU_CONVOLUTION_OUTPUT_BYTES];
+extern const unsigned char a733_npu_application_model[];
+extern const unsigned char a733_npu_application_input[];
+extern const unsigned char a733_npu_application_reference[];
+extern const size_t a733_npu_application_model_bytes, a733_npu_application_input_bytes, a733_npu_application_reference_bytes;
 extern const unsigned char a733_npu_application_artifact_hashes[3][32];
 
 /* Client alone writes output/timing, then release-publishes complete. Status1
- * means the copied hardware result matched the fixed reference and was reaped;
- * status2 means a completed result differed. Zero remains pending. */
+ * means both copied results matched the selected reference and were reaped;
+ * status2 means at least one completed result differed. Zero remains pending. */
 struct a733_npu_application_result {
     atomic_uint complete;
-    uint64_t start,end,job;
-    unsigned char output[NPU_CONVOLUTION_OUTPUT_BYTES];
+    uint64_t start,end,job,previous_job;
+    unsigned jobs;
+    unsigned char first_digest[32];
+    unsigned char output[NPU_CONVOLUTION_IO_CAPACITY];
 };
 extern struct a733_npu_application_result a733_npu_application_result;
 extern atomic_uint a733_npu_application_failed;
@@ -59,5 +62,5 @@ extern const struct a733_npu_ops a733_npu_application_operations;
 struct a733_observe_identity;
 int a733_npu_application_observer_admit(void);
 int a733_npu_application_request(const uint8_t[64],const struct a733_observe_identity *,uint32_t *,uint8_t[32]);
-int a733_npu_application_frame(uint8_t[512],const struct a733_observe_identity *,const uint8_t[32],const uint8_t[32]);
+int a733_npu_application_frame(uint8_t[1024],const struct a733_observe_identity *,const uint8_t[32],const uint8_t[32]);
 #endif

@@ -26,6 +26,19 @@ PROFILE_FIELDS=('epoch','generation','lease','npu_evidence','command_admission',
 def sha(data):return hashlib.sha256(data).hexdigest()
 
 
+def selected_model(raw):
+    elf=ELFFile(io.BytesIO(raw));table=elf.get_section_by_name('.symtab')
+    require(table is not None,'Native symbol table required.')
+    matches=[v for v in table.iter_symbols() if v.name=='a733_npu_application_model']
+    require(len(matches)==1,'Unique immutable model required.')
+    symbol=matches[0];section=elf.get_section(symbol['st_shndx'])
+    require(not section['sh_flags']&1,'Model is writable.')
+    offset=symbol['st_value']-section['sh_addr'];data=section.data()[offset:offset+symbol['st_size']]
+    selected=next((v for v in protocol.CATALOGUE if v['model']['bytes']==len(data) and v['model']['sha256']==sha(data)),None)
+    require(selected is not None,'Model is absent from reviewed catalogue.')
+    return selected
+
+
 def image_data(raw):
     """Validate the compact image before admitting any load or session upload."""
     elf=ELFFile(io.BytesIO(raw))
@@ -63,7 +76,8 @@ def image_data(raw):
         pll+pll_bytes==size and size<=4096 and not size%8 and 112<=npu<npu+48<=boot_bytes and
         npu+48<=pmic<pmic+24<=pins<boot_bytes,'Invalid exported native session layout.')
     hashes=[]
-    for name,(n,expected) in protocol.ARTIFACTS.items():
+    selected=selected_model(raw)
+    for name,(n,expected) in protocol.selected_artifacts({'model_name':selected['name']}).items():
         _,data=read('a733_npu_application_'+name,n);require(sha(data)==expected,'Fixed NPU artifact differs: '+name)
         hashes.append(bytes.fromhex(expected))
     require(read('a733_npu_application_artifact_hashes',96)[1]==b''.join(hashes),'Embedded artifact identity table differs.')
@@ -181,7 +195,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     request,contract=request_bytes(address,build,raw,profile)
     fixed.update({'request.bin':request,'contract.bin':contract,'result-zero.bin':bytes(16384),'report-zero.bin':bytes(128)})
     for name,data in fixed.items():(output/name).write_bytes(data)
-    p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),**profile,
+    p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'model_name':selected_model(image_raw)['name'],**profile,
         'session_layout':list(layout),'segments':uploads,'entry_evidence':evidence,'launcher_sha256':digest(output/'launch.bin'),
         'files':{p.name:digest(p) for p in output.iterdir() if p.is_file()}}
     save_json(output/'prepared.json',p);return validate_bundle(output)
@@ -194,6 +208,7 @@ def validate_bundle(bundle):
         require(Path(name).name==name,'Invalid prepared filename.');data[name]=(bundle/name).read_bytes()
         require(sha(data[name])==expected,'Prepared input changed: '+name)
     parts,address,build,layout=image_data(data['image.elf']);raw=data['session.bin'];profile=session_profile(raw,layout)
+    require(p.get('model_name','conv8')==selected_model(data['image.elf'])['name'],'Selected model differs from image.')
     require(p['image_sha256']==sha(data['image.elf']) and p['build_id']==build.hex() and p['session_layout']==list(layout) and
         all(p.get(k)==v for k,v in profile.items()),'Prepared native/session metadata differs.')
     manifest=json.loads(data['image-input-manifest.json']);require(manifest.get('target')=='a733-npu-convolution-supervised' and manifest.get('final_elf')==p['image_sha256'],'Manifest differs.')

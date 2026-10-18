@@ -1,17 +1,20 @@
-# Native fixed convolution application
+# Native compiled convolution application
 
 The native application combines the cached eight-core boot image, a permanent
-NPU memory reservation, the PMIC provider, NPU startup and the fixed convolution
-client. It copies 192 input bytes into private buffers, waits for a completed
-job, copies 72 output bytes, compares them with the pinned reference, and reaps
-the job before publishing a result through USB.
+NPU memory reservation, the PMIC provider, NPU startup and the trusted compiled-model
+client. Build-time selection chooses one of the three reviewed models in
+[the registration catalogue](npu-convolution.md). The client copies the selected
+input into private buffers, waits for matched completion, copies and compares
+the output, and successfully reaps the job before submitting a second input.
+It verifies both results before publishing through USB.
 
 The watchdog profile adopts an inherited PLL rate that can supply 492 MHz and
 requires an existing 800 mV DCDC2 supply. The supervised profile connects the
 PLL controller before local startup. Its explicit live-DRAM profile can enable
 a disabled PLL while adopting a quiescent NPU domain already ON. Neither profile
 programs PMIC voltage. No preserved board measurement
-establishes the cold PLL or DCDC2 state. Broader model support remains separate.
+establishes the cold PLL or DCDC2 state. Runtime model switching, concurrent models and other graph/operator classes
+remain unsupported.
 The fixed model and command streams come from pinned external NPU compiler
 artifacts. DDR initialization also retains its existing pinned boot firmware.
 Replacing those dependencies is deferred until hardware functionality and
@@ -23,7 +26,7 @@ Build from the repository root or from the standalone `apps/npu-convolution`
 CMake project with the pinned FreeRTOS and TinyUSB source directories.
 Supply `A733_NPU_HANDOFF_SOURCE`,
 `A733_NPU_MODEL`, `A733_NPU_INPUT` and `A733_NPU_REFERENCE`. The artifact generator
-checks the fixed hashes recorded in `apps/npu-convolution/artifacts.py`; it does
+checks the selected model/input/reference tuple in `tools/npu-models.json`; it does
 not invoke a model compiler. The existing compiler artifacts remain in the
 external cache. The target is `a733-npu-convolution`.
 The root build enables this target only when a handoff source is supplied.
@@ -82,7 +85,7 @@ comparison and explicit REAP.
 
 `apps/npu-convolution/observe.py` provides `prepare`, `validate` and `launch`
 commands. Preparation consumes the reviewed native ELF manifest and the preserved
-compact observer launcher bundle. It verifies the embedded fixed artifacts,
+compact observer launcher bundle. It verifies the embedded selected artifacts,
 copies launch inputs into a new bundle, and records their identities. A bundle
 prepared with `--refusal` is rejected before device discovery.
 
@@ -91,9 +94,10 @@ transfer, quarantine and recovery mechanisms. It requires NPU-specific software
 and platform evidence in addition to the existing DDR and independent-recovery
 records. Only the board coordinator may schedule physical execution.
 
-USB command `0x33` returns a 512-byte frame containing the boot identity, host
-challenge, build identity, controller and admission identities, fixed artifact
-digests, copied output, output digest and completion times. Status distinguishes
+USB command `0x33` returns a version-2, 1,024-byte frame containing the boot identity, host
+challenge, build identity, controller and admission identities, selected artifact
+digests, the complete final copied output, both job identities, the first output digest,
+final output digest and completion times. Status distinguishes
 pending, matching output, mismatching output and fault. The host validates and
 saves a complete frame before recording a terminal result. It reports success
 only when a matching output is durably captured and a fresh ROM response follows.
@@ -103,7 +107,7 @@ That ROM response alone does not establish watchdog causation.
 
 `checks/npu-application.py` links the actual native image with the explicit
 refusal fixture in `checks/npu-application.c`. It preserves generated assembly,
-source dependencies, fixed artifacts, tool identities, ELF and map before
+source dependencies, selected artifacts, tool identities, ELF and map before
 instruction execution. The prepared physical image retains zero admission flags.
 
 The selected instruction check constructs the real application, shared providers,
@@ -271,3 +275,23 @@ checks refuse missing SRAM-abandonment or disturbance evidence and unknown
 modes. Hardware responses, architecture and external admission are modeled.
 No previous scheduler, controller, numerical or USB workload was rerun, and no
 physical operation was performed.
+
+## Selected-model application evidence
+
+The focused variable-model batch is recorded under
+`~/.cache/sunstoneos/evidence/npu-models-20261018/native-final/`.
+It selects the 12×12 input and four-output-channel model, copies 432 input bytes
+and 400 output bytes, and passes two distinct jobs with matching REAP replies.
+It also preserves a first-job mismatch when the second matches and refuses
+success after a wrong ticket in the second REAP reply. The native serializer and
+durable host capture pass with the complete 1,024-byte frame. The host retains
+strict parsing for frozen version-1 frames and reads up to 1,040 transport bytes,
+including the 16-byte USB response header.
+
+The preserved compact launcher initially failed the source-compatibility check
+because its AArch32 entry retained an SCR.NS check absent from current source.
+The existing observer preparation tool produced one matching launcher from the
+preserved reviewed observer ELF/manifest and current launcher sources. The NPU
+image was reused; frozen observer and live-board artifacts were not modified.
+No physical test occurred. The instruction check models service completion and
+output and cannot establish physical inference or effective confinement.

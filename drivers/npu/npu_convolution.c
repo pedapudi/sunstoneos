@@ -48,9 +48,17 @@ static void digest(const void *data,size_t bytes,unsigned char out[32])
     hash_block(h,tail);if(final==128)hash_block(h,tail+64);
     for(unsigned i=0;i<32;++i)out[i]=(unsigned char)(h[i/4]>>(24-8*(i%4)));
 }
-static const unsigned char model_digest[32]={
-    0xdb,0x42,0xd8,0x15,0x10,0x04,0x17,0xf4,0xb8,0x91,0x38,0x96,0x46,0x2e,0xd0,0x31,
-    0xbe,0xaf,0xae,0x35,0xfb,0x4e,0xe1,0xc2,0x85,0x69,0xac,0x95,0x0a,0x9e,0x8f,0xca};
+struct supported_model {
+    unsigned char digest[32];
+    uint32_t model_bytes,input_bytes,output_bytes,vip_sram_bytes,coeff_bytes;
+    uint32_t input[12],output[12];
+};
+/* Only privileged build-time catalogue entries are executable input. The table
+ * fixes descriptor/control/coefficients together; CRC or caller hashes cannot
+ * add entries. Effective hardware confinement remains an admission prerequisite. */
+static const struct supported_model models[]={
+#include "npu_models.inc"
+};
 static const unsigned immutable[4]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_COEFF,
     NPU_CONVOLUTION_COMMAND,NPU_CONVOLUTION_BOOTSTRAP};
 static int span(uintptr_t base,size_t size)
@@ -60,7 +68,11 @@ static int overlap(uintptr_t a,size_t n,uintptr_t b,size_t m)
 static int fault(struct npu_convolution *c)
 {atomic_store_explicit(&c->failed,1,memory_order_release);return 0;}
 static int good(const struct npu_convolution *c)
-{return c && c->prepared && !atomic_load_explicit(&c->failed,memory_order_acquire);}
+{return c && c->prepared && c->model_index<sizeof(models)/sizeof(*models) &&
+    c->model_bytes==models[c->model_index].model_bytes &&
+    c->input_bytes==models[c->model_index].input_bytes &&
+    c->output_bytes==models[c->model_index].output_bytes &&
+    !atomic_load_explicit(&c->failed,memory_order_acquire);}
 static int private_overlap(const struct npu_convolution *c,uintptr_t p,size_t n)
 {
     if(!span(p,n) || overlap(p,n,(uintptr_t)c,sizeof(*c)) ||
@@ -75,8 +87,12 @@ static int unchanged(struct npu_convolution *c)
 {
     unsigned char actual[32];
     if(!good(c))return 0;
-    digest(c->model,sizeof(c->model),actual);
-    if(memcmp(actual,model_digest,sizeof(actual)))return fault(c);
+    if(c->model_index>=sizeof(models)/sizeof(*models) ||
+       c->model_bytes!=models[c->model_index].model_bytes ||
+       c->input_bytes!=models[c->model_index].input_bytes ||
+       c->output_bytes!=models[c->model_index].output_bytes)return fault(c);
+    digest(c->model,c->model_bytes,actual);
+    if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
     for(unsigned j=0;j<4;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable[j]];
         digest((void *)b->cpu,b->bytes,actual);
@@ -100,21 +116,32 @@ static int bootstrap_image(struct a733_npu_buffer *b)
     little(p+200,0x10000000);little(p+204,0);
     return 1;
 }
-static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p)
+static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size_t bytes)
+{
+    if(t->dimensions!=raw[0] || t->format!=raw[7] || t->buffer_type!=raw[8] ||
+       t->quantization!=raw[9] || t->scale_bits!=raw[10] ||
+       t->zero_point!=(int32_t)raw[11] || t->logical_bytes!=bytes)return 0;
+    for(unsigned i=0;i<6;++i)if(t->sizes[i]!=raw[i+1])return 0;
+    return 1;
+}
+static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
+    const struct supported_model *v)
 {
     static const uint32_t sizes[]={4096,4096,0,524288,4096,4096};
     struct nbg_tensor input,output;
     if(m->header.version!=0x20000 || m->header.target!=0x1000003b ||
        m->header.core_count!=1 || m->header.operation_count!=2 ||
        m->header.nn_bytes!=192 || m->header.pool_bytes || m->header.axi_sram_bytes ||
-       m->header.vip_sram_bytes!=0x18b00 || p->nn_operations!=1 ||
+       m->header.vip_sram_bytes!=v->vip_sram_bytes || v->vip_sram_bytes>0x80000 ||
+       m->sections[NBG_COEFF].bytes!=v->coeff_bytes || p->nn_operations!=1 ||
        p->descriptor_patches!=3 || p->state_patches!=1 || p->command_body_bytes!=80 ||
        !nbg_model_tensor(m,NBG_INPUT,0,&input) || !nbg_model_tensor(m,NBG_OUTPUT,0,&output) ||
-       input.logical_bytes!=192 || output.logical_bytes!=72)return 0;
+       !tensor_profile(&input,v->input,v->input_bytes) ||
+       !tensor_profile(&output,v->output,v->output_bytes))return 0;
     for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)
-        if(p->buffers[i].allocation_bytes!=sizes[i])return 0;
-    /* The complete SHA-256 already fixes dimensions, quantization, coefficient
-     * bytes and every relocation record; these checks bind decoder assumptions. */
+        if(p->buffers[i].allocation_bytes!=sizes[i] ||
+           p->buffers[i].minimum_bytes>sizes[i] ||
+           p->buffers[i].payload_bytes>p->buffers[i].minimum_bytes)return 0;
     return 1;
 }
 int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convolution_config *config)
@@ -122,7 +149,7 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     if(!c || !config || c->prepared || atomic_load(&c->failed) ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     struct npu_convolution_config v=*config;
-    if(v.register_physical!=0x03600000 || v.model_bytes!=NPU_CONVOLUTION_MODEL_BYTES || !span((uintptr_t)v.model,v.model_bytes) ||
+    if(v.register_physical!=0x03600000 || (!v.model_bytes || v.model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) || !span((uintptr_t)v.model,v.model_bytes) ||
        !span((uintptr_t)c,sizeof(*c)) || !span((uintptr_t)v.arena,v.arena_bytes) ||
        overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.model,v.model_bytes) ||
        overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.arena,v.arena_bytes) ||
@@ -139,12 +166,19 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
            overlap(b->cpu,b->bytes,(uintptr_t)v.model,v.model_bytes))return 0;
     }
     atomic_init(&c->failed,0);
-    memcpy(c->model,v.model,sizeof(c->model));
-    unsigned char actual[32];digest(c->model,sizeof(c->model),actual);
-    if(memcmp(actual,model_digest,sizeof(actual)))return fault(c);
+    memset(c->model,0,sizeof(c->model));
+    c->model_bytes=v.model_bytes;
+    memcpy(c->model,v.model,v.model_bytes);
+    unsigned char actual[32];digest(c->model,c->model_bytes,actual);
+    unsigned selected=0;
+    while(selected<sizeof(models)/sizeof(*models) &&
+        (models[selected].model_bytes!=v.model_bytes || memcmp(actual,models[selected].digest,32)))++selected;
+    if(selected==sizeof(models)/sizeof(*models))return fault(c);
+    c->model_index=selected;c->input_bytes=models[selected].input_bytes;
+    c->output_bytes=models[selected].output_bytes;
     struct nbg_model model;struct nbg_assembly_plan plan;
-    if(nbg_model_open(c->model,sizeof(c->model),&model)!=NBG_DECODE_OK ||
-       !nbg_assembly_requirements(&model,&plan) || !profile(&model,&plan))return fault(c);
+    if(nbg_model_open(c->model,c->model_bytes,&model)!=NBG_DECODE_OK ||
+       !nbg_assembly_requirements(&model,&plan) || !profile(&model,&plan,&models[c->model_index]))return fault(c);
     memcpy(c->buffers,v.buffers,sizeof(c->buffers));
     if(!a733_npu_native_init(&c->native,v.register_cpu,v.register_physical,v.arena,v.arena_bytes,
         v.arena_physical,c->buffers,NPU_CONVOLUTION_BUFFERS,v.fatal,v.fatal_cookie))return fault(c);
@@ -273,7 +307,7 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         if(!c->opened || timeout)return 0;
         break;
     case NPU_SERVICE_SUBMIT:
-        if(!c->ready || c->job || !input || bytes!=NPU_CONVOLUTION_INPUT_BYTES ||
+        if(!c->ready || c->job || !input || bytes!=c->input_bytes ||
            !timeout || timeout>INT64_MAX || private_overlap(c,(uintptr_t)input,bytes))return 0;
         memcpy((void *)c->buffers[NPU_CONVOLUTION_INPUT].cpu,input,bytes);r.command=1;
         break;
@@ -310,6 +344,6 @@ int npu_convolution_collect(struct npu_convolution *c,uint64_t ticket,
 int npu_convolution_output(struct npu_convolution *c,void *out,size_t bytes)
 {
     if(!client(c) || !good(c) || c->pending || !c->output_ready || !c->job ||
-       bytes!=NPU_CONVOLUTION_OUTPUT_BYTES || private_overlap(c,(uintptr_t)out,bytes))return 0;
+       bytes!=c->output_bytes || private_overlap(c,(uintptr_t)out,bytes))return 0;
     memcpy(out,(void *)c->buffers[NPU_CONVOLUTION_OUTPUT].cpu,bytes);return 1;
 }

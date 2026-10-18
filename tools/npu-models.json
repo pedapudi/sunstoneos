@@ -1,0 +1,140 @@
+{
+  "compiler_lock": "npu-compiler.lock.json",
+  "models": [
+    {
+      "name": "conv8",
+      "model": {
+        "bytes": 1928,
+        "sha256": "db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca"
+      },
+      "input": {
+        "bytes": 192,
+        "sha256": "976fdde5d777fd2b60d5146fa9acde1f2a4340c758555c9393f48c09cb1abf12"
+      },
+      "reference": {
+        "bytes": 72,
+        "sha256": "899612ebf5d62b2bebba2926ef68af8b63cf0050b2dd67fa2d3a5d759a5b9c9b"
+      },
+      "input_tensor": [
+        4,
+        8,
+        8,
+        3,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1015054465,
+        127
+      ],
+      "output_tensor": [
+        4,
+        6,
+        6,
+        2,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1017521702,
+        108
+      ],
+      "vip_sram_bytes": 101120,
+      "coeff_bytes": 256
+    },
+    {
+      "name": "conv10",
+      "model": {
+        "bytes": 1928,
+        "sha256": "dbef8b2e59eca7e85fbea2fd1db6769f6d63b461a080e9c7c735366797a77ce2"
+      },
+      "input": {
+        "bytes": 300,
+        "sha256": "6019d9566da343e7978f831db2fe23305d0ed8af073861b98e803a967be48504"
+      },
+      "reference": {
+        "bytes": 128,
+        "sha256": "f6ee75f38f18b18463657ae002764c41af25fc107886ef5e229b3a1a0ab4f7ab"
+      },
+      "input_tensor": [
+        4,
+        10,
+        10,
+        3,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1015054465,
+        127
+      ],
+      "output_tensor": [
+        4,
+        8,
+        8,
+        2,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1012126676,
+        106
+      ],
+      "vip_sram_bytes": 101376,
+      "coeff_bytes": 256
+    },
+    {
+      "name": "conv12",
+      "model": {
+        "bytes": 2056,
+        "sha256": "d8de2e7a886741959d7806783e0a4bf96addc726f6c18804a420bbf4a250d3d9"
+      },
+      "input": {
+        "bytes": 432,
+        "sha256": "026d44d8d5de9f3b1bee86c3794909e093ded7b5386536d94b90eaad71d72b71"
+      },
+      "reference": {
+        "bytes": 400,
+        "sha256": "a22da3d747cb4e689785aa2b0d79feef8a96957cfadc8d3a188a7f714cf8419f"
+      },
+      "input_tensor": [
+        4,
+        12,
+        12,
+        3,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1015054465,
+        127
+      ],
+      "output_tensor": [
+        4,
+        10,
+        10,
+        4,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1016995358,
+        122
+      ],
+      "vip_sram_bytes": 101376,
+      "coeff_bytes": 384
+    }
+  ]
+}

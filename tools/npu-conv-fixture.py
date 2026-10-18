@@ -17,20 +17,24 @@ from onnx import TensorProto, helper, numpy_helper
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="new directory for the fixture")
+    parser.add_argument('--width', type=int, default=8, choices=(8,10,12))
+    parser.add_argument('--channels', type=int, default=2, choices=(2,4))
     args = parser.parse_args()
+    w,c=args.width,args.channels
+    n=w-2
 
     # All values are dyadic fractions. The accumulator below is integer-exact;
     # division by 64 is exactly representable for every generated output.
-    input_integer = ((np.arange(192, dtype=np.int32) * 7) % 33 - 16).reshape(1, 3, 8, 8)
-    weight_integer = (np.arange(54, dtype=np.int32) % 5 - 2).reshape(2, 3, 3, 3)
-    bias_integer = np.array([16, -32], dtype=np.int32)
+    input_integer = ((np.arange(3*w*w, dtype=np.int32) * 7) % 33 - 16).reshape(1, 3, w, w)
+    weight_integer = (np.arange(c*27, dtype=np.int32) % 5 - 2).reshape(c, 3, 3, 3)
+    bias_integer = np.array(([16,-32]*c)[:c], dtype=np.int32)
     input_tensor = input_integer.astype(np.float32) / 8
     weights = weight_integer.astype(np.float32) / 8
     bias = bias_integer.astype(np.float32) / 64
-    accumulator = np.empty((1, 2, 6, 6), dtype=np.int32)
-    for channel in range(2):
-        for y in range(6):
-            for x in range(6):
+    accumulator = np.empty((1, c, n, n), dtype=np.int32)
+    for channel in range(c):
+        for y in range(n):
+            for x in range(n):
                 total = int(bias_integer[channel])
                 for z in range(3):
                     for ky in range(3):
@@ -44,8 +48,8 @@ def main():
         [helper.make_node("Conv", ["input", "weights", "bias"], ["output"],
                           kernel_shape=[3, 3], strides=[1, 1], pads=[0, 0, 0, 0])],
         "conv3x3",
-        [helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 3, 8, 8])],
-        [helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, 2, 6, 6])],
+        [helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 3, w, w])],
+        [helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, c, n, n])],
         [numpy_helper.from_array(weights, "weights"), numpy_helper.from_array(bias, "bias")],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
@@ -64,17 +68,17 @@ def main():
         blob = path.read_bytes()
         files[path.name] = dict(bytes=len(blob), sha256=hashlib.sha256(blob).hexdigest())
     report = dict(
-        operator="Conv", input_nchw=[1, 3, 8, 8], weights_oihw=[2, 3, 3, 3],
-        output_nchw=[1, 2, 6, 6], stride=[1, 1], padding=[0, 0, 0, 0],
+        operator="Conv", input_nchw=[1, 3, w, w], weights_oihw=[c, 3, 3, 3],
+        output_nchw=[1, c, n, n], stride=[1, 1], padding=[0, 0, 0, 0],
         input_formula="((linear_index * 7) % 33 - 16) / 8",
-        weight_formula="(linear_index % 5 - 2) / 8", bias=[0.25, -0.5],
+        weight_formula="(linear_index % 5 - 2) / 8", bias=bias.tolist(),
         reference="exact integer cross-correlation, including bias, divided by 64",
         expected_min=float(expected.min()), expected_max=float(expected.max()),
         quantization_applied=False, device_execution=False,
         numpy_version=np.__version__, onnx_version=onnx.__version__, files=files,
     )
     (args.output / "fixture.json").write_text(json.dumps(report, indent=2) + "\n")
-    print("Generated 3x3 convolution: 192 input values, 54 weights, 72 reference outputs")
+    print(f"Generated 3x3 convolution: {3*w*w} input values, {c*27} weights, {c*n*n} reference outputs")
 
 
 if __name__ == "__main__":

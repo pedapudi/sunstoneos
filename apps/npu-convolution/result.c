@@ -43,7 +43,7 @@ int a733_npu_application_request(const uint8_t p[64],const struct a733_observe_i
     unsigned nonzero=0;for(unsigned i=0;i<32;++i)nonzero|=p[32+i];if(!nonzero)return 0;
     *sequence=le32(p+4);for(unsigned i=0;i<32;++i)challenge[i]=p[32+i];return 1;
 }
-int a733_npu_application_frame(uint8_t out[512],const struct a733_observe_identity *id,
+int a733_npu_application_frame(uint8_t out[1024],const struct a733_observe_identity *id,
     const uint8_t challenge[32],const uint8_t build[32])
 {
     if(id!=&a733_observe_identity || !a733_npu_application_observer_admit())return 0;
@@ -61,8 +61,8 @@ int a733_npu_application_frame(uint8_t out[512],const struct a733_observe_identi
         job=a733_npu_application_result.job;
         if(!job || start<id->armed_at || end<start || end>=id->deadline)return 0;
     }
-    for(unsigned i=0;i<512;++i)out[i]=0;
-    put64(out,A733_NPU_APPLICATION_FRAME);put64(out+8,UINT64_C(512)<<32|1);
+    for(unsigned i=0;i<1024;++i)out[i]=0;
+    put64(out,A733_NPU_APPLICATION_FRAME);put64(out+8,UINT64_C(1024)<<32|2);
     put64(out+24,id->epoch);put64(out+32,id->generation);put64(out+40,id->lease);
     put64(out+48,start);put64(out+56,end);put64(out+64,id->deadline);put64(out+72,job);
     for(unsigned i=0;i<32;++i){out[80+i]=challenge[i];out[112+i]=build[i];}
@@ -71,19 +71,27 @@ int a733_npu_application_frame(uint8_t out[512],const struct a733_observe_identi
     for(unsigned i=0;i<3;++i)for(unsigned j=0;j<32;++j)
         out[184+i*32+j]=a733_npu_application_artifact_hashes[i][j];
     if(done) {
+        if(a733_npu_application_result.jobs!=2 || !a733_npu_application_result.previous_job ||
+           a733_npu_application_result.previous_job==job ||
+           !a733_npu_application_reference_bytes || a733_npu_application_reference_bytes>NPU_CONVOLUTION_IO_CAPACITY)return 0;
         unsigned mismatch=0;
-        for(unsigned i=0;i<NPU_CONVOLUTION_OUTPUT_BYTES;++i) {
+        for(unsigned i=0;i<32;++i) {
+            out[856+i]=a733_npu_application_result.first_digest[i];
+            mismatch|=out[856+i]^a733_npu_application_artifact_hashes[2][i];
+        }
+        put64(out+840,2);put64(out+848,a733_npu_application_result.previous_job);
+        for(unsigned i=0;i<a733_npu_application_reference_bytes;++i) {
             out[280+i]=a733_npu_application_result.output[i];
             mismatch|=out[280+i]^a733_npu_application_reference[i];
         }
         if((done==1 && mismatch) || (done==2 && !mismatch))return 0;
-        a733_observe_digest(out+280,NPU_CONVOLUTION_OUTPUT_BYTES,out+352);
-        put64(out+384,NPU_CONVOLUTION_OUTPUT_BYTES);
+        a733_observe_digest(out+280,a733_npu_application_reference_bytes,out+792);
+        put64(out+824,a733_npu_application_reference_bytes);
     }
     (void)a733_npu_application_health();
     unsigned latest=atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire);
     if(latest)failed=latest;
     put64(out+16,failed ? 3 : done==1 ? 0 : done==2 ? 2 : 1);
-    put64(out+392,failed);
-    a733_observe_digest(out,480,out+480);return 1;
+    put64(out+832,failed);
+    a733_observe_digest(out,992,out+992);return 1;
 }

@@ -32,11 +32,14 @@ PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel',
 request_bytes = observer.request_bytes
 
 
-ARTIFACTS = {
-    'model': (1928, 'db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca'),
-    'input': (192, '976fdde5d777fd2b60d5146fa9acde1f2a4340c758555c9393f48c09cb1abf12'),
-    'reference': (72, '899612ebf5d62b2bebba2926ef68af8b63cf0050b2dd67fa2d3a5d759a5b9c9b'),
-}
+CATALOGUE=json.loads((ROOT/'tools/npu-models.json').read_text())['models']
+ARTIFACTS={name:(CATALOGUE[0][name]['bytes'],CATALOGUE[0][name]['sha256']) for name in ('model','input','reference')}
+
+def selected_artifacts(prepared):
+    name=prepared.get('model_name','conv8')
+    selected=next((v for v in CATALOGUE if v['name']==name),None)
+    require(selected is not None,'Unknown reviewed model.')
+    return {key:(selected[key]['bytes'],selected[key]['sha256']) for key in ('model','input','reference')}
 
 def image_profile(image):
     from elftools.elf.elffile import ELFFile
@@ -55,8 +58,14 @@ def image_profile(image):
               'pmic_evidence','pin_evidence','npu_owner','pmic_owner','usb_owner','bridge_owner',
               'npu_established','usb_established')
         profile=dict(zip(keys,values))
+        symbol=symbols['a733_npu_application_model']
+        model=data('a733_npu_application_model',symbol['st_size'])
+        selected=next((v for v in CATALOGUE if v['model']['bytes']==len(model) and
+            v['model']['sha256']==hashlib.sha256(model).hexdigest()),None)
+        require(selected is not None,'Model is absent from reviewed catalogue.')
+        profile['model_name']=selected['name']
         hashes=[]
-        for name,(size,expected) in ARTIFACTS.items():
+        for name,(size,expected) in selected_artifacts(profile).items():
             value=data('a733_npu_application_'+name,size)
             require(hashlib.sha256(value).hexdigest()==expected,'Fixed NPU artifact differs: '+name)
             hashes.append(bytes.fromhex(expected))
@@ -66,7 +75,7 @@ def image_profile(image):
 
 def prepare(image, manifest_path, output, launcher_bundle, refusal=False):
     manifest=json.loads(manifest_path.read_text())
-    require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version')==1 and
+    require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version') in (1,2) and
             manifest.get('final_elf')==digest(image),'Image differs from reviewed NPU manifest.')
     prior=observer.validate_bundle(launcher_bundle)
     for name in ('launch.S','launch.c','launch.ld'):
@@ -129,7 +138,7 @@ def validate_bundle(bundle):
     for name, expected in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]:
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
     require(0 < (bundle / 'launch.bin').stat().st_size <= 0xc00 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
-    require(all(prepared.get(k)==v for k,v in image_profile(bundle/'image.elf').items()),'Prepared admission profile differs from ELF.')
+    require(all(prepared.get(k,'conv8' if k=='model_name' else None)==v for k,v in image_profile(bundle/'image.elf').items()),'Prepared admission profile differs from ELF.')
     prepared['_sizes'] = sizes
     return prepared
 
@@ -141,29 +150,42 @@ def request(sequence, prepared, challenge):
 
 def response(frame, sequence, prepared, challenge):
     """Validate the entire fixed frame before interpreting any reported success."""
-    require(len(frame) == 528, 'Incomplete or oversized observer response.')
-    require(struct.unpack_from('<4I', frame) == (MESSAGE_MAGIC, sequence, 0x80000033, 512), 'Response header/session sequence differs.')
+    artifacts=selected_artifacts(prepared)
+    require(len(frame) in (528,1040), 'Incomplete or oversized observer response.')
+    size=len(frame)-16
+    require(struct.unpack_from('<4I', frame) == (MESSAGE_MAGIC, sequence, 0x80000033, size), 'Response header/session sequence differs.')
     p = frame[16:]
-    require(hashlib.sha256(p[:480]).digest() == p[480:], 'Observer frame digest differs.')
-    magic, version, size, status, epoch, generation, lease, start, end, deadline, job = struct.unpack_from('<QII8Q', p)
-    require((magic, version, size) == (FRAME_MAGIC, 1, 512) and status in (0, 1, 2, 3), 'Unsupported observer frame.')
+    digest_at=size-32
+    require(hashlib.sha256(p[:digest_at]).digest() == p[digest_at:], 'Observer frame digest differs.')
+    magic, version, wire_size, status, epoch, generation, lease, start, end, deadline, job = struct.unpack_from('<QII8Q', p)
+    require((magic, version, wire_size) in ((FRAME_MAGIC,1,512),(FRAME_MAGIC,2,1024)) and wire_size==size and status in (0,1,2,3), 'Unsupported observer frame.')
     require((epoch, generation, lease) == (prepared['epoch'], prepared['generation'], prepared['lease']) and
             p[80:112] == challenge and p[112:144] == bytes.fromhex(prepared['build_id']), 'Stale or mismatched observer identity.')
     controller,npu_evidence,command_admission,usb_evidence,armed=struct.unpack_from('<5Q',p,144)
     require(controller==0x03600000 and (npu_evidence,command_admission,usb_evidence)==
         tuple(prepared[k] for k in ('npu_evidence','command_admission','usb_evidence')),
         'NPU profile differs from the reviewed image.')
-    require(p[184:280]==b''.join(bytes.fromhex(h) for _,h in ARTIFACTS.values()),'Fixed artifact identities differ.')
-    output=p[280:352];output_digest=p[352:384]
-    output_bytes,failure=struct.unpack_from('<2Q',p,384)
-    require(armed<deadline and not any(p[400:480]),'Invalid frame bounds or reserved fields.')
+    require(p[184:280]==b''.join(bytes.fromhex(h) for _,h in artifacts.values()),'Reviewed artifact identities differ.')
+    if version==1:
+        require(prepared.get('model_name','conv8')=='conv8','Legacy frame cannot publish selected model.')
+        output_bytes,failure=struct.unpack_from('<2Q',p,384)
+        output=p[280:352];output_digest=p[352:384]
+        require(not any(p[400:480]),'Invalid reserved fields.')
+        first_match=True
+    else:
+        output_bytes,failure,jobs,previous=struct.unpack_from('<4Q',p,824)
+        output=p[280:280+output_bytes];output_digest=p[792:824]
+        require(output_bytes<=512 and not any(p[280+output_bytes:792]) and not any(p[888:992]),'Invalid output padding/reserved fields.')
+        require((jobs==2 and previous and previous!=job) if output_bytes else jobs==previous==0 and not any(p[856:888]),'Incomplete or repeated inference tickets.')
+        first_match=p[856:888].hex()==artifacts['reference'][1]
+    require(armed<deadline,'Invalid frame bounds.')
     if output_bytes:
-        require(output_bytes==72 and job and armed<=start<=end<deadline and
+        require(output_bytes==artifacts['reference'][0] and job and armed<=start<=end<deadline and
                 hashlib.sha256(output).digest()==output_digest,'Invalid completed output.')
-        matched=output_digest.hex()==ARTIFACTS['reference'][1]
+        matched=output_digest.hex()==artifacts['reference'][1] and first_match
         require(status==3 or status==0 and matched or status==2 and not matched,'Result comparison differs.')
     else:
-        require(start==end==job==0 and not any(p[280:384]) and status in (1,3),'Incomplete frame claims a result.')
+        require(start==end==job==0 and not any(output) and not any(output_digest) and status in (1,3),'Incomplete frame claims a result.')
     require((status==3)==bool(failure) and (status!=1 or output_bytes==0),'Fault/status publication differs.')
     return {'status':('success','pending','mismatch','fault')[status],'epoch':epoch,'generation':generation,
         'lease':lease,'build_id':prepared['build_id'],'start_counter':start,'end_counter':end,
@@ -295,7 +317,7 @@ def main(argv=None):
     args=parser.parse_args(argv)
     if args.operation=='prepare':
         manifest=json.loads(args.image_manifest.read_text())
-        require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
+        require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version') in (1,2), 'Reviewed observer image manifest required.')
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.launcher_bundle.resolve(),args.refusal)
         print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
@@ -303,7 +325,7 @@ def main(argv=None):
         print(json.dumps({k:v for k,v in prepared.items() if not k.startswith('_')},indent=2));return 0
     require(prepared.get('refusal_only') is False,'Offline refusal bundle cannot be launched.')
     manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version')==1 and
+    require(manifest.get('target')=='a733-npu-convolution' and manifest.get('protocol_version') in (1,2) and
             manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
     def ready(): claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.ddr_contract,args.platform_contract)
@@ -405,7 +427,7 @@ def main(argv=None):
                                         same()
                                         remaining=int((started+3.6-time.monotonic())*1000)
                                         require(remaining>0,'Observer deadline expired after request write.')
-                                        return bytes(device.read(0x81,528,timeout=min(timeout,remaining)))
+                                        return bytes(device.read(0x81,1040,timeout=min(timeout,remaining)))
                                     except Exception:
                                         failed=True;raise
                                 capture_until_recovery(exchange,prepared,challenge,args.evidence,record,save,started+3.6)
