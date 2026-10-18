@@ -6,11 +6,13 @@
 int storage_read_session_valid(const struct storage_read_session *s)
 {
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
- s->magic!=A733_STORAGE_READ_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||
+ s->magic!=A733_STORAGE_READ_SESSION_MAGIC||s->version!=2||s->bytes!=sizeof(*s)||
  !s->owner||s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||!s->authority||
  !present(s->initial,32)||!present(s->memory,32)||!present(s->supplies,32)||
  !present(s->topology,32)||!present(s->supervision,32)||
  !s->identify_us||s->identify_us>10000000||!s->read_us||s->read_us>5000000||
+ !s->application_blocks||s->application_blocks>8||s->application_reserved||
+ s->application_first_sector>UINT32_MAX||s->application_blocks-1>UINT32_MAX-s->application_first_sector||
  !s->voltage_mask||(s->voltage_mask&~UINT32_C(0x00300000))||s->reserved32)return 0;
  for(unsigned i=0;i<6;++i)if(s->reserved[i])return 0;
  for(unsigned i=0;i<7;++i){

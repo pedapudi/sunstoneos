@@ -34,7 +34,7 @@ def freeze(build,out):
   if not copy.exists():copy.write_bytes(data)
   records.append(dict(path=str(p),sha256=h,snapshot=str(copy.relative_to(out))))
  (out/'compile-commands.json').write_text(json.dumps(commands,indent=2)+'\n');(out/'link.txt').write_bytes(link.read_bytes());(out/'image.elf').write_bytes(image.read_bytes())
- manifest=dict(target='sunstone-a733-storage-read',execution_profile='storage-read-supervised-v1',physical_access=False,final_elf=sha(image),build_id=(build/'storage-read-application/build-id.txt').read_text().strip(),objects=objects,compiled_inputs=records,scope='Exact compiled source/header closure and pinned linker/tool inputs. Hardware behavior unqualified.')
+ manifest=dict(target='sunstone-a733-storage-read',execution_profile='storage-read-supervised-v2',physical_access=False,final_elf=sha(image),build_id=(build/'storage-read-application/build-id.txt').read_text().strip(),objects=objects,compiled_inputs=records,scope='Exact compiled source/header closure and pinned linker/tool inputs. Hardware behavior unqualified.')
  (out/'image-input-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');return manifest
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();freeze(a.build,a.output)

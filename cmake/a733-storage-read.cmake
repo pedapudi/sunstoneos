@@ -18,7 +18,7 @@ list(REMOVE_ITEM storage_read_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 apply_build_patch("${storage_read_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/storage-read/boot.patch")
 list(APPEND storage_read_sources "${storage_read_build}/boot.c")
-foreach(source IN ITEMS apps/storage-read/main.c apps/storage-read/native.c apps/storage-read/usb0.c apps/storage-read/admission.c apps/storage-read/snapshot.c
+foreach(source IN ITEMS apps/storage-read/main.c apps/storage-read/native.c apps/storage-read/client.c apps/storage-read/usb0.c apps/storage-read/admission.c apps/storage-read/snapshot.c
  drivers/storage/a733_mmc_platform.c drivers/storage/a733_mmc_platform_native.c
  drivers/storage/sunxi_mmc.c drivers/storage/a733_storage_update.c)
  list(APPEND storage_read_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
@@ -44,7 +44,7 @@ set(storage_read_inputs ${storage_read_sources} ${storage_read_headers} ${board_
  "${SUNSTONE_SOURCE_ROOT}/apps/storage-read/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES storage_read_inputs)
-set(storage_read_identity "fixed-native-sd0-read1;supervised60;identify-sector0-512;PIO-private-copy;retained;${CMAKE_C_COMPILER_VERSION}")
+set(storage_read_identity "native-sd0-read-service2;supervised60;two-task-clients;bounded-ranges8;PIO-private-copy;retained;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS storage_read_inputs)
  file(SHA256 "${input}" storage_read_hash)
  string(APPEND storage_read_identity "${storage_read_hash}")

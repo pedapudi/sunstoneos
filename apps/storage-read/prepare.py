@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline preparation of one supervised fixed STORAGE_READ application session."""
+"""Offline preparation of a supervised reusable STORAGE_READ application session."""
 import hashlib
 import importlib.util
 import json
@@ -15,18 +15,20 @@ def module(name,path):
 board=module('storage_read_board_prepare',ROOT/'apps/board/prepare.py')
 base=board.base
 require=base.require
-SCHEMA='a733-storage-read-supervised-bundle-v1'
+SCHEMA='a733-storage-read-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373352444331
 REQUEST_MAGIC=0x4153373352444c31
 
 def session_check(raw):
-    require(len(raw)==864,'SD0 read session must be 864 bytes.')
+    require(len(raw)==880,'SD0 read session must be 880 bytes.')
     require(board.session_check(raw[:592])==2,'SD0 read requires USB0/provider selection 2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373352444131,1,864),'Invalid storage_read session extension.')
+    require(struct.unpack_from('<3Q',raw,592)==(0x4153373352444131,2,880),'Invalid storage_read session extension.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid storage_read owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728,760)),'Missing SD0 physical authority.')
     require(raw[834:840]==bytes(6) and raw[860:864]==bytes(4),'Reserved SD0 fields must be zero.')
+    first,blocks,reserved=struct.unpack_from('<QII',raw,864)
+    require(1<=blocks<=8 and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
     identify,read,voltage=struct.unpack_from('<QQI',raw,840)
     require(0<identify<=10000000 and 0<read<=5000000 and voltage and not voltage&~0x00300000,'Invalid bounded SD0 profile.')
     for i in range(7):
@@ -41,7 +43,7 @@ def embedded_reference(image,session):
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image has no symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
-    expected=struct.pack('<5Q',0x4153373352444131,864,256,512,1)
+    expected=struct.pack('<5Q',0x4153373352444131,880,288,4096,2)
     for name,body in [('storage_read_geometry',expected)]:
         require(name in symbols,'Missing immutable SD0 geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong SD0 geometry size.')
@@ -57,7 +59,7 @@ def embedded_reference(image,session):
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,864)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,880)
     return request,bytes(contract)
 
 def build_launcher(out,clang,lld):
@@ -80,7 +82,7 @@ def build_launcher(out,clang,lld):
 
 def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-storage-read-supervised-entry-v1','Wrong STORAGE_READ admission schema.')
+    require(record.get('schema')=='a733-storage-read-supervised-entry-v2','Wrong STORAGE_READ admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
     cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
     for key,offset in [('initial',632),('memory',664),('supplies',696),('topology',728),('supervision',760)]:
@@ -89,12 +91,12 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             require(not frozen,'Missing frozen STORAGE_READ evidence.');cache[str(path)]=path.read_bytes()
         data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'STORAGE_READ evidence differs.')
         fact=json.loads(data)
-        require(fact.get('schema')=='a733-storage-read-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
+        require(fact.get('schema')=='a733-storage-read-'+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
         required={'initial':['cold_sd0_controller','cold_card_protocol','all_sd0_clients_excluded','remote_firmware_excluded','irq193_owned_disabled_drained','no_dma_queue_encryption','no_clock_reset_writers'],
             'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
             'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],
-            'topology':['sd0_pf0_6_route','inserted_removable_sd','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
-            'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse','one_attempt','no_watchdog_arm','no_reset_retry']}[key]
+            'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
+            'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}[key]
         require(all(fact.get(k) is True for k in required),'Required STORAGE_READ physical fact absent.')
     return cache
 
@@ -104,7 +106,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-storage-read' and mf.get('execution_profile')=='storage-read-supervised-v1' and mf.get('final_elf')==ih,'Tested STORAGE_READ image manifest required.')
+    require(mf.get('target')=='sunstone-a733-storage-read' and mf.get('execution_profile')=='storage-read-supervised-v2' and mf.get('final_elf')==ih,'Tested STORAGE_READ image manifest required.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -137,7 +139,7 @@ def validate_bundle(bundle):
         require(hashlib.sha256(data[name]).hexdigest()==h,'SD0 input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'STORAGE_READ image changed.')
     manifest=json.loads(data['image-input-manifest.json'])
-    require(manifest.get('target')=='sunstone-a733-storage-read' and manifest.get('execution_profile')=='storage-read-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'STORAGE_READ image manifest differs.')
+    require(manifest.get('target')=='sunstone-a733-storage-read' and manifest.get('execution_profile')=='storage-read-supervised-v2' and manifest.get('final_elf')==p['image_sha256'],'STORAGE_READ image manifest differs.')
     sizes={name:len(value) for name,value in data.items()}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'STORAGE_READ protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'STORAGE_READ initial report backing changed.')
