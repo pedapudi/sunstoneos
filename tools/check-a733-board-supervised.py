@@ -97,14 +97,15 @@ def source_files():
             ('board-decoder.py', Path(decoder.__file__))]
 
 
-def validate_software(value, bundle):
+def validate_software(value, bundle, prepared):
     require(value.get('schema') == 'a733-board-supervised-software-v1' and
             value.get('physical_access') is False and
             all(value.get(key) is True for key in
                 ('admission_cases', 'launcher_cases', 'host_capture', 'host_lifecycle')),
             'Board software evidence is incomplete.')
     for key, name in [('image', 'image.elf'), ('launcher', 'launch.bin')]:
-        require(digest(artifact(value[key])) == digest(bundle / name),
+        artifact(value[key])
+        require(value[key]['sha256'] == prepared['files'][name],
                 'Software evidence covers different executable bytes.')
     paths = dict(source_files())
     paths.update({'supervised-host-tool.py': Path(supervisor.__file__),
@@ -119,7 +120,10 @@ def validate_software(value, bundle):
         artifact(item)
 
 
-def claimed(database, test_id, owner, bundle):
+def claimed(database, test_id, owner, bundle, prepared):
+    expected = {**prepared['files'], 'prepared.json': prepared['_prepared_sha256']}
+    for name, identity in expected.items():
+        require(digest(bundle / name) == identity, 'Frozen board bundle changed: ' + name)
     db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
     db.row_factory = sqlite3.Row
     try:
@@ -132,11 +136,12 @@ def claimed(database, test_id, owner, bundle):
         require(set(submission['prerequisites']) == PREREQUISITES and
                 set(review['prerequisites']) == PREREQUISITES, 'Board prerequisites differ.')
         refs = {name: artifact(value) for name, value in review['prerequisites'].items()}
-        require(refs['supervised-ram-recovery'] == (bundle / 'admission.json').resolve(),
+        require(refs['supervised-ram-recovery'] == (bundle / 'admission.json').resolve() and
+                review['prerequisites']['supervised-ram-recovery']['sha256'] == expected['admission.json'],
                 'Reviewed board entry differs.')
-        validate_software(json.loads(refs['board-supervised-software'].read_text()), bundle)
-        require({(bundle / name).resolve() for name in ('prepared.json', 'image.elf', 'launch.bin')} <=
-                {artifact(value) for value in submission['artifacts']},
+        validate_software(json.loads(refs['board-supervised-software'].read_text()), bundle, prepared)
+        require({((bundle / name).resolve(), expected[name]) for name in ('prepared.json', 'image.elf', 'launch.bin')} <=
+                {(artifact(value), value['sha256']) for value in submission['artifacts']},
                 'Queue does not cover this prepared image.')
     finally:
         db.close()
@@ -166,7 +171,7 @@ def main(argv=None):
                 'Board entry covers another USB instance.')
 
     return supervisor.run_session(args, bundle, prepared,
-        lambda: claimed(args.database, args.claim, args.owner, bundle), validate_entry,
+        lambda: claimed(args.database, args.claim, args.owner, bundle, prepared), validate_entry,
         lambda device, same, deadline, record, save: capture_device(
             device, same, deadline, session, profile, args.evidence, record, save),
         product='sunstoneos native board', serial='sunstoneos-a733-board',

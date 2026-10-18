@@ -82,14 +82,15 @@ def prepare(image, manifest_path, admission_path, output, clang, lld):
 
 
 def validate_bundle(bundle):
-    prepared = json.loads((bundle / 'prepared.json').read_text())
+    metadata = (bundle / 'prepared.json').read_bytes()
+    prepared = json.loads(metadata)
     require(prepared.get('schema') == 'a733-smp-supervised-bundle-v1' and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
-    sizes = {}
+    sizes = {}; frozen = {}
     for name, expected in prepared['files'].items():
         require(Path(name).name == name, 'Invalid prepared filename.')
         data = (bundle / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
-        sizes[name] = len(data)
+        sizes[name] = len(data); frozen[name] = data
     segments, address, identity = image_parts(bundle / 'image.elf')
     expected_segments = []
     for index, segment in enumerate(segments):
@@ -100,7 +101,7 @@ def validate_bundle(bundle):
     require(prepared['segments'] == expected_segments and prepared['image_sha256'] == digest(bundle / 'image.elf') and
             prepared['build_id'] == identity.hex(), 'Prepared ELF metadata differs.')
     require(digest(bundle/'admission.json')==prepared['admission_sha256'], 'Admission record changed.')
-    admission=json.loads((bundle/'admission.json').read_text())
+    admission=json.loads(frozen['admission.json'])
     validate_admission(admission,prepared['image_sha256'])
     require(prepared['reservation']==admission['reservation'], 'Reservation changed.')
     request, contract = request_bytes(address, identity, prepared['epoch'], prepared['generation'], prepared['lease'], prepared['reservation'], bytes.fromhex(prepared['admission_sha256']))
@@ -108,6 +109,8 @@ def validate_bundle(bundle):
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
     require(0 < (bundle / 'launch.bin').stat().st_size <= 0xc00 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
     prepared['_sizes'] = sizes
+    prepared['_frozen'] = frozen
+    prepared['_prepared_sha256'] = hashlib.sha256(metadata).hexdigest()
     return prepared
 
 
@@ -203,19 +206,22 @@ def validate_admission(value, image_hash, identity=None, port=None):
     for item in recovery['evidence']: artifact(item)
 
 
-def validate_software(value,bundle):
+def validate_software(value,bundle,prepared):
     require(value.get('schema')=='a733-smp-supervised-software-v1' and value.get('physical_access') is False and
             value.get('admission_cases') is True and value.get('launcher_cases') is True and
             value.get('host_lifecycle') is True, 'Supervised software evidence incomplete.')
     for key,name in [('image','image.elf'),('launcher','launch.bin')]:
-        require(digest(artifact(value[key]))==digest(bundle/name), 'Software evidence covers different executable bytes.')
+        artifact(value[key])
+        require(value[key]['sha256']==prepared['files'][name], 'Software evidence covers different frozen executable bytes.')
     for key,path in [('host_tool',Path(__file__)),('base_host_tool',Path(base.__file__)),('observer_host_tool',Path(observer.__file__))]:
         require(digest(artifact(value[key]))==digest(path), 'Software evidence covers another host implementation.')
     require(value.get('evidence'), 'Software evidence missing.')
     for item in value['evidence']: artifact(item)
 
 
-def claimed(database,test_id,owner,bundle,admission):
+def claimed(database,test_id,owner,bundle,admission,prepared):
+    expected={**prepared['files'],'prepared.json':prepared['_prepared_sha256']}
+    for name,identity in expected.items():require(digest(bundle/name)==identity,'Frozen bundle changed: '+name)
     db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
     try:
         require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0], 'Board queue halted.')
@@ -225,10 +231,11 @@ def claimed(database,test_id,owner,bundle,admission):
         require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,
                 'Supervised queue prerequisites differ.')
         refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        require(refs['supervised-ram-recovery']==admission.resolve(), 'Reviewed admission differs.')
-        validate_software(json.loads(refs['supervised-observer-software'].read_text()),bundle)
-        require({(bundle/n).resolve() for n in ('prepared.json','image.elf','launch.bin')}<=
-                {artifact(v) for v in submission['artifacts']}, 'Queue does not cover exact image.')
+        require(refs['supervised-ram-recovery']==admission.resolve() and
+                review['prerequisites']['supervised-ram-recovery']['sha256']==expected['admission.json'], 'Reviewed frozen admission differs.')
+        validate_software(json.loads(refs['supervised-observer-software'].read_text()),bundle,prepared)
+        require({((bundle/n).resolve(),expected[n]) for n in ('prepared.json','image.elf','launch.bin')}<=
+                {(artifact(v),v['sha256']) for v in submission['artifacts']}, 'Queue does not cover exact image.')
     finally: db.close()
 
 
@@ -412,12 +419,12 @@ def main(argv=None):
         result=prepare(args.image,args.image_manifest,args.admission,args.output.resolve(),args.clang,args.lld)
         print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
+    manifest=json.loads(prepared['_frozen']['image-input-manifest.json'])
     require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1 and
             manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
-    admission=json.loads((bundle/'admission.json').read_text())
+    admission=json.loads(prepared['_frozen']['admission.json'])
     return run_session(args,bundle,prepared,
-        lambda:claimed(args.database,args.claim,args.owner,bundle,bundle/'admission.json'),
+        lambda:claimed(args.database,args.claim,args.owner,bundle,bundle/'admission.json',prepared),
         lambda identity,port:validate_admission(admission,prepared['image_sha256'],identity,port),
         lambda device,same,deadline,record,save:capture_observer_device(
             device,same,deadline,prepared,args.evidence,record,save),

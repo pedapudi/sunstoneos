@@ -163,7 +163,7 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     save_json(output/'prepared.json',result);return validate_bundle(output)
 
 def validate_bundle(bundle):
-    bundle=Path(bundle);p=json.loads((bundle/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported board bundle.')
+    bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported board bundle.')
     sizes={}
     for name,expected in p['files'].items():
         require(Path(name).name==name and digest(bundle/name)==expected,'Prepared board input changed.');sizes[name]=(bundle/name).stat().st_size
@@ -205,7 +205,7 @@ def validate_bundle(bundle):
             sizes[name]<=0x43100000-address,'Retained firmware span changed.')
         expected.append({'name':name,'address':address})
     require(p['segments']==expected and all(x['name'] in sizes for x in expected),'Unsealed or changed upload.')
-    p['_sizes']=sizes;return p
+    p['_sizes']=sizes;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
 if __name__=='__main__':
     a=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','session-template','output','clang','lld'):a.add_argument('--'+name,type=Path,required=True)
