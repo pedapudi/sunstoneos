@@ -27,8 +27,15 @@ disabled pins. It never drives PD23 or infers connector power from a device-tree
 supply name. The board owner authenticates the exact carrier, endpoint, signal
 voltage, reset polarity and power sequence before admission.
 
-Sheet 2 supplies VDD-COMB1 from DCDC2 at 0.8 V and the PD bank from BLDO2 at
-1.8 V. The runtime acquires both actual stable rail reservations and obtains
+The initial profile follows sheet 2's VDD-COMB1 assignment to DCDC2 at 0.8 V
+and its PD-bank assignment to BLDO2 at 1.8 V. The later fan/LED routing review
+identifies VCC-PD on BLDO1 in the detailed power sheet. These assignments conflict;
+the current PCIe profile is not ready for physical use until the fitted board's
+PD supply and the profile's rail ownership agree. A BLDO2 snapshot cannot establish
+BLDO1 stability. Reconcile the wiring and update the application contract before
+an attempt; do not infer a regulator substitution from a device-tree name.
+
+The current runtime acquires DCDC2 and BLDO2 stable rail reservations and obtains
 page/identity/enable/selector/page snapshots through the shared PMIC provider.
 BLDO2 uses enable register 0x20 bit 7 and selector register 0x2b; selector 13
 programs 1.8 V. These observations prove programmed settings, not measured

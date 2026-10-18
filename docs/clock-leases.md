@@ -62,7 +62,11 @@ OSC stable. GPADC uses bit 68 for its controller, gate, reset and interrupt 70.
 Its exclusive lease holds FABRIC and GPADC24M stable, including the latter's
 REF and OSC ancestors. GPADC and the thermal sensor may share that stable
 source; either consumer prevents another owner from retuning it.
-Bits 69–127 remain invalid.
+APBS0 uses bit 69 for the always-on GPIO bus source/divider at R_CCU offset
+0x0c. Shared users prevent retuning; an exclusive reservation permits an admitted
+change. Its supported source0/source4 profiles retain REF and OSC conservatively.
+The PMIC reserves APBS0 alongside APBS1 because its PL0/PL1 pins use that bus.
+Bits 70–127 remain invalid.
 The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller
@@ -227,8 +231,8 @@ Existing registry clients retain their earlier evidence.
 ## Clock publication transfers ownership without a release window
 
 After a trusted coordinator validates the physical profile, atomic publication
-converts its exclusive PLL_NPU, display PLL1 or USB01 reference scope to
-shared ownership. A fresh
+converts its exclusive PLL_NPU, display PLL1, USB01 reference or GPADC24M scope
+to shared ownership. A fresh
 token replaces the old identity while preserving the owner and all other scopes.
 Validation and time checks precede the metadata change. Refusal leaves the old
 reservation and output unchanged; publication itself proves no hardware state.
@@ -246,7 +250,10 @@ Its focused host composition and native compilation pass.
 
 The thermal controller reserves GPADC24M and its conservative reference and
 oscillator ancestry. Changing that shared source requires exclusion of every
-ADC and thermal consumer. Local THS ownership is exclusive. Native thermal
+ADC and thermal consumer. After source setup and verification, the coordinator
+may atomically publish GPADC24M as stable while retaining all other scopes.
+Publication does not itself initialize the clock or authorize a new consumer.
+Local THS ownership is exclusive. Native thermal
 admission also verifies APB1 and the selected source under the register mutex.
 
 ## Focused evidence covers ownership composition
@@ -277,3 +284,11 @@ These checks establish software ownership behavior. Board startup still needs
 to create the shared registry, complete GPU parent admission and supply the
 audio binding to its parent controller. Physical clocks, reset recovery and
 concurrent workloads require separate qualification.
+
+The APBS0 reservation and GPADC24M publication changes pass one new focused
+registry case under `pwm-service-20261018/prerequisite/`. A second case executes
+the actual PMIC provider against modeled registers and checks its APBS0 ownership,
+source/divider validation, reference dependency and refusal after a profile change.
+Both frozen artifacts were reconciled during integration without another run.
+Existing native images retain their earlier provider layout; these host results
+do not establish new native or physical operation.

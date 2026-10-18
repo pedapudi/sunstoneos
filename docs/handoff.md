@@ -52,10 +52,13 @@ actual native USB serializer for repeated RTC results. The implementation worker
 have resumed after the usage-limit interruption. Existing frozen images and
 successful evidence remain preserved; none of these extensions has a new result.
 
-The PWM owner coordinates shared clock edits: an APBS0 stability reservation for
-always-on GPIO access, corresponding PMIC ownership, and atomic publication of
-a stable GPADC24M parent for thermal/ADC coexistence. The monitor owner imports
-that prerequisite rather than editing the registry concurrently. Normal monitor
+The shared prerequisite for fan/LED and combined monitoring is integrated:
+APBS0 stability ownership and actual PMIC source/divider validation, plus atomic
+publication of a stable GPADC24M parent. Two new focused checks pass under
+`pwm-service-20261018/prerequisite/`; integration reuses their frozen artifacts.
+The provider's new internal APBS0 field requires matching caller/fixture layouts
+in the next native images. The monitor owner imports the complete prerequisite
+rather than editing the registry concurrently. Normal monitor
 stop must distinguish halted publication from stopped converters; fan updates
 may introduce an explicit low interval. Device-specific reviews cover those
 behaviors before execution. Only the coordinator may operate the board.
@@ -183,6 +186,9 @@ configuration and copied USB output. One native image, sanitizer admission,
 inputs match integration under `pcie-application-20261018/`; controller and PHY
 evidence was reused. Physical use requires an identified endpoint, verified
 carrier wiring and power, and recovery for every affected power domain.
+The PD-bank supply mapping also needs correction or confirmation: the initial
+PCIe profile uses BLDO2, while the detailed fan/LED routing review identifies
+BLDO1. The [PCIe contract](pcie.md) records this unresolved physical prerequisite.
 BAR allocation, interrupt-driven transfers, DMA, higher link speeds and power
 transitions remain required work.
 

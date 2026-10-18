@@ -15,17 +15,20 @@ There is no callback that substitutes a rail-read result or bus readiness.
 
 ## Controller ownership precedes transactions
 
-The provider reserves exclusive S_TWI0 ownership and stable APBS1, reference
-and oscillator ownership. It accepts APBS1 source0 from DCXO or source4 from
-PLL_REF, with divisor field zero in either case. Source4 requires a read of
-PLL_REF at `0x02002000`: bits31:27 must all be set, and the decoded N and M
-factors must match, with N between 80 and 116. This is the existing NPU/GPU
+The provider reserves exclusive S_TWI0 ownership and stable APBS0, APBS1,
+reference and oscillator ownership. APBS0 clocks the always-on GPIO block that
+contains PL0/PL1; APBS1 clocks the I2C controller. Before GPIO or I2C access,
+the provider reads APBS0 at `0x0701000c` and accepts source0/DCXO or
+source4/SYS_CLK24M with any encoded divider from 1 through 32. It accepts APBS1
+source0 or source4 with divisor field zero. When either bus uses source4, a read
+of PLL_REF at `0x02002000` must show bits31:27 set and matching decoded N and M
+factors, with N between 80 and 116. This is the existing NPU/GPU
 24 MHz reference policy. The provider also checks the inherited oscillator
 selection, controller gate and reset release. The adopted bus must already
 be enabled, idle, and have both lines released. The observed clock divisor
 must represent 10–400 kHz and remain unchanged. The first successful baseline
-also records the APBS1 selector/divisor bits. Later baseline checks refuse a
-route change, including a switch between the two otherwise supported sources. These are programmed clock
+also records both buses' selector/divisor bits. Later baseline checks refuse any
+profile change, including a switch between otherwise supported sources. These are programmed clock
 settings; electrical timing is not measured.
 
 Before the pin manager changes muxes, the provider checks the legacy engine,
@@ -76,9 +79,9 @@ snapshot remains meaningful only while the same parent rail lease remains
 live. It proves neither physical wiring nor measured voltage or settling.
 Radio must select its supply mapping from separately admitted board topology.
 
-The provider reads DCDC1, DCDC2, DCDC4, DCDC8, DCDC9, BLDO2, BLDO5, CLDO1,
-CLDO5, ELDO6 and DC1SW2. DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4
-through 87; BLDO2/BLDO5/CLDO1/CLDO5 through 29. DCDC8 and DCDC9 decoding stop at
+The provider reads DCDC1/2/4/8/9, BLDO1/2/5, CLDO1/2/3/5, ELDO6 and DC1SW2.
+DCDC1/DC1SW2 decoding covers valid selectors through 28; DCDC2/4 through 87;
+BLDO1/2/5 and CLDO1/2/3/5 through 29. DCDC8 and DCDC9 decoding stop at
 selector 101. The pinned bootloader getter
 uses a power-of-two `ALIGN` macro with a 100 mV step at selector 102 and above;
 this does not establish the higher-range voltage formula. Such selectors
@@ -105,9 +108,11 @@ wiring separately. A PMIC snapshot cannot select or prove that topology.
 BLDO2 reads enable register `0x20` bit7 and selector `0x2b` bits4:0.
 Its source-defined range is 0.5–3.4 V in 100 mV steps; selector 13 represents
 1.8 V. Selectors 30 and 31 retain their raw bytes with `decoded=0` and no
-programmed voltage. Enable state is decoded independently. The board's PD-bank
-supply uses BLDO2; the PCIe platform must validate the actual snapshot under
-its still-live rail lease before using those pins.
+programmed voltage. Enable state is decoded independently. The initial PCIe
+profile attributes the PD-bank supply to BLDO2 from schematic sheet 2. The later
+fan/LED routing review identifies BLDO1 on the detailed power sheet instead.
+This unresolved mapping is recorded in [PCIe integration](pcie.md); a BLDO2
+snapshot must not be treated as proof of the PD-bank voltage.
 
 DC1SW2 reads enable register `0x11` bit4 and the shared DCDC1 selector at
 `0x12` bits4:0. Its range is 1.0–3.8 V in 100 mV steps. CLDO5 reads enable
@@ -243,3 +248,11 @@ the actual eight-core FreeRTOS headers. Existing provider, rail and source
 comparison cases were not replayed. Exact source dependencies, objects,
 executables and logs are retained under
 `~/.cache/sunstoneos/evidence/pmic-parent-20261017/batch1/`.
+
+The APBS0 ownership and read-only validation change passes the new actual-provider
+case under `pwm-service-20261018/prerequisite/`, with modeled register values.
+Unsupported sources, changed source/divider and read uncertainty retain failure
+before further GPIO or I2C access. No clock or regulator writes were added.
+The provider now stores its admitted APBS0 profile internally, so new native
+images must compile provider, callers and fixtures against the matching layout.
+Earlier frozen images and their evidence remain valid only for their own inputs.
