@@ -608,6 +608,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   native composition pass. Physical hashing/cipher operation, authenticated and
   wider cipher modes, other hashes, asymmetric operations and secure key handling
   remain outstanding. Internal hardware key erasure is unproven.
+  The [native SHA/AES application](crypto-application.md) now connects actual
+  shared providers, the singleton retained page and copied USB results. Its
+  native link and focused admission, orchestration, publication and host checks
+  pass; all 223 preserved repository inputs match integration. A read-only board
+  snapshot confirms the adopted CE clock configuration. Actual predecessor task
+  accounting, future launch exclusion, secure status access and memory admission
+  remain required before physical operation. No TRNG capability is claimed by
+  this application.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

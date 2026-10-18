@@ -34,6 +34,11 @@ The [DMA reference record](dma.md) pins the inspected board-kernel driver hash
 and distinguishes data addressing from unresolved wider descriptor addressing.
 The [native DMA memory record](dma-memory.md) identifies the cache-maintenance
 and translation references used by the EL1 adapter.
+The [crypto-engine record](crypto-engine.md) identifies the pinned A733 CE v5
+kernel and U-Boot references. Native SHA-256 and AES execution uses repository
+source; the [crypto application](crypto-application.md) loads no opaque CE
+firmware or Linux crypto library. Its fixed AES reference comes from NIST
+SP 800-38A, as recorded in [the cipher evidence](crypto-cipher.md).
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and

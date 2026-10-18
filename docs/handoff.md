@@ -66,10 +66,12 @@ substantive correctness risks. The coordinator alone operates the board.
 - H.264: the fixed Baseline IDR fixture matches its CPU reference, and selected
   A733 runtime register traces pass after a structure-field audit. Native driver,
   application and copied-output integration are in progress.
-- Crypto: a native SHA-256/AES application is being integrated. A physical
-  read-only snapshot confirms the adopted CE clock configuration. Security
-  access, exclusion of secure and nonsecure clients, and prior DMA quiescence
-  still require physical evidence. No crypto command has executed on the board.
+- Crypto: the native SHA-256/AES application is integrated. Its image links,
+  focused application and host checks pass, and all 223 preserved repository
+  inputs match integration. A physical snapshot confirms the adopted CE clocks.
+  Predecessor task completion, future launch exclusion, secure status access
+  and memory authority remain physical prerequisites. A boot-path audit is
+  investigating the predecessor handoff. No board crypto command has executed.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -115,8 +117,9 @@ Fresh reads before that launch established all seven secondaries OFF with clear
 request bits; see `startup-stage-20261017-080/cpu-state/session.json`. The next
 investigation covers RELEASE through secondary interrupt preparation, before
 cache enable. Return requires interrupt quiescence, saved redistributor-state
-restoration and observed target OFF. The current `003:083` instance needs its
-own verified launch state.
+restoration and observed target OFF. The current `003:083` instance has passed
+the guarded cache-off helper and returning launch-state survey; its next native
+diagnostic has not run. Both preparation claims are closed.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -150,6 +153,11 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
 - Crypto clocks: `crypto-clocks-20261018-082/session.json` records 13 read-only
   CCU/RTC observations. The CE clock, gates and reset releases are enabled;
   these observations do not prove engine quiescence or secure-register access.
+- Crypto application: `crypto-native-20261018/handoff.json` identifies the
+  frozen image and focused checks; `integration.json` reconciles every preserved
+  repository input. The original admission-fixture sanitizer failure is retained,
+  and only the corrected admission case was repeated. The modeled-authority
+  package is not deployable; physical admission requires actual evidence.
 - Bluetooth: `bluetooth-mimus-native-20261017/integration.json` reconciles all
   changed files and preserved inputs. Its `native-final/manifest.json` identifies
   the image; `composition/` holds actual host recognition and cancellation.
