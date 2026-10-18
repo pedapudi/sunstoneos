@@ -77,12 +77,14 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_USB_PCIE_DOMAIN A733_CLOCK_BIT(62) /* Shared stable PCK domain7; exclusive transitions. */
 #define A733_CLOCK_VO1        A733_CLOCK_BIT(63) /* Both TV paths, HDMI/eDP, TOP/PLL, CCU and PCK domain10; exclusive. */
 #define A733_CLOCK_TWI11      A733_CLOCK_BIT(64) /* Controller, CCU+0xeac gate0/reset16; exclusive. */
+#define A733_CLOCK_S_TWI1     A733_CLOCK_BIT(65) /* Controller, R_CCU+0x19c gate1/reset17; exclusive. */
+#define A733_CLOCK_USB2       A733_CLOCK_BIT(66) /* DWC3/xHCI, independent PHY and local clocks/PCK8; exclusive. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC|A733_CLOCK_VO1)
 #define A733_CLOCK_LOCALS  ((a733_clock_mask_t)0x3fc0)
-#define A733_CLOCK_ALL     (A733_CLOCK_BIT(65)-1) /* Bits0–64 assigned; higher bits refused. */
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(67)-1) /* Bits0–66 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -136,7 +138,15 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * role routes, and local clock/reset fields at CCU+0x1300/1304 or +0x1308/130c.
  * Both reserve USB01_REF -> REF -> OSC. USB01_REF covers CCU+0x1340 mux26:24
  * and gate31; SYS24M/DCXO source selection still requires live rate proof.
- * USB2 is independent and is not authorized by these scopes. Upstream MSI-LITE2
+ * USB2 is independent and is not authorized by these scopes. Its exclusive
+ * scope owns DWC3/xHCI at 0x06a00000, PHY/application at 0x06b00000, IRQ187,
+ * PCK8 and CCU+0x1348/1350/1354/135c/1360/1364. Within SERDES+8 it owns only
+ * bits21/20/17/16/4. It grants no COMB0/COMB1 analog or common-reset authority.
+ * USB2 has no implicit parent: native admission must separately hold and verify
+ * selected parents and FABRIC, SERDES_COMMON and USB_PCIE_DOMAIN. The initial
+ * high-speed profile holds OSC/REF/PERI0 and adopts both power domains ON.
+ * Type-C source/pin/rail ownership and attachment observations remain separate.
+ * Upstream MSI-LITE2
  * gate/reset at CCU+0x5a4 and USB_SYS gate at +0x5c0 bit9 remain FABRIC
  * authority; a local port token grants no upstream mutation rights. A shared
  * FABRIC lease permits only observation/adoption of stable upstream configuration.
@@ -165,6 +175,10 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * borrow that one lifetime owner rather than acquire separate module ownership.
  * S_TWI0 owns 0x07083000, all legacy/autonomous PMU/DRV engines and DMA,
  * R_CCU+0x19c gate0/reset16 and IRQ235; it reserves APBS1 -> REF -> OSC.
+ * S_TWI1 independently owns 0x07084000 and R_CCU+0x19c gate1/reset17,
+ * including its autonomous engines, with the same APBS1 ancestry. The common
+ * register mutex protects their shared gate/reset word. PL12/PL13 ownership
+ * and electrical authority remain separate from S_TWI1.
  * Every remote and local engine writer must be excluded before admission.
  * PL0/PL1 and electrical authority remain separate. TWI11 owns its controller
  * and CCU+0xeac gate0/reset16, with FABRIC held shared for APB1 stability.

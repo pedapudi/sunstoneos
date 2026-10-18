@@ -49,7 +49,14 @@ TOP, PLL, clock, reset and power-domain controls. TWI11 uses bit 64 for its
 controller and CCU+0xeac gate0/reset16. Its exclusive token holds FABRIC shared
 to prevent APB1 retuning. Native admission must separately establish the selected
 APB1 source and rate, pin ownership and exclusion of remote writers.
-Bits 65–127 remain invalid, including for the pending independent USB2 scope.
+S_TWI1 uses bit 65 for the Type-C controller bus and reserves the same APBS1
+ancestry as S_TWI0. USB2 uses bit 66 for its independent DWC3/xHCI port,
+USB2 PHY, PCK8 and local clock/reset fields. The native provider must separately
+reserve its selected parents and shared FABRIC, SERDES and USB/PCIe domain.
+The initial high-speed path adopts existing stable power domains; its token
+does not authorize COMB0/COMB1 analog or common-reset changes. Source power,
+pins and current Type-C attachment remain separate authority.
+Bits 67–127 remain invalid.
 The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller
@@ -98,6 +105,16 @@ Older
 MMC, PCIe and width fixtures receive compatible width or invalid-bit assertions
 and are compiled without replaying their scenarios. Results and input identities
 are recorded under `~/.cache/sunstoneos/evidence/clock-wide-20261017/`.
+
+The focused `checks/clock-usb-scopes.c` case covers the two additional USB-path
+scopes. It checks coexistence with PMIC, camera and USB0 ownership, conflicts
+with shared parent changes, exclusive-only local admission and token identity.
+One AddressSanitizer/UndefinedBehaviorSanitizer execution and the changed core's
+AArch64 compilation passed. Inputs, executable and logs are preserved under
+`~/.cache/sunstoneos/evidence/clock-usb-scopes-20261017/`. These assignments
+preserve the mask and token layout; earlier width and peripheral workloads
+were not repeated. The Type-C and USB host providers retain their own pending
+integration and physical qualification requirements.
 
 An expired release keeps its reservation. Clock failure or regression prevents
 further registry mutations and preserves existing tokens. An owner can also

@@ -155,9 +155,11 @@ layout. Previously sealed images retain their original ABI and evidence; the
 complete maintenance image will compile its current consumers together.
 The latest storage bootstrap contention correction follows that compile batch
 and is included in the maintenance image build, not the earlier object evidence.
-S_TWI1 and USB2 scopes are reserved for their concrete providers but are not yet
-implemented in the registry. Their owners coordinate those additions before
-provider checks.
+S_TWI1 and USB2 now have independent exclusive scopes. S_TWI1 holds APBS1
+ancestry; the USB2 provider must explicitly reserve its selected and shared
+parents. One focused coexistence/conflict check and changed-core compilation
+pass without changing the token layout. Evidence is under
+`clock-usb-scopes-20261017/`; complete provider checks remain pending.
 
 The cached eight-core runtime has instruction-model scheduler evidence. The
 larger device-memory image also has native reservation publication/refusal

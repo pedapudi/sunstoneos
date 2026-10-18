@@ -167,7 +167,7 @@ static void scopes(void)
     assert(a733_clock_leases_init(&m,pmic_model_now,&model));
     assert(a733_clock_acquire(&m,1,A733_CLOCK_PCIE0,0,10000000,&a)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&m,1,A733_CLOCK_COMB1,0,10000000,&a)==A733_CLOCK_INVALID);
-    assert(a733_clock_acquire(&m,1,0,A733_CLOCK_BIT(65),10000000,&a)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&m,1,0,A733_CLOCK_BIT(67),10000000,&a)==A733_CLOCK_INVALID);
     assert(a733_clock_acquire(&m,1,A733_CLOCK_SERDES_COMMON|A733_CLOCK_USB_PCIE_DOMAIN,
         A733_CLOCK_PCIE0|A733_CLOCK_COMB1|A733_CLOCK_SDC3,10000000,&a)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&m,2,A733_CLOCK_SERDES_COMMON|A733_CLOCK_USB_PCIE_DOMAIN,0,10000000,&b)==A733_CLOCK_OK);
