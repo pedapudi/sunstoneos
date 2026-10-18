@@ -7,6 +7,7 @@
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
 struct pvr_compute_service;
+struct a733_gpu_graphics_memory;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
@@ -14,7 +15,7 @@ struct pvr_compute_service;
 enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
-    PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING };
+    PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
@@ -22,7 +23,7 @@ enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
     PVR_GPU_SERVICE_PREPARATION, PVR_GPU_SERVICE_ENABLE, PVR_GPU_SERVICE_START,
     PVR_GPU_SERVICE_CONTROL, PVR_GPU_SERVICE_STOP, PVR_GPU_SERVICE_INTERRUPT,
-    PVR_GPU_SERVICE_FREE_LISTS, PVR_GPU_SERVICE_COMPUTATION };
+    PVR_GPU_SERVICE_FREE_LISTS, PVR_GPU_SERVICE_COMPUTATION, PVR_GPU_SERVICE_GRAPHICS };
 
 /* Optional shared peripheral interrupt delivery. Both callbacks or neither.
  * mask issues a disable command and completes CPU writes; it returns 1 on
@@ -104,6 +105,8 @@ struct pvr_gpu_service_config {
      * lifecycle/token. No GPU access: observation occurs during power enable.
      * Called after enable before firmware start, and before each COMPUTE. */
     int (*compute_mode)(void *);
+    /* Concrete native free-list/HWRT owner; published before compute and power. */
+    struct a733_gpu_graphics_memory *graphics;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -117,6 +120,7 @@ struct pvr_gpu_service_reply {
     uint32_t owns_session, start_error, control_error, stop_error;
     uint32_t free_list_error, free_list_pending;
     uint32_t compute_phase, compute_error, compute_job_error;
+    uint32_t graphics_phase;
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
@@ -182,7 +186,8 @@ int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
  * numerical job only for the READY owner; its reply reports acceptance. STATUS
  * includes compute progress. CLOSE refuses pending compute and retains backing
  * after completed-job isolation; reopen remains BUSY until context disposal.
- * Configured compute publication is part of OPEN and precedes usable READY.
+ * Configured graphics and compute publication are part of OPEN and precede
+ * power enable. Graphics preparation is not a rendering/completion claim.
  */
 int pvr_gpu_service_send(struct pvr_gpu_service *, const struct pvr_gpu_service_request *,
                          TickType_t wait, uint64_t *ticket);

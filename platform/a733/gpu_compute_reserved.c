@@ -187,6 +187,13 @@ static int admit_job(void *ctx, const struct pvr_compute_job_config *j)
         j->seed == 17 && j->factor == 3 && j->job_id == 1 && s->programs.admit == admit_program &&
         s->compute.client.phase == PVR_CCCB_NEW && s->compute.job.phase == PVR_JOB_NEW;
 }
+int a733_gpu_compute_reserved_admitted(struct a733_gpu_compute_reserved *s,
+    struct a733_gpu_reserved *firmware, struct pvr_gpu_service *service)
+{
+    return s && s == compute_owner && s->stage == BOUND && s->binding.firmware == firmware &&
+        s->binding.service == service && s->programs.admit == admit_program &&
+        s->job.admit == admit_job && admitted(&s->binding);
+}
 static struct pvr_compute_service *failed(struct a733_gpu_compute_reserved *s)
 {
     if (s->payload_lease.generation) device_memory_retain(s->binding.wb, s->payload_lease);

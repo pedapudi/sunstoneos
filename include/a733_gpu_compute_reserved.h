@@ -60,4 +60,11 @@ struct a733_gpu_compute_reserved {
 struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     struct a733_gpu_compute_reserved *, struct a733_gpu_reserved *,
     struct pvr_gpu_service *, uint32_t owner);
+/* Direct native provenance check for composing another retained device owner.
+ * Authenticates the private constructor singleton and exact native callbacks,
+ * then applies the existing lease/mapping/program admission checks. It cannot
+ * be replaced by a caller-supplied admit callback. No writes or publication.
+ */
+int a733_gpu_compute_reserved_admitted(struct a733_gpu_compute_reserved *,
+    struct a733_gpu_reserved *, struct pvr_gpu_service *);
 #endif

@@ -1,5 +1,6 @@
 #include "pvr_gpu_service.h"
 #include "pvr_compute_service.h"
+#include "a733_gpu_graphics_memory.h"
 #include <string.h>
 
 static struct pvr_gpu_service *instance;
@@ -89,6 +90,7 @@ static int allocations(struct pvr_gpu_service *s, const struct pvr_gpu_service_c
     }
     if (c->compute && (c->compute->service != s ||
         c->compute->phase != PVR_COMPUTE_SERVICE_BOUND)) return 0;
+    if (c->graphics && !a733_gpu_graphics_memory_validate(c->graphics, c, s)) return 0;
     return free_list_allocations(s, c);
 }
 /* Interrupt state is shared with an ISR that may run on another core.
@@ -141,6 +143,7 @@ static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
     if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
     if (s->config.compute) pvr_compute_service_abort(s->config.compute, PVR_COMPUTE_SERVICE_LIFECYCLE);
+    if (s->config.graphics) a733_gpu_graphics_memory_abort(s->config.graphics);
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
     (void)pvr_ccb_abort(&s->queue);
@@ -244,9 +247,20 @@ static int publish_compute(struct pvr_gpu_service *s)
     }
     s->phase = PVR_GPU_SERVICE_PUBLISHING; return 1;
 }
+static int publish_resources(struct pvr_gpu_service *s)
+{
+    if (!s->config.graphics) return publish_compute(s);
+    if (a733_gpu_graphics_memory_begin(s->config.graphics) != 1) {
+        fail(s, PVR_GPU_SERVICE_GRAPHICS); return 0;
+    }
+    s->phase = PVR_GPU_SERVICE_PUBLISHING_GRAPHICS; return 1;
+}
 static int prepare(struct pvr_gpu_service *s)
 {
     const struct pvr_gpu_service_config *c = &s->config;
+    if (c->graphics && !a733_gpu_graphics_memory_validate(c->graphics, c, s)) {
+        fail(s, PVR_GPU_SERVICE_GRAPHICS); return 0;
+    }
     memset(&s->queue, 0, sizeof(s->queue)); memset(&s->start, 0, sizeof(s->start));
     memset(&s->control, 0, sizeof(s->control)); memset(&s->stop, 0, sizeof(s->stop));
     struct pvr_gpu_start_ops start_ops = c->start;
@@ -260,6 +274,11 @@ static int prepare(struct pvr_gpu_service *s)
                        "firmware object capacity");
         memcpy(s->mappings + objects, c->compute->objects, sizeof(c->compute->objects));
         objects += PVR_COMPUTE_SERVICE_OBJECTS;
+    }
+    if (c->graphics) {
+        _Static_assert(PVR_FW_RESOURCE_COUNT + PVR_COMPUTE_SERVICE_OBJECTS + 1 <= PVR_MIPS_MAX_OBJECTS,
+                       "combined firmware object capacity");
+        s->mappings[objects++] = c->graphics->object;
     }
     if (!pvr_mips_prepare(c->firmware, c->firmware_bytes, c->firmware_buffers,
             s->mappings, objects, &s->boot) ||
@@ -283,7 +302,7 @@ static int prepare(struct pvr_gpu_service *s)
         }
         s->phase = PVR_GPU_SERVICE_BUILDING; return 1;
     }
-    return publish_compute(s);
+    return publish_resources(s);
 }
 static int begin_stop(struct pvr_gpu_service *s)
 {
@@ -306,7 +325,15 @@ static void advance(struct pvr_gpu_service *s)
         if (!opening_clock(s)) return;
         enum pvr_free_list_result r = free_list_progress(s, 0);
         if (r == PVR_FREE_LIST_FAULT || !opening_clock(s)) return;
-        if (r == PVR_FREE_LIST_OK) (void)publish_compute(s);
+        if (r == PVR_FREE_LIST_OK) (void)publish_resources(s);
+        return;
+    }
+    case PVR_GPU_SERVICE_PUBLISHING_GRAPHICS: {
+        if (!opening_clock(s)) return;
+        int r = a733_gpu_graphics_memory_poll(s->config.graphics);
+        if (r < 0) { fail(s, PVR_GPU_SERVICE_GRAPHICS); return; }
+        if (!opening_clock(s)) return;
+        if (r == 1) (void)publish_compute(s);
         return;
     }
     case PVR_GPU_SERVICE_PUBLISHING: {
@@ -461,7 +488,8 @@ static void worker(void *argument)
         advance(s); /* One bounded step before each request; traffic cannot starve it. */
         int active = (s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING) ||
                      s->phase == PVR_GPU_SERVICE_ENABLING || s->phase == PVR_GPU_SERVICE_BUILDING ||
-                     s->phase == PVR_GPU_SERVICE_DRAINING || s->phase == PVR_GPU_SERVICE_PUBLISHING;
+                     s->phase == PVR_GPU_SERVICE_DRAINING || s->phase == PVR_GPU_SERVICE_PUBLISHING ||
+                     s->phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS;
         struct pvr_gpu_service_message message;
         if (xQueueReceive(s->requests, &message, active ? 1 : portMAX_DELAY) != pdTRUE) continue;
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {
@@ -475,6 +503,7 @@ static void worker(void *argument)
         reply.owns_session = s->owner == message.client;
         reply.start_error = s->start.error; reply.control_error = s->control.error;
         reply.stop_error = s->stop.error;
+        if (s->config.graphics) reply.graphics_phase = s->config.graphics->phase;
         reply.free_list_error = s->free_lists.error; reply.free_list_pending = s->free_lists.request_count;
         if (s->config.compute) {
             reply.compute_phase = s->config.compute->phase; reply.compute_error = s->config.compute->error;
