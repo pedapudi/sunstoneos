@@ -18,8 +18,13 @@ static int fail(struct a733_gpu_backend *b, enum a733_gpu_backend_error error)
     return 0;
 }
 static int healthy(struct a733_gpu_backend *b)
-{ return b && b->initialized && b->service->phase != PVR_GPU_SERVICE_FAILED &&
-    !atomic_load_explicit(&b->error, memory_order_acquire); }
+{
+    if (!b || !b->initialized || b->service->phase == PVR_GPU_SERVICE_FAILED ||
+        atomic_load_explicit(&b->error, memory_order_acquire)) return 0;
+    if (b->external.revoked && atomic_load_explicit(b->external.revoked, memory_order_acquire))
+        return fail(b, A733_GPU_BACKEND_REVOKED);
+    return 1;
+}
 static int device_page(uintptr_t address)
 {
     struct aarch64_translation r, w;
@@ -37,6 +42,7 @@ static int device_pages(void)
 static int output_span(struct a733_gpu_backend *b, const void *p, size_t bytes, int queue_event)
 {
     if (!span(p, bytes) || !separate(b, sizeof(*b), p, bytes) ||
+        (b->external.revoked && !separate(b->external.revoked, sizeof(*b->external.revoked), p, bytes)) ||
         !separate(b->memory, sizeof(*b->memory), p, bytes) ||
         !separate(b->power, sizeof(*b->power), p, bytes) ||
         !separate(b->power->manager, sizeof(*b->power->manager), p, bytes) ||
@@ -319,7 +325,14 @@ static int sync_read(void *context, uint32_t *out)
         memory_result(b, a733_gpu_memory_sync_read(b->memory, out));
 }
 static int sync_write(void *context, uint32_t value)
-{ struct a733_gpu_backend *b = context; return active(b) && memory_result(b, a733_gpu_memory_sync_write(b->memory, value)); }
+{
+    struct a733_gpu_backend *b = context;
+    if (!active(b)) return 0;
+    /* First stop mutation: refuse before firmware shutdown or reset when the
+     * platform cannot eventually isolate and preserve transaction lifetime. */
+    if (!b->external.isolate) return fail(b, A733_GPU_BACKEND_ISOLATION);
+    return memory_result(b, a733_gpu_memory_sync_write(b->memory, value));
+}
 static int event(void *context, const unsigned char command[PVR_CCB_COMMAND_BYTES])
 {
     struct a733_gpu_backend *b = context;
@@ -331,6 +344,7 @@ static int isolate(void *context)
     if (!active(b)) return 0;
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE || !before(b, deadline) ||
+        !b->external.isolate ||
         b->external.isolate(b->external.context, b->power, deadline) != 1 ||
         b->power->phase != A733_GPU_PLATFORM_OFF || b->power->token || b->power->delegated || !before(b, deadline))
         return fail(b, A733_GPU_BACKEND_ISOLATION);
@@ -388,7 +402,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     struct pvr_gpu_service_config *c, struct a733_gpu_memory *m, struct a733_gpu_platform *p,
     const struct a733_gpu_backend_external *external)
 {
-    if (!b || !s || !c || !m || !p || !external || !external->isolate || b->phase != A733_GPU_BACKEND_NEW ||
+    if (!b || !s || !c || !m || !p || !external || b->phase != A733_GPU_BACKEND_NEW ||
         s->initialized || m->phase != A733_GPU_MEMORY_OFFLINE || !p->initialized || !p->manager ||
         p->phase != A733_GPU_PLATFORM_NEW || c->state.gpu_clock_hz != A733_GPU_INITIAL_HZ ||
         c->state.bvnc != PVR_FW_A733_BVNC || !span(c->firmware, c->firmware_bytes)) return 0;
@@ -397,6 +411,14 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
         !c->free_lists.ops.recover_targets)) return 0;
     const void *objects[] = {b, s, c, m, p, p->manager, external};
     const size_t sizes[] = {sizeof(*b), sizeof(*s), sizeof(*c), sizeof(*m), sizeof(*p), sizeof(*p->manager), sizeof(*external)};
+    if (external->revoked) {
+        struct aarch64_translation t;
+        if ((uintptr_t)external->revoked % _Alignof(atomic_uint) ||
+            !aarch64_device_translate((uintptr_t)external->revoked, 0, &t) || t.attributes != 0xff ||
+            !separate(external->revoked, sizeof(*external->revoked), c->firmware, c->firmware_bytes)) return 0;
+        for (unsigned i = 0; i < 7; ++i)
+            if (!separate(external->revoked, sizeof(*external->revoked), objects[i], sizes[i])) return 0;
+    }
     for (unsigned i = 0; i < 7; ++i) {
         if (!separate(objects[i], sizes[i], c->firmware, c->firmware_bytes)) return 0;
         for (unsigned j = 0; j < i; ++j) if (!separate(objects[i], sizes[i], objects[j], sizes[j])) return 0;
@@ -405,6 +427,8 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
         const struct pvr_mips_buffer *a = i < 3 ? &c->firmware_buffers[i] : &c->resources[i - 3];
         const struct pvr_mips_buffer *d = i < 3 ? &m->firmware[i] : &m->resources[i - 3];
         if (a->storage.cpu != d->storage.cpu || a->storage.bytes != d->storage.bytes || a->pages != d->pages || a->page_count != d->page_count) return 0;
+        if (external->revoked && (!separate(external->revoked, sizeof(*external->revoked), a->storage.cpu, a->storage.bytes) ||
+            !separate(external->revoked, sizeof(*external->revoked), a->pages, a->page_count * sizeof(uint64_t)))) return 0;
         for (unsigned j = 0; j < 7; ++j) if (!separate(objects[j], sizes[j], a->storage.cpu, a->storage.bytes) ||
             !separate(objects[j], sizes[j], a->pages, a->page_count * sizeof(uint64_t))) return 0;
     }

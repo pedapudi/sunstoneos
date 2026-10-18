@@ -12,14 +12,20 @@
 #define A733_GPU_INTID 95u
 
 struct a733_gpu_backend_external {
-    /* Mandatory proven platform implementation: block new GPU memory traffic,
+    /* Optional proven platform implementation: block new GPU memory traffic,
      * drain outstanding traffic, and leave power OFF with its resource token
      * released before returning 1. Use the supplied CLOSE deadline. Retain
      * everything on failure. A power OFF operation alone does not satisfy this
-     * contract. The provider must also establish safe subsequent power-on. */
+     * contract. The provider must also establish safe subsequent power-on.
+     * NULL allows fixed execution with lifetime retention. CLOSE then fails
+     * isolation before power-off/reclaim; no buffer becomes reusable. */
     int (*isolate)(void *, struct a733_gpu_platform *, uint64_t deadline);
     int (*event)(void *, const unsigned char[PVR_CCB_COMMAND_BYTES]);
     void *context;
+    /* Optional permanent private RAM latch, initially zero. Acquire-load before
+     * device operations; nonzero revokes work and retains all ownership. The
+     * owner never clears it or destroys its storage during this boot. */
+    const atomic_uint *revoked;
 };
 enum a733_gpu_backend_phase { A733_GPU_BACKEND_NEW, A733_GPU_BACKEND_BOUND,
     A733_GPU_BACKEND_POWERING, A733_GPU_BACKEND_IDENTIFY, A733_GPU_BACKEND_ACTIVE,
@@ -28,7 +34,7 @@ enum a733_gpu_backend_error { A733_GPU_BACKEND_OK, A733_GPU_BACKEND_STATE,
     A733_GPU_BACKEND_MAPPING, A733_GPU_BACKEND_CLOCK, A733_GPU_BACKEND_IDENTITY,
     A733_GPU_BACKEND_ACCESS, A733_GPU_BACKEND_MEMORY, A733_GPU_BACKEND_POWER,
     A733_GPU_BACKEND_ISOLATION, A733_GPU_BACKEND_INTERRUPT, A733_GPU_BACKEND_EVENT,
-    A733_GPU_BACKEND_COMPUTE_MODE };
+    A733_GPU_BACKEND_COMPUTE_MODE, A733_GPU_BACKEND_REVOKED };
 struct a733_gpu_backend {
     struct pvr_gpu_service *service;
     struct a733_gpu_memory *memory;
@@ -64,7 +70,8 @@ struct a733_gpu_backend {
  * Caller independently configures SPI 63 / INTID 95 disabled, level-high, with
  * a qualified route/group/API-safe priority. DVFS interrupt 96 is separate.
  * Recovery, pinned firmware hash, reservation ownership and the physical
- * isolation implementation are mandatory before board execution. */
+ * isolation implementation are mandatory for shutdown/reuse. Without isolation,
+ * every allocation and lease remains pinned for the boot, including success. */
 int a733_gpu_backend_bind(struct a733_gpu_backend *, struct pvr_gpu_service *,
     struct pvr_gpu_service_config *, struct a733_gpu_memory *, struct a733_gpu_platform *,
     const struct a733_gpu_backend_external *);

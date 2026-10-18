@@ -53,7 +53,7 @@ static int isolated(void *context, struct a733_gpu_platform *p, uint64_t deadlin
 }
 static int handled(void *context, const unsigned char *command)
 { return context == &provider_calls && command[0] == 7; }
-static struct a733_gpu_backend_external external = {isolated, handled, &provider_calls};
+static struct a733_gpu_backend_external external = {.isolate=isolated, .event=handled, .context=&provider_calls};
 static uint64_t until(void)
 { uint64_t time; a733_gpu_platform_native_now(NULL, &time); return time + 100000; }
 static void *region(unsigned id)
@@ -157,8 +157,7 @@ unsigned backend_check(void)
         CHECK(!memcmp(&saved, &config, sizeof(config)) && !backend.initialized && !mmio_count);
     }
     mapping_mode = 0;
-    struct a733_gpu_backend_external missing = {0};
-    CHECK(!a733_gpu_backend_bind(&backend, &service, &config, &memory, &power, &missing));
+    CHECK(!a733_gpu_backend_bind(&backend, &service, &config, &memory, &power, NULL));
     CHECK(!bind()); CHECK(!enabled());
     CHECK(!accesses(start_trace_0, sizeof(start_trace_0) / sizeof(*start_trace_0), 0));
     CHECK(!accesses(start_trace_1, sizeof(start_trace_1) / sizeof(*start_trace_1), 0));

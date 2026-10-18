@@ -1,0 +1,52 @@
+--- a/boot.c
++++ b/boot.c
+@@ -2,9 +2,14 @@
+ #include "a733_device_memory_layout.h"
+ #endif
+ #include "cached.h"
++#include "session.h"
++#include "a733_cpu_coherence.h"
+ #include "a733_cpu_continue.h"
+ #include <stddef.h>
+-static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
++static struct gpu_boot_contract gpu_admission __attribute__((section(".bss.a733_smp_monitor")));
++#define admission gpu_admission.base
++const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *c)
++{return c==&admission?gpu_admission.session_digest:NULL;}
+ static struct a733_cpu_start power[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static struct a733_cpu_entry owners[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static unsigned targets[7] __attribute__((section(".bss.a733_smp_monitor")));
+@@ -63,7 +68,7 @@
+     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
+     volatile const uint64_t *in=(const volatile uint64_t *)source;
+     uint64_t *out=(uint64_t *)&admission;
+-    for(unsigned i=0;i<sizeof(admission)/8;++i)out[i]=in[i];
++    for(unsigned i=0;i<sizeof(gpu_admission)/8;++i)out[i]=in[i];
+     barrier();
+     if(!boot_state() || !a733_smp_contract_valid(&admission,a733_smp_counter()) ||
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+@@ -87,6 +92,8 @@
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
++    extern int gpu_application_seal_session(const struct a733_smp_contract *);
++    if(!gpu_application_seal_session(&admission))a733_smp_stop(3,0x308);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
+     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
+     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
+@@ -98,6 +105,15 @@
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
++    /* Exclusive GPU SPI: Group1NS, level-high, primary route, API-safe priority.
++     * Keep disabled until the service worker publishes its interrupt binding. */
++    write32(0x03400088,read32(0x03400088)|(1u<<31));
++    write32(0x03400d08,read32(0x03400d08)&~(1u<<31));
++    write32(0x03400c14,read32(0x03400c14)&~(3u<<30));
++    uint32_t priority=read32(0x0340045c);
++    write32(0x0340045c,(priority&0x00ffffff)|0xd8000000);
++    *(volatile uint64_t *)(uintptr_t)0x034062f8=(mpidr&0xffffff)|((mpidr>>32&0xff)<<32);
++    barrier();
+     for(unsigned c=1;c<8;++c) {
+         targets[c-1]=c;
+         struct a733_cpu_start_config config={.ops={power_read,power_write,power_barrier,now_us},
