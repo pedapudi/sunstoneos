@@ -35,6 +35,11 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest()}
         record.setdefault('storage_read_frames',[]).append(entry);save()
         result=decoder.decode(frame,session);entry.update(result)
+        if result['application_status']==2:
+            record['storage_read_result']='observed-failure';record['durable_result']=entry.copy();save()
+            raise ValueError('Native SD0 client failed; no further requests.')
+        require(result['application_status']!=1 or result['application_reads']==2,
+                'Native SD0 client completion has an incomplete read count.')
         require(now()<deadline and not record.get('storage_read_cancelled'),'Late or cancelled SD0 output.')
         save();return frame,result,entry
     for _ in range(2401):
@@ -68,6 +73,17 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
                 sha256=hashlib.sha256(frame[decoder.HEADER:]).hexdigest(),ticket=ticket,request_id=sequence,first_sector=first,blocks=blocks))
             prior_ticket=ticket;record['durable_result']=entry.copy();save();break
         else:raise supervisor.CaptureWindowExpired('SD0 read exhausted bounded query budget.')
+    # USB completion alone does not establish the second native client's run.
+    for _ in range(2401):
+        if result['application_status']==1 and result['application_reads']==2:break
+        pause(min(.025,max(0,deadline-now())))
+        _,result,entry=query(bytes(1))
+        if result['status']==2:
+            record['storage_read_result']='observed-failure';record['durable_result']=entry.copy();save();return result
+        require(result['status'] in (0,1,3),'SD0 service rejected native-client completion query.')
+    else:raise supervisor.CaptureWindowExpired('Native SD0 client completion query budget exhausted.')
+    record['storage_read_application_reads']=result['application_reads']
+    record['storage_read_application_result']=entry.copy()
     record['storage_read_result']='observed-success'
     try:save()
     except BaseException:record['storage_read_result']='unobserved';record.pop('durable_result',None);raise

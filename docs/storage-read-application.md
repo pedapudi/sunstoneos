@@ -144,3 +144,9 @@ faster SD modes, wider buses,
 eMMC, UFS, filesystem operations, updates and watchdog recovery remain unqualified.
 The coordinator alone may prepare and execute a reviewed physical request after
 recovery of the quarantined board instance and establishment of current authority.
+
+Host success requires both USB range completion and the native application's
+successful completion of two reads. After the USB ranges finish, bounded status
+queries wait for that native result within the existing capture deadline.
+A native failure stops further requests; an incomplete count cannot establish
+success. This host check reuses the preserved image and launcher.
