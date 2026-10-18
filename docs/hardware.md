@@ -455,6 +455,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   mid-recognition cancellation suppresses copied output. Outgoing composition,
   native USB audio framing, physical headset operation and inference timing
   remain unqualified. The earlier identification evidence remains valid.
+  [Startup binding](board-session-seal.md) now retains authenticated session and
+  Bluetooth profile copies before SID and provider access. The board and headset
+  images and 15 focused binding cases pass. The recognition-enabled image refresh
+  remains in progress; earlier recognition results retain their original scope.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
@@ -482,6 +486,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   startup profiles pass sanitizer checks. An unexplained earlier DNS deadline
   miss remains a timing limitation. Physical networking, IPv6, server sockets,
   reconnection and wider Wi-Fi security modes remain open.
+  Native startup now hashes its private profile before deriving runtime settings,
+  closing the earlier live-memory hash/copy gap; focused binding checks pass.
 
 - Camera: The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes

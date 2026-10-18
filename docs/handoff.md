@@ -123,12 +123,21 @@ Component documents and the hardware matrix hold the remaining integrations.
 The [historical handoff](handoff-history-20261017.md) preserves earlier artifact
 locations and reconciliation details; it is not a current qualification record.
 
-Session integrity corrections remain in progress for the shared board, network
-and Bluetooth startup paths. Authenticated settings must remain bound to
-the private copies used by provider initialization; field validation alone does
-not establish that binding. Unaffected device checks remain reusable.
+The [shared board and Bluetooth startup paths](board-session-seal.md) now retain
+authenticated session and profile copies before SID access or provider setup.
+Networking hashes the same private profile used for runtime derivation. Both
+affected images and 15 focused binding cases pass; 199 unique compiled repository
+inputs match integration under `board-session-seal-20261018/native/`.
+The Bluetooth build covers headset capture; the recognition-enabled image is
+being refreshed separately to cover its changed startup branch. Existing codec,
+protocol and recognition results remain reusable where their inputs are unchanged.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
+
+Native thermal application integration is in progress. It connects the existing
+five-sensor driver to shared resources, deferred interrupt handling and copied
+application output. Calibration and controller evidence remains reusable;
+physical temperature accuracy and thermal policy remain unqualified.
 
 
 ## Observed host and device state
