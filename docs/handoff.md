@@ -34,6 +34,7 @@ software evidence and remaining modes. Recent integration includes native
 HDMI startup, DMA USB result observation, GPU graphics memory, storage updates
 and maintenance watchdog supervision. These paths have no physical qualification.
 
+
 ## Current integration
 
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
@@ -63,230 +64,11 @@ substantive correctness risks. The coordinator alone operates the board.
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
 
-The shared recorded-audio inference entry point is integrated. Bluetooth and I2S
-can call the existing model, recognizer and formatter with retained audio and a
-cancellation flag. The original supervised caller compiles and links with the
-extraction. One converted Bluetooth recording matches the host reference using
-the same audio; cancellation suppresses copied output after recognition unwinds.
-Evidence is under `bluetooth-mimus-native-20261017/shared-integration.json`.
-Physical audio input and execution timing remain unqualified.
 
-Integration reused the preserved images and checks. All 14 board-profile files
-and 27 Bluetooth files match their accepted worker commits. Startup code matches
-its accepted commit; its documentation also retains the previous physical result.
-Evidence is under `board-addressing-20261017/`,
-`bluetooth-headset-native-20261017/` and `native-tables-probe-20261017/`.
-The Bluetooth host batch preserved its inputs after execution because the initial
-snapshot failed; it does not establish pre-run input identity. Native USB headset
-output is linked and source-reviewed but has not executed in these checks.
+Component documents and the hardware matrix hold the remaining integrations.
+The [historical handoff](handoff-history-20261017.md) preserves earlier artifact
+locations and reconciliation details; it is not a current qualification record.
 
-Native I2S and JPEG device paths are integrated. The [I2S application](i2s-application.md)
-connects DMA0 capture or recorded playback to retained buffers and USB0 output.
-Its saved image passes twelve initial checks and four USB identity and failure
-checks. All 191 preserved compiler dependencies were verified; 128 repository
-dependencies match integration after accounting for the two rebuilt source files.
-The USB correction reuses 64 objects. Root configuration passes and its compiler
-and linker options match the saved build after path normalization. Broad header
-hashing changes generated identity constants; the frozen worker image retains
-its original identity. Evidence is under `i2s-application-20261017/`.
-
-The [JPEG application](jpeg-application.md) connects shared startup, decoder IOMMU
-mappings, guarded buffers and verified copied output. Its central build and
-focused software checks pass. All 419 compiler dependencies were recovered from
-the existing build and verified against preserved inputs. The 173 repository
-inputs match integration except for one comment-only change. The collector now
-requires dependency coverage for every linked object and rejects empty records.
-The JPEG host adapter is integrated; sixteen focused cases pass, with earlier
-results preserved after a fixture repair. Its aggregate setup check reports no
-mismatches. Sources and artifacts were reconciled under
-`jpeg-supervised-host-20261017/batch1/`. The I2S host adapter is also integrated;
-its first focused batch passes 27 case records, including four SRAM launcher
-instruction cases. Sources and artifacts match integration, with a documented
-source-only reporting-key correction. Evidence is under
-`i2s-supervised-host-20261017/`. Both adapters reuse shared transport and retained
-ownership handling. Their modeled admission records cannot authorize hardware.
-Neither application is physically qualified. Further application attempts require
-diagnosis of multicore startup; the board has recovered and accepts returning diagnostics.
-
-The [native Bluetooth application](bluetooth-native.md) is integrated with its
-host preparation and shared capture adapter. Firmware bootstrap, UART1 and H4/HCI
-identification connect to actual providers and copied USB output. Four focused
-composition cases and seventeen host/wrapper cases pass. All 420 recovered native
-dependencies are preserved; 176 repository inputs match except for one comment.
-The host's seventeen preserved inputs also match integration. Evidence is under
-`bluetooth-native-20261017/`. Physical identification, pairing/security and
-headset audio remain unqualified.
-
-The [supervised NPU startup](npu-application.md) now supports a disabled PLL with
-live DRAM and a quiescent, already-powered domain. It reuses the existing clock
-and power logic, preserves SRAM reset and makes no power-domain writes. One
-native link and the focused startup/admission cases pass. All 468 inputs are
-preserved; the actual native dependency closure contains 169 files, including
-112 repository inputs with only two comment differences. The saved image is
-reused without rebuilding. Evidence is under `npu-live-20261017/`.
-Modeled startup reaches service activation; worker commands and physical
-inference remain untested. Real supply, clock-source, SRAM-exclusion and
-manual-power-removal admission remain required.
-
-Native HDMI startup, DMA USB observation, GPU graphics resources, storage updates,
-native camera binding and fixed GPU graphics submission are integrated. The
-complete [maintenance image](storage-maintenance-launch.md) connects native
-tasks, immutable launch admission, fatal-fault revocation and protected backups.
-
-The [native mimus image](mimus-smp.md#native-eight-core-application-image) now
-connects eight-core startup, shared providers, the SMP C++ runtime and existing
-recorded/paced recognition with two inference workers. Ten focused lifecycle,
-packaging and capture cases pass. Central mimus and maintenance builds pass;
-full recognition on the native image and physical execution remain untested.
-Its supervised mode and frozen recorded/paced host adapter are now integrated.
-One image build, five default-mode compatibility compilations, 30 host groups
-and 17 native boundary cases pass. The 513 recorded dependencies were verified;
-82 repository dependencies match except for one comment-only header change.
-Evidence is under `mimus-supervised-20261017/`. Native USB exchange framing is
-source-reviewed and host-modeled; full native recognition, physical operation
-and performance remain unqualified.
-
-The [native NPU application](npu-application.md), [radio entropy provider](radio-entropy.md),
-[Type-C source controller](typec.md) and [USB2 host path](usb2-host.md) are integrated.
-Their focused software evidence is preserved and reconciled with the integrated
-sources. The NPU application also builds through the root CMake configuration
-when its handoff and artifact paths are supplied. The central link passes;
-application source properties remain isolated from other targets. Existing
-runtime evidence is reused. The supervised image also links through the root
-configuration. Its actual PMIC sampling, PLL retuning and startup token adoption
-pass with modeled device responses. The 460 preserved build inputs were checked;
-native inputs match, so the worker image is reused without rebuilding. Physical
-NPU execution still needs real boot authority and full startup qualification.
-The host adapter passes 33 cases plus five binding regressions; its nine source
-files match the final snapshot. Evidence is under `npu-supervised-20261017/` and
-`npu-supervised-host-20261017/`.
-
-The [board application](board-application.md) integrates shared startup, separate
-Type-C service and power tasks, simultaneous USB0 output and USB2 sector reads,
-and [native radio startup](board-radio.md). Radio startup connects crypto-engine
-entropy, WPA2 association and a bounded TCP exchange. Focused software checks and
-the central board image build pass. All 156 actual repository dependencies match
-the preserved application snapshot; no runtime checks were repeated for integration.
-Full native startup, physical transfers and entropy qualification remain untested.
-
-The default board image still requires a qualified hardware-watchdog window.
-Its integrated supervised mode leaves the watchdog disabled and retains resources
-until manual power removal. Its central build passes with 154 matching repository
-dependencies. Later shared-header edits change comments only. The host capture
-tool shares the observer's lock, queue and transport handling; 25 focused cases
-pass against the integrated sources. Evidence is preserved under
-`board-supervised-20261017/central/` and
-`board-supervised-host-20261017/batch1/`.
-The shared tool also accepts NPU and GPU result fields. Observer and board
-approval now binds directly to the initially validated image, launcher, admission
-and metadata hashes. Ten focused approval cases pass; transport and capture
-functions remain identical to their prior implementation. Source and artifact
-comparisons are under `supervised-bundle-binding-20261017/batch1/`.
-Existing native, launcher and transport results remain valid within their scopes.
-Before physical use, compose the selected bundle's software record from these
-results and current source snapshots; older records retain superseded source hashes.
-The current observer software record binds the tested native image, SCR-free
-launcher and current host under `supervised-reconnect-20261017-072/software.json`.
-The [supervised all-core observer](a733-smp-supervised.md) leaves the watchdog
-disabled. Three physical attempts produced no native USB observer. The latest
-attempt followed a successful returning register survey and fresh entry checks;
-its single refusal-report read timed out. Removing the suspect SCR access did
-not resolve startup. The user has reconnected and the failed session is closed.
-Next diagnosis must locate the failing stage using the previously working
-single-core return path before another full-image attempt.
-
-The [native camera application](camera-application.md) connects actual providers,
-OV5640 capture, retained full-frame copies and USB0 output. Its supervised mode
-now uses explicit manual-power-removal admission and the shared host runner.
-The native link, mode/admission checks and complete-frame collection checks pass.
-All 155 native dependencies were verified; 101 repository dependencies and the
-24 changed sources match integration. The saved image is reused without another
-build. Evidence is under `camera-supervised-20261017/`. The camera module is not
-connected; physical capture remains unqualified. The
-[native GPU application](gpu-application.md) also integrates actual providers,
-firmware, fixed rendering and copied USB output. Its central build and focused
-retention/revocation checks pass. Missing physical isolation prevents shutdown
-or reuse; a successful fixed render retains resources for the boot. Successful
-GPU output and physical operation remain untested. The supervised board mode and
-native HDMI colorbar application are integrated and pass their focused software
-checks. Their physical operation remains untested. Inspect live assignments
-before changing their files.
-
-The supervised GPU mode is integrated. Its root-configured build and focused
-session, launcher, packaging and refusal cases pass. All 151 repository
-dependencies match the integrated sources, so the worker's linked image is reused
-without another build. Default-mode compatibility units also compile. Evidence
-and source reconciliation are under `gpu-supervised-20261017/batch1/`.
-The GPU host adapter also passes 19 focused cases. All eight source files and
-preserved artifacts match integration; evidence is under
-`gpu-supervised-host-20261017/`. Physical rendering remains untested.
-
-The HDMI application supports the existing 720p60 colorbar and optional
-[RGB565 framebuffer output](hdmi-framebuffer.md) through DE1 and TV0. The framebuffer
-image build, normal start/stop and four fault cases pass. All 26 changed files and
-90 repository inputs match integration; the frozen image is reused. Evidence is
-under `hdmi-framebuffer-20261017/`. Physical isolation, DMA reachability and visible
-output remain unqualified; monitor availability is unknown.
-
-NPU startup with an unsuitable supply remains unsupported. NPU and GPU packaging/capture integration is complete at the software
-level. Their shared transport remains unchanged by the observer and board
-approval correction. Physical access remains exclusive to the coordinator.
-
-JPEG and Bluetooth share optional board startup callbacks. Camera integration
-preserves the existing controller evidence and fixes its IOMMU admission to
-derive recovery authority from the actual boot proof. The default watchdog
-mode remains separate from supervised retention. HDMI framebuffer integration
-and offline multicore startup diagnosis continue.
-
-The native PMIC provider now accepts the APBS1 reference-clock parent selected
-by the pinned DDR loader. It verifies the 24 MHz PLL reference and rejects later
-route changes without writing clock or divisor registers. Focused provider checks
-and native compilation pass; source and artifact comparisons are under
-`pmic-parent-20261017/batch1/`. New application builds include this correction.
-Earlier sealed images retain their original provider layout and need rebuilding
-before using the additional parent support. Physical operation remains untested.
-The early-boot NPU PLL draft is preserved without execution. The source-backed
-live-DRAM path supersedes that approach and requires no boot0 overlay.
-
-The GPU central integration compiles and links six affected targets against the
-actual graphics/reservation adapters and fixed render service. Empty fixture
-pools remain unusable. Artifacts and source comparisons are preserved under
-`gpu-render-20261017/central/`; runtime cases were not repeated. The four component
-cases exercise submission and retained failures with poisoned output, so they do
-not establish successful GPU rendering. Native camera evidence and matching
-integrated source identities are recorded in `camera-native-20261017/handoff.json`.
-Its `root-reconcile.json` records the shared clock and PMIC profile extensions;
-the camera's exercised scopes and rail decoding are unchanged. Complete native
-application linkage now passes; physical admission and capture remain outstanding.
-
-The compact DMA image includes native result frames, privilege routing and a
-host capture path. Focused checks passed on the linked image using refused
-handoffs. That fixture image must not be deployed. Physical boot admission and
-USB/DMA operation remain required.
-
-I2S reconciliation is complete; no workload was repeated. Generated assembly,
-objects and generation inputs for the original DMA composition are preserved
-under `dma-pool-session-20261016/assembly-later-capture-20261017/`. Their original
-pre-execution hashes were not recorded, so this later capture does not prove
-those assembly bytes were compiled. The executed ELF retains its original hash.
-
-The larger device-memory launcher is integrated with its focused software
-evidence. It accepts the exact runtime layout and excludes both reserved pools
-from uploads. It creates no physical memory or recovery authority, and ROM
-return alone does not establish scheduler or device results.
-The larger runtime passes full-pool publication, interior translation refusal
-and deadline refusal in the native fixture. A corrected uncached-translation
-check accepts matching effective shareability 2 or 3, as the existing uncached
-adapter does; write-back memory still requires 3. The launcher accepts the
-corrected image and manifest without repeating its instruction cases.
-Central configuration includes the new target. The compact observer boot hook
-was reconciled with the conditional source additions; its compact source remains
-identical after preprocessing those additions, and its sealed bundle is intact.
-
-GPU isolation research found no source-defined A733 acknowledgement that proves
-completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
-identifies the missing guarantee and asynchronous shutdown requirements. Retaining
-memory after failure does not restore an already changed power state.
 
 ## Observed host and device state
 
@@ -325,122 +107,69 @@ claim.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
-On the earlier instance `003:072`, fresh DDR initialization reported 12,288 MiB and two
-4 KiB pages matched. Thirty-nine read-only control/status values matched the
-reviewed entry conditions. The returning SRAM survey then captured SVC mode,
-disabled MMU/caches, primary MPIDR, zero frequency declaration and RMR, and an
-advancing counter. Every remaining launcher predicate passed. The survey restored
-both SRAM intervals and ROM remained responsive; SCR was deliberately unread.
-This is physical evidence for the survey and entry conditions, not multicore
-startup or coherence. Records are under `supervised-reconnect-20261017-072/`.
+The installed session rule grants reconnect access on port `3-1` until host
+reboot. Use `tools/usb-access.py` to inspect or disable it. The user reconnected
+with a microSD inserted and no button held; preserve that card. No MIPI camera or
+display and no microphone are connected. The DSI panel is undecided; OV5640 is
+the first camera target. A headset and HDMI monitor are unconfirmed.
 
-The following SCR-free launch reused the unchanged native image. Uploads,
-readback and one execution request succeeded, but no observer appeared within
-19 seconds. The sole refusal-report read failed with USB timeout error -7.
-Communication stopped immediately. The subsequent user reconnect allowed the
-coordinator to close that retained session. Its `runtime/session.json` remains
-the failure record. The invalid-access hypothesis did not resolve startup;
-the failing instruction or stage remains unknown. Preserve successful evidence
-and investigate the actual launcher/native entry against the working single-core
-path before selecting another bounded diagnostic.
-The prior `003:064` instance answered ROM requests. Its
-[physical ROM capture](watchdog.md) differs from the published dump and supplies
-the board-specific reset reference. SRAM workspace restoration passed there.
-Read-only recovery-register inspection found no redirect owner and a disabled
-watchdog. The boot input was high, so it cannot currently protect a reset from
-storage boot. The user confirmed automatic FEL entry after disconnecting and
-reattaching USB, with a microSD card inserted and no button held. Preserve that
-card. No watchdog was armed and no reset was issued.
-The failed UFS instance `003:063` remains quarantined. DDR evidence applies only
-to the instance on which it was collected; reconnecting invalidates RAM contents.
-The [SRAM configuration trial](watchdog.md) now verifies ROM-redirect and
-watchdog reset-policy writes with complete register/workspace restoration.
-It never enables the timer. Timer enabling, expiry, and reset retention remain
-unqualified. Intentional expiry and unattended fault tests remain deferred;
-this does not block separately reviewed supervised RAM-only work.
-The installed
-[session access rule](../tools/README.md) grants access after reconnects on
-physical port `3-1`. Kernel and native USB checks regained access automatically.
-The rule lasts until host reboot and can be removed with `disable-session`.
-Rediscover the node and run `python3 tools/usb-access.py check-session` before
-an intentional reconnect.
+The separate ESP32 `mimus keyboard` device is unrelated. Do not use it as the
+Orange Pi console or send keyboard events to the desktop. No Orange Pi UART
+adapter is visible.
 
-The separate `mimus keyboard` device is an existing ESP32 board. It must not be
-used as the Orange Pi console. No Orange Pi UART adapter is currently visible.
-
-The host has Clang 21, CMake, and LLVM object tools. LLD 21, ARM system emulation,
-and USB/FDT development headers are extracted under `~/.cache/sunstoneos/host`.
-Pinned sources, builds, packages, and raw evidence are under `~/.cache/sunstoneos`.
-The [build instructions](build.md) describe the emulator configuration.
-The local Python environment supplies the dependencies in
-`checks/host-requirements.txt` for USB transport and compiled-code checks.
 
 ## Reusable validation evidence
 
-Component documents identify their source inputs, artifacts, selected checks and
-limitations. Raw evidence is under `~/.cache/sunstoneos/evidence/`. The central
-`hardware-integration-20261016f` through `hardware-integration-20261016q`
-records preserve earlier source comparisons, build artifacts and source pins.
-`gpu-render-20261017/central/integration.json` records the current GPU links
-and component source reconciliation. Native mimus central build artifacts and
-input comparisons are under `mimus-native-20261017-lifecycle/`. NPU, radio
-entropy, Type-C and USB host handoffs and `root-reconcile.json` records are under
-`npu-application-20261017/`, `radio-entropy-20261017/`,
-`typec-native-20261017/` and `usb2-host-20261017/`. Complete radio and board
-application evidence is under `board-radio-20261017/` and
-`board-application-20261017/`. The latter includes central build inputs and
-artifacts in `central-snapshot/`; `central-integration.json` references matching
-external inputs already preserved by the worker. Camera and supervised observer
-central records are under `camera-application-20261017/` and
-`smp-supervised-20261017/`. All 105 camera and 30 observer repository dependencies
-match their worker snapshots; runtime cases were not repeated. GPU application
-central artifacts are under `gpu-application-20261017/`; all 150 actual repository
-dependencies match its worker snapshot. Its optional isolation and revocation
-fields change the backend ABI; older images retain their original scoped evidence.
-Storage native
-checks and input reconciliation are under `storage-update-20261017/`, including
-`native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
-evidence and central source reconciliation are under `storage-maintenance-20261017/`.
-Reuse results only
-within their recorded source, ABI, configuration and hardware conditions.
+Reuse frozen images and completed checks when their source, dependencies,
+configuration and hardware conditions still apply. A commit, clean integration
+or documentation edit does not justify a rebuild or runtime replay. Follow
+[the validation policy](validation.md); the dashboard requires no recurring
+browser test or manual status update.
 
-The shared clock registry now uses 128-bit masks, 128 slots and 48-byte tokens.
-TWI11 has an independent exclusive scope with shared FABRIC ancestry. One focused
-high-bit ownership check passed; 61 affected native units and three compatibility
-fixtures compiled without replaying earlier workloads. Evidence is under
-`clock-wide-20261017/`. All token producers and consumers must use the same
-layout. Previously sealed images retain their original ABI and evidence; the
-complete maintenance image compiles its current consumers together.
-The latest storage bootstrap contention correction follows that compile batch
-and is included in the maintenance image build, not the earlier object evidence.
-S_TWI1 and USB2 now have independent exclusive scopes. S_TWI1 holds APBS1
-ancestry; the USB2 provider must explicitly reserve its selected and shared
-parents. One focused coexistence/conflict check and changed-core compilation
-pass without changing the token layout. Evidence is under
-`clock-usb-scopes-20261017/`; native Type-C and USB provider checks now pass
-within their recorded scope.
+Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
 
-The cached eight-core runtime has instruction-model scheduler evidence. The
-larger device-memory image also has native reservation publication/refusal
-checks. Central links establish build integration only. The sealed observer
-bundle remains intact; new image identities must not inherit its preparation
-or physical-entry claims.
+- Startup: `startup-stage-20261017-079/native/runtime/session.json` records
+  physical distributor setup and restoration. `native-distributor-probe-20261017/`
+  contains the frozen probe and five focused cases. The current launch survey
+  is `startup-stage-20261017-080/survey/runtime/session.json`.
+- Bluetooth: `bluetooth-mimus-native-20261017/integration.json` reconciles all
+  changed files and preserved inputs. Its `native-final/manifest.json` identifies
+  the image; `composition/` holds actual host recognition and cancellation.
+- I2S: `i2s-mimus-20261017/handoff.json` and `integration.json` identify the
+  image, focused results and matching sources. DMA and recognizer responses are
+  modeled in these capture fixtures; they do not prove physical accuracy.
+- Recorded mimus: [physical single-core evidence](mimus-usb.md) covers 32
+  recordings. [Supervised native integration](mimus-smp.md) and the shared
+  recorded-entry compatibility link remain separate from physical SMP proof.
 
-Known evidence limits remain explicit:
+The [component records](hardware.md) identify the GPU, NPU, camera, JPEG,
+network, storage and USB artifacts. Older sealed images retain their original
+ABI and provider assumptions. In particular, clock tokens use 128-bit masks and
+48-byte tokens; do not mix old and current producers. New PMIC builds support
+the observed APBS1 parent. Older images need an affected rebuild before using
+that additional parent support.
 
-- The original DMA composition's generated assembly was archived later; its
-  pre-execution hashes were not recorded. The original executed ELF is preserved.
-- The first network lifecycle/entropy ELF was overwritten during fixture relink;
-  its digest and logs survive. Later focused executables are preserved.
-- Historical observer compiler resource headers lacked recorded hashes.
-- JPEG's historical malformed-input runner and input archive are missing.
-- Early eMMC routing evidence used the NAND pin function. Corrected SDC2/SDC3
-  source and composed checks supersede that routing claim.
+Preserve these limitations when reusing evidence:
 
-Apply [the validation policy](validation.md): select checks by changed behavior,
-build affected targets once and preserve successful evidence. Commits, clean
-integration and documentation changes do not justify replaying workloads.
-The dashboard needs no separate status maintenance or recurring browser tests.
+- The original DMA assembly was archived after execution; pre-run hashes are
+  absent, although the executed ELF survives.
+- The first network lifecycle/entropy ELF was overwritten; its logs and digest
+  survive. The earlier Bluetooth host snapshot was also captured after execution.
+- Historical observer compiler resource headers lack hashes. JPEG's historical
+  malformed-input runner and input archive are missing.
+- Early eMMC routing used the NAND function; corrected SDC2/SDC3 checks supersede it.
+- The compact DMA image with refused fixture handoffs must not run on hardware.
+- GPU drain/isolation after failure remains unresolved; retained buffers do not
+  establish completed writes or reverse a power transition.
+
+The host toolchain and Python environment are described in [build.md](build.md).
+Preserve configured compiler/linker/venv paths. Sources, packages, builds and
+models live under `~/.cache/sunstoneos`; no runtime filesystem is implied.
+
+Project [issues 1–11](https://github.com/pedapudi/sunstoneos/issues) track hardware
+scope and dependencies. [Issue 12](https://github.com/pedapudi/sunstoneos/issues/12)
+tracks the deferred native NPU toolkit. Suitable open-source dependencies remain
+preferred; opaque replacements follow hardware functionality and optimization.
 
 ## Next actions
 
@@ -456,7 +185,7 @@ recordings and model identities remain the reference.
    preserve the native layout and reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
-2. Qualify the integrated maintenance image after independent recovery passes.
+2. Qualify the integrated maintenance image under its reviewed recovery procedure.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
    conditions by itself.
@@ -479,8 +208,3 @@ recordings and model identities remain the reference.
    startup, live latency, concurrency, recovery and resource use. Finish
    reproducible boot/update artifacts and physical qualification of all required
    functions. The full accepted goal remains incomplete.
-
-Project [issues 1–11](https://github.com/pedapudi/sunstoneos/issues) track hardware
-scope, dependencies and acceptance criteria. [Issue 12](https://github.com/pedapudi/sunstoneos/issues/12)
-tracks the lower-priority native NPU development toolkit. External compiler tools
-remain acceptable until complete hardware support.
