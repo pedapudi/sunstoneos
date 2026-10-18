@@ -1,11 +1,30 @@
 #include "boot.h"
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+#include "session.h"
+#include "a733_device_memory_layout.h"
+#include "a733_cached_memory.h"
+#else
 #include "storage_read_session.h"
 #include "session.h"
 #include "snapshot.h"
+#endif
 #include "a733_storage_digest.h"
 #include <string.h>
 #define REPORT ((volatile struct a733_smp_result *)A733_SMP_RESULT_ADDRESS)
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+static struct gpu_boot_contract gpu_admission __attribute__((section(".monitor_state")));
+/* EL1 cannot read monitor RAM. Keep only its bounded immutable runtime view
+ * in the GPU linker's separately cleared retained RAM. */
+static struct a733_smp_contract gpu_runtime_contract __attribute__((section(".gpu_runtime_retained")));
+static unsigned gpu_runtime_secondary_off __attribute__((section(".gpu_runtime_retained")));
+#define admission gpu_admission.base
+const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *c)
+{return c==&admission?gpu_admission.session_digest:NULL;}
+const uint8_t *gpu_application_entry_digest(const struct a733_smp_contract *c)
+{return c==&admission?gpu_admission.entry_digest:NULL;}
+#else
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+#endif
 static unsigned secondary_off_admitted __attribute__((section(".monitor_state")));
 static struct {
     uint32_t ready,banks,ctlr,group,modifier,enabled,configuration;
@@ -47,7 +66,13 @@ static int secondaries_off(void)
 void sd_single_core_monitor_init(void)
 {
     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
+    #ifdef SUNSTONE_GPU_SINGLE_CORE
+    extern uint64_t __gpu_retained_start[],__gpu_retained_end[];
+    for(uint64_t *p=__gpu_retained_start;p<__gpu_retained_end;++p)*p=0;
+    for(unsigned i=0;i<sizeof(gpu_admission)/8;++i)((uint64_t *)&gpu_admission)[i]=((const volatile uint64_t *)source)[i];
+#else
     for(unsigned i=0;i<sizeof(admission)/8;++i)((uint64_t *)&admission)[i]=((const volatile uint64_t *)source)[i];
+#endif
     __asm__ volatile("dsb sy":::"memory");
     if(!a733_smp_contract_valid(&admission,counter())||source->magic!=admission.magic||
        source->generation!=admission.generation||
@@ -59,9 +84,21 @@ void sd_single_core_monitor_init(void)
     REPORT->magic=A733_SMP_RESULT_MAGIC;REPORT->epoch=admission.epoch;
     REPORT->generation=admission.generation;REPORT->status=UINT64_MAX;
     REPORT->stage=1;REPORT->start_counter=counter();
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+    if(!gpu_application_seal_session(&admission)||!secondaries_off()||
+       !a733_device_memory_boot_admit(&admission)||!a733_cached_memory_prepare())finish(1);
+    /* The shared single-core providers require outer-shareable Device MMIO.
+     * Both regimes are still cache-disabled; no table has been adopted. */
+    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
+    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+#else
     if(!board_session_prepare(&admission)||!storage_read_session_prepare(&admission)||
        !secondaries_off())finish(1);
+#endif
     secondary_off_admitted=1;
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+    gpu_runtime_contract=admission;gpu_runtime_secondary_off=1;
+#endif
     __asm__ volatile("dsb sy":::"memory");
     /* Snapshot helpers hash and publish before any providers. EL3 remains
      * cache-disabled; snapshots survive the accepted EL1 BSS clearing. */
@@ -133,6 +170,15 @@ void sd_single_core_monitor_init(void)
                      "msr cptr_el3, xzr" :: "r"(value));
     value = 0x33ff;
     __asm__ volatile("msr cptr_el2, %0" :: "r"(value));
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+    /* SPI95 stays disabled until the real service owns its interrupt binding. */
+    mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1U<<31));
+    mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1U<<31));
+    mmio_write(GICD_BASE+0xc14,mmio_read(GICD_BASE+0xc14)&~(3U<<30));
+    mmio_write(GICD_BASE+0x45c,(mmio_read(GICD_BASE+0x45c)&0x00ffffff)|0xd8000000);
+    *(volatile uint64_t *)(GICD_BASE+0x62f8)=0;
+    __asm__ volatile("dsb sy":::"memory");
+#endif
     mmio_write(GICD_BASE, (saved.ctlr & ~7U) | 0x33U);
     wait_clear(GICD_BASE, 1U << 31);
     value = admission.diagnostic_deadline;
@@ -155,6 +201,20 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     }
     a733_smp_stop(kind==1&&(RESULT->esr>>26)==0x17&&operation==0x733?(unsigned)status:3,operation);
 }
-const struct a733_smp_contract *sd_single_core_contract(void){return &admission;}
+const struct a733_smp_contract *sd_single_core_contract(void)
+{
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+    return &gpu_runtime_contract;
+#else
+    return &admission;
+#endif
+}
 
-int sd_single_core_secondaries_admitted(void){return secondary_off_admitted==1;}
+int sd_single_core_secondaries_admitted(void)
+{
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+    return gpu_runtime_secondary_off==1;
+#else
+    return secondary_off_admitted==1;
+#endif
+}

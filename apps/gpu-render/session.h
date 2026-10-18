@@ -12,5 +12,6 @@ struct gpu_boot_contract {struct a733_smp_contract base;uint8_t session_digest[3
 const uint8_t *gpu_application_entry_digest(const struct a733_smp_contract *);
 #endif
 const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *);
+const struct a733_board_session *gpu_application_session(void);
 int gpu_application_seal_session(const struct a733_smp_contract *);
 #endif

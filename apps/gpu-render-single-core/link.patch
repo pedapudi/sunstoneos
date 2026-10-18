@@ -1,0 +1,75 @@
+--- link.ld
++++ gpu-single-core-link.ld
+@@ -4,6 +4,8 @@
+     CODE (rx) : ORIGIN = 0x41000000, LENGTH = 2M
+     RAM (rw) : ORIGIN = 0x41200000, LENGTH = 14M
+     MONITOR (rw) : ORIGIN = 0x42000000, LENGTH = 2M
++    DEVICE_WB (rw) : ORIGIN = 0x48000000, LENGTH = 768M
++    DEVICE_NC (rw) : ORIGIN = 0x78000000, LENGTH = 16M
+ }
+ SECTIONS {
+     .text : {
+@@ -25,6 +27,17 @@
+         . += 16384; __monitor_stack_top = .;
+     } > MONITOR
+     .platform_log 0x42020000 (NOLOAD) : { . += 0x4000; } > MONITOR
++    .tables 0x421f0000 (NOLOAD) : ALIGN(4096) {
++        __tables_start = .; *(.bss.a733_cached_tables) __tables_end = .;
++    } > MONITOR
++    .gpu_retained (NOLOAD) : ALIGN(16) {
++        __gpu_retained_start = .;
++        *(.gpu_runtime_retained)
++        *session.c.o*(.bss.sealed_session .bss.session_sealed)
++        *device_memory_layout.c.o*(.bss*)
++        . = ALIGN(16); __gpu_retained_end = .;
++        __gpu_platform_log = .; . += 16384;
++    } > RAM
+     .bss (NOLOAD) : ALIGN(4096) {
+         __bss_start = .; *(.bss*) *(COMMON)
+         . = ALIGN(16); __bss_end = .;
+@@ -33,34 +46,17 @@
+         . += 32768; __exception_stack_top = .;
+     } > RAM
+     __heap_end = .;
+-    /* An absent pool preserves the previous image extent and section layout. */
++    __device_memory_profile = 1;
+     .device_pool (NOLOAD) : {
+-        . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;
+-        __device_pool_start = .;
+-        . += DEFINED(__device_pool_size) ? __device_pool_size : 0;
+-        __device_pool_end = .;
+-    } > RAM
+-    ASSERT(!DEFINED(__device_pool_size) || (__device_pool_size % 4096) == 0,
+-           "device pool must contain complete pages")
+-    ASSERT(!DEFINED(__device_pool_size) || __device_pool_size <= 2097152,
+-           "device pool exceeds allocation registry capacity")
+-    ASSERT(__device_pool_start == __device_pool_end || __device_pool_end <= 0x41f00000,
+-           "device pool exceeds image RAM reservation")
+-    /* Optional complete L2 block: never share cached and uncached aliases. */
+-    .uncached_pool (DEFINED(__uncached_pool_size) && __uncached_pool_size ?
+-                    0x41c00000 : .) (NOLOAD) : {
+-        __uncached_pool_start = .;
+-        . += DEFINED(__uncached_pool_size) ? __uncached_pool_size : 0;
+-        __uncached_pool_end = .;
+-    } > RAM
+-    ASSERT(!DEFINED(__uncached_pool_size) || !__uncached_pool_size ||
+-           __uncached_pool_size == 2097152,
+-           "uncached pool requires one complete 2 MiB block")
+-    ASSERT(__uncached_pool_start == __uncached_pool_end ||
+-           (__device_pool_end <= 0x41c00000 && __uncached_pool_start == 0x41c00000 &&
+-            __uncached_pool_end == 0x41e00000),
+-           "uncached pool overlaps image state or write-back pool")
+-    ASSERT(__bss_end <= 0x42000000, "EL1 allocations exceed RAM")
+-    ASSERT(__monitor_stack_top <= 0x42020000, "monitor state overlaps platform log")
++        __device_pool_start = .; . += LENGTH(DEVICE_WB); __device_pool_end = .;
++    } > DEVICE_WB
++    .uncached_pool (NOLOAD) : {
++        __uncached_pool_start = .; . += LENGTH(DEVICE_NC); __uncached_pool_end = .;
++    } > DEVICE_NC
++    .gpu_session 0x41f00000 (NOLOAD) : { . += 4096; } > RAM
++    ASSERT(__bss_end <= 0x41f00000, "GPU EL1 allocations overlap uploaded session")
++    ASSERT(__monitor_stack_top <= 0x42020000, "GPU monitor overlaps platform log")
++    ASSERT(__tables_end <= 0x42200000, "GPU tables exceed reservation")
++    ASSERT(__gpu_retained_end > __gpu_retained_start, "GPU retained state absent")
+     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
+ }

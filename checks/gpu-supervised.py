@@ -18,6 +18,8 @@ prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
 def main():
     a=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','output','clang','lld'):a.add_argument('--'+name,type=Path,required=True)
+    a.add_argument('--skip-launcher',action='store_true',help='reuse unchanged SRAM launcher cases')
+    a.add_argument('--prepare-only',action='store_true',help='prepare the modeled baseline without replaying checks')
     x=a.parse_args();out=x.output;out.mkdir(exist_ok=False)
     image_hash=prep.digest(x.image);parts,address,identity=prep.image_parts(x.image)
     # Explicit software-only prerequisite model. These records are never valid
@@ -26,9 +28,9 @@ def main():
     raw[48:80]=identity
     struct.pack_into('<4Q',raw,184,4,5,6,7);raw[216:312]=bytes([3])*96
     struct.pack_into('<I',raw,400,2);struct.pack_into('<2Q',raw,456,20,21)
-    struct.pack_into('<3I',raw,488,0,0,0);struct.pack_into('<3I',raw,500,24000000,24000000,24000000)
-    struct.pack_into('<4I',raw,512,3300000,3300000,1200000,900000);struct.pack_into('<I',raw,532,1)
-    raw[564:570]=bytes([11,0,2,11,1,2])
+    struct.pack_into('<3I',raw,488,0,1<<31,1<<31);struct.pack_into('<3I',raw,500,24000000,24000000,24000000)
+    struct.pack_into('<4I',raw,512,3300000,3300000,1200000,900000);struct.pack_into('<I',raw,532,2 if json.loads(x.manifest.read_text()).get('execution_profile')=='gpu-single-core-supervised-v2' else 1)
+    raw[564:570]=bytes([2,1,1,2,1,1])
     fixture=out/'fixtures';fixture.mkdir()
     def artifact(name,data):
         p=(fixture/name).absolute();p.write_bytes(data);return {'path':str(p),'sha256':hashlib.sha256(data).hexdigest()}
@@ -51,6 +53,8 @@ def main():
             'preserve_microsd':True,'one_attempt':True,'evidence':[evidence]}}
     admission=fixture/'admission.json';admission.write_text(json.dumps(record))
     bundle=out/'bundle';p=prep.prepare(x.image,x.manifest,admission,template,bundle,x.clang,x.lld)
+    if x.prepare_only:
+        print('Prepared software-only GPU fixture; never physical admission');return
     results=['immutable-model-bundle']
     for field in ('gpu','gpu_ddr'):
         changed={**record,field:evidence}
@@ -65,18 +69,19 @@ def main():
     else:raise AssertionError('missing initial isolation evidence accepted')
     results.append('missing-initial-isolation-refused')
     # Run only the new SRAM ABI cases in the maintained instruction model.
-    text=(ROOT/'checks/a733-smp-supervised-launch.py').read_text().replace('0x4153373353554333','0x4153373347534332').replace('480000000','1440000000')
-    text=text.replace('reason in (1,2,3,4,5,6,13)','reason in (1,2,3,4,5,6,13,14)')
-    first=text.index('    if args.frequency_only:');last=text.index('    result =',first)
-    text=text[:first]+'''    cases=[check('GPU supervised large reservation',12),
-        check('GPU uploaded watchdog claim refused',14,mutation=(0x41f00000+112,1)),
-        check('GPU large reservation mismatch refused',3,mutation=(CONTRACT+192,0x49000000)),
-        check('GPU initial isolation digest mismatch refused',3,mutation=(CONTRACT+256,0))]
+    if not x.skip_launcher:
+        text=(ROOT/'checks/a733-smp-supervised-launch.py').read_text().replace('0x4153373353554333','0x4153373347534332').replace('480000000','1440000000')
+        text=text.replace('reason in (1,2,3,4,5,6,13)','reason in (1,2,3,4,5,6,13,14)')
+        first=text.index('    if args.frequency_only:');last=text.index('    result =',first)
+        text=text[:first]+'''    cases=[check('GPU supervised large reservation',12),
+            check('GPU uploaded watchdog claim refused',14,mutation=(0x41f00000+112,1)),
+            check('GPU large reservation mismatch refused',3,mutation=(CONTRACT+192,0x49000000)),
+            check('GPU initial isolation digest mismatch refused',3,mutation=(CONTRACT+256,0))]
 '''+text[last:]
-    model=out/'launcher-model.py';model.write_text(text)
-    r=subprocess.run([sys.executable,str(model),'--bundle',str(bundle),'--output',str(out/'launcher-result.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
-    (out/'launcher.log').write_text(r.stdout);assert r.returncode==0,r.stdout
-    results.append('native-SRAM-supervised-ABI')
+        model=out/'launcher-model.py';model.write_text(text)
+        r=subprocess.run([sys.executable,str(model),'--bundle',str(bundle),'--output',str(out/'launcher-result.json')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+        (out/'launcher.log').write_text(r.stdout);assert r.returncode==0,r.stdout
+        results.append('native-SRAM-supervised-ABI')
     with x.image.open('rb') as f:
         e=ELFFile(f);symbols={s.name:s['st_value'] for s in e.get_section_by_name('.symtab').iter_symbols()}
     runtime=bytearray((bundle/'contract.bin').read_bytes()[:288]);start=100000000
@@ -106,6 +111,6 @@ def main():
     else:raise AssertionError('changed prepared session accepted')
     results.append('changed-bundle-refused')
     (out/'result.json').write_text(json.dumps({'status':'pass','cases':results,'image_sha256':image_hash,'physical_access':False},indent=2)+'\n')
-    print('PASS supervised GPU admission, immutable packaging, SRAM launch and refusal cases; no GPU execution modeled')
+    print('PASS supervised GPU admission, immutable packaging and refusal cases; '+('unchanged SRAM launcher cases reused' if x.skip_launcher else 'SRAM launcher cases passed')+'; no GPU execution modeled')
 
 if __name__=='__main__':main()

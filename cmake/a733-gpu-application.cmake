@@ -127,3 +127,11 @@ file(WRITE "@gpu_app_build@/manifest.json" "{\"target\":\"sunstone-a733-gpu-rend
     COMMAND "${CMAKE_COMMAND}" "-DIMAGE=$<TARGET_FILE:sunstone-a733-gpu-render>"
       -P "${gpu_app_build}/finish-manifest.cmake" VERBATIM)
 endif()
+
+option(SUNSTONE_GPU_SINGLE_CORE_APPLICATION "Build supervised boot-CPU-only GPU compute application" OFF)
+if(SUNSTONE_GPU_SINGLE_CORE_APPLICATION)
+  if(NOT SUNSTONE_GPU_SUPERVISED OR NOT SUNSTONE_GPU_COMPUTE_APPLICATION)
+    message(FATAL_ERROR "Single-core GPU mode requires supervised repeated compute")
+  endif()
+  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-gpu-single-core.cmake")
+endif()

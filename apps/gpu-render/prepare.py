@@ -93,6 +93,40 @@ def image_parts(path):
             if p['address']<=address and address+32<=p['address']+len(p['data']):return parts,address,p['data'][address-p['address']:address-p['address']+32]
         raise ValueError('GPU build identity has no image bytes.')
 
+def image_manifest_check(manifest,image,session=None):
+    """Bind the execution profile to immutable native startup, not a mode label."""
+    import io
+    from elftools.elf.elffile import ELFFile
+    profiles={'sunstone-a733-gpu-render':'gpu-supervised-v2',
+              'sunstone-a733-gpu-compute-single-core':'gpu-single-core-supervised-v2'}
+    target=manifest.get('target')
+    require(target in profiles and manifest.get('execution_profile')==profiles[target] and
+            manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),'Supervised GPU manifest required.')
+    if session is not None:
+        session_check(session)
+        mode=struct.unpack_from('<I',session,532)[0]
+        require(mode in (1,2) and (mode==1 or target=='sunstone-a733-gpu-compute-single-core'),
+                'ROM USB0 takeover requires the single-core GPU image.')
+    elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+    require(table is not None,'GPU image symbols absent.')
+    symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
+    marker=symbols.get('gpu_single_core_geometry')
+    if target=='sunstone-a733-gpu-render':
+        require(marker is None,'Single-core GPU image requires its own execution profile.')
+        return
+    require(manifest.get('workload')=='fixed-arithmetic-repeat' and marker is not None and marker[1]==32 and
+            symbols.get('sd_single_core_entry',(0,))[0]==int(elf.header['e_entry']) and
+            not any(symbols.get(name,(0,))[0] for name in
+                ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset')),
+            'Single-core GPU startup differs.')
+    first,size=marker
+    parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
+           int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
+    require(len(parts)==1,'Single-core GPU geometry must be immutable/file-backed.')
+    offset=first-int(parts[0]['p_vaddr'])
+    require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373347505331,1,592,60),
+            'Single-core GPU geometry differs.')
+
 def build_launcher(output,clang,lld):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     changes={'0x4153373353554c33':'0x4153373347534c32','REQUEST[1]==3':'REQUEST[1]==2',
@@ -118,7 +152,7 @@ def prepare(image,manifest,admission,session_template,output,clang,lld):
     output=Path(output);image_data=Path(image).read_bytes();manifest_data=Path(manifest).read_bytes()
     admission_data=Path(admission).read_bytes();template=Path(session_template).read_bytes()
     image_hash=hashlib.sha256(image_data).hexdigest();m=json.loads(manifest_data);record=json.loads(admission_data)
-    require(m.get('target')=='sunstone-a733-gpu-render' and m.get('execution_profile')=='gpu-supervised-v2' and m.get('final_elf')==image_hash,'Supervised GPU manifest required.')
+    image_manifest_check(m,image_data,template)
     cache=validate_admission(record,image_hash,hashlib.sha256(template).hexdigest());session_check(template)
     gpu=json.loads(cache[record['gpu']['path']]);entry=bytes.fromhex(record['gpu']['sha256'])
     require(template[80:112]==entry and struct.unpack_from('<Q',template,192)[0]==gpu['cold_master'],'Session does not bind actual GPU entry evidence.')
@@ -152,8 +186,7 @@ def validate_bundle(bundle):
     require(all(hashlib.sha256(cache[name]).hexdigest()==item['sha256'] for name,item in p['entry_evidence'].items()),'Frozen GPU evidence changed.')
     record=json.loads((bundle/'admission.json').read_text());validate_admission(record,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True)
     manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-gpu-render' and manifest.get('execution_profile')=='gpu-supervised-v2' and
-        manifest.get('final_elf')==p['image_sha256'],'GPU manifest changed.')
+    image_manifest_check(manifest,(bundle/'image.elf').read_bytes(),(bundle/'session.bin').read_bytes())
     raw=(bundle/'session.bin').read_bytes();session_check(raw);parts,address,identity=image_parts(bundle/'image.elf')
     derived=bytearray((bundle/'session-template.bin').read_bytes());struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=identity
     require(raw==derived and p['build_id']==identity.hex() and p['reservation']==record['reservation'],'GPU session derivation changed.')

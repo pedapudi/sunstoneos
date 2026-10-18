@@ -1,6 +1,24 @@
 --- platform.c
 +++ single-core-platform.c
-@@ -66,7 +66,7 @@
+@@ -7,8 +7,13 @@
+
+ static uint64_t tick_interval;
+ static uint64_t next_tick;
++#ifdef SUNSTONE_GPU_SINGLE_CORE
++#include "a733_cached_memory.h"
++#include "a733_cpu_coherence.h"
++#else
+ static uint64_t level1[512] __attribute__((aligned(4096)));
+ static uint64_t level2[512] __attribute__((aligned(4096)));
++#endif
+
+ void platform_puts(const char *text)
+ {
+@@ -63,10 +68,11 @@
+
+ void platform_init(void)
+ {
++#ifndef SUNSTONE_GPU_SINGLE_CORE
      // Identity-map peripheral space as Device-nGnRnE, and the 128 MiB RAM
      // region as normal, inner-shareable, write-back memory. Boot code/data
      // share a mapping here; separate permissions belong to the full VM layer.
@@ -9,7 +27,7 @@
      level1[1] = (uintptr_t)level2 | 3;
      for (unsigned i = 0; i < 64; ++i)
          level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) |
-@@ -74,7 +74,7 @@
+@@ -74,14 +80,23 @@
      // Result writes must reach DRAM for the cache-disabled EL3 monitor and ROM.
      // Map this 2 MiB block as normal non-cacheable memory (attribute index 2).
      level2[(RESULT_BASE - 0x40000000UL) / 0x200000UL] =
@@ -18,3 +36,31 @@
      configASSERT(a733_memory_boot_uncached(level2));
      uint64_t mair = 0x44ff00;
      uint64_t tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |
+                    (1UL << 10) | (1UL << 8) | 25;
++#else
++    uint64_t mair=A733_CPU_COHERENCE_MAIR,tcr=A733_CPU_COHERENCE_TCR;
++#endif
+     __asm__ volatile("dsb sy\n msr mair_el1, %0\n msr tcr_el1, %1\n"
+                      "msr ttbr0_el1, %2\n isb\n tlbi vmalle1\n dsb sy\n isb"
+-                     :: "r"(mair), "r"(tcr), "r"((uintptr_t)level1) : "memory");
++                     :: "r"(mair), "r"(tcr),
++#ifdef SUNSTONE_GPU_SINGLE_CORE
++                        "r"((uintptr_t)a733_cached_el1_l1)
++#else
++                        "r"((uintptr_t)level1)
++#endif
++                     : "memory");
+     uint64_t sctlr;
+     __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+     sctlr |= (1UL << 12) | (1UL << 2) | 1;
+@@ -134,6 +149,10 @@
+
+ void vApplicationFPUSafeIRQHandler(uint64_t interrupt)
+ {
++#ifdef SUNSTONE_GPU_SINGLE_CORE
++    extern void gpu_application_irq(void);
++    if(interrupt==95){gpu_application_irq();return;}
++#endif
+     if (interrupt == TIMER_IRQ)
+         FreeRTOS_Tick_Handler();
+     else if (interrupt < 1020)

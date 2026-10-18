@@ -268,13 +268,12 @@ under `gpu-completion-20261018/native/build/`, with SHA-256
 Its manifest is `gpu-application/manifest.json` beside that ELF. No native image
 was rebuilt or physically executed for the host change.
 
-The existing native GPU image starts cores 1 through 7 in
-`platform/a733-smp-cached/boot.c` before entering its runtime. The GPU boot patch
-preserves that loop. This image therefore depends on working all-core startup,
-interrupts and coherent scheduling. There is no integrated single-core GPU
-image. A CPU startup correction requires a new affected GPU build and a new
-image-bound admission record; the preserved ELF is not evidence for that
-correction.
+The all-core GPU target starts cores 1 through 7 in
+`platform/a733-smp-cached/boot.c` before entering its runtime. That target depends
+on working all-core startup, interrupts and coherent scheduling. The separate
+single-core compute target below uses the boot CPU and requires the other seven
+CPUs to remain OFF. A CPU startup correction requires an affected build and new
+image-bound admission; preserved images cannot establish the correction.
 
 Before preparing physical inputs, the coordinator must establish these facts
 for the selected target and final image:
@@ -293,7 +292,7 @@ shutdown experiment for this fixed lifetime. Entry still requires actual
 initial isolation. Every outcome retains all GPU backing and leases until
 complete whole-board power removal.
 
-Once those conditions and the image's CPU startup dependency are established,
+Once those conditions and the selected image's CPU startup dependency are established,
 the bounded coordinator procedure is:
 
 1. Freeze the final supervised compute ELF and its matching manifest. Use the
@@ -326,3 +325,71 @@ the bounded coordinator procedure is:
 No actual GPU entry record is supplied by the host checks. Initial memory and
 master exclusion, supported settled power, CPU startup and physical numerical
 execution remain requirements for the first board attempt.
+
+
+## Boot-CPU-only supervised computation
+
+With `SUNSTONE_GPU_SUPERVISED=ON`, `SUNSTONE_GPU_COMPUTE_APPLICATION=ON` and
+`SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`, build target
+`sunstone-a733-gpu-compute-single-core`. Its manifest uses execution profile
+`gpu-single-core-supervised-v2`. An immutable one-core geometry record and the
+actual entry symbol bind that profile to the ELF. Preparation rejects attempts
+to label this image as the all-core target, or to label an all-core image as
+single-core. The existing all-core target remains available.
+
+This target reuses the storage application's single-core entry, retained EL3
+monitor, FreeRTOS SRE port and terminal handling. Its explicit GPU branch seals
+the complete 288-byte GPU contract and 592-byte session. Before EL1 entry, it
+checks the seven secondary CPUs' OFF status and control settings. It starts no
+secondary CPU and changes no secondary power control.
+
+The shared large-memory constructor builds the GPU tables while caches remain
+disabled. Both MMIO roots select outer-shareable Device memory. EL1 adopts the
+exact existing coherence TCR/MAIR values and table root, then runs the unchanged
+full translation scan before publishing either memory pool. The secure monitor
+block remains inaccessible to EL1. The session, memory binding and bounded EL1
+runtime contract/secondary-state copies occupy a separately cleared retained
+RAM section outside EL1's BSS range. The complete authority contract stays in
+EL3 monitor storage. The diagnostic platform log has separate image RAM; GPU
+completion remains the copied and verified USB output.
+
+USB reference mode 2 selects the existing ROM PIO takeover path only for this
+single-core GPU profile. Native admission and offline preparation accept modes
+1 and 2 there; the all-core target accepts mode 1. The common native USB provider
+and controller already support the takeover. No controller admission has been
+relaxed. Actual absence of earlier undrained USB DMA, exclusion of concurrent
+ROM/firmware access, ownership of USB0 and its clocks, and full power-removal
+recovery remain required by [the USB contract](usb-platform.md).
+
+Frozen evidence is under `~/.cache/sunstoneos/evidence/gpu-single-core-20261018/`:
+
+- `native/build/sunstone-a733-gpu-compute-single-core.elf` has SHA-256
+  `5bd80e10e2bf7f13dfeede7cbe1bb7a915937d3842c2195c5fe09cdbf8d19938`.
+  Its map and manifest are in `native/build/gpu-single-core/`. It includes the
+  integrated normalized REF24 clock decoding.
+- `startup-pool-fixture/result.json` records actual linked startup, sealing,
+  BSS survival, protected-monitor refusal, complete WB/NC mapping verification,
+  and shared-provider, static-task and GPU service construction. CPU registers,
+  counter progression, cache publication and descriptor-based hardware walks
+  are modeled. No GPU job or arithmetic output is injected in these cases.
+- `package-retained-view/result.json` records offline packaging and native
+  contract acceptance/refusal. `profiles-resume/result.json` covers native and
+  host acceptance for all four USB mode values in both execution profiles.
+- `storage-compatibility/result.json` confirms unchanged preprocessed storage
+  behavior in the three shared adapter files. Only whitespace and diagnostic
+  file/line locations were normalized. Existing storage runtime evidence is
+  reused. GPU arithmetic, SRAM launcher and host-capture evidence is also reused.
+
+Initial checks exposed invalid generic PMIC pin/fabric fixtures and an incomplete
+emulator RAM map; the final baseline uses the accepted provider settings and
+complete GPU reservations. Review also found inaccessible EL1 pointers into
+monitor storage; the retained runtime copies and an ordinary-load trap cover
+that correction. Earlier failed results and image identities are preserved.
+
+For one physical attempt, use the existing prepare/claim/launch procedure with
+this ELF and its own manifest. This target needs primary-CPU startup, local
+interrupts and the stated seven-CPU OFF baseline. It does not depend on secondary
+scheduling or all-core coherence. Actual DDR exclusion, supported settled GPU
+power, initial GPU isolation, ROM USB takeover authority, and successful numerical
+execution remain unqualified. Every outcome retains the complete lifetime until
+confirmed whole-board power removal.

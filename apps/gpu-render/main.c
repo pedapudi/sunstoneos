@@ -133,8 +133,14 @@ void a733_smp_diagnostic_start(void)
     if(!a733_native_usb_init(&app.shared,&b,gpu_application_live,gpu_application_fail,NULL))platform_panic("GPU shared providers",3);
     TaskFunction_t functions[]={pmic,gpu_application_usb,client};
     const char *names[]={"gpu-pmic","gpu-usb","gpu-client"};
-    for(unsigned i=0;i<3;++i){app.handles[i]=xTaskCreateStaticAffinitySet(functions[i],names[i],4096,NULL,2,
-        app.stacks[i],&app.tasks[i],1);if(!app.handles[i])platform_panic("GPU tasks",4);}
+    for(unsigned i=0;i<3;++i){
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,2,app.stacks[i],&app.tasks[i]);
+#else
+        app.handles[i]=xTaskCreateStaticAffinitySet(functions[i],names[i],4096,NULL,2,
+        app.stacks[i],&app.tasks[i],1);
+#endif
+        if(!app.handles[i])platform_panic("GPU tasks",4);}
     if(!a733_native_usb_bind(&app.shared,app.handles[0],app.handles[1]))platform_panic("GPU USB bind",5);
     if(!a733_gpu_platform_native_init(&app.native,&app.shared.locks.callbacks)||
        !a733_gpu_platform_init(&app.power,&app.shared.gpu,7,&app.native.operations,&app.native))platform_panic("GPU platform",6);

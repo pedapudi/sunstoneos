@@ -23,7 +23,12 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        s->source_min_mv||s->source_max_mv||s->source_ma||s->zero_threshold_max_mv||s->fusb_device_id||
        s->usb2_revision||s->pck_client||s->usb_supply_uv[4]||present(&s->typec_pins[0][0],sizeof(s->typec_pins))||
        present(s->reserved,sizeof(s->reserved))||!s->pmic_owner||!s->usb0_owner||s->pmic_owner==s->usb0_owner||
-       s->usb0_cold_reference!=1||s->usb_supply_uv[0]!=3300000||s->usb_supply_uv[1]!=3300000)return 0;
+#ifdef SUNSTONE_GPU_SINGLE_CORE
+       (s->usb0_cold_reference!=1&&s->usb0_cold_reference!=2)||
+#else
+       s->usb0_cold_reference!=1||
+#endif
+       s->usb_supply_uv[0]!=3300000||s->usb_supply_uv[1]!=3300000)return 0;
     for(unsigned i=0;i<3;++i)if(!s->fabric_hz[i])return 0;
     return 1;
 }

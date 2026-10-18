@@ -1,0 +1,62 @@
+# One trusted compute client; reuse the storage adapter's retained single-core startup.
+set(gpsc_root "${SUNSTONE_SOURCE_ROOT}")
+set(gpsc_app "${gpsc_root}/apps/gpu-render-single-core")
+set(gpsc_shared "${gpsc_root}/apps/storage-read-single-core")
+set(gpsc_build "${CMAKE_CURRENT_BINARY_DIR}/gpu-single-core")
+set(gpsc_port "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
+file(MAKE_DIRECTORY "${gpsc_build}")
+get_target_property(gpsc_sources sunstone-a733-gpu-render SOURCES)
+list(FILTER gpsc_sources EXCLUDE REGEX "(/platform/a733-smp-|/platform/a733/cpu_|/freertos-a733-smp-cached/|/storage-maintenance/(boot|platform|continue|port|build-id)\\.|/gpu-application/(boot[^/]*|platform|build-id)\\.)")
+list(APPEND gpsc_sources "${gpsc_root}/platform/a733/cpu_coherence.c"
+ "${gpsc_root}/platform/a733/cpu_coherence.S" "${gpsc_root}/platform/a733/cpu_start.c"
+ "${gpsc_root}/platform/a733-smp-cached/memory.c")
+apply_build_patch("${gpsc_build}/port.c" "${gpsc_port}/port.c" "${gpsc_root}/patches/freertos-aarch64-clang.patch")
+apply_build_patch("${gpsc_build}/platform.c" "${gpsc_root}/platform/a733/platform.c" "${gpsc_shared}/platform.patch")
+apply_build_patch("${gpsc_build}/link.ld" "${gpsc_shared}/link.ld" "${gpsc_app}/link.patch")
+list(APPEND gpsc_sources "${gpsc_shared}/start.S" "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c"
+ "${gpsc_build}/platform.c" "${gpsc_build}/port.c" "${gpsc_port}/portASM.S"
+ "${gpsc_root}/arch/aarch64/start.S" "${gpsc_root}/arch/aarch64/vectors.S" "${gpsc_root}/arch/aarch64/cache.S")
+list(REMOVE_DUPLICATES gpsc_sources)
+add_executable(sunstone-a733-gpu-compute-single-core EXCLUDE_FROM_ALL ${gpsc_sources})
+get_target_property(gpsc_options sunstone-a733-gpu-render COMPILE_OPTIONS)
+get_target_property(gpsc_includes sunstone-a733-gpu-render INCLUDE_DIRECTORIES)
+get_target_property(gpsc_definitions sunstone-a733-gpu-render COMPILE_DEFINITIONS)
+list(FILTER gpsc_definitions EXCLUDE REGEX "^SUNSTONE_A733_SMP_DIAGNOSTIC=")
+list(FILTER gpsc_includes EXCLUDE REGEX "(a733-smp-cached|freertos-a733-smp-cached)")
+set_property(TARGET sunstone-a733-gpu-compute-single-core PROPERTY COMPILE_OPTIONS "${gpsc_options}")
+target_include_directories(sunstone-a733-gpu-compute-single-core BEFORE PRIVATE "${gpsc_app}" "${gpsc_port}")
+target_include_directories(sunstone-a733-gpu-compute-single-core PRIVATE ${gpsc_includes})
+target_compile_definitions(sunstone-a733-gpu-compute-single-core PRIVATE ${gpsc_definitions} GUEST=1 SUNSTONE_GPU_SINGLE_CORE=1)
+# The shared adapter's local boot.h stays unchanged; include the GPU log placement first.
+set_property(SOURCE "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c" "${gpsc_build}/platform.c" APPEND PROPERTY COMPILE_OPTIONS
+ "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-gpu-compute-single-core>:-include>"
+ "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-gpu-compute-single-core>:${gpsc_app}/boot.h>")
+file(GLOB gpsc_headers "${gpsc_app}/*.h")
+set(gpsc_inputs ${gpu_app_inputs} ${gpsc_sources} ${gpsc_headers}
+ "${gpsc_port}/portmacro.h" "${gpsc_port}/port.c" "${gpsc_shared}/boot.h" "${gpsc_shared}/cached.h"
+ "${gpsc_shared}/FreeRTOSConfig.h" "${gpsc_shared}/link.ld" "${gpsc_shared}/platform.patch"
+ "${gpsc_app}/link.patch" "${CMAKE_CURRENT_LIST_FILE}" "${gpsc_root}/patches/freertos-aarch64-clang.patch")
+list(REMOVE_DUPLICATES gpsc_inputs)
+set(gpsc_identity "gpu-fixed-arithmetic;single-boot-cpu;SRE;supervised60;retained;${gpu_app_cc_hash};${gpu_app_ld_hash};${gpsc_options};${gpsc_definitions};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS}")
+foreach(input IN LISTS gpsc_inputs)
+ file(SHA256 "${input}" gpsc_hash)
+ string(APPEND gpsc_identity "${gpsc_hash}")
+endforeach()
+string(SHA256 gpsc_build_id "${gpsc_identity}")
+string(REGEX REPLACE "(..)" "0x\\1," gpsc_id_bytes "${gpsc_build_id}")
+file(WRITE "${gpsc_build}/build-id.c.tmp" "const unsigned char a733_smp_build_id[32]={${gpsc_id_bytes}};\n")
+configure_file("${gpsc_build}/build-id.c.tmp" "${gpsc_build}/build-id.c" COPYONLY)
+file(WRITE "${gpsc_build}/build-id.txt" "${gpsc_build_id}\n")
+target_sources(sunstone-a733-gpu-compute-single-core PRIVATE "${gpsc_build}/build-id.c")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gpsc_inputs})
+target_link_options(sunstone-a733-gpu-compute-single-core PRIVATE -nostdlib -static -Wl,--gc-sections
+ "-Wl,-T,${gpsc_build}/link.ld" "-Wl,-Map,${gpsc_build}/image.map")
+set_target_properties(sunstone-a733-gpu-compute-single-core PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${gpsc_build}/link.ld")
+set(gpsc_manifest_script [=[
+file(SHA256 "${IMAGE}" digest)
+file(WRITE "@gpsc_build@/manifest.json" "{\"target\":\"sunstone-a733-gpu-compute-single-core\",\"execution_profile\":\"gpu-single-core-supervised-v2\",\"workload\":\"fixed-arithmetic-repeat\",\"build_id\":\"@gpsc_build_id@\",\"final_elf\":\"${digest}\"}\n")
+]=])
+string(CONFIGURE "${gpsc_manifest_script}" gpsc_manifest_script @ONLY)
+file(WRITE "${gpsc_build}/finish-manifest.cmake" "${gpsc_manifest_script}")
+add_custom_command(TARGET sunstone-a733-gpu-compute-single-core POST_BUILD
+ COMMAND "${CMAKE_COMMAND}" "-DIMAGE=$<TARGET_FILE:sunstone-a733-gpu-compute-single-core>" -P "${gpsc_build}/finish-manifest.cmake")
