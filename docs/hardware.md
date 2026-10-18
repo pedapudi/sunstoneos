@@ -116,10 +116,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks pass. All 174 compiled repository inputs match integration under
   `rtc-native-20261018/`. The schematic and pinned driver support the selected SoC
   RTC; the fitted board revision still requires confirmation. Physical operation,
-  native USB serialization and retention remain unqualified. Calendar setting,
-  clock-source initialization, alarm wake, reset-cause reporting and applicable
-  retention modes remain outstanding. Independent watchdog evidence and limits
-  are recorded separately above.
+  native USB serialization and retention remain unqualified. Authenticated
+  cold-start calendar setting and crystal initialization are also implemented;
+  their focused host and native instruction checks pass under
+  `rtc-calendar-native-20261018/`. The RTC-only startup interval accommodates
+  documented calendar writes; other applications keep their original deadlines.
+  Runtime calendar updates, alarm wake, calibration, reset-cause reporting and
+  applicable retention modes remain outstanding. Independent watchdog evidence
+  and limits are recorded separately above.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.

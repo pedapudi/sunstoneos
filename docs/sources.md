@@ -44,7 +44,8 @@ and uses pinned H6-CedarC source references. Its source manifest records license
 and hashes. A733 CedarC libraries provide instruction references; the native
 image does not load those Linux libraries. FFmpeg supplies the host pixel oracle.
 The [native RTC application](rtc-application.md) adapts the pinned board kernel's
-GPL-2.0-or-later SoC RTC calendar and alarm operations. Its
+GPL-2.0-or-later SoC RTC calendar and alarm operations, with crystal-control
+sequences from the pinned RTC clock driver. Its
 [source manifest](../apps/rtc/sources.json) records the exact driver, clock and
 board-description inputs. Repository source executes these operations under
 FreeRTOS; no RTC firmware blob or Linux runtime is loaded. The component document

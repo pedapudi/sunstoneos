@@ -152,10 +152,14 @@ copied USB output. One affected image and focused driver, native instruction and
 host checks pass. All 174 compiled repository inputs match integration under
 `rtc-native-20261018/`; accepted artifact and dependency evidence was reused.
 The fitted board revision, physical operation and native USB serialization remain
-unqualified. Explicit calendar setting and clock-source initialization are now
-in development. Their startup allowance must accommodate documented calendar
-write times while preserving the other applications' existing deadlines.
-Alarm wake and retention qualification remain required work.
+unqualified. Explicit cold-start calendar setting and crystal initialization
+are also integrated. Their image and focused initialization, failure, sealing
+and host checks pass under `rtc-calendar-native-20261018/`. The RTC target uses
+six seconds for startup within its unchanged 60-second lifetime; other targets
+retain the one-second default. The source and frozen image reconcile with the
+unrelated additive SD API declaration. Earlier alarm and IRQ evidence was reused.
+Runtime calendar updates, alarm wake, calibration, reset-cause reporting and
+retention qualification remain required work.
 
 The [native PCIe application](pcie-application.md) now connects the root-port
 driver and shared providers to x1 Gen1 link observation, read-only endpoint
