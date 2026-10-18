@@ -4,6 +4,9 @@
 #include "platform.h"
 #include "timing.h"
 #include "runtime.h"
+#ifdef SUNSTONE_MIMUS_NATIVE
+#include "native.h"
+#endif
 #include "mimus/asr/model.h"
 #include "mimus/asr/recognizer.h"
 #include "mimus/asr/platform.h"
