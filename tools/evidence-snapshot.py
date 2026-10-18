@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 
@@ -30,6 +31,50 @@ def copy_file(source, destination):
     return {"original": str(source), "bytes": before.st_size,
             "sha256": digest.hexdigest()}
 
+
+def collect_dependencies(build,target):
+    """Recover every object actually linked into this image, including ASM."""
+    import re
+    build=Path(build).resolve()
+    link=build/f'CMakeFiles/{target}.dir/link.txt'
+    objects=[(build/name).resolve() for name in shlex.split(link.read_text()) if name.endswith(('.obj','.o'))]
+    commands=json.loads((build/'compile_commands.json').read_text())
+    commands={(Path(c['directory'])/c['output']).resolve():c for c in commands}
+    errors=[];dependencies={};actual=[];records={};asm={}
+    for obj in objects:
+        target=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
+        if target in asm:continue
+        entries={};current=None
+        if target.is_file():
+            for line in target.read_text().splitlines():
+                if not line or line.startswith('#'):continue
+                if not line.startswith(' '):current=(build/line).resolve();entries[current]=[]
+                elif current is not None:entries[current].append(Path(line.strip()))
+        asm[target]=entries
+    for obj in objects:
+        command=commands.get(obj)
+        if not obj.is_file() or command is None:
+            errors.append('Missing linked object/command: '+str(obj));continue
+        actual.append(command);source=Path(command['file']).resolve();dep=Path(str(obj)+'.d')
+        if dep.is_file():
+            names=shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]);paths=[(build/n).resolve() for n in names]
+        else:
+            dep=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
+            paths=asm[dep].get(obj,[])
+            if source.suffix!='.S' or not paths:
+                errors.append('Missing compiler dependency record: '+str(obj));continue
+        if source not in paths:errors.append('Dependency record omits source: '+str(source))
+        # The generated fixed assembly embeds two immutable binary inputs.
+        if source.suffix=='.S':
+            paths+= [Path(name) for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
+        for path in paths:
+            if not path.is_file():errors.append('Missing dependency: '+str(path))
+            else:dependencies[str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
+        records[str(obj)]={'record':str(dep),'record_sha256':hashlib.sha256(dep.read_bytes()).hexdigest(),'source':str(source)}
+    if not objects or not dependencies:errors.append('Empty linked-object/dependency discovery')
+    if len(records)!=len(objects):errors.append('Incomplete linked-object dependency coverage')
+    if errors:raise RuntimeError(target+' dependency setup failed:\n'+'\n'.join(errors))
+    return dependencies,actual,records
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

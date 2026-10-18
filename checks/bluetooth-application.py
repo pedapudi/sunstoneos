@@ -60,7 +60,7 @@ def main():
         for path in (out / 'launcher').glob('*'):
             if path.is_file():
                 capture(path)
-        for dep in [*out.glob('*.d'), *(out / 'launcher').glob('*.d'), *([] if native_captured else a.build_dir.rglob('*.o.d'))]:
+        for dep in [*out.glob('*.d'), *(out / 'launcher').glob('*.d')]:
             capture(dep)
             for name in shlex.split(dep.read_text().replace('\\\n', ' ').split(':', 1)[1]):
                 path = Path(name)
@@ -68,6 +68,16 @@ def main():
                     path = (a.build_dir if dep.is_relative_to(a.build_dir) else ROOT) / path
                 if path.is_file():
                     capture(path)
+        if not native_captured:
+            snapshot=load('bluetooth_evidence_snapshot',ROOT/'tools/evidence-snapshot.py')
+            dependencies,commands,records=snapshot.collect_dependencies(a.build_dir,'sunstone-a733-bluetooth')
+            for path,identity in dependencies.items():
+                capture(path);assert inputs[str(Path(path).resolve())]['sha256']==identity
+            for record in records.values():
+                capture(record['record'])
+            (out/'native-commands.json').write_text(json.dumps(commands,indent=2)+'\n')
+            (out/'native-dependencies.json').write_text(json.dumps(dependencies,indent=2)+'\n')
+            (out/'native-dependency-records.json').write_text(json.dumps(records,indent=2)+'\n')
         for path in ([] if native_captured else a.build_dir.rglob('*')):
             if path.is_file() and (path.name in ['CMakeCache.txt', 'compile_commands.json', 'link.txt', 'flags.make', 'build.make'] or
                     path.suffix in ['.ld'] or path.parent.name == 'bluetooth-application'):

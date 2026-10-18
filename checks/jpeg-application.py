@@ -19,49 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
-def collect_dependencies(build):
-    """Recover every object actually linked into this image, including ASM."""
-    import re
-    build=Path(build).resolve()
-    link=build/'CMakeFiles/sunstone-a733-jpeg.dir/link.txt'
-    objects=[(build/name).resolve() for name in shlex.split(link.read_text()) if name.endswith(('.obj','.o'))]
-    commands=json.loads((build/'compile_commands.json').read_text())
-    commands={(Path(c['directory'])/c['output']).resolve():c for c in commands}
-    errors=[];dependencies={};actual=[];records={};asm={}
-    for obj in objects:
-        target=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
-        if target in asm:continue
-        entries={};current=None
-        if target.is_file():
-            for line in target.read_text().splitlines():
-                if not line or line.startswith('#'):continue
-                if not line.startswith(' '):current=(build/line).resolve();entries[current]=[]
-                elif current is not None:entries[current].append(Path(line.strip()))
-        asm[target]=entries
-    for obj in objects:
-        command=commands.get(obj)
-        if not obj.is_file() or command is None:
-            errors.append('Missing linked object/command: '+str(obj));continue
-        actual.append(command);source=Path(command['file']).resolve();dep=Path(str(obj)+'.d')
-        if dep.is_file():
-            names=shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]);paths=[(build/n).resolve() for n in names]
-        else:
-            dep=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
-            paths=asm[dep].get(obj,[])
-            if source.suffix!='.S' or not paths:
-                errors.append('Missing compiler dependency record: '+str(obj));continue
-        if source not in paths:errors.append('Dependency record omits source: '+str(source))
-        # The generated fixed assembly embeds two immutable binary inputs.
-        if source.suffix=='.S':
-            paths+= [Path(name) for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
-        for path in paths:
-            if not path.is_file():errors.append('Missing dependency: '+str(path))
-            else:dependencies[str(path)]=sha(path)
-        records[str(obj)]={'record':str(dep),'record_sha256':sha(dep),'source':str(source)}
-    if not objects or not dependencies:errors.append('Empty linked-object/dependency discovery')
-    if len(records)!=len(objects):errors.append('Incomplete linked-object dependency coverage')
-    if errors:raise RuntimeError('JPEG dependency setup failed:\n'+'\n'.join(errors))
-    return dependencies,actual,records
+import importlib.util
+_snapshot_spec=importlib.util.spec_from_file_location('jpeg_evidence_snapshot',ROOT/'tools/evidence-snapshot.py')
+_snapshot=importlib.util.module_from_spec(_snapshot_spec);_snapshot_spec.loader.exec_module(_snapshot)
+collect_dependencies=_snapshot.collect_dependencies
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -152,7 +113,7 @@ def main():
         f'-DSUNSTONE_NETWORK_C_HEADERS={out}/dependencies/headers','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON','-DSUNSTONE_BOARD_SUPERVISED=ON',f'-DSUNSTONE_JPEG_FIXTURE={out}/fixture.jpg',f'-DSUNSTONE_JPEG_REFERENCE={out}/reference.yuv'])
     run('build',['cmake','--build',build,'--target','sunstone-a733-jpeg','-j4'])
     image = build/'sunstone-a733-jpeg.elf'
-    dependencies,actual_commands,records=collect_dependencies(build)
+    dependencies,actual_commands,records=collect_dependencies(build,'sunstone-a733-jpeg')
     (out/'compiled-commands.json').write_text(json.dumps(actual_commands,indent=2)+'\n')
     (out/'dependency-records.json').write_text(json.dumps(records,indent=2)+'\n')
     for name in dependencies:

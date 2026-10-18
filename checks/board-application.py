@@ -87,14 +87,12 @@ def main():
         f'-DSUNSTONE_NETWORK_C_HEADERS={out}/dependencies/headers','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',f'-DSUNSTONE_BOARD_SUPERVISED={"ON" if a.supervised else "OFF"}'])
     run('build',['cmake','--build',build,'--target','sunstone-a733-board','-j4'])
     image = build/'sunstone-a733-board.elf'
-    dependencies = {}
-    for dep in build.rglob('*.o.d'):
-        for name in dep.read_text().replace('\\\n',' ').split(':',1)[1].split():
-            p = Path(name)
-            if p.is_file():dependencies[str(p.resolve())]=sha(p)
-    commands = json.loads((build/'compile_commands.json').read_text())
-    for unit in commands:
-        p = Path(unit['file']);dependencies[str(p.resolve())]=sha(p)
+    import importlib.util
+    snapshot_spec=importlib.util.spec_from_file_location('board_evidence_snapshot',ROOT/'tools/evidence-snapshot.py')
+    snapshot=importlib.util.module_from_spec(snapshot_spec);snapshot_spec.loader.exec_module(snapshot)
+    dependencies,commands,records=snapshot.collect_dependencies(build,'sunstone-a733-board')
+    (out/'compiled-commands.json').write_text(json.dumps(commands,indent=2)+'\n')
+    (out/'dependency-records.json').write_text(json.dumps(records,indent=2)+'\n')
     for name in dependencies:
         p=Path(name)
         if not p.is_relative_to(out):
