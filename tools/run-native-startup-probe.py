@@ -28,13 +28,24 @@ EARLY_PROFILE='core1-before-redistributor-write-v1'
 INTERFACE_PROFILE='core1-cpu-interface-only-v1'
 POWER_PROFILE='core1-before-redistributor-wake-v1'
 WAKE_PROFILE='core1-redistributor-wake-sleep-v1'
+CACHE_PROFILE='core1-el3-cache-restore-v1'
 
-def execution_profile(before_power,after_interface,before_wake=False,after_wake=False):
-    require(sum((before_power,after_interface,before_wake,after_wake))<=1,'Choose one diagnostic boundary.')
+def execution_profile(before_power,after_interface,before_wake=False,after_wake=False,el3_cache=False):
+    require(sum((before_power,after_interface,before_wake,after_wake,el3_cache))<=1,'Choose one diagnostic boundary.')
+    if el3_cache:return CACHE_PROFILE
     if after_wake:return WAKE_PROFILE
     return POWER_PROFILE if before_wake else INTERFACE_PROFILE if after_interface else EARLY_PROFILE if before_power else PROFILE
+def manifest_profile(m):
+    require(type(m.get('stop_before_power')) is bool,'Missing diagnostic boundary.')
+    require(type(m.get('stop_after_cpu_interface',False)) is bool,'Invalid CPU-interface boundary.')
+    require(type(m.get('stop_before_wake',False)) is bool,'Invalid redistributor wake boundary.')
+    require(type(m.get('stop_after_wake',False)) is bool,'Invalid redistributor wake/sleep boundary.')
+    require(type(m.get('el3_cache',False)) is bool,'Invalid EL3 cache boundary.')
+    profile=execution_profile(m['stop_before_power'],m.get('stop_after_cpu_interface',False),m.get('stop_before_wake',False),m.get('stop_after_wake',False),m.get('el3_cache',False))
+    return profile
+
 SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
-    'boot/a733/native-local-interrupt-probe.c','platform/a733/cpu_continue.c',
+    'boot/a733/native-local-interrupt-probe.c','boot/a733/native-el3-cache-probe.S','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
     'runtime/memory.c','runtime/include/string.h','include/a733_cpu_continue.h',
     'include/a733_cpu_entry.h','include/a733_cpu_start.h')
@@ -60,7 +71,7 @@ def prepare(a):
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
     a.build.mkdir(parents=True,exist_ok=False)
-    profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake,a.stop_after_wake)
+    profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake,a.stop_after_wake,a.el3_cache)
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],
         [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
@@ -75,8 +86,15 @@ def prepare(a):
             *(['-DSUNSTONE_PROBE_STOP_AFTER_CPU_INTERFACE=1'] if a.stop_after_cpu_interface else []),
             *(['-DSUNSTONE_PROBE_STOP_BEFORE_WAKE=1'] if a.stop_before_wake else []),
             *(['-DSUNSTONE_PROBE_STOP_AFTER_WAKE=1'] if a.stop_after_wake else []),
+            *(['-DSUNSTONE_PROBE_EL3_CACHE=1'] if a.el3_cache else []),
             '-I',ROOT/'include','-I',ROOT/'runtime/include','-c',source,'-o',obj])
-    commands.extend([[a.lld,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
+    link_symbols=[]
+    if a.el3_cache:
+        obj=a.build/'el3-cache.o';objects.append(obj)
+        commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-el3-cache-probe.S','-o',obj])
+        for alias,symbol in [('allow_ns_code','a733_cached_allow_ns_code'),('enable_el3','a733_cpu_coherence_enable_el3'),('el3_root','a733_cached_el3_l1')]:
+            link_symbols.append('--defsym=probe_production_'+alias+'='+hex(symbols[symbol]))
+    commands.extend([[a.lld,*link_symbols,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
         [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']])
     for command in commands:
         r=subprocess.run(list(map(str,command)),capture_output=True,text=True)
@@ -114,7 +132,7 @@ def prepare(a):
         'stop_before_power':a.stop_before_power,
         'stop_after_cpu_interface':a.stop_after_cpu_interface,
         'stop_before_wake':a.stop_before_wake,
-        'stop_after_wake':a.stop_after_wake,
+        'stop_after_wake':a.stop_after_wake,'el3_cache':a.el3_cache,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
         'sources':{name:digest(ROOT/name) for name in SOURCES},
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
@@ -188,6 +206,21 @@ def local_initialization_snapshot(raw):
         'stopped_after_wake','awake_waker','controller_refusal_restored')
     return dict(zip(names,struct.unpack('<32Q',raw)))
 
+def el3_cache_snapshot(raw):
+    require(len(raw)==160,'Short EL3 cache record.')
+    v=struct.unpack('<20Q',raw)
+    names=('sctlr','tcr','ttbr','mair','scr')
+    return {'state':v[0],'epoch':v[1],'deadline':v[2],'helper_result':v[3],
+        'original':dict(zip(names,v[4:9])),'enabled':dict(zip(names,v[9:14])),
+        'restored':dict(zip(names,v[14:19])),'failure':v[19]}
+
+def validate_el3_cache(r):
+    require(r['state']==3 and r['helper_result']==1 and r['failure']==0,'EL3 cache transition did not restore.')
+    old=r['original'];live=r['enabled']
+    require(not old['sctlr']&0x02001005 and r['restored']==old,'EL3 controls differ after restoration.')
+    require(live==dict(sctlr=old['sctlr']|0x1005,tcr=0x80823019,ttbr=0x421f0000,
+        mair=0x44ff00,scr=old['scr']&~0x200),'EL3 adoption readbacks differ.')
+
 def controller_access_snapshot(raw):
     require(len(raw)==32,'Short controller access record.')
     return dict(zip(('address','value','operation','completed'),struct.unpack('<4Q',raw)))
@@ -236,11 +269,7 @@ def claimed(a,expected):
 
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
-    require(type(m.get('stop_before_power')) is bool,'Missing diagnostic boundary.')
-    require(type(m.get('stop_after_cpu_interface',False)) is bool,'Invalid CPU-interface boundary.')
-    require(type(m.get('stop_before_wake',False)) is bool,'Invalid redistributor wake boundary.')
-    require(type(m.get('stop_after_wake',False)) is bool,'Invalid redistributor wake/sleep boundary.')
-    profile=execution_profile(m['stop_before_power'],m.get('stop_after_cpu_interface',False),m.get('stop_before_wake',False),m.get('stop_after_wake',False))
+    profile=manifest_profile(m)
     require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
     require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
@@ -307,7 +336,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -319,6 +348,8 @@ def run(a):
                 record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
                 record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
                 record['local_initialization']=local_initialization_snapshot((a.evidence/'local-initialization.bin').read_bytes())
+                record['el3_cache']=el3_cache_snapshot((a.evidence/'el3-cache.bin').read_bytes())
+                if m.get('el3_cache',False):validate_el3_cache(record['el3_cache'])
                 record['controller_access']=controller_access_snapshot((a.evidence/'controller-access.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
                 observation=record['observation'];activation=record['activation'];secondary=record['secondary']
@@ -411,6 +442,7 @@ def main():
     boundary.add_argument('--stop-before-power',action='store_true',help='Stop before the first redistributor write and restore unchanged local state.')
     boundary.add_argument('--stop-after-cpu-interface',action='store_true',help='Observe EL3 GIC access and disabled groups without invoking the local controller.')
     boundary.add_argument('--stop-before-wake',action='store_true',help='Complete the redistributor power handshake, then stop before WAKER and preserve the asleep state.')
+    boundary.add_argument('--el3-cache',action='store_true',help='After local initialization, adopt production EL3 tables and restore controls before shutdown.')
     boundary.add_argument('--stop-after-wake',action='store_true',help='Complete redistributor wake, stop before local configuration and restore sleep before shutdown.')
     live=sub.add_parser('run')
     for name in ('build','bundle','software','survey','database','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)

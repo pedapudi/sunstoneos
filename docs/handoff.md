@@ -115,7 +115,7 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:099` after successful core-1 local interrupt initialization and
+instance `003:100` after successful core-1 EL3 translation/cache adoption and
 restoration. Fresh DDR,
 survey and all-secondary-OFF checks passed on `003:092` before that launch.
 The diagnostic returned normally and its process and queue claim closed.
@@ -310,13 +310,15 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:099`. The user confirmed power
+The original board on `3-1` returned as `003:100`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
 Subsequent diagnostics identified and corrected a group-register verification
 refusal. Core-1 local initialization and restoration now pass under
-`native-local-group-mask-20261018/native/runtime/`. Refresh the current
+`native-local-group-mask-20261018/native/runtime/`. Production EL3 cache adoption
+and restoration also pass under `native-el3-cache-20261018/native-attempt/runtime/`.
+Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
 `003:093`, has successful DDR, returning survey, SD initial-register and PMIC
@@ -587,7 +589,12 @@ The primary agent handles all further multicore work directly.
    Arm defines unimplemented interrupt bits as read-as-zero/write-ignored.
    The corrected required-SGI/timer-bit check passes full local initialization
    and restoration under `native-local-group-mask-20261018/`, with observed OFF
-   and ROM return as `003:099`. Next qualify cached EL3/EL1 continuation,
+   and ROM return as `003:099`. The subsequent EL3 cache probe also passes
+   physically under `native-el3-cache-20261018/native-attempt/runtime/`.
+   It executes the production adoption helpers, restores all five saved
+   controls, completes local cleanup and observed OFF, and returns as `003:100`.
+   Four instruction cases cover adoption, inherited SIF and retained readback
+   failures. Next qualify cached EL1 continuation,
    interrupt delivery, remaining cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
    intentional watchdog expiry and unattended fault tests remain deferred;
@@ -613,7 +620,10 @@ The primary agent handles all further multicore work directly.
    eight USB/profile cases pass; focused review accepted the frozen image.
    All 175 preserved source inputs match integration. Evidence is under
    `gpu-single-core-20261018/`. Preparation of the second-board launch inputs
-   is in progress; no physical GPU result exists. Establish actual power,
+   is in progress; no physical GPU execution result exists. A second-board
+   read under `gpu-clock-read-20261018/` observes GPU clock and reset/bus words
+   both zero, with scratch restoration and normal same-instance return.
+   The missing DCDC4 selector read is prepared separately. Establish actual power,
    memory and recovery admission for the integrated GPU,
    NPU, codec, RTC and thermal applications. Their internal operations can advance
    without camera, display or microphone accessories. Retained buffers do not

@@ -1,5 +1,8 @@
 /* Returning core-1 diagnostic. Runs the production portable continuation. */
 #include "a733_cpu_continue.h"
+#if defined(SUNSTONE_PROBE_EL3_CACHE)
+extern int native_el3_cache_probe(uint64_t epoch,uint64_t deadline);
+#endif
 
 struct baseline {
     uint64_t state, base, ctlr, waker, enable, pending, active;
@@ -213,6 +216,9 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
         return 0;
     }
     r->state=2;
+#if defined(SUNSTONE_PROBE_EL3_CACHE)
+    if(!native_el3_cache_probe(epoch,deadline))return 0;
+#endif
     if(!cleanup(r,b))return 0;
     barrier();r->state=3;barrier();return 1;
 }

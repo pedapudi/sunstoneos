@@ -919,7 +919,43 @@ translation/shared-state restoration and saved DRAM comparison pass. ROM returns
 as `003:099`; the runner exits and its queue claim closes.
 
 This establishes the core-1 local register sequence with interrupt delivery
-disabled. Cached EL3/EL1 continuation, delivery, remaining cores, coherence and
+disabled. Cached EL1 continuation, delivery, remaining cores, coherence and
 FreeRTOS scheduling remain required. Frozen native images that contain the older
 controller require an affected rebuild before using the correction; the returning
 overlay compiles the current controller explicitly.
+
+## Core 1 adopts and restores the production EL3 cache configuration
+
+The returning overlay can call the frozen production SIF and EL3 adoption
+helpers after successful local interrupt initialization. It records original,
+enabled and restored SCTLR, TCR, TTBR0, MAIR and SCR values in Device memory.
+The bounded cached interval executes immutable code and writes only its Device
+report. It does not enter EL1 or access mutable cacheable runtime data.
+
+Cleanup completes Device stores before disabling translation and caches,
+invalidates local TLB and instruction-cache state, restores all five controls
+and checks each readback. This procedure depends on the absence of dirty
+cacheable stores; it is not a general cache-shutdown implementation. A helper
+or restoration failure retains the target without shutdown or shared return.
+The [A55 manual](https://documentation-service.arm.com/static/649ac6d4df6cd61d528c2bf1),
+sections 2.4.8 and 2.6.2.3, supplies the cache and powerdown requirements.
+
+Four focused instruction cases pass: normal adoption/restoration, inherited
+SIF clearing/restoration, rejected adoption readback and rejected restoration
+readback. The checker validates actual table descriptors for executed accesses
+and refuses cacheable stores during the new interval. Register, cache, TLB and
+power-controller effects remain modeled. Manifest validation is shared with the
+physical runner so its flag checks execute before physical preparation.
+
+Physical execution passes under
+`native-el3-cache-20261018/native-attempt/runtime/`. SCTLR_EL3 changes from
+`0x00c50838` to `0x00c5183d`; the observed root is `0x421f0000`, TCR is
+`0x80823019` and MAIR is `0x44ff00`. All five original controls restore exactly.
+Local interrupt cleanup, matching shutdown acknowledgment, observed OFF,
+shared-state/DRAM restoration and ROM return pass. The runner exits and its
+claim closes; the original board is now instance `003:100`.
+
+One earlier host invocation stopped during manifest parsing before any hardware
+access. Its terminal claim was closed, the typo was corrected, and the shared
+validator passed nominal and invalid-type checks. The accepted image and four
+instruction cases were reused for the single physical attempt.

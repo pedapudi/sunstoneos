@@ -127,6 +127,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   now checks required SGI/timer bits instead of requiring unimplemented PPI group
   bits to read as one. Matching OFF and ROM return pass. Interrupt delivery,
   coherent cached execution, remaining cores and scheduling remain unqualified.
+  Core 1 also passes production EL3 translation/cache adoption and exact control
+  restoration under `native-el3-cache-20261018/native-attempt/runtime/`.
+  Local cleanup, observed OFF, shared-state/DRAM restoration and ROM return pass.
+  This probe writes only Device memory during the cached interval; it does not
+  establish cached EL1 execution or cross-core coherence.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -390,6 +395,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   application](gpu-application.md) permits initial physical validation independently
   of SMP. Its startup, packaging and USB profile checks pass; all 175 frozen
   source inputs match integration. Physical execution remains untested.
+  The second board's GPU clock and reset/bus registers both read zero under
+  `gpu-clock-read-20261018/`, satisfying that current-state prerequisite.
+  Supply and initial isolation admission remain outstanding.
   A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
   independent ELF reader. Native [MIPS preparation](gpu-mips.md) also builds
