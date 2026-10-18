@@ -7,7 +7,7 @@ get_target_property(jpeg_parent_definitions sunstone-a733-board COMPILE_DEFINITI
 if(NOT "SUNSTONE_BOARD_SUPERVISED=1" IN_LIST jpeg_parent_definitions)
  message(FATAL_ERROR "JPEG cannot inherit an armed board target or generated boot")
 endif()
-set(SUNSTONE_JPEG_FIXTURE "" CACHE FILEPATH "Pinned155-byte48x32 baseline JPEG")
+set(SUNSTONE_JPEG_FIXTURE "" CACHE FILEPATH "Pinned constant or nonconstant 48x32 baseline JPEG")
 set(SUNSTONE_JPEG_REFERENCE "" CACHE FILEPATH "Independent full-range YUV420p2304-byte reference")
 if(NOT SUNSTONE_JPEG_FIXTURE OR NOT SUNSTONE_JPEG_REFERENCE)
  message(FATAL_ERROR "JPEG requires exact fixed fixture and independent reference")
@@ -16,10 +16,23 @@ file(SIZE "${SUNSTONE_JPEG_FIXTURE}" jpeg_fixture_bytes)
 file(SIZE "${SUNSTONE_JPEG_REFERENCE}" jpeg_reference_bytes)
 file(SHA256 "${SUNSTONE_JPEG_FIXTURE}" jpeg_fixture_hash)
 file(SHA256 "${SUNSTONE_JPEG_REFERENCE}" jpeg_reference_hash)
-if(NOT jpeg_fixture_bytes EQUAL 155 OR NOT jpeg_reference_bytes EQUAL 2304 OR
- NOT jpeg_reference_hash STREQUAL "dea313a03db46a224a28a8a79febff397b832f3256b9c9ce236e79ee90e6ed7f" OR
- NOT jpeg_fixture_hash STREQUAL "3689fc87a6594a114026b65c2e104589ae3a872188bce0cb12ae08ab92ede398")
- message(FATAL_ERROR "JPEG fixed fixture/reference geometry mismatch")
+file(READ "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/fixtures.json" jpeg_profiles)
+string(JSON jpeg_profile_count LENGTH "${jpeg_profiles}")
+math(EXPR jpeg_profile_last "${jpeg_profile_count}-1")
+set(jpeg_profile_matches 0)
+foreach(index RANGE 0 ${jpeg_profile_last})
+ foreach(field IN ITEMS fixture_bytes fixture_sha256 reference_bytes reference_sha256)
+  string(JSON jpeg_expected_${field} GET "${jpeg_profiles}" ${index} ${field})
+ endforeach()
+ if(jpeg_fixture_bytes EQUAL jpeg_expected_fixture_bytes AND
+    jpeg_reference_bytes EQUAL jpeg_expected_reference_bytes AND
+    jpeg_fixture_hash STREQUAL jpeg_expected_fixture_sha256 AND
+    jpeg_reference_hash STREQUAL jpeg_expected_reference_sha256)
+  math(EXPR jpeg_profile_matches "${jpeg_profile_matches}+1")
+ endif()
+endforeach()
+if(NOT jpeg_profile_matches EQUAL 1)
+ message(FATAL_ERROR "JPEG fixed fixture/reference pair mismatch")
 endif()
 set(jpeg_build "${CMAKE_CURRENT_BINARY_DIR}/jpeg-application")
 file(MAKE_DIRECTORY "${jpeg_build}")
@@ -53,6 +66,7 @@ if(jpeg_links)
 endif()
 file(GLOB jpeg_headers "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/*.h")
 set(jpeg_inputs ${jpeg_sources} ${jpeg_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/fixtures.json" "${SUNSTONE_SOURCE_ROOT}/apps/jpeg/fixture.py"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_jpeg_application.h" "${CMAKE_CURRENT_LIST_FILE}"
  "${SUNSTONE_JPEG_FIXTURE}" "${SUNSTONE_JPEG_REFERENCE}")
 list(REMOVE_DUPLICATES jpeg_inputs)

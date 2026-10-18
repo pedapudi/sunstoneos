@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Decode a captured immutable JPEG result; never opens a device."""
 import hashlib
+import importlib.util
+from pathlib import Path
+_spec=importlib.util.spec_from_file_location("jpeg_output_fixture_profiles",Path(__file__).with_name("fixture.py"))
+_fixtures=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_fixtures)
 import struct
 
 def decode(raw,session,reference):
     if len(session)!=856 or len(reference)!=2304:raise ValueError('Wrong fixed JPEG input geometry')
+    _fixtures.profile_for(session[768:800].hex(),session[800:832].hex())
     if len(raw)<128:raise ValueError('Truncated JPEG result')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
     if (magic,version)!=(0x4745504a,1) or status not in (0,1,2):raise ValueError('Unsupported JPEG frame')

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "constant",
+    "fixture_bytes": 155,
+    "fixture_sha256": "3689fc87a6594a114026b65c2e104589ae3a872188bce0cb12ae08ab92ede398",
+    "reference_bytes": 2304,
+    "reference_sha256": "dea313a03db46a224a28a8a79febff397b832f3256b9c9ce236e79ee90e6ed7f"
+  },
+  {
+    "name": "nonconstant",
+    "fixture_bytes": 520,
+    "fixture_sha256": "d31a703609ea58038f8b5a352ee6ac3a1e02ccb0b39d74d4f124a57cff16c8e4",
+    "reference_bytes": 2304,
+    "reference_sha256": "eada68215e5eb2522ba9751de74987eb1f51c948aa455740036460e9a4238296"
+  }
+]

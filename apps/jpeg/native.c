@@ -51,9 +51,9 @@ static int jpeg_authority(void *v,const struct a733_video_platform_config *c,
     if(v!=&jpeg||!token)return -1;
     if(*token&&*token!=jpeg.session.authority)return -1;*token=jpeg.session.authority;
     if(!board_live(NULL)||d!=jpeg_deadline()||memcmp(c,&jpeg.config,sizeof(*c))||
-       j->input!=jpeg.input||j->file_bytes!=155||j->input_bytes!=4096||
+       j->input!=jpeg.input||j->file_bytes!=jpeg_fixture_bytes()||j->input_bytes!=4096||
        j->input_iova!=0x10001000||j->luma_iova!=0x10005000||j->chroma_iova!=0x10009000)return -1;
-    uint8_t hash[32];storage_digest_bytes(j->input,155,hash);
+    uint8_t hash[32];storage_digest_bytes(j->input,jpeg_fixture_bytes(),hash);
     if(memcmp(hash,jpeg.session.fixture,32))return -1;
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!jpeg_device(p))return -1;
     for(uintptr_t p=0x01c0e000;p<0x01c0f000;p+=4096)if(!jpeg_device(p))return -1;
@@ -120,7 +120,7 @@ static int jpeg_allocate(void)
         if(i==0)jpeg.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,e.bytes);uint8_t *p=(void *)(e.cpu+4096);if(i==1)jpeg.input=p;else if(i==2)jpeg.luma=p;else jpeg.chroma=p;}
     }
-    memset(jpeg.input,0,4096);memcpy(jpeg.input,jpeg_fixture,155);
+    memset(jpeg.input,0,4096);memcpy(jpeg.input,jpeg_fixture,jpeg_fixture_bytes());
     struct a733_iommu_span spans[]={{0x10001000,(uintptr_t)jpeg.input,4096,A733_IOMMU_READ},
         {0x10005000,(uintptr_t)jpeg.luma,4096,A733_IOMMU_WRITE},{0x10009000,(uintptr_t)jpeg.chroma,4096,A733_IOMMU_WRITE}};
     if(a733_iommu_build(&jpeg.tables,jpeg.table,(uintptr_t)jpeg.table,spans,3)!=1)return 0;
@@ -164,7 +164,7 @@ static int jpeg_setup(void)
     c->pck=(struct a733_gpu_resource_lease){jpeg.power_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE};
     struct a733_video_platform_ops ops={jpeg_now,jpeg_authority,jpeg_memory,jpeg_no_drain,jpeg_enter,jpeg_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!jpeg_allocate()||!a733_video_platform_init(&jpeg.platform,c,&ops,&jpeg))return -1;
-    struct a733_video_jpeg_job job={jpeg.input,155,0x10001000,4096,0x10005000,4096,0x10009000,4096};
+    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg_fixture_bytes(),0x10001000,4096,0x10005000,4096,0x10009000,4096};
     return a733_video_jpeg_begin_retained(&jpeg.run,a733_video_platform_jpeg_ops(),&jpeg.platform,&job,jpeg_deadline(),jpeg_retained)?1:-1;
 }
 void jpeg_task(void *unused)

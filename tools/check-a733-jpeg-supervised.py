@@ -23,9 +23,10 @@ PRODUCT='sunstoneos native JPEG'
 SERIAL='sunstoneos-a733-jpeg'
 
 
-def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
+def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE):
     preparation.session_check(session)
-    require(session[768:800].hex()==FIXTURE_SHA256 and session[800:832]==hashlib.sha256(REFERENCE).digest(),
+    preparation.fixtures.profile_for(session[768:800].hex(),session[800:832].hex())
+    require(len(reference)==2304 and session[800:832]==hashlib.sha256(reference).digest(),
         'JPEG diagnostic fixture/reference differs.')
     record.update(jpeg_retention='whole-board-power-removal',jpeg_result='unobserved');save()
     for sequence in range(1,2401):
@@ -34,7 +35,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         path=evidence/f'jpeg-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest()}
         record.setdefault('jpeg_frames',[]).append(entry);save()
-        result=decoder.decode(frame,session,REFERENCE);entry.update(result)
+        result=decoder.decode(frame,session,reference);entry.update(result)
         require(now()<deadline,'JPEG response arrived after capture deadline.')
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
@@ -51,18 +52,19 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('JPEG exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save):
+def capture_device(device,same,deadline,session,evidence,record,save,*,reference=REFERENCE):
     def exchange(packet,timeout):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete JPEG request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'JPEG capture deadline expired after write.')
         return bytes(device.read(0x81,2432,timeout=min(timeout,remaining)))
-    return capture(exchange,session,evidence,record,save,deadline)
+    return capture(exchange,session,evidence,record,save,deadline,reference=reference)
 
 
 def source_files():
     return [('jpeg-host-tool.py',Path(__file__)),('jpeg-preparation.py',Path(preparation.__file__)),
-        ('jpeg-decoder.py',Path(decoder.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
+        ('jpeg-decoder.py',Path(decoder.__file__)),('jpeg-fixtures.py',Path(preparation.fixtures.__file__)),
+        ('jpeg-fixtures.json',ROOT/'apps/jpeg/fixtures.json'),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 
@@ -78,6 +80,7 @@ def freeze_bundle(bundle):
     prepared['_prepared_sha256']=hashlib.sha256(metadata).hexdigest()
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     prepared['_sizes']={name:len(data) for name,data in frozen.items()}
+    prepared['_reference']=preparation.embedded_reference(frozen['image.elf'],frozen['session.bin'])
     prepared['_frozen']=frozen
     return prepared
 
@@ -151,7 +154,7 @@ def main(argv=None):
         require(admission['identity']==identity and admission['port']==port,'JPEG entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference=prepared['_reference']),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='jpeg_result',
         source_files=source_files(),description='Supervised native JPEG; retain every resource until whole-board power removal')
 

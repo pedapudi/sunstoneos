@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('jpeg_board_prepare',ROOT/'apps/board/prepare.py')
+fixtures=module('jpeg_fixture_profiles',ROOT/'apps/jpeg/fixture.py')
 base=board.base
 require=base.require
 SCHEMA='a733-jpeg-supervised-bundle-v1'
@@ -25,9 +26,32 @@ def session_check(raw):
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid JPEG owner.')
     require(all(any(raw[o:o+32]) for o in (640,672,704,736,768,800)),'Missing JPEG physical or fixture evidence.')
+    fixtures.profile_for(raw[768:800].hex(),raw[800:832].hex())
     module,hz,g0,g1,uv,rail=struct.unpack_from('<6I',raw,832)
     require(not module&~0x0700001f and (module>>24)<=1 and 0<hz<=720000000 and
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited JPEG clock/rail state.')
+
+def embedded_reference(image,session):
+    """Authenticate both immutable embedded inputs against the admitted pair."""
+    import io
+    from elftools.elf.elffile import ELFFile
+    session_check(session)
+    elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+    require(table is not None,'JPEG image has no immutable input symbols.')
+    symbols={s.name:int(s['st_value']) for s in table.iter_symbols()}
+    def read(name,maximum):
+        require(name in symbols and name+'_end' in symbols,'Missing embedded JPEG input: '+name)
+        first,last=symbols[name],symbols[name+'_end'];require(first<last and last-first<=maximum,'Embedded JPEG input extent differs.')
+        for part in elf.iter_segments():
+            if part['p_type']=='PT_LOAD' and not int(part['p_flags'])&2 and int(part['p_vaddr'])<=first<last<=int(part['p_vaddr'])+int(part['p_filesz']):
+                start=first-int(part['p_vaddr']);return part.data()[start:start+last-first]
+        raise ValueError('Embedded JPEG input is not immutable/file-backed.')
+    fixture,reference=read('jpeg_fixture',4096),read('jpeg_reference',2304)
+    profile=fixtures.profile_for(hashlib.sha256(fixture).hexdigest(),hashlib.sha256(reference).hexdigest())
+    require(len(fixture)==profile['fixture_bytes'] and len(reference)==profile['reference_bytes'] and
+        hashlib.sha256(fixture).digest()==session[768:800] and hashlib.sha256(reference).digest()==session[800:832],
+        'JPEG image inputs differ from authenticated session.')
+    return reference
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
@@ -75,6 +99,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
 def prepare(image,manifest,admission,template,output,clang,lld):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
     require(mf.get('target')=='sunstone-a733-jpeg' and mf.get('execution_profile')=='jpeg-supervised-v1' and mf.get('final_elf')==ih,'Tested JPEG image manifest required.')
@@ -123,6 +148,7 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'JPEG ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'JPEG upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'JPEG launch contract changed.')
+    p['_reference']=embedded_reference((out/'image.elf').read_bytes(),raw)
     p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
 
 if __name__=='__main__':

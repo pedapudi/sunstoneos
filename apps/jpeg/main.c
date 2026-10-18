@@ -14,8 +14,8 @@ int board_application_start(void)
     for(unsigned i=0;i<sizeof(jpeg.session);++i)((uint8_t *)&jpeg.session)[i]=source[i];
     uint8_t hash[32];
     if(!a733_jpeg_session_valid(&jpeg.session)||memcmp(jpeg.session.board.image,a733_smp_build_id,32)||
-       jpeg_fixture_end-jpeg_fixture!=155||jpeg_reference_end-jpeg_reference!=2304)return 0;
-    storage_digest_bytes(jpeg_fixture,155,hash);
+       !jpeg_fixture_bytes()||jpeg_fixture_bytes()>4096||jpeg_reference_end-jpeg_reference!=2304)return 0;
+    storage_digest_bytes(jpeg_fixture,jpeg_fixture_bytes(),hash);
     if(memcmp(hash,jpeg.session.fixture,32))return 0;
     storage_digest_bytes(jpeg_reference,2304,hash);
     if(memcmp(hash,jpeg.session.reference,32))return 0;

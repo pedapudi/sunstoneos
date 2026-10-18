@@ -2,8 +2,9 @@
 
 The fixed native application connects the existing JPEG parser/executor and
 cold decoder platform to shared board providers, decoder IOMMU mappings and
-USB0 PIO output. It runs one zero-coefficient baseline 48-by-32 JPEG decode. Physical decoder
-startup, compound identity and copied pixels remain unqualified.
+USB0 PIO output. It runs one pinned baseline 48-by-32 YCbCr420 JPEG decode, selecting either the
+constant or nonconstant diagnostic profile. Physical decoder startup, compound
+identity and copied pixels remain unqualified.
 
 The application links the actual supervised board startup implementation.
 At its scheduler boundary it creates one additional privileged JPEG owner task.
@@ -89,7 +90,7 @@ DMA ownership transfer or permission to reset/reuse device memory.
 The callback scans actual IOMMU faults, checks guards and codec errors, copies
 the active Y/Cb/Cr pixels once into private CPU storage, and compares all 2304
 bytes with the independent fixed full-range YUV420p reference. It then scans
-faults again and rechecks guards/errors before publishing the copy. The image uses a 155-byte zero-coefficient derivative, SHA256
+faults again and rechecks guards/errors before publishing the copy. The constant profile uses a 155-byte zero-coefficient derivative, SHA256
 `3689fc87a6594a114026b65c2e104589ae3a872188bce0cb12ae08ab92ede398`.
 Its frame and quantization metadata come from the preserved baseline fixture
 `6522f2719f1f05e23a95aa71a18d52f2e91b19b4b6c94381b4100de4c79fd573`.
@@ -99,8 +100,8 @@ the unsigned JPEG level shift produces exactly 128 in every Y/Cb/Cr sample.
 An independent FFmpeg decode must produce those same 2304 bytes before the
 image build. Output backing starts with nonzero 0xa5 poison, so untouched DMA
 memory cannot satisfy the comparison.
-The comparison is exact. Padding is excluded from the copied payload. This
-first diagnostic does not qualify nonconstant images or broader JPEG numerical
+The comparison is exact. Padding is excluded from the copied payload. The constant profile remains available as the first diagnostic. Its preserved
+evidence does not qualify nonconstant images or broader JPEG numerical
 conformance.
 
 USB0 uses VID/PID 1f3a:efe8, revision 0100, product `sunstoneos native JPEG` and
@@ -115,7 +116,7 @@ reference before interpreting a result.
 
 ## Software checkpoint
 
-The central `sunstone-a733-jpeg` image and SRAM launcher build successfully.
+The original constant-profile `sunstone-a733-jpeg` image and SRAM launcher build successfully.
 The image SHA256 is
 `d519e230216280ba9049769bf9b021d9cd114291ef92dfb91359f66760ac6504`.
 Evidence is retained under
@@ -153,3 +154,73 @@ The batch manifests now contain 419 inputs and 164 compile commands. Original
 empty manifests and the setup-only validation record are preserved in
 `batch1/setup-followup/`. No image rebuild or runtime case was repeated for this
 repair.
+
+## Exact nonconstant diagnostic
+
+The nonconstant profile uses a reproducibly generated 520-byte baseline JPEG.
+It retains the 48-by-32 YCbCr420 frame, 64-byte luma stride, 32-byte chroma stride,
+4 KiB mapped input/output pages and 2,304-byte active planar Y/Cb/Cr payload.
+Its source generator is `apps/jpeg/fixture.py`; `nonconstant()` constructs the
+entropy-coded image, while `nonconstant_reference()` indexes the ideal plane
+pixels directly. The reference does not traverse scan order, zigzag positions,
+DC predictors or Huffman codes.
+
+Each block has a distinct DC level and nonzero horizontal, vertical and product
+terms at DCT frequencies (4,0), (0,4) and (4,4). After JPEG normalization, each
+selected inverse-transform basis contributes positive or negative one-eighth.
+The dequantized coefficients are multiples of eight, making every ideal sample
+an integer. The chosen levels avoid clipping. Distinct luma and chroma patterns,
+block rows and columns, quantization tables and Huffman tables make plane swaps,
+incorrect strides, sampling and table programming observable. These properties
+support exact active-sample comparison with zero tolerance for this restricted
+fixture; they do not establish general JPEG rounding conformance.
+
+FFmpeg 8.0.1 from Ubuntu package `7:8.0.1-3ubuntu2` provides the independent
+open-source CPU decoder reference. The oracle command selects the integer
+`simple` IDCT, disables CPU-specific dispatch and hardware acceleration, and
+emits full-range `yuvj420p` without RGB conversion or chroma upsampling.
+The decoder produced exactly the analytic 2,304 samples. Its executable,
+observed version, package versions and shared-library hashes are recorded in
+`~/.cache/sunstoneos/evidence/jpeg-nonconstant-20261017/oracle/`.
+The JPEG SHA-256 is
+`d31a703609ea58038f8b5a352ee6ac3a1e02ccb0b39d74d4f124a57cff16c8e4`;
+the reference SHA-256 is
+`eada68215e5eb2522ba9751de74987eb1f51c948aa455740036460e9a4238296`.
+The original 155-byte constant fixture and its recorded evidence remain preserved.
+
+`apps/jpeg/fixtures.json` binds each allowed fixture length and SHA-256 to its
+reference length and SHA-256. CMake rejects unknown or crossed pairs. Offline
+preparation also checks the selected session against the actual immutable,
+file-backed inputs embedded in the final ELF. Native startup authenticates those
+same embedded inputs before constructing the task. The input copy and job use
+the authenticated embedded length while retaining zero padding through the
+4 KiB read-only input mapping. The supervised host selects its reference from
+the frozen ELF and validates the admitted pair before any device exchange.
+Session, USB result and output-plane geometry are unchanged.
+
+The native copy compares every active Y, Cb and Cr sample exactly. Stride
+padding inside the 2,048-byte luma and 1,024-byte chroma allocations is excluded
+from the payload and may be written by the decoder. Physical guard pages and
+the unused mapped-page tails must retain their poison values. Existing IOMMU,
+codec-error and pre/post-copy guard checks remain mandatory. A tolerance change,
+padding comparison relaxation or ownership-release claim requires separate
+justification; this profile grants none.
+
+The nonconstant parser and table-preparation fixture passed with AddressSanitizer
+and UndefinedBehaviorSanitizer. The affected native JPEG image linked successfully,
+with 164 linked objects and 419 compiler dependencies preserved under
+`~/.cache/sunstoneos/evidence/jpeg-nonconstant-20261017/central/`.
+Its SHA-256 is
+`8f66dc8f49d48d758489040c65b5c4022c3246c1bcc83cb1d9d0c367c770343b`.
+Actual native copy/frame checks accepted the reference with changed row padding
+and refused swapped chroma planes, wrong luma or chroma strides, changed chroma
+sampling and a one-sample error. Host checks passed paired-identity admission,
+cross-pair refusal, durable copied output and rejection of forged constant or
+swapped-plane payloads with matching transport hashes. The corresponding results
+are in `parser/`, `native/` and `host/` beside the central evidence.
+
+The checks model provider admission, MMIO and IOMMU observations. They execute
+the actual parser, preparation, private copy, exact comparison and USB frame code;
+they do not run a hardware JPEG decoder. Existing guard, provider and supervised
+lifecycle evidence is reused. Physical decoder startup, table programming,
+FIFO/device memory behavior and copied pixels remain unqualified.

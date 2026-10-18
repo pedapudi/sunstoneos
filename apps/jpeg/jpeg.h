@@ -31,6 +31,8 @@ struct jpeg_application {
 };
 extern struct jpeg_application jpeg;
 extern const uint8_t jpeg_fixture[],jpeg_fixture_end[],jpeg_reference[],jpeg_reference_end[];
+static inline size_t jpeg_fixture_bytes(void)
+{return (uintptr_t)jpeg_fixture_end-(uintptr_t)jpeg_fixture;}
 void jpeg_task(void *);
 void board_usb0_task(void *);
 #endif
