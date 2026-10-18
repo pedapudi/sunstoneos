@@ -154,8 +154,9 @@ Native MMIO guards pass in `usb-rom-handoff-20261018-native/`, reusing those
 host results after correcting the linker path. The focused review accepted
 the corrected sequence. Separate session cases accept mode 2 only for the
 supervised single-core SD workload and preserve refusal in other builds.
-These checks model register behavior; ROM transfer provenance, host admission
-and physical takeover remain required evidence.
+These checks model register behavior. The ROM capture below establishes the
+second board's PIO implementation and selector; host admission and physical
+native takeover remain required evidence.
 
 ## ROM transfer provenance required for takeover
 
@@ -199,13 +200,25 @@ clear, channel enables clear and writer exclusion supplies concrete current
 state evidence after the DMAC clock/reset access conditions are admitted.
 It does not follow from a host authority boolean.
 
-The smallest additional ROM observation is a returning CPU copy of
-`0x17000` for `0xb000` bytes, with separate board-specific secure-ROM binding.
-Read the implementation-specific mode word only after the nonsecure-ROM hash
-matches. Detailed offline findings and input identities are preserved in
-`usb-rom-handoff-20261018-native/rom-provenance.json`. The first board's secure
-capture alone cannot establish the second board's USB implementation or DMA
-history.
+The second board's returning capture on port `3-3` matches both ROM hashes
+above, and the subsequently read mode word at `0xf355c` is zero. The record is
+`second-board-20261018-3-3/rom-usb-capture/runtime/session.json`. Independent
+hash comparisons and byte comparisons confirm the captured ROM identities
+and exact restoration of the DDR buffer and 128-byte helper workspace.
+Detailed findings and input identities are preserved in
+`usb-rom-handoff-20261018-native/rom-provenance.json`.
+
+Normal USB0 entry calls offset `0xa20`: offset `0x948` asserts the device reset
+and disables its gate, `0x9a8` asserts PHY reset, and `0x968` deasserts the device
+reset and enables the gate. PHY and endpoint PIO setup follows at `0x1cf0`.
+This initialization and the selected USB0 transfer loop do not program internal
+DMA channels. They create no undrained internal USB DMA during ordinary FEL
+reads, writes and execute acknowledgments. The existing native checks of all
+sixteen channel start bits therefore supply the smallest current internal DMA
+state check for this recorded, trusted PIO history. A previous unreviewed payload
+that enabled USB DMA would require its own completion evidence; a clear start
+bit would not establish its drain. The matched PIO path does not establish
+external DMAC completion after storage or DDR initialization.
 
 ## Sources and focused evidence
 
