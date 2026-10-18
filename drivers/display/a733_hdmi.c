@@ -247,7 +247,10 @@ static int poll_inner(struct a733_hdmi *s){
            !b->reservation.generation || !b->reservation.rail_owner ||
            !b->reservation.rail_generation || !b->reservation.system_owner ||
            !b->reservation.system_generation || !b->reservation.inactive_epoch ||
-           !b->reservation.recovery_epoch)return fail(s,A733_HDMI_AUTHORITY);
+           (!b->reservation.recovery_epoch==!b->reservation.supervision_epoch) ||
+           (b->reservation.supervision_epoch &&
+            (b->request.mode!=A733_HDMI_720P60 || b->request.range!=A733_HDMI_LIMITED)))
+            return fail(s,A733_HDMI_AUTHORITY);
         b->admitted=1;s->state=A733_HDMI_PREFLIGHT;return 0;
     case A733_HDMI_PREFLIGHT:
         r=a733_hdmi_phy_preflight(&s->phy);if(r<0)return -1;

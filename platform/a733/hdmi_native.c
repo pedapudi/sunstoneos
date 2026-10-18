@@ -309,7 +309,11 @@ static int barrier(void *v)
 int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_native_config *c)
 {
     if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||!n||n->self||boot_owner||!c||!c->clocks||!c->rails||!c->pmic||!c->locks||!c->pck||
-        !c->task||!c->owner||!c->epoch||!c->recovery||!c->request.initial.id||!c->request.initial.generation||
+        !c->task||!c->owner||!c->epoch||
+        !((c->recovery_mode==A733_HDMI_INDEPENDENT_RECOVERY&&c->recovery&&!c->supervision)||
+          (c->recovery_mode==A733_HDMI_SUPERVISED_PATTERN&&!c->recovery&&c->supervision&&
+           c->request.mode==A733_HDMI_720P60&&c->request.range==A733_HDMI_LIMITED))||
+        !c->request.initial.id||!c->request.initial.generation||
         c->pck_client>=A733_GPU_RESOURCE_CLIENTS||
         !c->locks->initialized||c->locks->now!=a733_counter_clock_now||
         !separate(n,sizeof(*n),c->locks->context,sizeof(struct a733_counter_clock))||
@@ -326,7 +330,8 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
         if(!separate(objects[i],sizes[i],objects[j],sizes[j]))return 0;
     n->self=n;n->config=*c;n->sealed=*c;
     n->grant=(struct a733_hdmi_reservation){.generation=c->epoch,.system_owner=c->owner,
-        .system_generation=c->epoch,.inactive_epoch=c->epoch,.recovery_epoch=c->recovery};
+        .system_generation=c->epoch,.inactive_epoch=c->epoch,.recovery_epoch=c->recovery,
+        .supervision_epoch=c->supervision};
     n->controller_config=(struct a733_hdmi_config){
         .ops={now,acquire,validate,read8,write8,read32,write32,barrier,retain},.context=n,.request=c->request};
     /* Constructor is serialized before scheduling. Irreversible boot ownership

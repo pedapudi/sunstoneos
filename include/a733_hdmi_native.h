@@ -5,10 +5,16 @@
 #include "a733_pmic.h"
 #include "a733_gpu_resources.h"
 struct a733_platform_locks;
+enum a733_hdmi_recovery_mode { A733_HDMI_INDEPENDENT_RECOVERY=0,
+    A733_HDMI_SUPERVISED_PATTERN=1 };
 /* Image-owned immutable boot admission. The image establishes sole control of
  * SYSCTRL resistor words0x160/164, all VO1 consumers, remote writers and prior
  * output before constructing this object. epoch identifies that actual cold
- * handoff; recovery identifies independently qualified recovery. initial must
+ * handoff. Independent mode uses recovery; supervised mode uses supervision
+ * and retains all ownership until manual power removal, even if output cannot
+ * be stopped. Supervised mode admits only the non-DMA 720p60 limited-range
+ * TV0 pattern. See docs/a733-smp-supervised.md for the RAM-only recovery policy.
+ * Neither mode establishes drain or permits resource reuse. initial must
  * identify a qualified complete analog image, including charge-pump provenance.
  * No built-in profile or default epoch is provided. These physical facts cannot
  * be established by a software token or by reading the initial register image.
@@ -24,6 +30,8 @@ struct a733_hdmi_native_config {
     void *task;
     uint64_t owner,epoch,recovery;
     struct a733_hdmi_request request;
+    enum a733_hdmi_recovery_mode recovery_mode;
+    uint64_t supervision;
 };
 struct a733_hdmi_native {
     struct a733_hdmi_native *self;

@@ -18,9 +18,11 @@ struct a733_pmic_snapshot {
 };
 /* Immutable privileged boot admission, authenticated before init. It excludes
  * every legacy reader, remote/secure owner, DMA/IRQ handler and autonomous PMU
- * writer. Device mappings, PL voltage/pullups and independent recovery must
- * already be established. An identity or register read does not prove these
- * facts. This first profile adopts an enabled, idle DCXO24M/APBS1 bus only.
+ * writer. Device mappings, PL voltage/pullups and recovery must already be
+ * established. The read-only provider may use supervised RAM recovery under
+ * docs/a733-smp-supervised.md, retaining every lease until manual power removal.
+ * An identity or register read does not prove these facts. This first profile
+ * adopts an enabled, idle DCXO24M/APBS1 bus only.
  */
 struct a733_pmic_config {
     uint64_t owner, identity, startup_deadline;

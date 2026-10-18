@@ -8,7 +8,7 @@ reads EDID or enables its TV0 colorbar. The implementation is
 `include/a733_hdmi_native.h`.
 
 A runnable board image still needs qualified cold-boot and analog inputs,
-independent recovery, a monitor and cable. The repository supplies no fabricated
+a monitor and cable, and an admitted recovery policy. The repository supplies no fabricated
 analog profile. Native construction and instruction emulation cannot establish
 those physical prerequisites. The [controller's remaining modes and functions](hdmi.md)
 remain required for full HDMI support.
@@ -21,8 +21,14 @@ FreeRTOS task, and the existing shared providers. It calls
 The PMIC provider must already be initialized; its worker can become ready after
 scheduling. Construction performs no device access.
 
-The immutable image configuration identifies an actual cold handoff and
-independently qualified recovery. It establishes exclusion of remote software,
+The immutable image configuration identifies an actual cold handoff. The
+default mode identifies independently qualified recovery. A distinct supervised
+mode admits only the non-DMA TV0 720p60 limited-range pattern under the
+[supervised RAM policy](a733-smp-supervised.md). It supplies a supervision epoch
+and leaves the independent-recovery epoch zero. The controller rejects both
+epochs present or both absent. Supervised mode retains ownership until manual
+power removal; output can remain enabled if a fault prevents stopping it.
+Neither mode permits framebuffer access, resource reuse or a drain claim. It establishes exclusion of remote software,
 all VO1 consumers and both complete resistor-control words at `0x03000160` and
 `0x03000164`. No other native component currently writes those words. An
 irreversible single-owner reservation protects their use within this image.

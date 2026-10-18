@@ -1,0 +1,32 @@
+--- boot.c
++++ boot-hdmi.c
+@@ -23,8 +23,8 @@
+     RESULT->completed_mask=status?0:255;
+     RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
+     barrier();RESULT->stage=5;barrier();
+-    /* Keep every CPU, register and memory reservation. The independently armed
+-     * watchdog owns reset; this image never feeds, disarms or resets it. */
++    /* Supervised failure retains every owner. Output can remain enabled;
++     * manual power removal owns recovery. No watchdog is armed or fed. */
+     for(;;)__asm__ volatile("wfe");
+ }
+ static int boot_state(void)
+@@ -70,16 +70,8 @@
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+        (RESULT->magic==A733_SMP_RESULT_MAGIC && RESULT->generation==admission.generation))
+         a733_smp_stop(1,1);
+-    /* Admission values are recorded by the qualified external arm procedure.
+-     * Readback can reject changed configuration; it cannot prove timer progress. */
+-    if((read32(0x02050014)&0xffff)!=admission.watchdog_mode ||
+-       (read32(0x02050010)&0xffff)!=admission.watchdog_configuration ||
+-       (read32(0x02050018)&0xffff)!=admission.watchdog_output ||
+-       read32(0x07090108)!=admission.fel_flag ||
+-       read32(0x070501c0)!=admission.redirect_flag ||
+-       read32(0x070501c4)!=admission.redirect_entry ||
+-       read32(0x070501d4)!=admission.alternate_flag ||
+-       (read32(0x03000024)&0x100))a733_smp_stop(1,2);
++    if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
++       read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;

@@ -36,7 +36,11 @@ struct a733_gpu_resource_native {
  * initialization accesses only CNTFRQ_EL0. Subsequent callbacks use Device-mapped
  * identity addresses and the existing inherited-bus I2C driver. Independent
  * watchdog recovery, valid mappings, and inherited I2C initialization are caller
- * prerequisites. I2C failures retain bus ownership and perform no later reads.
+ * prerequisites for isolated legacy I2C users. PCK-only acquisition with the
+ * shared read-only PMIC provider may use the supervised RAM recovery policy in
+ * docs/a733-smp-supervised.md; it retains ownership until manual power removal.
+ * This does not admit GPU/DMA work or prove prior drain.
+ * I2C failures retain bus ownership and perform no later reads.
  * Pass &native.operations and &native to a733_gpu_resources_init().
  */
 int a733_gpu_resources_native_init(struct a733_gpu_resource_native *,

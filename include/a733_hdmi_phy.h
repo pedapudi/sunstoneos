@@ -30,6 +30,9 @@ struct a733_hdmi_reservation {
     struct a733_clock_token clock;
     uint64_t generation,rail_owner,rail_generation,system_owner,system_generation;
     uint64_t inactive_epoch,recovery_epoch;
+    /* Exactly one recovery authority: independent recovery, or supervised
+     * non-DMA TV0 pattern with permanent retention until manual power removal. */
+    uint64_t supervision_epoch;
 };
 struct a733_hdmi_request {
     struct a733_hdmi_initial initial;
@@ -47,7 +50,9 @@ struct a733_hdmi_ops {
      * common authority used by EVERY writer. HDMI-local ownership is not
      * sufficient. Hold all reservations through stop/fault; no implicit release.
      * Authenticate the entire initial profile, cold/reset handoff, inactive
-     * producers, drained prior transactions and independent recovery. Establish
+     * producers and drained prior transactions. Authenticate independent recovery
+     * or the fixed supervised non-DMA 720p60 limited-range pattern reservation.
+     * Establish
      * Device mappings, VO1 domain10 ON, required bus clocks/reset release and
      * fixed rails before returning1. Do not write local HDMI/TV/PHY registers.
      * Native binding is a separate required component; booleans or fabricated
