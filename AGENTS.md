@@ -82,6 +82,21 @@ second build while preserving checks for the actual requested application.
 
 ## Efficient tool use and coordination
 
+- Use [the reference index](docs/reference-index.md) to find recurring guidance
+  and cached primary sources. Read required instructions once; reuse that context
+  while their content is unchanged. For subsequent lookups, retrieve the relevant
+  heading or symbol and a bounded excerpt, not the whole document.
+- After context recovery, carry forward the last-read revision, source pins,
+  conclusions and unresolved questions. Inspect relevant Git changes before
+  rereading. Missing context or a changed requirement warrants reading the affected
+  section. Never substitute a cached conclusion for live board/queue state.
+- Search cached manual text before opening a PDF or browsing again. Preserve the
+  source URL, document revision, section and hash when caching a new reference.
+  Reopen the original for figures, ambiguous extraction, missing details or a
+  changed source. Do not repeatedly retrieve unchanged external documentation.
+- Give workers the relevant skill, document sections and evidence pointers.
+  Avoid entire handoffs, manuals or source inventories unless their scope requires
+  them. Do not reread unchanged writing guidance for each message.
 - Discover unfamiliar paths with one scoped `rg --files` search, then reuse the
   discovered paths. Do not add existence checks before every known-file read.
 - Read relevant symbols or sections. Summarize large manifests and command
