@@ -179,3 +179,8 @@ option(SUNSTONE_BLUETOOTH_APPLICATION "Build the supervised Bluetooth applicatio
 if(SUNSTONE_BLUETOOTH_APPLICATION)
   include(cmake/a733-bluetooth.cmake)
 endif()
+
+option(SUNSTONE_A733_CRYPTO "Build supervised native CE SHA/AES diagnostic" OFF)
+if(SUNSTONE_A733_CRYPTO)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-crypto.cmake")
+endif()
