@@ -344,3 +344,31 @@ The software checks establish the finite integration and matching converted-inpu
 reference behavior. An identified headset, actual pairing/control/audio operation,
 concurrent receive-service bounds and physical transcription within the supervised
 window remain unqualified. Continuous dictation remains outside this finite path.
+
+The recognition-enabled startup image is now preserved under
+`board-session-seal-mimus-20261018/`, with ELF SHA256
+`7e01cd78e899a5a45fa9074fc8f188bd835c87a53615b444d7f69128b1fe6d0b`.
+It retains the authenticated session and profile before provider initialization.
+Earlier integration reconciled its 210 compiled repository inputs. The capture,
+conversion and recognition evidence remains applicable.
+
+The [native USB check](../checks/bluetooth-usb-native.py) executes that frozen
+image's recognition copy, serializer, USB task and TinyUSB device stack without
+rebuilding it. Five cases pass: fragmented output with a queued repeated request,
+malformed-request refusal, provider failure, deadline expiry and recognition stop
+during copying. Two identical 1,232-byte responses survive withheld endpoint
+completion without changing their backing bytes. The remaining transcript chunk
+also transfers, reconstructing all 1,212 bytes of the earlier recognition log.
+The production decoder accepts the copied identities, sample counts and digest.
+Pending and stopped replies expose no producer metadata.
+
+Inputs and results reside under `bluetooth-usb-native-20261018/` in the evidence
+cache. The check adopts the earlier real transcript and snapshot into their final
+native fields. It models ready provider/application state, clock/rail/PMIC status,
+controller transfers/events, scheduler yields and monotonic time. It executes no
+radio initialization, recognition or physical USB transaction. The first attempt
+omitted the recognizer's separate monotonic-time source; its failure is preserved.
+The repaired fixture uses one time value for both application paths. These results
+close the recognition serializer/TinyUSB software gap. Physical headset operation,
+receive-service bounds and complete transcription within the supervised window
+remain unqualified.
