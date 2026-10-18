@@ -100,10 +100,16 @@ GPU and radio firmware are supplied as immutable memory spans; these loaders
 do not require a runtime filesystem. Published artifact availability does not
 establish hardware compatibility or redistribution rights.
 
+Reuse suitable open-source drivers and libraries, adapting their OS interfaces
+to FreeRTOS as needed. Native execution does not require rewriting their device
+logic. An open-source host driver and the firmware it loads are separate
+dependencies; assess their source availability independently.
+
 After complete hardware functionality and performance tuning, investigate source
 replacements for remaining opaque dependencies. Retain the working binaries as
-comparison references. Prefer replacements with a concrete compatibility or
-maintenance benefit, and verify each against the supported hardware operations.
+comparison references. Replace source-available components only for a demonstrated
+incompatibility or unmet requirement. Verify each replacement against the
+supported hardware operations.
 The native NPU toolkit remains tracked in issue 12. Replacing embedded GPU or
 radio firmware is separate from implementing the A733 host drivers; complete
 replacement is not established by the current reverse-engineering evidence.

@@ -8,6 +8,10 @@ of application requirements. Project issues hold work scope and dependencies.
 ## Implementation
 
 - FreeRTOS is the runtime OS. Linux is a source and development reference only.
+- Reuse suitable open-source drivers and libraries, including upstream Linux
+  drivers, by adapting OS interfaces to FreeRTOS. Native execution does not
+  require an independent rewrite. Replace source-available components only for
+  a demonstrated incompatibility or requirement the existing code cannot meet.
 - Complete onboard hardware support and local mimus execution are separate
   completion requirements. A CPU fallback does not satisfy accelerator support.
 - Work on isolated branches or worktrees. Preserve other workers' changes.
