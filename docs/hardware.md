@@ -401,8 +401,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Emulator checks pass for actual provider ownership, bounded renewal, a TCP
   exchange and retained failure. Firmware upload and association checkpoints
   reuse earlier evidence; uninterrupted physical startup remains unqualified.
-  Production entropy, platform identity, wider modes, shutdown and physical
-  topology/recovery remain outstanding.
+  The [radio entropy provider](radio-entropy.md) connects asynchronous crypto
+  engine requests to a bounded buffer for copied network random bytes. Shared
+  engine faults invalidate buffered bytes; focused checks and native compilation
+  pass. Physical entropy qualification, platform identity, complete application
+  startup, wider modes, shutdown and physical topology/recovery remain outstanding.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
@@ -491,9 +494,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained faults. Host checks, source comparisons and native compilation pass.
   [Atomic startup adoption](npu-clock-handoff.md) transfers the PLL reservation
   directly into startup ownership; focused emulator checks pass without a
-  release window. Concrete boot authority, physical rail/PCK qualification,
-  effective memory confinement, numerical execution,
-  and physical qualification remain outstanding.
+  release window. The [native convolution application](npu-application.md)
+  connects cached startup, reserved memory, actual providers, the convolution
+  client and checked USB results. Native linking and modeled application checks
+  pass; modeled output does not establish numerical inference. Concrete boot
+  authority, physical rail/PCK qualification, effective memory confinement,
+  numerical execution and physical qualification remain outstanding.
 
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
@@ -538,6 +544,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the device disconnected and does not enable DMA or host power. Actual
   fabric/power/security/recovery admission, connection, USB1 and USB2/DWC3 modes
   and physical cold-start qualification remain outstanding.
+
+- USB host and Type-C: **implemented** native [source power and attachment
+  control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through
+  xHCI and TinyUSB. Focused checks cover attachment, independent power cutoff,
+  mass-storage enumeration, copied sector reads, malformed responses,
+  cancellation and disconnects. Native compilation passes. Complete application
+  startup, physical power and switch qualification, actual transfers, DMA drain,
+  repeated attachment, other speeds, hubs, periodic transfers, role swaps, USB PD,
+  VCONN and applicable alternate modes remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |

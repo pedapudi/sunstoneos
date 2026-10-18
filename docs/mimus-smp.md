@@ -146,6 +146,42 @@ under `~/.cache/sunstoneos/evidence/mimus-smp-20261016/`.
 
 The existing runtime-check image remains byte-identical, so its evidence is
 reused. The affected physical USB application also compiles; it has not been
-executed on the quarantined board. Broader recording coverage, sustained
+executed on the reconnected board. Broader recording coverage, sustained
 concurrent workloads, cancellation during inference, stack-use measurement,
 physical worker execution, and the performance target remain outstanding.
+
+
+## Native eight-core application image
+
+The `sunstone-a733-mimus-native` target combines cached eight-core FreeRTOS
+startup with the existing recorded and paced recognition paths. Recognition
+uses two inference workers because the current engine reserves two worker
+scratch areas. The model, arithmetic, punctuation and formatting remain unchanged.
+
+The image shares native counter, lock, PMIC, clock, rail, pin and USB providers
+with the storage maintenance image. Application and launch-session identities
+are separate. The mimus image does not initialize MMC or receive storage authority.
+Its runtime supplies SMP newlib, C++ constructors and a 4 MiB heap. Preloaded
+assets begin at `0x43000000`; the 16 MiB inference arena begins at `0x46000000`.
+
+Watchdog renewal requires completed inference work. During paced input, consumed
+samples can renew the deadline only while recognition awaits input. Scheduler
+heartbeats, stalled inference and terminal sessions cannot renew it. The host
+saves output durably before acknowledging it over USB.
+
+Configure the main project with `MIMUS_DIR`, `NEWLIB_ROOT`, `NEWLIB_SMP_ROOT`,
+`FREERTOS_DIR` and `TINYUSB_DIR` set to their pinned locations, then build:
+
+```sh
+cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" \
+  --target sunstone-a733-mimus-native -j 8
+```
+
+Ten focused lifecycle, packaging and capture cases passed on the component image.
+The central mimus and maintenance images also compile and link. Evidence under
+`~/.cache/sunstoneos/evidence/mimus-native-20261017-lifecycle/` preserves the
+component input comparison, central build and artifact snapshot. Earlier
+recognition parity remains scoped to the emulator images described above.
+Full recognition on this native image and physical execution remain untested.
+Board execution requires independent watchdog recovery and authenticated boot,
+memory and provider admission; an offline package does not establish them.

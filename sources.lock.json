@@ -2477,5 +2477,43 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
     "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
     "sha256": "7f8e6b5742b2906da8f448caedbd0de99f0300fa22814515cfed09612f19738f"
+  },
+  "usb2-platform-reference": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/dwc3/dwc3-sunxi-plat.c",
+    "archive": "usb2-research/bsp/drivers/usb/dwc3/dwc3-sunxi-plat.c",
+    "sha256": "ef28c3ae7967ac7a0fbf35ab12d3dffe3f5e1de725f2e6fdabcc720a315d2a95"
+  },
+  "usb2-phy-reference": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/usb/dwc3/phy-sunxi-plat.c",
+    "archive": "usb2-research/bsp/drivers/usb/dwc3/phy-sunxi-plat.c",
+    "sha256": "4eaecc86c8e3f7ad8a9a2cb2b3250787e5169c844413a5f7212a9d3c52ad7f3b"
+  },
+  "usb2-core-reference": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/dwc3/core.c",
+    "archive": "usb2-research/drivers/usb/dwc3/core.c",
+    "sha256": "33469e071759f7ff274fbcd03b8fd0866e691c342b9d1cb6e7770265d8e3dff9"
+  },
+  "usb2-register-reference": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/dwc3/core.h",
+    "archive": "usb2-native/core.h",
+    "sha256": "fa00e64374b2f2f01740ef3645f2c04ef9e25ef8f5d66207a7ecdccee2d4ab39"
+  },
+  "usb-xhci-specification": {
+    "url": "https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/extensible-host-controler-interface-usb-xhci.pdf",
+    "archive": "usb-host/xhci-1.2.pdf",
+    "sha256": "9257ca24f34bff08e6020623f707c788ca0f0df657aa713309ff489a68b1731e",
+    "revision": "1.2, May 2019"
+  },
+  "typec-switch-datasheet": {
+    "revision": "SY6280 revision1.0E",
+    "url": "https://www.silergy.com/zh/download/downloadFile?ftype=note&id=4369&type=product",
+    "archive": "usb2-electrical/sy6280-rev1.0e.pdf",
+    "sha256": "589001cd56c64cc860556e9ecc4e17d14bfbac22ab04df06d8573e8c37be33b1"
+  },
+  "usb-typec-specification": {
+    "revision": "USB Type-C revision2.0",
+    "url": "https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf",
+    "archive": "usb2-electrical/usb-typec-r2.0.pdf",
+    "sha256": "87d15160bf8bd25129b27e0b7c5e261ed0b1806b3b0d3a7b5d8b1eb783dc9981"
   }
 }

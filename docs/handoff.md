@@ -33,29 +33,29 @@ software evidence and remaining modes. Recent integration includes native
 HDMI startup, DMA USB result observation, GPU graphics memory, storage updates
 and maintenance watchdog supervision. These paths have no physical qualification.
 
-## Assigned parallel work
+## Current integration
 
-| Worktree | Assigned work |
-| --- | --- |
-| USB host worker | Native USB2/xHCI checks passed; integration awaits Type-C provider |
-| Type-C worker | Concrete host power/role and bounded I2C provider for the USB2 path |
-| NPU application worker | Native fixed convolution application, checked output and USB observation |
-| Mimus integration worker | Cached native SMP runtime, shared providers and recorded/paced recognition |
-| Radio entropy worker | Connect actual asynchronous CE entropy to copied network random-byte callbacks |
-| Independent reviewers | Changed runtime ownership, deadlines and focused verification before execution |
+Native HDMI startup, DMA USB observation, GPU graphics resources, storage updates,
+native camera binding and fixed GPU graphics submission are integrated. The
+complete [maintenance image](storage-maintenance-launch.md) connects native
+tasks, immutable launch admission, fatal-fault revocation and protected backups.
 
-Inspect live agent status before assigning overlapping work. Native HDMI startup,
-DMA USB observation, GPU graphics resources, storage core/host updates and the
-maintenance watchdog are integrated. The connected storage tasks are also
-integrated and their focused PMIC, MMC admission and USB callback checks pass.
-Watchdog revocation now survives both pre-bind and concurrent-bind faults; the
-two new interleaving checks passed. The complete
-[maintenance image](storage-maintenance-launch.md) now connects those tasks,
-immutable launch admission, fatal-fault revocation and protected host backups.
-Its linked instruction and host checks pass; the main build configuration and
-source comparison reuse that evidence without a second compilation or execution.
-Native camera binding and fixed graphics submission are integrated. USB host
-integration awaits its Type-C dependency; its focused composed checks have passed.
+The [native mimus image](mimus-smp.md#native-eight-core-application-image) now
+connects eight-core startup, shared providers, the SMP C++ runtime and existing
+recorded/paced recognition with two inference workers. Ten focused lifecycle,
+packaging and capture cases pass. Central mimus and maintenance builds pass;
+full recognition on the native image and physical execution remain untested.
+
+The [native NPU application](npu-application.md), [radio entropy provider](radio-entropy.md),
+[Type-C source controller](typec.md) and [USB2 host path](usb2-host.md) are integrated.
+Their focused software evidence is preserved and reconciled with the integrated
+sources. Broader header changes do not affect those exercised paths. No runtime
+case was replayed for integration. Complete radio and USB host application
+startup remains outstanding; the NPU application still needs real boot authority.
+
+Completed implementation and review workers are idle. Inspect live agent status
+before assigning another integration. New implementations use Sol 6.1 and
+substantive reviews use Astra, with separate worktrees and short task briefs.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
@@ -147,7 +147,11 @@ limitations. Raw evidence is under `~/.cache/sunstoneos/evidence/`. The central
 `hardware-integration-20261016f` through `hardware-integration-20261016q`
 records preserve earlier source comparisons, build artifacts and source pins.
 `gpu-render-20261017/central/integration.json` records the current GPU links
-and component source reconciliation. Storage native
+and component source reconciliation. Native mimus central build artifacts and
+input comparisons are under `mimus-native-20261017-lifecycle/`. NPU, radio
+entropy, Type-C and USB host handoffs and `root-reconcile.json` records are under
+`npu-application-20261017/`, `radio-entropy-20261017/`,
+`typec-native-20261017/` and `usb2-host-20261017/`. Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
 `native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
 evidence and central source reconciliation are under `storage-maintenance-20261017/`.
@@ -167,7 +171,8 @@ S_TWI1 and USB2 now have independent exclusive scopes. S_TWI1 holds APBS1
 ancestry; the USB2 provider must explicitly reserve its selected and shared
 parents. One focused coexistence/conflict check and changed-core compilation
 pass without changing the token layout. Evidence is under
-`clock-usb-scopes-20261017/`; complete provider checks remain pending.
+`clock-usb-scopes-20261017/`; native Type-C and USB provider checks now pass
+within their recorded scope.
 
 The cached eight-core runtime has instruction-model scheduler evidence. The
 larger device-memory image also has native reservation publication/refusal

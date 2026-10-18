@@ -81,3 +81,13 @@ cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" \
 
 The resulting ELF requires a separate immutable launch session and physical
 recovery evidence before board execution. Building it does not authorize storage writes.
+
+
+The [native mimus image](mimus-smp.md#native-eight-core-application-image) uses the
+same central build with the SMP C++ runtime and recorded or paced recognition.
+Its target is `sunstone-a733-mimus-native`.
+
+The [fixed NPU application](npu-application.md) is a standalone CMake project at
+`apps/npu-convolution`. Its target is `a733-npu-convolution`; it requires an
+explicit board handoff source and the pinned model, input and reference files.
+The preserved refusal fixture is for software checks and cannot admit a board.
