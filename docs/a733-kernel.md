@@ -28,6 +28,19 @@ redistributor settings. On completion, timeout, or a captured exception, it
 disables the timers and restores those settings before the forced-FEL reset.
 Register-write waits and cleanup waits have counter-based deadlines.
 
+A returning physical monitor requires both GICD_CTLR affinity-routing bits,
+ARE_S and ARE_NS, already set. An entry missing either bit returns status 4
+before any GIC write. The observed A733 ROM value `0x37` satisfies this condition.
+The [GIC specification](https://documentation-service.arm.com/static/601412d54ccc190e5e681269),
+section 12.9.4, makes an enabled-to-disabled ARE transition unpredictable. Cleanup
+therefore preserves every ARE bit enabled at cleanup entry. For admitted physical
+runs, this restores the saved CTLR without clearing affinity routing.
+
+The secure QEMU model permits cold startup with ARE clear. It enables affinity
+routing and retains those bits during cleanup, then exits through semihosting.
+That exit does not restore the emulator's cold GIC state or establish ROM-reset
+safety. An initialization failure before ARE enable leaves the bits clear.
+
 EL1 identity-maps peripheral addresses and the first 128 MiB of DRAM. The result block
 at `0x42000000` uses normal non-cacheable memory, so the cache-disabled monitor
 and ROM can read the log. Other mapped RAM uses normal cacheable attributes.
@@ -126,3 +139,18 @@ time does not measure the board's timeout duration.
 
 Successful evidence remains reusable while relevant inputs remain unchanged.
 Documentation changes and commits do not require another boot or emulator run.
+
+
+On 2026-10-18, seven focused instruction cases checked this ARE correction:
+physical rejection with neither or only one ARE bit set, physical cleanup with
+both bits set, QEMU cold startup, and an early QEMU RWP timeout. They execute
+the compiled monitor and reject every write that clears an enabled ARE bit.
+The three physical admission refusals make no GIC write. One affected secure-QEMU
+kernel build also completed 100 exchanges and exited with status 0.
+
+Evidence is under `~/.cache/sunstoneos/evidence/monitor-are-20261018/`:
+`instructions/result.json` contains the seven modeled cases, and `qemu-kernel.json`
+contains the secure-emulator run. These checks establish ARE admission/preservation;
+they do not qualify the monitor's other timeout or redistributor cleanup behavior.
+The corrected physical monitor has not been run on the board. Earlier physical
+results above remain evidence for their recorded image.

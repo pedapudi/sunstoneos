@@ -37,6 +37,11 @@ void monitor_init(void)
     // Keep the two security states and identify the boot CPU redistributor.
     if ((saved.ctlr & (1U << 6)) || (RESULT->gicr_typer >> 32) != 0)
         finish(4);
+#ifndef MONITOR_QEMU
+    // Returning to ROM cannot undo a newly enabled affinity-routing bit.
+    if ((saved.ctlr & 0x30U) != 0x30U)
+        finish(4);
+#endif
     saved.banks = (RESULT->gicd_typer & 31) + 1;
     saved.group = mmio_read(GICR_SGI + 0x80);
     saved.modifier = mmio_read(GICR_SGI + 0xd00);
@@ -105,7 +110,8 @@ static _Noreturn void finish(unsigned status)
     RESULT->end_counter = counter();
     if (saved.ready) {
         // Bounded cleanup: a stalled GIC must not prevent the ROM reset.
-        mmio_write(GICD_BASE, mmio_read(GICD_BASE) & ~7U);
+        uint32_t live_ctlr = mmio_read(GICD_BASE);
+        mmio_write(GICD_BASE, live_ctlr & ~7U);
         uint64_t deadline = counter() + COUNTER_HZ / 10;
         while ((mmio_read(GICD_BASE) & (1U << 31)) && counter() < deadline) {}
         mmio_write(GICR_SGI + 0x180, 0xffffffffU);
@@ -120,7 +126,8 @@ static _Noreturn void finish(unsigned status)
         mmio_write(GICR_SGI + 0x100, saved.enabled);
         for (unsigned i = 1; i < saved.banks; ++i)
             mmio_write(GICD_BASE + 0x100 + 4 * i, saved.spi_enabled[i]);
-        mmio_write(GICD_BASE, saved.ctlr);
+        // QEMU may enable ARE from cold state; cleanup must never clear it.
+        mmio_write(GICD_BASE, saved.ctlr | (live_ctlr & 0x30U));
     }
     RESULT->stage = 5;
     __asm__ volatile("dsb sy" ::: "memory");
