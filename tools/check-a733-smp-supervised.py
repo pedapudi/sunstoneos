@@ -294,7 +294,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     The capture callback consumes only the newly enumerated native instance.
     Every uncertain post-entry outcome retains the physical lock and queue claim.
     """
-    require(0<capture_seconds<=59 and result_key in ('scheduler_result','board_result','npu_result','gpu_result','i2s_result','jpeg_result','bluetooth_result','camera_result'),
+    capture_limit=179 if result_key=='mimus_result' else 59
+    require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','i2s_result','jpeg_result','bluetooth_result','camera_result','mimus_result'),
             'Unsupported supervised capture bounds.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
     ready()
