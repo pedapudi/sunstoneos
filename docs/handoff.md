@@ -56,6 +56,9 @@ substantive correctness risks. The coordinator alone operates the board.
   and copied-output checks pass. All 155 preserved repository inputs match
   integration. No microphone is connected; physical capture and inference timing
   remain unqualified. Evidence is under `i2s-mimus-20261017/`.
+- JPEG: a nonconstant qualification fixture is being integrated into the existing
+  application. Its independent integer oracle matches the pinned CPU decoder
+  exactly. Native fixture selection and copied-output binding remain in progress.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -310,12 +313,15 @@ and multicore scheduling remain unproven.
 All 44 transactions passed, including copied results and reviewed DRAM
 restoration. The runner exited and its queue claim closed. Old SRAM was left
 to the returned ROM. Evidence is under `startup-stage-20261017-079/native/`.
-The next investigation covers native setup after the distributor checkpoint.
+The next investigation covers first-secondary admission and read-only power
+preflight, stopping before any power callback write. Mailbox publication and
+its event signal require review before that diagnostic can run.
 
 Before this attempt, the guarded cache-off helper and returning survey passed
 on `003:079`; evidence is under `startup-stage-20261017-079/cache-off/` and
-`survey/`. The new `003:080` instance needs its own verified launch state before
-another launch. The queue has no active claim.
+`survey/`. The current `003:080` instance has also passed the guarded helper and
+returning survey, under `startup-stage-20261017-080/`. The queue has no active
+claim.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
