@@ -11,6 +11,21 @@
 /* Immutable external authority; evidence identifies the actual installed
  * topology, fresh module/UART ownership and secure SID access. PM2 is never
  * driven here: stable reset/LPO behavior must already be established. */
+struct bluetooth_headset_profile {
+    uint32_t mode,incoming;
+    uint8_t peer[6],pin[17],allow_just_works;
+    uint32_t minimum_security,server_channel;
+    uint64_t scheduling_authority;
+    uint8_t scheduling_evidence[32];
+    uint64_t receive_latency_us,response_timeout_us;
+    uint32_t samples;
+    uint16_t mtu,accept_slots,page_interval,page_window;
+    uint32_t line_timeout_us,capture_timeout_us;
+    uint8_t peer_page_scan_mode,peer_role_switch;
+    uint16_t peer_clock_offset;
+    uint64_t reserved2;
+};
+_Static_assert(sizeof(struct bluetooth_headset_profile)==128,"Headset immutable profile geometry");
 struct bluetooth_profile {
     uint64_t magic;uint32_t version,bytes;
     uint64_t topology,sid_authority,radio_authority,uart_authority,wake_authority;
@@ -25,8 +40,9 @@ struct bluetooth_profile {
     uint64_t firmware_address[4],firmware_bytes[4];
     uint64_t session_owner,runtime_lease_us,renew_margin_us;
     uint64_t command_timeout_us,frame_timeout_us,binding_timeout_us;
+    struct bluetooth_headset_profile headset;
 };
-_Static_assert(sizeof(struct bluetooth_profile)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
+_Static_assert(sizeof(struct bluetooth_profile)==752&&offsetof(struct bluetooth_profile,headset)==624&&offsetof(struct bluetooth_profile,firmware_address)==512,
     "Bluetooth offline profile geometry");
 /* One actual owner task. Providers, profiles, identity and all buffers remain
  * disjoint and retained through terminal failure and manual power removal. */
@@ -53,6 +69,7 @@ struct bluetooth_application {
     struct aic8800_dispatch_record diagnostic;
     uint64_t firmware_generation,uart_generation,deadline,hci_deadline;
     unsigned stage,iteration_live,host_wake;
+    uint64_t started;
     atomic_uint failed,result_lock,result;
     struct bt_hci_identity identity;
     uint64_t discarded_records;

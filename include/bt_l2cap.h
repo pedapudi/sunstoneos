@@ -83,6 +83,13 @@ struct bt_l2cap {
  * fault,-2 exhausted lifetime identity/cache/channel capacity. */
 int bt_l2cap_init(struct bt_l2cap *,struct bt_acl *,uint16_t mtu,uint64_t rtx_us,uint64_t ertx_us,
                   int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context);
+/* The initial native configured handoff may retain H4 bytes acquired before
+ * upper construction. Claim this ACL once using its actual current binding;
+ * no staging/partial framing or received bytes are discarded or relabeled.
+ * All existing constructor checks remain. This proves ownership only; normal
+ * link, handle, PSM and security validation still precede data admission. */
+int bt_l2cap_init_bootstrap(struct bt_l2cap *,struct bt_acl *,uint16_t mtu,uint64_t rtx_us,uint64_t ertx_us,
+    int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context,const struct bt_h4_binding *);
 int bt_l2cap_open(struct bt_l2cap *,uint64_t link,uint16_t psm,uint64_t deadline,uint64_t *channel);
 int bt_l2cap_close(struct bt_l2cap *,uint64_t channel,uint64_t deadline);
 /* Release a confirmed closed channel only after all its RX/TX backing and

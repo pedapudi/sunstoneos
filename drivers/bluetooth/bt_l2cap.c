@@ -122,28 +122,37 @@ static int disconnect(struct bt_l2cap *q,struct bt_l2cap_channel *c)
     uint8_t bytes[4];put16(bytes,c->remote_cid);put16(bytes+2,c->local_cid);
     int r=request(q,c,6,bytes,4);if(r==1)c->state=BT_L2CAP_DISCONNECTING;return r;
 }
-int bt_l2cap_init(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,uint64_t ertx,
-                  int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context)
+static int initialize(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,uint64_t ertx,
+                  int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context,const struct bt_h4_binding *bootstrap)
 {
-    if(!q || !a || q->state!=BT_L2CAP_OFF || a->state!=BT_ACL_ACTIVE || !authorize ||
+    if(!q || !a || !a->hci || a->hci->self!=a->hci || a->hci->acl_owner!=a || a->l2cap_owner ||
+       q->state!=BT_L2CAP_OFF || a->state!=BT_ACL_ACTIVE || !authorize ||
        mtu<48 || mtu>BT_L2CAP_MTU || timeout<1000000 || timeout>60000000 || ertx<60000000 || ertx>300000000 ||
        overlaps(q,sizeof(*q),a,sizeof(*a)) || overlaps(q,sizeof(*q),a->hci,sizeof(*a->hci)) ||
        overlaps(q,sizeof(*q),a->hci->transport.binding.uart,sizeof(struct a733_uart)))return -1;
+    if(bootstrap&&(bootstrap!=&a->hci->transport.binding||!bootstrap->firmware_generation||
+        !bootstrap->uart_generation||bootstrap->current(bootstrap->context,bootstrap->firmware_generation,bootstrap->uart_generation)!=1))return -1;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i)if(a->packets[i].state!=BT_ACL_TX_FREE)return -1;
     for(unsigned i=0;i<a->hci->transport.count;++i) {
         const struct bt_h4_record *r=&a->hci->transport.records[i];
         if(overlaps(q,sizeof(*q),r->storage.bytes,r->storage.capacity) ||
-           (r->owner!=BT_H4_FREE && r->type==2))return -1;
+           (!bootstrap&&r->owner!=BT_H4_FREE && r->type==2))return -1;
     }
-    if(a->hci->transport.staged || a->hci->transport.assembling!=a->hci->transport.count ||
+    if((!bootstrap&&(a->hci->transport.staged || a->hci->transport.assembling!=a->hci->transport.count)) ||
        a->hci->command!=BT_HCI_IDLE)return -1;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(a->links[i].state!=BT_ACL_UNUSED &&
        a->links[i].state!=BT_ACL_CONNECTED && a->links[i].state!=BT_ACL_CLOSED)return -1;
     *q=(struct bt_l2cap){.acl=a,.timeout_us=timeout,.ertx_us=ertx,.local_mtu=mtu,.next_channel=1,.next_cid=0x40,
         .authorize=authorize,.context=context,.next_serial=1,.state=BT_L2CAP_ACTIVE};
     for(unsigned i=0;i<BT_ACL_LINKS;++i){q->next_id[i]=1;q->assembling[i]=BT_L2CAP_PDUS;}
-    return 1;
+    a->l2cap_owner=q;return 1;
 }
+int bt_l2cap_init(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,uint64_t ertx,
+                  int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context)
+{return initialize(q,a,mtu,timeout,ertx,authorize,context,NULL);}
+int bt_l2cap_init_bootstrap(struct bt_l2cap *q,struct bt_acl *a,uint16_t mtu,uint64_t timeout,uint64_t ertx,
+                  int (*authorize)(void *,uint64_t,uint16_t,unsigned),void *context,const struct bt_h4_binding *binding)
+{return binding?initialize(q,a,mtu,timeout,ertx,authorize,context,binding):-1;}
 int bt_l2cap_open(struct bt_l2cap *q,uint64_t link,uint16_t psm,uint64_t bound,uint64_t *identity)
 {
     if(!q || q->state!=BT_L2CAP_ACTIVE || !identity || !outside(q,identity,sizeof(*identity)) ||

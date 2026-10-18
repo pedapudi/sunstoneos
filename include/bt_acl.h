@@ -51,9 +51,19 @@ struct bt_acl_synchronous_ops {
     void (*commit_disconnect)(void *,const struct bt_h4_record *);
     int (*event)(void *,const struct bt_h4_record *);
 };
+/* Security events share this same serialized HCI owner. Callbacks cannot
+ * advance lower transport or submit a command; they copy/validate records.
+ * Exact0 leaves an unrelated event for existing ACL/SCO classification. */
+struct bt_acl_security_ops {
+    int (*prepare)(void *);
+    int (*event)(void *,const struct bt_h4_record *);
+};
 struct bt_acl {
     struct bt_hci *hci;
+    const void *l2cap_owner;
     const struct bt_acl_synchronous_ops *synchronous;
+    const struct bt_acl_security_ops *security;
+    void *security_context;
     void *synchronous_context;
     struct bt_acl_link links[BT_ACL_LINKS];
     struct bt_acl_packet packets[BT_ACL_TX_SLOTS];
@@ -73,6 +83,7 @@ struct bt_acl {
 int bt_acl_init(struct bt_acl *, struct bt_hci *);
 /* Install once after configured audio support, before any synchronous handle.
  * Existing ACL links may remain. Exact owner identity is retained on fault. */
+int bt_acl_security_register(struct bt_acl *,const struct bt_acl_security_ops *,void *context);
 int bt_acl_synchronous_register(struct bt_acl *,const struct bt_acl_synchronous_ops *,void *context);
 /* Nonzero Bluetooth peer address; known page-scan mode0..2 and clock offset
  * supplied by a trusted discovery/configuration owner. Requests DM1 only.

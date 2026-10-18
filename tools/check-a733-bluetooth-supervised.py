@@ -23,6 +23,8 @@ SERIAL='sunstoneos-a733-bluetooth'
 
 def capture(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
     preparation.profile_check(profile,session)
+    if len(profile)==752:
+        return capture_pcm(exchange,session,profile,evidence,record,save,deadline,now,pause)
     record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved');save()
     for sequence in range(1,2401):
         require(now()<deadline,'Bluetooth capture deadline expired.')
@@ -43,12 +45,52 @@ def capture(exchange,session,profile,evidence,record,save,deadline,now=time.mono
     raise supervisor.CaptureWindowExpired('Bluetooth exhausted bounded pending-query budget.')
 
 
+def capture_pcm(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
+    record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved');save()
+    captured=[bytearray(),bytearray()];identity=None;sequence=0
+    for kind in (0,1):
+        total=struct.unpack_from('<I',profile,720)[0]*2 if kind==0 else identity['records']*24
+        while len(captured[kind])<total:
+            sequence+=1;require(sequence<=2600 and now()<deadline,'Headset capture budget/deadline expired.')
+            offset=len(captured[kind]);count=min(1024,total-offset)
+            request=struct.pack('<BBHI',kind+1,0,count,offset)
+            frame=exchange(request,min(500,max(1,int((deadline-now())*1000))))
+            path=evidence/f'bluetooth-pcm-{sequence:04}.bin';supervisor.durable_frame(path,frame)
+            result,data=decoder.decode_pcm(frame,session,profile,kind,offset,count)
+            entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),**result}
+            record.setdefault('bluetooth_frames',[]).append(entry);save()
+            require(now()<deadline,'Headset response arrived after capture deadline.')
+            if result['state']=='pending':
+                require(identity is None,'Published capture regressed to pending.')
+                pause(min(.025,max(0,deadline-now())));continue
+            if result['state']=='retained-failure':
+                record['bluetooth_result']='observed-failure';record['durable_result']=entry.copy();save();return result
+            if identity is None:identity=result
+            require(identity==result,'Immutable headset capture changed between copied chunks.')
+            captured[kind].extend(data)
+    require(hashlib.sha256(captured[0]).hexdigest()==identity['sha256'],'Copied PCM digest differs.')
+    cursor=0;acquired=0
+    for serial,offset,source,copied,status,reserved in struct.iter_unpack('<QIHHII',captured[1]):
+        require(serial>acquired and offset==cursor and 0<source<=255 and 0<=copied<=source and not status and not reserved,
+                'Capture record ordering, segmentation or loss differs.')
+        cursor+=copied;acquired=serial
+    require(cursor==len(captured[0]),'Record extents do not cover copied PCM.')
+    for name,data in [('bluetooth-8k-s16le.pcm',captured[0]),('bluetooth-pcm-records.bin',captured[1])]:
+        supervisor.durable_frame(evidence/name,data)
+    require(now()<deadline,'Headset capture deadline expired before durable publication.')
+    record['bluetooth_result']='observed-success';record['durable_result']=identity.copy()
+    try:save()
+    except BaseException:
+        record['bluetooth_result']='unobserved';record.pop('durable_result',None);raise
+    return identity
+
+
 def capture_device(device,same,deadline,session,profile,evidence,record,save):
     def exchange(packet,timeout):
-        same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete Bluetooth request.')
+        same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete Bluetooth request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'Bluetooth capture deadline expired after write.')
-        return bytes(device.read(0x81,177,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,1184 if len(profile)==752 else 177,timeout=min(timeout,remaining)))
     return capture(exchange,session,profile,evidence,record,save,deadline)
 
 

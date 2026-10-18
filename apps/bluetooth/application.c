@@ -37,7 +37,8 @@ int board_application_pins(struct a733_pin_handoff *pins)
         struct aarch64_translation t;
         if(!aarch64_device_translate(page,0,&t)||t.physical!=page||t.attributes!=0xff||t.shareability!=3)return 0;
     }
-    bluetooth_profile=*p;
+    memset(&bluetooth_profile,0,sizeof(bluetooth_profile));
+    memcpy(&bluetooth_profile,p,p->bytes);
     pins->authorized[A733_PIN_G]=0x3ff;pins->authorized[A733_PIN_M]=0x1b;
     pins->latch[1]=p->pm_latch;return 1;
 }

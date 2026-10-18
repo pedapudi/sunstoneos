@@ -19,7 +19,20 @@ SCHEMA = 'a733-bluetooth-supervised-bundle-v1'
 
 
 def profile_check(data, session):
-    require(len(data) == 624 and struct.unpack_from('<QII', data) == (0x3150465442535353, 1, 624), 'Bluetooth profile geometry differs.')
+    require(len(data) in (624,752) and struct.unpack_from('<QII', data) == (0x3150465442535353, 1 if len(data)==624 else 2, len(data)), 'Bluetooth profile geometry differs.')
+    if len(data)==752:
+        mode,incoming=struct.unpack_from('<2I',data,624)
+        minimum,channel=struct.unpack_from('<2I',data,656)
+        authority=struct.unpack_from('<Q',data,664)[0]
+        latency,response=struct.unpack_from('<2Q',data,704)
+        samples,mtu,slots,interval,window,line,capture=struct.unpack_from('<I4H2I',data,720)
+        scan,role,clock=struct.unpack_from('<BBH',data,740)
+        require(mode==1 and incoming<=1 and any(data[632:638]) and data[654]==0 and data[655]<=1 and
+                2<=minimum<=3 and 1<=channel<=30 and authority and any(data[672:704]) and
+                0<latency<1000000 and 0<response<1000000 and 0<samples<=24000 and 48<=mtu<=512 and
+                slots>=0xa0 and 0x12<=interval<=0x1000 and not interval%2 and 0x11<=window<=interval and
+                line and 0<capture<=5000000 and scan<=2 and role<=1 and not any(data[744:752]),
+                'Invalid immutable headset policy or discovery metadata.')
     require(struct.unpack_from('<I', session, 400)[0] == 2 and hashlib.sha256(data).digest() == session[320:352], 'Bluetooth profile/session identity differs.')
     require(struct.unpack_from('<Q', data, 24)[0] == struct.unpack_from('<Q', session, 312)[0] != 0, 'Actual secure SID authority required.')
     require(all(struct.unpack_from('<Q', data, offset)[0] == 0 for offset in (184, 192, 200, 360, 368)), 'Runtime handoffs/deadlines must be absent from immutable input.')
@@ -45,6 +58,17 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
             require(not frozen, 'Bluetooth evidence missing from frozen bundle.')
             cache[item['path']] = Path(item['path']).read_bytes()
         require(hashlib.sha256(cache[item['path']]).hexdigest() == item['sha256'] and bytes.fromhex(item['sha256']) == profile[offset:offset + 32], 'Bluetooth authority evidence differs.')
+    if len(profile)==752:
+        require(manifest.get('headset_provider',{}).get('commit')=='64e98eb5278d790f3b3e5279ca8b39b45097bbc0',
+                'Pinned native security provider required for headset capture.')
+        item=record.get('bluetooth_scheduling')
+        require(isinstance(item,dict) and set(item)=={'path','sha256'} and Path(item['path']).is_absolute(),
+                'Actual scheduling/buffer/RTS-CTS service evidence required.')
+        if item['path'] not in cache:
+            require(not frozen,'Scheduling evidence missing from frozen bundle.')
+            cache[item['path']]=Path(item['path']).read_bytes()
+        require(hashlib.sha256(cache[item['path']]).hexdigest()==item['sha256'] and
+                bytes.fromhex(item['sha256'])==profile[672:704],'Scheduling authority evidence differs.')
     return spans
 
 

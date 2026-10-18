@@ -31,10 +31,10 @@ struct bt_hci_incoming_config {
 struct bt_hci {
     struct bt_h4 transport;
     const struct bt_hci *self;
-    const void *acl_owner, *synchronous_owner;
+    const void *acl_owner, *synchronous_owner, *security_owner;
     struct bt_hci_incoming_config incoming_config;
     uint64_t configuration_deadline;
-    unsigned configuration_stage, configured, synchronous_ready;
+    unsigned configuration_stage, configured, synchronous_ready, security_ack_pending;
     struct bt_hci_identity identity;
     uint64_t initialization_deadline, command_timeout_us, command_deadline, command_tag;
     uint16_t opcode;
@@ -97,6 +97,15 @@ int bt_hci_request(struct bt_hci *, uint16_t opcode, const uint8_t *, size_t,
  * commands; preserves the same Status-versus-terminal-event contract. */
 int bt_hci_synchronous_request(struct bt_hci *,const void *owner,uint16_t opcode,
                               const uint8_t *,size_t,uint64_t deadline);
+/* One registered BR/EDR security owner shares the existing command credit.
+ * The exact opcode/length allowlist covers SSP/key/encryption setup only.
+ * Complete commands retain their matching completion; authentication and
+ * encryption commands retain Status and require separate terminal events.
+ * Registration is permanent for this controller lifetime. */
+int bt_hci_security_register(struct bt_hci *,const void *owner);
+int bt_hci_security_acknowledge(struct bt_hci *,const void *owner,uint64_t tag);
+int bt_hci_security_request(struct bt_hci *,const void *owner,uint16_t opcode,
+                           const uint8_t *,size_t,uint64_t deadline);
 /* One H4 step and at most one complete record dispatch. Commands consume one
  * credit at submission. Bootstrap Command Status marks acceptance only;
  * bootstrap advances after matching Command Complete. External link commands

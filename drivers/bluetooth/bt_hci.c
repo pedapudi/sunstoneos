@@ -126,16 +126,43 @@ static int request(struct bt_hci *h,uint16_t opcode,const uint8_t *p,size_t n,ui
 }
 int bt_hci_request(struct bt_hci *h,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
 {
+    if(h&&h->security_ack_pending)return 0;
     if((op!=0x0405 || n!=13) && (op!=0x0406 || n!=3) && (op!=0x0409 || n!=7) &&
        (op!=0x040a || n!=7))return -1;
     return request(h,op,p,n,deadline);
 }
 int bt_hci_synchronous_request(struct bt_hci *h,const void *owner,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
 {
+    if(h&&h->security_ack_pending)return 0;
     if(!h || !owner || h->synchronous_owner!=owner || !h->synchronous_ready ||
        ((op!=0x041b || n!=2) && (op!=0x043d || n!=59) && (op!=0x043e || n!=63) &&
         (op!=0x042a || n!=7) && (op!=0x0406 || n!=3)))return -1;
     return request(h,op,p,n,deadline);
+}
+int bt_hci_security_register(struct bt_hci *h,const void *owner)
+{
+    if(!h||h->self!=h||!owner||h->security_owner||h->state!=BT_HCI_IDENTIFIED||
+        h->command!=BT_HCI_IDLE||overlaps(h,sizeof(*h),owner,1))return -1;
+    h->security_owner=owner;return 1;
+}
+int bt_hci_security_acknowledge(struct bt_hci *h,const void *owner,uint64_t tag)
+{
+    if(!h||h->self!=h||h->security_owner!=owner||!owner||!h->security_ack_pending||
+        h->command!=BT_HCI_IDLE||tag!=h->command_tag)return -1;
+    h->security_ack_pending=0;return 1;
+}
+int bt_hci_security_request(struct bt_hci *h,const void *owner,uint16_t op,const uint8_t *p,size_t n,uint64_t deadline)
+{
+    unsigned status=op==0x0411||op==0x0413;
+    size_t bytes=op==0x040b?22:op==0x040c?6:op==0x040d?23:op==0x040e?6:
+        op==0x0411?2:op==0x0413?3:op==0x042b?9:op==0x042c?6:op==0x042d?6:
+        op==0x042e?10:op==0x042f?6:op==0x0434?7:op==0x1408?2:
+        op==0x0c56?1:op==0x0c55?0:op==0x1004?1:op==0x0c7a?1:op==0x0c79?0:SIZE_MAX;
+    if(!h||h->security_owner!=owner||!owner||bytes!=n)return -1;
+    if(h->security_ack_pending)return 0;
+    int result=request(h,op,p,n,deadline);
+    if(result==1){h->external_command=status?1:2;h->security_ack_pending=1;}
+    return result;
 }
 static int retain(struct bt_hci *h, const struct bt_h4_record *r)
 { return bt_h4_own(&h->transport,r->serial)==1 ? 1 : fail(h); }
@@ -185,7 +212,9 @@ static int dispatch(struct bt_hci *h, const struct bt_h4_record *r)
     if(h->external_command) {
         /* Link commands require Status then their separate terminal event.
          * Unknown-command refusal may instead use Complete with status. */
-        if(!cs && (n!=4 || !p[5])) return bad_record(h,r);
+        if(h->external_command==2){
+            if(cs||n<4)return bad_record(h,r);
+        } else if(!cs && (n!=4 || !p[5])) return bad_record(h,r);
         h->last_status=p[cs ? 2 : 5];h->command_accepted=!h->last_status;
         h->external_command=0;h->command=BT_HCI_IDLE;
         return retain(h,r);

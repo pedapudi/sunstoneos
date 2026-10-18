@@ -63,10 +63,13 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
 {assert(s==&app.session&&(atomic_load(&recovery)&4));++radio_retains;return A733_SESSION_RETAINED;}
 int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_dispatch_event *e){(void)s;(void)e;return 0;}
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *r){(void)s;(void)r;return 0;}
-int main(int argc,char **argv)
+#ifndef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
+#define BLUETOOTH_APPLICATION_FIXTURE_ENTRY main
+#endif
+int BLUETOOTH_APPLICATION_FIXTURE_ENTRY(int argc,char **argv)
 {
     wire.now=1;wire.room=1024;providers.used=1;providers.boot.identity=99;atomic_init(&recovery,1);
-    profile=(struct bluetooth_profile){.magic=BLUETOOTH_PROFILE_MAGIC,.version=1,.bytes=sizeof(profile),
+    profile=(struct bluetooth_profile){.magic=BLUETOOTH_PROFILE_MAGIC,.version=1,.bytes=624,
         .topology=2,.sid_authority=7,.radio_authority=3,.uart_authority=4,.wake_authority=5,
         .wiring_evidence={1},.sid_evidence={2},.fresh_transport_evidence={3},.pm_latch={6,7,0x3f,0},
         .radio={.owner=20,.topology={.identity=2}},.wake={.authority=5,.desired={{1,0,0},{0,0,0}}},
@@ -74,7 +77,7 @@ int main(int argc,char **argv)
         .firmware_address={0x43010000,0x43020000,0x43030000,0x43040000},.firmware_bytes={1708,24744,23288,341260},
         .session_owner=22,.runtime_lease_us=10000000,.renew_margin_us=3000000,
         .command_timeout_us=500000,.frame_timeout_us=100000,.binding_timeout_us=1000000};
-    uint8_t digest[32];storage_digest_bytes(&profile,sizeof(profile),digest);assert(bluetooth_profile_valid(&profile,digest));
+    uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));
     digest[0]^=1;assert(!bluetooth_profile_valid(&profile,digest));digest[0]^=1;
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest)&&constructor_calls==1);
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;
@@ -97,7 +100,7 @@ int main(int argc,char **argv)
     uint8_t frame[177];size_t frame_bytes=0;
     assert(bluetooth_result_frame(frame,&frame_bytes,1,31,37,digest,4,9,&identity)&&frame_bytes==177);
     assert(argc==3);FILE *file=fopen(argv[1],"wb");assert(file&&fwrite(frame,1,frame_bytes,file)==frame_bytes&&!fclose(file));
-    file=fopen(argv[2],"wb");assert(file&&fwrite(&profile,1,sizeof(profile),file)==sizeof(profile)&&!fclose(file));
+    file=fopen(argv[2],"wb");assert(file&&fwrite(&profile,1,profile.bytes,file)==profile.bytes&&!fclose(file));
     unsigned count=wire.accesses,polls=radio_polls;
     atomic_fetch_or(&recovery,4);assert(bluetooth_application_poll(&app)==-1&&wire.accesses==count&&radio_polls==polls);
     assert(bluetooth_application_result(&app,&identity)==-1&&radio_retains==1&&uart_retains==1);

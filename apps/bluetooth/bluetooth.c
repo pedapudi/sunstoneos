@@ -1,5 +1,8 @@
 #include "bluetooth.h"
 #include "a733_storage_digest.h"
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+#include "headset.h"
+#endif
 #include <string.h>
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
@@ -7,7 +10,7 @@ static int present(const uint8_t *p,size_t n)
 {unsigned value=0;for(size_t i=0;i<n;++i)value|=p[i];return value!=0;}
 int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t digest[32])
 {
-    if(!p||!digest||p->magic!=BLUETOOTH_PROFILE_MAGIC||p->version!=1||p->bytes!=sizeof(*p)||
+    if(!p||!digest||p->magic!=BLUETOOTH_PROFILE_MAGIC||!((p->version==1&&p->bytes==624)||(p->version==2&&p->bytes==sizeof(*p)))||
         !p->topology||!p->sid_authority||!p->radio_authority||!p->uart_authority||!p->wake_authority||
         !present(p->wiring_evidence,32)||!present(p->sid_evidence,32)||!present(p->fresh_transport_evidence,32)||
         p->radio.topology.identity!=p->topology||p->radio.handoff||p->radio.deadline_us||p->radio.lifetime_deadline_us||
@@ -20,7 +23,22 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         !p->command_timeout_us||p->command_timeout_us>5000000||!p->frame_timeout_us||
         p->frame_timeout_us>p->command_timeout_us||!p->binding_timeout_us||
         !p->runtime_lease_us||!p->renew_margin_us||p->renew_margin_us>=p->runtime_lease_us)return 0;
-    uint8_t actual[32];storage_digest_bytes(p,sizeof(*p),actual);if(memcmp(actual,digest,32))return 0;
+    if(p->version==2){
+#ifndef SUNSTONE_BLUETOOTH_HEADSET
+        return 0;
+#else
+        const struct bluetooth_headset_profile *h=&p->headset;
+        if(h->mode!=1||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
+            h->minimum_security<2||h->minimum_security>3||!h->server_channel||h->server_channel>30||
+            !h->scheduling_authority||!present(h->scheduling_evidence,32)||!h->receive_latency_us||
+            !h->response_timeout_us||h->receive_latency_us>=1000000||h->response_timeout_us>=1000000||
+            !h->samples||h->samples>24000||h->mtu<48||h->mtu>512||h->accept_slots<0x00a0||
+            h->page_interval<0x12||h->page_interval>0x1000||(h->page_interval&1)||
+            h->page_window<0x11||h->page_window>h->page_interval||!h->line_timeout_us||
+            !h->capture_timeout_us||h->capture_timeout_us>5000000||h->peer_page_scan_mode>2||h->peer_role_switch>1||h->reserved2)return 0;
+#endif
+    }
+    uint8_t actual[32];storage_digest_bytes(p,p->bytes,actual);if(memcmp(actual,digest,32))return 0;
     for(unsigned i=0;i<4;++i){
         if(p->firmware_address[i]<UINT64_C(0x43010000)||p->firmware_address[i]>=UINT64_C(0x43100000)||
             !p->firmware_bytes[i]||p->firmware_bytes[i]>UINT64_C(0x43100000)-p->firmware_address[i])return 0;
@@ -75,7 +93,7 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
         !separate(a,sizeof(*a),p,sizeof(*p))||!separate(a,sizeof(*a),shared,sizeof(*shared))||
         !separate(a,sizeof(*a),id,sizeof(*id))||!separate(a,sizeof(*a),recovery,sizeof(*recovery)))return 0;
     a->self=a;a->profile=p;a->shared=shared;a->chip_id=id;a->owner=owner;a->recovery_state=recovery;
-    a->deadline=end-10000;a->hci_deadline=start+55000000;
+    a->started=start;a->deadline=end-10000;a->hci_deadline=start+(p->version==2?45000000:55000000);
     atomic_init(&a->failed,1);atomic_init(&a->result_lock,0);atomic_init(&a->result,0);
     a->radio_config=p->radio;a->radio_config.handoff=shared->boot.identity;
     a->radio_config.deadline_us=start+40000000;a->radio_config.lifetime_deadline_us=a->deadline;
@@ -101,6 +119,9 @@ int bluetooth_application_retain(struct bluetooth_application *a)
     if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
     atomic_fetch_or_explicit(a->recovery_state,4,memory_order_acq_rel);
     atomic_store_explicit(&a->failed,1,memory_order_release);a->iteration_live=0;
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+    (void)bluetooth_headset_retain(a);
+#endif
     bt_h4_fail(&a->hci.transport);
     (void)a733_uart_platform_retain(&a->uart);(void)a733_radio_session_retain(&a->session);return -1;
 }
@@ -131,6 +152,12 @@ int bluetooth_application_poll(struct bluetooth_application *a)
         a->session.deadline,&a->host_wake);
     if(wake==A733_RADIO_BUSY)return 0;if(wake!=A733_RADIO_READY)return bluetooth_application_retain(a);
     a->iteration_live=1;
+#ifdef SUNSTONE_BLUETOOTH_HEADSET
+    if(a->profile->version==2&&atomic_load_explicit(&a->result,memory_order_acquire)){
+        int r=bluetooth_headset_poll(a,now);a->iteration_live=0;
+        return r<0?bluetooth_application_retain(a):1;
+    }
+#endif
     if(a->stage==1){
         a->firmware_generation=generation;
         a->binding=(struct bt_h4_binding){a733_uart_platform_controller(&a->uart),generation,a->uart_generation,
@@ -142,7 +169,7 @@ int bluetooth_application_poll(struct bluetooth_application *a)
     if(generation!=a->firmware_generation||bt_hci_step(&a->hci,64,a->deadline)<0)return bluetooth_application_retain(a);
     a->iteration_live=0;
     const struct bt_h4_record *record=bt_hci_next(&a->hci);
-    if(record){uint64_t serial=record->serial;if(bt_hci_release(&a->hci,serial)!=1)return bluetooth_application_retain(a);
+    if(record&&a->profile->version==1){uint64_t serial=record->serial;if(bt_hci_release(&a->hci,serial)!=1)return bluetooth_application_retain(a);
         if(a->discarded_records!=UINT64_MAX)++a->discarded_records;}
     if(a->hci.state==BT_HCI_IDENTIFIED&&!atomic_load_explicit(&a->result,memory_order_acquire)){
         unsigned unlocked=0;if(atomic_compare_exchange_strong_explicit(&a->result_lock,&unlocked,1,memory_order_acquire,memory_order_relaxed)){

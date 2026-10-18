@@ -1,0 +1,41 @@
+{
+  "repository": "https://github.com/zephyrproject-rtos/zephyr",
+  "tag": "v4.2.1",
+  "commit": "64e98eb5278d790f3b3e5279ca8b39b45097bbc0",
+  "sources": {
+    "subsys/bluetooth/host/classic/ssp.c": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/classic/ssp.c",
+      "sha256": "a265b8bbaecd83c71b48deadd3f00d7fdc8c2bfe20162de8b00f0af94b24d473"
+    },
+    "subsys/bluetooth/host/classic/ssp.h": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/classic/ssp.h",
+      "sha256": "241a939060e16a377263b7db909907286028d4e70594f0dd06e477db9e47e7dc"
+    },
+    "subsys/bluetooth/host/classic/keys_br.c": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/classic/keys_br.c",
+      "sha256": "072dca30d06a41f1a696cf7a33e1ffebcae05b878aac60df8be0b3822faf9805"
+    },
+    "subsys/bluetooth/host/classic/br.c": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/classic/br.c",
+      "sha256": "822d14df172dd7e564a98bf50d5a1c6a114429f4b02dc528498842125b92331a"
+    },
+    "subsys/bluetooth/host/keys.h": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/keys.h",
+      "sha256": "f19cebdd34fce34db6f7106decea318774a3acdc9e0dcadc245a917a28e63f28"
+    },
+    "subsys/bluetooth/host/conn_internal.h": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/subsys/bluetooth/host/conn_internal.h",
+      "sha256": "cdc2d9e3906b648865624190d67f71c8eabd9e695ccf64c5177dd7ae470dbb7f"
+    },
+    "include/zephyr/bluetooth/hci_types.h": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/include/zephyr/bluetooth/hci_types.h",
+      "sha256": "d93513765c29c3f93d3c83f47204c92804f1fcdd80daac0be63a132bdd5eaf81"
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/zephyrproject-rtos/zephyr/64e98eb5278d790f3b3e5279ca8b39b45097bbc0/LICENSE",
+      "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+    }
+  },
+  "license": "Apache-2.0",
+  "scope": "BR/EDR SSP and RAM link-key policy adapted to the existing serialized FreeRTOS HCI owner; no competing host stack."
+}

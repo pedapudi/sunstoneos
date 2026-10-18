@@ -1,4 +1,4 @@
-# Native Bluetooth controller identification
+# Native Bluetooth identification and headset capture
 
 The supervised Bluetooth image connects the onboard radio firmware bootstrap,
 native UART1 and existing H4/HCI worker. It identifies the controller through
@@ -59,8 +59,9 @@ Only successful Reset, Version, Supported Commands, Features, Buffer Size and
 BD_ADDR completions publish IDENTIFIED. Unsolicited records are consumed within
 the existing bounded packet storage. Identification establishes no pairing,
 authenticated peer, connection, audio path or controller security readiness.
-HFP, security/pairing, SCO/headset audio and broader Bluetooth modes remain
-required work.
+The optional headset capture path below adds security, hands-free control and
+synchronous PCM capture. Physical headset operation and broader Bluetooth modes
+remain unqualified.
 
 UART startup has a two-second software deadline. Radio bootstrap is bounded by
 40 seconds, HCI identification by 55 seconds and the complete supervised session
@@ -118,8 +119,8 @@ firmware upload or controller identification.
 The bounded host adapter uses the shared supervised session runner and the pure
 Bluetooth bundle validator and result decoder. It sends one zero-valued byte
 on USB OUT and requires one transferred byte before reading at most 177 bytes.
-Only a valid pending reply permits another query. A terminal identity or fault
-ends capture; malformed, late or failed transfers stop immediately. The copied
+For the identification profile, only a valid pending reply permits another
+query. A terminal identity or fault ends capture; malformed, late or failed transfers stop immediately. The copied
 frame becomes durable before its terminal result is published. Queue review
 binds the initially frozen bundle, executable image, launcher and host source
 identities. The board lock and queue claim remain retained for coordinator
@@ -141,3 +142,92 @@ workload and absent-watchdog checks with the unchanged supervisor explicitly
 modeled. No physical transport or earlier protocol suite is replayed. Inputs
 are copied and hashed before compilation and execution; raw results reside in
 `bluetooth-native-20261017/host-capture` under the evidence cache.
+
+
+## Bounded native headset capture
+
+Building with `SUNSTONE_BT_SECURITY_DIR` enables the 752-byte headset profile.
+The default 624-byte identification profile remains supported. Both profiles
+retain the same board workload ABI, four firmware spans and full-power-removal
+recovery requirement. The headset profile adds one permitted peer, explicit
+pairing consent or PIN, minimum security, RFCOMM channel, capture sample count,
+receive-service authority and actual peer discovery metadata. Outgoing page-scan
+mode, role-switch policy and clock offset come from that immutable input.
+
+The security provider compiles the pinned Zephyr 4.2.1 SSP and RAM link-key
+sources against the existing serialized HCI owner. The pin and per-file hashes
+are in `apps/bluetooth/security-source.json`. The adapter preserves original
+source license notices and the Apache license. It removes platform includes and
+logging registration, supplies fixed copied command buffers and connection
+lookups, and reuses the original security-level decision body. No Zephyr runtime
+or second Bluetooth transport runs on the board. Keys remain in RAM until full
+power removal; replacement pairing and authenticated-key replacement retain a
+failure before changing existing proof.
+
+A command queue copies parameters from upstream callbacks. Only matching tagged
+controller completions retire entries. Pending security acknowledgements block
+replacement commands from ACL and synchronous-audio owners. SSP consent alone
+never opens a service. Actual authentication, encryption mode and a successful
+16-byte encryption-key-size response must all refer to the same connected peer,
+ACL generation and controller lifetime. This port advertises no input or display;
+its Just Works policy also governs upstream initiator auto-confirmation.
+
+One task drives the existing local SDP server, RFCOMM registry, hands-free audio
+gateway and synchronous-audio provider. Incoming mode listens for the admitted
+peer. Outgoing mode discovers the peer's hands-free service and closes the SDP
+client while continuing its close work beside RFCOMM. The retained bootstrap
+initializer claims L2CAP once without discarding partial H4 framing or staged
+bytes. Its ordinary strict initializer retains its existing empty-input rule.
+Every service admission checks actual security again.
+
+The gateway advertises no telephony service or active call. After hands-free
+setup, it opens CVSD synchronous audio and collects signed 16-bit little-endian
+PCM at 8 kHz. Packet boundaries may split a sample. The application copies bytes
+across boundaries and preserves each packet's acquisition serial, source length,
+copied length, offset and loss status. It sends explicit zero-valued playback
+samples to service the synchronous link. Capture is bounded by the immutable
+sample count, buffer capacity, packet-record capacity and absolute deadlines.
+Any loss prevents successful publication. A complete capture becomes readable
+only after the controller confirms synchronous disconnect.
+
+Headset requests contain eight bytes: kind 1 for PCM or 2 for packet records,
+a zero reserved byte, a little-endian 16-bit requested count and a little-endian
+32-bit byte offset. Each request copies at most 1024 bytes. Replies contain a
+160-byte header followed by the copied bytes. Pending and failed replies carry
+no producer metadata. Successful headers identify the session, profile,
+firmware, UART, ACL and audio generations, complete extents and PCM SHA256.
+Packet records use the 24-byte little-endian layout declared in `headset.h`.
+The one-byte identification request retains its original reply format.
+
+The host saves each raw frame before decoding. It checks immutable identity
+across chunks, packet extents and loss, the complete PCM digest and the capture
+deadline before publishing success. The saved `bluetooth-8k-s16le.pcm` is copied
+audio output. Mimus currently accepts finite contiguous 16 kHz input; live input,
+resampling and headset-to-recognition integration remain outstanding.
+
+The affected native ELF links with the pinned security sources. Eight focused
+composition cases pass with AddressSanitizer and UndefinedBehaviorSanitizer:
+complete incoming authenticated control/audio capture, initiator consent refusal,
+authenticated key replacement refusal, operation expiry, PCM loss refusal,
+retained incomplete H4 handoff, pre-authentication service refusal and
+pending copied results before the owner starts. The model
+starts through actual application initialization and uses production protocol
+workers. Radio startup and UART register behavior are modeled. The host cases
+cover profile admission, copied frame identity, pending privacy, bounded capture,
+full digest refusal, identity changes and late finalization. Their frames are
+constructed in Python; native USB serialization has source review and native
+link coverage. Host source and result preservation completed after execution
+following failed pre-execution snapshot setup. That snapshot cannot prove
+pre-execution input identity. Outgoing connection/discovery composition remains untested. No physical headset
+or Bluetooth operation is established.
+
+The retained headset ELF SHA256 is
+`d082652408a0463ed32385cf0560e5ea3f02d5babbaf9bfae088aad89ad4e4db`.
+Its dependency record covers 177 linked objects and 446 inputs. Inputs, executable
+snapshots, compiler dependencies and raw results are under
+`~/.cache/sunstoneos/evidence/bluetooth-headset-native-20261017`. The native image
+and host adapter require a coordinator-reviewed board lifetime, actual wiring,
+secure SID and transport evidence, scheduling/buffer/RTS-CTS evidence, and one
+identified headset before a physical capture request can run. No headset is
+currently confirmed. Physical pairing, control, audio capture and recognition
+qualification remain required.

@@ -62,6 +62,12 @@ int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
         .mtu=le16(h->identity.buffer_size),.active_tx=BT_ACL_TX_SLOTS,
         .command_link=BT_ACL_LINKS,.state=BT_ACL_ACTIVE};return 1;
 }
+int bt_acl_security_register(struct bt_acl *a,const struct bt_acl_security_ops *op,void *ctx)
+{
+    if(!a||a->state!=BT_ACL_ACTIVE||!op||!ctx||a->security||!op->prepare||!op->event||
+        !private(a,op,sizeof(*op))||a->hci->security_owner!=ctx)return -1;
+    a->security=op;a->security_context=ctx;return 1;
+}
 int bt_acl_synchronous_register(struct bt_acl *a,const struct bt_acl_synchronous_ops *op,void *ctx)
 {
     if(!a || a->state!=BT_ACL_ACTIVE || !op || !ctx || a->synchronous || a->hci->synchronous_owner ||
@@ -217,6 +223,10 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
 }
 static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
 {
+    if(a->security){
+        int owned=a->security->event(a->security_context,r);
+        if(owned)return owned==1?1:fault(a);
+    }
     if(a->synchronous && !(r->type==4 && (r->storage.bytes[0]==0x13 || r->storage.bytes[0]==0x05))){
         int owned=a->synchronous->event(a->synchronous_context,r);
         if(owned)return owned==1 ? 1 : fault(a);
@@ -306,8 +316,10 @@ int bt_acl_step(struct bt_acl *a,unsigned budget,uint64_t deadline)
         deadline=a->links[i].deadline;
     for(unsigned i=0;i<BT_ACL_TX_SLOTS;++i) if(a->packets[i].state>=BT_ACL_QUEUED &&
         a->packets[i].state<=BT_ACL_SENT && deadline>a->packets[i].deadline) deadline=a->packets[i].deadline;
+    if(a->security&&a->security->prepare(a->security_context)!=1)return fault(a);
     if(a->synchronous && a->synchronous->prepare(a->synchronous_context)!=1)return fault(a);
     if(bt_hci_step(a->hci,budget,deadline)!=1) return fault(a);
+    if(a->security&&a->security->prepare(a->security_context)!=1)return fault(a);
     if(a->synchronous && a->synchronous->prepare(a->synchronous_context)!=1)return fault(a);
     if(a->active_tx<BT_ACL_TX_SLOTS && a->hci->transport.tx_offset==a->hci->transport.tx_length) {
         a->packets[a->active_tx].state=BT_ACL_SENT;a->active_tx=BT_ACL_TX_SLOTS;
