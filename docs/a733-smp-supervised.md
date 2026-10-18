@@ -265,21 +265,46 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native publication checkpoint
+## Returning native CPU/DSU planning checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty verified
-instruction replacements redirect the C boot entry, the end of cache publication,
-the terminal stop, the initial park and sixteen EL3 exception slots. The C entry
+The native code, data, BSS and stack addresses remain unchanged. Twenty-three verified
+instruction replacements redirect the C boot entry, successful CPU/DSU planning,
+the first requested control write, both planning failure parks, the terminal stop,
+the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
 The original stack selection, BSS clearing, boot-state validation and admission
 checks execute. Cache preparation then checks core identity and deadlines and
 constructs five translation-table pages. Three publication calls clean the native
 code, data/BSS and tables to the point of coherency with `DC CVAC` and `DSB SY`.
-The normal checkpoint at `0x41004bec` returns after all three calls succeed,
-before CPU/DSU preparation, cache activation, GIC or secondary initialization.
+Native CPU/DSU identification and planning then execute. The normal checkpoint
+at `0x41008264` returns before `a733_cached_block_walks` changes TCR_EL1 and sets
+SCTLR_EL1.M. A guard at `0x41004440` captures the first proposed implementation
+control or patch write before it executes. Both native preparation failure parks
+return their diagnostic state. Cache activation, GIC and secondary initialization
+remain outside this stage.
+
+The physical boot CPU is Cortex-A55 r2p0. The pinned TF-A reset code and native
+planner request no CPU workaround writes for that revision. Conditional DSU
+clock-gating workarounds can still require a control write; the diagnostic captures
+its register and value. The pinned A733 vendor monitor uses the same DSU register
+encodings at `0x48002814`, `0x48002840` and `0x4800284c`. Its speculative-walk
+blocking sequence at `0x4800388c` also changes TCR_EL1 and SCTLR_EL1.M. Those
+instructions explain why planning and later activation have separate return
+boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
+from the vendor monitor with SHA-256
+`8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
+
+Checkpoint 2 means native planning completed without a control write. Checkpoint
+6 records a requested register and value before that write; checkpoint 7 records
+a native failure park. Checkpoint 5 retains exception registers, including the
+faulting instruction address. The host copies the 184-byte native controller at
+`0x4200e480` and 128-byte core record at `0x4200e080`. They contain identity,
+revision plan, poll index, phase and native error state. Both intervals already
+belong to the backed-up monitor BSS. Unknown DSU revisions and register-access
+failures remain observed outcomes rather than inferred board properties.
 
 Publication covers `0x41000000..0x41200000`, `0x41200000..0x41290d10` and
 `0x421f0000..0x421f5000`. It visits every 64-byte line in order; the last data
@@ -316,7 +341,7 @@ diagnostic writes, including `0x421f0000..0x421f5000` for the five table pages.
 After warm return, the new ROM owns SRAM; the host never
 restores the obsolete caller stack or other old SRAM bytes into that instance.
 It verifies the returned ROM service, durably copies the diagnostic, native
-result, admission and constructed-table records, then restores and verifies the
+result, admission, table, controller and core records, then restores and verifies the
 affected DRAM.
 Any transport failure or absent return retains ownership and stops requests.
 
@@ -344,8 +369,8 @@ cache preparation. No refusal or exception was recorded. The report captured
 stack top `0x42014000`, terminal SP `0x42013f50`, CNTFRQ 24 MHz and both SCTLR banks
 as `0x00c50838`. The board returned automatically as USB instance `003:075`.
 Copied reports and all reviewed DRAM restoration comparisons passed. Evidence
-is under `startup-stage-20261017-074/native/`. Cache preparation and subsequent
-startup stages remain unresolved; this result does not establish multicore operation.
+is under `startup-stage-20261017-074/native/`. Subsequent physical checkpoints
+extend that evidence below; multicore operation remains unqualified.
 
 The table-construction checkpoint also physically passed once. All 41 host
 transactions succeeded, the diagnostic returned to ROM, and affected DRAM was
@@ -355,11 +380,19 @@ their SHA-256 is
 Evidence is under `~/.cache/sunstoneos/evidence/startup-stage-20261017-075/native/runtime/`;
 the table instruction evidence remains under `native-tables-probe-20261017/`.
 
-One affected build and one focused publication instruction case pass. The case
-checks all three ordered line ranges, their completion barriers, successful
-returns and exclusion of CPU/DSU preparation. Architectural reads, admission
-MMIO and `DC CVAC` are modeled; it does not model cache state or writeback effects.
-The preceding six startup cases and table case remain valid for unchanged code.
-Publication evidence is under
-`~/.cache/sunstoneos/evidence/native-publication-probe-20261017/`. Publication
-and later cache/coherence startup still require physical evidence.
+The complete publication phase physically passed once. All 41 host transactions
+succeeded, the diagnostic returned as USB instance `003:077`, and affected DRAM
+was restored. Both SCTLR banks remained `0xc50838`; the table pages retained
+their modeled hash. Evidence is under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-076/native/runtime/`.
+Its focused instruction evidence remains under `native-publication-probe-20261017/`.
+
+One affected build and four focused native planning cases pass: preparation
+without writes, a captured first DSU write, an unsupported DSU revision and an
+exception while reading DSU identity. The cases verify captured controller state,
+the existing return mechanism and exclusion of all control writes. Architectural
+reads, admission MMIO and `DC CVAC` are modeled; cache effects and physical register
+access remain unqualified. Earlier startup, table and publication evidence remains
+valid for unchanged code. Planning evidence is under
+`~/.cache/sunstoneos/evidence/native-planning-probe-20261017/`. Actual CPU/DSU
+planning and later startup still require physical evidence.

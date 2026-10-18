@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute native publication; cache maintenance and architectural reads are modeled."""
+"""Execute native CPU/DSU planning exits; architectural reads and maintenance are modeled."""
 import argparse
 import hashlib
 import importlib.util
@@ -25,7 +25,7 @@ for path in (a.bundle/'image.elf',a.build/'overlay.elf'):
 # Patch branches need actual decoding, rather than the old ELF's disassembly.
 for address,old,new in m['patches']:ops[address]=''
 nonce=bytes(range(1,17));reports=[]
-def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
+def check(name,*,scenario='normal',mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
     for address,size in [(0x41000000,0x1200000),(0x02050000,0x1000),(0x07050000,0x1000),(0x08001000,0x1000)]:cpu.mem_map(address,size)
     for item in m['payloads']:cpu.mem_write(item['address'],(a.build/item['name']).read_bytes())
@@ -40,11 +40,15 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     if watchdog:cpu.mem_write(0x02050014,struct.pack('<I',1))
     cpu.reg_write(UC_ARM64_REG_SP,0x41414100)
     registers={'currentel':el,'mpidr_el1':0x81000000,'sctlr_el3':sctlr,'sctlr_el1':0xc50838,
-               'cntfrq_el0':0,'daif':0x3c0,'ctr_el0':0x8444c004,'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
+               'cntfrq_el0':0,'daif':0x3c0,'ctr_el0':0x8444c004,'midr_el1':0x412fd050,'clidr_el1':0x124,
+               'id_aa64mmfr0_el1':2,'s3_0_c15_c3_1':0x30,'s3_0_c15_c3_0':0,'s3_0_c15_c3_3':1<<40,
+               'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
+    if scenario=='write':registers.update(s3_0_c15_c3_1=0,s3_0_c15_c3_0=0x800)
+    if scenario=='unknown':registers['s3_0_c15_c3_1']=0x90
     writes=[];controls=[];ticks=[];stopped=[];entered=[];injected=[];publication=[];cleaned=[]
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     def instruction(uc,address,size,unused):
-        assert address!=0x41004c2c,'CPU/DSU preparation must not execute.'
+        assert address not in (0x41008268,0x41004444),'Control-write guards must not be crossed.'
         if address==0x41004558:
             assert len(publication)<3 and (not publication or publication[-1]['barriers']==1)
             begin,end=ranges[len(publication)]
@@ -55,7 +59,7 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
             item=publication[-1]
             assert cleaned==list(range(item['begin'],item['end'],64))
             item['lines']=len(cleaned);item['barriers']+=1
-        if address==m['hooks']['cached_checkpoint']:
+        if address in (m['hooks'][key] for key in ('cached_checkpoint','write_checkpoint','failed_checkpoint','fault_checkpoint')):
             assert len(publication)==3 and all(item['barriers']==1 for item in publication)
         if fault and address==0x41000078 and not injected:
             injected.append(True);uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
@@ -71,6 +75,9 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
         read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
         if read:
             key=read[2].lower()
+            if scenario=='read-fault' and key=='s3_0_c15_c3_1':
+                registers.update(esr_el3=0x02000000,elr_el3=address,far_el3=0)
+                uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
             if key=='cntpct_el0':value=200+len(ticks);ticks.append(value)
             else:assert key in registers,(name,key,hex(address));value=registers[key]
             uc.reg_write(UC_ARM64_REG_X0+int(read[1]),value);uc.reg_write(UC_ARM64_REG_PC,address+4)
@@ -94,14 +101,31 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
         reports.append({'name':name,'wrong_el_park':True});return
     assert stopped==['return'],(name,stopped,hex(cpu.reg_read(UC_ARM64_REG_PC)))
     raw=bytes(cpu.mem_read(host.REPORT,256));result=host.decode(raw,nonce)
+    controller=host.controller_snapshot(bytes(cpu.mem_read(0x4200e480,184)),bytes(cpu.mem_read(0x4200e080,128)))
     assert result['SCTLR_EL3']==sctlr and result['SCTLR_EL1']==0xc50838
-    if fault:assert result['checkpoint']==5 and result['vector']==4 and result['elr']==0x41000078 and not entered
+    if scenario=='write':
+        assert result['checkpoint']==6 and result['requested_register']==14 and result['requested_value']==(1<<40)|0x18000
+        assert controller['state']==2 and controller['index']==4 and controller['phase']==1
+        assert controller['plan']['clusteractlr']==0x18000 and not controller['error']
+    elif scenario=='unknown':
+        assert result['checkpoint']==7 and controller['identity']['clusteridr']==0x90
+        assert controller['state']==5 and controller['error']==3 and controller['index']==10
+        assert controller['core_record']['state']==6 and controller['core_record']['error']==2
+    elif scenario=='read-fault':
+        assert result['checkpoint']==5 and result['vector']==4 and result['esr']==0x02000000
+        assert ops[result['elr']].lower().endswith('s3_0_c15_c3_1')
+        assert controller['state']==1 and controller['index']==8 and not controller['error']
+    elif fault:assert result['checkpoint']==5 and result['vector']==4 and result['elr']==0x41000078 and not entered
     elif sctlr&0x02001005:assert result['checkpoint']==4 and not entered
     elif mutate or watchdog:
         assert entered and result['checkpoint']==3 and result['status']==1 and result['detail']==(2 if watchdog else 1)
     else:
         assert entered and result['checkpoint']==2 and result['entered_c']==1 and result['entry_sp']==0x42014000
         assert result['CNTFRQ_EL0']==24000000
+        assert controller['state']==4 and not controller['error'] and controller['plan']['revision']==0x20
+        assert controller['identity']['midr']==0x412fd050 and controller['identity']['clusteridr']==0x30
+        assert not any(controller['plan'][key] for key in ('actlr','actlr2','actlr3','ectlr','clusteractlr','patch'))
+        assert controller['core_record']['state']==1 and not controller['core_record']['error']
         assert struct.unpack('<Q',cpu.mem_read(0x42000020,8))[0]==0xffffffffffffffff
         tables=bytes(cpu.mem_read(0x421f0000,0x5000));words=struct.unpack('<2560Q',tables)
         assert words[0]==(1<<54)|0x441 and words[1]==0x421f1003
@@ -118,9 +142,13 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
         assert result['terminal_sp']==0x42013f10
         result['table_sha256']=hashlib.sha256(tables).hexdigest()
         (a.output.parent/'modeled-tables.bin').write_bytes(tables)
-    reports.append({'name':name,'result':result,'system_writes':controls,'mmio_writes':writes,'publication':publication})
-check('actual-publication-before-cpu-and-dsu-preparation')
+    assert len(publication)==3 and all(item['barriers']==1 for item in publication)
+    reports.append({'name':name,'result':result,'controller':controller,'system_writes':controls,'mmio_writes':writes,'publication':publication})
+check('native-planning-complete-before-block-walks')
+check('first-dsu-control-write-captured',scenario='write')
+check('unsupported-dsu-native-failure-return',scenario='unknown')
+check('dsu-register-read-exception-return',scenario='read-fault')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
     'limits':'Actual patched native startup instructions with modeled system registers, counter, read-only admission MMIO and intercepted DC CVAC. Exact maintenance addresses and barriers checked; cache state and effects are not modeled. No physical cache, return, memory or board qualification.'},indent=2)+'\n')
-print('PASS one native publication case; all three ordered line ranges complete before CPU/DSU preparation.')
+print('PASS four native CPU/DSU planning exits; every control write and block-walk mutation excluded.')

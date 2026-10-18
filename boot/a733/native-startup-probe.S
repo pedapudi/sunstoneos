@@ -2,6 +2,7 @@
 .arch armv8-a
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
+.global write_checkpoint, failed_checkpoint
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -35,6 +36,16 @@ fault_checkpoint:
     mrs x17, far_el3
     str x17, [x16, #136]
     mov x17, #5
+    b publish
+write_checkpoint:
+    ldr x16, =0x42002000
+    str x1, [x16, #96]          // Register number at the untouched callback entry.
+    str x2, [x16, #104]         // Proposed value; the write never executes.
+    mov x17, #6
+    b publish
+failed_checkpoint:
+    ldr x16, =0x42002000
+    mov x17, #7
 publish:
     str x17, [x16, #24]
     mrs x17, CurrentEL
