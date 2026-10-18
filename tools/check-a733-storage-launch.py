@@ -356,9 +356,8 @@ def main(argv=None):
         usb_guard.check_health()
         record=dict(complete=False,transactions=[],claim=args.claim,owner=args.owner,launch_attempted=False,storage_complete=False)
         def save():save_json(args.evidence/'session.json',record)
-        with open('/tmp/mimus-board.lock','a') as lock:
-            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            node=access.discover();access.require_session(node);access.require_rom(node);identity=access.identity(node)
+        with access.board_lock() as node:
+            access.require_session(node);access.require_rom(node);identity=access.identity(node)
             port=access.target(node);port_config={'port':port.name,'sysfs':str(port.resolve())}
             original=identity;failed=False
             def ready():

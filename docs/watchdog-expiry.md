@@ -83,7 +83,7 @@ Treat DDR as uninitialized after the reset.
 
 ## Preserve ownership and host backups
 
-The runner acquires `/tmp/mimus-board.lock`, checks USB host health, requires the
+The runner acquires `/tmp/sunstoneos-a733-<USB-port>.lock`, checks USB host health, requires the
 port's reconnect access rule, and refuses quarantined instances. It compares
 the reset prefix and boot-input routine with the physical ROM capture before
 execution. Both phases reserve the shared USB re-enumeration budget because a failed

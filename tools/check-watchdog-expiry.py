@@ -231,9 +231,7 @@ def main():
         raise ValueError('No distinct accessible ROM instance in 20 seconds; no reset or request retry.')
 
     try:
-        with open('/tmp/mimus-board.lock', 'a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            node = access.discover()
+        with access.board_lock() as node:
             access.require_session(node)
             access.require_rom(node)
             identity = access.identity(node)

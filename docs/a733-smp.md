@@ -155,7 +155,7 @@ The launch command requires explicit paths for the prepared bundle, pinned FEL
 tool, qualification record, input evidence, DDR contract, queue database and new
 evidence directory. It also requires the queue claim, coordinator owner and
 `--confirm-bridge-stable`. The adapter checks host health, acquires
-`/tmp/mimus-board.lock`, checks the target identity, and requires the port's
+`/tmp/sunstoneos-a733-<USB-port>.lock`, checks the target identity, and requires the port's
 reconnect access rule and an unquarantined ROM instance.
 It reads the queue without changing its claim or completion state.
 

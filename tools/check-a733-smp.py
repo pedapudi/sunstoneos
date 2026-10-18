@@ -340,9 +340,8 @@ def main(argv=None):
     usb_guard.check_health()
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False}
     def save(): save_json(args.evidence/'session.json',record)
-    with open('/tmp/mimus-board.lock','a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        node=access.discover(); access.require_session(node); access.require_rom(node); identity=access.identity(node)
+    with access.board_lock() as node:
+        access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
         validate_qualification(qualification,port.name,str(port.resolve()))
         require(input_record.get('complete') is True and input_record.get('asserted') is True and input_record.get('workspace_restored') is True and input_record.get('identity')==identity and input_record.get('port')==port.name and input_record.get('rom_sha256')==ROM_HASH, 'Stable low-input evidence does not cover this live instance.')

@@ -6,7 +6,7 @@ is redirected to a separate real flock; no physical-board process is inspected.
 """
 import argparse
 import copy
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
 import importlib.util
@@ -157,9 +157,12 @@ def main():
         core.find=find_native
         guard=types.ModuleType('usb_guard');guard.__file__=str(guard_source)
         guard.check_health=lambda:events.append('guard-health');guard.reenumeration=lambda *a:nullcontext()
-        def fixture_open(path,*a,**kw):
-            assert path=='/tmp/mimus-board.lock','Unexpected production open: '+str(path)
-            return open(lock_path,*a,**kw)
+        @contextmanager
+        def fixture_lock():
+            with open(lock_path,'a') as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                yield old
+        access.board_lock=fixture_lock
         def hold():
             with open(lock_path,'a') as other:
                 try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -179,7 +182,7 @@ def main():
         def access_module(name,path):
             assert name=='observe_usb_access' and path==ROOT/'tools/usb-access.py'
             return access
-        patches=[patch.object(host,'module',access_module),patch.object(host,'open',fixture_open,create=True),
+        patches=[patch.object(host,'module',access_module),
             patch.object(host.base,'FEL_HASH',sha(fel)),patch.object(host.subprocess,'run',fake_fel),
             patch.object(host.time,'monotonic',clock.now),patch.object(host.time,'sleep',clock.pause),
             patch.object(host.os,'access',lambda *a:True),patch.object(host,'finish_after_observation',finish),

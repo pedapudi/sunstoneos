@@ -12,11 +12,18 @@ claiming command exits, the coordinator disconnects, or the host restarts. There
 is no automatic expiry, retry, or claim release.
 
 A queue claim reserves the testing schedule. Every actual device operation must
-also hold `/tmp/mimus-board.lock` and follow the identity, USB health, reconnect
+also hold `/tmp/sunstoneos-a733-<USB-port>.lock` and follow the identity, USB health, reconnect
 permission, and recovery rules in [AGENTS.md](../AGENTS.md). Supervised RAM-only
 tests may use a reviewed manual-recovery plan. Unattended fault tests still need qualified independent recovery. The failed UFS probe and
 intentional watchdog expiry remain deferred. A queue claim does not override an
 image's admission requirements or establish physical recovery.
+
+The shared `board_lock()` helper in `tools/usb-access.py` selects the device
+through host metadata and locks its physical USB port. Port `3-1`, for example,
+uses `/tmp/sunstoneos-a733-3-1.lock` across USB re-enumeration. It checks that the
+selected node has not changed before yielding it to the caller. Other ports and
+non-A733 mimus boards do not share this lock. The queue schedules SunstoneOS
+tests only; it does not reserve unrelated boards.
 
 ## Initialize once and submit immutable proposals
 

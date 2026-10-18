@@ -302,9 +302,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
             'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,result_key:'unobserved'}
     def save(): save_json(args.evidence/'session.json',record)
-    with open('/tmp/mimus-board.lock','a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        node=access.discover(); access.require_session(node); access.require_rom(node); identity=access.identity(node)
+    with access.board_lock() as node:
+        access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
         validate_entry(identity,port.name)
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,

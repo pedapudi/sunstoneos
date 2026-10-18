@@ -81,6 +81,9 @@ handoff, or final response does not invalidate successful test evidence.
 - Identify the target before issuing device commands. Do not open other boards.
 - Hold an exclusive target lock during device operations. Coordinate access with
   existing shared-board tooling when a controller or acoustic resource is shared.
+- A733 tools use `tools/usb-access.py:board_lock`, keyed by stable USB port as
+  `/tmp/sunstoneos-a733-<USB-port>.lock`. Do not acquire a project-wide mimus
+  lock for this board. Unrelated boards have independent ownership.
 - Start with identity queries and RAM-only execution. Preserve storage contents
   and establish recovery before persistent writes.
 - Stop device communication at the first transport failure or disappearance.

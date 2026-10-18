@@ -2,6 +2,7 @@
 """Manage temporary access to the single attached Allwinner FEL USB device."""
 
 import argparse
+from contextlib import contextmanager
 import errno
 import fcntl
 import json
@@ -19,6 +20,28 @@ RULE = Path("/run/udev/rules.d/90-sunstoneos-fel.rules")
 SYS_USB = Path("/sys/bus/usb/devices")
 DEV_USB = Path("/dev/bus/usb")
 RECOVERY_REQUIRED = Path.home() / ".cache/sunstoneos/recovery-required.json"
+
+
+def board_lock_path(port):
+    """One A733 lock per physical USB port, independent of enumeration number."""
+    if not re.fullmatch(r"[0-9]+-[0-9]+(?:\.[0-9]+)*", port):
+        raise ValueError("Invalid USB physical port.")
+    return Path(f"/tmp/sunstoneos-a733-{port}.lock")
+
+
+@contextmanager
+def board_lock(node=None):
+    """Select through host metadata, lock that port, and reject a changed target."""
+    node = discover() if node is None else node
+    before = identity(node)
+    port = target(node)
+    if (port / "idVendor").read_text().strip() != "1f3a":
+        raise ValueError("Target is not an Allwinner device.")
+    with board_lock_path(port.name).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if identity(node) != before or target(node).name != port.name:
+            raise ValueError("USB target changed while acquiring its board lock.")
+        yield node
 
 
 def command(*args, input=None):

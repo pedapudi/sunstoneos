@@ -44,10 +44,9 @@ def response():
         raise RuntimeError('Unexpected AWUS response; stop.')
 
 try:
-    with open('/tmp/mimus-board.lock', 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with access.board_lock() as node:
         usb_guard.check_health()
-        node = access.discover(); access.require_session(node); access.require_rom(node)
+        access.require_session(node); access.require_rom(node)
         if access.identity(node) != prior['initial_identity']:
             raise RuntimeError('The device instance changed; do not resume its transfer.')
         device = usb.core.find(idVendor=0x1f3a, idProduct=0xefe8,

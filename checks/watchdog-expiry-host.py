@@ -181,15 +181,16 @@ with tempfile.TemporaryDirectory(prefix='watchdog-main-host-') as directory:
             state['at_failure'] = len(state['transactions'])
             raise struct.error('Synthetic truncated diagnostic result')
 
-        def local_open(name, *args, **kwargs):
-            return builtins.open(root / 'local.lock' if name == '/tmp/mimus-board.lock' else name,
-                                 *args, **kwargs)
+        @contextmanager
+        def fixture_lock():
+            yield node
+        access.board_lock = fixture_lock
 
         with patch.object(sys, 'argv', argv), patch.dict(sys.modules, {'usb_guard': guard}), \
              patch.object(runner, 'load_module', return_value=access), \
              patch.object(runner, 'hash_file', side_effect=lambda value: hashes[value] if value in hashes else real_hash(value)), \
              patch.object(runner.subprocess, 'run', side_effect=fake_run), \
-             patch.object(runner.fcntl, 'flock'), patch.object(runner, 'open', local_open, create=True), \
+             patch.object(runner.fcntl, 'flock'), \
              patch.object(runner, 'run_phase', side_effect=malformed_result):
             try:
                 runner.main()

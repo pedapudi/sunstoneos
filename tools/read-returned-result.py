@@ -20,9 +20,7 @@ spec.loader.exec_module(access)
 sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
 import usb_guard
 usb_guard.check_health()
-with open("/tmp/mimus-board.lock", "a") as lock:
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    node = access.discover()
+with access.board_lock() as node:
     port = access.target(node)
     access.require_session(node)
     if (port.name != prior["port"] or (port / "bcdDevice").read_text().strip() != "02b3"

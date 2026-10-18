@@ -83,6 +83,11 @@ manual reconnection; successful capture retains the board claim and lock.
 The first physical attempt produced no USB observer within the capture window.
 Uploads and the execution request succeeded, but no scheduler result arrived.
 The board instance is quarantined pending manual reconnection.
+Its coordinator now holds `/tmp/sunstoneos-a733-3-1.lock`; the unrelated mimus
+lock has been released. The replacement holder acquired the A733 lock before
+the original process stopped. The queue claim and quarantine remain in force.
+The physical-entry runtime directory contains `lock-transfer.json` with both
+process identities. No board command was issued during this transfer.
 
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
