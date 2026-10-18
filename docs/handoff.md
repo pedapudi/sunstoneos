@@ -77,8 +77,9 @@ module and physical launch conditions remain unqualified. The
 firmware, fixed rendering and copied USB output. Its central build and focused
 retention/revocation checks pass. Missing physical isolation prevents shutdown
 or reuse; a successful fixed render retains resources for the boot. Successful
-GPU output and physical operation remain untested. All three application workers
-have completed their local changes; inspect live assignments before new work.
+GPU output and physical operation remain untested. Active work now integrates
+a supervised board mode and a native HDMI colorbar application in separate
+worktrees. Inspect live assignments before changing their files.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
@@ -147,11 +148,16 @@ execution request, no transport failure and no native observer within 19 seconds
 The host stopped board traffic and retained the test claim and exclusive lock.
 Manual reconnection has been requested; do not contact the quarantined instance.
 
-Source inspection found that the launcher rejects a zero counter-frequency
+The launcher used for the failed attempt rejected a zero counter-frequency
 declaration, although earlier board evidence records that initial value. Native
 startup sets the declaration only after the launcher. This may explain the
-missing observer, but the physical cause remains unconfirmed. A focused correction
-and a way to report a clean launcher refusal are under software review.
+missing observer, but the physical cause remains unconfirmed. The reviewed
+correction accepts an unset frequency declaration and can report a clean refusal
+after checking the session identity and restoring SRAM. Two changed launcher
+cases and nine host cases pass; the all-core image was not rebuilt. The integrated
+sources and preserved artifacts match the evidence under
+`smp-supervised-20261017/frequency-refusal/`. The existing held process uses the
+earlier implementation and still requires manual reconnection.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -259,11 +265,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Resolve the supervised observer's missing result before another physical
-   attempt. Review and check the counter-frequency admission correction and
-   clean-refusal reporting. After confirmed manual reconnection, close the held
+1. After confirmed manual reconnection, close the held observer
    test and refresh the board's DDR and entry evidence. Preserve storage, honor
-   actual admission requirements and stop at the first transport failure.
+   actual admission requirements and stop at the first transport failure. Use
+   the corrected launcher and clean-refusal reporting for the next reviewed attempt.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed; no cable move or
    power command was requested.
