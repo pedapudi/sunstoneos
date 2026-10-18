@@ -41,7 +41,8 @@ struct a733_hdmi {
  * No diagnostic override,
  * unknown/oversized EDID fallback, fractional-rate approximation or DVI mode.
  * Preparation programs real PHY/controller/TV0 while TV0 remains disabled.
- * start enables the hardware pattern and then unmutes after source50ms delay.
+ * start enables the selected TV0 input and then unmutes after the source50ms
+ * delay. Native framebuffer admission requires the actual armed DE producer.
  * Poll ACTIVE regularly for sampled HPD/PLL/TV health. Unobserved HPD pulses
  * between polls cannot be detected; interrupt hotplug remains required.
  * No state proves physical output, power-down safety or framebuffer drain.

@@ -265,6 +265,7 @@ static int validate(void *v,const struct a733_hdmi_request *r,
     if(!current(n)||n->stage!=COMPLETE||!equal(r,&n->config.request,sizeof(*r))||
         !equal(g,&n->grant,sizeof(*g)))return fail(n);
     n->deadline=deadline;
+    if(n->config.pixel_source&&n->config.pixel_source(n->config.pixel_context,0)!=1)return fail(n);
     return live(n)&&timely(n)?1:fail(n);
 }
 static int allowed(uintptr_t a,unsigned width,unsigned writing)
@@ -287,6 +288,9 @@ static int read32(void *v,uintptr_t a,uint32_t *out)
 static int write32(void *v,uintptr_t a,uint32_t value)
 {
     struct a733_hdmi_native *n=v;
+    if(!current(n))return fail(n);
+    if(n->config.pixel_source&&a==A733_HDMI_TV_BASE+0x90&&(value&BIT(31))&&
+       n->config.pixel_source(n->config.pixel_context,1)!=1)return fail(n);
     if(!allowed(a,4,1)||!live(n)||lock(n)!=1)return fail(n);
     store32(a,value);return unlock(n);
 }
@@ -312,7 +316,13 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
         !c->task||!c->owner||!c->epoch||
         !((c->recovery_mode==A733_HDMI_INDEPENDENT_RECOVERY&&c->recovery&&!c->supervision)||
           (c->recovery_mode==A733_HDMI_SUPERVISED_PATTERN&&!c->recovery&&c->supervision&&
-           c->request.mode==A733_HDMI_720P60&&c->request.range==A733_HDMI_LIMITED))||
+           c->request.mode==A733_HDMI_720P60&&c->request.range==A733_HDMI_LIMITED&&
+           c->request.source==A733_HDMI_PATTERN)||
+          (c->recovery_mode==A733_HDMI_SUPERVISED_FRAMEBUFFER&&!c->recovery&&c->supervision&&
+           c->request.mode==A733_HDMI_720P60&&c->request.range==A733_HDMI_LIMITED&&
+           c->request.source==A733_HDMI_FRAMEBUFFER&&c->pixel_source&&c->pixel_context))||
+        (c->request.source==A733_HDMI_FRAMEBUFFER&&c->recovery_mode!=A733_HDMI_SUPERVISED_FRAMEBUFFER)||
+        (c->request.source==A733_HDMI_PATTERN&&(c->pixel_source||c->pixel_context))||
         !c->request.initial.id||!c->request.initial.generation||
         c->pck_client>=A733_GPU_RESOURCE_CLIENTS||
         !c->locks->initialized||c->locks->now!=a733_counter_clock_now||
@@ -331,7 +341,8 @@ int a733_hdmi_native_init(struct a733_hdmi_native *n,const struct a733_hdmi_nati
     n->self=n;n->config=*c;n->sealed=*c;
     n->grant=(struct a733_hdmi_reservation){.generation=c->epoch,.system_owner=c->owner,
         .system_generation=c->epoch,.inactive_epoch=c->epoch,.recovery_epoch=c->recovery,
-        .supervision_epoch=c->supervision};
+        .supervision_epoch=c->supervision,
+        .framebuffer_epoch=c->request.source==A733_HDMI_FRAMEBUFFER?c->epoch:0};
     n->controller_config=(struct a733_hdmi_config){
         .ops={now,acquire,validate,read8,write8,read32,write32,barrier,retain},.context=n,.request=c->request};
     /* Constructor is serialized before scheduling. Irreversible boot ownership

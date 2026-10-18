@@ -117,3 +117,10 @@ application, session and recovery-admission cases pass, together with offline
 encoding and input-snapshot checks. No physical operation was attempted.
 Preserved evidence is under
 `~/.cache/sunstoneos/evidence/hdmi-application-20261017/`.
+
+An optional retained framebuffer image now extends this application. Configure
+`SUNSTONE_HDMI_FRAMEBUFFER=ON` for the fixed 720p RGB565 DE1→TV0 path. The default
+remains the non-DMA hardware pattern. The framebuffer image requires additional
+initial-isolation and memory admission, and retains its complete DMA allocation
+through stop or failure. See [the framebuffer image](hdmi-framebuffer.md) for its
+memory layout, provider bindings and physical qualification requirements.

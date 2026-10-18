@@ -13,7 +13,13 @@ int hdmi_session_valid(const struct hdmi_session *s)
         s->request.mode==A733_HDMI_720P60&&s->request.range==A733_HDMI_LIMITED&&
         s->request.initial.id&&s->request.initial.generation&&
         s->pmic.owner&&s->pmic.owner!=s->owner&&s->pmic.identity==s->generation&&
-        !s->pmic.startup_deadline;
+        !s->pmic.startup_deadline
+#if SUNSTONE_HDMI_FRAMEBUFFER
+        &&s->request.source==A733_HDMI_FRAMEBUFFER&&hdmi_framebuffer_session_valid(&s->framebuffer)
+#else
+        &&s->request.source==A733_HDMI_PATTERN
+#endif
+        ;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {

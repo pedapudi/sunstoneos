@@ -35,11 +35,49 @@ def image_data(image):
         raise ValueError('Image layout is outside the HDMI application ABI')
     return parts, build_address, build, size
 
+def framebuffer_metadata(raw):
+    with io.BytesIO(raw) as f:
+        elf = ELFFile(f)
+        symbols = {s.name: int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
+        def word(name):
+            address = symbols[name]
+            for p in elf.iter_segments():
+                if p['p_type'] == 'PT_LOAD' and int(p['p_vaddr']) <= address and address + 8 <= int(p['p_vaddr']) + len(p.data()):
+                    return struct.unpack_from('<Q', p.data(), address-int(p['p_vaddr']))[0]
+            raise ValueError('Missing initialized image metadata')
+        mode = word('a733_hdmi_framebuffer_mode')
+        if mode not in (0, 1):
+            raise ValueError('Unknown HDMI image mode')
+        return mode, word('a733_hdmi_framebuffer_offset') if mode else 0
+
+def geometry(parts, framebuffer):
+    # Full image reservations may share a boundary, never an interval. The
+    # linker emits the NC pool as NOLOAD inside its RAM PT_LOAD reservation.
+    spans = []
+    for base, size, data in parts:
+        if not size or len(data) > size or base + size > 2**64:
+            raise ValueError('Invalid ELF load segment')
+        if not (0x41000000 <= base and base+size <= 0x41f01000 or
+                0x42000000 <= base and base+size <= 0x42200000):
+            raise ValueError('ELF load segment overlaps a fixed session/result reservation')
+        if any(base < b+n and b < base+size for b,n in spans):
+            raise ValueError('Overlapping ELF load segments')
+        if any(base < b+n and b < base+len(data) for b,n in ((0x41f00000,4096),(0x42000000,0x5000))):
+            raise ValueError('Initialized image overlaps session/result/contract storage')
+        spans.append((base,size))
+    if framebuffer:
+        if not any(b <= 0x41c00000 and 0x41e00000 <= b+n for b,n in spans):
+            raise ValueError('Missing complete NC framebuffer reservation')
+        if any(b < 0x41e00000 and 0x41c00000 < b+len(data) for b,_,data in parts):
+            raise ValueError('Initialized payload overlaps the NC framebuffer pool')
+
 def validate(image, session, admission):
     image_bytes = image.read_bytes()
     admission_bytes = admission.read_bytes()
     raw = session.read_bytes()
     parts, address, build, size = image_data(image_bytes)
+    framebuffer, offset = framebuffer_metadata(image_bytes)
+    geometry(parts, framebuffer)
     if len(raw) != size:
         raise ValueError('Session must contain exactly the linked native structure')
     magic, version, count, epoch, generation, lease = struct.unpack_from('<6Q', raw)
@@ -54,12 +92,25 @@ def validate(image, session, admission):
     if any(record.get(k) != v for k, v in dict(epoch=epoch, generation=generation, lease=lease, supervisor=supervisor).items()):
         raise ValueError('Admission and session identities differ')
     snapshots = {'image.elf': image_bytes, 'admission.json': admission_bytes}
-    for key, offset in (('analog', 112), ('power', 144), ('supervision', 176)):
+    for key, proof_offset in (('analog', 112), ('power', 144), ('supervision', 176)):
         path = (admission.parent / record[key]).resolve()
         data = path.read_bytes()
-        if hashlib.sha256(data).digest() != raw[offset:offset+32]:
+        if hashlib.sha256(data).digest() != raw[proof_offset:proof_offset+32]:
             raise ValueError(f'{key} record differs from admitted session')
         snapshots[key+'-record'] = data
+    if framebuffer:
+        if offset < 232 or offset + 104 != size:
+            raise ValueError('Invalid framebuffer session suffix')
+        if record.get('framebuffer') != '720p60-rgb565-retained-v1':
+            raise ValueError('Frame ownership record is required')
+        for key, relative in (('isolation', 0), ('memory', 32)):
+            data = (admission.parent / record[key]).resolve().read_bytes()
+            if hashlib.sha256(data).digest() != raw[offset+relative:offset+relative+32]:
+                raise ValueError(f'{key} record differs from framebuffer session')
+            snapshots[key+'-record'] = data
+        authority, = struct.unpack_from('<Q', raw, offset+64)
+        if not authority or record.get('framebuffer_authority') != authority:
+            raise ValueError('Framebuffer authority differs from physical admission')
     return parts, address, build, raw, epoch, generation, lease, supervisor, snapshots
 
 def request_bytes(address, build, raw, epoch, generation, lease, supervisor):

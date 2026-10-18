@@ -192,7 +192,11 @@ int a733_clock_leases_init(struct a733_clock_leases *, int (*now)(void *,uint64_
  * OWA/DMIC local ownership includes module clock, gate/reset and producer/FIFO
  * route writers. Pins, voltage, DMA channels and memory are separate leases.
  * FABRIC includes APB1 at CCU+0x518; every selector/divider/global-gate
- * writer requires exclusive FABRIC. Shared consumers separately validate and
+ * writer requires exclusive FABRIC except the dedicated VO1 AHB leaf at
+ * CCU+0x5c0 bit4: exclusive VO1 owns that bit while holding FABRIC shared.
+ * Its masked read/modify/write holds the common register mutex and preserves
+ * every other field. This grants no DE or other global-gate write authority.
+ * Shared consumers separately validate and
  * reserve their selected parent. This software contract does not establish
  * remote-firmware exclusion or a stable live rate by itself.
  * FABRIC stability does not imply parent stability: callers must also lease

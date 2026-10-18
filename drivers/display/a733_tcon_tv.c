@@ -24,7 +24,7 @@ int a733_tcon_tv_prepare(struct a733_tcon_tv *t){
     switch(t->index){
     case 0:s.address+=0x90;s.mask=0x800ffff0;s.value=delay<<4;break;
     case 1:s.mask=0x31;break; /* strict, one pixel/clock; no legacy global enable */
-    case 2:s.address+=0x40;s.mask=7;s.value=1;break; /* real color-check source */
+    case 2:s.address+=0x40;s.mask=7;s.value=t->io->request.source==A733_HDMI_FRAMEBUFFER?0u:1u;break; /* DE or color-check source */
     case 3:s.address+=0x98;s.mask=0x8001ffff;s.value=2u*v->vtotal;break;
     case 4:s.address+=0x9c;s.mask=0x7fff7fff;s.value=((uint32_t)(v->width-1)<<16)|(v->height-1);break;
     case 5:s.address+=0xa0;s.mask=0xffff7fff;s.value=((uint32_t)(v->htotal-1)<<16)|(v->hsync+v->hback-1);break;

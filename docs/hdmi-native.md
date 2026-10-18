@@ -28,7 +28,11 @@ mode admits only the non-DMA TV0 720p60 limited-range pattern under the
 and leaves the independent-recovery epoch zero. The controller rejects both
 epochs present or both absent. Supervised mode retains ownership until manual
 power removal; output can remain enabled if a fault prevents stopping it.
-Neither mode permits framebuffer access, resource reuse or a drain claim. It establishes exclusion of remote software,
+The separate retained-framebuffer mode additionally requires a live native DE
+and memory provider. It authenticates the exact ARMED source before enabling
+TV0; the non-DMA reservation cannot authorize that path. See the
+[framebuffer image](hdmi-framebuffer.md). No mode permits resource reuse or
+claims global drain. The initial handoff establishes exclusion of remote software,
 all VO1 consumers and both complete resistor-control words at `0x03000160` and
 `0x03000164`. No other native component currently writes those words. An
 irreversible single-owner reservation protects their use within this image.
@@ -96,6 +100,14 @@ For an OFF domain, the binding writes the source-defined PCK10 delays:
 `0x170`, `0x174`, `0xc00`, `0xc04` and `0xc10`. It requests state 8 at
 `0x0706a000`, preserving other control fields, and allows 10 ms for status 8.
 An already-ON domain retains its delay fields. No other domain is modified.
+
+Exclusive VO1 ownership includes only its dedicated AHB leaf at CCU `+0x5c0`
+bit 4. The shared FABRIC lease excludes global fabric writers, and the common
+register mutex serializes masked updates that preserve every other field.
+The pinned clock driver and TV0 device-tree binding identify this dedicated
+leaf. The manual defines ordinary gate bits in this word. Although the Linux
+helper calls `0x010000ff` a key, those bits overlap other live gates; this binding
+does not copy that broad OR operation.
 
 The binding then enables the VO1 AHB gate, deasserts the selected resets,
 selects DCXO for the 24 MHz SFR clock, and enables the selected bus/SFR gates.

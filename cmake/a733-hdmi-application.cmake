@@ -1,4 +1,5 @@
-# Supervised TV0 hardware colorbar. No DE, framebuffer, USB, storage or DMA.
+# Default: supervised TV0 hardware colorbar. Optional retained DE framebuffer.
+option(SUNSTONE_HDMI_FRAMEBUFFER "Build fixed720p RGB565 framebuffer HDMI image" OFF)
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
@@ -28,7 +29,17 @@ foreach(source IN ITEMS apps/hdmi/main.c apps/hdmi/admission.c apps/hdmi/output.
  platform/a733/hdmi_native.c)
  list(APPEND hdmi_sources "${hdmi_root}/${source}")
 endforeach()
+if(SUNSTONE_HDMI_FRAMEBUFFER)
+ foreach(source IN ITEMS apps/hdmi/framebuffer.c runtime/device_memory_pool.c
+  platform/a733/memory_uncached.c drivers/iommu/a733_iommu.c
+  drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
+  drivers/display/a733_display_engine.c drivers/display/a733_tcon_lcd.c
+  drivers/display/a733_dsi_video.c drivers/display/a733_dsi_phy.c)
+  list(APPEND hdmi_sources "${hdmi_root}/${source}")
+ endforeach()
+endif()
 add_executable(sunstone-a733-hdmi EXCLUDE_FROM_ALL ${hdmi_sources})
+target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_FRAMEBUFFER=$<BOOL:${SUNSTONE_HDMI_FRAMEBUFFER}>)
 get_target_property(hdmi_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET sunstone-a733-hdmi PROPERTY COMPILE_OPTIONS "${hdmi_options}")
 target_include_directories(sunstone-a733-hdmi BEFORE PRIVATE "${hdmi_root}/apps/hdmi"
@@ -37,6 +48,11 @@ target_include_directories(sunstone-a733-hdmi BEFORE PRIVATE "${hdmi_root}/apps/
 target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_SECURE_MONITOR=1
  SUNSTONE_A733_SMP_DIAGNOSTIC=1 A733_SMP_CONTRACT_MAGIC=0x4153373348444331ULL
  A733_SMP_RESULT_MAGIC=0x4153373348445231ULL)
+if(SUNSTONE_HDMI_FRAMEBUFFER)
+ target_link_options(sunstone-a733-hdmi PRIVATE -Wl,--defsym=__uncached_pool_size=2097152
+  -Wl,--undefined=a733_hdmi_framebuffer_offset)
+endif()
+target_link_options(sunstone-a733-hdmi PRIVATE -Wl,--undefined=a733_hdmi_framebuffer_mode)
 file(GLOB hdmi_headers "${hdmi_root}/apps/hdmi/*.h")
 set(hdmi_inputs ${hdmi_sources} ${hdmi_headers} ${storage_inputs}
  "${CMAKE_CURRENT_LIST_FILE}" "${hdmi_root}/apps/hdmi/CMakeLists.txt"
@@ -44,7 +60,12 @@ set(hdmi_inputs ${hdmi_sources} ${hdmi_headers} ${storage_inputs}
  "${hdmi_root}/platform/a733-smp-supervised/launch.c"
  "${hdmi_root}/platform/a733-smp-observe/launch.S" "${hdmi_root}/platform/a733-smp-observe/launch.ld")
 list(REMOVE_DUPLICATES hdmi_inputs)
-set(hdmi_identity "native-hdmi-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;TV0-pattern;supervised;no-DMA")
+if(SUNSTONE_HDMI_FRAMEBUFFER)
+ set(hdmi_profile "DE1-TV0;RGB565;retained-DMA")
+else()
+ set(hdmi_profile "TV0-pattern;no-DMA")
+endif()
+set(hdmi_identity "native-hdmi-2;framebuffer=${SUNSTONE_HDMI_FRAMEBUFFER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;${hdmi_profile};supervised")
 foreach(input IN LISTS hdmi_inputs)
  file(SHA256 "${input}" hdmi_digest)
  string(APPEND hdmi_identity "${hdmi_digest}")

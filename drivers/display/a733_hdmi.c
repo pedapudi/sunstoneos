@@ -60,6 +60,7 @@ int a733_hdmi_init(struct a733_hdmi *s,const struct a733_hdmi_config *c){
        !c->ops.write8 || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
        !c->ops.retain || !c->request.initial.id || !c->request.initial.generation ||
        (c->request.range!=A733_HDMI_LIMITED && c->request.range!=A733_HDMI_FULL) ||
+       (c->request.source!=A733_HDMI_PATTERN&&c->request.source!=A733_HDMI_FRAMEBUFFER)||
        a733_hdmi_timing(c->request.mode,&t)!=1)return -1;
     /* No external PHY control/BIST; no live output or pad mux. Complete
      * provenance for the remaining fields is still mandatory at acquisition. */
@@ -248,6 +249,10 @@ static int poll_inner(struct a733_hdmi *s){
            !b->reservation.rail_generation || !b->reservation.system_owner ||
            !b->reservation.system_generation || !b->reservation.inactive_epoch ||
            (!b->reservation.recovery_epoch==!b->reservation.supervision_epoch) ||
+           (b->request.source==A733_HDMI_FRAMEBUFFER &&
+            b->reservation.framebuffer_epoch!=b->reservation.inactive_epoch) ||
+           (b->request.source==A733_HDMI_PATTERN && b->reservation.framebuffer_epoch) ||
+           (b->request.source!=A733_HDMI_PATTERN&&b->request.source!=A733_HDMI_FRAMEBUFFER) ||
            (b->reservation.supervision_epoch &&
             (b->request.mode!=A733_HDMI_720P60 || b->request.range!=A733_HDMI_LIMITED)))
             return fail(s,A733_HDMI_AUTHORITY);

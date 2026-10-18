@@ -132,6 +132,11 @@ int a733_iommu_init_camera_supervised(struct a733_iommu *,const struct a733_iomm
  * No later master admission, bank sharing, DMA reuse or release is authorized. */
 int a733_iommu_init_decoder(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
+/* Fixed display profile: translate/access master8 only, READ-only spans.
+ * Same global initial isolation and retained manual-power-removal contract as
+ * the decoder profile. No table changes, master sharing or release. */
+int a733_iommu_init_display(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 int a733_iommu_open(struct a733_iommu *, uint64_t deadline_us);
 /* At most one MMIO/cache/admission operation, with pre/post deadline checks.
  * Source flush holds its request for at least 10us, then clears it. This is

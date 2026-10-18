@@ -3,6 +3,9 @@ static int fault(void)
 {
     /* The designated task alone advances native retention. No later call
      * releases a clock, rail, PCK lease, mutex, or inherited memory owner. */
+#if SUNSTONE_HDMI_FRAMEBUFFER
+    hdmi_framebuffer_retain();
+#endif
     (void)a733_hdmi_fail(&app.hdmi.controller.io);
     atomic_store_explicit(&app.state,HDMI_APP_FAULT_RETAINED,memory_order_release);
     return -1;
@@ -32,18 +35,27 @@ int hdmi_output_step(void)
     case 1:
         r=a733_hdmi_poll(h);if(r<0)return fault();if(!r)return 0;
         if(h->state!=A733_HDMI_PREPARED)return fault();
+#if SUNSTONE_HDMI_FRAMEBUFFER
+        r=hdmi_framebuffer_prepare();if(r<0)return fault();if(!r)return 0;
+#endif
         if(a733_hdmi_start(h,app.deadline)!=1)return fault();app.stage=2;return 0;
     case 2:
         r=a733_hdmi_poll(h);if(r<0)return fault();if(!r)return 0;
         if(h->state!=A733_HDMI_ACTIVE)return fault();
         atomic_store_explicit(&app.state,HDMI_APP_ACTIVE,memory_order_release);app.stage=3;return 1;
     case 3:
+#if SUNSTONE_HDMI_FRAMEBUFFER
+        if(hdmi_framebuffer_service()<0)return fault();
+#endif
         r=a733_hdmi_service(h,app.deadline);if(r<0)return fault();
         if(h->state==A733_HDMI_STOPPING)app.stage=4;
         else if(h->state!=A733_HDMI_ACTIVE)return fault();return r;
     case 4:
         r=a733_hdmi_poll(h);if(r<0)return fault();if(!r)return 0;
         if(h->state!=A733_HDMI_STOPPED_RETAINED)return fault();
+#if SUNSTONE_HDMI_FRAMEBUFFER
+        r=hdmi_framebuffer_stop();if(r<0)return fault();if(!r)return 0;
+#endif
         atomic_store_explicit(&app.state,HDMI_APP_STOPPED_RETAINED,memory_order_release);return 1;
     default:return fault();
     }

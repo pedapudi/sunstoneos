@@ -151,7 +151,7 @@ static int admitted(const struct a733_iommu *s)
         a->powered_masters==s->accessible_masters && a->inherited_resolved==1 &&
         a->transactions_drained==1 && a->clocks_held==1 &&
         (s->camera_supervised ? (a->recovery_qualified==0 && a->retained_power_removal==1) :
-         (a->recovery_qualified==1 || (s->translated_masters==0xc0 &&
+         (a->recovery_qualified==1 || ((s->translated_masters==0xc0 || s->translated_masters==0x100) &&
           a->recovery_qualified==0 && a->retained_power_removal==1)));
 }
 int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
@@ -180,6 +180,15 @@ int a733_iommu_init_decoder(struct a733_iommu *s,const struct a733_iommu_ops *op
 {
     int r=a733_iommu_init(s,ops,ctx,tables);
     if(r==1){s->translated_masters=0xc0;s->accessible_masters=0xc0;}
+    return r;
+}
+int a733_iommu_init_display(struct a733_iommu *s,const struct a733_iommu_ops *ops,
+    void *ctx,const struct a733_iommu_tables *tables)
+{
+    if(!tables||!tables->count||tables->count>A733_IOMMU_MAX_SPANS)return -1;
+    for(unsigned i=0;i<tables->count;++i)if(tables->spans[i].access!=A733_IOMMU_READ)return -1;
+    int r=a733_iommu_init(s,ops,ctx,tables);
+    if(r==1){s->translated_masters=0x100;s->accessible_masters=0x100;}
     return r;
 }
 /* The pinned v2 source skips unavailable microsets in its MMIO wrappers.

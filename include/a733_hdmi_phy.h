@@ -31,13 +31,17 @@ struct a733_hdmi_reservation {
     uint64_t generation,rail_owner,rail_generation,system_owner,system_generation;
     uint64_t inactive_epoch,recovery_epoch;
     /* Exactly one recovery authority: independent recovery, or supervised
-     * non-DMA TV0 pattern with permanent retention until manual power removal. */
+     * TV0 pattern or explicitly bound framebuffer with permanent retention
+     * until manual power removal. framebuffer_epoch distinguishes DMA ownership. */
     uint64_t supervision_epoch;
+    uint64_t framebuffer_epoch; /* Distinct retained DMA authority; zero for pattern. */
 };
+enum a733_hdmi_source { A733_HDMI_PATTERN=0,A733_HDMI_FRAMEBUFFER=1 };
 struct a733_hdmi_request {
     struct a733_hdmi_initial initial;
     enum a733_hdmi_mode mode;
     enum a733_hdmi_range range;
+    enum a733_hdmi_source source;
 };
 struct a733_hdmi_ops {
     int (*now_us)(void *,uint64_t *);
@@ -51,7 +55,9 @@ struct a733_hdmi_ops {
      * sufficient. Hold all reservations through stop/fault; no implicit release.
      * Authenticate the entire initial profile, cold/reset handoff, inactive
      * producers and drained prior transactions. Authenticate independent recovery
-     * or the fixed supervised non-DMA 720p60 limited-range pattern reservation.
+     * or a fixed supervised720p60 limited-range reservation. Framebuffer input
+     * additionally requires actual retained DE/memory authority and an explicit
+     * framebuffer epoch; pattern authority alone cannot enable DMA.
      * Establish
      * Device mappings, VO1 domain10 ON, required bus clocks/reset release and
      * fixed rails before returning1. Do not write local HDMI/TV/PHY registers.

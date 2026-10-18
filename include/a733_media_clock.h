@@ -27,7 +27,10 @@ struct a733_media_clock_ops {
     /* 1 authenticated; 0 pending without mutation; any other result fails.
      * Authenticate owner/handoff, the exact live common token and borrowed PCK
      * lease, inherited supplies/operating points, all selected-domain writers,
-     * local quiescence, reset safety, Device mappings and independent recovery.
+     * local quiescence, reset safety, Device mappings and independent recovery
+     * or an image-owned supervised retained session under
+     * docs/a733-smp-supervised.md. Initial transaction drain remains required;
+     * manual power removal permits no table, buffer or resource reuse.
      * IOMMU mode also reserves VI, DE_SYS and VE_DEC against known native masters.
      * IOMMU additionally requires both banks disabled, inherited tables resolved,
      * exclusion/drain of all ten masters and continued power accessibility.

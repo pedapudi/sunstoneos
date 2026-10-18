@@ -5,6 +5,10 @@
 #include <string.h>
 struct hdmi_application app;
 const uint64_t a733_hdmi_session_bytes=sizeof(struct hdmi_session);
+const uint64_t a733_hdmi_framebuffer_mode=SUNSTONE_HDMI_FRAMEBUFFER;
+#if SUNSTONE_HDMI_FRAMEBUFFER
+const uint64_t a733_hdmi_framebuffer_offset=offsetof(struct hdmi_session,framebuffer);
+#endif
 int hdmi_live(void *unused)
 {(void)unused;return !atomic_load_explicit(&app.fatal,memory_order_acquire)&&a733_smp_counter()/24<app.deadline;}
 void hdmi_fail(void *unused)
@@ -73,11 +77,24 @@ void a733_smp_diagnostic_start(void)
           &app.clocks,&app.rails,&app.pins)||
        !a733_gpu_resources_native_use_pmic(&app.pck_native,&app.pck,&app.pmic))
         platform_panic("HDMI PMIC",9);
+#if SUNSTONE_HDMI_FRAMEBUFFER
+    framebuffer.self=&framebuffer;framebuffer.session=app.session.framebuffer;
+#endif
     struct a733_hdmi_native_config config={.clocks=&app.clocks,.rails=&app.rails,
         .pmic=&app.pmic,.locks=&app.locks,.pck=&app.pck,.pck_client=app.session.pck_client,
         .task=app.handles[1],.owner=app.session.owner,.epoch=app.session.epoch,
-        .request=app.session.request,.recovery_mode=A733_HDMI_SUPERVISED_PATTERN,
-        .supervision=app.session.supervisor};
+        .request=app.session.request,.supervision=app.session.supervisor,
+#if SUNSTONE_HDMI_FRAMEBUFFER
+        .recovery_mode=A733_HDMI_SUPERVISED_FRAMEBUFFER,
+        .pixel_source=hdmi_framebuffer_source,.pixel_context=&framebuffer
+#else
+        .recovery_mode=A733_HDMI_SUPERVISED_PATTERN
+#endif
+        };
     if(!a733_hdmi_native_init(&app.hdmi,&config))platform_panic("HDMI native",10);
+#if SUNSTONE_HDMI_FRAMEBUFFER
+    if(!hdmi_framebuffer_boot())platform_panic("HDMI framebuffer memory",12);
+#endif
+    if(!a733_smp_device_preparation_admitted())platform_panic("HDMI startup expired",13);
     vTaskStartScheduler();platform_panic("HDMI scheduler returned",11);
 }

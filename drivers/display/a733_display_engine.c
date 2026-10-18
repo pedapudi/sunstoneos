@@ -16,43 +16,41 @@ static int overlap(const void *a, size_t an, const void *b, size_t bn)
     uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
     return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y || (x < y + bn && y < x + an);
 }
-int a733_de_plan(const struct a733_tcon_lcd_timing *t, const struct a733_de_surface *s,
+static int plan(unsigned width,unsigned height,unsigned pixel_bytes,unsigned format,
+                const struct a733_de_surface *s,struct a733_de_plan *out)
+{
+    if(!s||!out||overlap(s,sizeof(*s),out,sizeof(*out))||!s->owner||!s->device_address||
+       (s->device_address&3)||(s->pitch&3)||s->pitch<pixel_bytes*width)return 0;
+    uint64_t bytes=(uint64_t)s->pitch*height,limit=UINT64_C(1)<<40;
+    if(!bytes||s->device_address>=limit||bytes>limit-s->device_address||
+       s->mapped_bytes<bytes||s->mapped_bytes>limit-s->device_address)return 0;
+    struct a733_de_plan p={0};
+    p.size=(width-1)|((height-1)<<16);p.padded_bytes=bytes;
+    p.last_pixel_address=s->device_address+bytes-s->pitch+pixel_bytes*width-1;
+    p.overlay[0]=0xff000003|(format<<8);
+    p.overlay[1]=p.size;p.overlay[3]=s->pitch;p.overlay[4]=(uint32_t)s->device_address;
+    p.overlay[0x80/4]=(uint32_t)(s->device_address>>32);p.overlay[0x88/4]=p.size;
+    p.blender[0]=0x101;p.blender[1]=0xff000000;p.blender[2]=p.size;
+    p.blender[0x8c/4]=p.size;p.blender[0x90/4]=0x03010301;*out=p;return 1;
+}
+int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surface *s,
                  struct a733_de_plan *out)
 {
-    if (!t || !s || !out || overlap(t, sizeof(*t), out, sizeof(*out)) ||
-        overlap(s, sizeof(*s), out, sizeof(*out)) || !s->owner || !s->device_address ||
-        (s->device_address & 3) || (s->pitch & 3) || s->pitch < 4u * t->dsi.width) return 0;
     struct a733_tcon_lcd_plan lcd;
-    if (!a733_tcon_lcd_plan(t, &lcd)) return 0;
-    uint64_t bytes = (uint64_t)s->pitch * t->dsi.height;
-    const uint64_t limit = UINT64_C(1) << 40;
-    if (!bytes || s->device_address >= limit || bytes > limit - s->device_address ||
-        s->mapped_bytes < bytes || s->mapped_bytes > limit - s->device_address) return 0;
-    struct a733_de_plan p = {0};
-    p.size = (t->dsi.width - 1u) | ((t->dsi.height - 1u) << 16);
-    p.padded_bytes = bytes;
-    p.last_pixel_address = s->device_address + bytes - s->pitch + 4u * t->dsi.width - 1;
-    p.overlay[0] = 0xff000403; /* XRGB8888 format4, global alpha, layer enabled. */
-    p.overlay[1] = p.size;
-    p.overlay[3] = s->pitch;
-    p.overlay[4] = (uint32_t)s->device_address;
-    p.overlay[0x80 / 4] = (uint32_t)(s->device_address >> 32);
-    p.overlay[0x88 / 4] = p.size;
-    p.blender[0] = 0x101; /* Pipe0 and black fallback color. */
-    p.blender[1] = 0xff000000;
-    p.blender[2] = p.size;
-    p.blender[0x8c / 4] = p.size;
-    p.blender[0x90 / 4] = 0x03010301; /* SRCOVER, opaque global alpha. */
-    *out = p;
-    return 1;
+    if(!t||!out||overlap(t,sizeof(*t),out,sizeof(*out))||!a733_tcon_lcd_plan(t,&lcd))return 0;
+    return plan(t->dsi.width,t->dsi.height,4,4,s,out);
 }
+int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
+{return plan(1280,720,2,0x0a,s,out);}
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {
     if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
         !c->lease || !c->ops.admit || !c->ops.read32 || !c->ops.write32 ||
         !c->ops.barrier || !c->ops.now_us) return 0;
     struct a733_de_plan p;
-    if (!a733_de_plan(&c->timing, &c->surface, &p)) return 0;
+    if(c->output==A733_DE_LCD1_XRGB8888){if(!a733_de_plan(&c->timing,&c->surface,&p))return 0;}
+    else if(c->output==A733_DE_TV0_RGB565){if(!a733_de_plan_tv0(&c->surface,&p))return 0;}
+    else return 0;
     memset(d, 0, sizeof(*d));
     d->config = *c; d->plan = p; d->deadline = deadline; d->initialized = 1;
     return 1;
@@ -128,6 +126,7 @@ static struct word write_word(const struct a733_de *d, unsigned i)
     if (i < IMAGE_WORDS) return image_word(d, i);
     struct word w = setup[i - IMAGE_WORDS];
     if (w.offset == 0x8148) w.value = d->plan.size;
+    if(w.offset==0x8010&&d->config.output==A733_DE_TV0_RGB565)w.value=0x40;
     return w;
 }
 enum a733_de_state a733_de_poll(struct a733_de *d)
@@ -168,8 +167,9 @@ enum a733_de_state a733_de_poll(struct a733_de *d)
         if (++d->index < check_count) goto out;
         d->index = 0;
     } else if (step == 2) {
-        if ((value & 0xf) == 1 || ((value >> 8) & 0xf) == 1 || ((value >> 12) & 0xf) == 1 ||
-            (d->action != A733_DE_PREPARE && (value & 0xf0) != 0x10)) {
+        unsigned route=d->config.output==A733_DE_TV0_RGB565?4u:1u;
+        if ((value & 0xf) == route || ((value >> 8) & 0xf) == route || ((value >> 12) & 0xf) == route ||
+            (d->action != A733_DE_PREPARE && (value & 0xf0) != (route<<4))) {
             fail(d, A733_DE_INITIAL_STATE); goto out;
         }
         if (d->action == A733_DE_OBSERVE) { d->step = 5; goto out; }

@@ -21,6 +21,10 @@ struct a733_de_plan {
  * must be disjoint. Output is unchanged on rejection. */
 int a733_de_plan(const struct a733_tcon_lcd_timing *, const struct a733_de_surface *, struct a733_de_plan *);
 
+/* Additional closed profile: UCH3 -> DE1 -> TV0, 1280x720 RGB565.
+ * The HDMI controller independently establishes the exact 720p60 timing. */
+enum a733_de_output { A733_DE_LCD1_XRGB8888=0, A733_DE_TV0_RGB565=1 };
+int a733_de_plan_tv0(const struct a733_de_surface *,struct a733_de_plan *);
 enum a733_de_action { A733_DE_PREPARE, A733_DE_START, A733_DE_OBSERVE, A733_DE_STOP };
 enum a733_de_state { A733_DE_PENDING, A733_DE_READY, A733_DE_ARMED,
     A733_DE_DISABLED_RETAINED, A733_DE_FAULT_RETAINED };
@@ -40,6 +44,7 @@ struct a733_de_config {
     uint64_t lease;
     struct a733_tcon_lcd_timing timing;
     struct a733_de_surface surface;
+    enum a733_de_output output; /* Zero preserves the original LCD1 profile. */
 };
 struct a733_de {
     struct a733_de_config config;
@@ -62,9 +67,10 @@ struct a733_de {
  * - the immutable surface owner, mapping and full padded image visibility,
  *   address translation/IOMMU policy and hardware burst bounds, including
  *   any necessary mapped padding beyond the last row. No CPU pointer is DMA;
- * - PREPARE/START: LCD1 and DSI1 inactive/prepared with the exact timing;
- *   OBSERVE: coordinated feed and ownership; STOP: DSI1 already stopped while
- *   LCD1/clocks remain available. No other output/producer may start.
+ * - PREPARE/START: the selected output is inactive/prepared with exact timing;
+ *   TV0_RGB565 requires real 720p60 HDMI admission and retained DMA ownership;
+ *   OBSERVE: coordinated feed and ownership; STOP: selected DSI1 or HDMI/TV0
+ *   output already stopped while necessary DE clocks remain available. No other output/producer may start.
  * All memory and resource ownership remains held after STOP or any fault.
  * Only an external authority with independent transaction-drain evidence may
  * later reclaim the frame or gates. A disabled DE or frame-end is insufficient.
