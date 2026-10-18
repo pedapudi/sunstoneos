@@ -147,9 +147,13 @@ queue recorded the failure. The new instance has fresh DDR evidence. Offline
 launch analysis must identify the next useful change before another attempt.
 
 The [native camera application](camera-application.md) connects actual providers,
-OV5640 capture, retained full-frame copies and USB0 output. Its native build and
-nine focused application checks pass, including central integration. The camera
-module is not connected; physical launch conditions remain unqualified. The
+OV5640 capture, retained full-frame copies and USB0 output. Its supervised mode
+now uses explicit manual-power-removal admission and the shared host runner.
+The native link, mode/admission checks and complete-frame collection checks pass.
+All 155 native dependencies were verified; 101 repository dependencies and the
+24 changed sources match integration. The saved image is reused without another
+build. Evidence is under `camera-supervised-20261017/`. The camera module is not
+connected; physical capture remains unqualified. The
 [native GPU application](gpu-application.md) also integrates actual providers,
 firmware, fixed rendering and copied USB output. Its central build and focused
 retention/revocation checks pass. Missing physical isolation prevents shutdown
@@ -176,9 +180,11 @@ supply remains unsupported. NPU and GPU packaging/capture integration is complet
 level. Their shared transport remains unchanged by the observer and board
 approval correction. Physical access remains exclusive to the coordinator.
 
-JPEG and Bluetooth share optional board startup callbacks. The camera's supervised
-launch and capture integration is the next device path in development. Its
-existing component evidence remains valid within the recorded scope.
+JPEG and Bluetooth share optional board startup callbacks. Camera integration
+preserves the existing controller evidence and fixes its IOMMU admission to
+derive recovery authority from the actual boot proof. The default watchdog
+mode remains separate from supervised retention. HDMI framebuffer integration
+and offline multicore startup diagnosis continue.
 
 The native PMIC provider now accepts the APBS1 reference-clock parent selected
 by the pinned DDR loader. It verifies the 24 MHz PLL reference and rejects later

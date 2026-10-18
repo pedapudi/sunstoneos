@@ -446,9 +446,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reconnection, wider Wi-Fi security modes, pairing and headset audio remain open.
 
 - Camera: The [native application](camera-application.md) connects actual provider
-  startup, completed frame copies and USB0 capture. Native central linking and
-  nine focused application checks pass. Module availability and physical launch
-  conditions remain unqualified. The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
+  startup, completed frame copies and USB0 capture. Its supervised mode includes
+  explicit manual-power-removal admission, frozen host packaging and durable
+  full-frame collection. Native linking and focused mode, admission, launcher and
+  host checks pass; all 155 native dependencies match preserved evidence. No
+  camera module is connected, so physical capture remains unqualified.
+  The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
   model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)
   configures local PHY, packet-port and parser state for both exposed port groups;
