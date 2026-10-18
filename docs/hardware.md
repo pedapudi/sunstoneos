@@ -142,8 +142,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
-  [Hardware reset and FEL return](watchdog.md) remain untested and are required
-  before further new peripheral-access sequences.
+  [Hardware reset and FEL return](watchdog.md) remain untested; physical
+  qualification is deferred. Supervised RAM-only tests use their own reviewed
+  recovery plan. Unattended recovery and the failed UFS probe remain restricted.
 - DMA: **tested** finite descriptor encoding in a host execution model, including
   memory/FIFO streams, 35-bit addresses, and invalid-chain refusal.
   The polled controller core also passes host checks for noncoherent transfers,

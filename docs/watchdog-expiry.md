@@ -1,5 +1,10 @@
 # Prepare protected watchdog enable and expiry trials
 
+**Deferred.** No watchdog reset trial is scheduled. The required physical boot
+connection is unavailable, and USB power-control investigation has stopped.
+This preserved procedure does not block unrelated software development or
+separately reviewed supervised RAM-only tests.
+
 The SRAM watchdog diagnostic implements separate enable/disarm and expiry
 requests. Its instruction-model and host-protocol checks pass. Neither phase
 has executed on the physical board. The existing configuration/restoration

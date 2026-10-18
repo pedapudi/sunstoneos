@@ -17,9 +17,10 @@ board lock. Inspect live worker state before assigning overlapping files.
 FreeRTOS runs on the physical boot A55. The [kernel check](a733-kernel.md) passes
 timer preemption, blocking queues and floating-point context checks. An EL3
 secure timer recovers a forced EL1 stall, but did not recover the UFS probe.
-Independent hardware-watchdog recovery remains required before new peripheral
-access. Physical USB programmed-I/O, C++ allocation and repeated mimus requests
-have passed their recorded workloads.
+The failed UFS probe remains disabled. Independent watchdog qualification is
+deferred; unrelated supervised RAM-only tests use a reviewed recovery plan.
+Physical USB programmed-I/O, C++ allocation and repeated mimus requests have
+passed their recorded workloads.
 
 [Mimus](mimus.md) matches host results on 32 development recordings through the
 [native USB application](mimus-usb.md). The model remains unchanged. Two-core
@@ -126,7 +127,8 @@ do not reuse previous RAM assets or signatures.
 The [SRAM configuration trial](watchdog.md) now verifies ROM-redirect and
 watchdog reset-policy writes with complete register/workspace restoration.
 It never enables the timer. Timer enabling, expiry, and reset retention remain
-unqualified. No new peripheral probe may run before independent watchdog recovery passes.
+unqualified. Intentional expiry and unattended fault tests remain deferred;
+this does not block separately reviewed supervised RAM-only work.
 The installed
 [session access rule](../tools/README.md) grants access after reconnects on
 physical port `3-1`. Kernel and native USB checks regained access automatically.
@@ -208,16 +210,13 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Qualify independent watchdog reset and ROM return before new peripheral
-   access. Reconnecting USB has restored FEL access and permissions. It does not
-   prove autonomous recovery. The queued expiry procedure requires a verified
-   reset destination; its current BOOT-pad protection has not been established.
-   The user cannot fit that connection. USB power-control investigation has
-   stopped because of its time and token cost. Root hubs lack switching; the
-   attached ASMedia hub advertises it, but actual cutoff was not tested. No power
-   command or cable move was requested. Manual reconnection remains available
-   for supervised recovery. Preserve the inserted microSD and all other storage. Physical input, enable/disarm,
-   expiry and stalled-interconnect recovery remain unqualified.
+1. Finish native application integration and its focused software checks.
+   Prepare bounded, supervised RAM-only hardware tests using existing software
+   return and manual reconnection where the image permits it. Preserve storage,
+   honor actual admission requirements and stop at the first transport failure.
+   The failed UFS probe, intentional watchdog expiry and unattended fault tests
+   remain deferred. USB power-control investigation is closed; no cable move or
+   power command was requested.
 2. Qualify the integrated maintenance image after independent recovery passes.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those

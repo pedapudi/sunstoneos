@@ -180,12 +180,12 @@ clang --target=aarch64-none-elf -march=armv8-a -ffreestanding -O2 \
 acceptance of a distinct instance with the expected ROM descriptor. This host
 check contacts no USB device.
 
-## Required next validation
+## Deferred physical qualification
 
 ROM communication is restored, and the SRAM configuration trial below passes.
-Extend the diagnostic for expiry with saved host state and results independent
-of DDR. Review ownership and preserve original RTC values before using them
-for results.
+The [protected expiry diagnostic](watchdog-expiry.md) is implemented, but its
+physical qualification is deferred. Retain its code and evidence for future
+qualification; it is not the next development task.
 
 First establish a reset destination that cannot execute unknown storage code.
 The documented BOOT-to-GND connection provides a candidate independent of

@@ -61,23 +61,16 @@ No additional permission command is needed while that rule remains installed.
 The first reset still needs its own reviewed diagnostic and physical result;
 these preparation steps do not qualify watchdog recovery.
 
-The user cannot fit the BOOT-to-GND connection, so this protected-reset procedure
-is unavailable on the current setup. The host root hubs report no power
-switching. The attached ASMedia hub at `3-10` and `4-9` advertises per-port
-switching, but actual power cutoff has not been tested. Investigation stopped
-after the user raised its time and token cost. The board remains on port `3-1`;
-no cable move or power command was requested.
-
-The [Linux USB ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-usb)
-limits power cutoff to supporting hubs. The [uhubctl guidance](https://github.com/mvp/uhubctl#faq)
-also requires checking actual VBUS cutoff because advertised switching can
-remove data connectivity while leaving power on. The inspected descriptors identify
-advertised capability only; physical cutoff remains unqualified. Manual USB
-reconnection remains the available recovery action for supervised tests.
-It does not qualify unattended watchdog recovery or an intentional reset
-into an unknown storage boot path.
-Read-only observations are under
+The protected watchdog trial is deferred because the physical BOOT connection
+is unavailable. USB power-control investigation is closed. No power command or
+cable move was performed; the board remains on host port `3-1`. Preserve the
+read-only findings under
 `~/.cache/sunstoneos/evidence/recovery-power-20261017/`.
+
+Manual USB reconnection remains available for supervised tests with a reviewed
+recovery plan. It does not qualify unattended watchdog recovery or an intentional
+reset into an unknown storage boot path. The following input-check procedure is
+retained for future qualification. No physical connection is currently requested.
 
 
 ```sh

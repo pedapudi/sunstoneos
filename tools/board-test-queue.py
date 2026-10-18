@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 DEFAULT = Path.home() / '.cache/sunstoneos/board-tests.sqlite3'
 RECOVERY = 'independent-watchdog-rom-return'
+SUPERVISED_RECOVERY = 'supervised-ram-recovery'
 
 
 def require(condition, message):
@@ -75,8 +76,9 @@ def submission(value):
     require(isinstance(prereqs, list) and prereqs and all(text(p) for p in prereqs)
             and len(set(prereqs)) == len(prereqs),
             'Prerequisites must be distinct nonempty strings.')
-    require(value['kind'] != 'peripheral' or RECOVERY in prereqs,
-            f'Peripheral tests require {RECOVERY}.')
+    require(value['kind'] != 'peripheral' or
+            RECOVERY in prereqs or SUPERVISED_RECOVERY in prereqs,
+            f'Peripheral tests require {RECOVERY} or {SUPERVISED_RECOVERY}.')
     require(isinstance(value['sources'], list) and value['sources'],
             'At least one source revision is required.')
     for source in value['sources']:

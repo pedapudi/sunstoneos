@@ -86,11 +86,17 @@ handoff, or final response does not invalidate successful test evidence.
 - Before intentional USB re-enumeration, require a reconnect access rule for the
   target port and user. Wait for udev permissions before the next protocol request.
   Do not reset again to work around missing host permissions.
-- The UFS probe exposed a failure that the CPU secure timer did not recover.
-  Qualify an independent hardware watchdog and ROM return before executing new
-  peripheral-access sequences. Keep UFS execution disabled until that recovery
-  path is integrated. A cached USB ROM descriptor does not prove ROM execution;
-  respect the host's failed-instance record in `tools/usb-access.py`.
+- Keep the failed UFS probe disabled until its failure and recovery path are
+  resolved. Do not make watchdog qualification or USB power automation a blanket
+  prerequisite for unrelated development. Supervised RAM-only hardware tests may
+  use demonstrated software return and manual USB reconnection, with a reviewed
+  recovery plan, storage preservation and one bounded attempt. Stop after the
+  first transport failure and wait for explicit reconnection; never retry it.
+- Defer intentional watchdog expiry and unattended peripheral fault tests until
+  their reset destination and recovery are qualified. Existing image admission
+  checks still apply; do not fabricate qualification flags. A cached USB ROM
+  descriptor does not prove ROM execution. Respect the failed-instance record
+  in `tools/usb-access.py`.
 - Do not transmit keyboard events into the user's desktop during tests.
 - Document missing peripherals as qualification blockers and continue independent
   work. Do not count source inspection or emulation as physical qualification.

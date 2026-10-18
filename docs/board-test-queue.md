@@ -13,9 +13,10 @@ is no automatic expiry, retry, or claim release.
 
 A queue claim reserves the testing schedule. Every actual device operation must
 also hold `/tmp/mimus-board.lock` and follow the identity, USB health, reconnect
-permission, and recovery rules in [AGENTS.md](../AGENTS.md). The coordinator must
-qualify independent watchdog expiry and ROM return before new peripheral access.
-A ready proposal or successful queue command does not establish those facts.
+permission, and recovery rules in [AGENTS.md](../AGENTS.md). Supervised RAM-only
+tests may use a reviewed manual-recovery plan. Unattended fault tests still need qualified independent recovery. The failed UFS probe and
+intentional watchdog expiry remain deferred. A queue claim does not override an
+image's admission requirements or establish physical recovery.
 
 ## Initialize once and submit immutable proposals
 
@@ -41,7 +42,7 @@ A proposal is a JSON object with these fields:
 | `kind` | `peripheral` for functional tests or `recovery` for recovery qualification. |
 | `sources` | Nonempty list of `repository` and full 40-digit Git `revision` records. |
 | `artifacts` | Nonempty list of absolute `path` and lowercase `sha256` records for the test inputs. Include the executable image and any required firmware or fixture. |
-| `prerequisites` | Distinct names for conditions the coordinator must verify. Peripheral tests must include `independent-watchdog-rom-return`. |
+| `prerequisites` | Distinct names for conditions the coordinator must verify. Peripheral tests must include `independent-watchdog-rom-return` or `supervised-ram-recovery`. |
 | `expected_result` | Observable acceptance conditions, including required recovery behavior. |
 | `procedure` | Ordered, nonempty list of instructions for one bounded attempt. These strings are never executed by the queue. |
 | `timeout_seconds` | Integer from 1 through 3600; the coordinator must enforce this bound through the approved test procedure. |
@@ -73,9 +74,12 @@ review evidence, and history.
 The coordinator creates a JSON object mapping every prerequisite name to an
 absolute evidence `path` and its `sha256`. For example, a prerequisite named
 `host-check` could reference a saved manifest containing the emulator result and
-input hashes. A recovery prerequisite must reference physical qualification
-records. Existence and hash checks cannot determine whether evidence proves the
-condition; that judgment belongs to the coordinator.
+input hashes. The independent-watchdog prerequisite must reference physical
+qualification records. A supervised-RAM prerequisite must document the specific board, bounded
+RAM-only procedure, storage preservation, demonstrated return path and manual
+reconnection plan. It cannot admit unattended fault testing or an intentional
+reset into unknown storage software. Existence and hash checks cannot determine
+whether evidence proves the condition; that judgment belongs to the coordinator.
 
 ```sh
 python3 tools/board-test-queue.py \
@@ -159,3 +163,12 @@ The focused check passed on 2026-10-16. Its log and input hashes are retained in
 `~/.cache/sunstoneos/evidence/board-test-queue-20261016/`. No physical device or
 emulator was accessed. This evidence establishes scheduling behavior; physical
 recovery and hardware qualification remain separate requirements.
+
+## Supervised recovery admission check
+
+The focused submission check accepts either documented recovery prerequisite
+and rejects missing or duplicate recovery prerequisites. All four cases pass;
+no board access occurs. Inputs and results are preserved under
+`~/.cache/sunstoneos/evidence/watchdog-deferral-20261017/`. The three physical
+watchdog preparation and reset proposals are deferred using the queue's
+`blocked` state, with their original procedures and history retained.
