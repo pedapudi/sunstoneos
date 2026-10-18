@@ -647,8 +647,13 @@ immutable aliases; arbitrary dirty runtime data needs its own ownership/cleanup.
    enable register `0x10` is `0xff`, voltage register `0x15` is `0x9e`, and its
    seven-bit selector 30 programs 800 mV. ROM returns as `003:101`; the process
    and claim close. The runner validates the explicit DDR-to-ROM-return chain
-   against the current survey and live instance. The frozen candidate still
-   references the earlier instance and requires updated admission before launch.
+   against the current survey and live instance. The frozen GPU candidate is now
+   reconciled to `003:101` under `gpu-single-core-20261018/physical-candidate/`.
+   All requested raw clock and supply samples are present; no additional PMIC
+   read or rebuild is needed. Current entry state, image-specific cache/writer
+   exclusion, trusted power history and takeover/recovery authority remain
+   unresolved. Successful execution of the modified PMIC probe remains positive
+   second-board evidence.
    Establish actual power,
    memory and recovery admission for the integrated GPU,
    NPU, codec, RTC and thermal applications. Their internal operations can advance
