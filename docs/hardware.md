@@ -29,8 +29,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   to 720p60 output. Its central build and 17 focused software cases pass.
   Optional [RGB565 framebuffer output](hdmi-framebuffer.md) now connects actual
   DE1, IOMMU and TV0 providers. Its native build, normal start/stop and four fault
-  cases pass. Analog admission, physical DMA reachability, monitor output and
-  broader modes remain required.
+  cases pass. Startup now retains the complete authenticated session before
+  counter and provider initialization; the framebuffer image and five focused
+  binding checks pass under `hdmi-binding-20261018/`. All 97 preserved repository
+  inputs match integration; existing display evidence was reused. Analog
+  admission, physical DMA reachability, monitor output and broader modes remain
+  required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).

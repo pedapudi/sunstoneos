@@ -72,6 +72,11 @@ substantive correctness risks. The coordinator alone operates the board.
   all 120 preserved repository inputs match integration under
   `camera-binding-20261018/`. Existing capture and pixel checks were reused.
   No MIPI camera is connected; physical capture remains unqualified.
+- HDMI: the framebuffer image retains and authenticates its complete session
+  before counter and provider initialization. The corrected image and five
+  focused binding checks pass; all 97 preserved repository inputs match
+  integration under `hdmi-binding-20261018/`. Existing display checks were reused.
+  Physical monitor output remains unqualified.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
@@ -106,8 +111,8 @@ Component documents and the hardware matrix hold the remaining integrations.
 The [historical handoff](handoff-history-20261017.md) preserves earlier artifact
 locations and reconciliation details; it is not a current qualification record.
 
-Session integrity corrections remain in progress for HDMI and the shared board,
-network and Bluetooth startup paths. Authenticated settings must remain bound to
+Session integrity corrections remain in progress for the shared board, network
+and Bluetooth startup paths. Authenticated settings must remain bound to
 the private copies used by provider initialization; field validation alone does
 not establish that binding. Unaffected device checks remain reusable.
 NPU already compares its private copy with the retained authenticated digest,
