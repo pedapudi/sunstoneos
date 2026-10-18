@@ -102,8 +102,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A subsequent target diagnostic executes core 1's native walk-blocking helper,
   reads its frame identity/power and restores both translation controls exactly.
   Matching shutdown and observed OFF, shared-state/DRAM restoration and ROM return
-  pass under `native-target-walks-frame-20261018/native/runtime/`. Local interrupt
-  configuration remains unresolved.
+  pass under `native-target-walks-frame-20261018/native/runtime/`. The subsequent
+  local snapshot also passes: core 1's frame is asleep and has no enabled,
+  pending or active interrupts. Controls restore and ROM returns after observed
+  OFF under `native-local-interrupt-read-20261018/native/runtime/`. The returning
+  overlay now includes the corrected production controller and bounded local
+  restoration; five instruction cases pass. Physical interrupt initialization
+  remains unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

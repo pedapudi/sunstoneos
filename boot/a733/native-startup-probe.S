@@ -611,6 +611,15 @@ target_local_reads:
     dsb sy
     mov x17, #2
     str x17, [x14]
+    // AAPCS call into the current portable controller and bounded restoration.
+    // Preserve observation registers; callee-saved x20/x25 retain core/epoch.
+    stp x9, x12, [sp, #-16]!
+    mov x0, x25
+    ldr x1, =0x4200e008
+    ldr x1, [x1]
+    bl native_local_interrupt_probe
+    ldp x9, x12, [sp], #16
+    cbz w0, park
 target_restore_walks:
     ldr x16, [x12, #56]
     msr sctlr_el1, x16

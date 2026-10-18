@@ -431,9 +431,16 @@ preferred; opaque replacements follow hardware functionality and optimization.
 Second-board DDR/survey proposals are prepared offline under
 `second-board-20261018-3-3/preparation/`. The reviewed recovery
 plan remains preserved. Both phases passed on that board with ROM responsive
-and survey SRAM restored; their queue claims are closed. No SD operation has run. The SD host now requires the native client's two
-successful reads as well as the USB results. Five focused host cases pass; the
-frozen native image was reused.
+and survey SRAM restored; their queue claims are closed. No SD command has run.
+The SD host requires both native reads as well as USB success. Read-only admission
+also permits one bounded CMD0 initialization without claiming cold card history;
+twelve focused policy cases pass and the native image was reused.
+
+The second-board register batch under `second-board-20261018-3-3/sd-initial-state/`
+completed with the SD clock gated, reset asserted, and IRQ 193 disabled, inactive
+and not pending. PF mux `0x0f3f3f33` retains ROM-selected functions that the current
+SD admission rejects. An offline integration change is checking that pin handoff;
+voltage, ownership and complete-image startup still need actual admission.
 
 ## Next actions
 
@@ -449,11 +456,13 @@ redistributor power-up sequence. That sequence is implemented and passes focused
 software checks; its connection to the physical failure remains a hypothesis.
 The primary agent handles all further multicore work directly.
 
-1. Continue from the successful target walk/frame observation under
-   `native-target-walks-frame-20261018/`. The native translation-control changes
-   and core-1 identity/power reads return successfully with exact restoration.
-   Observe remaining local interrupt state, then extend the corrected
-   initialization with matching cleanup. Qualify local interrupts, remaining
+1. Continue from the successful local interrupt snapshot under
+   `native-local-interrupt-read-20261018/`. Core 1's frame is asleep with no
+   enabled, pending or active interrupts; translation controls restore and ROM
+   returns after observed OFF. The returning overlay now compiles the corrected
+   production controller and restores local state before shutdown. Five focused
+   instruction cases pass under `native-local-interrupt-init-20261018/`;
+   physical initialization remains pending. Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
    intentional watchdog expiry and unattended fault tests remain deferred;

@@ -678,7 +678,7 @@ retain before the first redistributor write. Independently, the primary's first
 TYPER scan and redistributor snapshot had not been physically observed to complete.
 These are source-backed observation gaps, not established causes of the failed attempt.
 
-The current overlay selects execution profile `core1-release-pre-gic-v1`.
+The earlier overlay selected execution profile `core1-release-pre-gic-v1`.
 It removes the primary redistributor scan and snapshot. After the existing
 core-1 arrival, power and epoch guards, it permits actual native RELEASE.
 The secondary selects its reserved stack, publishes RELEASED, installs the
@@ -825,5 +825,46 @@ The 96-byte snapshot occupies `0x42002900` inside the existing saved result span
 Walk-control restoration, shutdown acknowledgment, observed OFF and shared cleanup
 retain their previous requirements. Three focused cases pass for the full snapshot,
 a powered-down frame and a power transition. Previous fault/cleanup evidence is
-reused. Physical local-register access remains pending; evidence is under
-`native-local-interrupt-read-20261018/`.
+reused. The physical snapshot passed on port `3-1`: control was zero, WAKER
+was `6`, and enable, pending, active, group, modifier, configuration and priority
+were zero. PWRR remained `0x100`. Both translation controls restored, shutdown
+acknowledgment matched, and PPU OFF preceded shared cleanup. All 51 transactions
+passed; ROM returned from `003:090` as `003:091`. Evidence is under
+`native-local-interrupt-read-20261018/native/runtime/`.
+
+## The returning diagnostic executes the corrected interrupt controller
+
+The current overlay compiles the production portable continuation controller with
+the cached image's existing source patch. The frozen native image still supplies
+entry, preparation and return code. A source change alone would not update that
+frozen image, so the overlay calls the newly linked controller explicitly.
+The linker bounds code and constants to a saved 16 KiB reservation and rejects
+implicit writable sections. The resulting overlay occupies 8,868 bytes.
+
+Core 1 first captures its local baseline and requires an asleep frame with no
+enabled, pending or active interrupts. It enables EL3 interrupt system-register
+access with legacy bypass disabled, then verifies both CPU interrupt groups are
+disabled. The production controller performs frame discovery, core wake control,
+GIC-600 power requests and local interrupt initialization. A rejected power request
+rechecks group stability within the original deadline.
+
+On success, cleanup disables local sources, waits for register writes, checks for
+pending or active interrupts, restores group, configuration and priority words,
+and waits for the frame to sleep. The initially powered frame remains powered.
+Core wake control and both translation controls restore before the existing
+shutdown acknowledgment and independently observed OFF. EL3 interrupt access stays
+enabled until core power-off; interrupt delivery is never enabled. A failed
+controller or cleanup retains ownership without acknowledging shutdown.
+
+This diagnostic does not toggle CPU interrupt-group enables or use the priority
+mask register. SPI enables remain disabled and LPIs remain off. Those conditions
+exclude the SPI/LPI packet transitions described in Arm's
+[erratum 2384374](https://documentation-service.arm.com/static/6287e27d41e28926d04306ec?token=),
+pages 12–14. General interrupt delivery and shutdown require a separate errata
+review when those conditions change.
+
+Five focused instruction cases pass: initialization and restoration, one rejected
+power request, refusal of a pending interrupt, retained restoration mismatch,
+and retained wake timeout. The actual linked controller executes in these cases;
+GIC, system-register and power responses are modeled. Evidence is under
+`native-local-interrupt-init-20261018/`. Physical execution remains pending.

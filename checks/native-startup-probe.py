@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check target walk controls, identification reads and restoration before observed OFF."""
+"""Execute production local interrupt initialization and returning cleanup in a model."""
 import argparse
 import atexit
 import hashlib
@@ -53,7 +53,7 @@ def check(name,scenario='normal'):
     if scenario in ('target-admission','capture-fault'):per_core[1]['sctlr_el1']=0xc51838
     capture_entries=[]
     frame_cores=list(range(8));rbase=0x03480000;gbase=rbase+0x10000
-    original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0xa0000002,'pending':1 if scenario=='pending-refusal' else 0,
+    original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0,'pending':1 if scenario=='pending-refusal' else 0,
         'active':0,'group':0x1122aabb,'modifier':0x00550000,'config':0xaaaaaaaa,'priority':0x12345678}
     rdist=original_rdist.copy();rdist['rwp']=0;rdist_writes=[];typer_reads=[];commands=[];private_wait_seen=[];sleep_attempted=[]
     local_registers={rbase:rdist['ctlr'],rbase+0x14:rdist['waker'],gbase+0x100:rdist['enable'],
@@ -101,7 +101,7 @@ def check(name,scenario='normal'):
                 cleanup_state=struct.unpack('<Q',uc.mem_read(0x42002100,8))[0]
                 activation_state=struct.unpack('<Q',uc.mem_read(0x42002400,8))[0]
                 rdist_state=struct.unpack('<Q',uc.mem_read(0x42002500,8))[0]
-                step=500000 if (scenario in ('capture-fault','frame-read-fault','target-restore-fault') and secondary_terminal or scenario=='ca-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
+                step=500000 if ((scenario=='wake-timeout' and rdist_writes) or (scenario=='cleanup-fault' and secondary_terminal) or scenario in ('capture-fault','frame-read-fault','target-restore-fault') and secondary_terminal or scenario=='wake-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
                 value=(ticks[-1] if ticks else 200)+step;ticks.append(value)
             else:assert key in registers,(name,key,hex(address));value=registers[key]
             uc.reg_write(UC_ARM64_REG_X0+int(read[1]),value);uc.reg_write(UC_ARM64_REG_PC,address+4)
@@ -126,11 +126,25 @@ def check(name,scenario='normal'):
             uc.emu_stop()
     def read(uc,access,address,size,value,unused):
         if 0x03460000<=address<0x03560000:
-            assert active[0]==1 and address in (rbase+8,rbase+0x24,*local_registers), 'Only selected local frame reads.'
+            assert active[0]==1
             assert per_core[1]['sctlr_el1']==0xc50839 and per_core[1]['tcr_el1']==0x800080
-            assert size==(8 if address==rbase+8 else 4)
-            data=(0x100<<32)|0x121 if address==rbase+8 else frame_power if address==rbase+0x24 else local_registers[address]
-            if address in local_registers:assert frame_power==0x100
+            init=host.local_initialization_snapshot(bytes(uc.mem_read(0x42002980,256)))
+            if (address-0x03460008)%0x20000==0:
+                assert size==8 and 0x03460008<=address<=0x03540008
+                index=(address-0x03460008)//0x20000
+                data=(index<<40)|0x121|(16 if index==7 else 0)
+            elif address==rbase+0x24:
+                assert size==4
+                data=frame_power
+                if scenario=='power-reject' and len([w for w in rdist_writes if w[0]==rbase+0x24])==1:data|=1
+            else:
+                assert size==4 and address in local_registers,hex(address)
+                assert frame_power==0x100
+                keys={rbase:'ctlr',rbase+0x14:'waker',gbase+0x100:'enable',gbase+0x200:'pending',
+                    gbase+0x300:'active',gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
+                data=rdist[keys[address]]
+                if address==rbase and rdist['rwp']:data|=8;rdist['rwp']-=1
+                if scenario=='cleanup-fault' and init['state']==2 and address==gbase+0x80:data^=1
             uc.mem_write(address,data.to_bytes(size,'little'));typer_reads.append(address);return
         if address in power_registers:
             assert size==4;power_reads.append(address)
@@ -151,7 +165,26 @@ def check(name,scenario='normal'):
         uc.mem_write(address,struct.pack('<I',data))
     def write(uc,access,address,size,value,unused):
         if address==0x42005118 and value:commands.append(value)
-        assert not 0x03460000<=address<0x03560000, 'No GICR writes on either CPU.'
+        if 0x03460000<=address<0x03560000:
+            assert size==4 and active[0]==1
+            assert struct.unpack('<Q',uc.mem_read(0x42002900,8))[0]==2
+            assert not (per_core[1]['icc_igrpen0_el1']&1 or per_core[1]['icc_igrpen1_el3']&3)
+            assert per_core[1]['icc_sre_el3']&7==7
+            rdist_writes.append([address,value])
+            if address==rbase+0x24:assert value==0
+            elif address==rbase+0x14:
+                assert value in (0,2,4,6)  # ChildrenAsleep is read-only.
+                if value&2:rdist['waker']=value|4;sleep_attempted.append(address)
+                else:rdist['waker']=4 if scenario=='wake-timeout' else 0
+            elif address==gbase+0x180:rdist['enable']&=~value;rdist['rwp']=2
+            elif address==gbase+0x100:rdist['enable']|=value;rdist['rwp']=2
+            elif address==gbase+0x280:rdist['pending']&=~value
+            elif address==gbase+0x380:rdist['active']&=~value
+            else:
+                keys={gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
+                assert address in keys,hex(address)
+                rdist[keys[address]]=value
+            return
         assert not (0x07053000<=address<0x07054000),'PPU status is read-only.'
         if address in (0x07050204,0x07050224):
             assert size==4
@@ -208,6 +241,14 @@ def check(name,scenario='normal'):
     activation=host.activation_snapshot(bytes(cpu.mem_read(0x42002400,256)))
     rdist_record=host.rdist_snapshot(bytes(cpu.mem_read(0x42002500,512)))
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
+    initialization=host.local_initialization_snapshot(bytes(cpu.mem_read(0x42002980,256)))
+    if scenario in ('cleanup-fault','wake-timeout'):
+        assert stopped==['park'] and observation['state']==1 and not activation['ack']
+        assert initialization['state'] in (1,2) and rdist_writes
+        if scenario=='cleanup-fault':assert initialization['cleanup_error']==4 and initialization['controller_state']==2
+        else:assert initialization['controller_state']==5 and initialization['error']==2
+        assert not any(key=='rmr_el3' for core,key,value in controls)
+        reports.append({'name':name,'retained':True,'initialization':initialization,'rdist_writes':rdist_writes,'activation':activation});return
     if scenario in ('capture-fault','frame-read-fault','target-restore-fault'):
         assert stopped==['park'] and observation['state']==1 and observation['origin']==(1 if scenario=='capture-fault' else 3)
         assert capture_entries==[1] and len(injected)==1 and activation['state']==1
@@ -234,15 +275,17 @@ def check(name,scenario='normal'):
     assert [power_registers[address] for address in (0x08002000,0x08002004,0x08002008)]==[0x20,0x48000000,0]
     assert result['checkpoint']==13 and activation['state']==5 and observation['state']==5
     assert activation['epoch']==activation['request']==activation['ack']==observation['epoch']==bundle['epoch']
-    assert not rdist_writes and not rdist_record['writes_attempted'] and not rdist_record['reason']
+    assert not rdist_record['writes_attempted'] and not rdist_record['reason']
     assert activation['last_ppu']&15==0 and activation['restored_control']==0x10000 and activation['restored_mode']==0x40
     assert capture_entries==[1]
     assert observation['CurrentEL']==12 and observation['SCTLR_EL3']==0xc50838 and observation['MIDR_EL1']==0x412fd050
     assert observation['control']==0x10000 and observation['mode']==0x40
     assert [power_registers[a] for a in (0x07050204,0x07050224)]==[0x10000,0x40]
     assert secondary['power']['state']==2 and secondary['power']['step']==18 and secondary['power']['writes_attempted']==7
-    assert power_writes==[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
+    expected_power=[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
         [1,2,0x07050224,0x40],[1,2,0x07050204,0x10002],[0,4,0x07050204,0x10000],[0,4,0x07050224,0x40]]
+    if initialization['state']==3:expected_power[4:4]=[[1,1,0x07050204,0x10000],[1,1,0x07050204,0x10000]]
+    assert power_writes==expected_power
     assert observation['core']==1 and observation['MPIDR_EL1']==0x81000100
     assert observation['gicr_state']==rdist_record['state']==1
     assert commands==[1,2] and secondary['owner']['state']==2 and secondary['owner']['phase']==5
@@ -255,7 +298,7 @@ def check(name,scenario='normal'):
         assert observation['controller']['core_record']['state']==6
     else:
         assert target_controls==[['tcr_el1',0x800080],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0]]
-        assert typer_reads==expected_frame_reads
+        assert typer_reads[:len(expected_frame_reads)]==expected_frame_reads
         assert observation['walks']==dict(blocked_sctlr1=0xc50839,blocked_tcr1=0x800080,
             typer=(0x100<<32)|0x121,pwrr=frame_power,restored_sctlr1=0xc50838,restored_tcr1=0,state=2)
         local=host.local_interrupt_snapshot(bytes(cpu.mem_read(0x42002900,96)))
@@ -269,20 +312,30 @@ def check(name,scenario='normal'):
         assert observation['controller']['core']==1 and observation['controller']['identity']['mpidr']==0x81000100
         assert observation['controller']['core_record']['state']==1 and observation['controller']['core_record']['epoch']==bundle['epoch']
         assert not any(observation['controller']['plan'][key] for key in ('actlr','actlr2','actlr3','ectlr','clusteractlr','patch'))
+    if scenario=='pending-refusal':
+        assert initialization['state']==4 and not rdist_writes
+    elif scenario in ('normal','power-reject'):
+        assert initialization['state']==3 and initialization['controller_state']==2 and not initialization['error']
+        assert initialization['writes']==(12 if scenario=='power-reject' else 11)
+        assert initialization['cleanup_writes']==7 and initialization['cleanup_error']==0
+        assert initialization['epoch']==bundle['epoch'] and initialization['core']==1
+        assert initialization['redistributor']==rbase and initialization['sre_after']==7
+        assert initialization['pwrr']==frame_power and initialization['restored_control']==0x10000
+        assert all(initialization[k]==original_rdist[k] for k in ('waker','enable','pending','active','group','modifier','config','priority'))
+        assert [w for w in rdist_writes if w[0]==rbase+0x24]==[[rbase+0x24,0]]*(2 if scenario=='power-reject' else 1)
+        assert sleep_attempted
     assert all(rdist[n]==original_rdist[n] for n in original_rdist)
     assert snapshot['state']==3 and snapshot['error']==0 and snapshot['banks']==9 and snapshot['original_ctlr']==0x37
     assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
-    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries})
-check('released-target-local-register-snapshot-and-restoration')
-check('local-register-reads-refuse-powered-down-frame','frame-power-off')
-check('local-register-reads-refuse-power-transition','frame-power-transition')
-check('released-target-preparation-refusal-observed-without-gicr','target-admission')
-check('failure-capture-read-fault-retains-without-retry','capture-fault')
-check('target-frame-read-fault-retains-without-shutdown','frame-read-fault')
-check('target-control-restore-fault-retains-without-shutdown','target-restore-fault')
+    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization})
+check('current-controller-ready-and-local-state-restored')
+check('current-controller-retries-one-rejected-power-request','power-reject')
+check('local-initialization-refuses-pending-interrupt','pending-refusal')
+check('local-cleanup-mismatch-retains-without-shutdown','cleanup-fault')
+check('local-wake-timeout-retains-without-shutdown','wake-timeout')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'execution_profile':host.PROFILE,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual RELEASE, native walk blocking, local interrupt register reads and restored OFF with modeled system registers, exceptions, distributor and PPU. No GICR writes. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
-print(f'PASS {len(reports)} focused target walk/frame cases; observed OFF or retained failure.')
+    'limits':'Actual RELEASE, production local interrupt controller, restored local state and observed OFF with modeled system registers, GIC and PPU. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
+print(f'PASS {len(reports)} focused local initialization cases; observed OFF or retained failure.')

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe core1 walk blocking and GIC frame identity, restore controls, then verify OFF."""
+"""Run current core1 local interrupt initialization, restore state, then verify OFF."""
 import argparse
 import hashlib
 import importlib.util
@@ -22,14 +22,19 @@ require,digest,save=base.require,base.digest,base.save_json
 NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
-OVERLAY=(0x41020000,0x2000)
-PROFILE='core1-local-interrupt-read-v1'
+OVERLAY=(0x41020000,0x4000)
+PROFILE='core1-local-interrupt-init-v1'
+SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
+    'boot/a733/native-local-interrupt-probe.c','platform/a733/cpu_continue.c',
+    'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
+    'runtime/memory.c','runtime/include/string.h','include/a733_cpu_continue.h',
+    'include/a733_cpu_entry.h','include/a733_cpu_start.h')
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
       ('el1-bss',0x41201000,0x8fd10),('result',0x42000000,0x4000),
       ('contract',0x42004000,0x1000),('monitor-bss',0x42005000,0xa590),
-      ('boot-stack',0x42010000,0x4000),('overlay',0x41020000,0x2000),
+      ('boot-stack',0x42010000,0x4000),('overlay',*OVERLAY),
       ('tables',0x421f0000,0x5000))
 
 def branch(source,target):
@@ -46,14 +51,24 @@ def prepare(a):
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
     a.build.mkdir(parents=True,exist_ok=False)
-    commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o'],
-        [a.lld,'-Ttext=0x41020000','-e','boot_checkpoint',a.build/'overlay.o','-o',a.build/'overlay.elf'],
-        [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']]
+    commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
+        ROOT/'platform/a733-smp-cached/continuation-core.patch'],
+        [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
+    objects=[a.build/'overlay.o']
+    for name,source in [('local',ROOT/'boot/a733/native-local-interrupt-probe.c'),
+                        ('controller',a.build/'continue-core.c'),('topology',ROOT/'platform/a733/cpu_start.c'),
+                        ('memory',ROOT/'runtime/memory.c')]:
+        obj=a.build/(name+'.o');objects.append(obj)
+        commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
+            '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
+            '-Wall','-Wextra','-Werror','-I',ROOT/'include','-I',ROOT/'runtime/include','-c',source,'-o',obj])
+    commands.extend([[a.lld,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
+        [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']])
     for command in commands:
         r=subprocess.run(list(map(str,command)),capture_output=True,text=True)
         with (a.build/'build.log').open('a') as f:f.write(r.stdout+r.stderr)
         require(r.returncode==0,'Overlay build failed; inspect log.')
-    require(0<(a.build/'overlay.bin').stat().st_size<=0x2000,'Overlay exceeds reservation.')
+    require(0<(a.build/'overlay.bin').stat().st_size<=OVERLAY[1],'Overlay exceeds reservation.')
     with (a.build/'overlay.elf').open('rb') as f:
         hooks={s.name:s['st_value'] for s in ELFFile(f).get_section_by_name('.symtab').iter_symbols()}
     code=bytearray(segments[0]['data']);patches=[]
@@ -83,6 +98,7 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':PROFILE,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
+        'sources':{name:digest(ROOT/name) for name in SOURCES},
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
@@ -145,6 +161,14 @@ def local_interrupt_snapshot(raw):
     return dict(zip(('state','base','ctlr','waker','enable','pending','active',
         'group','modifier','config','priority','pwrr_after'),struct.unpack('<12Q',raw)))
 
+def local_initialization_snapshot(raw):
+    require(len(raw)==256,'Short local initialization result.')
+    names=('state','epoch','core','deadline','controller_state','phase','error','writes',
+        'redistributor','original_control','restored_control','sre_before','sre_after',
+        'igrpen0','igrpen1','waker','enable','pending','active','group','modifier',
+        'config','priority','pwrr','cleanup_error','cleanup_writes')
+    return dict(zip(names,struct.unpack('<32Q',raw)))
+
 def activation_snapshot(raw):
     require(len(raw)==256,'Short activation snapshot.')
     names=('state','epoch','request','ack','core','initial_control','initial_mode','last_ppu','deadline',
@@ -191,6 +215,7 @@ def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==PROFILE and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
+    require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
     require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
     frozen={name:(a.build/name).read_bytes() for name in m['files']}
     require(all(Path(n).name==n and hashlib.sha256(b).hexdigest()==m['files'][n] for n,b in frozen.items()),'Frozen build changed.')
@@ -254,7 +279,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('local-initialization',0x42002980,256),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -265,6 +290,7 @@ def run(a):
                 record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
                 record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
                 record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
+                record['local_initialization']=local_initialization_snapshot((a.evidence/'local-initialization.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
                 observation=record['observation'];activation=record['activation'];secondary=record['secondary']
                 require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
@@ -284,6 +310,16 @@ def run(a):
                     local=record['local_interrupts']
                     require(local['base']==0x03480000 and local['state'] in (2,3), 'Local interrupt observation incomplete.')
                     record['local_interrupts_observed']=local['state']==2
+                    init=record['local_initialization']
+                    if local['state']==2:
+                        require(init['state'] in (3,4) and init['epoch']==observation['epoch'] and init['core']==1,'Local initialization did not complete or refuse safely.')
+                        if init['state']==3:
+                            require(init['controller_state']==2 and init['error']==init['cleanup_error']==0 and
+                                init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
+                                'Local initialization or control restoration differs.')
+                            require(all(init[k]==local[k] for k in ('waker','enable','pending','active','group','modifier','config','priority')) and
+                                init['pwrr']==local['pwrr_after'], 'Local interrupt restoration differs.')
+                    record['local_initialization_observed']=init['state']==3
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
