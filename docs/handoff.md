@@ -457,10 +457,13 @@ cases pass, including retained failure on mode, status or selector changes.
 Only the platform and build identity were rebuilt; 164 objects were reused.
 Read-only batches now capture the exact PF pull/drive fields, oscillator and
 fabric clock controls. All seven secondary power-state registers report OFF.
-The observed oscillator and reference fields require corrected rate decoding;
-the existing admission assumes a 24 MHz oscillator. This is a software profile
-gap, not evidence of an electrical fault. The clock worker is correcting the
-mandatory SD, USB and PMIC consumers against the pinned A733 sources.
+The integrated SD, USB and PMIC providers now decode the observed 26 MHz
+oscillator and normalized 24 MHz reference. PMIC timing uses its selected parent
+and retains the admitted raw oscillator rate. USB accepts a normalized 24 MHz
+route and refuses raw 26 MHz. Focused checks and review pass; all fourteen
+changed source snapshots match integration under `clock-reference/` in the
+second-board evidence directory. The final image must rebuild affected providers
+and their callers because PMIC and USB internal layouts changed.
 
 A conditional PMIC clock read confirms APBS0 source 0, APBS1 source 4,
 controller gate/reset value `0x10001` and divider `0x28`. The divider read ran
@@ -470,10 +473,25 @@ transaction or register write ran. Evidence is under
 `second-board-20261018-3-3/sd-pin-clock-state/`, `sd-peri0-state/` and
 `pmic-clock-state/`.
 
-The image still needs settled supply/ownership and electrical admission,
-corrected clock decoding and working startup. An independent single-core SD/USB application is
-being integrated to permit storage qualification while multicore remains under
-diagnosis. Full all-core hardware support remains required.
+The final read-only batch records all fourteen secondary CPU control/mode words
+as zero and the inherited PMIC pin fields. USB0 PHY/reset and device gate remain
+enabled by ROM; USB1 is disabled and the shared reference already selects
+normalized 24 MHz. Evidence is under `native-handoff-state/`. This state fails
+the existing USB cold baseline. An explicit ROM takeover is being implemented;
+do not launch the unchanged cold-only provider or weaken its admission.
+
+The MMC controller now waits one millisecond after clock activation before CMD0
+and two milliseconds after CMD0 completion. Six focused sanitizer cases and
+review pass under `cmd0-pacing/`; the waits retain the original ownership and
+deadline checks. No card command has run physically.
+
+Independent single-core SD/USB startup is implemented and statically reviewed.
+It seals session inputs outside EL1-cleared BSS and checks secondary OFF state
+in EL3 before shared hardware initialization. Final linking and focused native
+checks await the USB takeover. Source-backed supply settling and pin settings
+are documented under `single-core-admission/`; final ownership, image-bound
+admission and actual operations remain required. Full all-core support remains
+required independently of this storage image.
 
 ## Next actions
 

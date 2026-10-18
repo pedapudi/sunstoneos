@@ -219,8 +219,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   changes. Only two objects were rebuilt and 164 reused. No card command has run.
   Read-only pin, fabric and PMIC clock observations now supply the second board's
   configuration under `second-board-20261018-3-3/`. Mandatory native providers
-  still need corrected oscillator/reference decoding. An independent single-core
-  SD/USB startup is in development; actual card operations remain untested.
+  now have reviewed oscillator/reference corrections with focused software
+  evidence. Source-backed CMD0 delays also pass six focused cases. An independent
+  single-core SD/USB startup awaits final linking and checks; ROM leaves USB0
+  enabled, so an explicit takeover must precede the first launch. Actual card
+  operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
