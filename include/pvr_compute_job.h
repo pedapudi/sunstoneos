@@ -26,7 +26,8 @@ struct pvr_compute_job_config {
      * programs, private fresh queue/UFO, immutable valid context/VM/programs,
      * all physical/mapping/cache permissions, heap bases, and complete alias
      * exclusions. A UFO is a firmware-owned 32-bit timeline word. Its first
-     * command writes sequence 1; no reuse or wrap is supported here. */
+     * command writes sequence 1. Completed/acquired jobs can advance that
+     * timeline through repeat; sequence wrap and resource disposal are refused. */
     int (*admit)(void *, const struct pvr_compute_job_config *);
 };
 struct pvr_compute_job_image {
@@ -69,7 +70,10 @@ struct pvr_compute_job {
     const struct pvr_compute_job_config *config;
     const struct pvr_compute_job_image *image;
     uint64_t deadline, last_now, epoch;
-    uint32_t phase, error;
+    uint32_t phase, error, sequence;
+    uint64_t serial;
+    unsigned char update[8];
+    uint32_t results[PVR_COMPUTE_JOB_WORDS];
 };
 /* No I/O. Initialize zeroed private state against an IDLE transport and ACTIVE
  * firmware queue, sharing one monotonic clock and one privileged serialized
@@ -85,10 +89,15 @@ int pvr_compute_job_init(struct pvr_compute_job *,
                          struct pvr_cccb *, uint64_t absolute_deadline);
 /* One bounded step. Return 0 pending, 1 numerical job complete, -1 retained
  * fault. KICK acceptance only advances to fence wait. Completion requires
- * sequence 1 plus coherent output/guard agreement. Publication precedes the
- * initial zero check, including cache maintenance for initialized memory. It does not clean up the
+ * the current sequence plus coherent output/guard agreement. Publication precedes
+ * the previous-sequence check, including cache maintenance for output. It does not clean up the
  * firmware context or establish isolation. No resource-release API exists;
  * every fault retains backing until independently proven stop and cleanup. */
+/* Worker-only continuation after acquired COMPLETE. Preserve live client ring,
+ * epoch and all immutable inputs. Refuse timeline/serial wrap. publish must
+ * verify the old timeline before poisoning/publishing output for this sequence.
+ * Refusal preserves state; acceptance invalidates the prior copied result. */
+int pvr_compute_job_repeat(struct pvr_compute_job *, uint64_t absolute_deadline);
 int pvr_compute_job_poll(struct pvr_compute_job *);
 int pvr_compute_job_abort(struct pvr_compute_job *);
 #endif

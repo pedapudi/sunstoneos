@@ -18,7 +18,8 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
-    PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT };
+    PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
+    PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -112,7 +113,7 @@ struct pvr_gpu_service_config {
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
-    uint64_t timeout_us; /* OPEN/CLOSE/COMPUTE; STATUS requires zero. */
+    uint64_t timeout_us; /* OPEN/CLOSE/COMPUTE use a bound; STATUS/OUTPUT/CANCEL require zero. */
 };
 struct pvr_gpu_service_reply {
     uint64_t ticket, epoch;
@@ -122,6 +123,7 @@ struct pvr_gpu_service_reply {
     uint32_t owns_session, start_error, control_error, stop_error;
     uint32_t free_list_error, free_list_pending;
     uint32_t compute_phase, compute_error, compute_job_error;
+    uint32_t compute_sequence, compute_word_count, compute_words[32];
     uint32_t graphics_phase;
     uint32_t render_phase, render_error, render_checked;
     uint32_t render_first_pixel, render_pixel_count, render_pixels[64];
@@ -187,9 +189,11 @@ int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
  * fresh epoch and prepares all backing again when free lists are disabled.
  * With free lists enabled, CLOSE drains retained firmware actions before stop
  * and preserves all leases after verified isolation. Reopen then returns BUSY
- * until explicit resource disposal exists. Optional COMPUTE admits one fixed
- * numerical job only for the READY owner; its reply reports acceptance. STATUS
- * includes compute progress. CLOSE refuses pending compute and retains backing
+ * until explicit resource disposal exists. Optional COMPUTE repeatedly admits the fixed
+ * numerical workload after acquired completion for the READY owner; its reply reports acceptance. STATUS
+ * includes compute progress. COMPUTE_OUTPUT copies acquired results with sequence
+ * identity after completion. COMPUTE_CANCEL closes admission and faults/retains
+ * the session; its acknowledgment does not establish hardware cancellation. CLOSE refuses pending compute and retains backing
  * after completed-job isolation; reopen remains BUSY until context disposal.
  * Configured graphics and compute publication are part of OPEN and precede
  * power enable. Graphics preparation is not a rendering/completion claim.

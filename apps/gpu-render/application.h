@@ -22,6 +22,7 @@ struct gpu_application {
     atomic_uint fatal,result;
     struct pvr_gpu_service_reply last;
     uint32_t pixels[4096];
+    uint32_t compute_words[2][PVR_COMPUTE_JOB_WORDS], compute_sequence[2];
 };
 extern struct gpu_application app;
 const struct a733_board_session *gpu_application_session(void);

@@ -50,15 +50,30 @@ static void exchange(void)
     if(!tud_vendor_available())return;
     uint8_t request[4];if(tud_vendor_available()!=4||tud_vendor_read(request,4)!=4)stop();
     unsigned first=(unsigned)request[0]|(unsigned)request[1]<<8|(unsigned)request[2]<<16|(unsigned)request[3]<<24;
+#ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+    if(first>=2)stop();
+#else
     if(first>=64)stop();
+#endif
     unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
     if(!gpu_application_live(NULL))result=2;
+#ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+    /* Distinct magic and sequence identify one copied numerical submission. */
+    put32(response,0x43555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);
+    put32(response+16,result==1?PVR_COMPUTE_JOB_WORDS:0);put32(response+20,2);
+    put32(response+24,result==1?app.compute_sequence[first]:0);
+    put32(response+28,(uint32_t)app.session.epoch);put32(response+32,(uint32_t)(app.session.epoch>>32));
+    put32(response+36,result==1?2*PVR_COMPUTE_JOB_WORDS:0);
+    if(result==1)for(unsigned i=0;i<PVR_COMPUTE_JOB_WORDS;++i)put32(response+40+4*i,app.compute_words[first][i]);
+    response_sent=response_transferred=0;response_bytes=result==1?168:40;
+#else
     put32(response,0x52555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);
     put32(response+16,result==1?64:0);put32(response+20,64);put32(response+24,64);
     put32(response+28,(uint32_t)app.session.epoch);put32(response+32,(uint32_t)(app.session.epoch>>32));
     put32(response+36,result==1?4096:0);
     if(result==1)for(unsigned i=0;i<64;++i)put32(response+40+4*i,app.pixels[first*64+i]);
     response_sent=response_transferred=0;response_bytes=result==1?296:40;
+#endif
 }
 void gpu_application_usb(void *unused)
 {

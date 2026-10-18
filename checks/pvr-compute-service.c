@@ -26,7 +26,7 @@ static unsigned backing_used,mode_calls;
 static int observed_mode(void *ctx)
 {
     callback(ctx); ++mode_calls;
-    configASSERT(get(&enabled)&&vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.phase==PVR_COMPUTE_SERVICE_READY);
+    configASSERT(get(&enabled)&&vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&(compute.phase==PVR_COMPUTE_SERVICE_READY||compute.phase==PVR_COMPUTE_SERVICE_COMPLETE));
     if(compute_service_case==4)return 0;
     if(compute_service_case==5&&mode_calls==2)return -1;
     return 1;
@@ -113,11 +113,11 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     callback(ctx);configASSERT(off==0xb00&&!value&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&get(&published));
     configASSERT(word(command+8,4)==job_config.firmware_context);
-    unsigned char *ring=computation.firmware[3].storage.cpu;
+    unsigned char *ring=(unsigned char *)computation.firmware[3].storage.cpu+compute.client.cursor-184;
     configASSERT(word(ring,4)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u));
-    configASSERT(!memcmp(ring+40,job_image.compute,96)&&!memcmp(ring+176,job_image.update,8));
+    configASSERT(!memcmp(ring+40,job_image.compute,96)&&!memcmp(ring+176,compute.job.update,8));
     put(computation.firmware[2].storage.cpu,4,word(command+12,4));
-    put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);set(&job_kicks,1);return 1;
+    put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);set(&job_kicks,get(&job_kicks)+1);return 1;
 }
 static int event(void *ctx,const unsigned char command[88])
 { callback(ctx);configASSERT(word(command,4)==(PVR_CCB_MAGIC|106));set(&event_forwarded,1);return 1; }
@@ -125,13 +125,15 @@ static void completion_model(void)
 {
     unsigned char *out=job_config.buffers[PVR_JOB_OUTPUT].cpu;
     for(unsigned i=0;i<32;++i)put(out+64+4*i,4,(17u+(i+1u)*3u)^(0x9e3779b9u+(i<<16)));
-    __asm__ volatile("dsb sy":::"memory");put(computation.firmware[5].storage.cpu,4,1);
+    __asm__ volatile("dsb sy":::"memory");put(computation.firmware[5].storage.cpu,4,compute.job.sequence);
 }
 static void compute_peer(void *unused)
 {
     (void)unused;wait_flag(&job_kicks,1);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_DENIED);
     configASSERT(request(PVR_GPU_SERVICE_CLOSE,100000).result==PVR_GPU_SERVICE_DENIED);
+    configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_DENIED);
+    configASSERT(request(PVR_GPU_SERVICE_COMPUTE_CANCEL,0).result==PVR_GPU_SERVICE_DENIED);
     set(&peer_checked,1);wait_flag(&allow_complete,1);
     if(compute_service_case==1)completion_model();
     vTaskSuspend(NULL);
@@ -184,6 +186,56 @@ static void compute_owner(void *unused)
     r=request(PVR_GPU_SERVICE_STATUS,0);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(request(PVR_GPU_SERVICE_CLOSE,100000).result==PVR_GPU_SERVICE_BUSY);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_BUSY);
+    if(compute_service_case>=7) {
+        completion_model();
+        do {vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+        while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
+        r=request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0);
+        configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_sequence==1&&r.compute_word_count==32);
+        for(unsigned i=0;i<32;++i)configASSERT(r.compute_words[i]==job_image.expected[i]);
+        compute.job.sequence=UINT32_MAX;
+        configASSERT(!pvr_compute_job_repeat(&compute.job,compute.job.deadline+100000));
+        configASSERT(compute.job.phase==PVR_JOB_COMPLETE&&compute.client.serial==1);
+        compute.job.sequence=1;
+        configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_OK);
+        configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_BUSY);
+        wait_flag(&job_kicks,2);
+        configASSERT(compute.client.serial==2&&compute.client.write==368&&compute.job.sequence==2);
+        /* New publication must poison prior results before the second KICK. */
+        for(unsigned i=0;i<32;++i)configASSERT(word((unsigned char *)job_config.buffers[PVR_JOB_OUTPUT].cpu+64+4*i,4)==~job_image.expected[i]);
+        if(compute_service_case==7||compute_service_case==11)completion_model();
+        else if(compute_service_case==9)put(computation.firmware[5].storage.cpu,4,3);
+        else if(compute_service_case==10) {
+            r=request(PVR_GPU_SERVICE_COMPUTE_CANCEL,0);
+            configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.owns_session&&r.phase==PVR_GPU_SERVICE_FAILED);
+            configASSERT(compute.error==PVR_COMPUTE_SERVICE_CANCELLED);
+        }
+        do {vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+        while(r.compute_phase!=((compute_service_case==7||compute_service_case==11)?PVR_COMPUTE_SERVICE_COMPLETE:PVR_COMPUTE_SERVICE_FAILED));
+        if(compute_service_case==7||compute_service_case==11) {
+            r=request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0);
+            configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_sequence==2&&r.compute_word_count==32);
+            for(unsigned i=0;i<32;++i)configASSERT(r.compute_words[i]==job_image.expected[i]);
+            if(compute_service_case==11) {
+                unsigned char *command=resource(PVR_FW_EVENTS);memset(command,0,88);
+                put(command,4,PVR_CCB_MAGIC|105u);
+                __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL),1,__ATOMIC_RELEASE);
+                r=wait_phase(PVR_GPU_SERVICE_FAILED);
+                configASSERT(compute.error==PVR_COMPUTE_SERVICE_RESET);
+            }
+        }
+        if(compute_service_case!=7) {
+            configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_FAULT);
+            configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_FAULT);
+            configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&!get(&isolated));
+            unsigned before=get(&calls);vTaskDelay(5);configASSERT(get(&calls)==before);
+            if(compute_service_case==8)configASSERT(compute.error==PVR_COMPUTE_SERVICE_CLOCK&&
+                word(computation.firmware[5].storage.cpu,4)==1&&compute.job.sequence==2);
+            if(compute_service_case==9)configASSERT(compute.job.error==PVR_JOB_FENCE_VALUE);
+        }
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; repeated native publication and acquired copied results or retained fault\n");platform_exit(0);
+    }
     unsigned char *command=resource(PVR_FW_EVENTS);memset(command,0,88);
     put(command,4,PVR_CCB_MAGIC|(compute_service_case==2?105u:106u));
     __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL),1,__ATOMIC_RELEASE);

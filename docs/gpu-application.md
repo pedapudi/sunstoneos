@@ -99,8 +99,8 @@ native power adapter's private header selection; the build resumed after that
 composition correction. The symbol checker resumed with the existing Python
 environment providing ELF support. Successful component cases were not replayed.
 Physical watchdog work remains deferred. Physical isolation and resource disposal
-remain required for shutdown/reuse. General draws, textures, formats, repeated
-submission and compute qualification remain separate hardware requirements.
+remain required for shutdown/reuse. General draws, textures, formats and physical compute qualification remain
+separate hardware requirements.
 
 The central `sunstone-a733-gpu-render` target also compiles and links. Its 150
 repository dependencies match the reviewed worker snapshot. Central artifacts,
@@ -206,3 +206,43 @@ supervised batch. Prior PMIC, GPU, launcher and refusal evidence is reused.
 The earlier image remains preserved. This refresh establishes linkage and
 packaging; successful physical rendering and its entry prerequisites remain
 unqualified.
+
+## Repeated numerical compute mode
+
+Configure the existing native GPU target with
+`-DSUNSTONE_GPU_COMPUTE_APPLICATION=ON` to run two sequential instances of the
+[pinned arithmetic workload](gpu-compute-job.md). The service API supports
+further submissions until sequence exhaustion. The bounded application copies
+both 32-word results and their advancing timeline identities before publishing
+success. It uses the actual reserved-memory, native VM, shared PMIC, power,
+backend, firmware, service worker and USB providers. The compute mode omits
+render-target construction. Its build identity includes the mode selection.
+
+The USB request is a little-endian 32-bit submission index, zero or one.
+A compute response uses magic `0x43555047`, version one, a 40-byte header and
+128 result bytes after success. Header fields identify state, index, word count,
+submission count, timeline sequence, session epoch and total verified words.
+Pending and failed responses contain no result bytes. The render protocol uses
+a different magic. The host observer validates both sequences and every result:
+
+```sh
+python3 apps/gpu-render/observe.py --compute --bus BUS --address ADDRESS \
+  --epoch EPOCH --output /absolute/new/results.bin
+```
+
+The observer reads an already-running admitted image. Supervised preparation,
+actual memory/power admission and coordinator board ownership remain required.
+The current board instance is quarantined; this change performed no hardware
+access. A future bounded physical attempt must establish two advancing timelines
+and correct copied numerical outputs while retaining all GPU resources afterward.
+No successful cancellation or resource-release claim follows from this image.
+
+The affected compute image builds under
+`~/.cache/sunstoneos/evidence/gpu-completion-20261018/native/`.
+Its manifest identifies the final ELF and build inputs. The focused host check
+`python3 checks/gpu-compute-application.py` accepts both numerical frames and
+refuses malformed state, identity, sequence, arithmetic and render frames.
+[Service composition checks](gpu-compute-service.md) cover repeated native memory
+publication and acquired result copying with modeled GPU writes. Physical
+numerical execution, arbitrary programs, general graphics and mimus acceleration
+remain unqualified.

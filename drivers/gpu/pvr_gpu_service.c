@@ -446,8 +446,9 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
-    if ((unsigned)r->operation > PVR_GPU_SERVICE_RENDER_OUTPUT ||
-        ((r->operation == PVR_GPU_SERVICE_STATUS || r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT) ? r->timeout_us != 0 :
+    if ((unsigned)r->operation > PVR_GPU_SERVICE_COMPUTE_CANCEL ||
+        ((r->operation == PVR_GPU_SERVICE_STATUS || r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT ||
+          r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT || r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) ? r->timeout_us != 0 :
          (!r->timeout_us || r->timeout_us > INT64_MAX))) return PVR_GPU_SERVICE_INVALID;
     if (r->operation == PVR_GPU_SERVICE_STATUS)
         return s->phase == PVR_GPU_SERVICE_FAILED ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK;
@@ -470,6 +471,16 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
             return PVR_GPU_SERVICE_INVALID;
         return s->config.render->phase == PVR_RENDER_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
     }
+    if (r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT) {
+        if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
+        return s->config.compute->phase == PVR_COMPUTE_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
+    }
+    if (r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) {
+        if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
+        pvr_compute_service_abort(s->config.compute,PVR_COMPUTE_SERVICE_CANCELLED);
+        fail(s,PVR_GPU_SERVICE_COMPUTATION);
+        return PVR_GPU_SERVICE_OK;
+    }
     if (s->config.render && s->config.render->phase != PVR_RENDER_SERVICE_READY &&
         s->config.render->phase != PVR_RENDER_SERVICE_COMPLETE) return PVR_GPU_SERVICE_BUSY;
     if (r->operation == PVR_GPU_SERVICE_RENDER) {
@@ -485,7 +496,8 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     }
     if (r->operation == PVR_GPU_SERVICE_COMPUTE) {
         if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
-        if (s->config.compute->phase != PVR_COMPUTE_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
+        if (s->config.compute->phase != PVR_COMPUTE_SERVICE_READY &&
+            s->config.compute->phase != PVR_COMPUTE_SERVICE_COMPLETE) return PVR_GPU_SERVICE_BUSY;
         if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
         if (pvr_compute_service_begin(s->config.compute, s->deadline) != 1) {
             fail(s, PVR_GPU_SERVICE_COMPUTATION); return PVR_GPU_SERVICE_FAULT;
@@ -542,6 +554,11 @@ static void worker(void *argument)
         if (s->config.compute) {
             reply.compute_phase = s->config.compute->phase; reply.compute_error = s->config.compute->error;
             reply.compute_job_error = s->config.compute->job.error;
+            reply.compute_sequence = s->config.compute->job.sequence;
+            if (message.request.operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT && reply.result == PVR_GPU_SERVICE_OK) {
+                reply.compute_word_count = PVR_COMPUTE_JOB_WORDS;
+                memcpy(reply.compute_words,s->config.compute->job.results,sizeof(reply.compute_words));
+            }
         }
         configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
     }

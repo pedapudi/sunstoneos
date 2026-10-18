@@ -1,7 +1,7 @@
-# The GPU service owns one fixed numerical compute job
+# The GPU service repeats one fixed numerical compute workload
 
 The optional native compute component connects the
-[fixed numerical job](gpu-compute-job.md) to the FreeRTOS GPU service. Its
+[fixed numerical workload](gpu-compute-job.md) to the FreeRTOS GPU service. Its
 implementation publishes workload memory, maps firmware records before startup,
 submits the job from the service worker, and acquires results after the completion
 timeline advances. A two-core emulator check passes with actual native memory
@@ -67,8 +67,8 @@ startup begin only after that publication completes. READY therefore requires
 compute-memory publication, current core-mode admission, and the existing
 firmware health check.
 
-COMPUTE rechecks admission, formats the private client control record, and drives
-the fixed job through the same privileged worker. Its final publication callback
+COMPUTE rechecks admission, formats the private client control record for the
+first submission, and drives the fixed job through the same privileged worker. Its final publication callback
 orders the already-published memory before initial timeline acquisition. Client
 queue and timeline accesses use uncached memory; timeline reads are single aligned
 32-bit transactions. Result acquisition invalidates the exclusively owned output
@@ -82,11 +82,25 @@ including a reset after numerical completion. Other events retain their original
 handlers. Failure closes admission and preserves context, mappings, program data,
 queues, output, diagnostics, and resource ownership.
 
+The READY owner can submit the same immutable workload again after acquired
+completion. Each submission advances a 32-bit firmware timeline and the existing
+client-ring serial. The live client control record is never reformatted. The
+service verifies the preceding timeline before poisoning the exclusive output
+page and cleaning and invalidating it. It refuses sequence wrap. The command,
+input words, programs, mappings and context retain their original identities.
+
+`COMPUTE_OUTPUT` returns the 32 acquired words and their submission sequence in
+a copied reply. The worker copies observed output, rather than the expected
+reference. Starting another job makes output unavailable until its completion.
+`COMPUTE_CANCEL` acknowledges closed admission by faulting the session and
+retaining all backing and power ownership. It does not establish that GPU
+execution stopped. Later requests cannot submit work or retrieve output. Reset
+and other faults also revoke output access, including after completion.
+
 CLOSE returns BUSY while a compute operation is pending. After numerical
 completion it can use the existing shutdown protocol and independently proven
 isolation callback. Compute backing remains retained afterward, and OPEN refuses
-to reuse that session. Explicit context cleanup, resource disposal, repeated jobs,
-remain required work. An unexpected multicore observation also requires per-core
+to reuse that session. Explicit context cleanup and resource disposal remain required work. An unexpected multicore observation also requires per-core
 context state and command support; the documented A733 GPU is MC1. Power OFF alone does not prove
 that outstanding memory transactions have drained.
 
@@ -107,6 +121,7 @@ The focused check builds in an isolated directory and runs selected cases:
 python3 checks/pvr-compute-service.py \
   --output ~/.cache/sunstoneos/evidence/gpu-compute-service-20261016 \
   --freertos ~/.cache/sunstoneos/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2 \
+  --tinyusb ~/.cache/sunstoneos/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973 \
   --firmware ~/.cache/sunstoneos/sources/gpu/imagination-firmware/powervr/rogue_36.56.104.183_v1.fw \
   --lld ~/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld \
   --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64
@@ -132,11 +147,21 @@ focused alignment and partial-publication follow-up has its own executable and
 manifest. Source snapshots, commands, firmware hash, and ELF hashes identify each
 executed artifact.
 
-Physical qualification still requires a bootable integration image, qualified
+The [native application](gpu-application.md) builds a compute mode with the
+actual reserved-memory and power providers. Physical qualification requires qualified
 independent recovery, native power/register/interrupt service binding, reserved
 CPU/GPU mappings, physical confirmation of the observed MC1 mode, and matching
-heap bases. The coordinator can then submit one fixed job and record the timeline, numerical
-results, guards, and retained shutdown state. No board request is queued until
-that image and its inputs exist. General applications, repeated submissions,
-unexpected multicore execution modes, and performance qualification remain
-outstanding.
+heap bases. The coordinator must record advancing timelines, numerical results, guards and
+retained ownership. Arbitrary programs, general graphics, mimus acceleration,
+unexpected multicore execution modes and physical qualification remain outstanding.
+
+The repeated-workload checks use `--cases 7 8 9 10 11`. They cover two
+submissions with fresh output poisoning, copied values and owner-only access;
+a stale second timeline; a future timeline; cancellation after KICK; and reset
+after copied completion. The successful case also refuses sequence wrap.
+Evidence is under `~/.cache/sunstoneos/evidence/gpu-completion-20261018/`.
+Case 7 passed before a timeout-fixture correction and remains preserved under
+`composition-before-timeout-fixture-fix/`. Cases 8 through 11 pass under
+`composition/`. The stale timeline faults at the component deadline before the
+job-local timeout check. These checks model firmware and numerical GPU writes;
+they do not execute the USC program on a physical GPU.

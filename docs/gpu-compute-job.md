@@ -53,8 +53,9 @@ The client ring must have the same size as its supplied backing and be at least
 A required privileged admission callback proves the remaining conditions:
 physical mappings and aliases, cache ownership, permissions, valid immutable
 context/program records, matching heap bases, and exclusive ownership of a fresh
-queue and timeline. The timeline has one supported transition, from zero to one.
-Reuse and sequence wrap are unsupported. The fixed command requests the published
+queue and timeline at initialization. The first job advances the timeline from
+zero to one. After acquired completion, `pvr_compute_job_repeat` advances its
+sequence without reformatting the live client ring. Sequence wrap is refused. The fixed command requests the published
 single-core execution flag and prevents overlap with other work. A production
 single-core admission proof and multicore context addressing remain required;
 this workload does not reduce the final hardware-support scope.
@@ -63,10 +64,10 @@ Submission uses one serialized privileged worker and the firmware queues describ
 in [gpu-cccb.md](gpu-cccb.md). The job runner performs one bounded step per poll:
 
 1. Publish the context, translations, programs, job memory, and initialized timeline.
-2. Read the coherent timeline and require zero.
+2. Read the coherent timeline and require the previous sequence.
 3. Submit the 96-byte compute command followed by an eight-byte timeline update.
 4. Wait for firmware acceptance of the KICK command.
-5. Wait for timeline sequence one, then acquire and check the results and guards.
+5. Wait for the current timeline sequence, then acquire and check the results and guards.
 
 The publication callback must clean or otherwise publish dirty initialization
 before any timeline invalidation. Fence reads use one aligned 32-bit transaction.
@@ -88,8 +89,11 @@ compute command. Its `pvr_queue_signal_done_fences` observes that timeline to
 signal job completion. The native runner additionally requires numerical and
 guard agreement. KICK acceptance alone leaves the runner waiting for completion.
 All faults preserve the context, queues, mappings, programs, and output storage.
-Even successful numerical completion requires separate context cleanup before
-reuse. Power OFF does not establish that memory transactions have drained.
+The native service can reuse the same immutable workload after acquired
+completion. It verifies the previous timeline, poisons the exclusively owned
+output, and cleans and invalidates its page before another submission. Acquired
+results are copied into private job state with the current sequence. Separate
+context cleanup remains required before disposal or a new session. Power OFF does not establish that memory transactions have drained.
 
 The source comparison uses Mesa revision
 `86c7176d2dd0065555521bf8c61f208bf53c75d6` and board driver revision

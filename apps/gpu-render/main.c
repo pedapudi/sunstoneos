@@ -49,6 +49,18 @@ static void client(void *unused)
         if(!gpu_application_live(NULL)){retained();}vTaskDelay(1);}
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+#ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+    for(unsigned n=0;n<2;++n) {
+        r=request(PVR_GPU_SERVICE_COMPUTE,1000000);
+        while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE) {
+            vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);
+        }
+        r=request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0);
+        if(r.compute_word_count!=PVR_COMPUTE_JOB_WORDS||r.compute_sequence!=n+1){retained();}
+        memcpy(app.compute_words[n],r.compute_words,sizeof(r.compute_words));
+        app.compute_sequence[n]=r.compute_sequence;
+    }
+#else
     r=request(PVR_GPU_SERVICE_RENDER,1000000);
     while(r.render_phase!=PVR_RENDER_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
     if(r.render_checked!=PVR_RENDER_OUTPUT_BYTES){retained();}
@@ -63,6 +75,7 @@ static void client(void *unused)
             retained();}
         memcpy(app.pixels+first,r.render_pixels,sizeof(r.render_pixels));
     }
+#endif
     if(!gpu_application_live(NULL)){retained();}
     atomic_store_explicit(&app.result,1,memory_order_release);
     /* Every native owner and power lease stays live. Continue copied status
@@ -128,11 +141,15 @@ void a733_smp_diagnostic_start(void)
     struct a733_pmic_lifetime lifetime;
     if(a733_pmic_identity(&app.shared.pmic,&lifetime)!=A733_PMIC_READY||
        !a733_gpu_platform_bind_pmic(&app.power,&app.shared.gpu_native,&app.shared.pmic,&lifetime,9))platform_panic("GPU supply",7);
+#ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
     const struct a733_gpu_graphics_profile profile={{64,64,32},28,4,25,1000000};
+#endif
     static const struct a733_gpu_backend_external external={.revoked=&app.fatal};
     if(!a733_gpu_reserved_prepare(&app.firmware,9,gpu_firmware,(size_t)(gpu_firmware_end-gpu_firmware),400000000)||
        !a733_gpu_compute_reserved_prepare(&app.compute,&app.firmware,&app.service,10)||
+#ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
        !a733_gpu_graphics_memory_prepare_clear(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||
+#endif
        !a733_gpu_backend_bind(&app.backend,&app.service,&app.firmware.config,&app.firmware.memory,&app.power,&external)||
        !pvr_gpu_service_init(&app.service,&app.firmware.config,3,1)||
        !pvr_gpu_service_bind(&app.service,0,app.handles[2]))platform_panic("GPU service",8);

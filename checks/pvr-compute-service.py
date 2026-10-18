@@ -21,11 +21,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--freertos', type=Path, required=True)
+    parser.add_argument('--tinyusb', type=Path, required=True)
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=(1, 2, 3, 4, 5, 6), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 12)), default=[1, 2, 3])
     parser.add_argument('--build-only', action='store_true')
+    parser.add_argument('--run-only', action='store_true')
     a = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = a.output.resolve(); out.mkdir(parents=True, exist_ok=True)
@@ -63,35 +65,40 @@ set_target_properties(compute-model PROPERTIES SUFFIX ".elf")
     commands = [['cmake', '-S', str(source), '-B', str(build),
                  '-DCMAKE_TOOLCHAIN_FILE=' + str(root / 'cmake/aarch64-clang.cmake'),
                  '-DFREERTOS_DIR=' + str(a.freertos.resolve()),
+                 '-DTINYUSB_DIR=' + str(a.tinyusb.resolve()),
                  '-DSUNSTONE_GPU_FIRMWARE=' + str(a.firmware.resolve()),
                  '-DSUNSTONE_LLD=' + str(a.lld.absolute()),
                  '-DCMAKE_EXE_LINKER_FLAGS=--ld-path=' + str(a.lld.absolute()), '-DCMAKE_TRY_COMPILE_PLATFORM_VARIABLES=SUNSTONE_LLD',
                  '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],
                 ['cmake', '--build', str(build), '--target', 'compute-model', '-j4']]
-    for i, command in enumerate(commands): run(command, out, 'build-' + str(i))
-    (out / 'build-commands.json').write_text(json.dumps(commands, indent=2) + '\n')
-    original = (build / 'compute-model.elf').read_bytes()
-    snapshot = out / 'inputs'; snapshot.mkdir(exist_ok=True)
-    records = json.loads((build / 'compile_commands.json').read_text())
-    # Snapshot only this target's compiler inputs plus included project headers.
-    files = {Path(r['file']).resolve() for r in records if 'compute-model.dir' in r['command']}
-    files.update(root.glob('include/*.h'))
-    for dep in (build / 'CMakeFiles/compute-model.dir').rglob('*.obj.d'):
-        names = dep.read_text().replace('\\\n', ' ').split(':', 1)[1].split()
-        files.update(Path(name).resolve() for name in names)
-    files.update([root / 'checks/pvr-gpu-service.c', root / 'drivers/gpu/pvr_compute_probe.inc',
-                  root / 'drivers/gpu/pvr_compute_usc.inc', root / 'checks/pvr-compute-service.py',
-                  a.firmware.resolve(), root / 'platform/qemu-smp/link.ld'])
-    hashes = {}
-    for p in sorted(files):
-        data = p.read_bytes(); hashes[str(p)] = hashlib.sha256(data).hexdigest()
-        name = str(p).lstrip('/'); target = snapshot / name; target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-    (out / 'compute-model.elf').write_bytes(original)
-    manifest = {'scope': 'Two-core FreeRTOS with native translation/cache instructions and modeled firmware/GPU writes',
-                'commands': commands, 'inputs': hashes, 'elf_sha256': hashlib.sha256(original).hexdigest(),
-                'compile_commands': records, 'results': []}
-    (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    if not a.run_only:
+        for i, command in enumerate(commands): run(command, out, 'build-' + str(i))
+        (out / 'build-commands.json').write_text(json.dumps(commands, indent=2) + '\n')
+        original = (build / 'compute-model.elf').read_bytes()
+        snapshot = out / 'inputs'; snapshot.mkdir(exist_ok=True)
+        records = json.loads((build / 'compile_commands.json').read_text())
+        # Snapshot only this target's compiler inputs plus included project headers.
+        files = {Path(r['file']).resolve() for r in records if 'compute-model.dir' in r['command']}
+        files.update(root.glob('include/*.h'))
+        for dep in (build / 'CMakeFiles/compute-model.dir').rglob('*.obj.d'):
+            names = dep.read_text().replace('\\\n', ' ').split(':', 1)[1].split()
+            files.update(Path(name).resolve() for name in names)
+        files.update([root / 'checks/pvr-gpu-service.c', root / 'drivers/gpu/pvr_compute_probe.inc',
+                      root / 'drivers/gpu/pvr_compute_usc.inc', root / 'checks/pvr-compute-service.py',
+                      a.firmware.resolve(), root / 'platform/qemu-smp/link.ld'])
+        hashes = {}
+        for p in sorted(files):
+            data = p.read_bytes(); hashes[str(p)] = hashlib.sha256(data).hexdigest()
+            name = str(p).lstrip('/'); target = snapshot / name; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        (out / 'compute-model.elf').write_bytes(original)
+        manifest = {'scope': 'Two-core FreeRTOS with native translation/cache instructions and modeled firmware/GPU writes',
+                    'commands': commands, 'inputs': hashes, 'elf_sha256': hashlib.sha256(original).hexdigest(),
+                    'compile_commands': records, 'results': []}
+        (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    else:
+        original = (out / 'compute-model.elf').read_bytes()
+        manifest = json.loads((out / 'manifest.json').read_text())
     if a.build_only: return
     symbols = subprocess.check_output(['llvm-nm-21', '-S', str(out / 'compute-model.elf')], text=True)
     symbol = [line.split() for line in symbols.splitlines() if line.split()[-1] == 'compute_service_case']

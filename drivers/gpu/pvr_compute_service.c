@@ -271,11 +271,23 @@ static int write_client(void *ctx,enum pvr_cccb_region r,uint32_t off,const void
 }
 static int barrier(void *ctx,enum pvr_ccb_barrier kind)
 { (void)ctx;if((unsigned)kind>PVR_CCB_DEVICE_COMPLETE)return 0;__asm__ volatile("dsb sy":::"memory");return 1; }
+static int read_fence(void *,uint32_t *);
 static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t deadline)
 {
     struct pvr_compute_service *s=ctx;
     if(job!=s->config->job||deadline!=s->deadline||s->config->vm->phase!=A733_GPU_VM_MEMORY_PUBLISHED||
        s->phase!=PVR_COMPUTE_SERVICE_RUNNING||!io_span(s,5,0,4))return 0;
+    uint32_t previous;
+    if(!read_fence(s,&previous)||previous!=s->job.sequence-1)return 0;
+    const struct pvr_mips_buffer *output=&s->config->buffers[PVR_JOB_OUTPUT];
+    if(!mapped(output,0,0xff))return 0;
+    /* UPDATE follows the finished CDM task. The preceding acquired completion
+     * owns this exclusive output again; preserve the immutable program/input. */
+    uint32_t *words=output->storage.cpu;
+    for(unsigned i=0;i<64;++i)words[i]=PVR_COMPUTE_JOB_GUARD;
+    /* Always use the complement of each expected result as its poison. */
+    for(unsigned i=0;i<PVR_COMPUTE_JOB_WORDS;++i)words[16+i]=~s->config->image->expected[i];
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,(uintptr_t)output->storage.cpu,PAGE))return 0;
     __asm__ volatile("dsb sy":::"memory");return 1;
 }
 static int read_fence(void *ctx,uint32_t *out)
@@ -295,7 +307,7 @@ static int read_output(void *ctx,void *out,size_t bytes)
 }
 int pvr_compute_service_admit_mode(struct pvr_compute_service *s)
 {
-    if(!s||s->phase!=PVR_COMPUTE_SERVICE_READY||s->epoch!=s->service->epoch)return 0;
+    if(!s||(s->phase!=PVR_COMPUTE_SERVICE_READY&&s->phase!=PVR_COMPUTE_SERVICE_COMPLETE)||s->epoch!=s->service->epoch)return 0;
     if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
     if(!s->service->config.compute_mode||s->service->config.compute_mode(s->service->config.context)!=1)
         return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
@@ -304,13 +316,17 @@ int pvr_compute_service_admit_mode(struct pvr_compute_service *s)
 }
 int pvr_compute_service_begin(struct pvr_compute_service *s,uint64_t deadline)
 {
-    if(!s||s->phase!=PVR_COMPUTE_SERVICE_READY||s->service->phase!=PVR_GPU_SERVICE_READY||
+    if(!s||(s->phase!=PVR_COMPUTE_SERVICE_READY&&s->phase!=PVR_COMPUTE_SERVICE_COMPLETE)||s->service->phase!=PVR_GPU_SERVICE_READY||
        s->epoch!=s->service->epoch)return 0;
     s->deadline=deadline;
     if(pvr_compute_service_admit_mode(s)!=1)return 0;
     if(s->config->job->admit(s->config->job->admission_context,s->config->job)!=1)
         return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
     if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
+    if(s->phase==PVR_COMPUTE_SERVICE_COMPLETE) {
+        if(!pvr_compute_job_repeat(&s->job,deadline))return fail(s,PVR_COMPUTE_SERVICE_JOB);
+        s->phase=PVR_COMPUTE_SERVICE_RUNNING;return 1;
+    }
     const struct pvr_cccb_ops ops={clock_now,read_client,write_client,barrier};
     if(!pvr_cccb_init(&s->client,&ops,s,&s->service->queue,
         (uint32_t)s->config->job->programs->excluded[3].bytes,s->config->firmware_address[0],deadline))

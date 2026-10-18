@@ -17,8 +17,26 @@ def decode(header, chunk, epoch):
     return state
 
 
+def decode_compute(data, submission, epoch):
+    if len(data)<40:
+        raise ValueError('short GPU compute response')
+    magic,version,state,index,count,total,sequence,seen_epoch,checked=struct.unpack('<7IQI',data[:40])
+    if (magic,version,index,total,seen_epoch)!=(0x43555047,1,submission,2,epoch):
+        raise ValueError('GPU compute response identity differs')
+    if state not in (0,1,2) or (count,sequence,checked)!=((32,submission+1,64) if state==1 else (0,0,0)):
+        raise ValueError('GPU compute response sequence or validated extent differs')
+    if len(data)!=(168 if state==1 else 40):
+        raise ValueError('GPU compute response length differs')
+    if state==1:
+        expected=[((17+(i+1)*3)^(0x9e3779b9+(i<<16)))&0xffffffff for i in range(32)]
+        if struct.unpack('<32I',data[40:])!=tuple(expected):
+            raise ValueError('GPU numerical output differs')
+    return state
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--compute', action='store_true', help='verify both numerical submissions')
     parser.add_argument('--bus', type=int, required=True)
     parser.add_argument('--address', type=int, required=True)
     parser.add_argument('--epoch', type=int, required=True)
@@ -39,7 +57,7 @@ def main():
     try:
         end = time.monotonic() + args.timeout
         pixels = bytearray()
-        for chunk in range(64):
+        for chunk in range(2 if args.compute else 64):
             while True:
                 remain = end - time.monotonic()
                 if remain <= 0:
@@ -49,7 +67,7 @@ def main():
                 data = bytes(device.read(0x81, 296, timeout=timeout))
                 if len(data) < 40:
                     raise ValueError('short GPU response')
-                state = decode(data[:40], chunk, args.epoch)
+                state = decode_compute(data, chunk, args.epoch) if args.compute else decode(data[:40], chunk, args.epoch)
                 if state == 2:
                     raise RuntimeError('GPU application retained a failure')
                 if state == 0:
@@ -57,13 +75,14 @@ def main():
                         raise ValueError('pending response includes output')
                     time.sleep(min(0.01, max(0, end-time.monotonic())))
                     continue
-                if len(data) != 296 or data[40:] != bytes.fromhex('2080c0ff') * 64:
+                if not args.compute and (len(data) != 296 or data[40:] != bytes.fromhex('2080c0ff') * 64):
                     raise ValueError('GPU output differs from the fixed RGBA8 clear')
                 pixels.extend(data[40:])
                 break
         with args.output.open('xb') as output:
             output.write(pixels)
-        print(f'Copied and verified 4096 RGBA8 pixels; SHA-256 {hashlib.sha256(pixels).hexdigest()}')
+        kind='two 32-word numerical submissions' if args.compute else '4096 RGBA8 pixels'
+        print(f'Copied and verified {kind}; SHA-256 {hashlib.sha256(pixels).hexdigest()}')
     finally:
         usb.util.release_interface(device, 0)
         usb.util.dispose_resources(device)

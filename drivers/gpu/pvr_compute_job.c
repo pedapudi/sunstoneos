@@ -21,6 +21,7 @@
  * SOFTWARE.
  */
 #include "pvr_compute_job.h"
+#include <string.h>
 #include "pvr_compute_probe.inc"
 _Static_assert(sizeof(probe_usc)==PVR_COMPUTE_JOB_USC_BYTES,"USC probe size");
 const uint32_t pvr_compute_job_bytes[PVR_JOB_REGIONS]={320,128,64,4096,64,256,64,262144};
@@ -185,9 +186,21 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
     const unsigned char *x=(const void *)i,*y=(const void *)&expected;
     for(size_t n=0;n<sizeof(expected);++n)if(x[n]!=y[n])return 0;
     struct pvr_compute_job value={.ops=*ops,.context=ctx,.transport=t,.config=c,.image=i,
-        .deadline=deadline,.last_now=t->last_now,.epoch=t->epoch,.phase=PVR_JOB_PUBLISH};
+        .deadline=deadline,.last_now=t->last_now,.epoch=t->epoch,.phase=PVR_JOB_PUBLISH,.sequence=1,.serial=1};
+    memcpy(value.update,i->update,sizeof(value.update));
     if(value.last_now<t->queue->last_now)value.last_now=t->queue->last_now;
     *j=value;return 1;
+}
+int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
+{
+    if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
+       j->phase!=PVR_JOB_COMPLETE||j->sequence==UINT32_MAX||j->serial==UINT64_MAX||
+       j->transport->phase!=PVR_CCCB_IDLE||j->transport->queue->phase!=PVR_CCB_ACTIVE||
+       j->transport->serial!=j->serial||j->transport->epoch!=j->epoch||
+       j->transport->queue->epoch!=j->epoch||deadline<=j->last_now||
+       deadline<=j->transport->last_now||deadline<=j->transport->queue->last_now)return 0;
+    ++j->sequence;++j->serial;j->deadline=deadline;j->phase=PVR_JOB_PUBLISH;
+    memset(j->results,0,sizeof(j->results));put32(j->update,4,j->sequence);return 1;
 }
 int pvr_compute_job_poll(struct pvr_compute_job *j)
 {
@@ -196,7 +209,7 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
     if(j->phase==PVR_JOB_FAILED)return -1;
     if(j->epoch!=j->transport->epoch||j->epoch!=j->transport->queue->epoch||
        j->transport->queue->phase!=PVR_CCB_ACTIVE||
-       (j->phase>=PVR_JOB_KICK&&j->transport->serial!=1))return fail(j,PVR_JOB_TRANSPORT);
+       (j->phase>=PVR_JOB_KICK&&j->transport->serial!=j->serial))return fail(j,PVR_JOB_TRANSPORT);
     if(clock_ok(j)!=1)return -1;
     switch(j->phase) {
     case PVR_JOB_CHECK_FENCE:
@@ -205,10 +218,10 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
         if(j->ops.read_fence(j->context,&value)!=1)return fail(j,PVR_JOB_IO);
         if(clock_ok(j)!=1)return -1;
         if(j->phase==PVR_JOB_CHECK_FENCE) {
-            if(value)return fail(j,PVR_JOB_FENCE_VALUE);
+            if(value!=j->sequence-1)return fail(j,PVR_JOB_FENCE_VALUE);
             j->phase=PVR_JOB_SUBMIT;
-        } else if(value==1)j->phase=PVR_JOB_READ_OUTPUT;
-        else if(value)return fail(j,PVR_JOB_FENCE_VALUE);
+        } else if(value==j->sequence)j->phase=PVR_JOB_READ_OUTPUT;
+        else if(value!=j->sequence-1)return fail(j,PVR_JOB_FENCE_VALUE);
         break;
     }
     case PVR_JOB_PUBLISH:
@@ -218,7 +231,7 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
     case PVR_JOB_SUBMIT: {
         struct pvr_cccb_command commands[2]={
             {PVR_CCB_MAGIC|PVR_CCCB_TASK|205u,96,j->config->job_id,j->config->job_id,j->image->compute},
-            {PVR_CCB_MAGIC|213u,8,0,0,j->image->update}};
+            {PVR_CCB_MAGIC|213u,8,0,0,j->update}};
         if(!pvr_cccb_begin(j->transport,commands,2,NULL,0,j->deadline))return fail(j,PVR_JOB_TRANSPORT);
         if(clock_ok(j)!=1)return -1;
         j->phase=PVR_JOB_KICK;break;
@@ -236,6 +249,7 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
         if(clock_ok(j)!=1)return -1;
         for(unsigned n=0;n<64;++n)
             if(get32(data,4*n)!=(n>=16&&n<48?j->image->expected[n-16]:PVR_COMPUTE_JOB_GUARD))return fail(j,PVR_JOB_RESULT);
+        for(unsigned n=0;n<PVR_COMPUTE_JOB_WORDS;++n)j->results[n]=get32(data,64+4*n);
         j->phase=PVR_JOB_COMPLETE;return 1;
     }
     default:return fail(j,PVR_JOB_TRANSPORT);

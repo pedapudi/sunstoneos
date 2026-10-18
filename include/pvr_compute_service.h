@@ -44,7 +44,7 @@ enum pvr_compute_service_error { PVR_COMPUTE_SERVICE_NO_ERROR,
     PVR_COMPUTE_SERVICE_MAPPING, PVR_COMPUTE_SERVICE_CLOCK,
     PVR_COMPUTE_SERVICE_ADMISSION, PVR_COMPUTE_SERVICE_PUBLICATION,
     PVR_COMPUTE_SERVICE_QUEUE, PVR_COMPUTE_SERVICE_JOB,
-    PVR_COMPUTE_SERVICE_RESET, PVR_COMPUTE_SERVICE_LIFECYCLE };
+    PVR_COMPUTE_SERVICE_RESET, PVR_COMPUTE_SERVICE_LIFECYCLE, PVR_COMPUTE_SERVICE_CANCELLED };
 struct pvr_compute_service {
     const struct pvr_compute_service_config *config;
     struct pvr_gpu_service *service;
@@ -65,8 +65,9 @@ int pvr_compute_service_bind(struct pvr_compute_service *, struct pvr_gpu_servic
 /* Internal privileged service-worker interface. Objects join the initial MIPS
  * table build; no live firmware-table update occurs. OPEN publication cleans
  * one data page or one VM table page per poll. READY requires complete admission
- * and publication. begin admits one fixed job for that epoch. No second job,
- * reinitialization or resource release is supported. */
+ * and publication. begin admits the fixed workload repeatedly after acquired completion, retaining
+ * the client ring and advancing its timeline without wrap. No reinitialization
+ * or resource release is supported. */
 /* Post-power admission before the first firmware register write. Rechecked at
  * COMPUTE; no observation survives a failed or replaced lifecycle. */
 int pvr_compute_service_admit_mode(struct pvr_compute_service *);
