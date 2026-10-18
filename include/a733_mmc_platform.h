@@ -21,6 +21,19 @@ struct a733_mmc_platform_config {
     struct a733_pin_config expected[12], desired[12];
     enum a733_mmc_emmc_host emmc_host; /* SD requires zero. eMMC mux3/4 respectively. */
 };
+/* Fixed ROM JTAG route, not permission to take over a debugger. The caller's
+ * physical authority must exclude debug clients before this exact handoff.
+ * 1: input/disabled, 2: observed PF0/1/3/5 JTAG with PF2/4/6 disabled. */
+static inline unsigned a733_mmc_sd0_inherited_mux(const struct a733_pin_config *pins)
+{
+    static const uint8_t rom[7]={3,3,15,3,15,3,15};
+    unsigned passive=1,jtag=1;
+    for(unsigned i=0;i<7;++i){
+        passive&=pins[i].function==0||pins[i].function==15;
+        jtag&=pins[i].function==rom[i];
+    }
+    return passive?1:jtag?2:0;
+}
 enum a733_mmc_platform_result { A733_MMC_PENDING, A733_MMC_BUSY,
     A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID };
 /* Bounded, non-reentrant callbacks; exactly1 means success. Authenticated

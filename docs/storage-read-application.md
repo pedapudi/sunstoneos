@@ -66,6 +66,22 @@ least ten microseconds, then verifies reset release. An inherited enabled
 controller or incompatible pin route remains a retained refusal; this policy
 adds no takeover sequence.
 
+The service also accepts the exact inherited PF mux word `0x0f3f3f33` for
+PF0–6. The pinned A733 manual's `PF_CFG0` table and real-silicon kernel pinctrl
+table decode PF0/1/3/5 function 3 as JTAG-MS/DO/DI/CK; PF2/4/6 are disabled.
+This pattern requires `cmd0-once` initial authority with both
+`rom_jtag_handoff_authorized:true` and `jtag_debug_clients_excluded:true`.
+The pattern identifies the route; it cannot establish that debug clients are
+absent. Other alternate-function patterns remain refused.
+
+The shared banked pin manager compares every inherited mux, pull and drive
+field before writes, reserves all seven pins, disables every mux, updates
+pulls/drives and then enables the desired SD route with readback. The controller
+remains gated and held in reset through pin handoff. An inherited-field mismatch
+performs no pin writes; an uncertain write faults the pin manager and retains
+ownership. The service does not restore JTAG or release pins after uncertainty.
+Actual pulls, drives, supplies and signaling still need board-specific authority.
+
 The [native controller](../drivers/storage/sunxi_mmc.c) refuses an active command,
 busy controller/card state or enabled DMA before its software reset. It waits
 for reset bits to clear, configures one-bit legacy PIO and checks clock/control
@@ -197,3 +213,16 @@ successful completion of two reads. After the USB ranges finish, bounded status
 queries wait for that native result within the existing capture deadline.
 A native failure stops further requests; an incomplete count cannot establish
 success. This host check reuses the preserved image and launcher.
+
+The exact ROM pin handoff passes focused actual-provider composition checks for
+identification/read, inherited mismatch, active module clock, uncertain pin write
+and unsupported nearby mux. Five host authority cases and the actual native
+session/configuration parser also pass. MMIO, card and time effects remain
+modeled. The affected image recompiles SD platform, SD admission and its unique
+build identity; it reuses all 163 other accepted objects, including native
+startup. Its ELF hash is
+`a7f627c195f440ed9ff73ffcac0c53100b8ae67e04d0726b7b293f884f92a3f3`.
+Evidence is under `~/.cache/sunstoneos/evidence/second-board-20261018-3-3/sd-rom-pins/`.
+This image retains the earlier storage startup profile; newer CPU/startup
+corrections are not included. Physical entry still requires the coordinator's
+admission of that exact profile.

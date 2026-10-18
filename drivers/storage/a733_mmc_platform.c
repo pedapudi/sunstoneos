@@ -228,9 +228,10 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
        !separate(p,sizeof(*p),pmic,sizeof(*pmic))||
        !separate(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu))||o->outside(cookie,p,sizeof(*p))!=1)return 0;
     unsigned sd=c->kind==SUNXI_MMC_SD,count=sd?7:12,bank=sd?A733_PIN_F:A733_PIN_C;
+    if(sd&&!a733_mmc_sd0_inherited_mux(c->expected))return 0;
     for(unsigned i=0;i<count;++i) {
         unsigned pin=sd?i:emmc_pins[i],fn=sd?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?3+(unsigned)c->emmc_host:0);
-        if((c->expected[i].function!=0&&c->expected[i].function!=15)||c->desired[i].function!=fn||
+        if((!sd&&c->expected[i].function!=0&&c->expected[i].function!=15)||c->desired[i].function!=fn||
            !a733_pin_config_valid_banked(bank,pin,c->expected[i])||
            !a733_pin_config_valid_banked(bank,pin,c->desired[i]))return 0;
         if((sd&&pin!=2)||(!sd&&pin!=0&&pin!=5))if(c->desired[i].pull!=1)return 0;

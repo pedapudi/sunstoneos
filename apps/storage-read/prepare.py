@@ -19,6 +19,10 @@ SCHEMA='a733-storage-read-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373352444331
 REQUEST_MAGIC=0x4153373352444c31
 
+def inherited_mux(raw):
+    functions=list(raw[792:813:3])
+    return 1 if all(f in (0,15) for f in functions) else 2 if functions==[3,3,15,3,15,3,15] else 0
+
 def session_check(raw):
     require(len(raw)==880,'SD0 read session must be 880 bytes.')
     require(board.session_check(raw[:592])==2,'SD0 read requires USB0/provider selection 2.')
@@ -31,9 +35,10 @@ def session_check(raw):
     require(1<=blocks<=8 and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
     identify,read,voltage=struct.unpack_from('<QQI',raw,840)
     require(0<identify<=10000000 and 0<read<=5000000 and voltage and not voltage&~0x00300000,'Invalid bounded SD0 profile.')
+    require(inherited_mux(raw),'Unsupported inherited SD0 pin route.')
     for i in range(7):
         ef,ep,ed=raw[792+3*i:795+3*i];df,dp,dd=raw[813+3*i:816+3*i]
-        require(ef in (0,15) and ep<=2 and ed<=3 and df==(2 if 1<=i<=3 else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid fixed one-bit PF route.')
+        require(ep<=2 and ed<=3 and df==(2 if 1<=i<=3 else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid fixed one-bit PF route.')
 
 def embedded_reference(image,session):
     """Bind actual immutable geometry and const build ID before behavioral use."""
@@ -110,7 +115,13 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'STORAGE_READ evidence differs.')
         fact=json.loads(data)
         require(fact.get('schema')=='a733-storage-read-'+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
-        if key=='initial':initial_policy(fact)
+        if key=='initial':
+            initial_policy(fact)
+            if inherited_mux(raw)==2:
+                require(fact.get('initialization_mode')=='cmd0-once' and
+                    fact.get('rom_jtag_handoff_authorized') is True and
+                    fact.get('jtag_debug_clients_excluded') is True,
+                    'Reviewed ROM JTAG handoff and excluded debug clients required.')
         required={'initial':[],
             'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
             'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],

@@ -101,6 +101,14 @@ clock and enables the local bus. It holds reset for at least ten microseconds
 before release. The existing MMC core then performs its bounded cold setup and
 card identification.
 
+For SD, the fixed inherited ROM pattern `PF_CFG0[27:0]=0x0f3f3f33`
+may also be handed off under explicit debug-client exclusion. It selects JTAG
+on PF0/1/3/5 and disables PF2/4/6. The [read-only service](storage-read-application.md)
+binds that authority to its first CMD0 policy. Generic pin acquisition already
+performs full-field preflight, all-pin reservation, mux disable, pull/drive setup
+and target readback. The controller baseline and IRQ requirements remain in
+force; arbitrary alternate-function takeover remains unsupported.
+
 An actual seven- or twelve-pin ownership token alone cannot establish that remote
 firmware has stopped routing the same peripheral elsewhere. Authenticated
 admission excludes every alternate route and unselected pad writer before
