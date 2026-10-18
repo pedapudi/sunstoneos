@@ -717,3 +717,16 @@ those success paths keep their original gates. The new artifacts and pre-change
 source/evidence snapshot are under
 `~/.cache/sunstoneos/evidence/native-secondary-prewrite-observer-20261018/`.
 No repeated physical attempt is qualified by these software results.
+
+
+The pre-write observer was attempted once after confirmed power reconnection on
+USB instance `003:084`. Fresh DDR initialization, returning platform survey and
+all seven secondary OFF/request-clear observations passed. Admission used only
+that cold-session history; prior RAM state and uninterrupted ownership were discarded.
+
+All 27 host transactions completed, including the launch acknowledgment. No new
+ROM instance appeared within ten seconds, and no diagnostic report was recovered.
+The failure location remains unknown. The runner retains the board lock, queue
+claim and backups; no retry or later device command occurred. Evidence is under
+`reconnect-20261018-084/native/runtime/`. Another attempt requires a narrower
+observation boundary or a concrete correction, followed by fresh physical recovery.

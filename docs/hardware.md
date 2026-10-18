@@ -90,8 +90,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Execution after RELEASE, the remaining secondary cores, cache coherence and
   scheduling remain unresolved. A diagnostic through secondary interrupt
   initialization passes five focused software cases. Its physical launch did
-  not return, and no result was recovered. The board remains quarantined with
-  its lock and backups retained; source diagnosis continues before another attempt.
+  not return, and no result was recovered. After a confirmed power reconnect,
+  fresh DDR, platform and all-seven-OFF observations passed. One attempt with the
+  pre-write failure observer also returned no report under `reconnect-20261018-084/`.
+  The board remains quarantined with its lock and backups retained; another
+  launch requires a narrower diagnostic or concrete correction.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -182,14 +185,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   are implemented. Focused supply, native MMC admission and USB callback checks
   pass. The complete [maintenance image and launcher](storage-maintenance-launch.md)
   are integrated; focused instruction and host checks pass. The separate
-  [supervised read-only SD application](storage-read-application.md) now connects
-  native card identification and a sector-zero read to copied USB output.
-  Focused model, binding, cancellation and host checks pass. Its read deadline
-  cuts off publication independently of the longer board lifetime. One affected
-  case passes after a correction to the application body; the other 163 objects
-  and earlier evidence were reused. The 165-object image and source inputs are
-  reconciled under `storage-read-native-20261018/`. Physical card identification,
-  reads, writes, faster modes and recoverable boot remain outstanding.
+  [supervised read-only SD service](storage-read-application.md) identifies the
+  card and serves repeated ranges of one to eight sectors to two native clients.
+  One controller owner copies results into separate client slots; matching
+  acknowledgments permit slot reuse. The native task reads its configured range
+  twice, and USB uses the same API. One image, eleven modeled native cases and
+  host/package checks pass under `storage-read-service-20261018/`.
+  Detected removal permanently stops both clients. Unnoticed card replacement,
+  hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined

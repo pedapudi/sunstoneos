@@ -74,8 +74,8 @@ shared-parent ownership and readback-confirmed converter disable on stop.
 Thirteen controller stop cases, twenty modeled native composition/USB cases and
 four host groups pass under `monitor-application-20261018/`. Integration reuses
 the frozen image; physical sampling, analog drain and recovery remain unqualified.
-Reusable read-only microSD access continues in its separate worktree. Continuous
-fan/LED control and the PCIe supply correction are also integrated. The coordinator
+Reusable read-only microSD access, continuous fan/LED control and the PCIe
+supply correction are also integrated. The coordinator
 alone performs physical board tests; independent software work proceeds in parallel.
 
 The RTC USB integration check is complete. Five cases execute the actual native
@@ -96,8 +96,9 @@ in the next native images. The combined monitor image includes the complete prer
 checks converter disable independently of publication; resources remain retained.
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
-No physical test is running. Host metadata still identifies the quarantined
-instance; physical power removal and reconnection remain required.
+The bounded observer attempt on the reconnected board did not return. Instance
+`003:084` is quarantined; the runner retains its lock and claim. Further device
+commands are stopped pending physical recovery and source diagnosis.
 
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
@@ -225,18 +226,14 @@ Earlier PHY/protocol evidence was reused. Physical routing, measured supplies,
 endpoint behavior and recovery remain unqualified. BAR allocation, interrupts,
 DMA, higher link speeds and power transitions remain required work.
 
-The [supervised read-only SD application](storage-read-application.md) now
-identifies a card and reads sector zero through the actual native MMC providers,
-then publishes a separate copied USB result. Focused model, ownership, binding
-and host checks pass. A correction makes the active read deadline cut off
-publication while the board session remains live; its affected case passes.
-Only the application body and build ID changed during that correction; the
-other 163 objects and earlier evidence were reused. Integration reconciles the
-165-object image and its source inputs under `storage-read-native-20261018/`.
-Physical SD operation remains unqualified. The inserted microSD supplies a
-future physical target whose contents remain protected. The separate maintenance
-image still requires an identified card and qualified watchdog; this read-only
-path permits initial discovery without either prerequisite.
+The [supervised read-only SD service](storage-read-application.md) now serves
+repeated ranges to a native application task and the USB task through one MMC
+owner. Copied results and matching acknowledgments permit reuse of each client
+slot. One native image, eleven modeled native cases and host/package checks pass
+under `storage-read-service-20261018/`. The inserted microSD remains untouched.
+Physical SD operation, unnoticed card replacement and hotplug recovery remain
+unqualified. Initial read-only discovery uses the supervised return/manual
+power-removal plan; separate maintenance operations retain their own admission.
 
 The [native SPI application](spi-application.md) integrates SPI3 chip select 0
 on the header, with BLDO1 supplying its 1.8 V signal bank. One native link,
@@ -268,8 +265,8 @@ declaration differ among compiled repository inputs. The wrong-exception-level
 case models the CurrentEL register value; it does not establish EL2 execution or
 EL0 isolation. Physical sampling, safe AVCC, reference accuracy, divider population
 and recovery remain unqualified. The selection dividers permit observation only;
-no external drive or strap modification is authorized. Combined thermal and ADC
-monitoring with repeated application access is the next integration work.
+no external drive or strap modification is authorized. Repeated combined monitoring
+is integrated separately as described above.
 
 
 ## Observed host and device state
@@ -280,9 +277,9 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The last board instance is `003:083` on port `3-1`. Its diagnostic did not return
-and the instance is quarantined. Runner session `81427` retains the board lock
-and queue claim `5ab543c3a907541e29e1bbfe08963deef489cb022ae96b6262a867959dd8b9d3`.
+The last board instance is `003:084` on port `3-1`. Its diagnostic did not return
+and the instance is quarantined. Runner session `51570` retains the board lock
+and queue claim `03a79df09c6883041185a6dd61ebdb46fec5e97cb1f1990f13a569d0e4cc3944`.
 Do not send further device commands or terminate the ownership holder before
 coordinator recovery review. Physical reconnection remains required.
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
@@ -307,19 +304,21 @@ All 48 transactions, including copied state and DRAM restoration, passed.
 The runner exited and its queue claim closed. Evidence is under
 `startup-stage-20261017-082/native/`.
 
-Fresh reads before that launch established all seven secondaries OFF with clear
-request bits; see `startup-stage-20261017-080/cpu-state/session.json`. The next
-investigation covers RELEASE through secondary interrupt preparation, before
-cache enable. Return requires interrupt quiescence, saved redistributor-state
-restoration and observed target OFF. Instance `003:083` passed the guarded
-cache-off helper and returning launch-state survey. Its subsequent diagnostic
-attempted native RELEASE through secondary interrupt initialization. All 27
-host transactions completed, including launch, but no new ROM instance appeared
-within ten seconds. No result was recovered, so the failing instruction and
-target state remain unknown. Memory backups and ownership remain retained;
-there was no retry. Evidence is under `startup-stage-20261017-083/native/runtime/`.
-The user may be away for several hours; continue bounded returning diagnostics
-before another full-image attempt.
+The earlier interrupt-initialization attempt on `003:083` did not return.
+The user then disconnected and reconnected board power. Instance `003:084`
+responded to FEL identification with the existing permissions. Fresh DDR
+initialization, the returning platform survey and one read of all seven
+secondary power states passed. Previous RAM contents and ownership continuity
+were discarded; the old failed queue claim was closed after recovery review.
+
+One attempt with the frozen pre-write failure observer also did not return.
+All 27 host transactions completed, including launch, but no new ROM instance
+appeared within ten seconds. No diagnostic report was recovered. This outcome
+does not establish whether target admission, primary redistributor reads or a
+later operation failed. No retry or further device command occurred. Fresh
+preparation, failed execution and retained backups are under
+`reconnect-20261018-084/`. Source review must identify a narrower observation
+boundary or concrete correction before another launch.
 
 The installed session rule grants reconnect access on port `3-1` until host
 reboot. Use `tools/usb-access.py` to inspect or disable it. The user reconnected
@@ -354,7 +353,8 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
   `startup-stage-20261017-083/native/runtime/`; no result or restoration was observed.
   `native-secondary-prewrite-observer-20261018/` contains the later observer and
   three focused cases for target admission refusal, primary snapshot exception
-  and capture-fault retention. Its physical use awaits recovery.
+  and capture-fault retention. Its physical attempt under
+  `reconnect-20261018-084/native/runtime/` did not return; no report was recovered.
 - Crypto clocks: `crypto-clocks-20261018-082/session.json` records 13 read-only
   CCU/RTC observations. The CE clock, gates and reset releases are enabled;
   these observations do not prove engine quiescence or secure-register access.
@@ -414,17 +414,13 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Recover the board before the reviewed pre-write failure observer. Core-1
-   activation, entry and shutdown before RELEASE pass physically. The later
-   diagnostic has no physical result; the new observer captures selected target
-   admission failures and primary snapshot exceptions before interrupt writes.
-   It still retains post-write failures and cannot recover a stalled MMIO access.
+1. Diagnose the nonreturning pre-write observer before another launch. Core-1
+   activation, entry and shutdown before RELEASE pass physically, but both the
+   interrupt-initialization diagnostic and its failure observer returned no report.
    Preserve the held claim and backups until physical recovery is confirmed.
-   A power reconnect invalidates the previous RAM state. Reinitialize DDR using
-   the reviewed cold-start procedure, then obtain fresh launch-state evidence
-   and admission before running the observer.
-   The failed UFS probe, intentional watchdog expiry and unattended fault tests
-   remain deferred. USB power-control investigation is closed.
+   A further power reconnect requires fresh DDR and admission. Do not repeat
+   the same observer unchanged. The failed UFS probe, intentional watchdog expiry
+   and unattended fault tests remain deferred; USB power-control work is closed.
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.
    Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)
