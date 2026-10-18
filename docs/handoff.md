@@ -112,9 +112,9 @@ checks converter disable independently of publication; resources remain retained
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
-queues. The original board on port `3-1` is retained after the interrupt
-initialization attempt failed to return from instance `003:091`. Physical
-recovery was requested; do not send further commands to that instance.
+queues. The original board on port `3-1` was physically recovered and now has
+instance `003:092`. The failed runner exited and its claim closed after recovery.
+Fresh DDR preparation is required; no multicore launch has run on this instance.
 The second is on `3-3`, instance `003:088`, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -305,10 +305,11 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` requires physical recovery after the failed
-initialization attempt from `003:091`. Its retained runner PID is recorded in
-`native-local-interrupt-init-20261018/native/process.json`; verify that process
-before closing its claim after recovery. The second board on `3-3`, instance
+The original board on `3-1` is recovered as `003:092`. The user confirmed power
+removal; the coordinator verified the changed USB instance and stopped the
+identified old runner. Its process exited, its claim closed and its queue resumed.
+Evidence is under `reconnect-20261018-092/recovery.json`. Fresh DDR preparation
+and a platform survey are required before native execution. The second board on `3-3`, instance
 `003:088`, has successful DDR, returning survey and SD initial-register evidence.
 Both have reconnect permissions. The common access helper selects each port
 through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
@@ -476,22 +477,39 @@ transaction or register write ran. Evidence is under
 The final read-only batch records all fourteen secondary CPU control/mode words
 as zero and the inherited PMIC pin fields. USB0 PHY/reset and device gate remain
 enabled by ROM; USB1 is disabled and the shared reference already selects
-normalized 24 MHz. Evidence is under `native-handoff-state/`. This state fails
-the existing USB cold baseline. An explicit ROM takeover is being implemented;
-do not launch the unchanged cold-only provider or weaken its admission.
+normalized 24 MHz. Evidence is under `native-handoff-state/`. The integrated
+USB provider has an explicit ROM takeover for the supervised single-core SD
+image. Focused software checks pass; physical takeover remains unqualified.
 
 The MMC controller now waits one millisecond after clock activation before CMD0
 and two milliseconds after CMD0 completion. Six focused sanitizer cases and
 review pass under `cmd0-pacing/`; the waits retain the original ownership and
 deadline checks. No card command has run physically.
 
-Independent single-core SD/USB startup is implemented and statically reviewed.
+Independent single-core SD/USB startup is built and reviewed.
 It seals session inputs outside EL1-cleared BSS and checks secondary OFF state
-in EL3 before shared hardware initialization. Final linking and focused native
-checks await the USB takeover. Source-backed supply settling and pin settings
+in EL3 before shared hardware initialization. Twelve startup cases, two native
+composition cases and producer/host acceptance pass under
+`sd-single-core-20261018/`. Source-backed supply settling and pin settings
 are documented under `single-core-admission/`; final ownership, image-bound
 admission and actual operations remain required. Full all-core support remains
 required independently of this storage image.
+
+The second board's fixed ROM and nonsecure ROM capture matches the inspected
+reference byte for byte. Its selector confirms USB0 programmed-I/O operation.
+Scratch SRAM and DDR restore exactly under `rom-usb-capture/runtime/`.
+This establishes the inspected USB PIO predecessor for the recorded lifetime;
+external DMA handoff remains separate. The expanded PMIC probe builds with
+DCDC9 and ELDO6 selector reads but has not run physically. Those readings are
+needed for USB supply admission.
+
+GPU and NPU parent-clock providers now decode the normalized 24 MHz reference
+from supported oscillator inputs. Three focused provider groups pass under
+`accelerator-clock-reference-20261018/`; physical accelerator operation remains
+unqualified. Integration preserves the accepted SD image: its differing GPU
+resource source affects clock validation, which the SD rail-reservation path
+does not call. Input comparisons are under
+`progress-usb-clock-kernel-20261018/`.
 
 ## Next actions
 
@@ -513,12 +531,15 @@ The primary agent handles all further multicore work directly.
    returns after observed OFF. The returning overlay now compiles the corrected
    production controller and restores local state before shutdown. Five focused
    instruction cases pass under `native-local-interrupt-init-20261018/`;
-   one physical attempt produced no ROM return or result buffer. Its process,
-   claim and original-board lock remain retained pending requested physical
-   recovery. No failure location is established; the same launch must not repeat.
+   one physical attempt produced no ROM return or result buffer. Physical
+   recovery is complete, but no failure location is established. The same launch
+   must not repeat. The [Arm/Linux audit](a733-multicore-reference-audit.md)
+   distinguishes firmware responsibilities, permitted register ordering and
+   diagnostic refusals that currently produce no returned report.
    A narrower overlay now stops before the first redistributor write and verifies
    unchanged local state before shutdown. Two instruction cases pass under
-   `native-before-power-20261018/`; it has no physical result.
+   `native-before-power-20261018/`; it has no physical result. Hold that attempt
+   until the source trace supports a specific question and observable outcomes.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,

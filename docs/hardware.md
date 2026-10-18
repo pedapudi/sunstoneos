@@ -109,8 +109,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   overlay now includes the corrected production controller and bounded local
   restoration; five instruction cases pass. One physical initialization attempt
   produced no ROM return or result buffer. Its failure location remains unknown,
-  and original-board ownership is retained pending physical recovery. Interrupt
-  initialization remains unresolved.
+  and physical recovery is complete. Further launches await the
+  [Arm/Linux audit](a733-multicore-reference-audit.md) and an observable diagnostic
+  boundary. Interrupt initialization remains unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -221,9 +222,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   configuration under `second-board-20261018-3-3/`. Mandatory native providers
   now have reviewed oscillator/reference corrections with focused software
   evidence. Source-backed CMD0 delays also pass six focused cases. An independent
-  single-core SD/USB startup awaits final linking and checks; ROM leaves USB0
-  enabled, so an explicit takeover must precede the first launch. Actual card
-  operations remain untested.
+  single-core SD/USB image now links and passes focused startup, native composition
+  and host acceptance checks. Its explicit ROM USB takeover is integrated.
+  Physical ROM capture matches the inspected PIO implementation, with scratch
+  restoration verified. Actual supply readings, external DMA handoff and image
+  admission remain prerequisites. Card operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
