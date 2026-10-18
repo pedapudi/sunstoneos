@@ -5,6 +5,24 @@ The accepted objective is [docs/goal.md](docs/goal.md). Read the current
 [hardware matrix](docs/hardware.md) defines the support inventory independently
 of application requirements. Project issues hold work scope and dependencies.
 
+## Task-specific hardware skills
+
+Read the relevant repository skill when taking an assignment. Give subagents its
+path together with their file ownership and accepted evidence; they do not need
+every hardware document or the full conversation. Resolve links from the skill's
+directory. If automatic skill discovery is unavailable, open `SKILL.md` directly.
+
+| Assignment | Skill |
+| --- | --- |
+| Physical access, boot preparation, queued board tests or recovery | [A733 board operations](.agents/skills/sunstone-a733-board/SKILL.md) |
+| Secondary CPU startup, GIC, coherence or SMP diagnosis; primary agent only | [A733 multicore bring-up](.agents/skills/sunstone-a733-multicore/SKILL.md) |
+| Native peripheral integration, source adaptation, launch/capture or focused validation | [A733 device integration](.agents/skills/sunstone-a733-device/SKILL.md) |
+
+These skills describe reusable decisions and known failure mechanisms. Current
+state and completion claims remain in the handoff, hardware matrix and component
+evidence. Update a skill when a verified finding changes a reusable instruction;
+do not copy each run's status into it.
+
 ## Implementation
 
 - FreeRTOS is the runtime OS. Linux is a source and development reference only.
