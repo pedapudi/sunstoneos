@@ -36,6 +36,19 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 ## Current integration
 
+Five independent paths are active, with physical access reserved for the coordinator:
+
+- Startup diagnosis: prepare a returning A64 probe of inherited EL1 control state
+  before cache, interrupt or secondary-core setup.
+- HDMI: build the native framebuffer path after correcting ownership and startup
+  ordering; physical monitor output remains unqualified.
+- Mimus: integrate supervised recorded and paced recognition with the unchanged
+  model, bounded failure checkpoints and durable host output.
+- Bluetooth: adapt source-available pairing/security logic and connect the existing
+  hands-free and synchronous audio providers. Live mimus input still needs an adapter.
+- Wi-Fi networking: connect the pinned FreeRTOS+TCP DHCP and DNS implementations
+  with bounded request ownership, address lifecycle and callback cancellation.
+
 Native I2S and JPEG device paths are integrated. The [I2S application](i2s-application.md)
 connects DMA0 capture or recorded playback to retained buffers and USB0 output.
 Its saved image passes twelve initial checks and four USB identity and failure
@@ -244,9 +257,10 @@ No persistent-storage writes have been issued.
 
 The current board instance is `003:073` on port `3-1`, with automatic USB access.
 User-confirmed power removal replaced the failed instance. Its holder stopped,
-the queue recorded the failure and subsequent claims resumed. No device command
-has been issued to this new instance, and DDR has not been initialized.
-The recovery record is `supervised-reconnect-20261017-073/recovery.json`.
+the queue recorded the failure and subsequent claims resumed. Fresh DDR
+initialization now passes, with 12,288 MiB reported and both pages matching.
+The loader returned to ROM. Evidence, including the recovery record, is under
+`supervised-reconnect-20261017-073/`.
 The user is away for several hours; avoid another full-image attempt without a
 specific diagnostic or correction.
 
@@ -377,7 +391,7 @@ recordings and model identities remain the reference.
 
 1. Diagnose the failed multicore launch offline and identify the smallest useful
    correction or diagnostic before another physical attempt. The user reconnected
-   after the SCR-free attempt timed out; the new instance has no DDR state.
+   after the SCR-free attempt timed out; the new instance has fresh DDR evidence.
    Reuse the working return path and refresh admission for the selected diagnostic.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
