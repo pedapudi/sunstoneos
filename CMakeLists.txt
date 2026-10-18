@@ -164,3 +164,4 @@ include(cmake/gpu-vm-memory.cmake)
 
 include(cmake/a733-gpu-application.cmake)
 include(cmake/a733-smp-supervised.cmake)
+include(cmake/a733-hdmi-application.cmake)

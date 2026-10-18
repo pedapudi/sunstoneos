@@ -65,7 +65,13 @@ Full native startup, physical transfers and entropy qualification remain unteste
 
 The default board image still requires a qualified hardware-watchdog window.
 Its integrated supervised mode leaves the watchdog disabled and retains resources
-until manual power removal. The separate
+until manual power removal. Its central build passes with 154 matching repository
+dependencies. Later shared-header edits change comments only. The host capture
+tool shares the observer's lock, queue and transport handling; 25 focused cases
+pass against the integrated sources. Evidence is preserved under
+`board-supervised-20261017/central/` and
+`board-supervised-host-20261017/batch1/`.
+The separate
 [supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
 remain disabled. Its native build and focused startup, admission and host checks
 pass, including central integration. USB capture leaves the board running until
@@ -86,6 +92,13 @@ GPU output and physical operation remain untested. The supervised board mode and
 native HDMI colorbar application are integrated and pass their focused software
 checks. Their physical operation remains untested. Inspect live assignments
 before changing their files.
+
+The HDMI application connects actual providers to a fixed 720p60 colorbar.
+Its central build matches all 65 repository dependencies, and its 17 focused
+software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
+routing and physical output remain outstanding. Active NPU work connects
+supervised startup and enabled-clock retuning. Cold clock provisioning and an
+unsuitable supply still require a separate implementation and physical evidence.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture

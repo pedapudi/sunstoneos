@@ -53,6 +53,8 @@ handoff, or final response does not invalidate successful test evidence.
 - After a failed command, identify its cause before retrying. Preserve completed
   steps and resume only the failed or affected steps. Stop repeated downloads
   after a stable access failure and use an available authoritative source.
+- Preserve configured executable paths. Resolving symlinks for hashing must not
+  change invocations: `ld.lld` needs its name, and Python needs its virtualenv path.
 - After context recovery, read the objective and inspect current changes. Reuse
   unchanged source summaries and evidence instead of rediscovering the workstream.
 - Keep one implementation owner and one reviewer per integration. Review concrete

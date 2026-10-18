@@ -24,9 +24,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
   acquires actual shared clock, CLDO2, PMIC, power-domain and register ownership;
-  composed startup/EDID and retained-fault checks pass. Analog admission,
-  complete image binding, physical monitor output, framebuffer routing and
-  broader modes remain required.
+  composed startup/EDID and retained-fault checks pass. The supervised
+  [native colorbar application](hdmi-application.md) connects these providers
+  to 720p60 output. Its central build and 17 focused software cases pass.
+  Analog admission, physical monitor output, framebuffer routing and broader
+  modes remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -567,7 +569,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   mass-storage enumeration, copied sector reads, malformed responses,
   cancellation and disconnects. The [native board application](board-application.md)
   connects startup, separate Type-C tasks, host reads and simultaneous USB0
-  output. Focused application checks and central linking pass. Full startup,
+  output. A supervised mode retains resources until manual power removal;
+  USB0-only and USB0-with-radio selections can run without a powered host
+  accessory. Its central build passes, and 25 host cases cover capture,
+  refusal and retained ownership. Full startup,
   physical power and switch qualification, actual transfers, DMA drain,
   repeated attachment, other speeds, hubs, periodic transfers, role swaps, USB PD,
   VCONN and applicable alternate modes remain outstanding.

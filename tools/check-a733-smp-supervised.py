@@ -232,7 +232,7 @@ def claimed(database,test_id,owner,bundle,admission):
     finally: db.close()
 
 
-def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready):
+def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result"):
     require(not record.get('launch_attempted'), 'One supervised attempt only.')
     base.preload(transaction,bundle,prepared,evidence)
     require(int(transaction('readl','0x02050014').strip(),16)&1==0, 'Watchdog enabled before launch.')
@@ -242,7 +242,7 @@ def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready):
                   backup_sha256=prepared['_backup_hashes'].copy(),launch_attempted=True)
     save();started=time.monotonic();transaction('exe','0x52000');observe(started)
     record['launch_protocol_complete']=True
-    record['complete']=record.get('scheduler_result')=='observed-success'
+    record['complete']=record.get(result_key)=='observed-success'
     record['manual_reconnect_required']=not record.get('clean_refusal',False)
     save()
 
@@ -278,47 +278,35 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
         hold()
 
 
-def main(argv=None):
-    parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
-    prep=sub.add_parser('prepare')
-    for name in ('image','image-manifest','admission','output'): prep.add_argument('--'+name,type=Path,required=True)
-    prep.add_argument('--clang',default='clang-21')
-    prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
-    live=sub.add_parser('launch')
-    for name in ('bundle','fel','evidence','database'):
-        live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True)
-    live.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
-    args=parser.parse_args(argv)
-    if args.operation=='prepare':
-        manifest=json.loads(args.image_manifest.read_text())
-        require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
-        result=prepare(args.image,args.image_manifest,args.admission,args.output.resolve(),args.clang,args.lld)
-        print(json.dumps(result,indent=2)); return 0
-    bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
+def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
+                product,serial,bcd_device,capture_seconds,result_key,source_files=(),
+                description='Supervised native application; manual reconnection after capture'):
+    """Shared protected transport for the observer and native board application.
+
+    Callers validate their immutable bundle, reviewed entry and software records.
+    The capture callback consumes only the newly enumerated native instance.
+    Every uncertain post-entry outcome retains the physical lock and queue claim.
+    """
+    require(0<capture_seconds<=59 and result_key in ('scheduler_result','board_result'),
+            'Unsupported supervised capture bounds.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
-    def ready(): claimed(args.database,args.claim,args.owner,bundle,bundle/'admission.json')
     ready()
-    admission=json.loads((bundle/'admission.json').read_text())
     args.evidence.mkdir(parents=True,exist_ok=False)
     for label,path in [('host-tool.py',Path(__file__)),('base-host-tool.py',Path(base.__file__)),
                        ('admission.json',bundle/'admission.json'),
                        ('observer-host-tool.py',Path(observer.__file__)),
-                       ('prepared.json',bundle/'prepared.json')]: shutil.copy2(path,args.evidence/label)
+                       ('prepared.json',bundle/'prepared.json'), *source_files]: shutil.copy2(path,args.evidence/label)
     access=module('observe_usb_access',ROOT/'tools/usb-access.py')
     sys.path.insert(0,str(Path.home()/'git/mimus/tools')); import usb_guard
     usb_guard.check_health()
     record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
-            'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,'scheduler_result':'unobserved'}
+            'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,result_key:'unobserved'}
     def save(): save_json(args.evidence/'session.json',record)
     with open('/tmp/mimus-board.lock','a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         node=access.discover(); access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        validate_admission(admission,prepared['image_sha256'],identity,port.name)
+        validate_entry(identity,port.name)
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
@@ -344,8 +332,7 @@ def main(argv=None):
             save();return result.stdout
         def observe(started):
             nonlocal node,identity,failed
-            old=identity; deadline=started+19; original_stayed=True
-            challenge=secrets.token_bytes(32);record['challenge']=challenge.hex();save()
+            old=identity; deadline=started+capture_seconds; original_stayed=True
             # Enumeration is passive. A sole nonce-bound report probe is allowed
             # only if this window ends with the original instance unchanged.
             while time.monotonic()<deadline:
@@ -353,30 +340,21 @@ def main(argv=None):
                 if candidate is None or access.identity(candidate)!=old:original_stayed=False
                 if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):
                     access.require_session(candidate)
-                    require((port/'bcdDevice').read_text().strip()=='0101' and
-                            (port/'product').read_text().strip()==PRODUCT and
-                            (port/'serial').read_text().strip()==SERIAL, 'Unexpected target service.')
+                    require((port/'bcdDevice').read_text().strip()==f'{bcd_device:04x}' and
+                            (port/'product').read_text().strip()==product and
+                            (port/'serial').read_text().strip()==serial, 'Unexpected target service.')
                     node,identity=candidate,access.identity(candidate)
                     import usb.core
                     device=usb.core.find(idVendor=0x1f3a,idProduct=0xefe8,bus=int(node.parent.name),address=int(node.name))
-                    require(device is not None and device.bcdDevice==0x0101, 'Observer handle differs.')
+                    require(device is not None and device.bcdDevice==bcd_device, 'Observer handle differs.')
                     def same():
                         require(not failed and access.identity(node)==identity, 'Observer instance changed; stop.')
-                        require((port/'bcdDevice').read_text().strip()=='0101', 'Observer revision changed.')
-                    def exchange(packet,timeout):
-                        nonlocal failed
-                        try:
-                            same();require(device.write(0x02,packet,timeout=timeout)==len(packet), 'Incomplete request.')
-                            same();remaining=int((deadline-time.monotonic())*1000)
-                            require(remaining>0, 'Capture deadline expired after write.')
-                            return bytes(device.read(0x81,528,timeout=min(timeout,remaining)))
-                        except BaseException:
-                            failed=True;raise
+                        require((port/'bcdDevice').read_text().strip()==f'{bcd_device:04x}', 'Observer revision changed.')
                     try:
                         same();device.default_timeout=min(500,max(1,int((deadline-time.monotonic())*1000)))
                         device.set_configuration(1)
                         record['observer_identity']=identity;save()
-                        capture(exchange,prepared,challenge,args.evidence,record,save,deadline)
+                        capture_device(device,same,deadline,record,save)
                         return
                     except BaseException:
                         failed=True;raise
@@ -391,8 +369,8 @@ def main(argv=None):
             raise CaptureWindowExpired('No native observer within bounded capture window; reconnect manually.')
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-            with usb_guard.reenumeration('sunstoneos-a733','supervised all-core observer; manual reconnection after capture',1):
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready)
+            with usb_guard.reenumeration('sunstoneos-a733',description,1):
+                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key)
                 finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:
@@ -403,8 +381,49 @@ def main(argv=None):
     if record.get('clean_refusal'):
         print('Clean pre-entry refusal '+str(record['refusal_reason'])+'. SRAM restored; ROM usable. Queue claim remains with coordinator for review.')
     else:
-        print('Diagnostic: '+record['scheduler_result']+'. Manual reconnection required. Queue claim remains with coordinator.')
+        print('Diagnostic: '+record[result_key]+'. Manual reconnection required. Queue claim remains with coordinator.')
     return 0 if record['complete'] else 2
+
+
+def capture_observer_device(device,same,deadline,prepared,evidence,record,save):
+    challenge=secrets.token_bytes(32);record['challenge']=challenge.hex();save()
+    def exchange(packet,timeout):
+        same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete request.')
+        same();remaining=int((deadline-time.monotonic())*1000)
+        require(remaining>0,'Capture deadline expired after write.')
+        return bytes(device.read(0x81,528,timeout=min(timeout,remaining)))
+    return capture(exchange,prepared,challenge,evidence,record,save,deadline)
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
+    prep=sub.add_parser('prepare')
+    for name in ('image','image-manifest','admission','output'): prep.add_argument('--'+name,type=Path,required=True)
+    prep.add_argument('--clang',default='clang-21')
+    prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
+    live=sub.add_parser('launch')
+    for name in ('bundle','fel','evidence','database'):
+        live.add_argument('--'+name,type=Path,required=True)
+    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True)
+    live.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
+    args=parser.parse_args(argv)
+    if args.operation=='prepare':
+        manifest=json.loads(args.image_manifest.read_text())
+        require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
+        result=prepare(args.image,args.image_manifest,args.admission,args.output.resolve(),args.clang,args.lld)
+        print(json.dumps(result,indent=2)); return 0
+    bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
+    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
+    require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1 and
+            manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
+    admission=json.loads((bundle/'admission.json').read_text())
+    return run_session(args,bundle,prepared,
+        lambda:claimed(args.database,args.claim,args.owner,bundle,bundle/'admission.json'),
+        lambda identity,port:validate_admission(admission,prepared['image_sha256'],identity,port),
+        lambda device,same,deadline,record,save:capture_observer_device(
+            device,same,deadline,prepared,args.evidence,record,save),
+        product=PRODUCT,serial=SERIAL,bcd_device=0x0101,capture_seconds=19,
+        result_key='scheduler_result')
 
 
 if __name__=='__main__':

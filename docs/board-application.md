@@ -226,3 +226,11 @@ confirmed the permitted USB descriptor and absence of hardware-watchdog admit
 and reload symbols. Constructor boundaries in startup checks were modeled;
 physical provider admission remains untested. Existing armed,
 provider, protocol and scheduler evidence was reused. No board was accessed.
+
+The central supervised build also passes; its 154 repository dependencies match
+the application snapshot. Later shared-header edits affect comments only.
+The live host tool passes 25 focused software cases covering shared transport,
+exclusive ownership, selected workloads, malformed or stale replies, transfer
+failures and durable result publication. Its seven source files match the final
+snapshot under `board-supervised-host-20261017/batch1/`. These checks use modeled
+USB and FEL boundaries and a private host lock; they establish no physical result.
