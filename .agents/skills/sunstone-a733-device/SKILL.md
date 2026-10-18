@@ -49,6 +49,11 @@ need not use equal multiplier and divider fields when the oscillator differs.
 Check the pinned A733 manual in `sources.lock.json` and the effective clock driver
 before rejecting an observed configuration or expanding admission. Carry the
 derived rates into dependent bus timing and timeout calculations.
+Reuse [`a733_clock_reference.h`](../../../include/a733_clock_reference.h) for
+the shared raw-oscillator and normalized-reference decoding. Check which source
+the consumer actually selects before applying a frequency restriction. Reserved
+bits are not source selectors. Decoded register settings establish a configured
+rate; they do not measure frequency or establish clock ownership.
 
 Trace the actual native boot and application code. A single task in an application
 does not imply a single-core image: some device images inherit the eight-core
@@ -77,6 +82,15 @@ Publication needs actual completion and owned copied output. Cancellation or a
 software timeout does not prove hardware stopped. Resource release requires the
 device's demonstrated drain or recovery condition. Generation and client identity
 must remain bound through result copy and completion acknowledgment.
+
+For inherited USB hardware, distinguish cold initialization from taking ownership
+of the controller used by ROM. CPU startup does not imply peripheral reset.
+Use the [USB platform contract](../../../docs/usb-platform.md) and an explicit
+handoff that preserves shared clocks and other controllers. A clear DMA start
+bit may result from software cancellation; it does not establish completed bus
+writes. A USB disconnect delay lets the host observe disconnection but does not
+prove DMA completion. Establish completion or source-backed absence of DMA for
+the relevant powered lifetime before releasing its memory or resetting resources.
 
 Check completion for every native client claimed by the application. Successful
 USB transfers do not establish another task's completion when its summary fields
