@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute first-secondary admission/preflight, with no CPU configuration or power writes."""
+"""Execute OFF-secondary configuration and restoration before any power request."""
 import argparse
 import hashlib
 import importlib.util
@@ -42,18 +42,18 @@ def check(name,scenario='normal'):
     original_ctlr=7 if scenario=='are-guard' else 0x37
     original_spi=[0xa55aa55a]+[(0x11223344^(i*0x10201))&0xffffffff for i in range(1,32)]
     gic={'ctlr':original_ctlr,'typer':0x7b0408,'spi':original_spi.copy(),'rwp':0}
-    power_registers={0x07053008:8 if scenario=='prearm-on' else 0,0x07050204:0x10000,0x07050224:0x40,0x08002000:0x20}
-    writes=[];controls=[];ticks=[];stopped=[];injected=[];publication=[];cleaned=[];power_reads=[];events=[]
+    power_registers={0x07053008:8 if scenario=='prearm-on' else 0,0x07050204:0x10000,0x07050224:0x40,0x08002000:0x20,0x08002004:0x48000000,0x08002008:0}
+    writes=[];controls=[];ticks=[];stopped=[];injected=[];publication=[];cleaned=[];power_reads=[];events=[];configuration_writes=[];barriers=[]
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     def instruction(uc,address,size,unused):
-        assert address!=0x4100a1e8,'CPU configuration/power write guard must not be crossed.'
         assert address!=0x41004444,'CPU/DSU write guard must not be crossed.'
-        if scenario=='power-read-fault' and address==0x4100a1bc and uc.reg_read(UC_ARM64_REG_X0+19)==0x07053008 and not injected:
-            registers.update(elr_el3=address,far_el3=0x07053008);injected.append(True)
+        config_state=struct.unpack('<Q',uc.mem_read(0x42002280,8))[0]
+        partial=scenario=='configuration-fault' and address==0x4100a25c and uc.reg_read(UC_ARM64_REG_X0+19)==0x08002008
+        cleanup_fault=scenario=='cleanup-read-fault' and address==labels['configuration_require_off']+4 and config_state==2
+        if (partial or cleanup_fault) and not injected:
+            registers.update(elr_el3=address,far_el3=0x08002008 if partial else 0x07053008);injected.append(True)
             uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
-        if scenario=='partial-fault' and address==0x410003f0 and uc.reg_read(UC_ARM64_REG_X0+9)==0x03400190 and not injected:
-            registers.update(elr_el3=address,far_el3=0x03400190);injected.append(True)
-            uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
+        if address==0x4100a2d0:barriers.append(address)
         if address==0x41004558:
             begin,end=ranges[len(publication)]
             assert uc.reg_read(UC_ARM64_REG_X0)==begin and uc.reg_read(UC_ARM64_REG_X0+1)==end-begin
@@ -89,7 +89,13 @@ def check(name,scenario='normal'):
         elif text=='wfi':stopped.append('park');uc.emu_stop()
     def read(uc,access,address,size,value,unused):
         if address in power_registers:
-            assert size==4;power_reads.append(address);uc.mem_write(address,struct.pack('<I',power_registers[address]));return
+            assert size==4;power_reads.append(address)
+            data=power_registers[address]
+            config_state=struct.unpack('<Q',uc.mem_read(0x42002280,8))[0]
+            if scenario=='native-readback-refusal' and address==0x08002004 and uc.reg_read(UC_ARM64_REG_PC)==0x4100a1bc and not injected:
+                data^=4;injected.append(True)
+            if scenario=='changed-power' and config_state==2 and address==0x07053008:data=8
+            uc.mem_write(address,struct.pack('<I',data));return
         if not 0x03400000<=address<0x03401000:return
         assert size==4
         if address==0x03400000:
@@ -104,7 +110,12 @@ def check(name,scenario='normal'):
             data=gic['spi'][bank]
         uc.mem_write(address,struct.pack('<I',data))
     def write(uc,access,address,size,value,unused):
-        assert not (0x07050200<=address<0x07050240 or 0x07053000<=address<0x07054000 or 0x08002000<=address<0x08003000),'No secondary configuration/power writes permitted.'
+        assert not (0x07050200<=address<0x07050240 or 0x07053000<=address<0x07054000),'No secondary power writes permitted.'
+        if 0x08002000<=address<0x08003000:
+            assert size==4 and address in (0x08002000,0x08002004,0x08002008)
+            state=struct.unpack('<Q',uc.mem_read(0x42002280,8))[0]
+            assert state in (1,2) and not power_registers[0x07053008]&15
+            configuration_writes.append([state,address,value]);power_registers[address]=value;return
         if 0x42005100<=address<0x42005180 and value:
             assert struct.unpack('<Q',uc.mem_read(0x42002270,8))[0]==1,'No armed mailbox before stable OFF admission.'
         if 0x03400000<=address<0x03401000:
@@ -128,10 +139,15 @@ def check(name,scenario='normal'):
     cpu.hook_add(UC_HOOK_CODE,instruction);cpu.hook_add(UC_HOOK_MEM_READ,read);cpu.hook_add(UC_HOOK_MEM_WRITE,write)
     cpu.emu_start(0x41000000,0x41021000,count=1500000)
     snapshot=host.gic_snapshot(bytes(cpu.mem_read(0x42002100,512)))
-    if scenario=='cleanup-timeout':
-        assert stopped==['park'] and snapshot['state']==4 and snapshot['error']==1
+    configuration=snapshot['configuration']
+    if scenario in ('changed-power','cleanup-read-fault'):
+        assert stopped==['park'] and configuration['state']==(4 if scenario=='changed-power' else 2)
         assert not any(key=='rmr_el3' for key,value in controls)
-        reports.append({'name':name,'cleanup_retained':True,'gic':snapshot,'writes':writes});return
+        assert len(configuration_writes)==3 and all(item[0]==1 for item in configuration_writes)
+        assert snapshot['state']==1,'GIC groups must not be restored before configuration cleanup.'
+        if scenario=='changed-power':assert configuration['error']==1 and configuration['restore_status']==8
+        else:assert len(injected)==1
+        reports.append({'name':name,'cleanup_retained':True,'gic':snapshot,'configuration_writes':configuration_writes,'system_writes':controls});return
     assert stopped==['return'],(name,stopped,hex(cpu.reg_read(UC_ARM64_REG_PC)))
     result=host.decode(bytes(cpu.mem_read(host.REPORT,256)),nonce)
     secondary=host.secondary_snapshot(bytes(cpu.mem_read(0x4200eb48,128)),bytes(cpu.mem_read(0x4200eec8,248)),bytes(cpu.mem_read(0x42005100,256)))
@@ -143,44 +159,40 @@ def check(name,scenario='normal'):
     assert snapshot['state']==3 and not snapshot['error']
     assert secondary['power']['initialized']==1 and secondary['owner']['initialized']==1
     assert secondary['power']['core']==secondary['owner']['core']==1
-    if scenario=='prearm-on':
-        assert result['checkpoint']==10 and snapshot['prearm']['state']==2 and snapshot['prearm']['reason']==2
-        assert snapshot['prearm']['status_before']==8 and power_reads==[0x07053008] and not events
-        assert bytes(cpu.mem_read(0x42005100,256))==bytes(256)
-        assert secondary['owner']['phase']==1 and secondary['power']['writes_attempted']==0
-    elif scenario=='power-read-fault':
-        assert result['checkpoint']==5 and result['elr']==0x4100a1bc and injected
-        assert snapshot['prearm']['state']==1 and len(events)==1
-        assert power_reads==[0x07053008,0x07050204,0x07050224,0x07053008]
-        assert secondary['owner']['phase']==2 and secondary['power']['step']==0
-        assert not secondary['power']['writes_attempted']
+    assert snapshot['prearm']['state']==1 and len(events)==1
+    assert configuration['state']==3 and configuration['error']==0
+    assert [configuration['original_arch'],configuration['original_low'],configuration['original_high']]==[0x20,0x48000000,0]
+    assert [configuration['restored_arch'],configuration['restored_low'],configuration['restored_high']]==[0x20,0x48000000,0]
+    assert [power_registers[address] for address in (0x08002000,0x08002004,0x08002008)]==[0x20,0x48000000,0]
+    native=[item[1:] for item in configuration_writes if item[0]==1]
+    restored=[item[1:] for item in configuration_writes if item[0]==2]
+    assert restored==[[0x08002004,0x48000000],[0x08002008,0],[0x08002000,0x20]]
+    if scenario=='configuration-fault':
+        assert result['checkpoint']==5 and injected and configuration['permitted_attempts']==2
+        assert native==[[0x08002004,0x41002000]]
+    elif scenario=='native-readback-refusal':
+        assert result['checkpoint']==3 and result['status']==2 and result['detail']==33 and injected
+        assert configuration['permitted_attempts']==2 and native==[[0x08002004,0x41002000],[0x08002008,0]]
     else:
-        assert result['checkpoint']==9 and result['proposed_power_address']==0x08002004 and result['proposed_power_value']==0x41002000
-        assert snapshot['prearm']['state']==1 and snapshot['prearm']['reason']==0 and len(events)==1
-        assert power_reads==[0x07053008,0x07050204,0x07050224,0x07053008,0x07053008,0x07050204,0x07050224,0x08002000]
-        assert secondary['power']['state']==1 and secondary['power']['error']==0 and secondary['power']['step']==4
-        assert secondary['power']['control']==0x10000 and secondary['power']['mode']==0x40 and secondary['power']['architecture']==0x20
-        assert secondary['power']['writes_attempted']==1 # Attempt counted before intercepted callback; zero physical writes.
-        assert secondary['owner']['phase']==2 and secondary['owner']['state']==1 and not secondary['owner']['error']
+        assert result['checkpoint']==9 and result['proposed_power_address']==0x07050224 and result['proposed_power_value']==0x41
+        assert native==[[0x08002004,0x41002000],[0x08002008,0],[0x08002000,0x21]]
+        assert configuration['permitted_attempts']==3 and barriers
+        assert secondary['power']['step']==11 and secondary['power']['writes_attempted']==4
     if events:
         assert secondary['command']['magic']==0x53435045 and secondary['command']['core']==1 and secondary['command']['state']==1
         assert secondary['command']['epoch']==bundle['epoch'] and secondary['command']['inverse_epoch']==bundle['epoch']^((1<<64)-1)
         assert bytes(cpu.mem_read(0x42005180,128))==bytes(128)
-    if scenario=='are-guard':
-        assert result['checkpoint']==8 and snapshot['state']==0 and snapshot['error']==5
-        assert len(writes)==2,'Guard must make no GIC writes.'
-    else:
-        assert snapshot['state']==3 and snapshot['error']==0 and snapshot['banks']==9 and snapshot['original_ctlr']==0x37
-        assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
-        if scenario=='native-refusal':assert result['checkpoint']==3 and result['status']==2 and result['detail']==3
-        elif scenario=='partial-fault':assert result['checkpoint']==5 and result['elr']==0x410003f0 and injected
-        else:assert result['checkpoint'] in (5,9,10) and snapshot['terminal_ctlr']==0x33
+    assert snapshot['state']==3 and snapshot['error']==0 and snapshot['banks']==9 and snapshot['original_ctlr']==0x37
+    assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
+    assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
-    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes})
-check('first-secondary-native-preflight-before-hardware-write')
-check('non-off-secondary-refuses-before-mailbox-and-sev','prearm-on')
-check('native-power-read-exception-after-admitted-arm','power-read-fault')
+    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers})
+check('native-three-configuration-writes-before-power-request')
+check('native-entry-readback-refusal-restores-configuration','native-readback-refusal')
+check('partial-configuration-write-exception-restores-off-core','configuration-fault')
+check('changed-power-retains-before-configuration-restore','changed-power')
+check('configuration-cleanup-read-fault-retains-without-retry','cleanup-read-fault')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual patched native startup with modeled system registers, counter, power reads, GIC W1C/W1S/RWP and intercepted DC CVAC. Tests pre-arm ordering, native admission and zero secondary MMIO writes; cannot establish external exclusivity, physical OFF stability, event effects or secondary operation.'},indent=2)+'\n')
-print('PASS three first-secondary preflight cases; OFF gate precedes ARM/SEV and no CPU control write executes.')
+    'limits':'Actual native configuration sequence with modeled system registers, counter, power registers and GIC. Cannot establish physical OFF stability, external exclusivity, reset-entry semantics or secondary operation.'},indent=2)+'\n')
+print('PASS five OFF-secondary configuration cases; no power request executes and uncertain cleanup retains.')

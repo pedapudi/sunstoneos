@@ -265,7 +265,7 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning first-secondary admission and power-preflight checkpoint
+## Returning OFF-secondary configuration checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
@@ -301,9 +301,13 @@ the target alone does not establish those conditions.
 
 After admission, the original callback publishes its ARM command and SEV. Native
 power preflight reads OFF status, control, mode and reset architecture. The
-checkpoint at `0x4100a1e4` captures the first proposed CPU configuration/power
-write before the callback executes. No secondary configuration, power-request
-or reset-release write occurs. SEV does not request PPU power; the admitted OFF
+guard at `0x4100a1e4` admits exactly three core-1 configuration writes in order:
+reset-entry low `0x08002004 = 0x41002000`, reset-entry high `0x08002008 = 0`,
+and architecture `0x08002000 = original | 1`. Each callback retains its native
+privilege/address validation and store. Native readback checks and the publication
+barrier execute before the next callback is intercepted. The first proposed
+hotplug mode request is captured without executing it. No power-request or
+reset-release write occurs. SEV does not request PPU power; the admitted OFF
 state prevents an executing secondary from observing the command. Actual CPU
 activation requires a separate return and quiescence argument.
 
@@ -315,7 +319,15 @@ in state 2, unknown state or failed readback parks and retains ownership. A late
 exception after state 3 re-verifies under state 2. This prevents a faulting
 restoration read from repeatedly re-entering the same operation.
 
-After restoring EL1, every returning path restores affected distributor state.
+After restoring EL1, cleanup first restores the OFF core's reset configuration.
+It marks restoration in progress before any MMIO read, requires OFF status and
+clear control/mode request bits, then captures the terminal configuration. It
+restores entry low, entry high and architecture, with barriers and exact readbacks,
+and repeats the OFF/request checks. A changed or uncertain power state retains
+the board without configuration restoration; cleanup never powers down a core.
+Only verified configuration restoration permits distributor cleanup.
+
+Every returning path then restores affected distributor state.
 Cleanup drains pending writes, disables groups while retaining all original
 non-group CTLR bits, and waits for RWP. It clears SPI enables, waits for RWP,
 restores the saved enables and checks every word. It then restores the original
@@ -343,7 +355,7 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 9 captures the first proposed secondary hardware-write address and
+Checkpoint 9 captures the first prohibited secondary hardware-write address and
 32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
 refuses pre-arm admission before command publication or SEV. Checkpoint
 6 records a requested register and value before that write; checkpoint 7 records
@@ -362,8 +374,17 @@ state 2 refuses it. Reasons distinguish invalid core, non-OFF status, active
 control/mode request, changed status or expired/regressing time. The host also
 copies the first power controller, entry controller and mailbox from monitor BSS.
 Their poll phase and error identify native admission or preflight failure.
-`writes_attempted == 1` can precede the guarded callback even though no hardware
-write executed; it records the controller's attempt, not a completed bus operation.
+The 128-byte configuration record occupies `0x42002280..0x42002300`, immediately
+after the pre-arm record. Sixteen 64-bit fields have byte offsets 0 through 120:
+state, core, base, original architecture/low/high, terminal architecture/low/high,
+restored architecture/low/high, error, admitted attempts, restore status and packed
+restore requests. The packed word holds control in its low 32 bits and mode in
+its high 32 bits. State 1 requires all originals saved; state 2 guards every
+cleanup read/write; state 3 means verified restoration; state 4 records failure.
+An admitted attempt is counted before native execution so a partial-write fault
+still triggers cleanup. Native `writes_attempted` also counts intercepted requests;
+four attempts can describe three completed configuration writes and a blocked
+mode request.
 
 Full distributor setup sets GICD_CTLR.ARE_S/ARE_NS. Clearing either enabled bit
 is architecturally unpredictable, so restoring an arbitrary saved CTLR is not a
@@ -488,4 +509,19 @@ controller phases and zero secondary hardware writes. Register reads, event
 execution, GIC completion and cache maintenance are modeled; external ownership
 and physical OFF stability require the current board evidence. Artifacts are
 under `~/.cache/sunstoneos/evidence/native-secondary-preflight-probe-20261017/`.
-Physical first-secondary preflight and actual secondary startup remain unqualified.
+The first-secondary preflight physically passed once: stable OFF admission,
+ARM publication, native reads and intercepted reset-entry write all completed.
+The proposed address/value were `0x08002004 = 0x41002000`; power phase 4 reported
+one attempted callback with zero physical CPU writes. EL1/GIC restoration, all
+47 transactions and DRAM restoration passed, returning as USB `003:081`.
+Evidence is under `startup-stage-20261017-080/native/runtime/` in the same cache.
+The fresh 21-word all-secondary-OFF record is under that stage's `cpu-state/`;
+continuous exclusive ownership and the zero-CPU-write return preserve its relevance.
+
+One affected build and five instruction cases pass through the three configuration
+writes and stop before the mode request. The cases cover successful restoration, native entry
+readback refusal, an exception after a partial configuration write, changed power
+before cleanup, and a cleanup-read exception. The latter two retain ownership
+without retry or ROM return. Artifacts are under
+`~/.cache/sunstoneos/evidence/native-secondary-configuration-probe-20261017/`.
+Physical configuration writes and actual secondary startup remain unqualified.

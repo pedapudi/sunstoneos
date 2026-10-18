@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture first-secondary admission and power preflight before any CPU control write."""
+"""Run OFF-secondary reset configuration, restore it, and return before any power request."""
 import argparse
 import hashlib
 import importlib.util
@@ -106,6 +106,8 @@ def gic_snapshot(raw):
     result['original_spi']=list(struct.unpack_from('<32I',raw,64))
     result['restored_spi']=list(struct.unpack_from('<32I',raw,192))
     result['prearm']=dict(zip(('core','reason','status_before','control','mode','status_after','state','counter'),struct.unpack_from('<8Q',raw,320)))
+    result['configuration']=dict(zip(('state','core','base','original_arch','original_low','original_high','terminal_arch','terminal_low','terminal_high',
+        'restored_arch','restored_low','restored_high','error','permitted_attempts','restore_status','restore_requests'),struct.unpack_from('<16Q',raw,384)))
     return result
 
 def secondary_snapshot(power,owner,mailbox):
@@ -196,7 +198,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','First-secondary admission/preflight with no CPU control writes',2):
+            with usb_guard.reenumeration('sunstoneos-a733','OFF-secondary reset configuration and verified restoration before power requests',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:

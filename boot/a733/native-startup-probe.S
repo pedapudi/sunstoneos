@@ -14,6 +14,70 @@ boot_checkpoint:
     ldr x17, =0x410000d4
     br x17
 cached_checkpoint:
+    ldr x12, =0x42002280
+    ldr w9, [x0]
+    cmp w9, #1
+    b.ne configuration_blocked
+    ldr x17, [x12]
+    cbz x17, configuration_snapshot
+    cmp x17, #1
+    b.ne configuration_blocked
+    b configuration_allow
+configuration_snapshot:
+    ldr x13, =0x08002000
+    add x17, x13, #4
+    cmp x1, x17
+    b.ne configuration_blocked
+    ldr w17, =0x41002000
+    cmp w2, w17
+    b.ne configuration_blocked
+    str x9, [x12, #8]
+    str x13, [x12, #16]
+    dsb sy
+    ldr w17, [x13]
+    str x17, [x12, #24]
+    ldr w17, [x13, #4]
+    str x17, [x12, #32]
+    ldr w17, [x13, #8]
+    str x17, [x12, #40]
+    dsb sy
+    mov x17, #1
+    str x17, [x12]            // Every original precedes any admitted write.
+configuration_allow:
+    ldr x9, [x12, #104]
+    ldr x13, =0x08002000
+    cbz x9, configuration_low
+    cmp x9, #1
+    b.eq configuration_high
+    cmp x9, #2
+    b.ne configuration_blocked
+    cmp x1, x13
+    b.ne configuration_blocked
+    ldr w17, [x12, #24]
+    orr w17, w17, #1
+    cmp w2, w17
+    b.ne configuration_blocked
+    b configuration_permit
+configuration_low:
+    add x17, x13, #4
+    cmp x1, x17
+    b.ne configuration_blocked
+    ldr w17, =0x41002000
+    cmp w2, w17
+    b.ne configuration_blocked
+    b configuration_permit
+configuration_high:
+    add x17, x13, #8
+    cmp x1, x17
+    b.ne configuration_blocked
+    cbnz w2, configuration_blocked
+configuration_permit:
+    add x9, x9, #1
+    str x9, [x12, #104]       // Includes an admitted attempt that may fault.
+    mrs x8, CurrentEL         // Displaced native callback instruction.
+    ldr x17, =0x4100a1e8
+    br x17
+configuration_blocked:
     ldr x16, =0x42002000
     str x1, [x16, #96]
     mov w17, w2
@@ -237,6 +301,53 @@ snapshot_bank:
     mrs x17, tcr_el1
     str x17, [x16, #232]
 snapshot:
+    ldr x12, =0x42002280
+    ldr x17, [x12]
+    cbz x17, configuration_done
+    cmp x17, #3
+    b.eq configuration_done
+    cmp x17, #1
+    b.ne park
+    mov x17, #2
+    str x17, [x12]            // Guards every OFF check, snapshot, restore and readback.
+    ldr x13, =0x08002000
+    ldr x14, =0x07053008
+    ldr x15, =0x07050204
+    bl configuration_require_off
+    ldr w17, [x13]
+    str x17, [x12, #48]
+    ldr w17, [x13, #4]
+    str x17, [x12, #56]
+    ldr w17, [x13, #8]
+    str x17, [x12, #64]
+    ldr w17, [x12, #32]
+    str w17, [x13, #4]
+    dsb sy
+    ldr w17, [x12, #40]
+    str w17, [x13, #8]
+    dsb sy
+    ldr w17, [x12, #24]
+    str w17, [x13]
+    dsb sy
+    ldr w10, [x13]
+    str x10, [x12, #72]
+    ldr w17, [x12, #24]
+    cmp w10, w17
+    b.ne configuration_readback_failed
+    ldr w10, [x13, #4]
+    str x10, [x12, #80]
+    ldr w17, [x12, #32]
+    cmp w10, w17
+    b.ne configuration_readback_failed
+    ldr w10, [x13, #8]
+    str x10, [x12, #88]
+    ldr w17, [x12, #40]
+    cmp w10, w17
+    b.ne configuration_readback_failed
+    bl configuration_require_off
+    mov x17, #3
+    str x17, [x12]
+configuration_done:
     ldr x12, =0x42002100
     ldr x17, [x12]
     cbz x17, snapshot_final
@@ -335,6 +446,32 @@ snapshot_final:
     mov x0, #2
     msr rmr_el3, x0
     isb
+    b park
+configuration_require_off:
+    dsb sy
+    ldr w17, [x14]
+    dsb sy
+    str x17, [x12, #112]
+    tst w17, #15
+    b.ne configuration_power_changed
+    ldr w10, [x15]
+    dsb sy
+    ldr w11, [x15, #32]
+    dsb sy
+    orr x17, x10, x11, lsl #32
+    str x17, [x12, #120]
+    orr w17, w10, w11
+    tbnz w17, #0, configuration_power_changed
+    ret
+configuration_power_changed:
+    mov x17, #1
+    b configuration_cleanup_failed
+configuration_readback_failed:
+    mov x17, #2
+configuration_cleanup_failed:
+    str x17, [x12, #96]
+    mov x17, #4
+    str x17, [x12]
     b park
 gic_wait_rwp:
     isb
