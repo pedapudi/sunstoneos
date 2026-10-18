@@ -132,3 +132,11 @@ all-core image and unchanged component cases are reused. The first physical
 attempt's cause remains unconfirmed because it produced neither a native frame
 nor a refusal report; the frequency change addresses a separately recorded ROM
 metadata mismatch.
+
+The corrected launcher was used for a second physical attempt after confirmed
+power removal, fresh DDR initialization and matching entry-control observations.
+Uploads, readback and the execution request succeeded. No observer appeared
+within nineteen seconds, and the single refusal-report read timed out. The host
+stopped communication and retained the board lock and queue claim. Evidence is
+under `supervised-reconnect-20261017/`. The failure location remains unknown;
+offline comparison with the working single-core startup precedes another attempt.

@@ -61,8 +61,8 @@ instruction cases. Sources and artifacts match integration, with a documented
 source-only reporting-key correction. Evidence is under
 `i2s-supervised-host-20261017/`. Both adapters reuse shared transport and retained
 ownership handling. Their modeled admission records cannot authorize hardware.
-Neither application is physically qualified. The first board attempt still
-requires recovery of the quarantined instance.
+Neither application is physically qualified. Further board attempts require
+recovery of the quarantined instance and diagnosis of multicore startup.
 
 The [native Bluetooth application](bluetooth-native.md) is integrated with its
 host preparation and shared capture adapter. Firmware bootstrap, UART1 and H4/HCI
@@ -134,23 +134,17 @@ comparisons are under `supervised-bundle-binding-20261017/batch1/`.
 Existing native, launcher and transport results remain valid within their scopes.
 Before physical use, compose the selected bundle's software record from these
 results and current source snapshots; older records retain superseded source hashes.
-The observer record now includes the corrected launcher and current host sources
-under `supervised-bundle-binding-20261017/batch1/integration/`. Its referenced
-artifacts were verified without replaying tests. Fresh physical entry evidence
-is still required after manual reconnection.
-The separate
-[supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
-remain disabled. Its native build and focused startup, admission and host checks
-pass, including central integration. USB capture leaves the board running until
-manual reconnection; successful capture retains the board claim and lock.
-The first physical attempt produced no USB observer within the capture window.
-Uploads and the execution request succeeded, but no scheduler result arrived.
-The board instance is quarantined pending manual reconnection.
-Its coordinator now holds `/tmp/sunstoneos-a733-3-1.lock`; the unrelated mimus
-lock has been released. The replacement holder acquired the A733 lock before
-the original process stopped. The queue claim and quarantine remain in force.
-The physical-entry runtime directory contains `lock-transfer.json` with both
-process identities. No board command was issued during this transfer.
+The current observer software record binds the corrected launcher and current
+host sources under `supervised-observer-integration-20261017/3d41031/`.
+Its referenced artifacts were verified without replaying tests.
+The [supervised all-core observer](a733-smp-supervised.md) requires a disabled
+watchdog. Its native build and focused startup, admission and host checks pass.
+Both physical attempts produced no native USB observer. The corrected launcher
+was used on the second attempt after confirmed power removal and fresh entry
+checks. Its single refusal-report read timed out; no scheduler result arrived.
+The current instance is quarantined. The coordinator retains the queue claim and
+`/tmp/sunstoneos-a733-3-1.lock`; unrelated boards remain available. Offline launch
+analysis must identify the next useful change before another physical attempt.
 
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
@@ -244,35 +238,31 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The last tested board instance was `003:065` on port `3-1`, with valid session access.
-Fresh RAM-only DDR initialization passed once through the existing loader:
-12,288 MiB reported, board setup result zero, and two distinct 4 KiB RAM pages
-matched. The loader returned to FEL without a reset or persistent write.
-Evidence is under `supervised-ddr-20261017-192435/`. A subsequent read-only
-snapshot found all seven secondary cores inactive by the startup driver's
-criteria, inherited USB0 clocks/reset state, and a disabled watchdog. Its record
-is `supervised-entry-state-20261017-193112/result.json`. These observations do not
-by themselves establish auxiliary-core/DMA exclusion or every cached-entry
-condition. The follow-up `supervised-master-state-20261017-193555/` records
-E902 clock gates disabled, DMA0/1 reset asserted and clocks gated, and MBUS gates
-`0x4`. Its `ce/` record shows the crypto engine enabled; `ce-idle/` records zero
-secure/nonsecure interrupt, task-status, trigger and error fields. No control was
-changed. The reviewed physical-entry assessment and failed observation are under
-`smp-supervised-20261017/physical-entry/`. Its `runtime/session.json` records one
-execution request, no transport failure and no native observer within 19 seconds.
-The host stopped board traffic and retained the test claim and exclusive lock.
-Manual reconnection has been requested; do not contact the quarantined instance.
+The current quarantined board instance is `003:071` on port `3-1`.
+User-confirmed power removal replaced the previous failed instance. The installed
+session rule restored access automatically, and the old holder stopped before
+the queue resumed. Fresh RAM-only DDR initialization reported 12,288 MiB; two
+4 KiB pages matched and the loader returned to FEL. Thirty-nine read-only control
+and status values matched the prior reviewed entry conditions: secondary cores
+inactive, watchdog disabled, USB0 inherited, E902 and DMA0/1 disabled, and the
+active crypto engine idle. These checks establish the recorded entry conditions;
+they do not qualify all-core execution or coherence.
 
-The launcher used for the failed attempt rejected a zero counter-frequency
-declaration, although earlier board evidence records that initial value. Native
-startup sets the declaration only after the launcher. This may explain the
-missing observer, but the physical cause remains unconfirmed. The reviewed
-correction accepts an unset frequency declaration and can report a clean refusal
-after checking the session identity and restoring SRAM. Two changed launcher
-cases and nine host cases pass; the all-core image was not rebuilt. The integrated
-sources and preserved artifacts match the evidence under
-`smp-supervised-20261017/frequency-refusal/`. The existing held process uses the
-earlier implementation and still requires manual reconnection.
+Evidence is under `supervised-reconnect-20261017/`. Its `prepared/` bundle reuses
+the tested native image and corrected launcher with fresh admission and session
+identities. No executable was rebuilt. The second attempt completed uploads,
+readback and one execution request, but no native observer appeared within
+19 seconds. The sole refusal-report read then failed with USB timeout error -7.
+Device communication stopped immediately. The process recorded in
+`observer-claim.json` retains the lock and claim; `runtime/session.json` records
+the failed transfer. Do not contact this instance before explicit power removal.
+
+The counter-frequency correction addresses the ROM's unset frequency declaration,
+but did not establish physical startup. Neither attempt produced a diagnostic
+frame or refusal report, so the failure location remains unknown. Compare the
+SRAM launcher, architecture transition and native boot with the previously
+working single-core USB path before requesting another reconnect. Preserve both
+attempts and successful software evidence; do not repeat the full test batch.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -380,13 +370,12 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. After confirmed manual reconnection, close the held observer
-   test and refresh the board's DDR and entry evidence. Preserve storage, honor
-   actual admission requirements and stop at the first transport failure. Use
-   the corrected launcher and clean-refusal reporting for the next reviewed attempt.
+1. Diagnose the failed multicore launch offline and identify the smallest useful
+   correction or diagnostic before another physical attempt. The current USB
+   instance is quarantined after its refusal-report transfer timed out. Retain
+   ownership until confirmed power removal, then refresh DDR and entry evidence.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
-   remain deferred. USB power-control investigation is closed; no cable move or
-   power command was requested.
+   remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
