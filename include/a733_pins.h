@@ -87,7 +87,10 @@ struct a733_pins {
 };
 /* No MMIO. authorized_pb_mask is an explicit platform handoff of unowned pins,
  * not a discovery of unused pins. PIO clock, bank voltage, stable mappings,
- * watchdog recovery and quiescent peripheral functions are prerequisites. */
+ * operation-specific recovery and quiescent peripheral functions are
+ * prerequisites. Image admission may authorize supervised RAM-only retention
+ * until manual full power removal; it does not recover stalled MMIO or replace
+ * stricter recovery requirements of an existing image. */
 int a733_pins_init(struct a733_pins *, const struct a733_pins_operations *, void *, uint32_t);
 /* Input array and output token must be disjoint from manager state and remain
  * stable through the call. Token output starts zero. Checks all conflicts and
@@ -139,6 +142,15 @@ int a733_pins_init_banks(struct a733_pins *, const struct a733_pins_operations *
     void *, const struct a733_pin_handoff *);
 enum a733_pins_result a733_pins_acquire_banked(struct a733_pins *, uint64_t owner,
     const struct a733_pin_request_banked *, size_t, struct a733_pin_lease_banked *, uint64_t deadline);
+/* Fixed PWM0 fan stop: the existing exact PD5 lease remains owned. After
+ * independently proving its PWM producer quiescent, transition mux7 to GPIO
+ * output-low through disable/preload/mux ordering. No arbitrary rerouting.
+ * Main PIO atomic clear preserves neighboring DATA latches. Already-low calls
+ * still verify actual state. Any uncertain write retains the token and faults
+ * the manager. Physical gate voltage/discharge and fan-off remain qualified
+ * separately; digital readback alone is not an analog off-current guarantee. */
+enum a733_pins_result a733_pins_pwm0_fan_low(struct a733_pins *,
+    const struct a733_pin_lease_banked *,unsigned users_quiescent,uint64_t deadline);
 /* Additional inherited GPIO-output conditions for checked acquisition. Each
  * mask bit selects a requested pin with expected AND desired function 1.
  * At least one bit must be selected; levels outside masks are invalid. */

@@ -738,3 +738,25 @@ enum a733_pins_result a733_pins_held_banked(struct a733_pins *m,
     *held=match_banked(m,h);
     return leave(m,A733_PINS_OK);
 }
+
+enum a733_pins_result a733_pins_pwm0_fan_low(struct a733_pins *m,
+    const struct a733_pin_lease_banked *h,unsigned quiescent,uint64_t deadline)
+{
+    if(!m||!h||quiescent!=1||overlap(m,sizeof(*m),h,sizeof(*h)))return A733_PINS_INVALID;
+    enum a733_pins_result r=enter(m,deadline);
+    if(r!=A733_PINS_OK)return r;
+    if(!match_banked(m,h))return leave(m,A733_PINS_CONFLICT);
+    if(m->failed)return leave(m,A733_PINS_RECOVERY);
+    if(!(h->masks[A733_PIN_D]&(1u<<5)))return leave(m,A733_PINS_INVALID);
+    struct a733_pin_state *s=&m->pins[A733_PIN_D][5];
+    if(s->current.function!=7 && !(s->current.function==1&&!s->current_output))return leave(m,A733_PINS_INVALID);
+    r=verify_pin(m,A733_PIN_D,5,deadline);
+    if(r!=A733_PINS_OK)return leave(m,checked(m,r));
+    if(s->current.function==1)return leave(m,A733_PINS_OK);
+    struct expanded_plan plan={A733_PIN_D,5,s->current,{1,s->current.pull,s->current.drive},0,0,0};
+    uint32_t empty[A733_PIN_BANKS]={0};unsigned attempted=0;
+    r=apply_expanded(m,&plan,1,empty,empty,0,deadline,&attempted);
+    if(r!=A733_PINS_OK)return leave(m,r==A733_PINS_BUSY&&!attempted?r:fault(m));
+    s->current=plan.target;s->current_output=0;
+    return leave(m,A733_PINS_OK);
+}
