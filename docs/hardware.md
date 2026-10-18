@@ -223,8 +223,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained failures; affected central targets link. The [native I2S application](i2s-application.md)
   connects the stream service to DMA0, a retained memory pool and USB0 result
   capture. Capture and recorded playback constructors pass instruction checks;
-  USB failure revokes further device work. Cyclic/full-duplex operation,
-  wire-level drain, Bluetooth PCM and physical continuity remain open.
+  USB failure revokes further device work. Optional native mimus transcription
+  accepts one to five seconds of retained 16 kHz mono PCM with the existing model
+  and formatter. Its native link and focused capture, cancellation, admission
+  and copied-output checks pass. Physical capture and inference timing remain
+  unqualified. Cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and
+  physical continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an

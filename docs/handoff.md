@@ -47,10 +47,11 @@ substantive correctness risks. The coordinator alone operates the board.
   audio capture are integrated. Eight focused composition cases pass. Native
   capture-to-mimus integration is in progress, using the existing recorded
   inference path and unchanged model. Physical headset operation remains untested.
-- I2S: native finite capture-to-mimus integration is in progress in a separate
-  worktree. It shares the recorded inference entry point with Bluetooth while
-  retaining independent capture, memory and task ownership. No microphone is
-  connected; physical capture remains untested.
+- I2S: finite capture-to-mimus is integrated for one to five seconds of 16 kHz
+  mono audio. The native image links, and focused capture, admission, cancellation
+  and copied-output checks pass. All 155 preserved repository inputs match
+  integration. No microphone is connected; physical capture and inference timing
+  remain unqualified. Evidence is under `i2s-mimus-20261017/`.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
