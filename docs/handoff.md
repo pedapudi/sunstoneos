@@ -142,9 +142,9 @@ watchdog. Its native build and focused startup, admission and host checks pass.
 Both physical attempts produced no native USB observer. The corrected launcher
 was used on the second attempt after confirmed power removal and fresh entry
 checks. Its single refusal-report read timed out; no scheduler result arrived.
-The current instance is quarantined. The coordinator retains the queue claim and
-`/tmp/sunstoneos-a733-3-1.lock`; unrelated boards remain available. Offline launch
-analysis must identify the next useful change before another physical attempt.
+User reconnection cleared the failed session after its holder stopped and the
+queue recorded the failure. The new instance has fresh DDR evidence. Offline
+launch analysis must identify the next useful change before another attempt.
 
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
@@ -238,7 +238,10 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current quarantined board instance is `003:071` on port `3-1`.
+The current board instance is `003:072` on port `3-1`, with automatic USB access.
+Fresh DDR initialization passed and returned to ROM; no native image has executed
+on this instance. Evidence is under `supervised-reconnect-20261017-072/`.
+The preceding instance, `003:071`, supplied the failed multicore observation below.
 User-confirmed power removal replaced the previous failed instance. The installed
 session rule restored access automatically, and the old holder stopped before
 the queue resumed. Fresh RAM-only DDR initialization reported 12,288 MiB; two
@@ -253,9 +256,10 @@ the tested native image and corrected launcher with fresh admission and session
 identities. No executable was rebuilt. The second attempt completed uploads,
 readback and one execution request, but no native observer appeared within
 19 seconds. The sole refusal-report read then failed with USB timeout error -7.
-Device communication stopped immediately. The process recorded in
-`observer-claim.json` retains the lock and claim; `runtime/session.json` records
-the failed transfer. Do not contact this instance before explicit power removal.
+Device communication stopped immediately. After the next user reconnection, the
+coordinator verified the replacement instance, stopped the retained process and
+closed the failed claim. Its failure record remains in `runtime/session.json`.
+Fresh entry-control observations are still required before another multicore launch.
 
 The counter-frequency correction addresses the ROM's unset frequency declaration,
 but did not establish physical startup. Neither attempt produced a diagnostic
@@ -371,9 +375,9 @@ Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
 1. Diagnose the failed multicore launch offline and identify the smallest useful
-   correction or diagnostic before another physical attempt. The current USB
-   instance is quarantined after its refusal-report transfer timed out. Retain
-   ownership until confirmed power removal, then refresh DDR and entry evidence.
+   correction or diagnostic before another physical attempt. The user reconnected
+   after the refusal-report timeout; the new instance has fresh DDR evidence.
+   Refresh the required entry observations for the selected diagnostic.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.
