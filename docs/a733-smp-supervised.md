@@ -780,3 +780,20 @@ This establishes accessible identification and power registers in the returned
 ROM state. It does not establish SGI/PPI contents or the state after another CPU
 power transition. The missing driver handshake remains a required correction,
 but these observations do not establish it as the cause of earlier failures.
+
+## Target walk controls and frame reads have a returning diagnostic
+
+The current overlay extends core 1's successful preparation boundary through
+its native EL1 walk-blocking helper. It saves the original SCTLR_EL1 and TCR_EL1,
+executes the frozen helper, and captures their resulting values. It then reads
+only GICR_TYPER and GICR_PWRR at the core-1 frame identified by the ROM survey.
+It restores both controls and requires exact readback before publishing the
+observation or accepting a shutdown request. Interrupt configuration remains
+untouched. The original native image and launcher are reused.
+
+Three focused instruction cases pass under `native-target-walks-frame-20261018/`:
+normal observation/restoration, a frame-read exception, and failed control
+restoration. The latter two retain ownership without shutdown acknowledgment or
+ROM return. Register values, exception delivery and power transitions are modeled;
+these checks cannot recover a stalled MMIO transaction. The primary agent reviewed
+the helper's disassembly and cleanup. Physical execution remains pending.

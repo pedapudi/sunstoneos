@@ -555,6 +555,47 @@ observe_requests:
     tst x17, x10
     b.ne park
 observe_copy:
+    cmp x9, #3
+    b.ne observe_copy_records
+    // Observe the native target walk-blocking helper, then restore before OFF.
+    // The frozen helper uses only x16 and returns through x30.
+    mov x17, #1
+    str x17, [x12, #488]
+    mrs x16, tcr_el1           // Displaced first instruction at 0x41008264.
+    ldr x17, =0x41008268
+    blr x17
+    mrs x17, sctlr_el1
+    str x17, [x12, #440]
+    mrs x17, tcr_el1
+    str x17, [x12, #448]
+    // ROM evidence identifies core 1 at this frame. No SGI/PPI access occurs.
+    ldr x13, =0x03480000
+    dsb sy
+target_frame_read:
+    ldr x17, [x13, #8]
+    str x17, [x12, #456]
+    ldr w17, [x13, #0x24]
+    str x17, [x12, #464]
+    dsb sy
+    ldr x16, [x12, #56]
+    msr sctlr_el1, x16
+    isb
+    ldr x16, [x12, #64]
+    msr tcr_el1, x16
+    isb
+    mrs x17, sctlr_el1
+    str x17, [x12, #472]
+    ldr x16, [x12, #56]
+    cmp x17, x16
+    b.ne park
+    mrs x17, tcr_el1
+    str x17, [x12, #480]
+    ldr x16, [x12, #64]
+    cmp x17, x16
+    b.ne park
+    mov x17, #2
+    str x17, [x12, #488]
+observe_copy_records:
     ldr x13, =0x4200e538
     add x14, x12, #128
     mov x15, #23

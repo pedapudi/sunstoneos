@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check core1 RELEASE through CPU preparation, before GICR access, then observed OFF."""
+"""Check target walk controls, identification reads and restoration before observed OFF."""
 import argparse
 import atexit
 import hashlib
@@ -52,7 +52,7 @@ def check(name,scenario='normal'):
     writes=[];controls=[];ticks=[];stopped=[];injected=[];publication=[];cleaned=[];power_reads=[];events=[];configuration_writes=[];barriers=[];power_writes=[];secondary_started=[];secondary_terminal=[];active=[0];per_core={0:registers,1:dict(registers,mpidr_el1=0x81000100,tpidr_el3=0,s3_0_c15_c2_7=0,icc_sre_el3=0,icc_igrpen0_el1=0,icc_igrpen1_el3=0)}
     if scenario in ('target-admission','capture-fault'):per_core[1]['sctlr_el1']=0xc51838
     capture_entries=[]
-    frame_cores=[4,7,6,0,3,1,5,2];rbase=0x03460000+frame_cores.index(1)*0x20000;gbase=rbase+0x10000
+    frame_cores=list(range(8));rbase=0x03480000;gbase=rbase+0x10000
     original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0xa0000002,'pending':1 if scenario=='pending-refusal' else 0,
         'active':0,'group':0x1122aabb,'modifier':0x00550000,'config':0xaaaaaaaa,'priority':0x12345678}
     rdist=original_rdist.copy();rdist['rwp']=0;rdist_writes=[];typer_reads=[];commands=[];private_wait_seen=[];sleep_attempted=[]
@@ -65,7 +65,8 @@ def check(name,scenario='normal'):
         if active[0]==1 and address==labels['secondary_wait_request'] and rdist_state==0:private_wait_seen.append(address)
         observation_state=struct.unpack('<Q',uc.mem_read(0x42002700,8))[0]
         if address==labels['observe_prewrite']:capture_entries.append(active[0])
-        capture_fault=scenario=='capture-fault' and active[0]==1 and address==labels['observe_requests'] and observation_state==1
+        capture_fault=(scenario=='capture-fault' and active[0]==1 and address==labels['observe_requests'] and observation_state==1 or
+            scenario=='frame-read-fault' and active[0]==1 and address==labels['target_frame_read'])
         if active[0]==1 and address==labels['target_block']:
             for register in range(20,26):uc.reg_write(UC_ARM64_REG_X0+register,0xdead0000+register)
         if capture_fault and not injected:
@@ -95,7 +96,7 @@ def check(name,scenario='normal'):
                 cleanup_state=struct.unpack('<Q',uc.mem_read(0x42002100,8))[0]
                 activation_state=struct.unpack('<Q',uc.mem_read(0x42002400,8))[0]
                 rdist_state=struct.unpack('<Q',uc.mem_read(0x42002500,8))[0]
-                step=500000 if (scenario=='capture-fault' and secondary_terminal or scenario=='ca-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
+                step=500000 if (scenario in ('capture-fault','frame-read-fault','target-restore-fault') and secondary_terminal or scenario=='ca-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
                 value=(ticks[-1] if ticks else 200)+step;ticks.append(value)
             else:assert key in registers,(name,key,hex(address));value=registers[key]
             uc.reg_write(UC_ARM64_REG_X0+int(read[1]),value);uc.reg_write(UC_ARM64_REG_PC,address+4)
@@ -107,7 +108,11 @@ def check(name,scenario='normal'):
             if key=='rmr_el3':
                 assert active[0]==0,'Secondary must never execute RMR.'
                 assert value==2 and writes[-2:]==[[0x08001004,4,0x20],[0x08001008,4,0]];stopped.append('return');uc.emu_stop()
-            else:registers[key]=value;uc.reg_write(UC_ARM64_REG_PC,address+4)
+            else:
+                if scenario=='target-restore-fault' and active[0]==1 and key=='sctlr_el1' and value==0xc50838:
+                    injected.append(True)  # Model a failed restoration readback.
+                else:registers[key]=value
+                uc.reg_write(UC_ARM64_REG_PC,address+4)
         elif text=='wfi':
             if active[0]:
                 secondary_terminal.append(address)
@@ -115,7 +120,12 @@ def check(name,scenario='normal'):
             else:stopped.append('park')
             uc.emu_stop()
     def read(uc,access,address,size,value,unused):
-        assert not 0x03460000<=address<0x03560000, 'No GICR reads on either CPU.'
+        if 0x03460000<=address<0x03560000:
+            assert active[0]==1 and address in (rbase+8,rbase+0x24), 'Only target frame identity/power reads.'
+            assert per_core[1]['sctlr_el1']==0xc50839 and per_core[1]['tcr_el1']==0x800080
+            assert size==(8 if address==rbase+8 else 4)
+            data=(0x100<<32)|0x121 if address==rbase+8 else 0x100
+            uc.mem_write(address,data.to_bytes(size,'little'));typer_reads.append(address);return
         if address in power_registers:
             assert size==4;power_reads.append(address)
             data=power_registers[address]
@@ -192,11 +202,12 @@ def check(name,scenario='normal'):
     activation=host.activation_snapshot(bytes(cpu.mem_read(0x42002400,256)))
     rdist_record=host.rdist_snapshot(bytes(cpu.mem_read(0x42002500,512)))
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
-    if scenario=='capture-fault':
-        assert stopped==['park'] and observation['state']==1 and observation['origin']==1
+    if scenario in ('capture-fault','frame-read-fault','target-restore-fault'):
+        assert stopped==['park'] and observation['state']==1 and observation['origin']==(1 if scenario=='capture-fault' else 3)
         assert capture_entries==[1] and len(injected)==1 and activation['state']==1
         assert configuration['state']==snapshot['state']==rdist_record['state']==1
-        assert not typer_reads and not rdist_writes and commands==[1,2] and not activation['request'] and not activation['ack']
+        assert (not typer_reads if scenario!='target-restore-fault' else typer_reads==[rbase+8,rbase+0x24])
+        assert not rdist_writes and commands==[1,2] and not activation['request'] and not activation['ack']
         assert not any(key in ('rmr_el3','s3_0_c15_c2_7') for core,key,value in controls)
         reports.append({'name':name,'retained':True,'observation':observation,'activation':activation,'redistributor':rdist_record,'capture_entries':capture_entries,'system_writes':controls});return
     assert stopped==['return'],(name,hex(cpu.reg_read(UC_ARM64_REG_PC)),activation,snapshot['configuration'],bytes(cpu.mem_read(host.REPORT,48)).hex())
@@ -227,15 +238,20 @@ def check(name,scenario='normal'):
     assert power_writes==[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
         [1,2,0x07050224,0x40],[1,2,0x07050204,0x10002],[0,4,0x07050204,0x10000],[0,4,0x07050224,0x40]]
     assert observation['core']==1 and observation['MPIDR_EL1']==0x81000100
-    assert observation['gicr_state']==rdist_record['state']==1 and not typer_reads
+    assert observation['gicr_state']==rdist_record['state']==1
     assert commands==[1,2] and secondary['owner']['state']==2 and secondary['owner']['phase']==5
     assert secondary['report']['state']==2 and not injected
-    assert not [[key,value] for core,key,value in controls if core==1 and key in ('sctlr_el1','tcr_el1')]
+    target_controls=[[key,value] for core,key,value in controls if core==1 and key in ('sctlr_el1','tcr_el1')]
     if scenario=='target-admission':
+        assert not target_controls and not typer_reads
         assert observation['origin']==1 and observation['SCTLR_EL1']==0xc51838
         assert observation['controller']['state']==5 and observation['controller']['index']==2 and observation['controller']['error']==3
         assert observation['controller']['core_record']['state']==6
     else:
+        assert target_controls==[['tcr_el1',0x800080],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0]]
+        assert typer_reads==[rbase+8,rbase+0x24]
+        assert observation['walks']==dict(blocked_sctlr1=0xc50839,blocked_tcr1=0x800080,
+            typer=(0x100<<32)|0x121,pwrr=0x100,restored_sctlr1=0xc50838,restored_tcr1=0,state=2)
         assert observation['origin']==3 and observation['SCTLR_EL1']==0xc50838 and observation['TCR_EL1']==0
         assert observation['controller']['state']==4 and observation['controller']['error']==0
         assert observation['controller']['core']==1 and observation['controller']['identity']['mpidr']==0x81000100
@@ -247,10 +263,12 @@ def check(name,scenario='normal'):
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
     reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries})
-check('released-target-prepared-before-walks-and-gicr')
+check('released-target-walks-frame-and-restoration')
 check('released-target-preparation-refusal-observed-without-gicr','target-admission')
 check('failure-capture-read-fault-retains-without-retry','capture-fault')
+check('target-frame-read-fault-retains-without-shutdown','frame-read-fault')
+check('target-control-restore-fault-retains-without-shutdown','target-restore-fault')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'execution_profile':host.PROFILE,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual RELEASE, CPU preparation, eligible refusal, capture retention and OFF paths with modeled system registers, exceptions, distributor and PPU. Any GICR access is rejected. Does not identify physical083/084 failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
-print(f'PASS {len(reports)} focused RELEASE-before-GICR cases; observed OFF or retained capture fault.')
+    'limits':'Actual RELEASE, native walk blocking, frame identity/power reads and restored OFF with modeled system registers, exceptions, distributor and PPU. No SGI/PPI access or GICR writes. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
+print(f'PASS {len(reports)} focused target walk/frame cases; observed OFF or retained failure.')

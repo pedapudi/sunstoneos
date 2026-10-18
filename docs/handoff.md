@@ -107,8 +107,9 @@ operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board is on port `3-1`, now USB instance `003:089` after a
 successful diagnostic return. The second is on `3-3`, instance `003:088`, and
-responds as A733. Its user-reported 32 GB microSD remains untouched; DDR and
-platform qualification on that board are pending. Multicore work belongs directly
+responds as A733. Its user-reported 32 GB microSD remains untouched; DDR initialization, two 4 KiB page comparisons and a returning SRAM platform
+survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
+12 GiB; full capacity and device admission remain unqualified. Multicore work belongs directly
 to the primary agent, without delegation.
 
 - Startup diagnosis: core 1 accepts native RELEASE, publishes RELEASED and
@@ -416,9 +417,9 @@ tracks the deferred native NPU toolkit. Suitable open-source dependencies remain
 preferred; opaque replacements follow hardware functionality and optimization.
 
 Second-board DDR/survey proposals are prepared offline under
-`second-board-20261018-3-3/preparation/`. The coordinator must review the recovery
-plan and execute each phase through the second board's queue. No DDR or SD
-operation has run on that board. The SD host now requires the native client's two
+`second-board-20261018-3-3/preparation/`. The reviewed recovery
+plan remains preserved. Both phases passed on that board with ROM responsive
+and survey SRAM restored; their queue claims are closed. No SD operation has run. The SD host now requires the native client's two
 successful reads as well as the USB results. Five focused host cases pass; the
 frozen native image was reused.
 

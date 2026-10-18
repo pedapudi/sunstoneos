@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe core1 RELEASE and CPU preparation before walk blocking or redistributor access."""
+"""Observe core1 walk blocking and GIC frame identity, restore controls, then verify OFF."""
 import argparse
 import hashlib
 import importlib.util
@@ -23,7 +23,7 @@ NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
 OVERLAY=(0x41020000,0x2000)
-PROFILE='core1-release-pre-gic-v1'
+PROFILE='core1-walks-frame-read-v1'
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
@@ -122,7 +122,9 @@ def observation_snapshot(raw):
     names=('state','origin','epoch','core','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','TCR_EL1',
            'ESR_EL3','ELR_EL3','FAR_EL3','control','mode','gicr_state','MIDR_EL1')
     return {**dict(zip(names,struct.unpack_from('<16Q',raw))),
-            'controller':controller_snapshot(raw[128:312],raw[312:440])}
+            'controller':controller_snapshot(raw[128:312],raw[312:440]),
+            'walks':dict(zip(('blocked_sctlr1','blocked_tcr1','typer','pwrr',
+                'restored_sctlr1','restored_tcr1','state'),struct.unpack_from('<7Q',raw,440)))}
 
 def rdist_snapshot(raw):
     require(len(raw)==512,'Short redistributor snapshot.')
@@ -265,6 +267,14 @@ def run(a):
                 require(secondary['command']['state']==secondary['report']['state']==2 and secondary['command']['epoch']==observation['epoch'], 'Actual RELEASE not observed.')
                 require(record['gic']['state']==3 and record['gic']['configuration']['state']==3 and record['result']['restore_state']==3, 'Restoration incomplete.')
                 record['preparation_observed']=observation['origin']==3
+                if record['preparation_observed']:
+                    walks=observation['walks']
+                    require(walks['state']==2 and walks['restored_sctlr1']==observation['SCTLR_EL1'] and
+                        walks['restored_tcr1']==observation['TCR_EL1'], 'Target control restoration incomplete.')
+                    require(walks['blocked_sctlr1']==(observation['SCTLR_EL1']|1) and
+                        walks['blocked_tcr1']==(observation['TCR_EL1']|0x800080), 'Target walk blocking differs.')
+                    require(walks['typer']>>32==0x100, 'Observed frame is not core 1.')
+                    record['target_walks_and_frame_observed']=True
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
