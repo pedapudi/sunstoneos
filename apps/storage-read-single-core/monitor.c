@@ -1,5 +1,5 @@
 #include "boot.h"
-#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE) || defined(SUNSTONE_THERMAL_SINGLE_CORE)
 #include "session.h"
 #include "a733_device_memory_layout.h"
 #include "a733_cached_memory.h"
@@ -22,6 +22,10 @@ const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *c
 {return c==&admission?gpu_admission.session_digest:NULL;}
 const uint8_t *gpu_application_entry_digest(const struct a733_smp_contract *c)
 {return c==&admission?gpu_admission.entry_digest:NULL;}
+#elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
+static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+static struct a733_smp_contract thermal_runtime_contract __attribute__((section(".thermal_runtime_retained")));
+static unsigned thermal_runtime_secondary_off __attribute__((section(".thermal_runtime_retained")));
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
 static struct a733_smp_contract board_runtime_contract __attribute__((section(".board_runtime_retained")));
@@ -83,6 +87,10 @@ void sd_single_core_monitor_init(void)
     for(uint64_t *p=__gpu_retained_start;p<__gpu_retained_end;++p)*p=0;
     for(unsigned i=0;i<sizeof(gpu_admission)/8;++i)((uint64_t *)&gpu_admission)[i]=((const volatile uint64_t *)source)[i];
 #else
+#ifdef SUNSTONE_THERMAL_SINGLE_CORE
+    extern uint64_t __thermal_retained_start[],__thermal_retained_end[];
+    for(uint64_t *p=__thermal_retained_start;p<__thermal_retained_end;++p)*p=0;
+#endif
 #ifdef SUNSTONE_BOARD_SINGLE_CORE
     extern uint64_t __board_retained_start[],__board_retained_end[];
     for(uint64_t *p=__board_retained_start;p<__board_retained_end;++p)*p=0;
@@ -115,6 +123,12 @@ void sd_single_core_monitor_init(void)
      * Both regimes are still cache-disabled; no table has been adopted. */
     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+#elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
+    extern int thermal_session_prepare(const struct a733_smp_contract *);
+    if(!secondaries_off()||!board_session_prepare(&admission)||
+       !thermal_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
+    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
+    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     extern int board_identity_prepare(uint64_t);
     if(!secondaries_off()||!board_session_prepare(&admission)||
@@ -138,6 +152,8 @@ void sd_single_core_monitor_init(void)
     secondary_off_admitted=1;
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     gpu_runtime_contract=admission;gpu_runtime_secondary_off=1;
+#elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
+    thermal_runtime_contract=admission;thermal_runtime_secondary_off=1;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     board_runtime_contract=admission;board_runtime_secondary_off=1;
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)
@@ -231,6 +247,15 @@ void sd_single_core_monitor_init(void)
     extern int rtc_boot_route(void);
     if(!rtc_boot_route())finish(1);
 #endif
+#ifdef SUNSTONE_THERMAL_SINGLE_CORE
+    /* Same Group1NS/level/priority/boot-CPU route as thermal's accepted boot. */
+    mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1u<<7));
+    mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1u<<7));
+    mmio_write(GICD_BASE+0xc10,mmio_read(GICD_BASE+0xc10)&~(3u<<14));
+    mmio_write(GICD_BASE+0x444,(mmio_read(GICD_BASE+0x444)&0x00ffffff)|0xd8000000);
+    *(volatile uint64_t *)(GICD_BASE+0x6238)=0;
+    __asm__ volatile("dsb sy":::"memory");
+#endif
     value = admission.diagnostic_deadline;
     __asm__ volatile("msr cntps_cval_el1, %0" :: "r"(value));
     value = 1;
@@ -255,6 +280,8 @@ const struct a733_smp_contract *sd_single_core_contract(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return &gpu_runtime_contract;
+#elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
+    return &thermal_runtime_contract;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     return &board_runtime_contract;
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)
@@ -270,6 +297,8 @@ int sd_single_core_secondaries_admitted(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return gpu_runtime_secondary_off==1;
+#elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
+    return thermal_runtime_secondary_off==1;
 #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
     return board_runtime_secondary_off==1;
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)

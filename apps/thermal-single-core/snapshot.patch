@@ -1,0 +1,11 @@
+--- apps/thermal/snapshot.c
++++ snapshot.c
+@@ -7,7 +7,7 @@
+ static struct {
+     struct thermal_session session;
+     unsigned attempted,ready;
+-} admitted;
++} admitted __attribute__((section(".thermal_runtime_retained")));
+ int thermal_session_prepare(const struct a733_smp_contract *contract)
+ {
+     if(admitted.attempted)return 0;

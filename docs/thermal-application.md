@@ -105,3 +105,53 @@ failed instance or treat cable reconnection alone as resource recovery.
 
 Automatic throttling, shutdown policy and physical accuracy require later work;
 this finite observation path does not implement thermal policy.
+
+## Boot-CPU startup preserves the five-sensor service
+
+`apps/thermal-single-core` builds `sunstone-a733-thermal-single-core.elf` using
+the existing single-core monitor, cached mappings and FreeRTOS SRE port. Its
+profile is `thermal-single-core-supervised-v1`. The image retains the existing
+five-sensor controller, calibration, thresholds, shared clock/mutex ownership,
+two-set acquisition and copied USB output. It links no secondary startup or
+SMP barrier and requires all seven secondary CPUs to remain off.
+
+The monitor authenticates the board prefix and full thermal session before
+provider construction. Target-local patches retain both snapshots and the
+bounded runtime contract outside EL1-cleared BSS. The monitor clears this state
+before admission. EL1 cannot access secure monitor state. Thermal, calibration,
+clock and GIC registers use the required identity-mapped, outer-shareable Device
+memory. IRQ71 retains the accepted Group1NS, level-high, priority and boot-CPU
+route. The single-core IRQ dispatcher calls the existing ISR, which masks its
+source and defers sensor service. Task/ISR critical sections use the SRE port.
+DAIF masking is restored after static task construction, before provider binding
+and scheduler startup.
+
+The existing thermal preparation and capture tools accept the distinct profile.
+Preparation checks exact ELF identity, immutable geometry, entry and absence of
+SMP startup symbols. USB ROM takeover mode two is required for this profile;
+the existing profile retains mode one. The common single-core platform record
+binds actual instruction publication, secondary OFF state, USB takeover and
+resource ownership. Thermal-specific electrical, clock, security and retention
+evidence requirements remain in force. Frozen platform condition bytes are
+validated from the protected bundle.
+
+Thirteen startup/interrupt cases and six host cases pass under
+`~/.cache/sunstoneos/evidence/thermal-single-core-20261018/`. The startup cases
+execute actual session admission, descriptor walks, provider/thermal/task
+construction and IRQ71 dispatch. The ISR check observes deferred notification
+without sensor-register reads. System registers, counter and GIC responses are
+modeled. Host capture reuses the accepted calibrated two-set payload with a new
+session binding. Existing calibration, arithmetic, controller and service cases
+are reused without replay. Legacy frozen-bundle validation also passes.
+Focused independent source/ELF review found no new blocker. Physical acquisition,
+accuracy and interrupt delivery remain unqualified.
+
+The coordinator may submit one RAM-only attempt on a freshly admitted target,
+using the existing one-second startup, 60-second lifetime and 59-second capture.
+Actual memory/publication, secondary OFF, USB takeover and thermal-specific
+clock, supply, security, IRQ and ownership evidence must bind the frozen image.
+Expected output remains two fresh valid five-channel records with factory
+calibration. No heating, forced threshold crossing or threshold change is
+requested. Stop at the first transport failure or disappearance and retain every
+resource until confirmed whole-board power removal. Software fixtures grant no
+physical admission; alarm-free output does not qualify IRQ delivery.
