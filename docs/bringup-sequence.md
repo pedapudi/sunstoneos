@@ -89,11 +89,13 @@ workloads, cancellation, errors, recovery, and applicable power transitions.
 Use the [validation policy](validation.md) to select checks for changed behavior
 and reuse evidence whose inputs remain valid.
 
-CPU, GPU, and NPU optimization follows functional coverage. The established
-mimus compute target is at most 0.25 times audio duration: a ten-second
-recording permits at most 2.5 seconds of recognition computation. Preserve
-the model and recorded-reference behavior. Measure capture-to-result latency
-separately from compute time.
+CPU, GPU, and NPU optimization follows functional coverage. The accepted
+mimus target is complete warm recognition within 0.05 times audio duration:
+a ten-second recording permits 500 ms from available PCM to formatted text.
+This includes feature extraction, inference, decoding, punctuation, transfers
+and synchronization. The 0.01-times target is a stretch objective for bounded
+investigation. Preserve the model and established accuracy requirements.
+Report startup time and live end-of-speech latency separately.
 
 The [physical USB application result](mimus-usb.md#physical-integration-evidence)
 records 19.588 seconds of compute for approximately 8.87 seconds of audio,

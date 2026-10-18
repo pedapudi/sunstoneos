@@ -100,7 +100,7 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | DMA integration worker | Native session and copy entry integrated; complete-image handoff and larger pool binding remain |
 | Audio worker | Bounded I2S periods integrated; native stream-pool binding and wider modes remain |
 | HDMI worker | Actual PHY/controller and TV0 timing, sink discovery and diagnostic output |
-| PCIe worker | Actual shared-resource binding, PHY, link and endpoint configuration |
+| PCIe worker | Initial native root-port preparation integrated; physical link, endpoint operations, interrupts and DMA remain |
 | USB host worker | Exposed USB2/DWC3/xHCI and Type-C integration; schematic marks USB1 data pins unconnected |
 | Device memory worker | Larger native reservations for concurrent graphics, camera, video and mimus |
 | GPU worker | Native free-list and hardware render-target resource binding toward actual graphics workloads |
@@ -108,8 +108,10 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 
 The parallel workers stopped at an account usage limit on the latest continuation.
 Their worktrees and evidence remain intact. Do not assume an assigned worker is
-still executing; inspect its live status before resuming. PCIe has reported a
-passed composed batch but still needs final handoff and central integration.
+still executing; inspect its live status before resuming. PCIe's passed composed
+batch and native sources are integrated. Its 197 recorded inputs and 17 artifacts
+match the saved evidence. Dependency scans confirm that central header changes
+do not affect these units, so the workload was not repeated.
 HDMI has accepted runtime/fixture review but no integrated result. The I2S and
 DMA integration reports still need final reconciliation, including the DMA
 assembly-source provenance supplement. Other assigned implementations remain
@@ -252,6 +254,12 @@ Documentation, clean integration and commits do not justify rerunning workloads.
 The dashboard requires no separate status maintenance or recurring browser tests.
 
 ## Next actions
+
+The accepted [goal](goal.md) prioritizes complete native device integration.
+After hardware functionality, warm mimus recognition must finish within 0.05
+times audio duration; 0.01 times is a stretch target for bounded investigation.
+Startup and live end-of-speech latency are separate measurements. Existing
+recordings and model identities remain the reference.
 
 1. Qualify independent watchdog recovery before new peripheral-access sequences.
    Confirm a stable, removable BOOT-to-GND connection using the

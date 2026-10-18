@@ -2183,5 +2183,119 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_core.c",
     "archive": "bluetooth-audio/net/bluetooth/hci_core.c",
     "sha256": "0dd67e642db52459a21f84a11ca1db6f97345defc708384d4d0e44697711259c"
+  },
+  "pcie-Kconfig": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/Kconfig",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/Kconfig",
+    "sha256": "8435e64df959eb80efa5633815452fc9a625109d7a362157c539e8c9d28a1c95"
+  },
+  "pcie-Makefile": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/Makefile",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/Makefile",
+    "sha256": "7da83ba90ed10f0aaab36f5e1d338b2716b56d94c69d95f54c4af522364b7f21"
+  },
+  "pcie-pcie-sunxi-dma-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi-dma.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi-dma.c",
+    "sha256": "2c491b72677591f741e12d1680506c0e4d8d61ab415dad9571c5095f8b380784"
+  },
+  "pcie-pcie-sunxi-dma-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi-dma.h",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi-dma.h",
+    "sha256": "e9e00511e4c3d66f6b2b08ab1235acefa4064c0425f8da18493dd382f7555785"
+  },
+  "pcie-pcie-sunxi-ep-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi-ep.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi-ep.c",
+    "sha256": "d0613dc4e881f8d923ff884df125df98a54172d0149c4bd15ea9b194c0393d8f"
+  },
+  "pcie-pcie-sunxi-plat-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi-plat.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi-plat.c",
+    "sha256": "f64e85ee9efbd1324abb0e36771e5990fbd76369e157298fa7226e96bf34f73a"
+  },
+  "pcie-pcie-sunxi-rc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi-rc.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi-rc.c",
+    "sha256": "884f57727b1a03704034defb2f033672185f564205c8b0187cb37177f520750a"
+  },
+  "pcie-pcie-sunxi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/allwinner/pcie-sunxi.h",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-sunxi.h",
+    "sha256": "f349423f5d2744b9ed5331c9c89718806b1f599ab5135e898a0b902a84edd4a7"
+  },
+  "pcie-pcie-dw-sunxi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/dwc/pcie-dw-sunxi.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-dw-sunxi.c",
+    "sha256": "cff6add87d1a7a9deda841315dd01f88d9252448bcebae7b8213bc737c12589e"
+  },
+  "pcie-pcie-dw-sunxi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pci/controller/dwc/pcie-dw-sunxi.h",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pcie-dw-sunxi.h",
+    "sha256": "a9155c6eb10d11392963baf928d946b55076a6a87508dda842eef9160fa6f2d9"
+  },
+  "pcie-sunxi-cadence-combophy-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/phy/sunxi-cadence-combophy.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/sunxi-cadence-combophy.c",
+    "sha256": "84b5471d3b7bbb2ae247b75459135dff0a1d40eef9a2bb994df14eb799b5c082"
+  },
+  "pcie-pci_endpoint_test-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/misc/pci_endpoint_test.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pci_endpoint_test.c",
+    "sha256": "00717f70825f1c31f0b78a5478a3d955f8b852b00224a385f0a770feeb081b2e"
+  },
+  "pcie-pci-epf-test-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/pci/endpoint/functions/pci-epf-test.c",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pci-epf-test.c",
+    "sha256": "cb5cc6761615f0a0ef08344318bddd38a843aacea3398e521ab373f6f08476a8"
+  },
+  "pcie-pci-test-function-rst": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/Documentation/PCI/endpoint/pci-test-function.rst",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pci-test-function.rst",
+    "sha256": "2d98c26bdc99ee8ad41f363e55e43c3c331a3fd0db346d618f5dbd29a01573f2"
+  },
+  "pcie-pci-test-howto-rst": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/Documentation/PCI/endpoint/pci-test-howto.rst",
+    "archive": "pcie/pinned/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/pci-test-howto.rst",
+    "sha256": "534c9da808a4fbb89d07075998e3dfba2967c100a50f69a947da9c8702b3752b"
+  },
+  "pcie-b791be842935-pcie-sunxi-plat-c": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/pci/pcie-sunxi-plat.c",
+    "archive": "pcie/pinned/b791be842935b27268ae3d00e943a9075495f30a/pcie-sunxi-plat.c",
+    "sha256": "1a1d40f339a50199f6a0064304dc2c03e1bb2abe56f4baaef3c18d14f96fae1a"
+  },
+  "pcie-pcie_sunxi_rc-c": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/pci/pcie_sunxi_rc.c",
+    "archive": "pcie/pinned/b791be842935b27268ae3d00e943a9075495f30a/pcie_sunxi_rc.c",
+    "sha256": "15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd"
+  },
+  "pcie-b791be842935-pcie-sunxi-h": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/pci/pcie-sunxi.h",
+    "archive": "pcie/pinned/b791be842935b27268ae3d00e943a9075495f30a/pcie-sunxi.h",
+    "sha256": "80d67aa3b18c5d18e2eb9fb2f625b46cd045da5dcb74e804d840efcdc2df8af2"
+  },
+  "pcie-b791be842935-sunxi-cadence-combophy-c": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/phy/allwinner/sunxi-cadence-combophy.c",
+    "archive": "pcie/pinned/b791be842935b27268ae3d00e943a9075495f30a/sunxi-cadence-combophy.c",
+    "sha256": "1522200ccdbe156b756272e22d7886712d7a64fd07050fb99cadc5f8dab0400b"
   }
 }

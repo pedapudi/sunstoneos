@@ -14,6 +14,12 @@ its recorded operational and recovery criteria on physical hardware.
 Every row below has **no qualification evidence**. Unless stated below, its
 implementation is **planned**. Partial results apply only to the stated scope:
 
+- PCIe: **implemented** [native root-port preparation](pcie.md) with shared
+  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
+  observation and read-only configuration access to one direct endpoint.
+  Source comparison, composed host checks and native compilation pass. Physical
+  link operation, endpoint power admission, BAR allocation, interrupts, DMA,
+  Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).

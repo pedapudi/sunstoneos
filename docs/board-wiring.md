@@ -21,6 +21,12 @@ python3 tools/fetch-sources.py board-schematic board-position board-manual
 
 ## BOOT and GND provide a physical FEL input
 
+The board has test pads rather than a BOOT pushbutton. Connecting BOOT to GND
+requires a physical contact fixture or removable wire connection. This is a
+preparation step for the protected watchdog trial, not a requirement for normal
+USB reconnection or software integration. Do not attach anything until the actual
+board's pad layout is identified and power is disconnected.
+
 The [manual](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view),
 section 2.9, printed pages 34–35 (PDF pages 41–42), instructs connecting the
 BOOT and GND test points before applying USB power to enter FEL. FEL is the

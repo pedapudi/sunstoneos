@@ -130,7 +130,7 @@ The initial portable image SHA-256 is
 `01e0e97a19e02fa06c5fbee40e93055ec23e621ae154cec7a3059cf552ed62d2`;
 its ELF hash begins `d1deb6dbc3a0d919`. Compute time was 39.086 seconds in this
 single run, about 4.41 times the audio duration. There is no repeatability range.
-The required compute target is at most 0.25 times audio duration. This initial
+The accepted warm recognition target is at most 0.05 times audio duration. This initial
 portable result does not meet that target.
 
 The board returned to ROM with stage 5, status 0, and automatic USB access.
@@ -218,7 +218,7 @@ capitals, and formatted output all matched the host reference.
 | Recognition arena peak | 1,761,840 bytes | 1,761,840 bytes |
 | Allocator reservation peak | 105,984 bytes | 105,984 bytes |
 
-The compute-to-audio ratio is about 2.20, so the required maximum of 0.25 remains
+The compute-to-audio ratio is about 2.20, so the required maximum of 0.05 remains
 unmet. The [native USB session](mimus-usb.md#physical-integration-evidence) adds broader recorded-audio parity. Physical kernel
 boundary checks, repeatability, and other concurrent workloads remain unqualified.
 
