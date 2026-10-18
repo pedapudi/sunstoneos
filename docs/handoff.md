@@ -64,7 +64,9 @@ pools remain unusable. Artifacts and source comparisons are preserved under
 cases exercise submission and retained failures with poisoned output, so they do
 not establish successful GPU rendering. Native camera evidence and matching
 integrated source identities are recorded in `camera-native-20261017/handoff.json`.
-Its complete image/provider admission and physical capture remain outstanding.
+Its `root-reconcile.json` records the shared clock and PMIC profile extensions;
+the camera's exercised scopes and rail decoding are unchanged. Complete
+image/provider admission and physical capture remain outstanding.
 
 The compact DMA image includes native result frames, privilege routing and a
 host capture path. Focused checks passed on the linked image using refused
