@@ -2515,5 +2515,11 @@
     "url": "https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf",
     "archive": "usb2-electrical/usb-typec-r2.0.pdf",
     "sha256": "87d15160bf8bd25129b27e0b7c5e261ed0b1806b3b0d3a7b5d8b1eb783dc9981"
+  },
+  "cpu-continue-gic600-power": {
+    "revision": "0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e",
+    "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c",
+    "archive": "cpu-continue/drivers/arm/gic/v3/gic-x00.c",
+    "sha256": "81d9f07610756503b5eb1ee71212c5b19cc3ee53e2f731e7dfac4808afcc34a6"
   }
 }

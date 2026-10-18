@@ -8,6 +8,9 @@ struct model {
     uint32_t control,waker,enabled,pending,active,group,modifier,config,priority;
     unsigned accesses,calls,fail_at,late_at,stuck,bad_frame,bad_distributor,hotplug_writes;
     unsigned busy,wake_wait,sleep_wait;
+    uint32_t pwrr;
+    unsigned power_writes,group_wait,group_stuck,power_stuck,reject_once;
+    unsigned power_access[3];
 };
 static uintptr_t frame(unsigned core) {return 0x03460000+((core+3)%8)*0x20000;}
 static int result(struct model *m)
@@ -29,9 +32,15 @@ static int read64(void *ctx,uintptr_t address,uint64_t *out)
 static int read32(void *ctx,uintptr_t address,uint32_t *out)
 {
     struct model *m=ctx;uintptr_t c=0x07050200+m->cpu.core*4,r=frame(m->cpu.core),g=r+0x10000;
+    if(address>=r && address<r+0x20000 && address!=r+0x24)assert(!(m->pwrr&1));
     if(address==0x03400000)*out=m->bad_distributor?0x73:0x33;
     else if(address==c)*out=m->control;
     else if(address==c+0x20)*out=0x40;
+    else if(address==r+0x24) {
+        m->power_access[m->power_writes?2:0]=m->accesses+1;
+        *out=m->pwrr;
+        if(m->group_wait && !m->group_stuck && --m->group_wait==0)m->pwrr=13;
+    }
     else if(address==r) {*out=m->busy?8:0;if(m->busy && !m->stuck)--m->busy;}
     else if(address==r+0x14) {
         if(m->sleep_wait && --m->sleep_wait==0)m->waker|=4;
@@ -50,7 +59,14 @@ static int read32(void *ctx,uintptr_t address,uint32_t *out)
 static int write32(void *ctx,uintptr_t address,uint32_t value)
 {
     struct model *m=ctx;uintptr_t c=0x07050200+m->cpu.core*4,r=frame(m->cpu.core),g=r+0x10000;
+    if(address>=r && address<r+0x20000 && address!=r+0x24)assert(!(m->pwrr&1));
     if(address==c) {assert(m->cpu.core && value==(m->control&~2u));m->control=value;++m->hotplug_writes;}
+    else if(address==r+0x24) {
+        assert(value==0 && ((m->pwrr>>2)&1)==((m->pwrr>>3)&1));
+        m->power_access[1]=m->accesses+1;++m->power_writes;
+        if(m->reject_once)m->reject_once=0;
+        else if(!m->power_stuck)m->pwrr=0;
+    }
     else if(address==r+0x14) {
         assert(!(m->waker&2) || (m->waker&4));
         assert(value==(m->waker&~2u));m->waker=value;m->wake_wait=2;
@@ -70,6 +86,7 @@ static int write32(void *ctx,uintptr_t address,uint32_t value)
 static void setup(struct model *m,unsigned core)
 {
     memset(m,0,sizeof(*m));m->now=1;m->control=0x42;m->waker=0x12;m->sleep_wait=2;
+    m->pwrr=13;
     m->enabled=UINT32_MAX;m->pending=UINT32_MAX;m->active=UINT32_MAX;
     m->modifier=UINT32_MAX;m->config=UINT32_MAX;m->priority=0x76543210;
     struct a733_cpu_continue_config c={.ops={read32,read64,write32,clock_read},.context=m,
@@ -84,8 +101,31 @@ static unsigned run(struct model *m)
 static void quiet(struct model *m)
 {unsigned n=m->calls;for(unsigned i=0;i<3;++i)a733_cpu_continue_poll(&m->cpu);assert(n==m->calls);}
 static _Alignas(4096) uint64_t l1[512],l2[512];
-int main(void)
+static void power_cases(void)
 {
+    struct model m;unsigned positions[3];
+    for(unsigned core=0;core<2;++core) {
+        setup(&m,core);if(!core)m.pwrr=0;
+        assert(run(&m)==A733_CONTINUE_GIC_READY && m.power_writes==1 && !m.pwrr);
+        memcpy(positions,m.power_access,sizeof(positions));quiet(&m);
+    }
+    setup(&m,1);m.pwrr=5;m.group_wait=3;m.reject_once=1;
+    assert(run(&m)==A733_CONTINUE_GIC_READY && m.power_writes==2 && !m.pwrr);quiet(&m);
+    for(unsigned i=0;i<3;++i) {
+        setup(&m,1);m.fail_at=positions[i];
+        assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==1);quiet(&m);
+    }
+    setup(&m,1);m.pwrr=5;m.group_wait=1;m.group_stuck=1;
+    assert(run(&m)==A733_CONTINUE_PENDING && !m.power_writes);
+    m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2);quiet(&m);
+    setup(&m,1);m.power_stuck=1;
+    assert(run(&m)==A733_CONTINUE_PENDING && m.power_writes);
+    m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2);quiet(&m);
+    puts("PASS local GIC-600 power: primary/secondary, group transition and rejected request, three access failures, two deadline failures");
+}
+int main(int argc,char **argv)
+{
+    if(argc==2 && !strcmp(argv[1],"--power")) {power_cases();return 0;}
     struct model m;unsigned operations=0;
     for(unsigned core=0;core<8;++core) {
         setup(&m,core);assert(run(&m)==A733_CONTINUE_GIC_READY);

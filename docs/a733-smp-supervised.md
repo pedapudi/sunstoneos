@@ -723,7 +723,7 @@ One affected overlay build and three focused instruction cases passed: successfu
 target preparation with poisoned C callee-saved registers, target SCTLR_EL1
 preparation refusal, and a capture read exception that retains ownership. Every redistributor read or write fails
 the fixture. These cases model architectural registers, exceptions, distributor
-and PPU behavior; physical return and CPU preparation still require observation.
+and PPU behavior. Physical release and CPU preparation also pass as described below.
 The image, software result and frozen inputs are under
 `~/.cache/sunstoneos/evidence/native-secondary-release-pre-gic-20261018/`.
 The earlier GIC_READY and pre-write observer images remain immutable under
@@ -737,7 +737,29 @@ that cold-session history; prior RAM state and uninterrupted ownership were disc
 
 All 27 host transactions completed, including the launch acknowledgment. No new
 ROM instance appeared within ten seconds, and no diagnostic report was recovered.
-The failure location remains unknown. The runner retains the board lock, queue
-claim and backups; no retry or later device command occurred. Evidence is under
+The failure location remains unknown. The runner retained its lock and claim until
+user-confirmed power reconnection; backups remain preserved. Evidence is under
 `reconnect-20261018-084/native/runtime/`. Another attempt requires a narrower
 observation boundary or a concrete correction, followed by fresh physical recovery.
+
+
+## Core 1 completes native preparation and returns to ROM
+
+The diagnostic that stops before redistributor access passed on port `3-1` after
+fresh DDR initialization, platform survey and all-seven-OFF observations.
+Core 1 accepted RELEASE, published RELEASED and reached PREPARED with no
+requested CPU workaround writes. SCTLR_EL1 was `0x00c50838`; TCR_EL1 was zero.
+The observation recorded a matching core/epoch and no redistributor access.
+
+Matching shutdown acknowledgment and independently observed PPU OFF preceded
+shared-state restoration. All 50 host transactions and saved-DRAM comparisons
+passed. The runner exited successfully and the queue claim closed. USB ROM
+service returned from instance `003:086` as `003:089`. Raw evidence is under
+`~/.cache/sunstoneos/evidence/reconnect-20261018-086/native/runtime/`.
+This establishes release and preparation on core 1. It does not establish local
+interrupt initialization, cache coherence or multicore scheduling.
+
+The [continuation driver](cpu-continue.md) now includes the GIC-600 redistributor
+power-up sequence omitted from previous images. Its software checks pass; the
+returning diagnostic still needs observation and cleanup for that power change
+before physical execution. The earlier failures remain unlocalized.

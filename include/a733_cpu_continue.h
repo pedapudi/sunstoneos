@@ -38,6 +38,8 @@ struct a733_cpu_continue {
  * Callbacks are ordered/bounded/non-reentrant, return exactly one on success,
  * and share the owner's monotonic microsecond timebase. No callback establishes
  * physical ownership. Fresh zero state, copied config, disjoint live storage.
+ * GIC-600 redistributor power is requested for this core only; rejected requests
+ * recheck group stability within the original deadline. Access failure retains.
  * GIC_READY proves only local register sequencing; CPU system registers,
  * translation, exceptions and scheduler startup are separate subsequent steps. */
 int a733_cpu_continue_init(struct a733_cpu_continue *,const struct a733_cpu_continue_config *);

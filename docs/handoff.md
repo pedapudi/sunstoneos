@@ -96,24 +96,23 @@ in the next native images. The combined monitor image includes the complete prer
 checks converter disable independently of publication; resources remain retained.
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
-The user reconnected the original board after the failed observer attempt.
-Instance `003:086` responds in ROM recovery on port `3-1`; the old holder and
-claim are closed. The second board is on port `3-3`, with a user-reported 32 GB
-microSD. Its independent queue is initialized; its access rule awaits the user’s
-sudo command. Both cards remain untouched. Multicore work belongs directly to
-the primary agent, without delegation.
+Both A733 boards have working reconnect permissions and separate port locks and
+queues. The original board is on port `3-1`, now USB instance `003:089` after a
+successful diagnostic return. The second is on `3-3`, instance `003:088`, and
+responds as A733. Its user-reported 32 GB microSD remains untouched; DDR and
+platform qualification on that board are pending. Multicore work belongs directly
+to the primary agent, without delegation.
 
-- Startup diagnosis: table construction, cache publication and CPU/DSU planning
-  passed physically. The observed identity is supported and needs no workaround
-  writes. EL1 walk blocking, exact control restoration and interrupt-controller
-  reads also pass. Complete distributor setup and restoration now pass physically.
-  Core 1 now powers on, reaches native entry and powers itself off. The primary
-  verifies OFF and restores saved state before returning to ROM. Execution after
-  RELEASE, cache coherence and scheduling remain unresolved. The diagnostic for
-  secondary interrupt initialization passes five focused software cases, but its
-  physical launch did not return. A further observer now reports selected failures
-  before any redistributor write and returns only after observed target OFF.
-  Its three focused software cases pass; the physical failure remains unlocalized.
+- Startup diagnosis: core 1 accepts native RELEASE, publishes RELEASED and
+  completes CPU/DSU preparation. Its reset SCTLR_EL1 is `0x00c50838` and TCR_EL1
+  is zero. The diagnostic stops before target translation changes or interrupt
+  redistributor access, then verifies matching shutdown acknowledgment and actual
+  OFF. Shared control state and saved DRAM are restored; USB ROM service returns.
+  Evidence is under `reconnect-20261018-086/native/runtime/`.
+  The driver now implements the missing GIC-600 redistributor power-up handshake.
+  Focused host checks and two native instruction cases pass under
+  `gic600-power-20261018/`. The correction is not physically tested. Per-core
+  interrupt initialization, cache coherence and scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -280,19 +279,17 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board is on port `3-1`, currently instance `003:086`. Its ROM
-identity responds and its existing permissions work. The failed `003:084`
-runner was stopped after confirmed reconnection, and its failed queue claim
-was closed. The first fresh DDR attempt refused two-device discovery before any
-USB command; its record remains under `reconnect-20261018-086/ddr/`.
-This preflight refusal caused no hardware failure or RAM modification.
+The original board is on port `3-1`, currently instance `003:089`. The second
+board is on port `3-3`, instance `003:088`. Both respond as A733 and have working
+session permissions. The common access helper selects each physical port through
+`SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
+Queue assignments are in [the board-test procedure](board-test-queue.md).
+The second board still requires DDR and platform qualification.
 
-The common access helper now selects an explicit physical port through
-`SUNSTONE_USB_PORT`, preserves each port’s session permissions, and records
-failures independently. The second board is on port `3-3`; its permissions are
-pending the user-run enable command. Queue assignments are in
-[the board-test procedure](board-test-queue.md). Fresh DDR and platform evidence
-are still required for each board before native execution.
+The first DDR preparation after reconnecting the original board refused ambiguous
+two-device discovery before any USB command. Explicit port selection resolved
+that host-side refusal. Fresh DDR, the returning platform survey and all-seven-OFF
+observations then passed under `reconnect-20261018-086/`.
 
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
 BSS clearing, admission, table construction, cache publication and CPU/DSU
@@ -307,33 +304,22 @@ and returns to its original value. All eight SPI-enable banks match their saved
 values; both affinity-routing bits remain set. Cache coherence and multicore
 scheduling remain unproven.
 
-Core 1 now powers on and reaches its native ARRIVED report at EL3 with caches
-disabled. It identifies as Cortex-A55 r2p0 with MPIDR `0x81000100`. The diagnostic
-stops before RELEASE and requests target-owned shutdown. The primary observes
-both the matching acknowledgment and actual PPU OFF, then restores the original
-control, mode and reset configuration. GIC and EL1 restoration also pass.
-All 48 transactions, including copied state and DRAM restoration, passed.
-The runner exited and its queue claim closed. Evidence is under
-`startup-stage-20261017-082/native/`.
+Core 1 powers on, reaches native entry at EL3, accepts RELEASE and completes
+CPU/DSU preparation. It identifies as Cortex-A55 r2p0 with MPIDR `0x81000100`.
+Its observed SCTLR_EL1 is `0x00c50838` and TCR_EL1 is zero. No workaround writes
+are required. The diagnostic stops before target translation-control writes and
+redistributor access. Matching shutdown acknowledgment, actual PPU OFF, shared
+control restoration and DRAM restoration all pass. All 50 host transactions
+succeeded. The runner exited, its queue claim closed, and ROM returned as
+`003:089`. Evidence is under `reconnect-20261018-086/native/runtime/`.
 
-The earlier interrupt-initialization attempt on `003:083` did not return.
-The user then disconnected and reconnected board power. Instance `003:084`
-responded to FEL identification with the existing permissions. Fresh DDR
-initialization, the returning platform survey and one read of all seven
-secondary power states passed. Previous RAM contents and ownership continuity
-were discarded; the old failed queue claim was closed after recovery review.
+Earlier attempts that scanned or configured interrupt redistributors returned no
+report. Their backups remain under `startup-stage-20261017-083/native/runtime/`
+and `reconnect-20261018-084/native/runtime/`. User-confirmed power reconnections
+closed those retained sessions. Their failure locations remain unknown.
 
-One attempt with the frozen pre-write failure observer also did not return.
-All 27 host transactions completed, including launch, but no new ROM instance
-appeared within ten seconds. No diagnostic report was recovered. This outcome
-does not establish whether target admission, primary redistributor reads or a
-later operation failed. No retry or further device command occurred. Fresh
-preparation, failed execution and retained backups are under
-`reconnect-20261018-084/`. Source review must identify a narrower observation
-boundary or concrete correction before another launch.
-
-The installed session rule grants reconnect access on port `3-1` until host
-reboot. Use `tools/usb-access.py` to inspect or disable it. The user reconnected
+The installed session rules grant reconnect access on ports `3-1` and `3-3` until
+host reboot. Use `tools/usb-access.py` to inspect or disable it. The user reconnected
 with a microSD inserted and no button held; preserve that card. No MIPI camera or
 display and no microphone are connected. The DSI panel is undecided; OV5640 is
 the first camera target. A headset and HDMI monitor are unconfirmed.
@@ -426,23 +412,20 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-The narrower diagnostic is integrated. It bypasses the primary interrupt-frame
-scan and stops core 1 after native RELEASE and CPU preparation, before
-translation-walk changes or any redistributor access. It copies the observed
-state, uses target-owned shutdown and verifies actual OFF before returning.
-One overlay build and three focused instruction cases passed under
-`native-secondary-release-pre-gic-20261018/`; there is no physical result yet.
-Pinned sources support the redistributor base and stride but do not establish
-safe access to every frame while cores are off. A stalled read remains a
-hypothesis. The primary agent will handle all further multicore work directly.
+Core-1 release and preparation now pass physically, with successful shutdown,
+restoration and USB ROM return. The interrupt driver lacked the GIC-600
+redistributor power-up sequence. That sequence is implemented and passes focused
+software checks; its connection to the physical failure remains a hypothesis.
+The primary agent handles all further multicore work directly.
 
-1. Diagnose the nonreturning pre-write observer before another launch. Core-1
-   activation, entry and shutdown before RELEASE pass physically, but both the
-   interrupt-initialization diagnostic and its failure observer returned no report.
-   Preserve the failed-attempt backups. The original board has now recovered;
-   the changed diagnostic requires fresh DDR and admission. Do not repeat
-   the failed observer unchanged. The failed UFS probe, intentional watchdog expiry
-   and unattended fault tests remain deferred; USB power-control work is closed.
+1. Extend the returning diagnostic to observe redistributor identity and power
+   state before any SGI/PPI access. Review power-up and matching cleanup against
+   the pinned Arm implementation before a physical attempt. Then qualify local
+   interrupts, the remaining cores, cache coherence and scheduling. Preserve the
+   failed-attempt backups and reuse the successful release/preparation evidence.
+   The failed UFS probe, intentional watchdog expiry and unattended fault tests
+   remain deferred; USB power-control work is closed.
+
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.
    Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)

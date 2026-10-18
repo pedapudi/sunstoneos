@@ -22,7 +22,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def emulate(path, system_only=False, vectors_only=False):
+def emulate(path, system_only=False, vectors_only=False, power_only=False):
     with path.open('rb') as f:
         elf = ELFFile(f)
         segments = [(s['p_vaddr'], s.data()) for s in elf.iter_segments() if s['p_type'] == 'PT_LOAD']
@@ -51,7 +51,7 @@ def emulate(path, system_only=False, vectors_only=False):
         g = r + 0x10000
         control = 0x07050200 + core * 4
         mmio = {0x03400000: 0x33, control: 0x42, control + 0x20: 0x80,
-                r: 0, r + 0x14: 6, g + 0x80: 0, g + 0xd00: 0xffffffff,
+                r: 0, r + 0x14: 6, r + 0x24: 13, g + 0x80: 0, g + 0xd00: 0xffffffff,
                 g + 0x100: 0xffffffff, g + 0x300: 0xffffffff,
                 g + 0xc04: 0xffffffff, g + 0x400: 0x76543210}
         report = symbols['a733_cpu_continue_records'] + core * 128
@@ -145,15 +145,20 @@ def emulate(path, system_only=False, vectors_only=False):
                 cpu.mem_write(address, struct.pack('<Q', typer))
                 return
             assert size == 4
+            if r <= address < r + 0x20000 and address != r + 0x24:
+                assert not mmio[r + 0x24] & 1, 'Interrupt state accessed before GIC-600 power-up'
             if access != UC_MEM_WRITE:
                 assert address in mmio, (core, mode, 'read', hex(address))
                 cpu.mem_write(address, struct.pack('<I', mmio[address]))
             else:
-                assert address in {control, r + 0x14, g + 0x180, g + 0x280, g + 0x380,
+                assert address in {control, r + 0x14, r + 0x24, g + 0x180, g + 0x280, g + 0x380,
                                    g + 0x80, g + 0xd00, g + 0xc04, g + 0x400, g + 0x100}
                 if address == control: assert core != 0
                 writes.append((address, value))
-                if address == r + 0x14: mmio[address] = value & ~4
+                if address == r + 0x24:
+                    assert value == 0
+                    mmio[address] = 0
+                elif address == r + 0x14: mmio[address] = value & ~4
                 elif address == g + 0x180: mmio[g + 0x100] &= ~value
                 elif address == g + 0x380: mmio[g + 0x300] &= ~value
                 elif address == g + 0x100: mmio[address] |= value
@@ -206,6 +211,10 @@ def emulate(path, system_only=False, vectors_only=False):
         results.append({'core': core, 'mode': mode, 'result': observed, 'record': state,
                         'mmio_writes': writes, 'system_writes': system_writes, 'exclusive_attempts': attempts[0]})
 
+    if power_only:
+        case(0)
+        case(1)
+        return results
     if vectors_only:
         case(5, 'exclusive_abort')
         case(6, 'exit_svc')
@@ -224,7 +233,9 @@ def main():
     p.add_argument('--evidence', type=Path, required=True)
     p.add_argument('--vectors-only', action='store_true', help='Check EL1 exclusive-abort and diagnostic SVC routes only')
     p.add_argument('--reuse-build', type=Path, help='Reuse unchanged C objects/host evidence; check only changed system-register assembly')
+    p.add_argument('--gic-power-only', action='store_true', help='Run changed GIC-600 power cases and primary/secondary native paths only')
     args = p.parse_args()
+    assert not args.gic_power_only or not (args.reuse_build or args.vectors_only)
     out = args.evidence.resolve()
     assert ROOT not in [out, *out.parents]
     out.mkdir(parents=True, exist_ok=False)
@@ -246,7 +257,7 @@ def main():
          '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(ROOT / 'include'),
          *[str(ROOT / p) for p in ['checks/a733-cpu-continue.c', 'platform/a733/cpu_continue.c', 'platform/a733/cpu_start.c']],
          '-o', str(out / 'host-check')], 'host-build.log')
-        run([str(out / 'host-check')], 'host-run.log')
+        run([str(out / 'host-check')] + (['--power'] if args.gic_power_only else []), 'host-run.log')
     (out / 'FreeRTOSConfig.h').write_text('#define configNUMBER_OF_CORES 8\n')
     (out / 'stubs.c').write_text('''#include <stddef.h>
 #include <stdint.h>
@@ -297,7 +308,7 @@ SECTIONS {
         shutil.copyfile(old_elf, out / 'continue.elf')
     else:
         run([str(lld), '-T', str(out / 'continue.ld'), *objects, '-o', str(out / 'continue.elf')], 'link.log')
-    cases = emulate(out / 'continue.elf', bool(args.reuse_build), args.vectors_only)
+    cases = emulate(out / 'continue.elf', bool(args.reuse_build), args.vectors_only, args.gic_power_only)
     target = run(['/usr/lib/llvm-21/bin/llvm-size', str(out / 'continue.o'), str(out / 'continue-asm.o')], 'size.log')
     result = {'passed': True, 'scope': 'Host GIC/descriptor checks and native continuation under instruction emulation with modeled system registers, MMIO and privilege/translation transitions. Kernel entry hooks are test fixtures; no full FreeRTOS or physical coherence/atomicity qualification.',
               'commands': commands, 'inputs': {s: digest(ROOT / s) for s in SOURCES},

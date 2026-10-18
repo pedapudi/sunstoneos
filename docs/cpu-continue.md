@@ -105,19 +105,24 @@ GIC-wakeup-disable bit. It preserves every other hotplug-control bit and verifie
 the result. Core 0 skips hotplug accesses. The controller then performs these
 local operations:
 
-1. Require LPIs disabled and wait for pending redistributor writes.
-2. If the processor is sleeping, wait for `ChildrenAsleep` before clearing
+1. Wait for the GIC-600 redistributor group to finish any power transition.
+   Request power for this core by writing zero to `GICR_PWRR`; require `RDPD`
+   clear before accessing interrupt state. A rejected request returns to the
+   group-stability check under the original deadline.
+2. Require LPIs disabled and wait for pending redistributor writes.
+3. If the processor is sleeping, wait for `ChildrenAsleep` before clearing
    `ProcessorSleep`, then wait for the children to become awake.
-3. Disable SGIs/PPIs, wait for write completion, and clear pending/active state.
-4. Assign the local bank to nonsecure Group 1, keep timer PPIs level-sensitive,
+4. Disable SGIs/PPIs, wait for write completion, and clear pending/active state.
+5. Assign the local bank to nonsecure Group 1, keep timer PPIs level-sensitive,
    set SGI0 priority to `0xf0`, and enable SGI0.
-5. Verify group, modifier, enable and priority state after write completion.
+6. Verify group, modifier, enable and priority state after write completion.
 
 The sleep transition follows the pinned
 [GICv3 redistributor implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_helpers.c).
 A stalled transition, uncertain access or expired deadline retains every resource.
-The controller performs no rollback, reset or retry. Terminal polls issue no
-callbacks. `GIC_READY` proves this register sequence only.
+The controller performs no rollback or reset. Only a power request rejected
+before completion may be reissued; an access failure terminates the sequence.
+Terminal polls issue no callbacks. `GIC_READY` proves this register sequence only.
 
 A733 SGI routing uses affinity level 1 for the target core and affinity level 0
 value zero. The encoder produces SGI0 value `(core << 16) | 1` for cores 0–7.
@@ -195,3 +200,33 @@ Physical acceptance still requires qualified watchdog recovery, all eight CPU
 identities, bounded exclusive and SGI checks, scheduler participation, appropriate
 reset/errata handling, and coherent cached operation. Performance optimization
 follows complete hardware functionality.
+
+
+## Redistributor power-up is implemented but not physically qualified
+
+The controller follows the pinned Arm Trusted Firmware-A
+[GIC-600 power sequence](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c).
+The `cpu-continue-gic600-power` entry in `sources.lock.json` pins that BSD-3-Clause
+source reference. Repository code executes the sequence; no additional firmware
+binary or runtime dependency is loaded.
+
+The controller compares group power-down and power-off status before requesting
+power. It writes zero to `GICR_PWRR`, selecting the current core rather than all
+cores in its redistributor group. It confirms that the power-down bit is clear
+before reading local interrupt state. Each poll keeps the existing one-operation
+limit and checks the original deadline. Uncertain accesses retain ownership.
+Both native access adapters permit the selected frame's power register.
+
+Focused sanitizer cases cover an already-powered primary, a powered-down
+secondary, a group transition followed by a rejected request, each of the three
+power-operation failures, and both group and power-completion deadlines. Two
+native instruction cases reach the primary and secondary kernel-entry hooks.
+The models reject interrupt-state access before power-up. The cached adapter
+also compiles with the existing supervised image configuration. Evidence is
+under `~/.cache/sunstoneos/evidence/gic600-power-20261018/`.
+
+The returning diagnostic has not executed this correction. It needs matching
+redistributor power observation and cleanup before physical qualification.
+Earlier startup failures returned no report and cannot yet be attributed to
+this omission. Redistributor discovery and the later interrupt, cache and
+scheduler stages still require board evidence.

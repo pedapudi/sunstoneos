@@ -36,7 +36,7 @@ static int read32(void *ctx,uintptr_t a,uint32_t *out)
 {
     struct a733_cpu_continue *s=ctx;uintptr_t c=0x07050200+s->core*4,r=s->redistributor,g=r+0x10000;
     if(a!=0x03400000 && a!=c && a!=c+0x20 && (!r ||
-       (a!=r && a!=r+0x14 && a!=g+0x300 && a!=g+0x80 && a!=g+0xd00 &&
+       (a!=r && a!=r+0x14 && a!=r+0x24 && a!=g+0x300 && a!=g+0x80 && a!=g+0xd00 &&
         a!=g+0xc04 && a!=g+0x400 && a!=g+0x100)))return 0;
     sync_memory();*out=*(volatile uint32_t *)a;sync_memory();return 1;
 }
@@ -48,7 +48,7 @@ static int read64(void *ctx,uintptr_t a,uint64_t *out)
 static int write32(void *ctx,uintptr_t a,uint32_t value)
 {
     struct a733_cpu_continue *s=ctx;uintptr_t c=0x07050200+s->core*4,r=s->redistributor,g=r+0x10000;
-    if(a!=c && (!r || (a!=r+0x14 && a!=g+0x180 && a!=g+0x280 && a!=g+0x380 &&
+    if(a!=c && (!r || (a!=r+0x14 && a!=r+0x24 && a!=g+0x180 && a!=g+0x280 && a!=g+0x380 &&
        a!=g+0x80 && a!=g+0xd00 && a!=g+0xc04 && a!=g+0x400 && a!=g+0x100)))return 0;
     sync_memory();*(volatile uint32_t *)a=value;sync_memory();return 1;
 }

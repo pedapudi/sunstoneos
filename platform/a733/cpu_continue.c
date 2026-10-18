@@ -4,7 +4,8 @@ enum { DISTRIBUTOR, SCAN, CONTROL, MODE, WAKE_ENABLE, WAKE_CHECK,
     R_CTLR, WAKER, WAKE_CLEAR, WAKE_WAIT, DISABLE, DISABLE_WAIT,
     CLEAR_PENDING, CLEAR_ACTIVE, ACTIVE_CHECK, GROUP, MODIFIER, CONFIG,
     CONFIG_WRITE, PRIORITY, PRIORITY_WRITE, ENABLE, ENABLE_WAIT,
-    VERIFY_GROUP, VERIFY_MODIFIER, VERIFY_ENABLE, VERIFY_PRIORITY };
+    VERIFY_GROUP, VERIFY_MODIFIER, VERIFY_ENABLE, VERIFY_PRIORITY,
+    POWER_GROUP_WAIT, POWER_REQUEST, POWER_VERIFY };
 enum { ERROR_IO=1, ERROR_TIME, ERROR_INITIAL, ERROR_VERIFY };
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
@@ -82,6 +83,16 @@ unsigned a733_cpu_continue_poll(struct a733_cpu_continue *s)
     case MODE:if(read32(s,control+0x20,&v) && (v&1))fail(s,ERROR_INITIAL);break;
     case WAKE_ENABLE:(void)write32(s,control,s->control&~2u);break;
     case WAKE_CHECK:if(read32(s,control,&v) && v!=(s->control&~2u))fail(s,ERROR_VERIFY);break;
+    /* GIC-600 power protocol: TF-A 0892ad4, drivers/arm/gic/v3/gic-x00.c.
+     * Select this core only (RDAG=0). Group transitions may reject a request;
+     * recheck stability before reissuing it within the original deadline. */
+    case POWER_GROUP_WAIT:
+        if(read32(s,r+0x24,&v))advance=((v>>2)&1)==((v>>3)&1);
+        break;
+    case POWER_REQUEST:(void)write32(s,r+0x24,0);break;
+    case POWER_VERIFY:
+        if(read32(s,r+0x24,&v) && (v&1)) {s->phase=POWER_GROUP_WAIT;advance=0;}
+        break;
     case R_CTLR:if(read32(s,r,&v)) {if(v&1)fail(s,ERROR_INITIAL);advance=!(v&8);}break;
     case WAKER:if(read32(s,r+0x14,&s->waker))advance=!(s->waker&2) || !!(s->waker&4);break;
     case WAKE_CLEAR:(void)write32(s,r+0x14,s->waker&~2u);break;
@@ -106,7 +117,10 @@ unsigned a733_cpu_continue_poll(struct a733_cpu_continue *s)
     default:fail(s,ERROR_VERIFY);break;
     }
     if(s->state==A733_CONTINUE_PENDING && time_ok(s) && advance) {
-        if(s->phase==VERIFY_PRIORITY)s->state=A733_CONTINUE_GIC_READY;else ++s->phase;
+        if(s->phase==VERIFY_PRIORITY)s->state=A733_CONTINUE_GIC_READY;
+        else if(s->phase==WAKE_CHECK)s->phase=POWER_GROUP_WAIT;
+        else if(s->phase==POWER_VERIFY)s->phase=R_CTLR;
+        else ++s->phase;
     }
 out:s->entered=0;return s->state;
 }
@@ -197,7 +211,7 @@ static int native_read32(void *ctx,uintptr_t address,uint32_t *out)
     struct a733_cpu_continue *s=ctx;
     uintptr_t c=0x07050200+s->core*4,r=s->redistributor,g=r+0x10000;
     if(address!=0x03400000 && address!=c && address!=c+0x20 &&
-       (!r || (address!=r && address!=r+0x14 && address!=g+0x300 &&
+       (!r || (address!=r && address!=r+0x14 && address!=r+0x24 && address!=g+0x300 &&
        address!=g+0x80 && address!=g+0xd00 && address!=g+0xc04 &&
        address!=g+0x400 && address!=g+0x100)))return 0;
     sync_memory();*out=*(volatile uint32_t *)address;sync_memory();return 1;
@@ -212,7 +226,7 @@ static int native_write32(void *ctx,uintptr_t address,uint32_t value)
 {
     struct a733_cpu_continue *s=ctx;
     uintptr_t c=0x07050200+s->core*4,r=s->redistributor,g=r+0x10000;
-    if(address!=c && (!r || (address!=r+0x14 && address!=g+0x180 && address!=g+0x280 &&
+    if(address!=c && (!r || (address!=r+0x14 && address!=r+0x24 && address!=g+0x180 && address!=g+0x280 &&
        address!=g+0x380 && address!=g+0x80 && address!=g+0xd00 && address!=g+0xc04 &&
        address!=g+0x400 && address!=g+0x100)))return 0;
     sync_memory();*(volatile uint32_t *)address=value;sync_memory();return 1;

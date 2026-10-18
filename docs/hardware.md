@@ -85,16 +85,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   affinity-routing bits are already set. Complete distributor setup and exact
   restoration of its control and SPI enables now pass physically. Secondary
   admission and reset configuration also pass. Core 1 now powers on, reaches
-  native entry at EL3 and powers itself off before RELEASE. The primary observes
-  actual OFF before restoring control, reset configuration, GIC and DRAM state.
-  Execution after RELEASE, the remaining secondary cores, cache coherence and
-  scheduling remain unresolved. A diagnostic through secondary interrupt
-  initialization passes five focused software cases. Its physical launch did
-  not return, and no result was recovered. After a confirmed power reconnect,
-  fresh DDR, platform and all-seven-OFF observations passed. One attempt with the
-  pre-write failure observer also returned no report under `reconnect-20261018-084/`.
-  The board remains quarantined with its lock and backups retained; another
-  launch requires a narrower diagnostic or concrete correction.
+  native entry at EL3, accepts RELEASE and completes CPU/DSU preparation.
+  The diagnostic stops before target translation changes or redistributor access,
+  then verifies shutdown acknowledgment and actual OFF. Shared control and DRAM
+  restoration pass, and ROM returns. Evidence is under
+  `reconnect-20261018-086/native/runtime/`.
+  The remaining secondary cores, per-core interrupt setup, cache coherence and
+  scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
+  their sessions were closed after physical recovery. A missing GIC-600
+  redistributor power-up handshake is now implemented. Focused host checks and
+  primary/secondary native instruction cases pass under `gic600-power-20261018/`;
+  the correction has no physical result yet.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

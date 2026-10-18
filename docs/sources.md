@@ -43,6 +43,11 @@ The [H.264 application](h264-native.md) adapts open-source Linux Cedrus control
 and uses pinned H6-CedarC source references. Its source manifest records licenses
 and hashes. A733 CedarC libraries provide instruction references; the native
 image does not load those Linux libraries. FFmpeg supplies the host pixel oracle.
+The [CPU continuation driver](cpu-continue.md) follows the BSD-3-Clause Arm
+Trusted Firmware-A GIC-600 redistributor power protocol. The
+`cpu-continue-gic600-power` entry in `sources.lock.json` pins the reference source.
+Repository source executes the bounded sequence; it adds no runtime firmware
+blob. Physical operation remains unqualified.
 The [native RTC application](rtc-application.md) adapts the pinned board kernel's
 GPL-2.0-or-later SoC RTC calendar and alarm operations, with crystal-control
 sequences from the pinned RTC clock driver. Its
