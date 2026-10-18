@@ -157,9 +157,10 @@ The runtime check passed once; native compiler setup corrections did not repeat 
 Existing UART format/FIFO/interrupt, pin-manager and I2S evidence remains valid;
 this binding does not rerun those component workloads.
 
-Physical admission, serial peer tests, Bluetooth module bootstrap and H4
-integration remain required. Interrupt-driven platform service, alternate parent
-profiles, DMA, RS-485, IrDA, nine-bit modes, runtime format changes and
+The [native Bluetooth application](bluetooth-native.md) integrates this polled
+UART binding with module bootstrap and H4 transport. Physical admission and
+serial peer tests remain required. Interrupt-driven platform service, alternate
+parent profiles, DMA, RS-485, IrDA, nine-bit modes, runtime format changes and
 suspend/resume also remain required. Modeled GIC observations do not qualify
 physical interrupt behavior or reset timing.
 

@@ -166,8 +166,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native platform binding](uart-platform.md) now composes actual clock
   and pin leases, reset sequencing, GIC masking and one FreeRTOS owner task.
   Host checks and single-core/SMP native compilation pass. Twelve explicit
-  routes cover all nine controllers. Physical serial operation, Bluetooth
-  binding, platform IRQ service, DMA and advanced modes remain outstanding.
+  routes cover all nine controllers. The [native Bluetooth application](bluetooth-native.md)
+  integrates the polled UART1 binding. Physical serial operation, platform IRQ
+  service, DMA and advanced modes remain outstanding.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,

@@ -114,9 +114,10 @@ exclude the first 32 interrupt IDs.
 
 [Radio wiring](radio.md) assigns UART1 TX/RX to PG6/PG7 and RTS/CTS to PG8/PG9.
 The module firmware defaults to 1,500,000 baud with automatic flow control.
-SDIO firmware bootstrap, Bluetooth reset/wake signaling, H4 packet framing,
-HCI commands, pairing and headset audio remain separate implementation work.
-No controller check establishes a working Bluetooth link.
+The [native Bluetooth application](bluetooth-native.md) now integrates SDIO
+firmware bootstrap, reset/wake signaling, this UART binding, H4 packet framing,
+HCI commands, pairing and headset audio. Its software evidence is separate from
+the UART controller checks. Physical Bluetooth operation remains unqualified.
 
 The board schematic, sheet 18, exposes an alternative UART1 route on PE12/PE13
 at header pins 29/31. This route shares the Bluetooth controller and cannot
