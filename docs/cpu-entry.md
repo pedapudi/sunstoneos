@@ -1,10 +1,16 @@
-# Secondary CPUs park until power cleanup authorizes entry
+# Secondary CPUs wait for authorization before continuing startup
 
 The [secondary entry code](../platform/a733/cpu_entry.S) implements a reserved
-AArch64 EL3 entry for A733 cores 1 through 7. Each core reports its identity and
-waits in its own mailbox. The [boot coordinator](../platform/a733/cpu_entry.c)
-releases it only after the existing [power controller](cpu-start.md) completes
+AArch64 EL3 entry for A733 cores 1 through 7. Each secondary core has a mailbox:
+a reserved area of shared RAM containing the primary core's command and the
+secondary core's status report. The secondary writes its identity there, then
+waits for a release command. The [boot coordinator](../platform/a733/cpu_entry.c)
+issues that command only after the [power controller](cpu-start.md) completes
 request cleanup and the matching arrival report passes validation.
+
+The primary prepares the mailbox before requesting power for the secondary.
+Mailbox writes do not power on a core. The separate power controller starts it;
+the mailbox coordinates execution after it starts.
 
 Host sanitizer checks, instruction emulation and freestanding AArch64 compilation
 pass. Core 1 reaches the physical EL3 arrival report and powers itself off before

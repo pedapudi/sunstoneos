@@ -9,6 +9,11 @@ the primary observes OFF before restoring saved state. The remaining cores and
 multicore FreeRTOS remain unqualified. The [startup record](a733-smp-supervised.md)
 holds the physical evidence and the later interrupt-initialization failure.
 
+ON and OFF are the hardware controller's reported power states for the target
+core. The board and primary core remain powered while a secondary core is OFF.
+Clock gating stops clock pulses, reset controls the starting state, and mailbox
+commands coordinate execution. These controls are separate from core power.
+
 The [interface](../include/a733_cpu_start.h) accepts one serialized privileged
 boot owner, copied callbacks, a reserved entry address, a target core and an
 absolute microsecond deadline. Each poll performs at most one register or
