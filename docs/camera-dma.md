@@ -32,8 +32,9 @@ including every byte of both spans and any guard requirements.
 
 Opening reserves the frame immediately. Admission must publish its ownership
 token before side effects, including partial cache or mapping changes. The
-caller must not read, write, remap or free either span while ownership is
-reserved or assigned to the device. Admission also establishes:
+caller must not write, remap or free either span while ownership is reserved or
+assigned to the device. Reads are prohibited until either drained ownership
+transfer or the explicit retained-readout completion below. Admission also establishes:
 
 - Exclusive DMA registers, stable clocks and reset state, and independent recovery.
 - A configured route through the camera crossbar and video scaler.
@@ -71,6 +72,26 @@ capture is inactive, and acknowledges only the observed status. Cache
 invalidation and acquire barriers follow. Only a successful transition to
 `READY` returns frame ownership to the caller. Closing then releases the mapping
 and resource leases; it does not erase the caller's image.
+
+The separate retained-readout API permits read-only access to a completed still
+frame while preserving device ownership. It requires the original capture-done
+observation, self-cleared parser SCAP controls, CSI and route error checks, and
+an IOMMU fault scan. Fresh DMA completion and inactive-capture observations
+precede CPU cache invalidation. The coordinator rechecks time and authority
+before publishing its result.
+
+This path reaches `READABLE`, keeps both planes device-owned, and never calls
+disable, drain, close or release. Only the 307200-byte image payload of each
+plane may be read; guards and padding are excluded. Every table, parameter,
+frame, clock and hardware reservation remains retained. CPU writes, rearming,
+buffer reuse and global reclamation remain prohibited. The manual's still-frame
+completion definition and the reference driver's image return support this
+limited access; they do not establish global transaction drain.
+
+A returned privileged const view cannot be revoked. Its caller must serialize
+use with the owner and stop on a later fault. Only a completed copy in separately
+admitted application memory remains independently usable. The view does not
+grant an EL0 mapping or change the memory pool's device-ownership record.
 
 Each poll performs at most one MMIO or platform operation, with monotonic time
 checks before and after it. A pending callback continues the same operation;

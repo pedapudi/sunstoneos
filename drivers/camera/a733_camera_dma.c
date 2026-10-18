@@ -84,6 +84,12 @@ int a733_camera_dma_close(struct a733_camera_dma *s,uint64_t d)
     if(!s || !s->initialized || s->state!=A733_CAM_DMA_READY)return -1;
     return begin(s,A733_CAM_DMA_RELEASE,d);
 }
+int a733_camera_dma_readout(struct a733_camera_dma *s,uint64_t d)
+{
+    if(!s || !s->initialized || s->state!=A733_CAM_DMA_STOP || s->retained_readout ||
+       s->owner!=A733_CAMERA_DEVICE || !(s->events&1) || !d || d<=s->now)return -1;
+    s->retained_readout=1;s->deadline=d;s->index=0;s->phase=0;return 1;
+}
 static int read_reg(struct a733_camera_dma *s,uint16_t off,uint32_t *v)
 {
     if(s->ops.read(s->context,s->token,off,v,s->deadline)!=1 || tick(s)!=1)return fail(s);
@@ -134,7 +140,7 @@ int a733_camera_dma_poll(struct a733_camera_dma *s)
 {
     uint64_t token;uint32_t v;int r;
     if(!s || !s->initialized || s->state==A733_CAM_DMA_FAULT)return -1;
-    if(s->state==A733_CAM_DMA_ARMED || s->state==A733_CAM_DMA_READY ||
+    if(s->state==A733_CAM_DMA_ARMED || s->state==A733_CAM_DMA_READY || s->state==A733_CAM_DMA_READABLE ||
        s->state==A733_CAM_DMA_CLOSED)return 1;
     if(s->state==A733_CAM_DMA_NEW)return -1;
     if(tick(s)!=1)return -1;
@@ -179,7 +185,7 @@ int a733_camera_dma_poll(struct a733_camera_dma *s)
         if(v&1)s->state=A733_CAM_DMA_STOP;
         return 0;
     case A733_CAM_DMA_STOP:
-        return callback(s,s->ops.producer_stop,A733_CAM_DMA_DISABLE);
+        return callback(s,s->ops.producer_stop,s->retained_readout?A733_CAM_DMA_FINAL_STATUS:A733_CAM_DMA_DISABLE);
     case A733_CAM_DMA_DISABLE:
         r=program(s,disable,COUNT(disable));
         if(r==1)s->state=A733_CAM_DMA_DRAIN;
@@ -196,12 +202,13 @@ int a733_camera_dma_poll(struct a733_camera_dma *s)
             if(read_reg(s,0x24c,&v)!=1)return -1;
             if(v&1)return fail(s);
         } else {
-            if(write_reg(s,0x254,s->saved)!=1)return -1;
+            if(!s->retained_readout && write_reg(s,0x254,s->saved)!=1)return -1;
             s->state=A733_CAM_DMA_SYNC;
         }
         ++s->index;return 0;
     case A733_CAM_DMA_SYNC:
-        r=callback(s,s->ops.sync_cpu,A733_CAM_DMA_READY);
+        r=callback(s,s->ops.sync_cpu,s->retained_readout?A733_CAM_DMA_READABLE:A733_CAM_DMA_READY);
+        if(s->state==A733_CAM_DMA_READABLE)return 1;
         if(s->state==A733_CAM_DMA_READY) { s->owner=A733_CAMERA_CALLER;return 1; }
         return r;
     case A733_CAM_DMA_RELEASE:

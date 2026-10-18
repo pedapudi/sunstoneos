@@ -80,7 +80,7 @@ enum a733_capture_state {
     A733_CAPTURE_FENCE,A733_CAPTURE_DMA_DISABLE,A733_CAPTURE_ROUTE_CLOSE,
     A733_CAPTURE_RECEIVER_CLOSE,A733_CAPTURE_SENSOR_CLOSE,A733_CAPTURE_DRAIN,
     A733_CAPTURE_IOMMU_SCAN,A733_CAPTURE_DMA_FINISH,A733_CAPTURE_DMA_CLOSE,
-    A733_CAPTURE_READY,A733_CAPTURE_FAULT
+    A733_CAPTURE_READY,A733_CAPTURE_FAULT,A733_CAPTURE_READABLE,A733_CAPTURE_READOUT_ROUTE
 };
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
@@ -94,7 +94,7 @@ struct a733_camera_capture {
     uint64_t token,deadline,now;
     enum a733_capture_state state;
     uint8_t initialized,entered,started,local_granted,packets_granted;
-    uint8_t quiet,sampled,fenced,drained,scanned;
+    uint8_t quiet,sampled,fenced,drained,scanned,retained_readout;
 };
 /* Fresh zero storage; private immutable config/callback storage; one privileged
  * serialized caller; bounded non-reentrant callbacks. CPU-only table construction
@@ -104,6 +104,16 @@ struct a733_camera_capture {
  */
 int a733_camera_capture_init(struct a733_camera_capture *,const struct a733_camera_capture_config *);
 int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
+/* Source-defined still-frame access while every resource stays reserved.
+ * After actual CAPTURE_DONE, stop the sensor, sample CSI errors, verify all
+ * parser capture bits clear, scan IOMMU faults, and perform fresh DMA status
+ * and CPU cache synchronization. No packet-quiet/drain/close/release callback
+ * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
+ * Only the307200-byte payload per plane may be read, without mutation or reuse.
+ * A privileged const view cannot be revoked: its consumer must serialize use
+ * with this owner and stop on a later fault. Only a completed separate copy
+ * remains independently usable. This API does not authorize EL0 aliases. */
+int a733_camera_capture_open_retained(struct a733_camera_capture *,uint64_t deadline);
 /* One platform/MMIO/cache operation at most, plus nested monotonic clock reads.
  * READY transfers the 640x480 NV16 Y/UV payloads to this caller, stride640 each.
  * Global/analog/IOMMU tokens and mappings remain retained even after READY.

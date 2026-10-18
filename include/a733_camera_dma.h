@@ -13,7 +13,7 @@ enum a733_camera_dma_state {
     A733_CAM_DMA_WAIT, A733_CAM_DMA_STOP, A733_CAM_DMA_DISABLE,
     A733_CAM_DMA_DRAIN, A733_CAM_DMA_FINAL_STATUS, A733_CAM_DMA_SYNC,
     A733_CAM_DMA_READY, A733_CAM_DMA_RELEASE, A733_CAM_DMA_CLOSED,
-    A733_CAM_DMA_FAULT
+    A733_CAM_DMA_FAULT, A733_CAM_DMA_READABLE
 };
 enum a733_camera_frame_owner {
     A733_CAMERA_CALLER, A733_CAMERA_RESERVED, A733_CAMERA_DEVICE
@@ -53,7 +53,10 @@ struct a733_camera_dma_ops {
      * Use parser SCAP image mode; completion requires DMA CAPTURE_DONE.
      */
     int (*start_one)(void *, uint64_t token, uint64_t);
-    /* Establish quiet input and successful single-frame fence operation. */
+    /* Establish quiet input and successful single-frame fence operation.
+     * For explicit retained readout, establish the completed SCAP fence and
+     * captured-frame error checks instead. Global ingress quiet is not claimed;
+     * all local/global resources and mappings remain owned without release. */
     int (*producer_stop)(void *, uint64_t token, uint64_t);
     /* After CAP_EN clear, prove all writes retired, no prefetched addresses,
      * no upstream errors, and exactly one complete undamaged frame. Register
@@ -76,13 +79,22 @@ struct a733_camera_dma {
     enum a733_camera_dma_state state;
     enum a733_camera_frame_owner owner;
     uint16_t index;
-    uint8_t phase, initialized;
+    uint8_t phase, initialized, retained_readout;
 };
 int a733_camera_dma_init(struct a733_camera_dma *,
     const struct a733_camera_dma_ops *, void *, const struct a733_camera_dma_config *);
 int a733_camera_dma_open(struct a733_camera_dma *, uint64_t deadline_us);
 int a733_camera_dma_capture(struct a733_camera_dma *, uint64_t deadline_us);
 int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
+/* Opt-in access without ownership transfer, only from STOP after this object's
+ * actual CAPTURE_DONE observation. The coordinating producer_stop operation
+ * must authenticate self-cleared SCAP, no rearm, source/error observations and
+ * the same retained mappings. Fresh DMA status and CPU synchronization still
+ * execute. No disable, drain, status acknowledgement or release occurs.
+ * READABLE keeps DEVICE ownership; only the307200-byte payload of each plane
+ * may be read. Neither padding nor guards are image data. No second request,
+ * close/release, CPU write or mapping/buffer reuse is authorized. */
+int a733_camera_dma_readout(struct a733_camera_dma *,uint64_t deadline_us);
 /* At most one MMIO/platform operation plus pre/post monotonic time checks.
  * Faults are terminal and retain ownership; no automatic stop/reset/retry.
  * READY alone returns frame ownership. ARMED has not captured any data.
