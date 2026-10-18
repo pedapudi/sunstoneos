@@ -25,6 +25,8 @@ def branch(address,target):
 
 
 def prepare(args):
+    local=getattr(args,"local",False)
+    report=(REPORT[0],0x1b00) if local else REPORT
     base=json.loads((args.primary/'manifest.json').read_text())
     frozen,reservations=primary.load(args.primary,args.image,base)
     with args.image.open('rb') as stream:
@@ -37,8 +39,9 @@ def prepare(args):
         names=('a733_cpu_start_init','a733_cpu_entry_native_init','a733_cpu_entry_poll',
                'a733_cpu_secondary_entry','a733_cpu_secondary_continue','a733_cpu_index',
                'a733_smp_counter','a733_smp_power_address','memset','memcpy')
+        if local:names+=('prepare_core','a733_cpu_continue_init','a733_cpu_continue_poll','a733_cached_el3_vectors')
         native={n:address(n) for n in names}
-    require(all(REPORT[0]+REPORT[1]<=a or a+n<=REPORT[0] for _,a,n in reservations),
+    require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
     require(len(frozen['overlay.bin'])<=EXTENSION-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
     args.output.mkdir(parents=True,exist_ok=False)
@@ -56,15 +59,17 @@ SECTIONS {
 ''')
     source='boot/a733/secondary-identity-probe'
     commands=[]
-    for suffix in ('c','S'):
+    units=[(source+'.'+suffix,'identity-'+suffix+'.o') for suffix in ('c','S')]
+    if local:units += [('boot/a733/secondary-local-probe.c','local.o'),('boot/a733/secondary-distributor-probe.c','distributor.o')]
+    for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
-            '-Wall','-Wextra','-Werror','-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
-            '-I',ROOT/'boot/a733','-c',ROOT/(source+'.'+suffix),'-o',args.output/('identity-'+suffix+'.o')])
+            '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_SECONDARY_LOCAL=1'] if local else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
+            '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
-    commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,args.output/'identity-c.o',args.output/'identity-S.o',
+    commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
                       '-o',args.output/'identity.elf'],
                      [args.objcopy,'-O','binary',args.output/'identity.elf',args.output/'identity.bin']])
     for command in commands:
@@ -101,19 +106,22 @@ SECTIONS {
     require(patched==1,'Secondary patch did not match exactly one segment.')
     names=(source+'.c',source+'.S',source+'.h','include/a733_cpu_entry.h','include/a733_cpu_start.h',
            'platform/a733-smp-cached/boot.h','tools/prepare-secondary-identity-probe.py')
-    manifest={'schema':'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
+    if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
+                     'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
+    manifest={'schema':'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
-        'identity_report':{'address':REPORT[0],'bytes':REPORT[1]},
-        'reservations':reservations+[('identity-report',*REPORT)],'commands':[[str(x) for x in c] for c in commands],
+        'identity_report':{'address':report[0],'bytes':report[1]},
+        'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('Prepared sequential identity survey for cores2..7; no board access.')
+    print('Prepared sequential '+('local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','primary','output','clang','lld','objcopy'):
         parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument("--local",action="store_true",help="Include actual CPU preparation and local GIC setup/restoration")
     prepare(parser.parse_args())

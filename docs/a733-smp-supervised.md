@@ -1143,3 +1143,29 @@ Together with the earlier core-1 result, this establishes production entry and
 shutdown for every secondary. It does not establish local interrupt initialization
 on the remaining cores, interrupt delivery, mutable cache coherence or scheduling.
 The full-image attempt still has no failure-location observation.
+
+## Sequential local interrupt initialization
+
+The returning local diagnostic calls the frozen production CPU preparation and
+interrupt controller on cores 1–7, one core at a time. It saves the distributor
+control and SPI enables before changing them. Each target saves its actual
+translation controls and local interrupt state, initializes its local controller,
+then restores that state before acknowledging shutdown. The primary requires
+independent OFF observation before restoring the core configuration. Distributor
+restoration follows the final shutdown.
+
+The diagnostic keeps CPU interrupt delivery disabled. Initially powered,
+asleep local interrupt frames are required. A bounded controller refusal can
+return only after complete local restoration; its report remains distinct from
+successful initialization. Cleanup failure retains ownership. This procedure
+does not qualify powered-off redistributor transitions, interrupt delivery,
+cache coherence or scheduling.
+
+One compiled extension and three instruction cases pass under
+`secondary-local-probe-20261018/`: all seven targets complete, an injected
+configuration refusal returns after restoration, and a cleanup mismatch prevents
+shutdown and return. The instruction cases reuse the saved primary startup
+checkpoint and exercise A76 r4p1 preparation with the observed per-target reset
+controls. Six host cases cover the larger report and backup, restored refusal,
+invalid results and transport failure. Hardware responses remain modeled;
+physical local initialization on cores 2–7 is pending.

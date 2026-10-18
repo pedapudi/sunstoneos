@@ -1,5 +1,21 @@
 # Current work
 
+The sequential local interrupt diagnostic is compiled and software-tested under
+`secondary-local-probe-20261018/`. It calls production CPU preparation and local
+GIC setup on cores 1–7, restores each target before OFF, then restores the
+shared distributor. Three instruction cases and six host cases pass; the actual
+primary boot checkpoint was reused. Physical execution is pending. The original
+board remains on port 3-1, instance 003:110, with continuous DDR evidence. Its
+fresh returning SRAM survey reports instruction cache enabled, so the accepted
+cache-off helper and follow-up survey precede native execution.
+
+The complete PWM fan/LED and SHA-256/AES applications now have independent
+boot-CPU profiles. Their frozen images and focused results are integrated under
+`pwm-single-core-20261018/` and `crypto-single-core-20261018/`. Native source
+inputs match; final PWM fixture/document revisions match the accepted follow-up
+snapshot. Integration did not rebuild images or repeat checks. Physical device
+operation and admission remain outstanding.
+
 The [accepted goal](goal.md) requires native FreeRTOS, complete board hardware
 support and local mimus transcription. The [hardware matrix](hardware.md) is the
 authoritative inventory. No complete subsystem has physical qualification.

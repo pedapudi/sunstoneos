@@ -4,8 +4,9 @@ A physical diagnostic identified an incorrect interrupt-group readback check.
 Core 1 returned `GICR_IGROUPR0 = 0xfff0ffff`; the driver required `0xffffffff`
 and retained a verification failure. The corrected driver permits unimplemented
 PPI bits and now completes local initialization, restoration, shutdown and ROM
-return on core 1. Interrupt delivery, coherent cached execution, the remaining
-cores and FreeRTOS SMP scheduling remain unqualified.
+return on core 1. All seven secondaries also have physical entry and shutdown
+evidence. Local interrupt setup on the remaining cores, interrupt delivery, cache
+coherence and FreeRTOS SMP scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
@@ -42,7 +43,7 @@ qualify a complete firmware replacement.
 
 | Boundary | Reference requirement | SunstoneOS evidence and remaining gap |
 | --- | --- | --- |
-| CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | Core 1 entry, release, CPU preparation and shutdown passed. Other cores remain unqualified. |
+| CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | All seven secondaries pass entry, release and shutdown. Core 1 also passes CPU preparation; preparation on cores 2–7 remains unqualified. |
 | Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered core-1 frame. A transition from powered-off remains unqualified. |
 | Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Core 1 wake and return-to-sleep pass physically with delivery disabled. |
 | System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |

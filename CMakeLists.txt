@@ -219,6 +219,7 @@ endif()
 
 if(SUNSTONE_A733_PWM)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pwm.cmake")
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pwm-single-core.cmake")
 endif()
 
 option(SUNSTONE_A733_ADC "Build the supervised native GPADC board monitor" OFF)

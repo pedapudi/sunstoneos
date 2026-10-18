@@ -2,6 +2,9 @@
 #include "secondary-identity-probe.h"
 #include "a733_cpu_entry.h"
 #include "boot.h"
+#ifdef SUNSTONE_SECONDARY_LOCAL
+#include "secondary-local-probe.h"
+#endif
 
 #define HEADER ((volatile struct identity_header *)IDENTITY_REPORT)
 #define SLOTS ((volatile struct identity_slot *)IDENTITY_SLOTS)
@@ -39,10 +42,13 @@ int identity_primary_run(void)
     // Host zeroes the entire report before upload; stale state is never adopted.
     const volatile uint64_t *words=(void *)HEADER;
     for(unsigned i=0;i<IDENTITY_REPORT_BYTES/8;++i)if(words[i])return 0;
-    HEADER->magic=UINT64_C(0x4137334944454e31);HEADER->version=1;
+    HEADER->magic=IDENTITY_MAGIC;HEADER->version=1;
     HEADER->bytes=IDENTITY_REPORT_BYTES;HEADER->epoch=admission->epoch;
     HEADER->deadline=admission->startup_deadline;HEADER->state=1;barrier();
-    for(unsigned core=2;core<8;++core) {
+#ifdef SUNSTONE_SECONDARY_LOCAL
+    if(!secondary_distributor_begin(HEADER->deadline))return 0;
+#endif
+    for(unsigned core=IDENTITY_FIRST_CORE;core<8;++core) {
         volatile struct identity_slot *slot=&SLOTS[core];
         uintptr_t config=0x08001000+core*0x1000,control=0x07050200+core*4;
         uintptr_t mode=control+0x20,status=0x07052008+core*0x1000;
@@ -78,5 +84,8 @@ int identity_primary_run(void)
            read32(control)!=slot->control || (read32(status)&15))return 0;
         slot->restored=1;barrier();HEADER->completed|=UINT64_C(1)<<core;barrier();
     }
+#ifdef SUNSTONE_SECONDARY_LOCAL
+    if(!secondary_distributor_restore(HEADER->deadline))return 0;
+#endif
     HEADER->state=2;barrier();return 1;
 }

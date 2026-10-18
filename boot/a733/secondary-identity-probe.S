@@ -12,7 +12,7 @@ identity_primary_gate:
     br x17
 identity_target:
     // Production entry has observed RELEASE and supplied core/epoch in x0/x1.
-    cmp x0, #2
+    cmp x0, #IDENTITY_FIRST_CORE
     b.lo identity_park
     cmp x0, #7
     b.hi identity_park
@@ -66,6 +66,52 @@ identity_target:
     str x13, [x16, #112]
     orr w15, w12, w13
     tbnz w15, #0, identity_park
+#ifdef SUNSTONE_SECONDARY_LOCAL
+    // Preserve the target identities across actual production C functions.
+    mov x19, x16
+    mov x20, x0
+    mov x21, x1
+    msr daifset, #15
+    ldr x4, =a733_cached_el3_vectors
+    msr vbar_el3, x4
+    msr tpidr_el3, xzr
+    ldr x4, =24000000
+    msr cntfrq_el0, x4
+    msr cntps_ctl_el1, xzr
+    msr cntp_ctl_el0, xzr
+    msr cntv_ctl_el0, xzr
+    isb
+    bl prepare_core
+    mov x0, x20
+    mov x1, x21
+    ldr x2, =IDENTITY_REPORT
+    ldr x2, [x2, #32]
+    ldr x3, =0x42018a00
+    add x3, x3, x20, lsl #9
+    bl secondary_local_probe
+    cbz w0, identity_park
+    // Return2 denotes a restored refusal; its report remains distinct from success.
+    ldr x17, [x19, #40]
+    msr sctlr_el1, x17
+    isb
+    mrs x15, sctlr_el1
+    cmp x15, x17
+    b.ne identity_park
+    ldr x17, [x19, #48]
+    msr tcr_el1, x17
+    isb
+    mrs x15, tcr_el1
+    cmp x15, x17
+    b.ne identity_park
+    mov x16, x19
+    mov x0, x20
+    mov x1, x21
+    ldr x14, =0x07050200
+    add x14, x14, x0, lsl #2
+    ldr x12, [x16, #104]
+    ldr x13, [x16, #112]
+    ldr x17, [x16, #88]
+#endif
     dsb sy
     mov x15, #1
     str x15, [x16, #120]
