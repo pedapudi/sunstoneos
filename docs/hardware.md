@@ -311,8 +311,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   image links; focused checks verify retention when isolation is unavailable
   and prevention of device access after application failure. Its supervised
   mode also builds and passes session, launcher, packaging and refusal checks.
-  All 151 repository dependencies match the integrated sources, allowing reuse
-  of the linked image without another build. This mode retains resources until
+  The refreshed supervised image includes PMIC APBS1 source4 support. Its affected
+  link and nominal offline packaging pass; all 307 preserved repository inputs
+  match integration under `gpu-pmic-refresh-20261018/`. Existing GPU and PMIC
+  checks were reused. The software-only package supplies no physical admission.
+  This mode retains resources until
   manual power removal and still requires actual initial isolation. Successful GPU
   output, general drawing, repeated submission, lease disposal for reopen and
   physical execution remain outstanding.

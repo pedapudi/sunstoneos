@@ -83,6 +83,12 @@ substantive correctness risks. The coordinator alone operates the board.
   focused binding checks pass; all 97 preserved repository inputs match
   integration under `hdmi-binding-20261018/`. Existing display checks were reused.
   Physical monitor output remains unqualified.
+- GPU: the supervised image now includes the PMIC clock-parent support needed
+  for the observed board configuration. One affected link and nominal offline
+  bundle validation pass; all 307 preserved repository inputs match integration
+  under `gpu-pmic-refresh-20261018/`. Existing GPU and PMIC checks were reused.
+  The software-only bundle cannot supply physical admission, and successful
+  rendering remains unqualified.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
