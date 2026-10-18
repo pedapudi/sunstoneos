@@ -381,3 +381,51 @@ fixture assertion assumed the one-second cap instead of reading the admitted
 two-second value. Both failures, original inputs and corrected recipes remain
 preserved. Only affected or unexecuted steps resumed; the successful scheduler
 cases and native image were reused. Older RTC suites were not replayed.
+
+## Native USB serialization executes with the frozen service image
+
+The USB integration check reuses the service ELF above without rebuilding it.
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/rtc-usb-native-20261018/`. The five focused cases
+pass, and all 109 sealed inputs match after execution. Earlier scheduler,
+calendar, alarm and IRQ results are reused.
+
+The check executes the actual USB task, RTC copied-result API, serializer,
+TinyUSB initialization and descriptor configuration, vendor FIFOs, device event
+queue and transfer-completion callbacks. Controller events enter through the
+actual DCD event handler. The fixture models controller initialization, endpoint
+opening, transfer ownership and completion; it does not access physical USB
+registers, hardware FIFOs or the PHY. It never substitutes a host-generated RTC
+frame or directly invokes vendor/application completion callbacks.
+
+The completed 2416-byte transcript comes from the preserved real-FreeRTOS
+scheduler case. The fixture adopts those immutable bytes and their digest into
+the final ELF's private service layout. The actual native copy and serializer
+then produce the 2480-byte response. Defining compilation units and DWARF
+locations resolve private variables whose names occur elsewhere in the image.
+The prepared USB provider uses admitted owner identities and exact native object
+pointers. Its final platform poll and health consumers execute, while lower
+clock, rail and PMIC status results are explicit model boundaries. This does
+not replay or establish hardware initialization or real lease-ledger health.
+
+A pending query emits a private 64-byte header with zero digest and no payload.
+Two successful copies are identical to the adopted bytes. Actual TinyUSB write
+returns accept 2048 bytes followed by 432 bytes for each response. Each response
+completes as four 512-byte transfers and one 432-byte transfer. With completion
+withheld, a second OUT request waits in the real RX FIFO. It cannot replace the
+first response or invoke another copy until that response finishes. Endpoint
+backing remains unchanged while a modeled transfer owns it.
+
+The service-cancel request reaches the actual shared fatal latch; native clients
+retain their scoped cancellation API. Provider failure and deadline expiry stop
+further submissions while retaining the outstanding transfer. An injected poison
+store during the actual transcript copy exercises its final refusal check and
+produces a 64-byte failure frame without payload or digest. These are selected
+instruction interleavings, not a concurrency stress or timing qualification.
+
+Preserved failures include two declaration-parser setup errors and one DCD hook
+that compared unspecified upper register bits for a narrow endpoint argument.
+The corrected hook follows the declared argument widths. Only affected or
+unexecuted cases resumed. No production source, image or prior evidence changed.
+Physical USB operation, clock accuracy, wake/retention and recovery qualification
+remain outstanding.
