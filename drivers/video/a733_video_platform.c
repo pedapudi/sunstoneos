@@ -255,7 +255,7 @@ static int identity(struct a733_video_platform *p)
  * Remaining updates combine package RMW operations with the same final fields.
  * A reset pulse is NOT a drain mechanism: authority must already prove drain.
  */
-static int prep_step(struct a733_video_platform *p)
+static int prep_step(struct a733_video_platform *p,unsigned codec)
 {
     unsigned local=p->version==UINT64_C(0x3331000021320);
     switch(p->step) {
@@ -268,7 +268,7 @@ static int prep_step(struct a733_video_platform *p)
     case 3:return local?1:update(p,VE+0x804,0x11,0x11);
     case 4:return local?1:update(p,VE+0x804,0x11,0);
     case 5:return local?1:update(p,VE,0x130000,0x130000);
-    case 6:return update(p,VE,0x2c00101f,0);
+    case 6:return update(p,VE,0x2c00101f,codec);
     case 7:return update(p,VE+0x1c,0x100,0);
     case 8:return update(p,VE+0xc4,UINT32_MAX,0);
     case 9:return update(p,VE+0xc8,UINT32_MAX,0);
@@ -283,8 +283,8 @@ static int prep_step(struct a733_video_platform *p)
     default:return 0;
     }
 }
-static int prepare(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
- const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d)
+static int prepare_codec(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
+ const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d,unsigned codec)
 {
     struct a733_video_platform *p=v;
     if(p->failed||!p->checked||token!=p->token||d!=p->deadline||!timely(p))return fail(p);
@@ -304,12 +304,15 @@ static int prepare(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
     }
     if(p->step==2&&p->last_now<p->reset_until)return 0;
     int r=lock(p);if(r!=1)return r;
-    if(!prep_step(p))return fail(p);
+    if(!prep_step(p,codec))return fail(p);
     ++p->step;
     if(unlock(p)!=1)return -1;
     if(p->step==18)p->prepared=1;
     return p->prepared?1:0;
 }
+static int prepare(void *v,uint64_t token,const struct a733_video_jpeg_job *j,
+ const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d)
+{return prepare_codec(v,token,j,pic,stride,rows,d,0);}
 static int jpeg_read(void *v,uint64_t token,uint32_t off,uint32_t *out,uint64_t d)
 {
     struct a733_video_platform *p=v;
@@ -360,6 +363,96 @@ const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void)
     static const struct a733_video_jpeg_ops ops={clock_now,acquire,prepare,jpeg_read,jpeg_write,finish};
     return &ops;
 }
+static int h264_write_allowed(uint32_t off)
+{
+    switch(off){
+    case 0xec:case 0xc4:case 0xc8:case 0x200:case 0x204:case 0x208:case 0x20c:
+    case 0x21c:case 0x220:case 0x224:case 0x228:case 0x22c:case 0x230:case 0x234:
+    case 0x238:case 0x23c:case 0x240:case 0x24c:case 0x250:case 0x254:case 0x260:
+    case 0x2e0:case 0x2e4:return 1;
+    default:return 0;
+    }
+}
+/* Private bridges reuse only common resource sequencing. No JPEG job/picture
+ * is fabricated: those historical parameters are NULL and unused here. */
+static int h264_now(void *v,uint64_t *n)
+{struct a733_h264_platform *p=v;return p->ops.now_us(p->cookie,n);}
+static int h264_admit(void *v,const struct a733_video_platform_config *c,
+ const struct a733_video_jpeg_job *unused,uint64_t d,uint64_t *t)
+{struct a733_h264_platform *p=v;(void)unused;return p->bound?p->ops.admit(p->cookie,c,&p->job,d,t):-1;}
+static int h264_memory(void *v,uint64_t t,const struct a733_video_jpeg_job *unused,
+ const struct a733_video_jpeg *picture,uint32_t stride,uint32_t rows,uint64_t d)
+{struct a733_h264_platform *p=v;(void)unused;(void)picture;(void)stride;(void)rows;
+ return p->ops.memory(p->cookie,t,&p->job,d);}
+static int h264_no_drain(void *v,uint64_t t,uint64_t d)
+{(void)v;(void)t;(void)d;return -1;}
+static int h264_enter(void *v,uint64_t d)
+{struct a733_h264_platform *p=v;return p->ops.enter(p->cookie,d);}
+static int h264_leave(void *v)
+{struct a733_h264_platform *p=v;return p->ops.leave(p->cookie);}
+static int h264_native_read(void *v,uintptr_t a,uint32_t *x)
+{struct a733_h264_platform *p=v;return p->ops.read(p->cookie,a,x);}
+static int h264_native_write(void *v,uintptr_t a,unsigned w,uint32_t x)
+{struct a733_h264_platform *p=v;return p->ops.write(p->cookie,a,w,x);}
+int a733_h264_platform_init(struct a733_h264_platform *p,const struct a733_video_platform_config *c,
+ const struct a733_h264_platform_ops *o,void *cookie)
+{
+    if(!p||p->common.initialized||!o||!o->now_us||!o->admit||!o->memory||!o->copied||
+       !o->enter||!o->leave||!o->read||!o->write)return 0;
+    p->ops=*o;p->cookie=cookie;
+    struct a733_video_platform_ops ops={h264_now,h264_admit,h264_memory,h264_no_drain,
+        h264_enter,h264_leave,h264_native_read,h264_native_write};
+    return a733_video_platform_init(&p->common,c,&ops,p);
+}
+static int h264_same_job(const struct a733_h264_job *a,const struct a733_h264_job *b)
+{
+    if(a->input!=b->input)return 0;
+    for(unsigned i=0;i<A733_H264_BUFFERS;++i)if(a->buffers[i].iova!=b->buffers[i].iova||
+        a->buffers[i].bytes!=b->buffers[i].bytes)return 0;
+    return 1;
+}
+static int h264_clock(void *v,uint64_t *n)
+{struct a733_h264_platform *p=v;return clock_now(&p->common,n);}
+static int h264_acquire(void *v,const struct a733_h264_job *j,uint64_t d,uint64_t *t)
+{
+    struct a733_h264_platform *p=v;
+    if(!p||!j)return -1;
+    if(p->bound&&!h264_same_job(&p->job,j))return fail(&p->common);
+    if(!p->bound){p->job=*j;p->bound=1;}
+    return acquire(&p->common,NULL,d,t);
+}
+static int h264_prepare(void *v,uint64_t t,const struct a733_h264_job *j,uint64_t d)
+{
+    struct a733_h264_platform *p=v;
+    if(!p||!j||!p->bound||!h264_same_job(&p->job,j))return -1;
+    return prepare_codec(&p->common,t,NULL,NULL,0,0,d,1);
+}
+static int h264_read(void *v,uint64_t t,uint32_t off,uint32_t *x,uint64_t d)
+{
+    struct a733_h264_platform *p=v;struct a733_video_platform *c=&p->common;
+    if(c->failed||!c->checked||t!=c->token||d!=c->deadline||!x)return fail(c);
+    if(off!=0xf0&&off!=0xe0&&off!=0xe4&&(!c->prepared||
+       (off!=0&&off!=0x1c&&off!=0xb0&&off!=0xec&&off!=0x228&&off!=0x5c&&off!=0x804)))return fail(c);
+    if(lock(c)!=1)return fail(c);
+    if(rd(c,VE+off,x)!=1)return -1;
+    return unlock(c);
+}
+static int h264_write(void *v,uint64_t t,uint32_t off,uint32_t x,uint64_t d)
+{
+    struct a733_h264_platform *p=v;struct a733_video_platform *c=&p->common;
+    if(c->failed||!c->prepared||t!=c->token||d!=c->deadline||!h264_write_allowed(off))return fail(c);
+    if(lock(c)!=1)return fail(c);
+    if(wr(c,VE+off,4,x)!=1)return -1;
+    return unlock(c);
+}
+static int h264_copied(void *v,uint64_t t,uint64_t d)
+{struct a733_h264_platform *p=v;
+ return a733_video_platform_retained_copy(&p->common,t,d,p->ops.copied,p->cookie);}
+const struct a733_h264_ops *a733_video_platform_h264_ops(void)
+{
+    static const struct a733_h264_ops ops={h264_clock,h264_acquire,h264_prepare,h264_read,h264_write,h264_copied};
+    return &ops;
+}
 static int readable(uintptr_t a)
 {
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
@@ -375,7 +468,8 @@ static int readable(uintptr_t a)
     if(a==GIC||a==GIC+0x108||a==GIC+0x208||a==GIC+0x308||a==GIC+0xc14)return 1;
     if(a>=VE&&a<VE+0x1000) switch(a-VE) {
     case 0:case 4:case 0x1c:case 0x50:case 0x54:case 0xc4:case 0xc8:case 0xcc:
-    case 0xe0:case 0xe4:case 0xe8:case 0xec:case 0xf0:case 0x11c:case 0x804:return 1;
+    case 0xe0:case 0xe4:case 0xe8:case 0xec:case 0xf0:case 0x11c:case 0x804:
+    case 0xb0:case 0x228:case 0x5c:return 1;
     default:return 0;
     }
     return 0;
@@ -407,7 +501,7 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
     int allowed=(mask||delay)&&width==4;
     if(a>=VE&&a<VE+0x1000) {
         uint32_t off=(uint32_t)(a-VE);
-        allowed=codec_write(off,width)||(width==4&&(off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
+        allowed=codec_write(off,width)||(width==4&&(h264_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
     }
     if(!allowed)return -1;
 #if defined(__aarch64__)

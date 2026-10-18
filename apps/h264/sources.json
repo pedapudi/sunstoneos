@@ -1,0 +1,69 @@
+{
+  "h264_hal.c": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/aefdcde5bec97a09caf1a7d838f7fbcaf6d76779",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "f81b8be6a90b6e785d735467c82fc422d19a164121edee495c6d841106dc1aaa"
+  },
+  "h264_hal.h": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/de73854a169e4644e4cffa1665d60a0e6a38b728",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "4ccf5fbbe7add74ed5258e466b8fe9520c27249390fdecc6f16951db6ac80ca2"
+  },
+  "h264_dec.h": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/ffb5f5a6ac26b62da710fe0b149bab5e82b76d5c",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "8a9a2bdbcadab3886e14e82a0997585354fa144824eaee0341da8d2c8b8d8210"
+  },
+  "h264.h": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/0b60e0153574c231c8f7306eca58c9059942cdbf",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "cc120907753cd4d7b40150fdad150aca526cd9323ad236a15f4565f1b4f0e2cf"
+  },
+  "cedrus_h264.c": {
+    "url": "https://api.github.com/repos/torvalds/linux/contents/drivers/staging/media/sunxi/cedrus/cedrus_h264.c?ref=70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56",
+    "revision": "70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56",
+    "sha256": "979b34c1eba96f9cc960252110f980e2dcd0f502435f9954394f7d7239140db5"
+  },
+  "h264_dec.c": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/8e3e6b70c6948ae558321dbb8d57d36e028e5878",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "b81ae006fb2b7d80c5be65017a6ea6481a19d2df02d9ba0751acb44680bedb8c"
+  },
+  "h264_config.h": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/1a8212ef80f621d1961c1bec4be3d83b993ee2f3",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "efa79e453a9ec8c126430589744df3fb64f5c271d47d45d3dc9f8145494d9224"
+  },
+  "COPYING": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+  },
+  "COPYING.LESSER": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+  },
+  "h264_nalu.c": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/5f650f056dd277f61eec7ab9078229fc45921c3f",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "245e92cf6ce38f4a30b1a483c0cac2075e065065fe6caeca0e3e3d31b7a97064"
+  },
+  "a733-runtime-reference": {
+    "package_revision": "7f592b79a85cb7b5ef86dabaf2016013b85a8d4d",
+    "package_url": "https://raw.githubusercontent.com/radxa/allwinner-debian/7f592b79a85cb7b5ef86dabaf2016013b85a8d4d/packages/arm64/libcedarc/libcedarc-dev_2.0.0_arm64.deb",
+    "package_sha256": "ea2c62123466e233e5f358fffac10499a5ae3886d9fe340532907bba6f2f6d4e",
+    "execution": "Host instruction reference only; not linked or loaded by native FreeRTOS.",
+    "libraries": {
+      "libawh264.so": "c977fe936a0bf1418f0a452c9769158b3ad2c8ff32aa972c1db4e21630f7fcc3",
+      "libVE.so": "3af49a5eb24f6832518a858274fb206d60e490985bff02f5d5be36d053f65be4",
+      "libvideoengine.so": "abfea1fa75f6a3ca5413d16eb69fcb87692f3e3b6552d83a222a998e909cef82"
+    },
+    "license_status": "Redistributed package is retained unchanged; inspect package notices. Native adaptation uses GPL Cedrus control; H6-CedarC LGPL2 source provides corroborating semantics."
+  },
+  "veAwTopRegDef.h": {
+    "url": "https://api.github.com/repos/Allwinner-Homlet/H6-CedarC/git/blobs/1ded748264514e72721fd0be84065ab676508f2a",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "e5ef99781196d09be6fe3e7837a6a4a89e43af4fa473e5f98c1223620aad4503"
+  }
+}

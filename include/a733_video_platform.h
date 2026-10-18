@@ -2,6 +2,7 @@
 #ifndef SUNSTONE_A733_VIDEO_PLATFORM_H
 #define SUNSTONE_A733_VIDEO_PLATFORM_H
 #include "a733_video_jpeg_run.h"
+#include "a733_video_h264.h"
 #include "a733_clock_leases.h"
 #include "a733_gpu_resources.h"
 
@@ -97,4 +98,31 @@ int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
+
+/* One fixed H.264 consumer, sharing the actual cold/clock/reset/lease provider.
+ * The JPEG structure and callback ABI above are unchanged. This wrapper keeps
+ * the H.264 job typed and never presents it as a JPEG picture or scan.
+ * Callback contracts are the same retained acquisition/memory contracts above;
+ * memory supplies the six explicit H.264 spans, including scratch and MV data.
+ */
+struct a733_h264_platform_ops {
+    int (*now_us)(void *,uint64_t *);
+    int (*admit)(void *,const struct a733_video_platform_config *,const struct a733_h264_job *,uint64_t,uint64_t *);
+    int (*memory)(void *,uint64_t,const struct a733_h264_job *,uint64_t);
+    int (*copied)(void *,uint64_t,uint64_t);
+    int (*enter)(void *,uint64_t);
+    int (*leave)(void *);
+    int (*read)(void *,uintptr_t,uint32_t *);
+    int (*write)(void *,uintptr_t,unsigned,uint32_t);
+};
+struct a733_h264_platform {
+    struct a733_video_platform common;
+    struct a733_h264_platform_ops ops;
+    struct a733_h264_job job;
+    void *cookie;
+    unsigned bound;
+};
+int a733_h264_platform_init(struct a733_h264_platform *,const struct a733_video_platform_config *,
+                            const struct a733_h264_platform_ops *,void *);
+const struct a733_h264_ops *a733_video_platform_h264_ops(void);
 #endif
