@@ -7,8 +7,10 @@ releases it only after the existing [power controller](cpu-start.md) completes
 request cleanup and the matching arrival report passes validation.
 
 Host sanitizer checks, instruction emulation and freestanding AArch64 compilation
-pass. Physical secondary entry remains unqualified. Cache coherence, per-core
-interrupt setup and eight-core FreeRTOS startup remain outstanding.
+pass. Core 1 reaches the physical EL3 arrival report and powers itself off before
+release. Cache coherence, per-core interrupt setup and eight-core FreeRTOS
+startup remain outstanding. The [startup record](a733-smp-supervised.md) holds
+the physical evidence and the later interrupt-initialization failure.
 
 ## The boot owner reserves memory before starting a CPU
 
@@ -89,7 +91,8 @@ Cortex-A55; cores 6 and 7 must identify as Cortex-A76. MIDR variant and revision
 remain available for later errata selection. The part identifiers match the pinned
 [Cortex-A55](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/cortex_a55.h)
 and [Cortex-A76](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/include/lib/cpus/aarch64/cortex_a76.h)
-definitions. Physical MIDR observations are still required.
+definitions. Physical observations identify cores 0 and 1 as Cortex-A55 r2p0;
+cores 2 through 7 still need identification.
 
 Every operation uses the power controller's original absolute microsecond
 deadline, with monotonic checks before and after it. Mailbox and power operations
@@ -164,10 +167,11 @@ Freestanding compilation produces 1,692 bytes of owner code/read-only data,
 2,152 bytes for the native adapter and 4,248 bytes for the entry and vectors.
 The largest reported direct C stack frame is 512 bytes. The owner requires runtime
 `memcpy` and `memset`; other undefined symbols connect the power controller,
-entry allocations and platform continuation. The native adapter is compiled
-but its privileged operations have not executed on the board.
+entry allocations and platform continuation. These software measurements do not
+establish physical behavior; the later core-1 evidence is recorded separately.
 
-Physical execution requires the independent watchdog recovery qualification.
-The next integration must provide the fixed continuation and reserved image
-placement, then prove secondary arrival, coherent memory, per-core interrupt
-handling and scheduler participation on all seven secondary processors.
+The supervised RAM-only diagnostic uses a reviewed return procedure and manual
+power removal after failure. Watchdog-dependent images retain their separate
+recovery prerequisites. Physical acceptance still requires secondary arrival,
+coherent memory, per-core interrupt handling and scheduler participation on all
+seven secondary processors.

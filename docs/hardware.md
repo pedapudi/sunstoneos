@@ -590,6 +590,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A nonconstant diagnostic now has an exact CPU-decoded reference and integrated
   native copy/layout and host checks. Its sparse-coefficient oracle does not
   establish general JPEG numerical conformance. Physical decoding remains untested.
+  The complete JPEG session is now copied and verified against its admitted
+  digest before provider startup. USB failure revokes board liveness before
+  parking. The affected native link and focused session/failure checks pass;
+  prior decoder and numerical evidence was reused.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.

@@ -64,9 +64,11 @@ substantive correctness risks. The coordinator alone operates the board.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
-  Evidence is under `jpeg-nonconstant-20261017/`. A focused correction is binding
-  the complete session to its admitted digest and revoking board liveness before
-  USB failure parks execution. Existing decode evidence remains applicable.
+  Evidence is under `jpeg-nonconstant-20261017/`. Startup now copies and verifies
+  the complete session against its admitted digest before provider initialization;
+  USB failure revokes board liveness before parking execution. The affected image
+  and focused checks pass. All 188 preserved repository inputs match integration
+  under `jpeg-sealing-20261018/`; prior decoder evidence was reused.
 - H.264: the fixed Baseline IDR fixture matches its CPU reference, and selected
   A733 runtime register traces pass after a structure-field audit. Native driver,
   application and copied-output integration are in progress.
@@ -78,7 +80,7 @@ substantive correctness risks. The coordinator alone operates the board.
   investigating the predecessor handoff. Inspection of the actual DDR initializer
   found no crypto launch path; actual ROM/FEL history remains unresolved. No board
   crypto command has executed. The session-binding and USB failure corrections
-  follow the JPEG correction before this image is eligible for physical use.
+  are in progress before this image is eligible for physical use.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -92,7 +94,7 @@ Session integrity needs the same follow-up in camera, I2S and HDMI startup.
 Their admission functions hash the complete session, but their application entry
 functions later copy live bytes without comparing the copied digest with the
 authenticated digest. Field validation alone does not bind that later copy.
-Correct these consumers after JPEG and crypto; reuse unaffected device checks.
+Correct these consumers after crypto; reuse unaffected device checks.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
 

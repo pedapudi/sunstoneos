@@ -4,7 +4,10 @@ The [CPU startup controller](../platform/a733/cpu_start.c) implements the A733
 secondary-core entry-address and power-request sequence. Host failure checks
 pass, and its complete writes match isolated instructions from the published
 board firmware for cores 1 through 7. The controller compiles for AArch64.
-Physical power-on, secondary entry and multicore FreeRTOS remain unqualified.
+Core 1 power-on, native entry and target-owned shutdown now pass on the board;
+the primary observes OFF before restoring saved state. The remaining cores and
+multicore FreeRTOS remain unqualified. The [startup record](a733-smp-supervised.md)
+holds the physical evidence and the later interrupt-initialization failure.
 
 The [interface](../include/a733_cpu_start.h) accepts one serialized privileged
 boot owner, copied callbacks, a reserved entry address, a target core and an
@@ -23,8 +26,9 @@ Only boot core 0 can initiate this sequence. The topology decoder uses MPIDR
 affinity level 1 for the core index and requires the other affinity levels to
 be zero. It accepts the architectural flag bits and refuses reserved bits or
 an index outside 0 through 7. The board device tree describes six Cortex-A55
-cores followed by two Cortex-A76 cores; physical MIDR identification remains
-necessary before selecting per-core startup operations.
+cores followed by two Cortex-A76 cores. Physical MIDR observations identify
+cores 0 and 1 as Cortex-A55 r2p0; the remaining cores still need identification
+before selecting their startup operations.
 
 The entry must be four-byte aligned and lie in DRAM below 4 GiB. This is the
 initial image-placement constraint. It does not describe the processor's full
@@ -112,8 +116,9 @@ reported direct stack frame is 48 bytes. Source hashes, commands, logs, traces
 and object identity are recorded in the evidence directory. These are software
 checks; no secondary processor executed in this model or on the board.
 
-The next implementation must bind privileged register access, publish a reserved
-EL3 entry and mailbox, and coordinate the secondary handoff. It must provide
-per-core exception handling, coherence, GIC wakeup/redistributor setup and the
-A733 affinity mapping before extending the scheduler to all eight cores.
-Physical execution requires independently qualified watchdog recovery first.
+The native integration binds privileged register access, a reserved EL3 entry
+and mailboxes. Physical core-1 entry and shutdown pass before release; execution
+after release, interrupt preparation and coherent scheduling remain unresolved.
+The [supervised diagnostic](a733-smp-supervised.md) uses a reviewed RAM-only
+return procedure and manual power removal after failure. Watchdog-dependent
+images retain their separate recovery prerequisites.
