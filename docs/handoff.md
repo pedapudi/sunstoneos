@@ -115,10 +115,11 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:100` after successful core-1 EL3 translation/cache adoption and
-restoration. Fresh DDR,
-survey and all-secondary-OFF checks passed on `003:092` before that launch.
-The diagnostic returned normally and its process and queue claim closed.
+instance `003:102` after the cached-EL1 diagnostic returned without an EL1
+observation. EL3 adoption/restoration, shutdown/OFF and DRAM restoration passed;
+EL1 execution remains unobserved. The process exited and the failed claim closed.
+The original-board queue is halted pending executable-visibility review. DDR
+continuity began with the initialization and all-secondary-OFF checks on `003:092`.
 The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -310,7 +311,7 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:100`. The user confirmed power
+The original board on `3-1` returned as `003:102`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
@@ -602,6 +603,17 @@ The primary agent handles all further multicore work directly.
    intentional watchdog expiry and unattended fault tests remain deferred;
    USB power-control work is closed.
 
+The next cached-EL1 diagnostic is implemented and passes three modeled cases:
+production entry/SMC/restoration, unexpected SMC rejection and failed restoration
+retention. Its physical attempt returned normal ROM as `003:102`, with matching
+OFF and DRAM restoration, but the new EL1 report is entirely zero. The uploaded
+overlay matches its frozen bytes and contains the EL1 call. Only the earlier
+EL3-only interval is observed. Evidence is under `native-el1-cache-20261018/`.
+The cause is unresolved; stale executable visibility across cache enablement is
+a hypothesis under review. The child exited and its failed claim closed; the
+original-board queue is halted pending that review. No unchanged retry is allowed.
+No transport failure occurred, and no reconnect is requested on this evidence.
+
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.
    Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)
@@ -640,6 +652,15 @@ The primary agent handles all further multicore work directly.
    establish completed device writes or permit resource reuse. The larger memory
    profile supplies capacity; physical exclusion, coherence and device mappings
    remain required. Camera capture separately requires the actual module and wiring.
+The independent single-core NPU convolution image is integrated and reviewed.
+Eleven startup/provider cases, seven host cases and six comparisons of unchanged
+SD/GPU preprocessing pass under `npu-single-core-20261018/`. Integration matches
+145 distinct repository inputs and reuses the frozen ELF and external compiled
+inputs without rebuilding or replaying tests. The startup restores interrupt
+masking after FreeRTOS static task construction. Physical NPU inference remains
+pending actual supply, memory, DMA, USB and recovery admission. The preserved
+software fixture bundle is never a deployable admission record.
+
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
    audio, display, codecs, PCIe, SPI, routed PWM/ADC and power transitions.

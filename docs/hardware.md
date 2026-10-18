@@ -132,6 +132,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Local cleanup, observed OFF, shared-state/DRAM restoration and ROM return pass.
   This probe writes only Device memory during the cached interval; it does not
   establish cached EL1 execution or cross-core coherence.
+  The subsequent production EL1-entry diagnostic passes three modeled cases,
+  but its physical EL1 record is empty despite a verified new upload. The board
+  returned ROM with observed OFF and DRAM restoration; only the EL3 interval is
+  observed. Executable visibility across cache enablement is under review under
+  `native-el1-cache-20261018/`. Cached EL1 execution remains unqualified.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -763,6 +768,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 
+  The independent single-core convolution image is also integrated. Eleven
+  startup/provider cases, seven host cases and six unchanged SD/GPU preprocessing
+  comparisons pass under `npu-single-core-20261018/`; focused review accepted
+  the image and source closure. Physical inference and the remaining NPU modes
+  remain unqualified. The software fixture package must never deploy.
 - Video and image codecs: **implemented** [baseline JPEG preparation and execution control](video-codecs.md)
   for the documented YCbCr420 profile. Host checks, runtime instruction comparisons
   and native compilation pass. Identity admission precedes reset/engine setup;

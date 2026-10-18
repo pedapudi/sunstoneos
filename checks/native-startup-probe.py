@@ -10,7 +10,7 @@ import re
 import struct
 import subprocess
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ,UC_HOOK_MEM_WRITE
-from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP
+from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_NZCV
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('build','bundle','output','objdump'):p.add_argument('--'+name,type=Path,required=True)
@@ -22,7 +22,8 @@ before_power=m.get('stop_before_power',False)
 after_interface=m.get('stop_after_cpu_interface',False)
 before_wake=m.get('stop_before_wake',False)
 after_wake=m.get('stop_after_wake',False)
-el3_cache=m.get('el3_cache',False)
+el1_cache=m.get('el1_cache',False)
+el3_cache=m.get('el3_cache',False) or el1_cache
 profile=host.manifest_profile(m)
 assert m.get('execution_profile')==profile
 ops={};labels={}
@@ -52,6 +53,7 @@ def check(name,scenario='normal'):
         'id_aa64mmfr0_el1':0x101122,'s3_0_c15_c3_1':0x41,'s3_0_c15_c3_0':121618999,'tcr_el1':0,
         'esr_el3':0x96000010,'elr_el3':0,'far_el3':0,
         'scr_el3':0x530,'tcr_el3':0,'ttbr0_el3':0,'mair_el3':0}
+    registers.update(ttbr0_el1=0x12345000,ttbr1_el1=0x56789000,mair_el1=0x123456,icc_igrpen1_el1=0)
     original_ctlr=7 if scenario=='are-guard' else 0x37
     original_spi=[0xa55aa55a]+[(0x11223344^(i*0x10201))&0xffffffff for i in range(1,32)]
     gic={'ctlr':original_ctlr,'typer':0x7b0408,'spi':original_spi.copy(),'rwp':0}
@@ -74,12 +76,17 @@ def check(name,scenario='normal'):
     expected_frame_reads=[rbase+8,rbase+0x24]+([] if frame_power!=0x100 else list(local_registers)+[rbase+0x24])
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     cache_operations=[];cache_memory={'fetches':0,'reads':0,'writes':0}
+    el1_memory={'fetches':0,'reads':0,'writes':0};transitions=[]
     def mapped_access(uc,address,size,write=False,fetch=False):
         regs=per_core[active[0]]
-        if not regs['sctlr_el3']&1:return
+        level=regs['currentel']//4
+        if level==1:
+            assert el1_cache and active[0]==1 and not write,'EL1 must make no stores'
+            el1_memory['fetches' if fetch else 'reads']+=1
+        if not regs[f'sctlr_el{level}']&1:return
         assert el3_cache and active[0]==1
-        assert regs['tcr_el3']==0x80823019 and regs['mair_el3']==0x44ff00
-        table=regs['ttbr0_el3']
+        assert regs[f'tcr_el{level}']==(0x200803019 if level==1 else 0x80823019) and regs[f'mair_el{level}']==0x44ff00
+        table=regs[f'ttbr0_el{level}']
         for shift in (30,21,12):
             desc=struct.unpack('<Q',uc.mem_read(table+((address>>shift)&511)*8,8))[0]
             if shift==12 or desc&3!=3:break
@@ -88,8 +95,9 @@ def check(name,scenario='normal'):
         pa=(desc&0x0000fffffffff000&~((1<<shift)-1))|(address&((1<<shift)-1))
         assert pa==address and address//(1<<shift)==(address+size-1)//(1<<shift)
         if fetch:
-            assert 0x41000000<=address<0x41200000 and not desc&(1<<54)
-            assert desc&(1<<5) and not regs['scr_el3']&0x200
+            assert 0x41000000<=address<0x41200000 and not desc&(1<<(53 if level==1 else 54))
+            if level==3:assert desc&(1<<5) and not regs['scr_el3']&0x200
+            else:assert (desc>>6)&3==3  # Frozen image maps code read-only at EL0/EL1.
             cache_memory['fetches']+=1
         elif write:
             assert 0x42000000<=address and address+size<=0x421f0000
@@ -125,6 +133,22 @@ def check(name,scenario='normal'):
         if address==0x4100460c:
             item=publication[-1];assert cleaned==list(range(item['begin'],item['end'],64));item['lines']=len(cleaned)
         text=ops.get(address,'')
+        if text=='eret':
+            assert el1_cache and active[0]==1 and registers['currentel']==12
+            assert registers['elr_el3']==0x410081cc and registers['spsr_el3']==0x3c5
+            assert registers['sctlr_el1']==0x30d00800 and registers['scr_el3']==0x535
+            registers['saved_sp_el3']=uc.reg_read(UC_ARM64_REG_SP)
+            registers['currentel']=4;registers['daif']=0x3c0
+            uc.reg_write(UC_ARM64_REG_SP,registers['sp_el1'])
+            uc.reg_write(UC_ARM64_REG_PC,registers['elr_el3']);transitions.append('eret-el1');return
+        if text.startswith('smc'):
+            assert el1_cache and active[0]==1 and registers['currentel']==4
+            assert address+4==m['el1_smc_return'] and uc.reg_read(UC_ARM64_REG_SP)==0x41253000
+            registers.update(elr_el3=address+4,esr_el3=0x5e000733,
+                spsr_el3=uc.reg_read(UC_ARM64_REG_NZCV)|0x3c5,currentel=12,daif=0x3c0)
+            if scenario=='el1-smc-refusal':registers['esr_el3']^=1;injected.append(True)
+            uc.reg_write(UC_ARM64_REG_SP,registers['saved_sp_el3'])
+            uc.reg_write(UC_ARM64_REG_PC,registers['vbar_el3']+0x400);transitions.append('smc-el3');return
         if text=='sev':
             assert struct.unpack('<Q',uc.mem_read(0x42002270,8))[0]==1
             assert struct.unpack('<Q',uc.mem_read(0x42005118,8))[0] in (1,2)
@@ -132,7 +156,7 @@ def check(name,scenario='normal'):
         if re.match(r'dc\s+cvac,\s*x0$',text,re.I):
             assert address==0x410045e0;cleaned.append(uc.reg_read(UC_ARM64_REG_X0));uc.reg_write(UC_ARM64_REG_PC,address+4);return
         if re.match(r'(dc|ic|tlbi)\s',text,re.I):
-            assert el3_cache and active[0]==1 and re.fullmatch(r'(ic\s+iallu|tlbi\s+alle3)',text,re.I),text
+            assert el3_cache and active[0]==1 and re.fullmatch(r'(ic\s+iallu|tlbi\s+(alle3|vmalle1))',text,re.I),text
             cache_operations.append(text);uc.reg_write(UC_ARM64_REG_PC,address+4);return
         read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
         if read:
@@ -156,12 +180,14 @@ def check(name,scenario='normal'):
             if 'DAIFSet' in text or 'SPSel' in text:uc.reg_write(UC_ARM64_REG_PC,address+4);return
             write=re.match(r'msr\s+(\S+),\s*(x\d+|xzr)',text,re.I);assert write,(name,text)
             key=write[1].rstrip(',').lower();value=0 if write[2]=='xzr' else uc.reg_read(UC_ARM64_REG_X0+int(write[2][1:]));controls.append([active[0],key,value])
-            assert key in ('vbar_el3','cntfrq_el0','cntps_ctl_el1','cntp_ctl_el0','cntv_ctl_el0','rmr_el3','sctlr_el1','tcr_el1','tpidr_el3','s3_0_c15_c2_7','icc_sre_el3','icc_igrpen0_el1','icc_igrpen1_el3','sctlr_el3','scr_el3','tcr_el3','ttbr0_el3','mair_el3'),(name,key)
+            assert key in ('vbar_el3','cntfrq_el0','cntps_ctl_el1','cntp_ctl_el0','cntv_ctl_el0','rmr_el3','sctlr_el1','tcr_el1','tpidr_el3','s3_0_c15_c2_7','icc_sre_el3','icc_igrpen0_el1','icc_igrpen1_el3','sctlr_el3','scr_el3','tcr_el3','ttbr0_el3','mair_el3','ttbr0_el1','ttbr1_el1','mair_el1','icc_ctlr_el3','mdcr_el3','cptr_el3','icc_sre_el2','icc_sre_el1','hcr_el2','hstr_el2','mdcr_el2','vttbr_el2','cptr_el2','cnthctl_el2','cntvoff_el2','sctlr_el2','tpidr_el1','sp_el1','vbar_el1','cpacr_el1','cntkctl_el1','elr_el3','spsr_el3'),(name,key)
             if key=='rmr_el3':
                 assert active[0]==0,'Secondary must never execute RMR.'
                 assert value==2 and writes[-2:]==[[0x08001004,4,0x20],[0x08001008,4,0]];stopped.append('return');uc.emu_stop()
             else:
-                if scenario=='cache-enable-refusal' and active[0]==1 and key=='sctlr_el3' and value&1:
+                if scenario=='el1-restore-refusal' and active[0]==1 and key=='ttbr0_el1' and value==0x12345000:
+                    registers[key]=value^0x1000;injected.append(True)
+                elif scenario=='cache-enable-refusal' and active[0]==1 and key=='sctlr_el3' and value&1:
                     registers[key]=value^8;injected.append(True)
                 elif scenario=='cache-restore-refusal' and active[0]==1 and key=='tcr_el3' and value==0:
                     registers[key]=1;injected.append(True)
@@ -306,11 +332,17 @@ def check(name,scenario='normal'):
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
     initialization=host.local_initialization_snapshot(bytes(cpu.mem_read(0x42002980,256)))
     cache=host.el3_cache_snapshot(bytes(cpu.mem_read(0x42002a80,160)))
+    el1=host.el1_cache_snapshot(bytes(cpu.mem_read(0x42002b20,256)))
     controller_access=host.controller_access_snapshot(bytes(cpu.mem_read(0x42002960,32)))
     a.output.with_suffix('.last-observation.json').write_text(json.dumps({
-        'case':name,'assertions_complete':False,'stopped':stopped,'el3_cache':cache,
+        'case':name,'assertions_complete':False,'stopped':stopped,'el3_cache':cache,'el1_cache':el1,
         'initialization':initialization,'activation':activation,
         'rdist_writes':rdist_writes,'secondary_terminal':secondary_terminal,'controller_access':controller_access},indent=2)+'\n')
+    if scenario in ('el1-smc-refusal','el1-restore-refusal'):
+        assert el1_cache and stopped==['park'] and injected and not activation['ack']
+        assert el1['state']==(1 if scenario=='el1-smc-refusal' else 2) and el1['failure']==1
+        assert not initialization['cleanup_writes'] and not sleep_attempted
+        reports.append({'name':name,'el1_cache':el1,'retained':True,'el1_memory':el1_memory,'transitions':transitions});return
     if scenario in ('cache-enable-refusal','cache-restore-refusal'):
         assert el3_cache and stopped==['park'] and injected and not activation['ack']
         assert cache['state']==(1 if scenario=='cache-enable-refusal' else 2) and cache['failure']==1
@@ -320,7 +352,11 @@ def check(name,scenario='normal'):
     if el3_cache:
         host.validate_el3_cache(cache)
         assert cache['epoch']==activation['epoch'] and all(cache_memory.values())
-        assert len(cache_operations)==6 and cache_operations.count('ic\tiallu')==2
+        assert len(cache_operations)==(11 if el1_cache else 6) and cache_operations.count('ic\tiallu')==(3 if el1_cache else 2)
+    if el1_cache:
+        host.validate_el1_cache(el1,m['el1_smc_return'])
+        assert el1['epoch']==activation['epoch'] and transitions==['eret-el1','smc-el3']
+        assert el1_memory['fetches'] and not el1_memory['reads'] and not el1_memory['writes']
     if scenario in ('interface-group-enabled','interface-sre-refusal'):
         assert after_interface and stopped==['park'] and observation['state']==1 and not activation['ack']
         assert initialization['state']==1 and not initialization['cpu_interface_observed']
@@ -396,7 +432,13 @@ def check(name,scenario='normal'):
         assert observation['controller']['state']==5 and observation['controller']['index']==2 and observation['controller']['error']==3
         assert observation['controller']['core_record']['state']==6
     else:
-        assert target_controls==[['tcr_el1',0x800080],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0]]
+        expected_controls=[['tcr_el1',0x800080],['sctlr_el1',0xc50839]]
+        if el1_cache:expected_controls += [
+            ['sctlr_el1',0x30d00800],['tcr_el1',0x200803019],['tcr_el1',0x200803019],
+            ['sctlr_el1',0x30d01805],['tcr_el1',0x200803099],['sctlr_el1',0x30d01805],
+            ['sctlr_el1',0x30d00801],['sctlr_el1',0xc50839],['tcr_el1',0x800080]]
+        expected_controls += [['sctlr_el1',0xc50838],['tcr_el1',0]]
+        assert target_controls==expected_controls,target_controls
         assert typer_reads[:len(expected_frame_reads)]==expected_frame_reads
         assert observation['walks']==dict(blocked_sctlr1=0xc50839,blocked_tcr1=0x800080,
             typer=(0x100<<32)|0x121,pwrr=frame_power,restored_sctlr1=0xc50838,restored_tcr1=0,state=2)
@@ -463,8 +505,12 @@ def check(name,scenario='normal'):
     assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
-    reports.append({'name':name,'el3_cache':cache,'cache_memory':cache_memory,'cache_operations':cache_operations,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization,'controller_access':controller_access})
-if el3_cache:
+    reports.append({'name':name,'el1_cache':el1,'el1_memory':el1_memory,'transitions':transitions,'el3_cache':cache,'cache_memory':cache_memory,'cache_operations':cache_operations,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization,'controller_access':controller_access})
+if el1_cache:
+    check('production-el1-adoption-smc-and-restoration')
+    check('el1-smc-identity-refusal-retains','el1-smc-refusal')
+    check('el1-restoration-readback-refusal-retains','el1-restore-refusal')
+elif el3_cache:
     check('production-el3-adoption-and-restoration')
     check('el3-inherited-sif-cleared-and-restored','cache-sif')
     check('el3-adoption-readback-refusal-retains','cache-enable-refusal')

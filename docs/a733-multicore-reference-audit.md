@@ -191,3 +191,32 @@ Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.
 The external inputs are pinned in `sources.lock.json`; no Linux code executes
 as the SunstoneOS runtime.
+
+## Publication must cover the executable physical address space
+
+Arm's [TrustZone guide](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/TrustZone%20for%20Armv8-A.pdf),
+sections 3.4–3.5, distinguishes Secure and Nonsecure physical addresses in cache
+tags. With the MMU disabled, EL3 addresses are Secure. Maintenance by virtual
+address acts on the translated physical address space. Secure set/way operations
+can affect both spaces; their coverage of system caches is a separate question.
+
+SunstoneOS's frozen publication helper executes `DC CVAC` with the EL3 MMU off.
+The subsequent cached EL3 code mapping selects Nonsecure physical addresses.
+That publication therefore does not establish invalidation of an inherited
+Nonsecure code alias. The pinned Linux boot contract also requires an image
+without stale instruction entries and publication to the point of coherency;
+it warns that system caches can require maintenance by address rather than
+set/way. See its
+[cache requirements](https://github.com/torvalds/linux/blob/e5f0a698b34ed76002dc5cff3804a61c80233a7a/Documentation/arch/arm64/booting.rst).
+
+This is a source-backed gap in warm-image publication, not proof of the latest
+physical failure's cause. The cached-EL1 attempt returned only the EL3 result,
+although its copied upload contains the new EL1 call. A correction must establish
+executable visibility for the actual address spaces and cache levels before
+another launch. A model that represents both physical address spaces with one
+unconditionally coherent byte array cannot verify this property.
+
+The second board's returning PMIC probe executed its newly added voltage-selector
+read. That supports the particular boot-CPU transition used there. Device-image
+admission must assess its own startup and prior cache ownership; the CPU result
+does not invalidate unrelated physical evidence.

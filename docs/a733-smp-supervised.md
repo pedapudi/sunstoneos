@@ -959,3 +959,29 @@ One earlier host invocation stopped during manifest parsing before any hardware
 access. Its terminal claim was closed, the typo was corrected, and the shared
 validator passed nominal and invalid-type checks. The accepted image and four
 instruction cases were reused for the single physical attempt.
+
+## Cached EL1 diagnostic has no physical observation yet
+
+`tools/run-native-startup-probe.py prepare --el1-cache` invokes the frozen
+production EL3-to-EL1 entry and EL1 cache helper. A checkpoint replaces the first
+EL1 interrupt-interface configuration, copies system registers into general
+registers, and returns through SMC. EL1 makes no ordinary data accesses. The EL3
+handler blocks lower-level translation walks, validates the return, restores five
+EL1 translation controls and resumes the existing EL3/local shutdown cleanup.
+This is a cold-core diagnostic, not a resumable context switch.
+
+AArch64 EL1 translation controls are not separate secure/nonsecure banks.
+The handler restores their saved values explicitly. This follows Arm's
+[TrustZone register model](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/TrustZone%20for%20Armv8-A.pdf)
+and the existing TF-A-based walk-blocking order. Interrupt delivery, EL1 stack
+access, mutable cached data, other cores and scheduling remain outside this
+checkpoint.
+
+Three instruction cases pass under `native-el1-cache-20261018/`, including
+unexpected SMC rejection and failed restoration retention. The physical attempt
+returned ROM as `003:102` with matching shutdown/OFF and restored DRAM. However,
+the EL1 report is entirely zero, so the attempt failed its required observation.
+The copied upload matches the new binary and its EL1 call. Only the prior EL3
+interval is observed. Stale executable visibility across cache enablement is an
+unconfirmed explanation; no unchanged physical retry is permitted. The failed
+claim is closed and the original-board queue is halted pending corrective review.

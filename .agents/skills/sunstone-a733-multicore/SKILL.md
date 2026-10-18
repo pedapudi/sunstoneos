@@ -125,3 +125,17 @@ A synchronous-exception handler cannot recover an MMIO load that never completes
 If no report returns, mark the location unknown. Choose a narrower observation or
 a source-backed correction; do not declare a suspected instruction the cause.
 Keep proven entry/return evidence and test only the newly crossed boundary.
+
+## Check warm-image visibility across security mappings
+
+A successful upload comparison proves the loader's data view, not a later cached
+instruction view. Before reusing code addresses, establish publication and
+invalidation for the physical address space selected by the executable mapping.
+EL3 maintenance with its MMU off targets Secure addresses; it cannot establish
+coverage of an inherited Nonsecure alias merely because the numeric address
+matches. See the [reference audit](../../../docs/a733-multicore-reference-audit.md).
+
+Keep changed-interval observations explicit. A valid shutdown and ROM return can
+coexist with a missing new interval. Treat that interval as unobserved and review
+code visibility before repeating its launch. The instruction model's shared byte
+array does not model security-tagged cache lines or system-cache retention.

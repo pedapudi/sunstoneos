@@ -47,6 +47,11 @@ native_el3_cache_probe:
     str x2, [x19, #104]
     mov x2, #2
     str x2, [x19]
+#ifdef SUNSTONE_PROBE_EL1_CACHE
+    ldr x0, [x19, #8]
+    mov x1, x20
+    bl native_el1_cache_probe
+#endif
     // No dirty Normal-memory lines exist from this interval. Complete Device
     // stores before disabling M/C/I. Original control has all three clear.
     ldr x2, [x19, #32]
