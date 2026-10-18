@@ -811,3 +811,19 @@ This qualifies that bounded observation and return path. It does not qualify
 local interrupt initialization or explain the earlier absent reports. Current
 ROM survey gates passed before entry, so this attempt reused DDR continuity
 without retraining or an additional cache-disable operation.
+
+## Local interrupt state is captured before configuration
+
+The current overlay reads core 1's redistributor control, wake, enable, pending,
+active, group, group-modifier, interrupt-configuration and first priority word.
+It requires clear power-down permission and equal power-group transition bits
+before these reads. Unsupported power state produces a refusal observation;
+it does not trigger another power request. A final power-register read accompanies
+the snapshot. No interrupt register is written.
+
+The 96-byte snapshot occupies `0x42002900` inside the existing saved result span.
+Walk-control restoration, shutdown acknowledgment, observed OFF and shared cleanup
+retain their previous requirements. Three focused cases pass for the full snapshot,
+a powered-down frame and a power transition. Previous fault/cleanup evidence is
+reused. Physical local-register access remains pending; evidence is under
+`native-local-interrupt-read-20261018/`.

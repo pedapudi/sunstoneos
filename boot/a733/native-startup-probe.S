@@ -568,7 +568,7 @@ observe_copy:
     str x17, [x12, #440]
     mrs x17, tcr_el1
     str x17, [x12, #448]
-    // ROM evidence identifies core 1 at this frame. No SGI/PPI access occurs.
+    // ROM evidence identifies core 1 at this frame. All frame accesses are reads.
     ldr x13, =0x03480000
     dsb sy
 target_frame_read:
@@ -577,6 +577,41 @@ target_frame_read:
     ldr w17, [x13, #0x24]
     str x17, [x12, #464]
     dsb sy
+    ldr x14, =0x42002900
+    str x13, [x14, #8]
+    mov x16, #3              // Unsupported power state: record and restore controls.
+    str x16, [x14]
+    tbnz w17, #0, target_restore_walks
+    eor w16, w17, w17, lsr #1
+    tbnz w16, #2, target_restore_walks
+    mov x16, #1              // Any uncertain frame read retains ownership.
+    str x16, [x14]
+target_local_reads:
+    ldr w17, [x13]
+    str x17, [x14, #16]
+    ldr w17, [x13, #0x14]
+    str x17, [x14, #24]
+    add x15, x13, #0x10, lsl #12
+    ldr w17, [x15, #0x100]
+    str x17, [x14, #32]
+    ldr w17, [x15, #0x200]
+    str x17, [x14, #40]
+    ldr w17, [x15, #0x300]
+    str x17, [x14, #48]
+    ldr w17, [x15, #0x80]
+    str x17, [x14, #56]
+    ldr w17, [x15, #0xd00]
+    str x17, [x14, #64]
+    ldr w17, [x15, #0xc04]
+    str x17, [x14, #72]
+    ldr w17, [x15, #0x400]
+    str x17, [x14, #80]
+    ldr w17, [x13, #0x24]
+    str x17, [x14, #88]
+    dsb sy
+    mov x17, #2
+    str x17, [x14]
+target_restore_walks:
     ldr x16, [x12, #56]
     msr sctlr_el1, x16
     isb

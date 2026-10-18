@@ -23,7 +23,7 @@ NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
 OVERLAY=(0x41020000,0x2000)
-PROFILE='core1-walks-frame-read-v1'
+PROFILE='core1-local-interrupt-read-v1'
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
@@ -140,6 +140,11 @@ def rdist_snapshot(raw):
     result.update(zip(('esr','elr','far','requested_address','requested_value'),struct.unpack_from('<5Q',raw,456)))
     return result
 
+def local_interrupt_snapshot(raw):
+    require(len(raw)==96, 'Short local interrupt snapshot.')
+    return dict(zip(('state','base','ctlr','waker','enable','pending','active',
+        'group','modifier','config','priority','pwrr_after'),struct.unpack('<12Q',raw)))
+
 def activation_snapshot(raw):
     require(len(raw)==256,'Short activation snapshot.')
     names=('state','epoch','request','ack','core','initial_control','initial_mode','last_ppu','deadline',
@@ -249,7 +254,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -259,6 +264,7 @@ def run(a):
                 record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
                 record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
                 record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
+                record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
                 observation=record['observation'];activation=record['activation'];secondary=record['secondary']
                 require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
@@ -275,6 +281,9 @@ def run(a):
                         walks['blocked_tcr1']==(observation['TCR_EL1']|0x800080), 'Target walk blocking differs.')
                     require(walks['typer']>>32==0x100, 'Observed frame is not core 1.')
                     record['target_walks_and_frame_observed']=True
+                    local=record['local_interrupts']
+                    require(local['base']==0x03480000 and local['state'] in (2,3), 'Local interrupt observation incomplete.')
+                    record['local_interrupts_observed']=local['state']==2
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()

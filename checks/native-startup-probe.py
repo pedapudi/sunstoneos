@@ -56,6 +56,11 @@ def check(name,scenario='normal'):
     original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0xa0000002,'pending':1 if scenario=='pending-refusal' else 0,
         'active':0,'group':0x1122aabb,'modifier':0x00550000,'config':0xaaaaaaaa,'priority':0x12345678}
     rdist=original_rdist.copy();rdist['rwp']=0;rdist_writes=[];typer_reads=[];commands=[];private_wait_seen=[];sleep_attempted=[]
+    local_registers={rbase:rdist['ctlr'],rbase+0x14:rdist['waker'],gbase+0x100:rdist['enable'],
+        gbase+0x200:rdist['pending'],gbase+0x300:rdist['active'],gbase+0x80:rdist['group'],
+        gbase+0xd00:rdist['modifier'],gbase+0xc04:rdist['config'],gbase+0x400:rdist['priority']}
+    frame_power=0x101 if scenario=='frame-power-off' else 0x104 if scenario=='frame-power-transition' else 0x100
+    expected_frame_reads=[rbase+8,rbase+0x24]+([] if frame_power!=0x100 else list(local_registers)+[rbase+0x24])
     ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     def instruction(uc,address,size,unused):
         assert address!=0x41004444,'CPU/DSU write guard must not be crossed.'
@@ -121,10 +126,11 @@ def check(name,scenario='normal'):
             uc.emu_stop()
     def read(uc,access,address,size,value,unused):
         if 0x03460000<=address<0x03560000:
-            assert active[0]==1 and address in (rbase+8,rbase+0x24), 'Only target frame identity/power reads.'
+            assert active[0]==1 and address in (rbase+8,rbase+0x24,*local_registers), 'Only selected local frame reads.'
             assert per_core[1]['sctlr_el1']==0xc50839 and per_core[1]['tcr_el1']==0x800080
             assert size==(8 if address==rbase+8 else 4)
-            data=(0x100<<32)|0x121 if address==rbase+8 else 0x100
+            data=(0x100<<32)|0x121 if address==rbase+8 else frame_power if address==rbase+0x24 else local_registers[address]
+            if address in local_registers:assert frame_power==0x100
             uc.mem_write(address,data.to_bytes(size,'little'));typer_reads.append(address);return
         if address in power_registers:
             assert size==4;power_reads.append(address)
@@ -206,7 +212,7 @@ def check(name,scenario='normal'):
         assert stopped==['park'] and observation['state']==1 and observation['origin']==(1 if scenario=='capture-fault' else 3)
         assert capture_entries==[1] and len(injected)==1 and activation['state']==1
         assert configuration['state']==snapshot['state']==rdist_record['state']==1
-        assert (not typer_reads if scenario!='target-restore-fault' else typer_reads==[rbase+8,rbase+0x24])
+        assert (not typer_reads if scenario!='target-restore-fault' else typer_reads==expected_frame_reads)
         assert not rdist_writes and commands==[1,2] and not activation['request'] and not activation['ack']
         assert not any(key in ('rmr_el3','s3_0_c15_c2_7') for core,key,value in controls)
         reports.append({'name':name,'retained':True,'observation':observation,'activation':activation,'redistributor':rdist_record,'capture_entries':capture_entries,'system_writes':controls});return
@@ -249,9 +255,15 @@ def check(name,scenario='normal'):
         assert observation['controller']['core_record']['state']==6
     else:
         assert target_controls==[['tcr_el1',0x800080],['sctlr_el1',0xc50839],['sctlr_el1',0xc50838],['tcr_el1',0]]
-        assert typer_reads==[rbase+8,rbase+0x24]
+        assert typer_reads==expected_frame_reads
         assert observation['walks']==dict(blocked_sctlr1=0xc50839,blocked_tcr1=0x800080,
-            typer=(0x100<<32)|0x121,pwrr=0x100,restored_sctlr1=0xc50838,restored_tcr1=0,state=2)
+            typer=(0x100<<32)|0x121,pwrr=frame_power,restored_sctlr1=0xc50838,restored_tcr1=0,state=2)
+        local=host.local_interrupt_snapshot(bytes(cpu.mem_read(0x42002900,96)))
+        assert local['base']==rbase and local['state']==(2 if frame_power==0x100 else 3)
+        if frame_power==0x100:
+            assert all(local[k]==v for k,v in original_rdist.items())
+            assert local['pwrr_after']==frame_power
+        else:assert not any(v for k,v in local.items() if k not in ('base','state'))
         assert observation['origin']==3 and observation['SCTLR_EL1']==0xc50838 and observation['TCR_EL1']==0
         assert observation['controller']['state']==4 and observation['controller']['error']==0
         assert observation['controller']['core']==1 and observation['controller']['identity']['mpidr']==0x81000100
@@ -263,12 +275,14 @@ def check(name,scenario='normal'):
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
     reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries})
-check('released-target-walks-frame-and-restoration')
+check('released-target-local-register-snapshot-and-restoration')
+check('local-register-reads-refuse-powered-down-frame','frame-power-off')
+check('local-register-reads-refuse-power-transition','frame-power-transition')
 check('released-target-preparation-refusal-observed-without-gicr','target-admission')
 check('failure-capture-read-fault-retains-without-retry','capture-fault')
 check('target-frame-read-fault-retains-without-shutdown','frame-read-fault')
 check('target-control-restore-fault-retains-without-shutdown','target-restore-fault')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'execution_profile':host.PROFILE,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual RELEASE, native walk blocking, frame identity/power reads and restored OFF with modeled system registers, exceptions, distributor and PPU. No SGI/PPI access or GICR writes. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
+    'limits':'Actual RELEASE, native walk blocking, local interrupt register reads and restored OFF with modeled system registers, exceptions, distributor and PPU. No GICR writes. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
 print(f'PASS {len(reports)} focused target walk/frame cases; observed OFF or retained failure.')
