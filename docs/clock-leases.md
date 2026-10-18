@@ -56,7 +56,13 @@ reserve its selected parents and shared FABRIC, SERDES and USB/PCIe domain.
 The initial high-speed path adopts existing stable power domains; its token
 does not authorize COMB0/COMB1 analog or common-reset changes. Source power,
 pins and current Type-C attachment remain separate authority.
-Bits 67–127 remain invalid.
+PWM0 uses bit 67 for its complete controller, including shared channel-pair
+controls, gate, reset and interrupt. Its exclusive lease holds FABRIC, REF and
+OSC stable. GPADC uses bit 68 for its controller, gate, reset and interrupt 70.
+Its exclusive lease holds FABRIC and GPADC24M stable, including the latter's
+REF and OSC ancestors. GPADC and the thermal sensor may share that stable
+source; either consumer prevents another owner from retuning it.
+Bits 69–127 remain invalid.
 The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller
@@ -88,16 +94,27 @@ lock serializes mask operations; no 128-bit atomic or dynamic allocation is
 required. The 128 reservation slots count active tokens, independently of the
 number of scope bits.
 
-Every producer and consumer must rebuild together because token size,
-alignment, containing structures and mask-valued function arguments have
-changed. Tokens remain private runtime metadata and have no wire or persistent
-format. Historical evidence remains valid for its recorded sources and ABI;
-it does not establish execution of a rebuilt image.
+Images adopting the 128-bit mask ABI must rebuild their producers and consumers
+together because it changes token size, alignment, containing structures and
+mask-valued function arguments. Adding PWM0 and GPADC scopes preserves that ABI.
+Tokens remain private runtime metadata and have no wire or persistent format.
+Historical evidence remains valid for its recorded sources and ABI; it does not
+establish execution of a rebuilt image.
 
 The focused `checks/clock-wide.c` check covers independent TWI11 and VO1
 ownership, FABRIC conflicts, upper-half token authentication, stable publication
 and retained faults. It also checks refusal of every unassigned high bit.
 The check passed once with AddressSanitizer and UndefinedBehaviorSanitizer.
+
+The focused `checks/pwm-adc-clock.c` case covers the added controller scopes,
+their parent dependencies, thermal/ADC coexistence and parent-change conflicts.
+It passes with the same sanitizers under
+`~/.cache/sunstoneos/evidence/pwm-native-20261018/clock/`. Initial integration matched
+the tested registry, header and original case. A subsequent boundary assertion
+checks refusal of the first unassigned scope; its result is preserved separately
+under `clock-boundary/` without replacing the original evidence. Fixture boundaries
+now derive from `A733_CLOCK_ALL`; reconciliation records their equivalent tested
+value and the unchanged registry/header hashes. The older suites were not rerun.
 `checks/clock-wide.py` compiled 61 production consumers reached through the
 common clock header with the cached eight-core configuration. The radio session
 also used its existing networking allocation options and pinned TCP headers.
