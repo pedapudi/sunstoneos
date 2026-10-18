@@ -1,5 +1,5 @@
---- a/platform/a733-smp-cached/continue.S
-+++ b/platform/a733-smp-cached/continue.S
+--- continue.S
++++ continue.S
 @@ -307,10 +307,11 @@
      b \handler
      .space 124
@@ -16,3 +16,19 @@
  .rept 2
      vector .Lsync_bhb
      vector .Lirq_bhb
+@@ -336,10 +337,15 @@
+     b.ne .Lsync_fault
+     mrs x0, esr_el1
+     and x0, x0, #0xffff
++    cmp x0, #120
++    b.eq .Lobserve
+     cmp x0, #119
+     b.eq .Lexit
+     ldp x0, x1, [sp], #16
+     b FreeRTOS_SWI_Handler
++.Lobserve:
++    ldp x0, x1, [sp], #16
++    b a733_observe_exception
+ .Lexit:
+     ldp x0, x1, [sp], #16
+     b a733_smp_exit_privileged

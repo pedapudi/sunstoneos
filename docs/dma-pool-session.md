@@ -103,14 +103,17 @@ export PATH="$cache/host/usr/lib/llvm-21/bin:$PATH"
 cmake -S apps/dma-copy -B "$cache/build/a733-dma-copy" \
   -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/aarch64-clang.cmake" \
   -DFREERTOS_DIR="$cache/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2" \
+  -DTINYUSB_DIR="$cache/sources/tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973" \
   -DA733_DMA_HANDOFF_SOURCE=/absolute/path/qualified-dma-handoff.c
 cmake --build "$cache/build/a733-dma-copy" --target a733-dma-copy -j4
 ```
 
 Configuration refuses a missing handoff source. The file must define
-`const struct a733_dma_handoff a733_dma_copy_handoff` in normal immutable image
-storage. Compiling its assertions does not establish the physical facts they
-represent. The target supplies no default authority and no board launch command.
+`const struct a733_dma_handoff a733_dma_copy_handoff` and
+`const struct a733_dma_copy_usb_handoff a733_dma_copy_usb_handoff` in normal
+immutable image storage. Compiling its assertions does not establish the physical facts they
+represent. The target supplies no default authority. Physical launch requires the separate
+host admission described below.
 
 A private vector patch admits synchronous exceptions and interrupts from the
 privileged driver's EL1t context through the existing kernel handlers. The
@@ -119,11 +122,11 @@ unrecognized synchronous exceptions retain their fault paths. Application
 tasks return to EL0; this does not add isolation against arbitrary application
 memory corruption in the existing shared mappings.
 
-The cached platform has no console implementation. After verifying and closing
-each copy, the client records its channel bit in `a733_dma_copy_result`. It
-release-publishes completion after all selected channels finish. An observer
-must acquire-load completion before reading the mask. This RAM record is not
-a durable host result across reset; native USB observation remains required.
+After verifying and closing each copy, the client records its channel bit in
+`a733_dma_copy_result`. It records start/end counters and release-publishes
+completion after all selected channels finish. The USB service acquires
+completion before reading the mask and counters. Partial progress produces a
+pending frame; it cannot report a successful subset of the selected channels.
 
 On 17 October 2026, the target linked once with no undefined symbols and a
 2 MiB write-back pool at `0x4126b000..0x4146b000`. That link used an explicit
@@ -135,6 +138,114 @@ The ELF hash is
 `220156f455bd2a59926f0801fa0b480c02ebd5659e8d502920965d89369f5151`.
 Build inputs and results are in `~/.cache/sunstoneos/evidence/dma-copy-image-20261017/`;
 instruction evidence is in `~/.cache/sunstoneos/evidence/dma-copy-vectors-20261017/`.
+
+## USB observation binds the completed copy to one boot session
+
+The copy image reuses the existing observer's USB0 programmed-I/O adapter,
+TinyUSB configuration, bounded SVC handler and digest implementation. Private
+patches copy the admitted boot identity before cache publication, route SVC 120
+and select DMA-specific framing. Shared observer sources and its sealed bundle
+remain separate artifacts.
+
+The external USB handoff binds epoch, generation and watchdog lease to the
+accepted boot contract. It also binds its evidence identifier to the DMA
+handoff/evidence identifiers. All four assertion bits are required: exclusive
+USB0/PHY/clock ownership, valid device mappings, exclusion of remote users and
+independent watchdog/ROM recovery. USB ownership covers the complete CCU words
+at `0x02003300` and `0x02003304`; other USB users must remain stopped until reset.
+These declarations require independently established evidence. Reading them
+cannot establish their physical truth.
+
+The DMA constructor still uses the image's common clock/lock providers. The
+USB observer retains its separately admitted exclusive peripheral reservation;
+its PIO buffers require no additional DMA mapping. USB initialization runs only
+after both handoffs are admitted. Its 150 ms detach and 1 ms reset delays consume
+the existing observation interval. No code feeds or extends the watchdog.
+
+The USB task remains EL0, runs on core zero and invokes only the fixed SVC entry.
+The service authenticates the task, core, return address, stack extent and saved
+privilege state before USB access. DMA bootstrap and worker tasks retain their
+existing EL1t route. The shared mappings still require cooperative tasks; these
+checks do not provide isolation against arbitrary memory corruption.
+
+The device uses revision `0102`, product `sunstoneos DMA copy observer` and serial
+`sunstoneos-a733-dma-copy`, with bulk OUT `02` and IN `81`. Each request carries
+command `0x32`, an increasing sequence, boot epoch/generation and a nonzero
+32-byte challenge. The 512-byte response payload uses DMA magic
+`0x41533733444d4131`. It contains the accepted boot identity, challenge, compiled
+build identity, selected/completed channel masks, bytes per copy, controller,
+evidence identifiers and counter bounds. SHA-256 covers its first 480 bytes.
+The digest detects malformed data; it is not keyed device authentication.
+
+Success requires the exact selected mask after every copied payload and padding
+check, result reap and channel close. It makes no claim about eight-core
+scheduler diagnostics. The host writes and synchronizes the complete response
+before publishing `dma_result: observed-success`. ROM return is recorded
+separately. Missing or malformed output cannot be replaced by reading RAM after
+reset.
+
+## The host command reuses the sealed compact launcher
+
+[The DMA host command](../apps/dma-copy/observe.py) provides `prepare`, `validate`
+and `launch`. Preparation requires an image manifest naming target
+`a733-dma-copy`, protocol version 1 and its exact `final_elf` SHA-256. It extracts
+immutable DMA/USB records from that ELF and uses their fixed boot identity.
+The coordinator must allocate a fresh identity for each admitted boot.
+
+Preparation copies the existing observer launch binary after validating its
+bundle, exact launcher sources and unchanged contract declarations. It performs
+no launcher build. The DMA image accepts that launcher's compact version-one
+contract magic, `0x415337334f424331`; its monitor result and USB frame have distinct
+DMA identities. The original sealed bundle is read only.
+
+```sh
+python3 apps/dma-copy/observe.py prepare \
+  --image /absolute/path/a733-dma-copy.elf \
+  --image-manifest /absolute/path/image-manifest.json \
+  --launcher-bundle "$cache/evidence/smp-observe-host-20261016/prepared-observer" \
+  --output /absolute/new/dma-bundle
+python3 apps/dma-copy/observe.py validate --bundle /absolute/new/dma-bundle
+```
+
+`prepare --refusal` permits offline preparation with refused handoff flags.
+`launch` rejects every such bundle before device discovery. The ordinary
+preparation path requires complete DMA and USB declarations, but physical launch
+also requires the claimed board-queue artifacts and external evidence.
+
+The launch command requires `--bundle`, `--fel`, `--qualification`,
+`--input-evidence`, `--ddr-contract`, `--platform-contract`, `--evidence`,
+`--database`, `--claim`, `--owner` and `--confirm-bridge-stable`. Its queue
+prerequisites are `independent-watchdog-rom-return`, `stable-protected-fel`,
+`ddr-reservation`, `dma-copy-platform` and `dma-copy-software`. The platform record
+binds the current USB instance, image, boot identity and DMA/USB evidence IDs.
+It includes the inherited cached-entry/USB requirements plus actual DMA startup,
+drain and ownership evidence.
+
+The command reuses sealed uploads, SRAM preservation, qualification checks,
+refusal recovery and quarantine helpers. It holds the existing board flock,
+performs one launch, accepts only the protected port's expected USB identity and
+stops transport after the first failure. It retains ownership when a live launch
+has an unresolved outcome. Successful pending replies allow bounded observation;
+they do not authorize retries after a failed transfer.
+
+[The focused check](../checks/dma-copy-observe.py) links the complete compact
+image with handoff assertion masks set to zero. Actual client instructions
+process modeled completed service replies and verify modeled copies before
+publishing their result. The native encoder produces pending and completed
+frames for the host capture path. A corrupted payload must reach the existing
+fatal path without publishing completion. The fixture also checks new SVC
+routing, preserved launcher reuse and offline launch refusal. It does not
+execute physical USB, DMA, cache coherence, boot or watchdog recovery.
+
+On 17 October 2026, this observer target linked once and the focused composition
+passed on ELF SHA-256
+`49397dc736e9b8f47c3a56632b7b0d1f5230404eef006aaa272524585ded4b96`.
+The image retains refused handoffs. A fixture stop-hook correction preceded
+completion of the instruction cases on that same ELF; no rebuild or completed
+case replay followed. Inputs include generated assembly and its generation
+sources. The exact original and corrected runners, refusal bundle, captured
+frames and tool identities are preserved under
+`~/.cache/sunstoneos/evidence/dma-copy-observe-20261017/`.
 
 ## Capacity and remaining hardware work
 

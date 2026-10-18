@@ -1,0 +1,9 @@
+--- boot.c
++++ boot.c
+@@ -4,1 +4,2 @@
+ #include "cached.h"
++#include "result.h"
+@@ -86,1 +87,3 @@
+     RESULT->status=UINT64_MAX;RESULT->stage=1;
++    a733_observe_boot_identity(admission.epoch,admission.generation,admission.lease,
++        admission.armed_at,admission.diagnostic_deadline);

@@ -1,5 +1,7 @@
 #include "a733_dma_copy_application.h"
 #include "platform.h"
+#include "boot.h"
+#include "result.h"
 
 static struct a733_counter_clock clock_source;
 static struct a733_clock_leases registry;
@@ -37,6 +39,7 @@ static void client(void *unused)
         if(state==A733_DMA_POOL_WAITING) vTaskDelay(1);
     }
     configASSERT(state==A733_DMA_POOL_READY);
+    a733_dma_copy_result.start=a733_smp_counter();
     for(unsigned job=0;job<client_view.count;++job) {
         unsigned char *src=client_view.source[job],*dst=client_view.destination[job];
         configASSERT(request(DMA_SERVICE_OPEN,job,0).phase==DMA_SERVICE_READY);
@@ -55,6 +58,7 @@ static void client(void *unused)
         atomic_fetch_or_explicit(&a733_dma_copy_result.completed_channels,
             UINT32_C(1)<<client_view.channels[job],memory_order_relaxed);
     }
+    a733_dma_copy_result.end=a733_smp_counter();
     atomic_store_explicit(&a733_dma_copy_result.complete,1,memory_order_release);
     /* Preserve the worker, clock lease and parent allocation after completion. */
     vTaskSuspend(NULL);fatal(NULL);
@@ -64,11 +68,12 @@ void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 void a733_smp_diagnostic_start(void)
 {
     configASSERT(a733_smp_device_preparation_admitted());
+    configASSERT(a733_dma_copy_observer_admit());
     configASSERT(a733_counter_clock_init(&clock_source,24000000));
     configASSERT(a733_clock_leases_init(&registry,a733_counter_clock_now,&clock_source));
     configASSERT(a733_platform_locks_init(&locks,a733_counter_clock_now,&clock_source));
     const struct a733_dma_pool_config config={&a733_dma_copy_handoff,&clock_source,&registry,&locks,
-        240000,1024,4,3,fatal,NULL};
+        240000,A733_DMA_COPY_BYTES,4,3,fatal,NULL};
     configASSERT(a733_dma_pool_session_init(&session,&config));
     client_view.service=&session.service;client_view.state=&session.state;
     client_view.count=session.count;client_view.bytes=session.copy_bytes;
@@ -80,5 +85,6 @@ void a733_smp_diagnostic_start(void)
     TaskHandle_t task=xTaskCreateStaticAffinitySet(client,"dma-copy",3072,NULL,2,
         client_stack,&client_state,2);
     configASSERT(task && dma_service_bind(&session.service,0,task,(UINT32_C(1)<<session.count)-1));
+    a733_observe_service_start();
     vTaskStartScheduler();platform_panic("scheduler returned",0);
 }
