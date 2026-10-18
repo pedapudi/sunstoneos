@@ -99,11 +99,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   all eight frame affinities and reports their power-down permission bits clear
   under `gic600-registers-20261018-089/`. This does not establish local interrupt
   initialization or identify the earlier failure location.
+  A subsequent target diagnostic executes core 1's native walk-blocking helper,
+  reads its frame identity/power and restores both translation controls exactly.
+  Matching shutdown and observed OFF, shared-state/DRAM restoration and ROM return
+  pass under `native-target-walks-frame-20261018/native/runtime/`. Local interrupt
+  configuration remains unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
-- DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
-  Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
+- DDR: **tested** independently on both attached boards for initialization and
+  distinct transfers to two 4 KiB pages. Firmware reports 12 GiB LPDDR5 on each;
+  full capacity and stability remain untested. The second board also passes its
+  returning platform survey with SRAM restoration under
+  `second-board-20261018-3-3/platform-attempt1/`.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
   boot CPU for the physical kernel check. Cacheable RAM and non-cacheable result
   storage work for this workload; full memory protection/coherence remains untested.

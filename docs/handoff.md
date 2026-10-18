@@ -71,11 +71,18 @@ focused modeled checks under `npu-models-20261018/`. First-result mismatch and
 wrong completion tickets prevent success publication. The built image is for
 software validation only; physical inference and memory confinement remain
 unqualified. Arbitrary models, runtime model switching and mimus acceleration
-remain required follow-up work. The NPU controller now requires the supported
+remain required follow-up work. The NPU controller requires the supported
 MMU control value before submit, completion and close. Ninety-six focused
 single-bit corruption cases and native compilation pass under
-`npu-first-physical-20261018/`. This refusal check does not establish effective
-engine confinement; address bypass and coefficient bounds remain unresolved.
+`npu-first-physical-20261018/`. This refusal check alone does not establish effective
+engine confinement. Static review of the pinned revision-9.2 simulator now traces
+external descriptor, coefficient, input and output accesses through the existing
+page-directory MMU. Exact native configuration excludes the observed flat mode;
+page exception bits select fault retention. The reviewed method for the trusted
+first model is this private MMU plus exclusive internal SRAM ownership. Physical
+translation and actual platform admission remain unqualified; full coefficient
+decoding is not a prerequisite for that bounded method. See
+[native address routing](npu-address-path.md).
 
 Combined thermal/ADC monitoring is integrated with repeated copied samples,
 shared-parent ownership and readback-confirmed converter disable on stop.
@@ -105,36 +112,41 @@ checks converter disable independently of publication; resources remain retained
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
-queues. The original board is on port `3-1`, now USB instance `003:089` after a
+queues. The original board is on port `3-1`, now USB instance `003:090` after a
 successful diagnostic return. The second is on `3-3`, instance `003:088`, and
-responds as A733. Its user-reported 32 GB microSD remains untouched; DDR initialization, two 4 KiB page comparisons and a returning SRAM platform
-survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
-12 GiB; full capacity and device admission remain unqualified. Multicore work belongs directly
-to the primary agent, without delegation.
+responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
+initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
+12 GiB; full capacity and device admission remain unqualified. Multicore work
+belongs directly to the primary agent, without delegation.
 
-- Startup diagnosis: core 1 accepts native RELEASE, publishes RELEASED and
-  completes CPU/DSU preparation. Its reset SCTLR_EL1 is `0x00c50838` and TCR_EL1
-  is zero. The diagnostic stops before target translation changes or interrupt
-  redistributor access, then verifies matching shutdown acknowledgment and actual
-  OFF. Shared control state and saved DRAM are restored; USB ROM service returns.
-  Evidence is under `reconnect-20261018-086/native/runtime/`.
-  The driver now implements the missing GIC-600 redistributor power-up handshake.
-  Focused host checks and two native instruction cases pass under
-  `gic600-power-20261018/`. The correction is not physically tested. One read-only ROM batch subsequently
-  identified all eight redistributor affinities and power states. All frames
-  reported `RDPD=0`; the missing handshake is not an established explanation of
-  the earlier failures. Per-core interrupt initialization, cache coherence and
-  scheduling remain unresolved.
+- Startup diagnosis: core 1 accepts native RELEASE, completes CPU/DSU
+  preparation and executes the native walk-blocking helper. SCTLR_EL1 changes
+  from `0x00c50838` to `0x00c50839`; TCR_EL1 changes from zero to `0x00800080`.
+  The target reads its frame TYPER as `0x0000010000000121` and PWRR as `0x100`.
+  Both controls restore exactly before matching shutdown acknowledgment and
+  observed PPU OFF. Shared state and saved DRAM restore; ROM returns as `003:090`.
+  The runner exited and its claim closed. Evidence is under
+  `native-target-walks-frame-20261018/native/runtime/`. Three focused software
+  cases cover the extended path and retained read/restoration failures.
+  The GIC-600 power-up correction remains software-tested only. Target frame
+  access passes after CPU power transition and walk blocking; the earlier
+  failure location remains unknown. Local interrupt initialization, cache
+  coherence, the other secondary cores and scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
   prevents copied publication under `bluetooth-mimus-native-20261017/`.
   The recognition-enabled image now includes retained startup inputs; one focused
-  model-configuration handoff case passes, and all 210 compiled repository inputs
-  match integration under `board-session-seal-mimus-20261018/`. The case models
-  the recognizer; earlier audio and inference results were reused. Physical
-  headset operation, native USB serialization and execution within the supervised
-  window remain unqualified.
+  model-configuration handoff case passes. Its 210 compiled repository inputs
+  matched at the earlier integration under `board-session-seal-mimus-20261018/`. The case models
+  the recognizer; earlier audio and inference results were reused. Five focused
+  cases now execute recognition copy, the serializer and TinyUSB
+  using the preserved image and prior real transcript. Complete copied output,
+  repeated requests under backpressure, malformed requests, provider/deadline
+  refusal and stop during copying pass under `bluetooth-usb-native-20261018/`.
+  Physical headset operation, receive scheduling and execution within the
+  supervised window remain unqualified. Whole-image startup reconciliation is
+  separate from the accepted unchanged Bluetooth/USB source inputs.
 - I2S: finite capture-to-mimus is integrated for one to five seconds of 16 kHz
   mono audio. The native image links, and focused capture, admission, cancellation
   and copied-output checks pass. Startup retains the complete authenticated
@@ -437,16 +449,15 @@ redistributor power-up sequence. That sequence is implemented and passes focused
 software checks; its connection to the physical failure remains a hypothesis.
 The primary agent handles all further multicore work directly.
 
-1. Use the successful ROM observation under `gic600-registers-20261018-089/`:
-   distributor IIDR is `0x0201643b`, frame affinity matches indices 0–7, and all
-   power-down permission bits are clear. These observations precede another CPU
-   power transition; they do not establish its later interrupt state. Extend the
-   returning diagnostic through the next unresolved target boundary with matching
-   cleanup, then qualify local
-   interrupts, the remaining cores, cache coherence and scheduling. Preserve the
-   failed-attempt backups and reuse the successful release/preparation evidence.
-   The failed UFS probe, intentional watchdog expiry and unattended fault tests
-   remain deferred; USB power-control work is closed.
+1. Continue from the successful target walk/frame observation under
+   `native-target-walks-frame-20261018/`. The native translation-control changes
+   and core-1 identity/power reads return successfully with exact restoration.
+   Observe remaining local interrupt state, then extend the corrected
+   initialization with matching cleanup. Qualify local interrupts, remaining
+   cores, cache coherence and scheduling. Preserve failed-attempt backups and
+   reuse accepted preparation and restoration evidence. The failed UFS probe,
+   intentional watchdog expiry and unattended fault tests remain deferred;
+   USB power-control work is closed.
 
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.

@@ -796,4 +796,18 @@ normal observation/restoration, a frame-read exception, and failed control
 restoration. The latter two retain ownership without shutdown acknowledgment or
 ROM return. Register values, exception delivery and power transitions are modeled;
 these checks cannot recover a stalled MMIO transaction. The primary agent reviewed
-the helper's disassembly and cleanup. Physical execution remains pending.
+the helper's disassembly and cleanup.
+
+
+The physical target walk/frame diagnostic passed on port `3-1`. SCTLR_EL1 changed
+from `0x00c50838` to `0x00c50839`, and TCR_EL1 from zero to `0x00800080`.
+The target read GICR_TYPER `0x0000010000000121` and GICR_PWRR `0x100`.
+Both controls restored exactly. Matching shutdown acknowledgment and observed
+PPU OFF preceded shared-state and DRAM restoration. All 50 transactions passed;
+ROM returned from `003:089` as `003:090`, the process exited and its claim closed.
+Evidence is under `native-target-walks-frame-20261018/native/runtime/`.
+
+This qualifies that bounded observation and return path. It does not qualify
+local interrupt initialization or explain the earlier absent reports. Current
+ROM survey gates passed before entry, so this attempt reused DDR continuity
+without retraining or an additional cache-disable operation.
