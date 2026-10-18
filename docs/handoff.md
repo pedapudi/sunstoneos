@@ -37,9 +37,7 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 | Worktree | Assigned work |
 | --- | --- |
-| Camera worker | Native OV5640 transport, resource binding and retained single-frame readout |
-| Graphics worker | Real render context, geometry/fragment submission and checkable color output |
-| USB host worker | Native USB2/xHCI enumeration and one direct storage-device read |
+| USB host worker | Native USB2/xHCI checks passed; integration awaits Type-C provider |
 | Type-C worker | Concrete host power/role and bounded I2C provider for the USB2 path |
 | NPU application worker | Native fixed convolution application, checked output and USB observation |
 | Mimus integration worker | Cached native SMP runtime, shared providers and recorded/paced recognition |
@@ -56,14 +54,17 @@ two new interleaving checks passed. The complete
 immutable launch admission, fatal-fault revocation and protected host backups.
 Its linked instruction and host checks pass; the main build configuration and
 source comparison reuse that evidence without a second compilation or execution.
-Graphics submission and USB host/Type-C integration have separate owners.
+Native camera binding and fixed graphics submission are integrated. USB host
+integration awaits its Type-C dependency; its focused composed checks have passed.
 
 The GPU central integration compiles and links six affected targets against the
-actual graphics/reservation adapters. Empty fixture pools remain unusable. Its
-artifacts and component source comparisons are preserved under
-`gpu-central-integration-20261017/`; existing runtime cases were not repeated.
-Component results retain their recorded inputs and do not establish physical
-HDMI, DMA, GPU or storage operation.
+actual graphics/reservation adapters and fixed render service. Empty fixture
+pools remain unusable. Artifacts and source comparisons are preserved under
+`gpu-render-20261017/central/`; runtime cases were not repeated. The four component
+cases exercise submission and retained failures with poisoned output, so they do
+not establish successful GPU rendering. Native camera evidence and matching
+integrated source identities are recorded in `camera-native-20261017/handoff.json`.
+Its complete image/provider admission and physical capture remain outstanding.
 
 The compact DMA image includes native result frames, privilege routing and a
 host capture path. Focused checks passed on the linked image using refused
@@ -143,8 +144,8 @@ Component documents identify their source inputs, artifacts, selected checks and
 limitations. Raw evidence is under `~/.cache/sunstoneos/evidence/`. The central
 `hardware-integration-20261016f` through `hardware-integration-20261016q`
 records preserve earlier source comparisons, build artifacts and source pins.
-`gpu-central-integration-20261017/integration.json` records the latest GPU links,
-component reconciliation and storage/watchdog integration. Storage native
+`gpu-render-20261017/central/integration.json` records the current GPU links
+and component source reconciliation. Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
 `native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
 evidence and central source reconciliation are under `storage-maintenance-20261017/`.
@@ -207,7 +208,8 @@ recordings and model identities remain the reference.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
    conditions by itself.
-3. Finish native camera binding and actual GPU graphics submission. Connect
+3. Connect the integrated native camera and fixed GPU render service to complete
+   application startup. Bind
    immutable boot admission, genuine resource ownership and qualified memory
    to executable applications. Retained buffers permit neither invented drain
    nor resource reuse. The larger memory profile supplies capacity; physical

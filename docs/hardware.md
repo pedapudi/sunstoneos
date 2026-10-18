@@ -261,8 +261,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   backing, builds two hardware render-target records and publishes graphics
   before compute and power activation. Source comparisons and native preparation,
   capacity-refusal and deadline cases pass; six affected central targets link.
-  Geometry/fragment submissions, rendered output, lease disposal for reopen and
-  physical execution remain outstanding.
+  The [fixed render service](gpu-render.md) submits compiled programs through
+  paired geometry/fragment queues and copies output only after timeline, pixel
+  and guard validation. Source comparisons and four native submission/failure
+  cases pass. Six affected central targets link with the render implementation.
+  Successful GPU output, general drawing, repeated submission, lease disposal
+  for reopen and physical execution remain outstanding.
   The [native lifecycle backend](gpu-backend.md) now has instruction-model
   evidence for identity admission, restricted MMIO, memory/GIC composition,
   retained faults, and actual queue event reception. A proven physical memory
@@ -427,8 +431,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   other IOMMU masters remain reserved; concurrent device use and disposal are
   not established. Native [media clocks](media-clock.md) prepare CSI/ISP gates
   and rates under actual registry and domain leases. Host checks and native
-  compilation pass. Module electrical binding, actual DMA mapping/drain,
-  additional modes and physical qualification remain outstanding.
+  compilation pass. The [native camera binding](camera-native.md) connects
+  actual shared resources, TWI, frame allocations and device controllers. Ten
+  focused cases pass; five native units and two existing embedding fixtures
+  compile. Completed payload is copied into a CPU-owned destination while source
+  buffers, tables and hardware leases remain reserved. Complete image admission,
+  module electrical binding, physical DMA/coherence and drain, additional modes
+  and physical qualification remain outstanding.
   Module availability remains unconfirmed.
 
 - NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
