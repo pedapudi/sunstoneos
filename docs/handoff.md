@@ -196,10 +196,21 @@ analog board-selection inputs. The [native fan PWM application](pwm.md) now
 integrates a finite waveform, interrupt notification and a retained GPIO-low
 stop. Provider, pin, linked-image and host checks pass under
 `pwm-native-20261018/`; all compiled repository code matches integration.
-Electrical fan-off remains a physical qualification requirement. Native ADC
-board-monitor sampling is now in development using the completed routing audit.
-The selection dividers permit observation only; no external drive or strap
-modification is authorized. The other routed PWM functions remain outstanding.
+Electrical fan-off remains a physical qualification requirement. Continuous fan
+control, duty changes and safe reuse are the next PWM integration work.
+
+The [native ADC application](adc-application.md) now samples the four board-selection
+dividers through actual shared clock, CLDO3 supply and native register providers.
+It publishes two sets of raw observations with deferred interrupt service and
+copied USB results. Eighteen core cases, admission checks, sixteen modeled native
+cases and four host groups pass under `adc-application-20261018/`.
+Integration preserves the frozen image; only an unused PWM pin helper and its
+declaration differ among compiled repository inputs. The wrong-exception-level
+case models the CurrentEL register value; it does not establish EL2 execution or
+EL0 isolation. Physical sampling, safe AVCC, reference accuracy, divider population
+and recovery remain unqualified. The selection dividers permit observation only;
+no external drive or strap modification is authorized. Combined thermal and ADC
+monitoring with repeated application access is the next integration work.
 
 
 ## Observed host and device state

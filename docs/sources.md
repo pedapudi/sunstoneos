@@ -63,6 +63,12 @@ The [PWM driver](pwm.md) adapts the pinned U-Boot PWM register and sequencing
 semantics with their GPL notices preserved. Repository source supplies the
 FreeRTOS ownership, deadlines and retained stop path. The native application
 loads no PWM firmware blob or bootloader runtime.
+The [GPADC application](adc-application.md) uses repository driver source based
+on the pinned U-Boot continuous-sampling sequence and A733 register documentation.
+The AXP8191 source table supplies the read-only CLDO3 voltage decoder. The board
+schematic and A733 datasheet separately establish routing and nominal supply
+requirements. The native image loads no ADC firmware blob or Linux runtime;
+source inspection does not qualify actual analog voltage or accuracy.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and

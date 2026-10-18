@@ -220,12 +220,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remain unqualified. Continuous operation, other modes, the status LED, header
   alternatives and display backlight output remain required.
   [Board routing](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
-  identifies the analog inputs; native ADC sampling is in development.
-  GPADC0–3 serve board selection dividers; GPADC4 reaches the display connector.
-  The remaining GPADC channels have no documented usable connection. LRADC0 has
-  a pull-up but no documented key ladder. Analog sampling and physical
-  qualification remain outstanding; fitted components and voltages
-  require confirmation.
+  identifies the analog inputs. [Native ADC monitoring](adc-application.md) is
+  **implemented** for two raw observation sets from the GPADC0–3 board-selection
+  dividers, with actual shared providers, deferred interrupts and copied USB output.
+  Eighteen core cases, admission checks, sixteen modeled native cases and four
+  host groups pass under `adc-application-20261018/`. Integration reuses the frozen
+  image with an unrelated additive PWM pin helper recorded separately.
+  Physical sampling, voltage/reference accuracy and recovery remain unqualified.
+  Repeated/concurrent monitoring, threshold modes and FIFO/DMA remain required.
+  GPADC4 reaches the display connector; the remaining GPADC channels have no
+  documented usable connection. LRADC0 has a pull-up but no documented key ladder.
+  These usable accessory and LRADC functions remain outstanding. Fitted components,
+  analog supply and reference still require physical confirmation.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
