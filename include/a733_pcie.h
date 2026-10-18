@@ -10,7 +10,10 @@ enum a733_pcie_result { A733_PCIE_PENDING, A733_PCIE_READY, A733_PCIE_BUSY,
  * The caller excludes secure/remote writers, GIC handlers and interrupt-route
  * writers for INTIDs168–175/184/185, and all COMB1 USB3 users. Shared
  * SERDES100MHz and PCK7 are already ON. No global reset or rail write occurs.
- * Identity-mapped Device apertures and independent recovery are prerequisites.
+ * Identity-mapped Device apertures and reviewed operation-specific recovery
+ * are prerequisites: qualified independent reset, or supervised permanent
+ * retention until confirmed whole-board power removal. Software deadlines
+ * cannot recover stalled MMIO; the physical recovery path must be qualified before use.
  * deadline bounds software progress, not an unresponsive physical bus access.
  */
 struct a733_pcie_config {

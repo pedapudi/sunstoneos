@@ -194,3 +194,8 @@ option(SUNSTONE_A733_RTC "Build supervised native RTC read/alarm diagnostic" OFF
 if(SUNSTONE_A733_RTC)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-rtc.cmake")
 endif()
+
+option(SUNSTONE_A733_PCIE "Build supervised native PCIe direct-endpoint observation" OFF)
+if(SUNSTONE_A733_PCIE)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pcie.cmake")
+endif()

@@ -4,7 +4,9 @@ The initial native profile implements the A733 COMB1 internal 100 MHz PHY
 sequence, PCIe root-complex preparation, an x1 Gen1 link and read-only
 configuration access to one directly attached endpoint. FreeRTOS owns the
 controller. Linux and U-Boot supply register semantics and comparison helpers;
-neither is a runtime dependency. Physical PCIe operation remains unqualified.
+neither is a runtime dependency. The [supervised native application](pcie-application.md)
+connects these providers to authenticated entry and copied USB results. Physical
+PCIe operation remains unqualified.
 
 The controller has sixteen inbound and sixteen outbound translation windows,
 four embedded DMA read channels and four write channels. Gen2/Gen3 operation,
