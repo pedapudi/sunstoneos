@@ -414,6 +414,15 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
+The next offline diagnostic will bypass the primary interrupt-frame scan and
+stop core 1 after native RELEASE and CPU preparation, before translation-walk
+changes or any redistributor access. It must copy the observed state, use the
+proven target-owned shutdown and verify actual OFF before returning. Pinned
+sources support the redistributor base and stride but do not establish safe
+access to every frame while cores are off; a stalled read remains a hypothesis.
+The implementation owner and reviewer are preparing this narrower boundary in
+an isolated worktree. No further physical attempt is authorized by this plan.
+
 1. Diagnose the nonreturning pre-write observer before another launch. Core-1
    activation, entry and shutdown before RELEASE pass physically, but both the
    interrupt-initialization diagnostic and its failure observer returned no report.
