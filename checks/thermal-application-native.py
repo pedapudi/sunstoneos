@@ -37,7 +37,7 @@ class Machine:
   self.session=session;self.cpu.mem_write(0x41f00000,session);self.cpu.mem_write(self.base,session);self.cpu.mem_write(self.board,session[:592]);self.cpu.mem_write(self.board+160,struct.pack('<Q',61000000));self.write_field('handle',1,8)
   self.registry=self.provider+image.layouts['board_provider']['shared']+image.layouts['a733_native_usb']['clocks'];rl=image.layouts['a733_clock_leases']
   for field,value in [('next_id',1),('initialized',1),('now',image.address('now','/apps/thermal/native.c')),('context',self.base)]:self.cpu.mem_write(self.registry+rl[field],value.to_bytes(4 if field=='initialized' else 8,'little'))
-  self.regs.update({0x07090160:0,0x02002000:0xf8000000|(99<<8)|(99<<16),0x02002518:1,0x02002fc0:0x40,0x02002fe4:0x20})
+  self.regs.update({0x07090160:0x10000002,0x02002000:0xf8000000|(99<<8)|(99<<16),0x02002518:1,0x02002fc0:0x40,0x02002fe4:0x20})
   codes=[2420,2400,2500,1769,1770];bits=250
   for i,code in enumerate(codes):bits|=code<<(12+12*i)
   for i in range(3):self.regs[0x03006244+4*i]=(bits>>(32*i))&0xffffffff

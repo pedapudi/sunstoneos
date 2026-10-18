@@ -62,15 +62,19 @@ GPADC24M dependency retains REF and OSC stability. FABRIC ownership includes
 stable APB1 selection; PERI0 is also required when APB1 uses its 600 MHz output.
 All overlapping clock writers must use the registry and common register mutex.
 
-The first profile accepts a native-observed 24 MHz oscillator. GPADC clock word
-CCU `0x0fc0` uses direct DCXO, mux 1 and divider 1. Cold configuration requires
-exclusive GPADC24M ownership and authenticated exclusion of every ADC/THS
-consumer. Stable shared ownership permits adoption of that already enabled
-profile. A live clock with a different source or divisor is refused.
+The driver uses the detected raw oscillator and the shared normalized REF24
+validator. GPADC clock word CCU `0x0fc0` selects SYS_CLK24M with mux zero or raw
+DCXO with mux one (A733 manual section4.1.6.170). Cold configuration uses direct
+DCXO at 24 MHz and normalized SYS_CLK24M for supported 26/19.2 MHz oscillators,
+always with divider one. It requires exclusive GPADC24M ownership and
+authenticated exclusion of every ADC/THS consumer. Stable shared ownership
+permits adoption of either already enabled 24 MHz path. Direct 26/19.2 MHz DCXO,
+unsupported sources and divisors are refused.
 
 Native reads validate the oscillator, reference PLL, selected APB1 parent and
 APB1 divider. When PERI0 is selected, its integer factors, software gates,
-No-Auto controls and effective output status must match. Parent and APB1
+No-Auto controls and effective output status must match. Reserved PERI0 bit 24
+does not select a source. Parent and APB1
 registers remain read-only. The driver enables the ADC clock before deasserting
 THS reset and enabling its bus gate at CCU `0x0fe4`.
 
@@ -168,3 +172,21 @@ sampling. All four cases pass with sanitizers; the changed core compiles for
 AArch64. Inputs and results are under
 `~/.cache/sunstoneos/evidence/thermal-lease-wait-20261017/`. The earlier conversion
 and controller workloads were not repeated.
+
+## Detected reference-clock compatibility has focused evidence
+
+The focused clock check at `checks/a733-thermal-clock-reference.c` executes the
+changed actual-driver paths with accepted callback fixtures and ASan/UBSan. It
+covers 24/26/19.2 MHz clock startup, normalized adoption, preserved direct 24 MHz
+adoption, PERI0 reserved bit 24, and retained refusal of wrong ratios, lock loss,
+unstable/disabled oscillator, mismatched APB1 and raw non-24 MHz GPADC input. Cold
+configuration preserves unrelated fields; adoption performs no GPADC writes.
+PLL and APB1 registers remain read-only. Existing conversion, calibration,
+threshold and controller-service evidence is reused without replay.
+
+The second board's preserved `OSC=0x983fb0f7` and `REF=0xf8675f00` decode 26 MHz
+with N=96 and M=104, producing normalized 24 MHz. The earlier frozen thermal image
+refuses this clock profile. Its replacement and exact inputs are retained under
+`~/.cache/sunstoneos/evidence/thermal-clock-reference-20261018/`. Focused
+source review accepted source selection, arithmetic and ownership. These
+register observations do not establish clock ownership or physical acquisition.

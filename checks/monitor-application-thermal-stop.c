@@ -66,7 +66,7 @@ static void pack(uint32_t words[3],unsigned ft,const unsigned code[5])
 }
 static void setup(struct model *m,unsigned cold,unsigned peri)
 {
-    memset(m,0,sizeof(*m));
+    memset(m,0,sizeof(*m));m->osc=0x10000002; /* Enabled, stable24MHz DCXO. */
     m->ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);
     m->ccu[0xa0/4]=0xfe000000u|(99u<<8)|(1u<<20);
     m->ccu[0x1908/4]=0x0fff0fff;m->ccu[0x1988/4]=0x0fff0000;

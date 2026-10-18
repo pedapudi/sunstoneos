@@ -2,6 +2,7 @@
 /* Copyright(c) 2020 - 2023 Allwinner Technology Co.,Ltd. All rights reserved. */
 /* Copyright (C) 2019 frank@allwinnertech.com */
 #include "a733_thermal.h"
+#include "a733_clock_reference.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define THS UINT32_C(0x02522000)
@@ -94,32 +95,37 @@ static int clear(struct a733_thermal *p,unsigned offset,uint32_t value)
     if (!value) return 1;
     return timely(p) && p->ops.write(p->cookie,THS+offset,value&MASK)==1 && timely(p);
 }
-static int clocks(struct a733_thermal *p,int enabled)
+static int clocks(struct a733_thermal *p,int enabled,uint32_t *cold_source)
 {
-    uint32_t v,ref;
-    if (!rd(p,UINT32_C(0x07090160),&v) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
-        !rd(p,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u) return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if (n<80 || n>116 || n!=m || !bits(p,CCU+0x518,0x0300001f,p->config.apb1)) return 0;
+    uint32_t v,ref,oscillator;
+    if (!rd(p,UINT32_C(0x07090160),&oscillator) || !rd(p,CCU,&ref) ||
+        !a733_clock_ref24_valid(oscillator,ref) ||
+        !bits(p,CCU+0x518,0x0300001f,p->config.apb1)) return 0;
+    /* SYS_CLK24M is normalized through PLL_REF. Raw DCXO is selectable only
+     * when it also supplies 24 MHz (manual4.1.6.170, mux0 versus mux1). */
+    unsigned direct24=a733_clock_dcxo_hz(oscillator)==24000000;
+    if(cold_source)*cold_source=direct24?BIT(24):0;
     if (p->config.apb1>>24==3) {
-        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&(BIT(24)|BIT(1))) ||
+        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&BIT(1)) ||
             !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0) ||
             !bits(p,CCU+0x1908,0x0a000a00,0x0a000a00) || !bits(p,CCU+0x1988,0x0a000000,0x0a000000)) return 0;
-        n=((v>>8)&255)+1;
+        unsigned n=((v>>8)&255)+1;
         if (n<53 || n>105 || 24u*n!=600u*(((v>>20)&7)+1)*2) return 0;
     }
     if (!enabled && p->config.configure_adc_clock) return bits(p,CCU+0xfc0,BIT(31),0);
-    return bits(p,CCU+0xfc0,0x8700001f,0x81000000) &&
+    if(!rd(p,CCU+0xfc0,&v))return 0;
+    v&=UINT32_C(0x8700001f);
+    return (v==UINT32_C(0x80000000) || (direct24&&v==UINT32_C(0x81000000))) &&
         (!enabled || bits(p,CCU+0xfe4,0x10001,0x10001));
 }
 static int startup(struct a733_thermal *p)
 {
-    uint32_t words[3];
-    if (!clocks(p,0)) return 0;
+    uint32_t words[3],cold_source;
+    if (!clocks(p,0,&cold_source)) return 0;
     for (unsigned i=0;i<3;++i) if (!rd(p,SID+4*i,&words[i])) return 0;
     if (!a733_thermal_calibrate(words,&p->calibration)) return 0;
     if (p->config.configure_adc_clock &&
-        (!update(p,CCU+0xfc0,0x0700001f,0x01000000) || !update(p,CCU+0xfc0,BIT(31),BIT(31)))) return 0;
+        (!update(p,CCU+0xfc0,0x0700001f,cold_source) || !update(p,CCU+0xfc0,BIT(31),BIT(31)))) return 0;
     if (!update(p,CCU+0xfe4,BIT(16),BIT(16)) || !update(p,CCU+0xfe4,1,1)) return 0;
     /* Refuse an inherited thermal/protection service instead of clearing it. */
     if (!bits(p,THS+4,MASK,0) || !bits(p,THS+0x10,MASK,0) ||
@@ -144,7 +150,7 @@ static int startup(struct a733_thermal *p)
     if (!clear(p,0x20,MASK) || !clear(p,0x24,MASK) || !clear(p,0x28,MASK) || !clear(p,0x2c,MASK) ||
         !update(p,THS+0x14,MASK,p->config.critical_mask) ||
         !update(p,THS+0x18,MASK,p->config.alarm_mask) || !update(p,THS+4,MASK,MASK)) return 0;
-    return clocks(p,1);
+    return clocks(p,1,NULL);
 }
 static enum a733_thermal_result finish(struct a733_thermal *p,enum a733_thermal_result r)
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
@@ -224,7 +230,7 @@ enum a733_thermal_result a733_thermal_read(struct a733_thermal *p,uint64_t deadl
     if (r!=A733_THERMAL_READY) return r;
     uint32_t flags,critical,alarm,off;
     struct a733_thermal_sample sample={0};
-    if (!clocks(p,1) || !bits(p,THS+4,MASK,MASK) || !rd(p,THS+0x20,&flags) ||
+    if (!clocks(p,1,NULL) || !bits(p,THS+4,MASK,MASK) || !rd(p,THS+0x20,&flags) ||
         !rd(p,THS+0x24,&critical) || !rd(p,THS+0x28,&off) || !rd(p,THS+0x2c,&alarm)) return fault(p);
     flags&=MASK;critical&=MASK;off&=MASK;alarm&=MASK;
     for (unsigned i=0;i<5;++i) if (flags&BIT(i)) {
@@ -253,7 +259,7 @@ enum a733_thermal_result a733_thermal_stop(struct a733_thermal *p,uint64_t deadl
  p->deadline=deadline;
  enum a733_thermal_result r=lock(p);
  if (r!=A733_THERMAL_READY) return r;
- if (!clocks(p,1) || !bits(p,THS+0x10,MASK,0) ||
+ if (!clocks(p,1,NULL) || !bits(p,THS+0x10,MASK,0) ||
      !update(p,THS+0x14,MASK,0) || !update(p,THS+0x18,MASK,0) ||
      !update(p,THS+4,MASK,0) || !bits(p,THS+4,MASK,0) ||
      !bits(p,THS+0x14,MASK,0) || !bits(p,THS+0x18,MASK,0) ||
