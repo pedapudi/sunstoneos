@@ -32,6 +32,10 @@ report setup errors together. Before instruction emulation, inspect the final
 ELF for required public entry points and layouts. Account for inlining and the
 actual calling convention, including the width of integer return values.
 Verify emulator privilege and interrupt-controller settings before execution.
+Fixtures that start midway through device initialization must establish the
+prerequisite ownership, clocks, generation and deadlines through actual setup
+calls. Audit these prerequisites together before running the remaining cases;
+assigning a later state does not establish the effects of earlier states.
 
 Keep these checks in the existing harness and reuse their outputs. Reject empty
 dependency inventories when recording build evidence. Routine setup repairs
