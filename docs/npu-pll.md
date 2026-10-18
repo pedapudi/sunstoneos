@@ -111,7 +111,12 @@ Linux helper's warning-only lock failure, SunstoneOS retains failure without
 opening the output gate. Its pre-DRAM mode remains available under its original
 conservative contract; the manual does not mandate that restriction.
 
-Reference checks accept the existing 24 MHz oscillator/reference profile. PLL
+Reference checks require enabled, stable DCXO and exact 24 MHz PLL_REF using
+the [shared decoder](clock-leases.md#detected-oscillator-and-normalized-reference).
+The detected input may be 19.2, 24 or 26 MHz. The fixed PLL_REF parent from the
+pinned kernel keeps the programmed NPU output unchanged. Baseline checks run
+under held REF/OSC ownership; final control, lock and output checks remain in
+force, without claiming continuous reference monitoring. PLL
 modulation, fractional interpolation, smooth updates and dithering must be
 disabled. The phase-interpolator bias and charge-pump bias must have their
 specified reset settings. Unlock interrupts must be disabled. Pending unlock
@@ -188,3 +193,13 @@ retained local-startup refusal after PLL preparation; lock timeout retains
 ownership without opening the output. No PCK or DRAM clock writes occur, and
 SRAM reset remains deasserted. Existing controller and numerical suites were
 not rerun. These results do not establish physical operation or inference.
+
+The focused detected-reference checks are preserved under
+`~/.cache/sunstoneos/evidence/accelerator-clock-reference-20261018/`.
+Actual provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
+profiles and retains wrong ratios, lost reference lock, and disabled or unstable
+DCXO before writes. GPU/NPU PERI0 cases preserve reserved bit24; the NPU PLL
+case also retains final control corruption without opening the output.
+These modeled-register checks do not establish physical operation. No native
+image was rebuilt; accelerator launch still requires a final image built from
+the accepted startup and providers, plus actual resource and recovery admission.

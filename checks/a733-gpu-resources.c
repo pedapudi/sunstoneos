@@ -65,7 +65,7 @@ static void fresh(void)
     memset(&model, 0, sizeof(model)); memset(&manager, 0, sizeof(manager));
     atomic_init(&model.pause, 0); atomic_init(&model.entered, 0);
     const struct reg regs[] = {
-        {0x07090160, 0}, {0x02002000, 0xf8000000u | (99u << 16) | (99u << 8)},
+        {0x07090160, 0x10000002}, {0x02002000, 0xf8000000u | (99u << 16) | (99u << 8)},
         {0x020020a0, 0xfe000000u | (1u << 20) | (99u << 8)},
         {0x02003908, 0x8fff0fff}, {0x02003988, 0x0fff0000},
         {0x020020a8, 0}, {0x020020ac, 0}, {0x070101ac, 0x40},
@@ -181,7 +181,7 @@ int main(int argc, char **argv)
         terminal(); ++faults;
     }
     const struct { uintptr_t address; uint32_t xor; enum a733_gpu_resource_error error; } bad[] = {
-        {0x07090160, 0x4000, A733_GPU_RESOURCE_OSCILLATOR},
+        {0x07090160, 2, A733_GPU_RESOURCE_OSCILLATOR},
         {0x02002000, 0x10000000, A733_GPU_RESOURCE_PLL},
         {0x02002000, 0x00010000, A733_GPU_RESOURCE_PLL},
         {0x020020a0, 0x10000000, A733_GPU_RESOURCE_PLL},
@@ -243,4 +243,5 @@ int main(int argc, char **argv)
     assert(acquire(1, A733_GPU_RESOURCE_PARENT, &shared) == A733_GPU_RESOURCE_OK);
     printf("PASS GPU resource sharing, change guards, concurrent admission, inherited state and %u retained faults (%u acquisition callbacks)\n",
            faults, acquire_calls);
+    return 0;
 }

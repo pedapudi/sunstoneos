@@ -1,4 +1,5 @@
 #include "a733_gpu_resources.h"
+#include "a733_clock_reference.h"
 #include <stddef.h>
 
 #define CCU UINT32_C(0x02002000)
@@ -96,9 +97,9 @@ static int clocks(struct a733_gpu_resource_manager *m, uint32_t mask,
     uint32_t osc, ref, peri, sdm0, sdm1, gate_config, gate_status;
     if (!(mask & A733_GPU_RESOURCE_OSC)) return 1;
     if (!read32(m, RTC + 0x160, &osc)) return 0;
-    /* The board's 24 MHz oscillator is selected by mux values zero and three. */
-    uint32_t mux = (osc >> 14) & 3;
-    if (mux != 0 && mux != 3) return fail(m, A733_GPU_RESOURCE_OSCILLATOR);
+    /* OSC ownership protects the detected input; consumers below use PLL_REF. */
+    if ((osc & UINT32_C(0x10000002)) != UINT32_C(0x10000002))
+        return fail(m, A733_GPU_RESOURCE_OSCILLATOR);
     if (!(mask & A733_GPU_RESOURCE_PARENT)) return 1;
     if (!read32(m, CCU, &ref) || !read32(m, CCU + 0xa0, &peri) ||
         !read32(m, CCU + 0xa8, &sdm0) || !read32(m, CCU + 0xac, &sdm1) ||
@@ -113,9 +114,9 @@ static int clocks(struct a733_gpu_resource_manager *m, uint32_t mask,
     if ((ref & 0xf8000000) != 0xf8000000 || (peri & 0xfe000000) != 0xfe000000 ||
         (peri & 2) || (sdm0 & 0x80000000) || (sdm1 & 0x08000000))
         return fail(m, A733_GPU_RESOURCE_PLL);
-    uint64_t nref = ((ref >> 8) & 255) + 1, mref = ((ref >> 16) & 127) + 1;
+    /* PERI0 has fixed PLL_REF ancestry, not raw DCXO. */
     uint64_t nperi = ((peri >> 8) & 255) + 1, mperi = ((peri >> 20) & 7) + 1;
-    if (nref < 80 || nref > 116 || nperi < 53 || nperi > 105 || nref != mref ||
+    if (!a733_clock_ref24_valid(osc, ref) || nperi < 53 || nperi > 105 ||
         UINT64_C(24000000) * nperi != (uint64_t)A733_GPU_INITIAL_HZ * mperi * 3)
         return fail(m, A733_GPU_RESOURCE_PLL);
     ready->parent_hz = A733_GPU_INITIAL_HZ;

@@ -6,8 +6,9 @@ uses register reads and the existing AXP8191 I²C reader. Host and AArch64 emula
 checks pass. Physical execution and integration with the GPU service remain
 outstanding.
 
-The supported baseline is a 24 MHz oscillator, a locked integer PLL chain that
-produces the 400 MHz peripheral clock, and DCDC4 already enabled at 800 mV.
+The supported baseline has an enabled, stable oscillator and a locked integer
+PLL_REF output of exactly 24 MHz. The peripheral PLL chain must produce the
+400 MHz peripheral clock, and DCDC4 must already be enabled at 800 mV.
 Cold PLL programming, regulator writes, voltage changes, clock modulation, and
 other operating points are unimplemented. An unsupported baseline causes a
 retained failure. The manager does not report a requested rate or voltage as
@@ -27,7 +28,7 @@ One manager owns the following resource inventory:
 
 | Resource | Stable lease guarantee |
 | --- | --- |
-| Oscillator | The board's 24 MHz oscillator selection remains fixed |
+| Oscillator | Enabled, stable detected oscillator protected against writers; no raw-rate promise |
 | GPU parent clock | The reference PLL, peripheral PLL, output gates, and divisor retain the verified 400 MHz configuration |
 | DCDC4 | The enabled 800 mV setting remains fixed |
 | Power-controller clock | The shared PCK controller remains clocked |
@@ -62,13 +63,16 @@ lock rules.
 
 ## Acquisition verifies settings before enabling gates
 
-The native adapter reads oscillator selection at `0x07090160`. It accepts the
-two mux encodings that select the board's 24 MHz source. The parent-clock check
-then reads the reference PLL, peripheral PLL, and peripheral modulation controls
+The native adapter reads oscillator status at `0x07090160` and requires enable
+and stability bits. OSC-only ownership does not declare a raw frequency. Concrete
+PCK clients validate their own device clocks; a PCK gate has no rate calculation
+here. The parent-clock check then reads the reference PLL, peripheral PLL, and peripheral modulation controls
 at `0x02002000`, `0x020020a0`, `0x020020a8`, and `0x020020ac`.
 
 The check requires the source-defined enable, supply, lock, and output flags.
-It verifies multiplier limits and the reference PLL's divide ratio. It derives
+It uses the shared [detected-reference decoder](clock-leases.md#detected-oscillator-and-normalized-reference)
+to require exact REF24 from the detected 19.2, 24 or 26 MHz input. It verifies
+multiplier limits and the peripheral PLL's divide ratio. It derives
 400 MHz from the peripheral multiplier, output divisor, and fixed divide-by-three
 stage. Peripheral PLL input-divider bit 1 must be zero, selecting division by
 one. Enabled modulation is refused. These checks establish programmed settings;
@@ -207,3 +211,19 @@ shared lock integration, an inherited I²C bus, and a stopped GPU. It should
 capture the clock and rail baseline, acquire all GPU resources once, perform the
 bounded power/identity/shutdown trial, and release the lease. An unsupported
 baseline should stop that trial and supply evidence for cold initialization.
+
+The RAIL bridge used by the shared rail ledger only reserves and authenticates
+metadata. Its acquire/status/end functions do not call the clock validator,
+read MMIO, or establish a voltage. Updating parent admission therefore does not
+change the SD rail path. Clock admission samples settings at acquisition under
+held ownership; it does not provide continuous frequency monitoring.
+
+The focused detected-reference checks are preserved under
+`~/.cache/sunstoneos/evidence/accelerator-clock-reference-20261018/`.
+Actual provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
+profiles and retains wrong ratios, lost reference lock, and disabled or unstable
+DCXO before writes. GPU/NPU PERI0 cases preserve reserved bit24; the NPU PLL
+case also retains final control corruption without opening the output.
+These modeled-register checks do not establish physical operation. No native
+image was rebuilt; accelerator launch still requires a final image built from
+the accepted startup and providers, plus actual resource and recovery admission.

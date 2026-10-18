@@ -103,7 +103,7 @@ static int write_reg(void *v,uintptr_t a,uint32_t x)
 static const struct a733_npu_pll_operations ops={acquire,enter,leave,retain,now,read_reg,write_reg};
 static void setup(struct model *m,enum a733_npu_pll_mode mode)
 {
-    memset(m,0,sizeof(*m));m->now=10;
+    memset(m,0,sizeof(*m));m->now=10;m->osc=0x10000002;
     m->regs[0]=0xf8000000|(99<<16)|(99<<8);
     m->regs[0x2a0/4]=mode==A733_NPU_PLL_COLD_ENABLE ? 0x00104520 : 0xf8104520;
     m->regs[0x2ac/4]=0x30000000;m->regs[0x2b0/4]=0xb0000;

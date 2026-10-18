@@ -1,4 +1,5 @@
 #include "a733_npu_platform.h"
+#include "a733_clock_reference.h"
 
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07064000)
@@ -68,22 +69,20 @@ static int update(struct a733_npu_platform *p,uintptr_t address,uint32_t mask,ui
 static int parents_stable(struct a733_npu_platform *p)
 {
     uint32_t osc,ref,pll,a,b,automatic,status;
-    if (!rd(p,0x07090160,&osc) || (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) ||
-        !rd(p,CCU,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000)) return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if (n<80 || n>116 || n!=m) return 0;
+    if (!rd(p,0x07090160,&osc) || !rd(p,CCU,&ref) ||
+        !a733_clock_ref24_valid(osc,ref)) return 0;
     if (!rd(p,CCU+0x2a0,&pll) || (pll&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000) || (pll&BIT(1)) ||
         !rd(p,CCU+0x2a8,&a) || (a&BIT(31)) || !rd(p,CCU+0x2ac,&b) || (b&BIT(27)) ||
         !rd(p,CCU+0x1920,&automatic) || (automatic&0x10001)!=0x10001 ||
         !rd(p,CCU+0x19a0,&status) || !(status&BIT(16))) return 0;
-    n=((pll>>8)&255)+1;m=((pll>>20)&7)+1;
+    unsigned n=((pll>>8)&255)+1,m=((pll>>20)&7)+1;
     if (n<53 || n>105 || (24000000u*n)%m) return 0;
     unsigned rate=(24000000u*n)/m;
     if (rate<A733_NPU_INITIAL_HZ || rate%A733_NPU_INITIAL_HZ || rate/A733_NPU_INITIAL_HZ>32) return 0;
     p->parent_hz=rate;p->divisor=rate/A733_NPU_INITIAL_HZ;
     if (!(p->shared&A733_CLOCK_PERI0)) return 1;
     if (!rd(p,CCU+0xa0,&pll) || (pll&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) ||
-        (pll&(BIT(24)|BIT(1))) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
+        (pll&BIT(1)) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
         !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&automatic) ||
         !rd(p,CCU+0x1988,&status)) return 0;
     n=((pll>>8)&255)+1;

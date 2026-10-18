@@ -84,7 +84,7 @@ static void setup(struct model *m,unsigned parent_div)
     m->config=(struct a733_npu_platform_config){.fabric={0x03000001,0x82000001,0x84000000},
         .rate_hz={300000000,400000000,400000000},.owner=7,.handoff=99,.deadline_us=10000};
     assert(a733_clock_leases_init(&m->clocks,now,m));
-    *reg(m,0x07090160)=0xc000;
+    *reg(m,0x07090160)=0x1000c002;
     *reg(m,CCU)=0xf8000000|(99u<<8)|(99u<<16);
     *reg(m,CCU+0xa0)=0xfe000000|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
     *reg(m,CCU+0x2a0)=0xf8000000|(81u<<8)|((parent_div-1)<<20);

@@ -37,7 +37,8 @@ control at bit 1, although the kernel clock description omits that field.
 Startup refuses a set bit 1 in PLL_NPU or a selected PERI0 parent.
 Accepted inherited parent rates are 492, 984, and 1,968 MHz. Module divisors
 are respectively 1, 2, and 4. A 1,008 MHz inherited parent is refused.
-The reference PLL must preserve a 24 MHz oscillator rate. Modulation and
+The reference PLL must produce exactly 24 MHz from the detected oscillator;
+19.2, 24 and 26 MHz inputs use their actual multiplier/divider ratio. Modulation and
 selected-parent automatic gating must be disabled.
 The primary manual defines gate-control bit 0 as `0: Auto`, `1: No-Auto`.
 PLL_NPU therefore requires `+0x1920` bits 0 and 16 set, together with effective
@@ -49,7 +50,7 @@ The verifier reads these controls and statuses; it does not change any gate.
 
 The source operating-point table assigns 800 mV to 492 MHz for every listed
 NPU speed bin, for both oscillator variants. This implementation supports the
-24 MHz clock path. The startup authority must establish that the identified
+normalized 24 MHz reference path. The startup authority must establish that the identified
 board has a supported NPU operating-point profile. The initial profile is a
 functional bring-up choice; it is not a performance target.
 
@@ -84,7 +85,7 @@ Separate PCK-clock and DCDC2 leases remain held for platform lifetime.
 All relevant writers must participate in the same ownership system.
 
 Fabric configuration is supplied as exact AHB, NSI, and MBUS selector/divider
-words and rates. The controller admits the existing 24 MHz and PERI0 profiles
+words and rates. The controller admits normalized SYS24 and PERI0 profiles
 used by [DMA startup](dma-platform.md). It verifies the selected parents and
 leases PERI0 when necessary. Unsupported DDR, DE, or NPU fabric selections are
 refused. FABRIC ownership alone does not protect a separately programmable PLL.
@@ -188,3 +189,21 @@ The startup fixture now supplies forced-on controls and matching effective
 status. Its lifecycle logic is unchanged; earlier startup, service and
 convolution evidence is reused without replaying those cases. These software
 checks do not establish physical gate behavior.
+
+The [shared reference decoder](clock-leases.md#detected-oscillator-and-normalized-reference)
+requires DCXO enabled/stable and exact REF24. The pinned kernel gives PLL_NPU
+and PERI0 fixed PLL_REF parents; neither rate is computed from raw DCXO.
+Manual §4.1.6.6 marks PERI0 bits24:23 reserved, so they do not select a parent.
+The remaining divisor, modulation, branch-gate and effective-status checks stay
+in force. These observations occur at baseline under retained parent leases;
+they do not establish continuous hardware monitoring or physical qualification.
+
+The focused detected-reference checks are preserved under
+`~/.cache/sunstoneos/evidence/accelerator-clock-reference-20261018/`.
+Actual provider code accepts exact 26 MHz N96/M104 and 19.2 MHz N100/M80
+profiles and retains wrong ratios, lost reference lock, and disabled or unstable
+DCXO before writes. GPU/NPU PERI0 cases preserve reserved bit24; the NPU PLL
+case also retains final control corruption without opening the output.
+These modeled-register checks do not establish physical operation. No native
+image was rebuilt; accelerator launch still requires a final image built from
+the accepted startup and providers, plus actual resource and recovery admission.

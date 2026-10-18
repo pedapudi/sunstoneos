@@ -48,7 +48,7 @@ static int fresh(void)
 {
     memset(&manager, 0, sizeof(manager)); memset(&native, 0, sizeof(native));
     reads = opens = closes = bus_lock = register_lock = fail_read = fail_lock = wrong_page = bad_close = 0;
-    *mmio(0x07090160) = 0;
+    *mmio(0x07090160) = 0x10000002;
     *mmio(0x02002000) = 0xf8636300;
     *mmio(0x020020a0) = 0xfe106300;
     *mmio(0x02003908) = 0x8fff0fff;
