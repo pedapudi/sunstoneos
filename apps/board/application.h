@@ -11,7 +11,7 @@ _Static_assert(offsetof(struct a733_board_session,radio_profile_digest)==368,"ob
 _Static_assert(offsetof(struct a733_board_session,workload)==400,"observer workload");
 _Static_assert(offsetof(struct board_radio_profile,response_bytes)==BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET,
     "observer response extent");
-_Static_assert(offsetof(struct board_radio_profile,response)==1600 &&
+_Static_assert(offsetof(struct board_radio_profile,response)==1596 &&
     offsetof(struct board_radio_profile,network_dhcp)==BOARD_RADIO_PROFILE_NETWORK_OFFSET &&
     offsetof(struct board_radio_profile,network_dns)==1857 &&
     offsetof(struct board_radio_profile,network_reserved)==1861 &&

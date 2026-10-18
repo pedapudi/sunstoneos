@@ -80,7 +80,8 @@ struct board_radio_profile {
     uint64_t client_deadline_us;
     uint8_t peer_address[4];uint16_t peer_port,request_bytes,response_bytes,reserved;
     uint8_t request[256],response[256];
-    uint8_t network_dhcp,network_dns[4],network_reserved[3];
+    _Alignas(8) uint8_t network_dhcp;
+    uint8_t network_dns[4],network_reserved[3];
     uint32_t address_timeout_ticks,lease_cap_ticks;
 };
 /* Wire timing fields are 32-bit ticks, widened into the actual TickType_t.

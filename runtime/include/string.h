@@ -6,4 +6,9 @@ void *memmove(void *dest, const void *src, size_t count);
 void *memset(void *dest, int value, size_t count);
 int memcmp(const void *left, const void *right, size_t count);
 size_t strlen(const char *text);
+char *strcpy(char *restrict dest, const char *restrict src);
+char *strncpy(char *restrict dest, const char *restrict src, size_t count);
+int strcasecmp(const char *left, const char *right);
+int strcmp(const char *left, const char *right);
+char *strchr(const char *text, int value);
 #endif

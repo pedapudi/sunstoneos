@@ -28,7 +28,7 @@ The startup profile occupies 1,872 bytes. Runtime and watchdog profiles use
 version 3; supervised uploads use version 4 and convert to runtime version 3
 after authentication. Earlier sizes and versions are refused. The appended
 network fields preserve every preceding field offset, including the checked
-response length at byte 1,336 and response data at byte 1,600.
+response length at byte 1,336 and response data at byte 1,596.
 
 | Offset | Wire field | Meaning |
 | --- | --- | --- |
@@ -135,3 +135,22 @@ reserved bytes, missing timers, incompatible sizes and versions, supervised
 conversion, DNS digest coverage and copied-result decoding. Lower providers
 remain explicit unused fixtures. DHCP acquisition, DNS traffic and physical
 radio operation require separate network and board evidence.
+
+The addressing fixture passed with AddressSanitizer and UndefinedBehaviorSanitizer;
+the host admission and result-decoding cases also passed. Evidence is under
+`~/.cache/sunstoneos/evidence/board-addressing-20261017/profile2/`.
+The initial compile exposed an incorrect response-offset assertion and reuse
+of the earlier structure's tail padding. The corrected layout preserves the
+response at byte 1,596 and aligns the appended policy to byte 1,856.
+The failed compilation remains in `profile/`.
+
+The combined supervised board image links the actual DHCP/DNS implementation.
+Its linked DNS source uses the native IP-task bind and close helpers. The
+board's local string header declares the five runtime string functions required
+by DNS. All 157 linked objects and 403 compiler dependencies are preserved under
+`~/.cache/sunstoneos/evidence/board-addressing-20261017/central/`.
+The image SHA-256 is
+`542cf2dca10fb9b14765a195d39174476a230982e2b86c660b3fa1e681c74cde`.
+The link establishes native composition. It supplies no physical radio evidence;
+bounded DNS timing also remains unqualified as recorded in
+[the network evidence](radio-network.md).
