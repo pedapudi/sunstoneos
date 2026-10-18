@@ -276,7 +276,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native GPU application](gpu-application.md) connects real firmware,
   providers, IRQ routing, fixed rendering and copied USB output. Its central
   image links; focused checks verify retention when isolation is unavailable
-  and prevention of device access after application failure. Successful GPU
+  and prevention of device access after application failure. Its supervised
+  mode also builds and passes session, launcher, packaging and refusal checks.
+  All 151 repository dependencies match the integrated sources, allowing reuse
+  of the linked image without another build. This mode retains resources until
+  manual power removal and still requires actual initial isolation. Successful GPU
   output, general drawing, repeated submission, lease disposal for reopen and
   physical execution remain outstanding.
   The [native lifecycle backend](gpu-backend.md) now has instruction-model

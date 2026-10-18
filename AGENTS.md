@@ -60,6 +60,8 @@ handoff, or final response does not invalidate successful test evidence.
 - Keep one implementation owner and one reviewer per integration. Review concrete
   ownership, concurrency and device behavior before execution; report only new
   findings. Integrate completed work before adding another workstream.
+- Request further work from a completed reviewer with `followup_task`.
+  `send_message` updates a running reviewer but does not restart a completed turn.
 - For new assignments, use `gpt-6.1-sol` implementation agents and `gpt-6-astra`
   reviewers. Give each a concise task-specific context instead of the full thread.
   Let existing agents finish their current unit before changing models. Reserve
