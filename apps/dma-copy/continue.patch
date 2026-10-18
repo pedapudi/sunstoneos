@@ -1,0 +1,18 @@
+--- a/platform/a733-smp-cached/continue.S
++++ b/platform/a733-smp-cached/continue.S
+@@ -307,10 +307,11 @@
+     b \handler
+     .space 124
+ .endm
+-// Current EL with SP0 is never an admitted runtime context.
+-.rept 4
+-    vector a733_cached_cold_fault
+-.endr
++// The private DMA bootstrap and worker run at EL1t on SP_EL0.
++    vector .Lsync_bhb
++    vector .Lirq_bhb
++    vector a733_cached_cold_fault
++    vector a733_cached_cold_fault
+ .rept 2
+     vector .Lsync_bhb
+     vector .Lirq_bhb
