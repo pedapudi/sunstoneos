@@ -348,22 +348,26 @@ recordings and model identities remain the reference.
    and admission before running the observer.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
-2. Qualify the integrated maintenance image under its reviewed recovery procedure.
-   Its physical use requires card/range ownership, protected backups and actual
-   controller, memory and supply admission. No prepared bundle grants those
-   conditions by itself.
-3. Establish real power, memory and recovery admission for the integrated GPU
-   and camera applications. Actual module wiring remains required before camera
-   capture; successful GPU output remains to be observed. Retained buffers permit neither invented drain
-   nor resource reuse. The larger memory profile supplies capacity; physical
-   exclusion, coherence and device mappings remain required.
-4. Qualify all-core startup, interrupts, scheduler results and coherent memory
-   through the supervised observer when ready. Preserve the sealed
-   [watchdog-dependent observer](a733-smp-observe-host.md) and its existing entry
-   requirements. USB enumeration alone does not establish diagnostic success.
+2. Qualify all-core startup, interrupts, scheduler results and coherent memory
+   through the supervised observer before dependent full-device images.
+   Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)
+   and its existing entry requirements. USB enumeration alone does not establish
+   diagnostic success.
+3. Use the integrated read-only SD application for initial card identification
+   and a sector-zero read after actual controller, memory and supply admission.
+   Preserve the inserted card's contents. The separate maintenance image needs
+   card/range ownership, protected backups and its qualified watchdog procedure;
+   it is not the first discovery path.
+4. Establish actual power, memory and recovery admission for the integrated GPU,
+   NPU, codec, RTC and thermal applications. Their internal operations can advance
+   without camera, display or microphone accessories. Retained buffers do not
+   establish completed device writes or permit resource reuse. The larger memory
+   profile supplies capacity; physical exclusion, coherence and device mappings
+   remain required. Camera capture separately requires the actual module and wiring.
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
-   audio, display, codecs, PCIe and power transitions. OV5640 is the first camera;
+   audio, display, codecs, PCIe, SPI, routed PWM/ADC and power transitions.
+   Complete runtime RTC access and the remaining RTC modes. OV5640 is the first camera;
    no MIPI camera or display is connected, and the DSI panel is undecided.
    No microphone is available. Recorded audio remains the mimus fixture.
 6. Qualify unchanged-model mimus with paced input and all cores. After every
