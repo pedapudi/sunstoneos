@@ -51,10 +51,14 @@ The `a733-power-probe` build target contains
 kernel loader with `--expect 'PASS PMIC identity and rail reads'`.
 Do not execute it while the board is awaiting independent recovery.
 
-The probe also includes the DCDC9 selector at `0x1a` and ELDO6 selector at
-`0x3f`, needed to establish inherited USB supply settings. The expanded image
-builds under `second-board-20261018-3-3/pmic-rail-probe/`; these additional reads
-have no physical result yet. The earlier 17-register result remains unchanged.
+The expanded probe passes all 19 reads on the second board under
+`second-board-20261018-3-3/pmic-rail-probe/runtime/`. DCDC9 is enabled with
+selector register `0x1a = 0xc8`; its seven-bit selector is 72, representing
+1,240 mV. ELDO6 is enabled with `0x3f = 0x0c`, representing 800 mV. These are
+programmed settings, not measured rail voltages. No regulator data was written.
+The corrected returning monitor completed with status zero and ROM returned as
+`003:093` with automatic USB access. This result covers the normal PMIC workload;
+it does not qualify recovery from arbitrary peripheral faults.
 
 References are the [pinned board sources](sources.md): the bootloader's
 `include/sunxi_power/pmu_axp8191.h`, `drivers/sunxi_power/pmu_axp8191.c`,

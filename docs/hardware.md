@@ -225,8 +225,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   single-core SD/USB image now links and passes focused startup, native composition
   and host acceptance checks. Its explicit ROM USB takeover is integrated.
   Physical ROM capture matches the inspected PIO implementation, with scratch
-  restoration verified. Actual supply readings, external DMA handoff and image
-  admission remain prerequisites. Card operations remain untested.
+  restoration verified. A 19-register PMIC probe establishes enabled USB supplies
+  at programmed 1,240 mV and 800 mV, with normal ROM return. External DMA handoff,
+  refreshed warm launcher state and image admission remain prerequisites.
+  Card operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,

@@ -25,8 +25,10 @@ passed their recorded workloads.
 The returning boot monitor now requires both interrupt affinity-routing bits
 already enabled and preserves them during cleanup. Seven focused instruction
 cases and one secure-QEMU kernel run pass under `monitor-are-20261018/`.
-The corrected monitor has no physical result; broader cleanup behavior remains
-unqualified. This change leaves the frozen multicore diagnostics untouched.
+The corrected monitor also passes the second board's 19-register PMIC probe,
+including normal ROM return and automatic USB access under
+`second-board-20261018-3-3/pmic-rail-probe/runtime/`. Broader cleanup behavior
+remains unqualified. Frozen multicore diagnostics are unchanged.
 
 [Mimus](mimus.md) matches host results on 32 development recordings through the
 [native USB application](mimus-usb.md). The model remains unchanged. Two-core
@@ -115,7 +117,7 @@ Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
 instance `003:092`. The failed runner exited and its claim closed after recovery.
 Fresh DDR preparation is required; no multicore launch has run on this instance.
-The second is on `3-3`, instance `003:088`, and
+The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
 12 GiB; full capacity and device admission remain unqualified. Multicore work
@@ -310,7 +312,9 @@ removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Evidence is under `reconnect-20261018-092/recovery.json`. Fresh DDR preparation
 and a platform survey are required before native execution. The second board on `3-3`, instance
-`003:088`, has successful DDR, returning survey and SD initial-register evidence.
+`003:093`, has successful DDR, returning survey, SD initial-register and PMIC
+evidence. Preserve its recorded DDR continuity through the normal return; refresh
+the warm launcher survey without repeating DDR training.
 Both have reconnect permissions. The common access helper selects each port
 through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
 Queue assignments are in [the board-test procedure](board-test-queue.md).
@@ -499,9 +503,13 @@ The second board's fixed ROM and nonsecure ROM capture matches the inspected
 reference byte for byte. Its selector confirms USB0 programmed-I/O operation.
 Scratch SRAM and DDR restore exactly under `rom-usb-capture/runtime/`.
 This establishes the inspected USB PIO predecessor for the recorded lifetime;
-external DMA handoff remains separate. The expanded PMIC probe builds with
-DCDC9 and ELDO6 selector reads but has not run physically. Those readings are
-needed for USB supply admission.
+external DMA handoff remains separate. The expanded PMIC probe passes all 19
+reads, including enabled DCDC9 at a programmed 1,240 mV and ELDO6 at 800 mV.
+The returning monitor reports status zero and ROM returns with access as
+`003:093`. Its process exited and queue claim closed. These programmed settings
+support USB supply admission; they are not measured voltages. No storage command
+has run. The next preparation refreshes the warm survey and checks DMA0 status
+only after confirming its register-access clocks and reset state.
 
 GPU and NPU parent-clock providers now decode the normalized 24 MHz reference
 from supported oscillator inputs. Three focused provider groups pass under
