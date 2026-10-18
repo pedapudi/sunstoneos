@@ -244,6 +244,12 @@ plus native binding/provider, launcher and host checks pass under
 `rtc-service-native-20261018/`. All 23 owned files match integration. Of 182 compiled
 repository inputs, four differ only by unused additive CLDO3 and PWM pin support.
 The frozen image and successful checks were reused without rebuilding or replay.
+The boot-CPU-only RTC service is now integrated as well. Twelve native startup
+and five host cases pass under `rtc-single-core-20261018/`; all 182 compiled
+repository inputs and 583 frozen inputs match integration. The frozen image and
+checks were reused. Its two clients, calendar operations and alarm service no
+longer depend on secondary startup. Physical launch remains pending actual
+board admission, with resources retained until whole-board power removal.
 Physical timing, UTC accuracy and physical USB remain unqualified. Source switching,
 wider client registration, wake, calibration, reset-cause reporting and applicable
 retention modes remain required.
