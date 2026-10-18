@@ -140,3 +140,37 @@ within nineteen seconds, and the single refusal-report read timed out. The host
 stopped communication and retained the board lock and queue claim. Evidence is
 under `supervised-reconnect-20261017/`. The failure location remains unknown;
 offline comparison with the working single-core startup precedes another attempt.
+
+## Returning A32 launch survey
+
+`tools/run-launch-survey.py` prepares and runs a separate SRAM-only register
+survey. It does not launch the native image or write a reset, cache, MMU, power
+or watchdog control. The root coordinator alone executes it under the existing
+per-port lock and a reviewed queue claim.
+
+The survey uses `0x85000..0x85400` for code and its inline register save area,
+and `0x86000..0x86080` for a 128-byte report. These intervals reuse the returning
+DDR wrapper and mailbox workspace. They exclude the live FEL image at
+`0x47000..0x4a000` and the loader scratch interval at `0x71000`. It never touches
+the caller's stack. The host backs up both complete intervals, checks immutable
+upload readback, executes once, copies the nonce-bound report, then restores and
+verifies both SRAM intervals. A successful report read and restoration establish
+ROM responsiveness; a queue claim still requires coordinator review.
+
+The report captures CPSR, SCTLR, MPIDR, CNTFRQ, RMR, two physical-counter reads,
+SP, LR and the caller's general registers. SCR is explicitly unavailable. Reading
+SCR from an unproven exception/security context can trap; the survey omits that
+access. RMR is read with the same instruction used by the previously exercised
+pinned `reset64` helper, without writing it. The instruction model verifies the
+return convention and preservation; it cannot establish physical register-access
+permission or real counter progress.
+
+Build with `run-launch-survey.py prepare --build DIR --clang CLANG --lld LLD
+--objcopy OBJCOPY`, then run `checks/launch-survey.py --build DIR --output
+SOFTWARE.json` with bytecode disabled. A physical `run` requires `--build`,
+`--software`, `--fel`, `--database`, `--claim`, `--owner` and a fresh `--evidence`
+directory. The queue prerequisites are `supervised-ram-recovery` and
+`launch-survey-software`; submitted artifacts include the exact manifest and
+binary. On the first transport error, instance change or uncertain SRAM state,
+the runner stops all traffic and retains ownership for manual recovery review.
+It never retries or automatically reconnects.
