@@ -1,60 +1,34 @@
 #!/usr/bin/env python3
-"""Capture one immutable PCM result through an explicitly selected USB0 device."""
+"""Decode saved I2S frames offline. Physical capture uses check-a733-i2s-supervised.py."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import struct
-import usb.core
 
-p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--bus',type=int,required=True)
-p.add_argument('--address',type=int,required=True)
-p.add_argument('--epoch',type=int,required=True)
-p.add_argument('--generation',type=int,required=True)
-p.add_argument('--session-sha256',required=True)
-p.add_argument('--output',type=Path,required=True)
-p.add_argument('--cancel',action='store_true')
-a=p.parse_args()
-metadata=a.output.with_suffix(a.output.suffix+'.json')
-if a.output.exists() or metadata.exists():p.error('output or metadata already exists')
-identity=bytes.fromhex(a.session_sha256)
-if len(identity)!=32:p.error('session digest must contain 32 bytes')
-d=usb.core.find(idVendor=0x1f3a,idProduct=0xefe8,bus=a.bus,address=a.address)
-if d is None:raise SystemExit('selected device is absent')
-if d.product!='sunstoneos native I2S' or d.serial_number!='sunstoneos-a733-i2s':
-    raise SystemExit('selected device is not the native I2S application')
-# One bounded exchange per request. Any transport failure terminates the process.
-# Callers must hold the project board lock and establish launch/recovery authority.
-d.set_configuration()
-def exchange(op,offset=0,count=0):
-    d.write(0x02,struct.pack('<III',op,offset,count),timeout=2000)
-    data=bytearray()
-    while len(data)<72:
-        data.extend(d.read(0x81,4168,timeout=2000))
-    magic,version,state,actual,size,total,epoch,generation=struct.unpack('<6I2Q',data[:40])
-    if (magic,version,total,epoch,generation)!=(0x53493241,1,16384,a.epoch,a.generation):
-        raise RuntimeError('capture identity mismatch')
-    if data[40:72]!=identity or actual!=offset or size>count:
-        raise RuntimeError('capture session or response mismatch')
-    while len(data)<72+size:data.extend(d.read(0x81,4168,timeout=2000))
-    if len(data)!=72+size:raise RuntimeError('response extent mismatch')
-    return state,data[72:]
-if a.cancel:
-    state,_=exchange(2)
-    if state!=3:raise RuntimeError('cancellation was not acknowledged')
-    print('capture cancelled; all device reservations remain retained')
-else:
-    state,_=exchange(0)
-    if state!=2:raise SystemExit(f'PCM unavailable: state {state}; no automatic retry')
-    frame=bytearray()
-    for offset in range(0,16384,4096):
-        count=min(4096,16384-offset)
-        state,chunk=exchange(1,offset,count)
-        if state!=2 or len(chunk)!=count:raise RuntimeError('frame read refused')
-        frame.extend(chunk)
-    with a.output.open('xb') as output:output.write(frame)
-    with metadata.open('x') as description:description.write(json.dumps(dict(
-        format='S16_LE',rate_hz=16000,channels=1,epoch=a.epoch,generation=a.generation,
-        session_sha256=a.session_sha256,sha256=hashlib.sha256(frame).hexdigest()),indent=2)+'\n')
-    print(f'captured {len(frame)} bytes')
+def decode(frame,session,operation,offset=0,count=0):
+    if len(session)<48 or struct.unpack_from('<Q',session,16)[0]!=len(session):
+        raise ValueError('Invalid admitted I2S session size')
+    if operation not in (0,1,2) or not 0<=offset<=16384 or not 0<=count<=min(4096,16384-offset) or (operation!=1 and (offset or count)):
+        raise ValueError('Invalid I2S request shape')
+    if len(frame)<72:raise ValueError('Short I2S response')
+    magic,version,state,actual,size,total,epoch,generation=struct.unpack_from('<6I2Q',frame)
+    if (magic,version,total,epoch,generation)!=(0x53493241,1,16384,*struct.unpack_from('<2Q',session,24)):
+        raise ValueError('I2S response identity mismatch')
+    if frame[40:72]!=hashlib.sha256(session).digest() or actual!=offset or state not in (0,1,2,3):
+        raise ValueError('I2S response session, offset or state mismatch')
+    expected=count if operation==1 and state==2 else 0
+    if size!=expected or len(frame)!=72+size or (operation==2 and state!=3):
+        raise ValueError('I2S response extent or cancellation mismatch')
+    return {'state':state,'offset':actual,'bytes':size,'payload':frame[72:]}
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--frame',type=Path,required=True)
+    parser.add_argument('--session',type=Path,required=True)
+    parser.add_argument('--operation',type=int,choices=(0,1,2),required=True)
+    parser.add_argument('--offset',type=int,default=0);parser.add_argument('--count',type=int,default=0)
+    a=parser.parse_args();result=decode(a.frame.read_bytes(),a.session.read_bytes(),a.operation,a.offset,a.count)
+    payload=result.pop('payload');result['payload_sha256']=hashlib.sha256(payload).hexdigest()
+    print(json.dumps(result,indent=2))
+if __name__=='__main__':main()
