@@ -876,3 +876,26 @@ board lock. This result does not identify whether CPU-interface access, controll
 initialization or cleanup failed. The model pass does not qualify those operations.
 The original board requires physical recovery before another operation; the
 second board was not involved. Do not repeat the same launch.
+
+
+## A narrower diagnostic stops before the first redistributor write
+
+The optional `prepare --stop-before-power` build runs the same production
+controller through CPU-interface access, frame discovery and core wake-control
+verification. Its write callback refuses the first GICR_PWRR request before
+issuing MMIO. The controller records a retained I/O result from that deliberate
+refusal; this is not GIC_READY or a power-up success.
+
+The wrapper verifies that the entire captured local bank and power register
+remain unchanged, restores core wake control, and permits the existing control
+restoration and shutdown handshake. The record distinguishes the deliberate
+stop from an initial-state refusal. Any changed local state retains ownership
+without shutdown. This profile performs no redistributor writes and leaves
+interrupt delivery disabled.
+
+Two focused instruction cases pass: normal observation with unchanged local
+state, and a mismatched local-state read that retains ownership. The overlay
+occupies 9,376 bytes in the existing 16 KiB reservation. Evidence is under
+`native-before-power-20261018/`; no physical attempt has run. After recovery,
+this boundary can distinguish the new CPU-interface/controller entry path from
+the redistributor writes and cleanup in the failed complete attempt.

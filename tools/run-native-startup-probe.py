@@ -24,6 +24,7 @@ LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
 OVERLAY=(0x41020000,0x4000)
 PROFILE='core1-local-interrupt-init-v1'
+EARLY_PROFILE='core1-before-redistributor-write-v1'
 SOURCES=('boot/a733/native-startup-probe.S','boot/a733/native-startup-probe.ld',
     'boot/a733/native-local-interrupt-probe.c','platform/a733/cpu_continue.c',
     'platform/a733-smp-cached/continuation-core.patch','platform/a733/cpu_start.c',
@@ -51,6 +52,7 @@ def prepare(a):
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
     a.build.mkdir(parents=True,exist_ok=False)
+    profile=EARLY_PROFILE if a.stop_before_power else PROFILE
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],
         [a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o']]
@@ -61,7 +63,8 @@ def prepare(a):
         obj=a.build/(name+'.o');objects.append(obj)
         commands.append([a.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
-            '-Wall','-Wextra','-Werror','-I',ROOT/'include','-I',ROOT/'runtime/include','-c',source,'-o',obj])
+            '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_PROBE_STOP_BEFORE_POWER=1'] if a.stop_before_power else []),
+            '-I',ROOT/'include','-I',ROOT/'runtime/include','-c',source,'-o',obj])
     commands.extend([[a.lld,'-T',ROOT/'boot/a733/native-startup-probe.ld','--gc-sections',*objects,'-o',a.build/'overlay.elf'],
         [a.objcopy,'-O','binary',a.build/'overlay.elf',a.build/'overlay.bin']])
     for command in commands:
@@ -96,7 +99,8 @@ def prepare(a):
             data=bytes(code) if index==0 else segment['data'];name=f'segment-{index}.bin'
             (a.build/name).write_bytes(data);payloads.append({'name':name,'address':segment['address'],'bytes':len(data)})
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
-    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':PROFILE,'native_sha256':NATIVE,
+    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':profile,'native_sha256':NATIVE,
+        'stop_before_power':a.stop_before_power,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
         'sources':{name:digest(ROOT/name) for name in SOURCES},
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
@@ -166,7 +170,7 @@ def local_initialization_snapshot(raw):
     names=('state','epoch','core','deadline','controller_state','phase','error','writes',
         'redistributor','original_control','restored_control','sre_before','sre_after',
         'igrpen0','igrpen1','waker','enable','pending','active','group','modifier',
-        'config','priority','pwrr','cleanup_error','cleanup_writes')
+        'config','priority','pwrr','cleanup_error','cleanup_writes','stopped_before_power')
     return dict(zip(names,struct.unpack('<32Q',raw)))
 
 def activation_snapshot(raw):
@@ -213,7 +217,9 @@ def claimed(a,expected):
 
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
-    require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==PROFILE and m['native_sha256']==NATIVE,'Wrong startup image.')
+    require(type(m.get('stop_before_power')) is bool,'Missing diagnostic boundary.')
+    profile=EARLY_PROFILE if m['stop_before_power'] else PROFILE
+    require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
     require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
     require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
@@ -225,7 +231,7 @@ def run(a):
     require(all(survey['result']['launcher_gates'].values()),'Actual A32 launcher gates fail; establish cache-off state separately.')
     software_raw=a.software.read_bytes();software=json.loads(software_raw)
     require(software.get('schema')=='a733-native-startup-software-v1' and software.get('physical_access') is False and
-            software.get('execution_profile')==PROFILE and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
+            software.get('execution_profile')==profile and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
     expected={a.build/'manifest.json':manifest_hash,a.software.resolve():hashlib.sha256(software_raw).hexdigest(),
               a.survey.resolve():hashlib.sha256(survey_raw).hexdigest(),(a.bundle/'prepared.json').resolve():prepared['_prepared_sha256']}
     recovery,recovery_hash=claimed(a,expected);require(digest(a.fel)==base.FEL_HASH,'Pinned FEL executable required.')
@@ -267,7 +273,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native core1 RELEASE and CPU preparation before any redistributor access, then target-owned OFF',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native core1 diagnostic with verified local restoration and target-owned OFF',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -313,12 +319,21 @@ def run(a):
                     init=record['local_initialization']
                     if local['state']==2:
                         require(init['state'] in (3,4) and init['epoch']==observation['epoch'] and init['core']==1,'Local initialization did not complete or refuse safely.')
-                        if init['state']==3:
-                            require(init['controller_state']==2 and init['error']==init['cleanup_error']==0 and
-                                init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
-                                'Local initialization or control restoration differs.')
+                        before_power=init['state']==4 and init['stopped_before_power']==1
+                        if before_power:
+                            require(m['stop_before_power'] and init['controller_state']==5 and init['error']==1 and
+                                init['writes']==2 and init['cleanup_writes']==1 and init['cleanup_error']==0,
+                                'Pre-write boundary differs.')
+                        if init['state']==3 or before_power:
+                            if init['state']==3:
+                                require(not m['stop_before_power'] and init['stopped_before_power']==0 and
+                                    init['controller_state']==2 and init['error']==init['cleanup_error']==0,
+                                    'Local initialization differs.')
+                            require(init['redistributor']==local['base'] and init['restored_control']==init['original_control'],
+                                'Local control restoration differs.')
                             require(all(init[k]==local[k] for k in ('waker','enable','pending','active','group','modifier','config','priority')) and
                                 init['pwrr']==local['pwrr_after'], 'Local interrupt restoration differs.')
+                    record['before_power_observed']=init['state']==4 and init['stopped_before_power']==1
                     record['local_initialization_observed']=init['state']==3
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
@@ -338,6 +353,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)
     build=sub.add_parser('prepare')
     for name in ('build','observer','clang','lld','objcopy'):build.add_argument('--'+name,type=Path,required=True)
+    build.add_argument('--stop-before-power',action='store_true',help='Stop before the first redistributor write and restore unchanged local state.')
     live=sub.add_parser('run')
     for name in ('build','bundle','software','survey','database','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
     live.add_argument('--claim',required=True);live.add_argument('--owner',required=True);a=p.parse_args()

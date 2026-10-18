@@ -214,7 +214,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   handoff with explicit debug-client exclusion. Focused provider, host-policy and
   native parser checks pass; three objects were rebuilt and 163 reused under
   `second-board-20261018-3-3/sd-rom-pins/`. Its observed adaptive voltage mode
-  remains outside the current admission profile; no card command has run.
+  is now supported with sensed/selected 3.3 V, unchanged mode and stable owned
+  supplies. Four provider cases pass, including retention on voltage-state
+  changes. Only two objects were rebuilt and 164 reused. No card command has run.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,

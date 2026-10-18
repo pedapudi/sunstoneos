@@ -450,10 +450,15 @@ Only three affected objects were rebuilt; 163 original objects were reused.
 Evidence is under `second-board-20261018-3-3/sd-rom-pins/`.
 
 The board reports adaptive PF voltage mode with sensed and selected 3.3 V.
-The existing manual-mode-only profile rejects this state. A separate source review
-is assessing adaptive-mode admission with stable rail and writer exclusion.
-The image is not yet eligible: exact pull/drive fields, clock/supply ownership,
-electrical admission and its eight-core startup dependency remain outstanding.
+Adaptive mode is now admitted alongside the manual modes when sensed and
+selected voltage remain 3.3 V. Exact mode, rail stability and writer exclusion
+remain required; no voltage configuration is written. Four focused provider
+cases pass, including retained failure on mode, status or selector changes.
+Only the platform and build identity were rebuilt; 164 objects were reused.
+The image still needs exact pull/drive fields, clock/supply ownership, electrical
+admission and working startup. An independent single-core SD/USB application is
+being integrated to permit storage qualification while multicore remains under
+diagnosis. Full all-core hardware support remains required.
 
 ## Next actions
 
@@ -478,6 +483,9 @@ The primary agent handles all further multicore work directly.
    one physical attempt produced no ROM return or result buffer. Its process,
    claim and original-board lock remain retained pending requested physical
    recovery. No failure location is established; the same launch must not repeat.
+   A narrower overlay now stops before the first redistributor write and verifies
+   unchanged local state before shutdown. Two instruction cases pass under
+   `native-before-power-20261018/`; it has no physical result.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,

@@ -9,7 +9,7 @@ struct result {
     uint64_t state, epoch, core, deadline, controller_state, phase, error, writes;
     uint64_t redistributor, original_control, restored_control, sre_before, sre_after;
     uint64_t igrpen0, igrpen1, waker, enable, pending, active, group, modifier;
-    uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, reserved[6];
+    uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power, reserved[5];
 };
 _Static_assert(sizeof(struct result)==256,"Host result layout");
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
@@ -35,6 +35,13 @@ static int read64(void *context,uintptr_t a,uint64_t *out)
 static int write32(void *context,uintptr_t a,uint32_t v)
 {
     (void)context;
+#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER)
+    if(a==0x03480024) {
+        volatile struct result *r=(void *)UINT32_C(0x42002980);
+        r->stopped_before_power=1;
+        return 0; /* Deliberate callback refusal; no redistributor write occurs. */
+    }
+#endif
     if(a!=0x07050204 && a!=0x03480014 && a!=0x03480024 &&
        a!=0x03490180 && a!=0x03490280 && a!=0x03490380 &&
        a!=0x03490080 && a!=0x03490d00 && a!=0x03490c04 &&
@@ -123,6 +130,26 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
     while(a733_cpu_continue_poll(&state)==A733_CONTINUE_PENDING) {}
     r->controller_state=state.state;r->phase=state.phase;r->error=state.error;
     r->writes=state.writes_attempted;r->redistributor=state.redistributor;
+#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER)
+    if(r->stopped_before_power && state.state==A733_CONTINUE_RETAINED &&
+       state.redistributor==b->base && state.writes_attempted==2) {
+        /* Only the core wake-control write ran. Verify the untouched local bank
+         * and restore that control before the existing target shutdown. */
+        r->pwrr=load(0x03480024);
+        if(r->pwrr!=b->pwrr)return 0;
+        r->waker=load(0x03480014);r->enable=load(0x03490100);
+        r->pending=load(0x03490200);r->active=load(0x03490300);
+        r->group=load(0x03490080);r->modifier=load(0x03490d00);
+        r->config=load(0x03490c04);r->priority=load(0x03490400);
+        if(load(0x03480000)!=b->ctlr || r->waker!=b->waker || r->enable!=b->enable ||
+           r->pending!=b->pending || r->active!=b->active || r->group!=b->group ||
+           r->modifier!=b->modifier || r->config!=b->config || r->priority!=b->priority)return 0;
+        ++r->cleanup_writes;store(0x07050204,(uint32_t)r->original_control);
+        r->restored_control=load(0x07050204);
+        if(r->restored_control!=r->original_control)return 0;
+        barrier();r->state=4;barrier();return 2;
+    }
+#endif
     if(state.state!=A733_CONTINUE_GIC_READY || state.redistributor!=b->base)return 0;
     r->state=2;
     if(!cleanup(r,b))return 0;
