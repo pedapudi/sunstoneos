@@ -232,8 +232,7 @@ python3 apps/gpu-render/observe.py --compute --bus BUS --address ADDRESS \
 
 The observer reads an already-running admitted image. Supervised preparation,
 actual memory/power admission and coordinator board ownership remain required.
-The current board instance is quarantined; this change performed no hardware
-access. A future bounded physical attempt must establish two advancing timelines
+A bounded physical attempt must establish two advancing timelines
 and correct copied numerical outputs while retaining all GPU resources afterward.
 No successful cancellation or resource-release claim follows from this image.
 
@@ -246,3 +245,84 @@ refuses malformed state, identity, sequence, arithmetic and render frames.
 publication and acquired result copying with modeled GPU writes. Physical
 numerical execution, arbitrary programs, general graphics and mimus acceleration
 remain unqualified.
+
+
+## Supervised capture of the first numerical workload
+
+The coordinator launcher selects the output protocol from the frozen image
+manifest's `workload` field. `fixed-arithmetic-repeat` captures two numerical
+submissions into `compute.bin`; `fixed-clear` captures the render into
+`rgba8.bin`. Earlier render manifests without that field retain the render
+protocol. Other workloads are refused before device access. Protocol selection
+has no command-line override. Each reply is saved before decoding. Success
+requires both advancing compute sequences, all 64 correct words, and durable
+output before the capture deadline.
+
+The focused host evidence is under
+`~/.cache/sunstoneos/evidence/gpu-physical-proposal-20261018/host/`.
+Its 33 cases cover render regression, compute success and refusal, transfer
+failures, queue ownership, pinned firmware and frozen manifest selection.
+Replies and device operations are modeled. The checks reuse the compute ELF
+under `gpu-completion-20261018/native/build/`, with SHA-256
+`55fcba76201f52e54ab4e1dbd24f04e9c3dbfe9857843c5d463204663621f72e`.
+Its manifest is `gpu-application/manifest.json` beside that ELF. No native image
+was rebuilt or physically executed for the host change.
+
+The existing native GPU image starts cores 1 through 7 in
+`platform/a733-smp-cached/boot.c` before entering its runtime. The GPU boot patch
+preserves that loop. This image therefore depends on working all-core startup,
+interrupts and coherent scheduling. There is no integrated single-core GPU
+image. A CPU startup correction requires a new affected GPU build and a new
+image-bound admission record; the preserved ELF is not evidence for that
+correction.
+
+Before preparing physical inputs, the coordinator must establish these facts
+for the selected target and final image:
+
+| Required fact | Available observation and remaining limit |
+| --- | --- |
+| Target and recovery | Identify the stable USB port and current instance, verify reconnect access, and document complete board power removal with every power source removed. A ROM descriptor or USB reconnection alone cannot prove GPU power removal. |
+| RAM exclusion | Establish exclusive ownership of `0x41000000..0x42200000` and `0x48000000..0x79000000`, disabled inherited CPU caches, and exclusion of remote writers. DDR capacity and two successful page transfers do not cover those reservations. |
+| Inherited parent | Read oscillator selection at `0x07090160`, PLL registers at `0x02002000`, `0x020020a0`, `0x020020a8`, `0x020020ac`, and branch configuration/status at `0x02003908`, `0x02003988`. Apply the exact checks in [GPU resources](gpu-resources.md). These establish programmed 400 MHz settings, not measured frequency. |
+| Inherited supply | Through the reviewed PMIC owner, verify AXP8191 page/identity/revision and enabled DCDC4 selector 30, then establish settling. Register settings alone do not measure an 800 mV rail. The GPU path cannot repair an unsupported supply or PLL baseline. |
+| Initial GPU exclusion | Verify disabled local clock `0x02002b20[31]` and asserted external reset with bus gate disabled at `0x02002b24[16,0]`. Establish complete earlier power removal and no later GPU activity. These register reads cannot prove an inherited transaction drain. |
+| Platform ownership | Establish shared CCU/PCK/PMIC exclusion, exclusion of other GPU masters, and Device mappings for GPU/GIC. Resource tokens and session digests bind records but cannot establish those physical facts. |
+
+The absent [runtime drain guarantee](gpu-isolation.md) does not require a
+shutdown experiment for this fixed lifetime. Entry still requires actual
+initial isolation. Every outcome retains all GPU backing and leases until
+complete whole-board power removal.
+
+Once those conditions and the image's CPU startup dependency are established,
+the bounded coordinator procedure is:
+
+1. Freeze the final supervised compute ELF and its matching manifest. Use the
+   existing pinned firmware hash above. Review target-specific admission and
+   session-template records against the raw observations; software fixture
+   records cannot supply physical authority.
+2. Run `apps/gpu-render/prepare.py` offline with `--image`, `--manifest`,
+   `--admission`, `--session-template`, a fresh `--output`, and the previously
+   configured `--clang` and `--lld`. This freezes all referenced evidence and
+   builds the bounded SRAM launcher. Validate the resulting bundle before any
+   device operation.
+3. Submit the frozen `prepared.json`, `image.elf` and `launch.bin` to the existing
+   per-board queue. Review prerequisites `supervised-ram-recovery` and
+   `gpu-supervised-software` against that exact image, launcher and current host
+   source bytes. Reference the existing admission/launcher evidence and affected
+   host cases instead of replaying unchanged checks.
+4. With `SUNSTONE_USB_PORT` selecting the qualified target, invoke
+   `tools/check-a733-gpu-supervised.py --bundle BUNDLE --fel FEL --evidence NEW_DIR
+   --database QUEUE --claim CLAIM --owner OWNER --supervised-manual-reconnect`.
+   The shared runner takes the port lock, checks the claimed frozen inputs and
+   launches once. The native session allows sixty seconds; host capture allows
+   at most fifty-nine seconds and 304 queries.
+5. Accept numerical operation only when `gpu_result` is `observed-success` and
+   the durable `compute.bin` contains both verified 128-byte results. Inspect
+   the saved raw replies for advancing sequence identities. On pending-budget
+   expiry, malformed output or transport failure, stop communication. Success
+   also retains resources and the physical lock. Confirm full power removal
+   through the existing recovery workflow before permitting any resource reuse.
+
+No actual GPU entry record is supplied by the host checks. Initial memory and
+master exclusion, supported settled power, CPU startup and physical numerical
+execution remain requirements for the first board attempt.

@@ -25,6 +25,10 @@ def session():
 def frame(chunk,state=1,epoch=31):
     return struct.pack('<7IQI',0x52555047,1,state,chunk,64 if state==1 else 0,64,64,epoch,4096 if state==1 else 0)+(bytes.fromhex('2080c0ff')*64 if state==1 else b'')
 
+def compute_frame(index,state=1,epoch=31):
+    words=[((17+(i+1)*3)^(0x9e3779b9+(i<<16)))&0xffffffff for i in range(32)]
+    return struct.pack('<7IQI',0x43555047,1,state,index,32 if state==1 else 0,2,index+1 if state==1 else 0,epoch,64 if state==1 else 0)+(struct.pack('<32I',*words) if state==1 else b'')
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True)
     parser.add_argument('--image',type=Path,required=True,help='Existing reviewed GPU ELF; never rebuilt or executed')
@@ -34,7 +38,7 @@ def main():
     identities={str(p.relative_to(ROOT)):host.digest(p) for p in sources}
     state_path=out/'results.json';state=json.loads(state_path.read_text()) if state_path.exists() else {'physical_access':False,'cases':{}}
     def case(name,fn):
-        fingerprint=hashlib.sha256((inspect.getsource(fn)+inspect.getsource(Clock)+inspect.getsource(session)+inspect.getsource(frame)+json.dumps(identities,sort_keys=True)+host.digest(a.image)).encode()).hexdigest()
+        fingerprint=hashlib.sha256((inspect.getsource(fn)+inspect.getsource(Clock)+inspect.getsource(session)+inspect.getsource(frame)+inspect.getsource(compute_frame)+json.dumps(identities,sort_keys=True)+host.digest(a.image)).encode()).hexdigest()
         if name in state['cases']:
             assert state['cases'][name]['inputs']==fingerprint,'Changed completed inputs: '+name
             return
@@ -45,19 +49,24 @@ def main():
     for p in sources:
         target=snapshot/p.relative_to(ROOT);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(p,target)
 
-    def captures(d,variation):
+    def captures(d,variation,compute=False):
         clock=Clock();calls=[];received=[];committed=[];record={'gpu_result':'unobserved','complete':False};pending=[False]
         def exchange(packet,timeout):
             chunk=struct.unpack('<I',packet)[0];calls.append(chunk);assert 0<timeout<=500
-            data=frame(chunk)
-            if variation=='pending-success' and not pending[0]:data=frame(0,0);pending[0]=True
-            if variation=='wrong-epoch':data=frame(chunk,epoch=99)
-            if variation=='wrong-chunk':data=frame(chunk+1)
-            if variation=='poison':data=data[:40]+bytes([0xa5])*256
-            if variation=='failure':data=frame(chunk,2)
+            response=compute_frame if compute else frame
+            data=response(chunk)
+            if variation=='pending-success' and not pending[0]:data=response(0,0);pending[0]=True
+            if variation=='wrong-epoch':data=response(chunk,epoch=99)
+            if variation=='wrong-chunk':data=response(chunk+1)
+            if variation=='poison':data=data[:40]+bytes([0xa5])*(128 if compute else 256)
+            if variation=='failure':data=response(chunk,2)
             if variation=='short':data=b'partial'
-            if variation=='pending-output':data=frame(chunk,0)+b'x'
-            if variation=='regression' and chunk==1:data=frame(chunk,0)
+            if variation=='pending-output':data=response(chunk,0)+b'x'
+            if variation=='regression' and chunk==1:data=response(chunk,0)
+            if variation=='wrong-sequence':
+                data=bytearray(data);struct.pack_into('<I',data,24,7);data=bytes(data)
+            if variation=='render-protocol':data=frame(chunk)
+            if variation=='truncated-output':data=data[:-4]
             if variation=='late':clock.value=200
             if variation=='read-failure':raise OSError('Software fixture transport failure')
             received.append(data);return data
@@ -65,22 +74,27 @@ def main():
             if variation=='save-failure' and record['gpu_result']=='observed-success':raise OSError('Software fixture journal failure')
             committed.append(copy.deepcopy(record));sup.save_json(d/'session.json',record)
         error=None
-        try:host.capture(exchange,session(),d,record,save,150,now=clock.now,pause=clock.pause)
+        try:host.capture(exchange,session(),d,record,save,150,now=clock.now,pause=clock.pause,workload='fixed-arithmetic-repeat' if compute else 'fixed-clear')
         except (ValueError,OSError,RuntimeError,struct.error) as ex:error=ex
         if variation=='pending-success':
-            assert not error and calls==[0]+list(range(64)) and record['gpu_result']=='observed-success'
-            assert (d/'rgba8.bin').read_bytes()==bytes.fromhex('2080c0ff')*4096
-            assert host.digest(d/'rgba8.bin')==record['copied_gpu_output']['sha256']
+            assert not error and calls==[0]+list(range(2 if compute else 64)) and record['gpu_result']=='observed-success'
+            output=d/('compute.bin' if compute else 'rgba8.bin')
+            expected=compute_frame(0)[40:]*2 if compute else bytes.fromhex('2080c0ff')*4096
+            assert output.read_bytes()==expected
+            assert host.digest(output)==record['copied_gpu_output']['sha256']
         elif variation=='failure':assert not error and calls==[0] and record['gpu_result']=='observed-failure'
         else:
-            assert error and calls==(list(range(64)) if variation=='save-failure' else [0,1] if variation=='regression' else [0])
+            assert error and calls==(list(range(2 if compute else 64)) if variation=='save-failure' else [0,1] if variation=='regression' else [0])
             assert not any(x.get('gpu_result')=='observed-success' for x in committed)
-            if variation=='save-failure':assert record['gpu_result']=='unobserved' and 'durable_result' not in record and (d/'rgba8.bin').exists()
+            if variation=='save-failure':assert record['gpu_result']=='unobserved' and 'durable_result' not in record and (d/('compute.bin' if compute else 'rgba8.bin')).exists()
         assert not record['complete']
         for i,data in enumerate(received,1):assert (d/f'gpu-{i:03}.bin').read_bytes()==data
         return {'requests':len(calls),'error':str(error) if error else None,'observed':record['gpu_result'],'limits':'Only copied fixture USB bytes; no GPU render or drain claim.'}
     for variation in ['pending-success','wrong-epoch','wrong-chunk','poison','failure','short','pending-output','regression','late','read-failure','save-failure']:
         case('capture-'+variation,lambda d,v=variation:captures(d,v))
+
+    for variation in ['pending-success','wrong-epoch','wrong-chunk','poison','failure','short','pending-output','regression','late','read-failure','save-failure','wrong-sequence','render-protocol','truncated-output']:
+        case('compute-capture-'+variation,lambda d,v=variation:captures(d,v,True))
 
     def transfers(d,variation):
         clock=Clock();calls=[];record={'complete':False};actual=host.capture
@@ -177,7 +191,7 @@ def main():
     def wiring(d):
         bundle=d/'bundle';bundle.mkdir();raw=session()
         admission={'identity':'software-only-target','port':'software-only-port'};entry=b'Software-only prerequisite'
-        values={'session.bin':raw,'session-template.bin':raw,'admission.json':json.dumps(admission).encode(),'entry.bin':entry,'image.elf':a.image.read_bytes()}
+        values={'session.bin':raw,'session-template.bin':raw,'admission.json':json.dumps(admission).encode(),'entry.bin':entry,'image.elf':a.image.read_bytes(),'image-input-manifest.json':json.dumps({'workload':'fixed-arithmetic-repeat'}).encode()}
         for name,data in values.items():(bundle/name).write_bytes(data)
         prepared={'files':{n:host.digest(bundle/n) for n in values},'entry_evidence':{'original-evidence':{'name':'entry.bin'}},'image_sha256':host.digest(bundle/'image.elf'),'retention':'whole-board-power-removal'}
         (bundle/'prepared.json').write_text(json.dumps(prepared))
@@ -193,10 +207,12 @@ def main():
             try:validate_entry('another target',admission['port'])
             except ValueError:pass
             else:raise AssertionError('Different target accepted')
+            (bundle/'image-input-manifest.json').write_text(json.dumps({'workload':'fixed-clear'}))
+            capture('device','same','deadline','record','save')
             assert 'whole-board power removal' in kw['description'];calls.append('shared-run-session');return 2
-        with patch.object(host.preparation,'validate_bundle',lambda b:prepared),patch.object(host.preparation,'validate_admission',validate),patch.object(host,'claimed',lambda *a:calls.append('claim-check')),patch.object(sup,'run_session',run):
+        with patch.object(host.preparation,'validate_bundle',lambda b:prepared),patch.object(host.preparation,'validate_admission',validate),patch.object(host,'claimed',lambda *a:calls.append('claim-check')),patch.object(sup,'run_session',run),patch.object(host,'capture_device',lambda *a,**kw: calls.append(kw['workload'])):
             code=host.main(['--bundle',str(bundle),'--fel',str(d/'never-executed-fel'),'--evidence',str(d/'never-used-device-evidence'),'--database',str(d/'queue'),'--claim','fixture','--owner','fixture','--supervised-manual-reconnect'])
-        assert code==2 and calls==['claim-check','frozen-entry-check','frozen-entry-check','shared-run-session'];return {'calls':calls,'limits':'Shared transport mocked; existing per-port lock/retention evidence reused.'}
+        assert code==2 and calls==['claim-check','frozen-entry-check','frozen-entry-check','fixed-arithmetic-repeat','shared-run-session'];return {'calls':calls,'limits':'Shared transport mocked; existing per-port lock/retention evidence reused.'}
     case('shared-session-wiring',wiring)
     state['result']='PASS new GPU host adapter cases; no physical access or GPU execution';sup.save_json(state_path,state);print(state['result'])
 if __name__=='__main__':main()
