@@ -211,12 +211,12 @@ void a733_smp_diagnostic_start(void)
 #ifndef SUNSTONE_BOARD_SUPERVISED
        board.session.deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline
 #else
-       a733_cached_runtime[0].startup_deadline<A733_SMP_COUNTER_HZ
+       a733_cached_runtime[0].startup_deadline<A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ
 #endif
        )platform_panic("board session",2);
 #ifdef SUNSTONE_BOARD_SUPERVISED
     board.admitted_session=board.session;
-    board.session.session_start_ticks=a733_cached_runtime[0].startup_deadline-A733_SMP_COUNTER_HZ;
+    board.session.session_start_ticks=a733_cached_runtime[0].startup_deadline-A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ;
     board.session.deadline_us=a733_cached_runtime[0].diagnostic_deadline/24;
 #endif
     struct a733_board_session *s=&board.session;

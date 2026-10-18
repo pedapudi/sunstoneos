@@ -5,7 +5,8 @@
 #include "boot.h"
 #include <string.h>
 static struct {
- struct a733_rtc_session session;
+ struct a733_rtc_session_set session;
+ struct a733_rtc_initialization initialization;
  struct a733_rtc_boot boot;
  unsigned attempted,ready;
 } admitted;
@@ -37,16 +38,24 @@ int rtc_session_prepare(const struct a733_smp_contract *contract)
 {
  if(!contract||admitted.attempted)return 0;
  admitted.attempted=1;
+ const uint64_t bytes=contract->reserved[1];
  if(contract->magic!=A733_RTC_CONTRACT_MAGIC||
     contract->reserved[0]!=A733_BOARD_SESSION_ADDRESS||
-    contract->reserved[1]!=sizeof(admitted.session))return 0;
+    (bytes!=sizeof(struct a733_rtc_session)&&
+     bytes!=sizeof(admitted.session)))return 0;
  const volatile uint8_t *source=(const void *)A733_BOARD_SESSION_ADDRESS;
- for(unsigned i=0;i<sizeof(admitted.session);++i)((uint8_t *)&admitted.session)[i]=source[i];
- uint8_t hash[32];storage_digest_bytes(&admitted.session,sizeof(admitted.session),hash);
- if(memcmp(hash,&contract->reserved[2],32)||!a733_rtc_session_valid(&admitted.session))return 0;
+ for(unsigned i=0;i<bytes;++i)((uint8_t *)&admitted.session)[i]=source[i];
+ uint8_t hash[32];storage_digest_bytes(&admitted.session,(size_t)bytes,hash);
+ if(memcmp(hash,&contract->reserved[2],32)||admitted.session.base.bytes!=bytes||
+    !a733_rtc_session_valid(&admitted.session.base))return 0;
  boot_contract=contract;
  struct a733_rtc_boot_ops ops={read32,write32,route64};
  if(!access_ok()||!a733_rtc_boot_bus(&admitted.boot,&ops,&admitted))return 0;
+ if(admitted.session.base.version==2){
+  extern int rtc_boot_initialize(const struct a733_rtc_setting *,struct a733_rtc_initialization *,
+      const struct a733_smp_contract *);
+  if(!rtc_boot_initialize(&admitted.session.setting,&admitted.initialization,contract))return 0;
+ }
  /* Ready remains private until all early ownership and publication succeeds. */
  admitted.ready=1;
  if(a733_cpu_coherence_publish((uintptr_t)&admitted,sizeof(admitted),contract->startup_deadline)==1)return 1;
@@ -59,4 +68,9 @@ int rtc_boot_route(void)
  admitted.ready=0;return 0;
 }
 const struct a733_rtc_session *rtc_admitted_session(void)
-{return admitted.ready&&admitted.boot.state==2?&admitted.session:NULL;}
+{return admitted.ready&&admitted.boot.state==2?&admitted.session.base:NULL;}
+
+const struct a733_rtc_setting *rtc_admitted_setting(void)
+{return rtc_admitted_session()&&admitted.session.base.version==2?&admitted.session.setting:NULL;}
+const struct a733_rtc_initialization *rtc_admitted_initialization(void)
+{return rtc_admitted_setting()?&admitted.initialization:NULL;}

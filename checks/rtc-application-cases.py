@@ -28,14 +28,14 @@ def setup(image,out):
                 if die.tag=='DW_TAG_structure_type':
                     fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
                     if fields:layouts[name]=fields
-    names=['rtc_enable_irq','vTaskEnterCritical','vTaskExitCritical','rtc_session_prepare','rtc_admitted_session','rtc_boot_route','rtc_copy','rtc_application_irq',
+    names=['rtc_copy_initialized','rtc_admitted_initialization','rtc_admitted_setting','rtc_enable_irq','vTaskEnterCritical','vTaskExitCritical','rtc_session_prepare','rtc_admitted_session','rtc_boot_route','rtc_copy','rtc_application_irq',
            'a733_smp_counter','a733_cpu_coherence_publish','a733_rtc_session_valid','a733_smp_contract_valid',
            'a733_smp_build_id','board','board_live','board_fail','rtc','gicv3_spi_mask']
     symbols={}
     for name in names:
         assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
     assert all(name not in candidates for name in ('a733_watchdog_hw_admit','a733_watchdog_hw_reload'))
-    for s,fields in {'rtc_application':['session','driver','result','cancel','armed','pending','output','digest','spi'],
+    for s,fields in {'rtc_application':['session','driver','result','cancel','armed','pending','output','digest','spi','initialized_output','initialized_digest'],
                      'a733_rtc':['irq_fault'],'gicv3_spi':['distributor','intid']}.items():
         assert all(k in layouts[s] for k in fields),s
     identity=next(data[symbols['a733_smp_build_id']-address:symbols['a733_smp_build_id']-address+32] for address,data in segments if address<=symbols['a733_smp_build_id']<=address+len(data)-32)
@@ -44,7 +44,7 @@ def setup(image,out):
     return symbols,segments,layouts,identity
 
 class Machine:
-    def __init__(self,image,out,source,fail=0):
+    def __init__(self,image,out,source,fail=0,startup=1):
         self.symbols,self.segments,self.layouts,self.identity=setup(image,out)
         self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         for address,size in [(0x40000000,0x4000000),(0x50000000,0x1000000),(0x03400000,0x10000),(0x07010000,0x1000),(0x07090000,0x1000)]:self.cpu.mem_map(address,size)
@@ -56,7 +56,7 @@ class Machine:
         epoch,generation,lease=struct.unpack_from('<3Q',self.session,24)
         _,contract=prepare.request_bytes(self.symbols['a733_smp_build_id'],self.identity,self.session,epoch,generation,lease)
         self.contract=bytearray(contract);struct.pack_into('<Q',self.contract,0,prepare.CONTRACT_MAGIC)
-        struct.pack_into('<4Q',self.contract,80,24,24000024,1440000024,1440000024)
+        struct.pack_into('<4Q',self.contract,80,24,24+startup*24000000,1440000024,1440000024)
         self.cpu.mem_write(0x43200000,bytes(self.contract));self.cpu.hook_add(UC_HOOK_CODE,self.hook);self.cpu.hook_add(UC_HOOK_MEM_WRITE,self.write)
         assert self.call('a733_rtc_session_valid',0x41f00000)==1
         assert self.call('a733_smp_contract_valid',0x43200000,100)==1

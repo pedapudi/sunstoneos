@@ -35,9 +35,10 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  if(!i){out[0]=0x0304;out[1]=0x0409;return out;}if(i>=5)return NULL;size_t n=strlen(text[i]);out[0]=(uint16_t)(0x0300|2*n+2);for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;}
 
 /* Request0 observes; request1 requests cancellation. Header64B followed by
- * the immutable88B RTC snapshot only on success. All integers are little endian. */
+ * an immutable88B adoption or136B initialization snapshot only on success. All integers are little endian. */
 _Static_assert(sizeof(struct a733_rtc_snapshot)==88,"RTC result layout");
-static uint8_t response[64+sizeof(struct a733_rtc_snapshot)];
+_Static_assert(sizeof(struct rtc_initialized_output)==136,"RTC initialized result layout");
+static uint8_t response[64+sizeof(struct rtc_initialized_output)];
 static unsigned response_bytes,response_sent,response_transferred;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 void tud_mount_cb(void){}
@@ -56,14 +57,18 @@ static void rtc_exchange(void)
  if(!tud_vendor_available())return;
  uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request>1)stop();
  if(request)atomic_store_explicit(&rtc.cancel,1,memory_order_release);
- struct a733_rtc_snapshot snapshot;uint8_t hash[32];unsigned result=(unsigned)rtc_copy(&snapshot,hash);
+ struct rtc_initialized_output snapshot;uint8_t hash[32];
+ unsigned initialized=rtc.session.version==2;
+ unsigned result=initialized?(unsigned)rtc_copy_initialized(&snapshot,hash):
+     (unsigned)rtc_copy(&snapshot.calendar,hash);
+ unsigned payload=initialized?sizeof(snapshot):sizeof(snapshot.calendar);
  memset(response,0,sizeof(response));
- put32(response,0x31435452);put32(response+4,1);put32(response+8,result);
- put32(response+12,result==1?sizeof(snapshot):0);
+ put32(response,0x31435452);put32(response+4,initialized?2:1);put32(response+8,result);
+ put32(response+12,result==1?payload:0);
  put32(response+16,(uint32_t)board.session.epoch);put32(response+20,(uint32_t)(board.session.epoch>>32));
  put32(response+24,(uint32_t)board.session.generation);put32(response+28,(uint32_t)(board.session.generation>>32));
- if(result==1){memcpy(response+32,hash,32);memcpy(response+64,&snapshot,sizeof(snapshot));}
- response_sent=response_transferred=0;response_bytes=result==1?sizeof(response):64;
+ if(result==1){memcpy(response+32,hash,32);memcpy(response+64,&snapshot,payload);}
+ response_sent=response_transferred=0;response_bytes=result==1?64+payload:64;
 }
 void board_usb0_task(void *unused)
 {

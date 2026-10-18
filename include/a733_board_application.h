@@ -18,6 +18,12 @@
 #define A733_BOARD_CONTRACT_VERSION 1u
 #endif
 #define A733_BOARD_SUPERVISED_SECONDS 60u
+#ifndef A733_BOARD_STARTUP_SECONDS
+#define A733_BOARD_STARTUP_SECONDS 1u
+#endif
+#if A733_BOARD_STARTUP_SECONDS < 1 || A733_BOARD_STARTUP_SECONDS >= A733_BOARD_SUPERVISED_SECONDS
+#error Invalid supervised board startup interval
+#endif
 /* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
  * odd selections include radio. This is a fixed staged application choice. */
 static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}

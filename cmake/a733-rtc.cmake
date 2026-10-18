@@ -19,8 +19,8 @@ apply_build_patch("${rtc_build}/boot.c" "${board_build}/boot-supervised.c"
 apply_build_patch("${rtc_build}/platform.c" "${storage_build}/platform.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/platform.patch")
 list(APPEND rtc_sources "${rtc_build}/boot.c" "${rtc_build}/platform.c")
-foreach(source IN ITEMS apps/rtc/main.c apps/rtc/native.c apps/rtc/irq.c apps/rtc/usb0.c apps/rtc/admission.c apps/rtc/snapshot.c
- drivers/rtc/a733_rtc.c drivers/rtc/a733_rtc_boot.c drivers/gpu/gicv3_spi.c)
+foreach(source IN ITEMS apps/rtc/main.c apps/rtc/initialize.c apps/rtc/native.c apps/rtc/irq.c apps/rtc/usb0.c apps/rtc/admission.c apps/rtc/snapshot.c
+ drivers/rtc/a733_rtc.c drivers/rtc/a733_rtc_initialize.c drivers/rtc/a733_rtc_boot.c drivers/gpu/gicv3_spi.c)
  list(APPEND rtc_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 list(REMOVE_DUPLICATES rtc_sources)
@@ -33,7 +33,7 @@ set_property(TARGET sunstone-a733-rtc PROPERTY COMPILE_OPTIONS "${rtc_options}")
 target_include_directories(sunstone-a733-rtc BEFORE PRIVATE "${SUNSTONE_SOURCE_ROOT}/apps/rtc")
 target_include_directories(sunstone-a733-rtc PRIVATE ${rtc_includes})
 target_compile_definitions(sunstone-a733-rtc PRIVATE ${rtc_definitions}
- SUNSTONE_BOARD_APPLICATION=1 A733_SMP_CONTRACT_MAGIC=0x4153373352544331ULL A733_SMP_RESULT_MAGIC=0x4153373352545231ULL)
+ SUNSTONE_BOARD_APPLICATION=1 A733_BOARD_STARTUP_SECONDS=6 A733_SMP_CONTRACT_MAGIC=0x4153373352544331ULL A733_SMP_RESULT_MAGIC=0x4153373352545231ULL)
 if(rtc_links)
  target_link_libraries(sunstone-a733-rtc PRIVATE ${rtc_links})
 endif()
@@ -42,7 +42,7 @@ set(rtc_inputs ${rtc_sources} ${rtc_headers} ${board_inputs} "${CMAKE_CURRENT_LI
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/sources.json"
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/boot.patch" "${SUNSTONE_SOURCE_ROOT}/apps/rtc/platform.patch")
 list(REMOVE_DUPLICATES rtc_inputs)
-set(rtc_identity "native-rtc1;supervised60;TypeA;external32768;alarm1..10;copied88;${CMAKE_C_COMPILER_VERSION}")
+set(rtc_identity "native-rtc2;startup6;supervised60;TypeA;external32768;alarm1..10;copied88;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS rtc_inputs)
  file(SHA256 "${input}" rtc_hash)
  string(APPEND rtc_identity "${rtc_hash}")

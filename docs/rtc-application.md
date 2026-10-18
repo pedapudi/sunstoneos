@@ -1,7 +1,9 @@
 # Native RTC read and alarm diagnostic
 
-The native application adopts the A733 SoC real-time clock (RTC), reads its
-initialized calendar, and arms one non-waking alarm one to ten seconds ahead.
+The native application reads the A733 SoC real-time clock (RTC) and arms one
+non-waking alarm one to ten seconds ahead. An explicit authenticated mode can
+initialize the onboard crystal source and set a requested calendar value before
+application startup. Read-only adoption requires an existing valid source and calendar.
 The owner task acknowledges its interrupt, disables the alarm, restores the
 previous disabled target, and publishes a copied calendar/result snapshot over
 USB. Cancellation follows the same ownership and restoration rules.
@@ -82,10 +84,10 @@ whole-board power removal even after success.
 
 ## Remaining RTC modes and physical evidence
 
-This diagnostic does not set time, initialize or calibrate the oscillator,
-change the DCXO or LDO, or write general-purpose/boot words. Clock-source
-initialization, set-time, alarm wake from low power, and retention qualification
-remain required. No authoritative hardware reset-cause field has been identified;
+The explicit mode initializes the fixed crystal source and sets the calendar
+at boot. Runtime calendar updates, oscillator calibration, alarm wake from low
+power and retention qualification remain required. Both modes preserve DCXO,
+LDO and general-purpose/boot words. No authoritative hardware reset-cause field has been identified;
 software boot markers are not decoded as reset cause. Warm-reset retention and
 complete supply-removal retention require separate physical evidence.
 
@@ -119,4 +121,90 @@ that request once. A successful 64-byte header carries session identity and a
 SHA256 digest followed by the immutable 88-byte calendar/alarm snapshot.
 Pending or failed replies expose no snapshot. Raw refused frames remain durable.
 After any attempted run, ownership remains retained until whole-board power
-removal; a USB cable reconnect alone does not establish that recovery.
+removal. Disconnecting USB removes all power when USB is the only supply; any
+additional supplies must also be removed. The coordinator verifies the newly
+connected device instance before resuming.
+
+## Explicit source and calendar initialization
+
+A separate 784-byte session, version 2, appends four little-endian 32-bit words
+to the existing adoption session: flags, day, packed HMS and zero reserved.
+Flag 1 authorizes source initialization; flag 2 authorizes calendar setting.
+Both may be selected. Version1 remains 768 bytes and cannot reach either write
+path. The complete copied extent is bounded to 768 or 784 bytes before validation
+or hashing. Initialization consumes that retained authenticated setting.
+
+The clock evidence must authorize the requested change, identify the fitted
+onboard crystal, and exclude inherited users of the shared 32k source and remote
+source writers. Calendar authority binds the requested day and HMS. Absence of
+FreeRTOS clock leases before the scheduler does not establish this exclusion.
+The single-primary EL3 hook performs initialization after existing inactive
+alarm/GIC and bus ownership admission, before other cores or provider startup.
+
+Source initialization uses keyed preserve-only updates of RTC control bits 14/15
+for automatic fallback, bit 4 for crystal enable, and bits 1/0 for osc32k and
+external-source selection. Gain bits 3/2 remain unchanged. Manual section 9.1.7.1
+and the pinned CCU mux declarations define bit 1=0 as osc32k selection.
+Section 9.1.5.1 contains conflicting bit 1 source-selection prose. The pinned CCU
+probe also polls statusbit 4, whereas the manual defines oscillator health at
+status bit 2, clear when healthy. This implementation follows the register table:
+four healthy samples, selection status bit 0 and no remaining fault/pending state.
+It records inherited source pending before acknowledging only W1C bit1 under
+explicit source authority. It does not copy vendor DCXO/fanout writes.
+
+The source-readiness budget is one second. Calendar setting follows pinned
+`sunxi_rtc_settime`: wait for HMS access clear, write HMS, wait for completion,
+wait for DAY access clear, write DAY, and wait for completion. Each of the four
+busy waits allows one second as specified by manual section 9.1.7.1, with the
+vendor's two-millisecond settling delay after each clear. All waits and delays
+also check the absolute startup deadline. A partial update retains ownership;
+no rollback asserts that the former calendar or source has been restored.
+
+The RTC target selects six seconds of startup within the existing 60-second
+session. One second for source readiness, four one-second busy waits and eight
+milliseconds of settling leave 992 milliseconds for remaining startup work.
+Other board targets retain the default one-second startup interval. The RTC
+launcher, native validator and board session-start derivation use matching
+intervals, preserving the original total session deadline. These are failure
+bounds; physical oscillator startup and successful boot within them remain
+unqualified.
+
+Calendar verification compares a coherent absolute day/HMS timestamp with the
+requested timestamp and the measured interval beginning at the HMS write.
+If HMS crosses midnight before DAY is written and the DAY write loses that
+carry, verification refuses the resulting earlier date. It does not infer a
+repair. The requested calendar is explicit user input, not proof of accurate
+current UTC. Hardware continues from that value between later reads.
+
+`apps/rtc/setting.py` creates this session template from an adoption template,
+a reviewed clock-evidence file, optional `--initialize-source`, and an explicit
+`--calendar YYYY-MM-DDTHH:MM:SS`. The normal preparation command then binds
+physical admission and the exact final image. The clock record must authorize
+that target and source operation; software-model records are nondeployable.
+
+Version2 result frames retain the 64-byte header and append 136 bytes on success:
+the existing 88-byte alarm/calendar snapshot plus 48 bytes of inherited/final
+raw initialization fields, requested flags, stage, attempted-write count and
+elapsed microseconds. Stage 6 means complete initialization; earlier stages
+identify a retained partial failure. Boot failures do not start USB or publish
+a successful result. The diagnostic remains in admitted RAM for a separately
+reviewed observer; no physical observer result is claimed.
+
+The new image and focused checks pass under
+`~/.cache/sunstoneos/evidence/rtc-calendar-native-20261018/`. Its ELF SHA256 is
+`e7c83e371ff81f8a5e62b07ba6cae517003a01e24ea9e2301345b58dbe751817`;
+the generated build ID is
+`1a4684e9692b6f6db65451e3d637336cf0674b770559859b9d67c33c106c46ec`.
+All 177 compiled repository inputs, 420 dependencies and 2,535 pre-run input
+hashes match after execution. Independent source/artifact review accepted the
+results. The frozen adoption image and its passed evidence above remain intact.
+
+The new cases execute the initializer over explicit callbacks and linked native
+instructions over modeled MMIO. They cover source-only/calendar-only operation,
+600-millisecond calendar writes, partial/source/busy failures, lost midnight
+carry, exact private session binding, no initialization writes in adoption mode,
+combined copied output, default/RTC startup validators, launcher and host
+admission. The combined copy contains the actual native initializer report and
+an explicitly modeled later alarm/calendar snapshot. Earlier alarm/IRQ evidence
+is reused. Physical source readiness, UTC accuracy, oscillator calibration,
+retention and native USB serialization remain unqualified.

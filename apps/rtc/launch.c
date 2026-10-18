@@ -6,7 +6,8 @@ int a733_smp_launch_prepare(void)
 {
     volatile const struct a733_rtc_session *j=(const void *)A733_BOARD_SESSION_ADDRESS;
     volatile const struct a733_board_session *s=&j->board;
-    ADMIT(j->magic==A733_RTC_SESSION_MAGIC&&j->version==1&&j->bytes==sizeof(*j)&&
+    ADMIT(j->magic==A733_RTC_SESSION_MAGIC&&j->bytes==CONTRACT->reserved[1]&&((j->version==1&&j->bytes==sizeof(*j))||
+        (j->version==2&&j->bytes==sizeof(struct a733_rtc_session_set)))&&
         s->magic==A733_BOARD_SESSION_MAGIC&&s->version==2&&s->bytes==sizeof(*s)&&s->workload==2&&
         s->epoch==REQUEST[3]&&s->generation==REQUEST[4]&&s->lease==REQUEST[6],14);
     ADMIT(!s->minimum_reload_us&&!s->maximum_recovery_us&&!s->guard_us&&!s->reset_by_us&&

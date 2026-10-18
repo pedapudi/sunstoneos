@@ -37,7 +37,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==1:
             output=evidence/'rtc-snapshot.bin';supervisor.durable_frame(output,frame[64:])
             require(now()<deadline,'RTC output became durable after capture deadline.')
-            record['copied_rtc_output']={'path':output.name,'bytes':88,'sha256':hashlib.sha256(frame[64:]).hexdigest()}
+            record['copied_rtc_output']={'path':output.name,'bytes':len(frame)-64,'sha256':hashlib.sha256(frame[64:]).hexdigest()}
         require(now()<deadline,'RTC finalization exceeded capture deadline.')
         record['rtc_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
@@ -55,7 +55,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,cancel=Fals
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete RTC request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'RTC capture deadline expired after write.')
-        return bytes(device.read(0x81,152,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,200,timeout=min(timeout,remaining)))
     return capture(exchange,session,evidence,record,save,deadline,cancel=cancel)
 
 

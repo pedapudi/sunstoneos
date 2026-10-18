@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline preparation of one supervised fixed RTC application session."""
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -19,30 +20,50 @@ CONTRACT_MAGIC=0x4153373352544331
 REQUEST_MAGIC=0x4153373352544c31
 
 def session_check(raw):
-    require(len(raw)==768,'RTC session must be768bytes.')
+    require(len(raw) in (768,784),'RTC session must be768 or784bytes.')
     require(board.session_check(raw[:592])==2,'RTC requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373352544131,1,768),'Invalid RTC session extension.')
+    version=1 if len(raw)==768 else 2
+    require(struct.unpack_from('<3Q',raw,592)==(0x4153373352544131,version,len(raw)),'Invalid RTC session extension.')
+    if version==2:
+        flags,day,hms,reserved=struct.unpack_from('<4I',raw,768)
+        require(0<flags<4 and not reserved,'Explicit RTC initialization flags required.')
+        require((flags&2 and 1<=day<=65535 and not hms&~0x1f3f3f and (hms>>16)<24 and ((hms>>8)&63)<60 and (hms&63)<60) or
+                (not flags&2 and not day and not hms),'Invalid RTC calendar target.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid RTC owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing RTC physical evidence.')
     delay,reserved=struct.unpack_from('<2I',raw,760)
     require(1<=delay<=10 and not reserved,'RTC alarm delay must be1..10seconds.')
 
+def calendar_target(year,month,date,hour,minute,second):
+    target=datetime.datetime(year,month,date,hour,minute,second)
+    day=(target.date()-datetime.date(1970,1,1)).days+1
+    require(1<=day<=65535,'Calendar exceeds the TypeA16-bit day range.')
+    return day,(hour<<16)|(minute<<8)|second
+
+def setting_session(adopted,flags,day,hms,clock_digest):
+    """Produce an explicit initialization template; authority is reviewed separately."""
+    session_check(adopted)
+    require(len(adopted)==768 and len(clock_digest)==32,'An adoption base and exact clock evidence digest are required.')
+    raw=bytearray(adopted)+struct.pack('<4I',flags,day,hms,0)
+    struct.pack_into('<2Q',raw,600,2,len(raw));raw[664:696]=clock_digest
+    session_check(raw);return bytes(raw)
+
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,768)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,len(raw))
     return request,bytes(contract)
 
 def build_launcher(out,clang,lld):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
     text=text.replace('0x4153373353554c33','0x4153373352544c31').replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
-    text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct a733_rtc_session)')
-    text=text.replace('20*A733_SMP_COUNTER_HZ','60*A733_SMP_COUNTER_HZ')
+    text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && (CONTRACT->reserved[1]==sizeof(struct a733_rtc_session) || CONTRACT->reserved[1]==sizeof(struct a733_rtc_session_set))')
+    text=text.replace('20*A733_SMP_COUNTER_HZ','60*A733_SMP_COUNTER_HZ').replace('CONTRACT->startup_deadline=start+A733_SMP_COUNTER_HZ;', 'CONTRACT->startup_deadline=start+6*A733_SMP_COUNTER_HZ;')
     (out/'rtc-launch-base.c').write_text(text)
-    for name,path in [('launch.c',ROOT/'apps/rtc/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('a733_rtc_application.h',ROOT/'include/a733_rtc_application.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h')]:shutil.copy2(path,out/name)
-    flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
+    for name,path in [('launch.c',ROOT/'apps/rtc/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('a733_rtc_application.h',ROOT/'include/a733_rtc_application.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h'),('a733_rtc_initialize.h',ROOT/'include/a733_rtc_initialize.h'),('a733_rtc.h',ROOT/'include/a733_rtc.h')]:shutil.copy2(path,out/name)
+    flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1','-DA733_BOARD_STARTUP_SECONDS=6',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
@@ -66,10 +87,21 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         require(fact.get('schema')=='a733-rtc-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'RTC authority is not bound to this image/target.')
         required={'initial':['exclusive_rtc_and_rccu_word','irq228_owned_disabled_inactive_unpending',
                     'remote_writers_excluded','other_cores_excluded','inherited_alarm_disabled_unpending'],
-            'clock':['external_32768_stable','calendar_initialized','source_writers_excluded'],
+            'clock':['source_writers_excluded'] if len(raw)==784 else ['external_32768_stable','calendar_initialized','source_writers_excluded'],
             'electrical':['fitted_board_identified','vcc_rtc_power_stable'],
             'supervision':['whole_board_power_removal','permanent_ownership','no_reuse','one_attempt']}[key]
         require(all(fact.get(k) is True for k in required),'Required RTC physical fact absent.')
+    if len(raw)==784:
+        flags,day,hms,_=struct.unpack_from('<4I',raw,768)
+        fact=json.loads(cache[str(Path(record['clock']['path']))])
+        if not flags&1:require(fact.get('external_32768_stable') is True,'Calendar setting needs an admitted stable external source.')
+        if not flags&2:require(fact.get('calendar_initialized') is True,'Source-only initialization needs an admitted calendar.')
+        if flags&1:
+            require(all(fact.get(k) is True for k in ('source_change_authorized','exclusive_osc32k_consumers','remote_source_writers_excluded','onboard_crystal_fitted')),
+                    'RTC source change lacks exclusive inherited-consumer authority.')
+        if flags&2:
+            require(fact.get('calendar_write_authorized') is True and fact.get('requested_day')==day and fact.get('requested_hms')==hms,
+                    'RTC calendar target lacks explicit authorization.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):

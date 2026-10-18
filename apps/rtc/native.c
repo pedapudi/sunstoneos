@@ -86,6 +86,10 @@ void rtc_task(void *unused)
  if(!board_live(NULL)||a733_clock_token_status(&providers.shared.clocks,&rtc.clock)!=A733_CLOCK_OK)retained();
  rtc.output=rtc.driver.snapshot;
  storage_digest_bytes(&rtc.output,sizeof(rtc.output),rtc.digest);
+ if(rtc.session.version==2){
+  rtc.initialized_output.calendar=rtc.output;
+  storage_digest_bytes(&rtc.initialized_output,sizeof(rtc.initialized_output),rtc.initialized_digest);
+ }
  if(!board_live(NULL)||a733_smp_counter()/24>=deadline())retained();
  atomic_store_explicit(&rtc.result,1,memory_order_release);
  for(;;){if(!board_live(NULL))retained();vTaskDelay(1);}
@@ -98,6 +102,21 @@ int rtc_copy(struct a733_rtc_snapshot *out,uint8_t hash[32])
  if(r!=1)return (int)r;
  if(!board_live(NULL)||a733_smp_counter()/24>=deadline())return 2;
  *out=rtc.output;memcpy(hash,rtc.digest,32);
+ if(!board_live(NULL)||a733_smp_counter()/24>=deadline()){
+  memset(out,0,sizeof(*out));memset(hash,0,32);return 2;
+ }
+ return 1;
+}
+
+int rtc_copy_initialized(struct rtc_initialized_output *out,uint8_t hash[32])
+{
+ if(!out||!hash)return 2;
+ memset(out,0,sizeof(*out));memset(hash,0,32);
+ unsigned result=atomic_load_explicit(&rtc.result,memory_order_acquire);
+ if(result!=1)return (int)result;
+ if(rtc.session.version!=2||rtc.initialized_output.initialization.stage!=6||
+    !board_live(NULL)||a733_smp_counter()/24>=deadline())return 2;
+ *out=rtc.initialized_output;memcpy(hash,rtc.initialized_digest,32);
  if(!board_live(NULL)||a733_smp_counter()/24>=deadline()){
   memset(out,0,sizeof(*out));memset(hash,0,32);return 2;
  }

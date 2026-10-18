@@ -79,7 +79,7 @@ int a733_board_contract_valid(const struct a733_smp_contract *c,const struct a73
        c->redirect_entry!=0x20||c->alternate_flag)return 0;
 #else
        c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ||
-       c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
+       c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
        c->diagnostic_deadline!=c->armed_at+A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ||
        c->expires_at!=c->diagnostic_deadline||c->watchdog_mode||c->watchdog_configuration||
        c->watchdog_output||c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)return 0;
