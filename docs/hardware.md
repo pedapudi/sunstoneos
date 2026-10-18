@@ -386,7 +386,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and
   physical continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
-  board software's target revision. A sanitizer check covers bounds, guards,
+  board software's target revision. The integrated [single-core compute
+  application](gpu-application.md) permits initial physical validation independently
+  of SMP. Its startup, packaging and USB profile checks pass; all 175 frozen
+  source inputs match integration. Physical execution remains untested.
+  A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
   independent ELF reader. Native [MIPS preparation](gpu-mips.md) also builds
   firmware page tables, boot data, and wrapper register values; complete outputs

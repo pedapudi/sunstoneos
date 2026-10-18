@@ -608,10 +608,13 @@ The primary agent handles all further multicore work directly.
    Preserve the inserted card's contents. The separate maintenance image needs
    card/range ownership, protected backups and its qualified watchdog procedure;
    it is not the first discovery path.
-4. GPU work is adapting the existing single-core startup for initial compute
-   validation independently of SMP. It must preserve sealed memory admission,
-   protected page tables and the required all-core mode. No physical GPU result
-   exists. Establish actual power, memory and recovery admission for the integrated GPU,
+4. The GPU single-core compute application is integrated for validation
+   independently of SMP. Twelve startup cases, nine package/admission cases and
+   eight USB/profile cases pass; focused review accepted the frozen image.
+   All 175 preserved source inputs match integration. Evidence is under
+   `gpu-single-core-20261018/`. Preparation of the second-board launch inputs
+   is in progress; no physical GPU result exists. Establish actual power,
+   memory and recovery admission for the integrated GPU,
    NPU, codec, RTC and thermal applications. Their internal operations can advance
    without camera, display or microphone accessories. Retained buffers do not
    establish completed device writes or permit resource reuse. The larger memory
