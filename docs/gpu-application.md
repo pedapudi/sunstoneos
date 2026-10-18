@@ -187,3 +187,22 @@ A733 port lock until confirmed full board power removal.
 Nineteen focused host cases pass under `gpu-supervised-host-20261017/`. They use
 modeled replies and do not establish successful GPU rendering. Existing native,
 launcher and protocol evidence is reused without rebuilding or replaying it.
+
+The refreshed supervised image includes the PMIC provider's supported APBS1
+source4 route through PLL_REF. Its native adapter permits the required PLL_REF
+read, and the provider retains the selected parent for later baseline checks.
+The source4 checks and native adapter evidence in
+[pmic-runtime.md](pmic-runtime.md) remain applicable.
+
+The artifact refresh under
+`~/.cache/sunstoneos/evidence/gpu-pmic-refresh-20261018/` passes one supervised
+image link and nominal offline bundle preparation/validation using the final
+ELF identity. The bundle contains software-only prerequisite records and cannot
+supply physical admission. The recorded compiler input comparison identifies
+seven changed files: three PMIC implementation/header inputs, two headers with
+comment changes, and the runtime string implementation/header additions. GPU
+application, boot patch, CMake fragment and packager bytes match the earlier
+supervised batch. Prior PMIC, GPU, launcher and refusal evidence is reused.
+The earlier image remains preserved. This refresh establishes linkage and
+packaging; successful physical rendering and its entry prerequisites remain
+unqualified.
