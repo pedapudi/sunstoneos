@@ -457,8 +457,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remain unqualified. The earlier identification evidence remains valid.
   [Startup binding](board-session-seal.md) now retains authenticated session and
   Bluetooth profile copies before SID and provider access. The board and headset
-  images and 15 focused binding cases pass. The recognition-enabled image refresh
-  remains in progress; earlier recognition results retain their original scope.
+  images and 15 focused binding cases pass. The recognition-enabled image also
+  links, and one focused case verifies its retained model-configuration handoff.
+  Earlier recognition results retain their original scope; inference was modeled
+  in this new startup case.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses

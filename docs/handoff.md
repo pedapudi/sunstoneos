@@ -58,12 +58,15 @@ substantive correctness risks. The coordinator alone operates the board.
   before any redistributor write and returns only after observed target OFF.
   Its three focused software cases pass; the physical failure remains unlocalized.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
-  native mimus transcription are integrated. The image links; actual host
+  native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
-  prevents copied publication. All 209 preserved repository inputs match
-  integration. Physical headset operation, native USB serialization and execution
-  within the supervised window remain unqualified. Evidence is under
-  `bluetooth-mimus-native-20261017/`.
+  prevents copied publication under `bluetooth-mimus-native-20261017/`.
+  The recognition-enabled image now includes retained startup inputs; one focused
+  model-configuration handoff case passes, and all 210 compiled repository inputs
+  match integration under `board-session-seal-mimus-20261018/`. The case models
+  the recognizer; earlier audio and inference results were reused. Physical
+  headset operation, native USB serialization and execution within the supervised
+  window remain unqualified.
 - I2S: finite capture-to-mimus is integrated for one to five seconds of 16 kHz
   mono audio. The native image links, and focused capture, admission, cancellation
   and copied-output checks pass. Startup retains the complete authenticated
@@ -128,9 +131,9 @@ authenticated session and profile copies before SID access or provider setup.
 Networking hashes the same private profile used for runtime derivation. Both
 affected images and 15 focused binding cases pass; 199 unique compiled repository
 inputs match integration under `board-session-seal-20261018/native/`.
-The Bluetooth build covers headset capture; the recognition-enabled image is
-being refreshed separately to cover its changed startup branch. Existing codec,
-protocol and recognition results remain reusable where their inputs are unchanged.
+The additional recognition-enabled Bluetooth image and one focused startup case
+also pass. Existing codec, protocol and recognition results remain reusable where
+their inputs are unchanged.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
 
