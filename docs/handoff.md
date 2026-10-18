@@ -50,17 +50,23 @@ full recognition on the native image and physical execution remain untested.
 The [native NPU application](npu-application.md), [radio entropy provider](radio-entropy.md),
 [Type-C source controller](typec.md) and [USB2 host path](usb2-host.md) are integrated.
 Their focused software evidence is preserved and reconciled with the integrated
-sources. Broader header changes do not affect those exercised paths. No runtime
-case was replayed for integration. Complete radio and USB host application
-startup remains outstanding; the NPU application still needs real boot authority.
+sources. The NPU application still needs real boot authority.
 
-Two Sol 6.1 workers are connecting the next application paths. The board
-application worker owns shared startup, independent Type-C tasks, simultaneous
-USB0 output and USB2 host reads. The radio application worker owns radio startup,
-crypto-engine entropy, association and copied IPv4 requests. Both use separate
-worktrees and coordinate their provider interface. Astra review precedes focused
-execution; neither worker may access the board. Inspect live agent status before
-assigning overlapping work.
+The [board application](board-application.md) integrates shared startup, separate
+Type-C service and power tasks, simultaneous USB0 output and USB2 sector reads,
+and [native radio startup](board-radio.md). Radio startup connects crypto-engine
+entropy, WPA2 association and a bounded TCP exchange. Focused software checks and
+the central board image build pass. All 156 actual repository dependencies match
+the preserved application snapshot; no runtime checks were repeated for integration.
+Full native startup, physical transfers and entropy qualification remain untested.
+
+The board image still requires a qualified hardware-watchdog window. A Sol 6.1
+worker is implementing a separate supervised all-core observer that requires the
+watchdog to remain disabled. Its intended completion is USB result capture and
+manual reconnection; it does not claim a software return to ROM after all-core
+entry. A second worker owns a separate native camera application. Both use
+isolated worktrees and request Astra source review before focused execution.
+Neither may access the board. Root owns central integration and physical tests.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
@@ -157,7 +163,11 @@ and component source reconciliation. Native mimus central build artifacts and
 input comparisons are under `mimus-native-20261017-lifecycle/`. NPU, radio
 entropy, Type-C and USB host handoffs and `root-reconcile.json` records are under
 `npu-application-20261017/`, `radio-entropy-20261017/`,
-`typec-native-20261017/` and `usb2-host-20261017/`. Storage native
+`typec-native-20261017/` and `usb2-host-20261017/`. Complete radio and board
+application evidence is under `board-radio-20261017/` and
+`board-application-20261017/`. The latter includes central build inputs and
+artifacts in `central-snapshot/`; `central-integration.json` references matching
+external inputs already preserved by the worker. Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
 `native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
 evidence and central source reconciliation are under `storage-maintenance-20261017/`.
@@ -210,9 +220,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Finish native application integration and its focused software checks.
-   Prepare bounded, supervised RAM-only hardware tests using existing software
-   return and manual reconnection where the image permits it. Preserve storage,
+1. Complete and review the separate supervised all-core observer. Its intended
+   recovery is manual reconnection after USB capture or failure. Prepare one
+   bounded RAM-only physical attempt after its software checks and real entry
+   admission are complete. Preserve storage,
    honor actual admission requirements and stop at the first transport failure.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed; no cable move or
@@ -227,10 +238,10 @@ recordings and model identities remain the reference.
    to executable applications. Retained buffers permit neither invented drain
    nor resource reuse. The larger memory profile supplies capacity; physical
    exclusion, coherence and device mappings remain required.
-4. After independent recovery and entry admission, use the sealed
-   [cached observer](a733-smp-observe-host.md) to qualify all-core startup,
-   interrupts, scheduler results and coherent memory. ROM return alone does not
-   establish scheduler or peripheral operation.
+4. Qualify all-core startup, interrupts, scheduler results and coherent memory
+   through the supervised observer when ready. Preserve the sealed
+   [watchdog-dependent observer](a733-smp-observe-host.md) and its existing entry
+   requirements. USB enumeration alone does not establish diagnostic success.
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
    audio, display, codecs, PCIe and power transitions. OV5640 is the first camera;

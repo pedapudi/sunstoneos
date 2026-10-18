@@ -91,3 +91,10 @@ The [fixed NPU application](npu-application.md) is a standalone CMake project at
 `apps/npu-convolution`. Its target is `a733-npu-convolution`; it requires an
 explicit board handoff source and the pinned model, input and reference files.
 The preserved refusal fixture is for software checks and cannot admit a board.
+
+The [native board application](board-application.md) is available as
+`sunstone-a733-board` when `SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR` and
+`SUNSTONE_NETWORK_C_HEADERS` identify the authenticated networking sources and
+freestanding C headers. It links USB0 output, USB2 host reads and native radio
+startup. Its immutable session still requires qualified hardware-watchdog,
+memory and power admission before physical execution.

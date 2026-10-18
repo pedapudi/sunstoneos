@@ -405,8 +405,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [radio entropy provider](radio-entropy.md) connects asynchronous crypto
   engine requests to a bounded buffer for copied network random bytes. Shared
   engine faults invalidate buffered bytes; focused checks and native compilation
-  pass. Physical entropy qualification, platform identity, complete application
-  startup, wider modes, shutdown and physical topology/recovery remain outstanding.
+  pass. The [native board application](board-application.md) connects actual
+  platform identity, radio startup, entropy, association and a bounded TCP client.
+  Focused application checks and central native linking pass; full startup and
+  physical operation remain untested. Entropy qualification, wider modes,
+  shutdown and physical topology/recovery remain outstanding.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
@@ -550,8 +553,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through
   xHCI and TinyUSB. Focused checks cover attachment, independent power cutoff,
   mass-storage enumeration, copied sector reads, malformed responses,
-  cancellation and disconnects. Native compilation passes. Complete application
-  startup, physical power and switch qualification, actual transfers, DMA drain,
+  cancellation and disconnects. The [native board application](board-application.md)
+  connects startup, separate Type-C tasks, host reads and simultaneous USB0
+  output. Focused application checks and central linking pass. Full startup,
+  physical power and switch qualification, actual transfers, DMA drain,
   repeated attachment, other speeds, hubs, periodic transfers, role swaps, USB PD,
   VCONN and applicable alternate modes remain outstanding.
 

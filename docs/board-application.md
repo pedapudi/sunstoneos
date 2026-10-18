@@ -128,3 +128,10 @@ read-only firmware spans, qualified CE raw-source characterization and startup
 for the actual silicon and health-enable epoch, an access point and a fixed TCP
 peer. Missing qualification refuses construction. No board operation, reset or
 persistent write is authorized by this image's existence.
+
+The central `sunstone-a733-board` target also compiles and links successfully.
+Its 156 repository dependencies match the preserved worker snapshot. Central
+artifacts, generated sources and actual dependency records are preserved in
+`central-snapshot/` beside the original batch; `central-integration.json`
+identifies the image and reused external inputs. The original focused runtime
+checks were not repeated.
