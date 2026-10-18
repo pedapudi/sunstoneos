@@ -212,13 +212,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   cases and four host groups pass. Integration reuses those artifacts with
   documented default-startup and additive-header differences. Physical exchange,
   electrical compatibility and peer recovery remain unqualified.
-- PWM and ADC: **planned**, with [board routing identified](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses).
-  Native fan PWM integration is in development for PD5/PWM0 channel 5.
-  The status LED, header alternatives and display backlight output remain in scope.
+- PWM and ADC: **implemented** [finite fan PWM](pwm.md) on PD5/PWM0 channel 5,
+  with shared clock/rail/pin ownership, interrupt notification, waveform stop
+  and a retained transition to GPIO output-low. Provider, pin, linked native and
+  host checks pass under `pwm-native-20261018/`; integration preserves the tested
+  image without replay. Physical waveform, gate discharge and fan-off current
+  remain unqualified. Continuous operation, other modes, the status LED, header
+  alternatives and display backlight output remain required.
+  [Board routing](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
+  identifies the analog inputs; native ADC sampling is in development.
   GPADC0–3 serve board selection dividers; GPADC4 reaches the display connector.
   The remaining GPADC channels have no documented usable connection. LRADC0 has
-  a pull-up but no documented key ladder. Analog sampling, additional PWM modes
-  and physical qualification remain outstanding; fitted components and voltages
+  a pull-up but no documented key ladder. Analog sampling and physical
+  qualification remain outstanding; fitted components and voltages
   require confirmation.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.

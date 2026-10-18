@@ -34,7 +34,8 @@ and source-qualified settling remain independent admission facts.
 
 Cold admission excludes every PWM0, clock/reset, PD5, voltage and remote writer.
 It requires a gated/reset controller, no inherited capture/group/complementary
-mode, owned disabled/drained SPI67 and a reviewed fan circuit/load. Local gate
+mode, owned disabled/drained GIC interrupt 67 (SPI index 35) and a reviewed
+fan circuit/load. Local gate
 and reset setup occurs once; no post-fault reset or retry exists. The actual
 native adapter checks EL1/task/interrupt context and common mutex ownership
 before a restricted controller/register access.
@@ -47,7 +48,7 @@ precede the final hardware start. Pulse completion requires PUL_START to clear.
 The source planner rejects unsupported fractional ticks and duration/field
 limits instead of silently rounding.
 
-EL3 configures owned SPI67 as a primary-routed, level-high Group1NS interrupt
+EL3 configures interrupt 67 as a primary-routed, level-high Group1NS interrupt
 while it remains masked. It rejects unexplained pending or active state. The
 ISR masks that SPI and publishes an atomic notification without entering PWM,
 pin or power services. The owner task observes channel 5's status, disables its

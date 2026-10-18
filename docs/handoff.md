@@ -192,9 +192,11 @@ effects, verified wiring and voltage, and recovery for every affected supply.
 
 The [PWM and ADC routing audit](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
 identifies the fan, status LED, header alternatives and display outputs, plus
-analog board-selection inputs. Native fan PWM integration is in development.
-Its stop path must establish a defined pin state while retaining ownership;
-electrical fan-off remains a physical qualification requirement. Native ADC
+analog board-selection inputs. The [native fan PWM application](pwm.md) now
+integrates a finite waveform, interrupt notification and a retained GPIO-low
+stop. Provider, pin, linked-image and host checks pass under
+`pwm-native-20261018/`; all compiled repository code matches integration.
+Electrical fan-off remains a physical qualification requirement. Native ADC
 board-monitor sampling is now in development using the completed routing audit.
 The selection dividers permit observation only; no external drive or strap
 modification is authorized. The other routed PWM functions remain outstanding.

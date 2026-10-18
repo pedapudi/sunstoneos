@@ -59,6 +59,10 @@ source under FreeRTOS. Board-kernel and U-Boot sources provide register and rout
 references; the AXP8191 table in the pinned U-Boot supplies the BLDO1 voltage
 decoder fields. The native image loads no SPI firmware blob. Its component
 record identifies the source revision, schematic route and electrical limits.
+The [PWM driver](pwm.md) adapts the pinned U-Boot PWM register and sequencing
+semantics with their GPL notices preserved. Repository source supplies the
+FreeRTOS ownership, deadlines and retained stop path. The native application
+loads no PWM firmware blob or bootloader runtime.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and
