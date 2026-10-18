@@ -265,18 +265,21 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native initialization checkpoint
+## Returning native table-construction checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
 The native code, data, BSS and stack addresses remain unchanged. Twenty verified
-instruction replacements redirect the C boot entry, the cache preparation entry,
+instruction replacements redirect the C boot entry, the end of table construction,
 the terminal stop, the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
 The original stack selection, BSS clearing, boot-state validation and admission
-checks execute. The normal checkpoint returns before the first instruction of
-`a733_cached_prepare`, before cache, coherence, GIC or secondary initialization.
+checks execute. Cache preparation then checks core identity and deadlines and
+constructs five translation-table pages. The normal checkpoint at `0x41004b84`
+returns after successful table construction, before publication, cache maintenance,
+coherence, GIC or secondary initialization. The first publication call at
+`0x41004b94` would otherwise execute `DC CVAC`; it remains outside this stage.
 
 The overlay occupies `0x41020000..0x41021000`. Its nonce-bound 256-byte report at
 `0x42002000` is outside the native result structure. It records C entry, stack
@@ -299,10 +302,12 @@ The actual A32 launcher saves sixty bytes on its ROM caller stack before using
 its private stack. The host validates the surveyed SP and rejects overlap with
 its explicit SRAM reservations. It durably preserves those sixty bytes as
 evidence, together with every SRAM upload interval and every DRAM interval the
-diagnostic writes. After warm return, the new ROM owns SRAM; the host never
+diagnostic writes, including `0x421f0000..0x421f5000` for the five table pages.
+After warm return, the new ROM owns SRAM; the host never
 restores the obsolete caller stack or other old SRAM bytes into that instance.
 It verifies the returned ROM service, durably copies the diagnostic, native
-result and admission records, then restores and verifies the affected DRAM.
+result, admission and constructed-table records, then restores and verifies the
+affected DRAM.
 Any transport failure or absent return retains ownership and stops requests.
 
 Prepare the overlay with `run-native-startup-probe.py prepare`, using the same
@@ -331,3 +336,11 @@ as `0x00c50838`. The board returned automatically as USB instance `003:075`.
 Copied reports and all reviewed DRAM restoration comparisons passed. Evidence
 is under `startup-stage-20261017-074/native/`. Cache preparation and subsequent
 startup stages remain unresolved; this result does not establish multicore operation.
+
+One affected build and one focused table-construction instruction case pass.
+The case checks table links, secure monitor isolation, table-page attributes and
+the permitted write intervals. Architectural reads and admission MMIO are modeled.
+No publication, cache-maintenance instruction or translation-control write
+executes before return. Evidence is under
+`~/.cache/sunstoneos/evidence/native-tables-probe-20261017/`. Table construction
+and later cache/coherence startup still require physical evidence.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One fixed native stack/BSS/admission diagnostic, returning before cached_prepare."""
+"""One fixed native table-construction diagnostic, returning before cache publication."""
 import argparse
 import hashlib
 import importlib.util
@@ -27,7 +27,8 @@ REPORT=0x42002000
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
       ('el1-bss',0x41201000,0x8fd10),('result',0x42000000,0x4000),
       ('contract',0x42004000,0x1000),('monitor-bss',0x42005000,0xa590),
-      ('boot-stack',0x42010000,0x4000),('overlay',0x41020000,0x1000))
+      ('boot-stack',0x42010000,0x4000),('overlay',0x41020000,0x1000),
+      ('tables',0x421f0000,0x5000))
 
 def branch(source,target):
     offset=target-source;require(offset%4==0 and -(1<<27)<=offset<(1<<27),'Branch out of range.')
@@ -55,7 +56,7 @@ def prepare(a):
     def patch(address,old,target):
         offset=address-0x41000000;require(struct.unpack_from('<I',code,offset)[0]==old,'Native instruction differs.')
         new=branch(address,target);struct.pack_into('<I',code,offset,new);patches.append([address,old,new])
-    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x41004b04,0xd10103ff,'cached_checkpoint'),
+    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x41004b84,0xd5033f9f,'cached_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint')]:
         patch(address,old,hooks[name])
     for slot in range(16):
@@ -156,7 +157,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native stack/BSS/admission checkpoint and forced-FEL return',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native table construction checkpoint and forced-FEL return',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -166,7 +167,7 @@ def run(a):
                 node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
-            for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224)]:
+            for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)

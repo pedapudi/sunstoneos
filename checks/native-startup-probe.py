@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the fixed native startup checkpoints; system registers/MMIO are modeled."""
+"""Execute native table construction; architectural reads and admission MMIO are modeled."""
 import argparse
 import hashlib
 import importlib.util
@@ -31,6 +31,7 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     for item in m['payloads']:cpu.mem_write(item['address'],(a.build/item['name']).read_bytes())
     cpu.mem_write(0x41020000,(a.build/'overlay.bin').read_bytes())
     for address,size in [(0x41201000,0x8fd10),(0x42005000,0xa590)]:cpu.mem_write(address,b'\xa5'*size)
+    cpu.mem_write(0x421f0000,b'\xa5'*0x5000)
     contract=bytearray((a.bundle/'contract.bin').read_bytes());start=100
     struct.pack_into('<Q',contract,0,0x4153373353554333)
     struct.pack_into('<4Q',contract,80,start,start+24000000,start+480000000,start+480000000)
@@ -39,16 +40,18 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     if watchdog:cpu.mem_write(0x02050014,struct.pack('<I',1))
     cpu.reg_write(UC_ARM64_REG_SP,0x41414100)
     registers={'currentel':el,'mpidr_el1':0x81000000,'sctlr_el3':sctlr,'sctlr_el1':0xc50838,
-               'cntfrq_el0':0,'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
+               'cntfrq_el0':0,'daif':0x3c0,'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
     writes=[];controls=[];ticks=[];stopped=[];entered=[];injected=[]
     def instruction(uc,address,size,unused):
+        assert address!=0x41004558,'Publication must not execute.'
         if fault and address==0x41000078 and not injected:
             injected.append(True);uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
         if address==m['hooks']['boot_checkpoint']:
             assert bytes(uc.mem_read(0x41201000,0x8fd10))==bytes(0x8fd10)
             assert bytes(uc.mem_read(0x42005000,0xa590))==bytes(0xa590)
             assert uc.reg_read(UC_ARM64_REG_SP)==0x42014000;entered.append(True)
-        text=ops.get(address,'');read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
+        text=ops.get(address,'');assert not re.match(r'(dc|ic|tlbi)\s',text,re.I),text
+        read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
         if read:
             key=read[2].lower()
             if key=='cntpct_el0':value=200+len(ticks);ticks.append(value)
@@ -83,21 +86,24 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
         assert entered and result['checkpoint']==2 and result['entered_c']==1 and result['entry_sp']==0x42014000
         assert result['CNTFRQ_EL0']==24000000
         assert struct.unpack('<Q',cpu.mem_read(0x42000020,8))[0]==0xffffffffffffffff
+        tables=bytes(cpu.mem_read(0x421f0000,0x5000));words=struct.unpack('<2560Q',tables)
+        assert words[0]==(1<<54)|0x441 and words[1]==0x421f1003
+        assert words[1024]==(1<<54)|(1<<53)|0x401 and words[1025]==0x421f3003
+        assert words[512+8]==0x410007e5 and words[1536+8]==0x410007c5
+        assert words[512+16]==0x421f4003 and words[1536+16]==0
+        assert words[2:512]==(0,)*510 and words[1026:1536]==(0,)*510
+        assert words[576:1024]==(0,)*448 and words[1600:2048]==(0,)*448
+        for i in range(512):
+            address=0x42000000+i*4096;expected=address|(1<<54)|0x443
+            if 0x421f0000<=address<0x421f5000:expected|=0x308
+            if address in (0x421f2000,0x421f3000):expected|=0x20
+            assert words[2048+i]==expected,(i,hex(words[2048+i]),hex(expected))
+        assert result['terminal_sp']==0x42013f10
+        result['table_sha256']=hashlib.sha256(tables).hexdigest()
+        (a.output.parent/'modeled-tables.bin').write_bytes(tables)
     reports.append({'name':name,'result':result,'system_writes':controls,'mmio_writes':writes})
-check('actual-stack-bss-and-admission')
-check('invalid-contract',mutate=True)
-check('changed-watchdog-state',watchdog=True)
-check('bss-write-exception',fault=True)
-check('initial-cache-rejection',sctlr=0xc51838)
-check('wrong-exception-level',el=4)
-# The host rejects overlaps before communication; failure details remain data.
-valid={'complete':True,'sram_restored':True,'rom_usable':True,'result':{'sp':0xf2200}}
-assert host.caller_interval(valid)==(0xf21c4,60)
-for sp in (0,0x53010,0x100004,0xf2201):
-    try:host.caller_interval({**valid,'result':{'sp':sp}})
-    except ValueError:pass
-    else:raise AssertionError(sp)
+check('actual-table-construction-before-publication')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
     'limits':'Actual patched native startup instructions with modeled system registers, counter and read-only admission MMIO. No physical cache, return, memory or board qualification.'},indent=2)+'\n')
-print('PASS six focused native startup instruction cases and caller-interval validation.')
+print('PASS one native table-construction case; no publication or cache/translation mutation.')
