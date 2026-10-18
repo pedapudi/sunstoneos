@@ -81,12 +81,13 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_USB2       A733_CLOCK_BIT(66) /* DWC3/xHCI, independent PHY and local clocks/PCK8; exclusive. */
 #define A733_CLOCK_PWM0       A733_CLOCK_BIT(67) /* Entire PWM0, pairs/global controls/gate/reset/IRQ; exclusive. */
 #define A733_CLOCK_GPADC      A733_CLOCK_BIT(68) /* GPADC0 controller/gate/reset/IRQ70; exclusive, not parent retuning. */
+#define A733_CLOCK_APBS0      A733_CLOCK_BIT(69) /* R_CCU+0x0c, RPIO bus source/divider; stable shared or exclusive change. */
 #define A733_CLOCK_MAIN_UARTS (A733_CLOCK_UART0|A733_CLOCK_UART1|A733_CLOCK_UART2|A733_CLOCK_UART3|A733_CLOCK_UART4|A733_CLOCK_UART5|A733_CLOCK_UART6)
 #define A733_CLOCK_S_UARTS (A733_CLOCK_S_UART0|A733_CLOCK_S_UART1)
 #define A733_CLOCK_SPIS (A733_CLOCK_SPI0|A733_CLOCK_SPI1|A733_CLOCK_SPI2|A733_CLOCK_SPI3|A733_CLOCK_SPI4|A733_CLOCK_S_SPI)
 #define A733_CLOCK_MEDIA_LOCALS (A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_IOMMU_SYS|A733_CLOCK_VE_DEC|A733_CLOCK_VO1)
 #define A733_CLOCK_LOCALS  ((a733_clock_mask_t)0x3fc0)
-#define A733_CLOCK_ALL     (A733_CLOCK_BIT(69)-1) /* Bits0–68 assigned; higher bits refused. */
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(70)-1) /* Bits0–69 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,
@@ -239,7 +240,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *,
     const struct a733_clock_token *, uint64_t deadline, struct a733_clock_token *);
 /* Atomic metadata publication after the privileged PLL coordinator has proved
  * its physical profile stable and kept all consumers excluded. parents must
- * be a nonempty subset of PLL_NPU|DISPLL1|USB01_REF held exclusively. Convert
+ * be a nonempty subset of PLL_NPU|DISPLL1|USB01_REF|GPADC24M held exclusively. Convert
  * only those bits to shared ownership, preserving owner and every other scope.
  * A fresh token invalidates the old identity. All validation/time callbacks
  * precede mutation; OK always returns the only live replacement token. Refusal

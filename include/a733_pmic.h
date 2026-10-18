@@ -60,7 +60,7 @@ struct a733_pmic {
     struct a733_pmic_slot slots[A733_PMIC_REQUESTS];
     atomic_uint busy;
     uint64_t last_now, next_id, deadline;
-    uint32_t divider, last_status, apbs1;
+    uint32_t divider, last_status, apbs1, apbs0;
     unsigned stage, held, retained, failed, active, phase, byte_index;
     uint8_t values[6];
 };

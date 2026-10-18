@@ -91,7 +91,7 @@ static int clock_live(struct a733_pmic *p)
     if(r==A733_CLOCK_BUSY)return 0;
     return r==A733_CLOCK_OK && p->clock.owner==p->config.owner &&
         p->clock.exclusive==A733_CLOCK_S_TWI0 &&
-        p->clock.shared==(A733_CLOCK_APBS1|A733_CLOCK_REF|A733_CLOCK_OSC) ? 1 : -1;
+        p->clock.shared==(A733_CLOCK_APBS0|A733_CLOCK_APBS1|A733_CLOCK_REF|A733_CLOCK_OSC) ? 1 : -1;
 }
 static int bus_idle(struct a733_pmic *p)
 {
@@ -100,14 +100,19 @@ static int bus_idle(struct a733_pmic *p)
 }
 static int baseline(struct a733_pmic *p)
 {
-    uint32_t osc,apbs,ref,divider;
+    uint32_t osc,apbs,apbs0,ref,divider;
     if(!rd(p,0x07090160,&osc) || (osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
        (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) ||
+       !rd(p,0x0701000c,&apbs0))return 0;
+    apbs0&=UINT32_C(0x0700001f);
+    unsigned source=apbs0>>24;
+    if((source!=0 && source!=4) ||
+       (p->stage!=S_BASELINE && apbs0!=p->apbs0) ||
        !rd(p,0x07010010,&apbs))return 0;
     apbs&=UINT32_C(0x0700001f);
     if((apbs!=0 && apbs!=UINT32_C(0x04000000)) ||
        (p->stage!=S_BASELINE && apbs!=p->apbs1))return 0;
-    if(apbs) {
+    if(apbs || source==4) {
         if(!rd(p,0x02002000,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000))return 0;
         unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
         if(n<80 || n>116 || n!=m)return 0;
@@ -126,7 +131,7 @@ static int baseline(struct a733_pmic *p)
     unsigned denominator=(1u<<n)*(m+1)*((m==0 && (divider&0x180)==0x80) ? 11u : 10u);
     /* 10–400kHz supported read profile; no inherited divisor mutation. */
     if(denominator<60 || denominator>2400)return 0;
-    if(p->stage==S_BASELINE){p->apbs1=apbs;p->divider=divider;}
+    if(p->stage==S_BASELINE){p->apbs1=apbs;p->apbs0=apbs0;p->divider=divider;}
     else if(divider!=p->divider)return 0;
     return 1;
 }
@@ -284,7 +289,7 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
     if(p->stage!=S_READY && p->last_now>=p->deadline)return leave(p,fault(p));
     if(p->active<A733_PMIC_REQUESTS && p->last_now>=p->deadline)return leave(p,fault(p));
     if(p->stage==S_CLOCK) {
-        enum a733_clock_result r=a733_clock_acquire(p->clocks,p->config.owner,A733_CLOCK_APBS1,
+        enum a733_clock_result r=a733_clock_acquire(p->clocks,p->config.owner,A733_CLOCK_APBS0|A733_CLOCK_APBS1,
             A733_CLOCK_S_TWI0,p->deadline,&p->clock);
         if(r==A733_CLOCK_BUSY)return leave(p,A733_PMIC_BUSY);
         if(r!=A733_CLOCK_OK)return leave(p,fault(p));p->stage=S_BASELINE;return leave(p,A733_PMIC_PENDING);

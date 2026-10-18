@@ -39,7 +39,7 @@ static a733_clock_mask_t parents(a733_clock_mask_t mask)
     if(mask&(A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5))p|=A733_CLOCK_AUDIO1;
     if((mask|p)&(A733_CLOCK_AUDIO1|A733_CLOCK_PERI0|A733_CLOCK_PLL_NPU|
         A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE|A733_CLOCK_PLL_VE0|A733_CLOCK_PLL_VE1|
-        A733_CLOCK_GPADC24M|A733_CLOCK_APB_UART|A733_CLOCK_APBS1|A733_CLOCK_USB01_REF))p|=A733_CLOCK_REF;
+        A733_CLOCK_GPADC24M|A733_CLOCK_APB_UART|A733_CLOCK_APBS1|A733_CLOCK_APBS0|A733_CLOCK_USB01_REF))p|=A733_CLOCK_REF;
     if((mask|p)&A733_CLOCK_REF)p|=A733_CLOCK_OSC;
     return p;
 }
@@ -131,7 +131,7 @@ enum a733_clock_result a733_clock_publish_audio(struct a733_clock_leases *m,
 enum a733_clock_result a733_clock_publish_stable(struct a733_clock_leases *m,
     const struct a733_clock_token *token,a733_clock_mask_t stable,uint64_t deadline,struct a733_clock_token *out)
 {
-    const a733_clock_mask_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1|A733_CLOCK_USB01_REF;
+    const a733_clock_mask_t supported=A733_CLOCK_PLL_NPU|A733_CLOCK_DISPLL1|A733_CLOCK_USB01_REF|A733_CLOCK_GPADC24M;
     if(!stable || (stable&~supported) || !separate(m,sizeof(*m),token,sizeof(*token)) ||
         !separate(m,sizeof(*m),out,sizeof(*out)) || !separate(token,sizeof(*token),out,sizeof(*out)))
         return A733_CLOCK_INVALID;
