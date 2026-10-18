@@ -254,6 +254,9 @@ recordings and model identities remain the reference.
    admission failures and primary snapshot exceptions before interrupt writes.
    It still retains post-write failures and cannot recover a stalled MMIO access.
    Preserve the held claim and backups until physical recovery is confirmed.
+   A power reconnect invalidates the previous RAM state. Reinitialize DDR using
+   the reviewed cold-start procedure, then obtain fresh launch-state evidence
+   and admission before running the observer.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image under its reviewed recovery procedure.
