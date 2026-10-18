@@ -78,10 +78,14 @@ tool shares the observer's lock, queue and transport handling; 25 focused cases
 pass against the integrated sources. Evidence is preserved under
 `board-supervised-20261017/central/` and
 `board-supervised-host-20261017/batch1/`.
-The shared tool now also accepts an NPU result field. An exact source comparison
-confirms that this selector addition leaves observer and board behavior unchanged.
-Updated software records are under the latter directory's
-`integration/npu-selector/`; the original results are preserved without replay.
+The shared tool also accepts NPU and GPU result fields. Observer and board
+approval now binds directly to the initially validated image, launcher, admission
+and metadata hashes. Ten focused approval cases pass; transport and capture
+functions remain identical to their prior implementation. Source and artifact
+comparisons are under `supervised-bundle-binding-20261017/batch1/`.
+Existing native, launcher and transport results remain valid within their scopes.
+Before physical use, compose the selected bundle's software record from these
+results and current source snapshots; older records retain superseded source hashes.
 The separate
 [supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
 remain disabled. Its native build and focused startup, admission and host checks
@@ -124,9 +128,15 @@ software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
 routing and physical output remain outstanding. Cold NPU clock provisioning
 and an unsuitable supply still require a separate implementation and physical
 evidence. NPU and GPU packaging/capture integration is complete at the software
-level. Before another physical launch, apply the same frozen queue-to-upload
-binding to the older observer and board adapters. Physical access remains
-exclusive to the coordinator.
+level. Their shared transport remains unchanged by the observer and board
+approval correction. Physical access remains exclusive to the coordinator.
+
+Native JPEG and I2S application integration is in progress in separate worktrees.
+JPEG connects the existing decoder to actual memory translation, shared resources
+and copied USB output. I2S connects capture or recorded playback to the actual DMA
+pool and stream service. Neither application has completed its build or focused
+checks. A separate source assessment covers cold NPU supply and PLL provisioning;
+it has issued no hardware operations.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
