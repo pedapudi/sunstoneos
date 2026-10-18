@@ -74,10 +74,12 @@ handoff, or final response does not invalidate successful test evidence.
   findings. Integrate completed work before adding another workstream.
 - Request further work from a completed reviewer with `followup_task`.
   `send_message` updates a running reviewer but does not restart a completed turn.
-- For new assignments, use `gpt-6.1-sol` implementation agents and `gpt-6-astra`
-  reviewers. Give each a concise task-specific context instead of the full thread.
-  Let existing agents finish their current unit before changing models. Reserve
-  review for substantive correctness risks; routine edits stay with their owner.
+- Use `gpt-6.1-sol` with explicit `medium` reasoning for implementation and
+  debugging, and `gpt-6-astra` for focused correctness review. Reserve `low` for
+  mechanical edits and evidence reconciliation. Give each agent concise
+  task-specific context instead of the full thread. Change active workers at a
+  safe handoff boundary, preserving edits, live processes and successful evidence.
+  Reserve review for substantive correctness risks; routine edits stay with their owner.
 - Keep handoffs concise: changed behavior, exact inputs, result, remaining gap.
   Use existing evidence tools; do not add a reporting system for bookkeeping.
 
