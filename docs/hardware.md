@@ -17,8 +17,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - PCIe: **implemented** [native root-port preparation](pcie.md) with shared
   clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
   observation and read-only configuration access to one direct endpoint.
-  Source comparison, composed host checks and native compilation pass. Physical
-  link operation, endpoint power admission, BAR allocation, interrupts, DMA,
+  Source comparison, composed host checks and native compilation pass. The
+  [supervised application](pcie-application.md) connects the existing providers
+  to retained session admission, final endpoint checks and copied USB output.
+  One native image, sanitizer admission checks, 14 modeled native cases and four
+  host groups pass. All 174 compiled repository inputs match integration under
+  `pcie-application-20261018/`; existing controller and PHY evidence was reused.
+  Physical link operation, endpoint power admission, BAR allocation, interrupts, DMA,
   Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and

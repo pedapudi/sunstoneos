@@ -157,11 +157,15 @@ in development. Their startup allowance must accommodate documented calendar
 write times while preserving the other applications' existing deadlines.
 Alarm wake and retention qualification remain required work.
 
-Native PCIe application integration is in progress. It connects the existing
-root-port driver and shared providers to x1 Gen1 link observation, read-only
-endpoint configuration and copied USB output. Physical use requires an identified
-endpoint and verified carrier wiring and power. BAR allocation, interrupt-driven
-transfers, DMA, higher link speeds and power transitions remain required work.
+The [native PCIe application](pcie-application.md) now connects the root-port
+driver and shared providers to x1 Gen1 link observation, read-only endpoint
+configuration and copied USB output. One native image, sanitizer admission,
+14 modeled native cases and four host groups pass. All 174 compiled repository
+inputs match integration under `pcie-application-20261018/`; controller and PHY
+evidence was reused. Physical use requires an identified endpoint, verified
+carrier wiring and power, and recovery for every affected power domain.
+BAR allocation, interrupt-driven transfers, DMA, higher link speeds and power
+transitions remain required work.
 
 A supervised read-only SD application is in development for first card
 identification and an initial block read through the existing native MMC

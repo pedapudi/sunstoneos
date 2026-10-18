@@ -49,6 +49,10 @@ GPL-2.0-or-later SoC RTC calendar and alarm operations. Its
 board-description inputs. Repository source executes these operations under
 FreeRTOS; no RTC firmware blob or Linux runtime is loaded. The component document
 records conflicting manual descriptions and the unresolved external-RTC board variant.
+The [PCIe implementation](pcie.md) uses the pinned board kernel and U-Boot as
+register and sequence references. The [native application](pcie-application.md)
+executes repository controller and PHY source under FreeRTOS; it loads neither
+a PCIe firmware blob nor either reference operating environment.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and

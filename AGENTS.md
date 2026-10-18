@@ -64,6 +64,8 @@ second build while preserving checks for the actual requested application.
   discovered paths. Do not add existence checks before every known-file read.
 - Read relevant symbols or sections. Summarize large manifests and command
   results; do not print entire inventories or repeatedly request truncated output.
+  For JSON manifests, print named fields or fixed-size samples; never print a
+  complete path-to-hash map.
 - After a failed command, identify its cause before retrying. Preserve completed
   steps and resume only the failed or affected steps. Stop repeated downloads
   after a stable access failure and use an available authoritative source.
