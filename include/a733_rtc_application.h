@@ -5,7 +5,8 @@
 #define A733_RTC_CONTRACT_MAGIC UINT64_C(0x4153373352544331)
 #define A733_RTC_SESSION_MAGIC UINT64_C(0x4153373352544131)
 /* Evidence authenticates exclusive RTC/IRQ228/R_CCU word ownership, exclusion
- * of remote writers, existing stable external32768Hz clock and manual recovery.
+ * of remote writers and manual recovery. Adoption requires a stable external
+ * clock; explicit initialization/runtime modes carry separate write authority.
  * Nonzero hashes do not establish that these physical facts are true. */
 struct a733_rtc_session {
  struct a733_board_session board;
@@ -16,6 +17,7 @@ struct a733_rtc_session {
 _Static_assert(sizeof(struct a733_rtc_session)==768,"RTC session wire layout");
 #define A733_RTC_INIT_SOURCE 1u
 #define A733_RTC_SET_CALENDAR 2u
+#define A733_RTC_RUNTIME_CALENDAR 4u
 struct a733_rtc_setting {uint32_t flags,day,hms,reserved;};
 struct a733_rtc_session_set {
  struct a733_rtc_session base;

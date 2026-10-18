@@ -51,7 +51,7 @@ int rtc_session_prepare(const struct a733_smp_contract *contract)
  boot_contract=contract;
  struct a733_rtc_boot_ops ops={read32,write32,route64};
  if(!access_ok()||!a733_rtc_boot_bus(&admitted.boot,&ops,&admitted))return 0;
- if(admitted.session.base.version==2){
+ if(admitted.session.base.version>=2){
   extern int rtc_boot_initialize(const struct a733_rtc_setting *,struct a733_rtc_initialization *,
       const struct a733_smp_contract *);
   if(!rtc_boot_initialize(&admitted.session.setting,&admitted.initialization,contract))return 0;
@@ -71,6 +71,6 @@ const struct a733_rtc_session *rtc_admitted_session(void)
 {return admitted.ready&&admitted.boot.state==2?&admitted.session.base:NULL;}
 
 const struct a733_rtc_setting *rtc_admitted_setting(void)
-{return rtc_admitted_session()&&admitted.session.base.version==2?&admitted.session.setting:NULL;}
+{return rtc_admitted_session()&&admitted.session.base.version>=2?&admitted.session.setting:NULL;}
 const struct a733_rtc_initialization *rtc_admitted_initialization(void)
 {return rtc_admitted_setting()?&admitted.initialization:NULL;}

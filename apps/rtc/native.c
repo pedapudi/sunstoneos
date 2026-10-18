@@ -56,6 +56,7 @@ void rtc_task(void *unused)
       stable,0,deadline(),&rtc.clock);
   if(r==A733_CLOCK_OK)break;if(r!=A733_CLOCK_BUSY)retained();vTaskDelay(1);
  }
+ if(rtc.session.version==3){rtc_runtime_task();retained();}
  if(a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,deadline())!=1)retained();
  struct a733_rtc_ops ops={now,read_reg,write_reg};
  if(!gicv3_spi_mask(&rtc.spi)||!quiet(1)||

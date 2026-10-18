@@ -14,11 +14,12 @@ int board_application_start(void)
  if(!s||memcmp(&s->board,&board.admitted_session,sizeof(s->board))||
     !a733_rtc_session_valid(s)||memcmp(s->board.image,a733_smp_build_id,32))return 0;
  rtc.session=*s;
- if(s->version==2){
+ if(s->version>=2){
   const struct a733_rtc_setting *setting=rtc_admitted_setting();
   const struct a733_rtc_initialization *initialization=rtc_admitted_initialization();
   if(!setting||!initialization||initialization->stage!=6)return 0;
   rtc.setting=*setting;rtc.initialized_output.initialization=*initialization;
+  rtc.runtime_output.boot=*initialization;
  }
  rtc.spi=(struct gicv3_spi){0x03400000,228};
  rtc.handle=xTaskCreateStaticAffinitySet(rtc_task,"rtc",2048,NULL,4,rtc.stack,&rtc.task,1);

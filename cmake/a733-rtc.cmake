@@ -19,7 +19,7 @@ apply_build_patch("${rtc_build}/boot.c" "${board_build}/boot-supervised.c"
 apply_build_patch("${rtc_build}/platform.c" "${storage_build}/platform.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/platform.patch")
 list(APPEND rtc_sources "${rtc_build}/boot.c" "${rtc_build}/platform.c")
-foreach(source IN ITEMS apps/rtc/main.c apps/rtc/initialize.c apps/rtc/native.c apps/rtc/irq.c apps/rtc/usb0.c apps/rtc/admission.c apps/rtc/snapshot.c
+foreach(source IN ITEMS apps/rtc/main.c apps/rtc/initialize.c apps/rtc/runtime.c apps/rtc/native.c apps/rtc/irq.c apps/rtc/usb0.c apps/rtc/admission.c apps/rtc/snapshot.c
  drivers/rtc/a733_rtc.c drivers/rtc/a733_rtc_initialize.c drivers/rtc/a733_rtc_boot.c drivers/gpu/gicv3_spi.c)
  list(APPEND rtc_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
@@ -42,7 +42,7 @@ set(rtc_inputs ${rtc_sources} ${rtc_headers} ${board_inputs} "${CMAKE_CURRENT_LI
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/sources.json"
  "${SUNSTONE_SOURCE_ROOT}/apps/rtc/boot.patch" "${SUNSTONE_SOURCE_ROOT}/apps/rtc/platform.patch")
 list(REMOVE_DUPLICATES rtc_inputs)
-set(rtc_identity "native-rtc2;startup6;supervised60;TypeA;external32768;alarm1..10;copied88;${CMAKE_C_COMPILER_VERSION}")
+set(rtc_identity "native-rtc3;runtime-setting;startup6;supervised60;TypeA;external32768;alarm1..10;copied88;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS rtc_inputs)
  file(SHA256 "${input}" rtc_hash)
  string(APPEND rtc_identity "${rtc_hash}")

@@ -8,11 +8,31 @@ import struct
 def decode(raw,session):
     if len(session) not in (768,784) or len(raw)<64:raise ValueError('Truncated RTC input')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
-    if (magic,version)!=(0x31435452,1 if len(session)==768 else 2) or status not in (0,1,2):raise ValueError('Unsupported RTC frame')
+    if (magic,version)!=(0x31435452,struct.unpack_from('<Q',session,600)[0]) or status not in (0,1,2):raise ValueError('Unsupported RTC frame')
     if not epoch or not generation or (epoch,generation)!=struct.unpack_from('<2Q',session,24):raise ValueError('RTC identity differs')
     result={'status':status,'bytes':count,'epoch':epoch,'generation':generation}
     if status!=1:
         if count or len(raw)!=64 or any(raw[32:64]):raise ValueError('Private RTC output exposed')
+        return result
+    if version==3:
+        if count!=104 or len(raw)!=168 or hashlib.sha256(raw[64:]).digest()!=raw[32:64]:raise ValueError('Runtime RTC digest/extent differs')
+        report=struct.unpack('<14I',raw[64:120]);boot=struct.unpack('<12I',raw[120:])
+        before_control,before_status,before_day,before_hms,after_control,after_status,after_day,after_hms,requested,stage,writes,elapsed,outcome,cancel=report
+        flags,day,hms,reserved=struct.unpack_from('<4I',session,768)
+        if flags not in (4,5) or requested!=2 or outcome not in (1,2,3,4) or cancel not in (0,1):raise ValueError('Runtime RTC outcome differs')
+        if boot[8]!=flags or boot[9]!=6 or (boot[4]&0x13)!=0x11 or boot[5]&7!=1:raise ValueError('Runtime source boot incomplete')
+        if outcome in (1,3):
+            if stage!=6 or writes!=2 or cancel!=int(outcome==3):raise ValueError('Runtime applied state differs')
+            final_day=after_day&65535;hh,mm,ss=(after_hms>>16)&31,(after_hms>>8)&63,after_hms&63
+            if not final_day or hh>23 or mm>59 or ss>59 or (after_control&0x193)!=0x11 or after_status&7!=1 or (before_control^after_control)&0xc01f:raise ValueError('Runtime calendar/source invalid')
+            actual=(final_day-1)*86400+hh*3600+mm*60+ss
+            target=(day-1)*86400+(hms>>16)*3600+((hms>>8)&63)*60+(hms&63)
+            if not target<=actual<=target+(elapsed+999999)//1000000:raise ValueError('Runtime absolute calendar differs')
+        elif outcome==2:
+            if writes or not cancel or stage>=6:raise ValueError('Cancellation may have written calendar')
+        elif stage>=6:raise ValueError('Retained failure claims complete setting')
+        result.update(runtime_outcome=outcome,cancel_seen=cancel,calendar_writes=writes,
+                      runtime_stage=stage,snapshot_sha256=raw[32:64].hex())
         return result
     expected=88 if len(session)==768 else 136
     if count!=expected or len(raw)!=64+expected or hashlib.sha256(raw[64:]).digest()!=raw[32:64]:raise ValueError('RTC copy digest/extent differs')

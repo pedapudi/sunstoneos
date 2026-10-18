@@ -15,4 +15,22 @@ struct a733_rtc_initialization {
  * No rollback or guessed calendar repair after a partial write. */
 int a733_rtc_initialize(const struct a733_rtc_setting *,const struct a733_rtc_ops *,
     void *,uint64_t deadline_us,struct a733_rtc_initialization *);
+enum a733_rtc_calendar_outcome {
+ A733_RTC_CALENDAR_APPLIED=1,A733_RTC_CALENDAR_CANCELLED,
+ A733_RTC_CALENDAR_APPLIED_LATE_CANCEL,A733_RTC_CALENDAR_RETAINED
+};
+struct a733_rtc_calendar_result {
+ struct a733_rtc_initialization operation;
+ uint32_t outcome,cancel_seen;
+};
+/* One owner task retains exclusive calendar/source writer authority throughout
+ * yielded waits. pause returns1 after a bounded scheduler wait, without any
+ * register mutex held. Cancel is graceful only before the first attempted HMS
+ * write. The runtime write callback may return2 only to prove cancellation was
+ * rechecked under its mutex and NO hardware write was attempted. All other
+ * failed write callbacks are treated as possibly mutated hardware.
+ * Clock/session/deadline loss stops further I/O even after commit begins. */
+int a733_rtc_set_calendar(const struct a733_rtc_setting *,const struct a733_rtc_ops *,
+ void *,uint64_t,int (*pause)(void *,uint64_t),int (*cancelled)(void *),
+ struct a733_rtc_calendar_result *);
 #endif

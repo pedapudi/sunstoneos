@@ -22,13 +22,14 @@ REQUEST_MAGIC=0x4153373352544c31
 def session_check(raw):
     require(len(raw) in (768,784),'RTC session must be768 or784bytes.')
     require(board.session_check(raw[:592])==2,'RTC requires USB0/provider selection2.')
-    version=1 if len(raw)==768 else 2
+    version=struct.unpack_from('<Q',raw,600)[0]
+    require((len(raw)==768 and version==1) or (len(raw)==784 and version in (2,3)),'RTC version/extent differs.')
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373352544131,version,len(raw)),'Invalid RTC session extension.')
-    if version==2:
+    if version>=2:
         flags,day,hms,reserved=struct.unpack_from('<4I',raw,768)
-        require(0<flags<4 and not reserved,'Explicit RTC initialization flags required.')
-        require((flags&2 and 1<=day<=65535 and not hms&~0x1f3f3f and (hms>>16)<24 and ((hms>>8)&63)<60 and (hms&63)<60) or
-                (not flags&2 and not day and not hms),'Invalid RTC calendar target.')
+        require(((version==2 and 0<flags<4) or (version==3 and flags in (4,5))) and not reserved,'Explicit RTC mode flags required.')
+        require((flags&6 and 1<=day<=65535 and not hms&~0x1f3f3f and (hms>>16)<24 and ((hms>>8)&63)<60 and (hms&63)<60) or
+                (not flags&6 and not day and not hms),'Invalid RTC calendar target.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid RTC owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing RTC physical evidence.')
@@ -46,7 +47,7 @@ def setting_session(adopted,flags,day,hms,clock_digest):
     session_check(adopted)
     require(len(adopted)==768 and len(clock_digest)==32,'An adoption base and exact clock evidence digest are required.')
     raw=bytearray(adopted)+struct.pack('<4I',flags,day,hms,0)
-    struct.pack_into('<2Q',raw,600,2,len(raw));raw[664:696]=clock_digest
+    struct.pack_into('<2Q',raw,600,3 if flags&4 else 2,len(raw));raw[664:696]=clock_digest
     session_check(raw);return bytes(raw)
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
@@ -95,13 +96,16 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         flags,day,hms,_=struct.unpack_from('<4I',raw,768)
         fact=json.loads(cache[str(Path(record['clock']['path']))])
         if not flags&1:require(fact.get('external_32768_stable') is True,'Calendar setting needs an admitted stable external source.')
-        if not flags&2:require(fact.get('calendar_initialized') is True,'Source-only initialization needs an admitted calendar.')
+        if not flags&6:require(fact.get('calendar_initialized') is True,'Source-only initialization needs an admitted calendar.')
         if flags&1:
             require(all(fact.get(k) is True for k in ('source_change_authorized','exclusive_osc32k_consumers','remote_source_writers_excluded','onboard_crystal_fitted')),
                     'RTC source change lacks exclusive inherited-consumer authority.')
-        if flags&2:
+        if flags&6:
             require(fact.get('calendar_write_authorized') is True and fact.get('requested_day')==day and fact.get('requested_hms')==hms,
                     'RTC calendar target lacks explicit authorization.')
+        if flags&4:
+            require(all(fact.get(k) is True for k in ('exclusive_calendar_writer_lifetime','remote_calendar_writers_excluded')),
+                    'Runtime calendar setting lacks retained exclusive writer authority.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):

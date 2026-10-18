@@ -1,7 +1,9 @@
 # Native RTC read and alarm diagnostic
 
-The native application reads the A733 SoC real-time clock (RTC) and arms one
-non-waking alarm one to ten seconds ahead. An explicit authenticated mode can
+The adoption and cold-initialization modes read the A733 SoC real-time clock
+(RTC) and arm one non-waking alarm one to ten seconds ahead. A separate finite
+runtime mode sets an authenticated calendar target after providers start and
+returns its result without arming an alarm. An explicit authenticated mode can
 initialize the onboard crystal source and set a requested calendar value before
 application startup. Read-only adoption requires an existing valid source and calendar.
 The owner task acknowledges its interrupt, disables the alarm, restores the
@@ -85,8 +87,10 @@ whole-board power removal even after success.
 ## Remaining RTC modes and physical evidence
 
 The explicit mode initializes the fixed crystal source and sets the calendar
-at boot. Runtime calendar updates, oscillator calibration, alarm wake from low
-power and retention qualification remain required. Both modes preserve DCXO,
+at boot. A finite owner-task mode also sets a calendar target while providers
+are running. Repeated updates, composition with subsequent alarms, concurrent
+clients, oscillator calibration, alarm wake from low power and retention
+qualification remain required. Both modes preserve DCXO,
 LDO and general-purpose/boot words. No authoritative hardware reset-cause field has been identified;
 software boot markers are not decoded as reset cause. Warm-reset retention and
 complete supply-removal retention require separate physical evidence.
@@ -184,7 +188,7 @@ that target and source operation; software-model records are nondeployable.
 
 Version2 result frames retain the 64-byte header and append 136 bytes on success:
 the existing 88-byte alarm/calendar snapshot plus 48 bytes of inherited/final
-raw initialization fields, requested flags, stage, attempted-write count and
+initialization fields, requested flags, stage, attempted-write count and
 elapsed microseconds. Stage 6 means complete initialization; earlier stages
 identify a retained partial failure. Boot failures do not start USB or publish
 a successful result. The diagnostic remains in admitted RAM for a separately
@@ -208,3 +212,82 @@ admission. The combined copy contains the actual native initializer report and
 an explicitly modeled later alarm/calendar snapshot. Earlier alarm/IRQ evidence
 is reused. Physical source readiness, UTC accuracy, oscillator calibration,
 retention and native USB serialization remain unqualified.
+
+## Finite runtime calendar setting
+
+Session version 3 retains the 784-byte setting layout. Flag 4 requests one owner-task
+calendar update; optional flag 1 initializes the crystal source at the existing
+EL3 boundary. Cold calendar flag 2 is excluded from this profile. Versions 1/2
+cannot authorize runtime writes. The host template tool accepts `--runtime`
+with `--calendar`, and normal admission binds the exact target and final image.
+
+The boot hook verifies source readiness and preserves raw calendar fields,
+including invalid values awaiting repair. In this profile its stage 6 report
+means source-ready and calendar-pending. It does not mean that the calendar was
+set or valid. The owner task starts after provider construction and scheduler
+startup, acquires its permanent clock stability lease, masks interrupt 228 and
+requires it disabled, inactive and unpending before any calendar transaction.
+RTC alarm enable, IRQ enable, pending and wake output must all remain disabled.
+An unexpected active/pending alarm causes retained refusal without acknowledgement.
+
+The sealed authority excludes every other calendar/source writer for the entire
+operation, including remote firmware. Releasing a register mutex during waits
+does not release that authority or the clock lease. Each RTC access takes and
+releases the existing shared register mutex; contention follows its bounded
+scheduler behavior. Busy and settling waits call the task delay API with no
+mutex held. Runtime writes are restricted to DAY/HMS. Crystal, reset, GPR,
+DCXO and LDO writes remain outside this task path.
+
+The callable driver operation reuses HMS→DAY ordering, one-second busy bounds,
+two-millisecond settling and coherent absolute-time verification. Every resume
+and each transaction checks session/deadline/clock authority. Calendar/source
+writer exclusivity spans the yielded intervals. A failed transaction retains
+its partial state rather than asserting restoration. Verified midnight carry
+uses the same absolute-time rule as the cold operation.
+
+Cancellation is graceful only before the first attempted HMS write. The native
+write callback rechecks it under the mutex immediately before that boundary.
+Its special no-write return proves that no hardware store was attempted. Any
+other failed write callback is treated as possibly mutated hardware. After the
+first attempt, graceful cancellation is recorded while bounded completion and
+verification continue under valid authority. Session revocation, clock loss or
+deadline expiry stop further MMIO immediately. A completed late cancellation
+is reported separately; no alarm is armed afterward.
+
+Version 3 frames have the existing 64-byte header and 104-byte payload. The payload
+contains a 56-byte runtime operation/outcome followed by the 48-byte source-ready
+boot report. Runtime outcomes are applied, cancelled without a write, applied
+after late cancellation, and retained failure. It contains no ordinary alarm
+snapshot. Header status 1 means a terminal copied report; clients must inspect
+the runtime outcome before interpreting it as successful calendar setting.
+A still-live controlled partial failure may publish a retained-failure report.
+Shared revocation/deadline loss prevents publication and copied access. The host
+records cancellation, late application and retained failure distinctly from
+observed success and preserves raw frames before decoding.
+
+The runtime image and focused checks pass under
+`~/.cache/sunstoneos/evidence/rtc-runtime-native-20261018/`. Its ELF SHA256 is
+`e8125a65f44281076b91ae4d8fa064ba122028db98ca8cf535e7b4c2515bf28e`;
+the generated build ID is
+`0b7ef02d9a7ca2c40e35c47c20782f38302b66382d103f00b8c44d6b74c39b4c`.
+All 178 compiled repository inputs, 421 dependencies and 2,584 pre-run hashes
+match after execution. Independent source/artifact review accepted the results.
+The frozen adoption and cold-initialization images above remain unchanged.
+
+The new native cases execute owner construction, task dispatch, runtime MMIO
+callbacks and copied output through modeled public clock/mutex/task-delay
+boundaries. They distinguish cancellation under the first-write mutex from a
+failed callback after an actual HMS store, and cover late cancellation, partial
+DAY timeout, pending/active alarm refusal, clock loss and deadline expiry with
+no subsequent RTC MMIO. Task-delay observations require the mutex released.
+No alarm is armed in these cases.
+
+Successful calendar reports now publish the same coherent day/HMS pair used
+for verification, preserving reserved fields. They do not substitute later raw
+diagnostic reads that can straddle midnight. A focused driver case covers this
+common initializer correction, and a native runtime/host case forces the same
+rollover boundary. Prior cold/alarm/IRQ/default-interval evidence is reused;
+those suites were not replayed.
+Physical calendar timing, UTC accuracy, native USB serialization, wake,
+calibration and retention remain unqualified. This finite consumer does not
+complete repeated updates or calendar/alarm composition for the full OS.

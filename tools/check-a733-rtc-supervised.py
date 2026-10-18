@@ -39,7 +39,8 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
             require(now()<deadline,'RTC output became durable after capture deadline.')
             record['copied_rtc_output']={'path':output.name,'bytes':len(frame)-64,'sha256':hashlib.sha256(frame[64:]).hexdigest()}
         require(now()<deadline,'RTC finalization exceeded capture deadline.')
-        record['rtc_result']='observed-success' if result['status']==1 else 'observed-failure'
+        record['rtc_result']=({1:'observed-success',2:'observed-cancelled',3:'observed-applied-after-cancel',4:'observed-retained-failure'}[result['runtime_outcome']]
+            if result.get('runtime_outcome') else 'observed-success' if result['status']==1 else 'observed-failure')
         record['durable_result']=entry.copy()
         try:
             save()

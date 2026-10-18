@@ -44,13 +44,13 @@ def setup(image,out):
     return symbols,segments,layouts,identity
 
 class Machine:
-    def __init__(self,image,out,source,fail=0,startup=1):
+    def __init__(self,image,out,source,fail=0,startup=1,session_data=None):
         self.symbols,self.segments,self.layouts,self.identity=setup(image,out)
         self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         for address,size in [(0x40000000,0x4000000),(0x50000000,0x1000000),(0x03400000,0x10000),(0x07010000,0x1000),(0x07090000,0x1000)]:self.cpu.mem_map(address,size)
         for address,data in self.segments:self.cpu.mem_write(address,data)
         self.publications=0;self.fail=fail;self.live=1;self.counter=100;self.masks=0;self.fatals=0;self.done=False;self.critical=False;self.defer_irq=False;self.race=False;self.mask_model=True
-        self.session=bytearray((out/'session-template.bin').read_bytes());self.session[48:80]=self.identity
+        self.session=bytearray(session_data if session_data is not None else (out/'session-template.bin').read_bytes());self.session[48:80]=self.identity
         self.cpu.mem_write(0x41f00000,bytes(self.session));self.cpu.mem_write(0x0701020c,struct.pack('<I',0xa5000000))
         prepare=module('rtc_case_prepare',source/'apps/rtc/prepare.py');prepare.session_check(self.session)
         epoch,generation,lease=struct.unpack_from('<3Q',self.session,24)
