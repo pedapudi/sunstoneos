@@ -166,7 +166,7 @@ def main(argv=None):
 
     def validate_entry(identity, port):
         preparation.validate_admission(admission, prepared['image_sha256'], template_hash,
-                                       entry_evidence, True)
+                                       entry_evidence, True, prepared.get('execution_profile','board-supervised-v2'))
         require(admission['identity'] == identity and admission['port'] == port,
                 'Board entry covers another USB instance.')
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Offline protected input preparation for the supervised complete board image."""
+import io
+import types
+from elftools.elf.elffile import ELFFile
 import argparse
 import hashlib
 import importlib.util
@@ -19,6 +22,43 @@ SESSION_MAGIC=0x4153373342535332
 CONTRACT_MAGIC=0x4153373342534332
 REQUEST_MAGIC=0x4153373342534c32
 SCHEMA='a733-board-supervised-bundle-v2'
+artifact=supervisor.observer.artifact
+PROFILES={'sunstone-a733-board':'board-supervised-v2',
+          'sunstone-a733-board-single-core':'board-single-core-supervised-v1'}
+def image_manifest_check(manifest,raw):
+    target=manifest.get('target');profile=PROFILES.get(target)
+    require(profile and manifest.get('execution_profile')==profile and
+            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested Board image manifest required.')
+    elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    marker=symbols.get('board_single_core_geometry')
+    if target=='sunstone-a733-board-single-core':
+        require(marker is not None and marker['st_size']==32 and
+                symbols.get('sd_single_core_entry') and symbols['sd_single_core_entry']['st_value']==elf['e_entry'] and
+                not any(n in symbols for n in ('a733_cpu_start_init','a733_cpu_primary_continue',
+                    'a733_smp_pre_scheduler','FreeRTOS_SGI_Handler')),'Board single-core startup differs.')
+        address=int(marker['st_value']);parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and
+            not p['p_flags']&2 and p['p_vaddr']<=address and address+32<=p['p_vaddr']+p['p_filesz']]
+        require(len(parts)==1,'Board geometry must be immutable and file backed.')
+        offset=address-parts[0]['p_vaddr']
+        require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373342534331,1,592,60),
+                'Board single-core execution geometry differs.')
+    else:require(marker is None,'Single-core Board image requires its execution profile.')
+    return profile
+
+def single_core_platform(value,prepared,identity,port):
+    require(value.get('schema')=='a733-board-single-core-platform-v1' and value.get('identity')==identity and
+            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
+            'Board single-core platform admission differs.')
+    required={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion',
+              'dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded',
+              'physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping',
+              'physical-counter-continuity','rom-usb0-pio-takeover',
+              'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
+    require(set(value.get('conditions',{}))==required,'Board single-core platform conditions differ.')
+    for item in value['conditions'].values():artifact(item)
+    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
+            'Board platform record must establish actual entry conditions.')
+
 def request_bytes(address,identity,epoch,generation,lease,session):
     require(len(identity)==32 and all(type(x) is int and 0<x<2**64 for x in (epoch,generation,lease)) and
         0x41000000<=address<=0x411fffe0,'Invalid supervised launch identity.')
@@ -27,7 +67,7 @@ def request_bytes(address,identity,epoch,generation,lease,session):
     contract=struct.pack('<6Q',0,2,224,epoch,generation,generation^((1<<64)-1))+identity
     contract+=struct.pack('<14Q',0,0,0,0,lease,0,0,0,0,0,0,0,0x41f00000,592)+h
     return request,contract+bytes(4096-len(contract))
-def session_check(raw,usb_reference_modes=(1,)):
+def session_check(raw,usb_reference_modes=(1,2)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
     require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
@@ -78,7 +118,7 @@ def build_launcher(output,clang,lld):
     save_json(output/'commands.json',[[str(x) for x in c] for c in commands])
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'Board launcher exceeds reserved SRAM.')
 
-def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,execution_profile="board-supervised-v2"):
     # Snapshot each evidence byte string once; parse/hash use that same value.
     cache={} if cache is None else cache
     def evidence(item):
@@ -104,7 +144,7 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
     # Reuse the existing exact platform schema, substituting only byte-snapshot
     # artifact validation; its callback never opens returned paths itself.
     import types
-    original=supervisor.observer.validate_platform
+    original=single_core_platform if execution_profile=='board-single-core-supervised-v1' else supervisor.observer.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
     validate(platform,{'image_sha256':image_hash},identity,port)
     recovery=record.get('recovery',{})
@@ -123,15 +163,16 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     payload_snapshots=[(dict(item),Path(item['path']).read_bytes()) for item in payloads]
     image_hash=hashlib.sha256(image_data).hexdigest();template_hash=hashlib.sha256(template_data).hexdigest()
     manifest=json.loads(manifest_data)
-    require(manifest.get('target')=='sunstone-a733-board' and manifest.get('execution_profile')=='board-supervised-v2' and manifest.get('final_elf')==image_hash,'Tested supervised board manifest required.')
-    admission=json.loads(admission_data);evidence_cache=validate_admission(admission,image_hash,template_hash)
-    raw=bytearray(template_data);workload=session_check(raw)
+    execution_profile=image_manifest_check(manifest,image_data)
+    admission=json.loads(admission_data);evidence_cache=validate_admission(admission,image_hash,template_hash,execution_profile=execution_profile)
+    raw=bytearray(template_data);workload=session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))
     require(not workload&1 or admission.get('radio_ddr') is not None,'Radio profile/firmware DDR reservation missing.')
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
-    struct.pack_into('<3Q',raw,24,epoch,generation,lease);raw[48:80]=bytes.fromhex(image_hash)
+    struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     output.mkdir(parents=True,exist_ok=False);build_launcher(output,clang,lld)
     for data,name in [(image_data,'image.elf'),(manifest_data,'image-input-manifest.json'),(admission_data,'admission.json'),(template_data,'session-template.bin')]:(output/name).write_bytes(data)
     segments,address,identity=base.image_parts(output/'image.elf')
+    raw[48:80]=identity
     evidence_snapshots={}
     for index,(path,data) in enumerate(evidence_cache.items()):
         name=f'entry-evidence-{index}.bin';(output/name).write_bytes(data)
@@ -160,7 +201,7 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     require(list(payloads)==admission.get('payloads',[]),'Firmware payloads differ from reviewed admission.')
     request,contract=request_bytes(address,identity,epoch,generation,lease,raw)
     for name,data in [('request.bin',request),('contract.bin',contract),('result-zero.bin',bytes(16384)),('report-zero.bin',bytes(128))]:(output/name).write_bytes(data)
-    result={'schema':SCHEMA,'image_sha256':image_hash,'launcher_sha256':digest(output/'launch.bin'),'admission_sha256':hashlib.sha256(admission_data).hexdigest(),
+    result={'schema':SCHEMA,'execution_profile':execution_profile,'image_sha256':image_hash,'launcher_sha256':digest(output/'launch.bin'),'admission_sha256':hashlib.sha256(admission_data).hexdigest(),
         'reservation':admission['reservation'],'build_id':identity.hex(),'epoch':epoch,'generation':generation,'lease':lease,'workload':workload,
         'session':'session.bin','profile':profile_name,'manifest':'image-input-manifest.json','image':'image.elf','segments':uploads,
         'reservations':[{k:v for k,v in s.items() if k!='data'} for s in segments],
@@ -177,16 +218,16 @@ def validate_bundle(bundle):
     cache={path:(bundle/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
     require(all(hashlib.sha256(cache[path]).hexdigest()==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen evidence changed.')
     admitted=json.loads((bundle/'admission.json').read_text())
-    validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True)
-    require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
-    raw=(bundle/'session.bin').read_bytes();require(session_check(raw)==p['workload'],'Workload changed.')
-    derived=bytearray((bundle/'session-template.bin').read_bytes())
-    struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=bytes.fromhex(p['image_sha256'])
-    require(raw==derived,'Session differs from admitted template derivation.')
     manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-board' and manifest.get('execution_profile')=='board-supervised-v2' and
-        manifest.get('final_elf')==p['image_sha256'],'Supervised image manifest differs.')
-    require(struct.unpack_from('<3Q',raw,24)==(p['epoch'],p['generation'],p['lease']) and raw[48:80].hex()==p['image_sha256'],'Session identity changed.')
+    execution_profile=image_manifest_check(manifest,(bundle/'image.elf').read_bytes())
+    require(p.get('execution_profile','board-supervised-v2')==execution_profile,'Board execution profile changed.')
+    validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True,execution_profile)
+    require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
+    raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
+    derived=bytearray((bundle/'session-template.bin').read_bytes())
+    struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=bytes.fromhex(p['build_id'])
+    require(raw==derived,'Session differs from admitted template derivation.')
+    require(struct.unpack_from('<3Q',raw,24)==(p['epoch'],p['generation'],p['lease']) and raw[48:80].hex()==p['build_id'],'Session identity changed.')
     segments,address,identity=base.image_parts(bundle/'image.elf')
     require(identity.hex()==p['build_id'],'Build identity changed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,p['epoch'],p['generation'],p['lease'],raw)):

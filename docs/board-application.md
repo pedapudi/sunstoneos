@@ -237,3 +237,72 @@ addition accepts an NPU result field in the shared tool without changing the
 board path; `integration/npu-selector/` records that source comparison.
 These checks use modeled
 USB and FEL boundaries and a private host lock; they establish no physical result.
+
+## Boot-CPU execution preserves the complete application
+
+`apps/board-single-core` builds `sunstone-a733-board-single-core.elf` with the
+existing board application, shared providers, USB0 output, Type-C service,
+USB2 host, radio coordinator, CE entropy adapter, SDIO transport and network
+service. The distinct profile is `board-single-core-supervised-v1`. It uses
+the accepted single-core monitor and FreeRTOS SRE port. All seven secondary
+CPUs must remain off; this target links no secondary startup or SMP barrier.
+
+All four supervised workload selectors remain available. Selections zero and
+one construct Type-C and USB2 host service, with selection one also constructing
+radio. Selection two constructs shared providers and USB0; selection three adds
+radio. The radio owner, client and network stack retain their existing identities,
+queues, entropy qualification, firmware authentication and completion rules.
+No radio operation is replaced by a separate demonstration.
+
+The monitor authenticates and retains the complete board session before provider
+construction. It reads the four admitted SID shadow words for radio selections
+and retains their typed identity outside EL1-cleared BSS. The monitor explicitly
+clears this retained state before each admission. EL1 receives a separate bounded
+runtime contract and cannot read secure monitor state. Actual page tables map
+radio and CE registers as outer-shareable Device memory, radio profiles/firmware
+as normal cached memory, and the USB2 pool as normal non-cacheable memory.
+The cached CE pool remains separate from USB2 DMA allocations. Provider binding,
+radio construction and scheduler entry restore DAIF masking after FreeRTOS
+static object construction.
+
+New preparation for both board profiles places the linked `a733_smp_build_id`
+bytes in `session.image`. The retained-session consumer compares this field with
+the authenticated contract's linked identity. The ELF file hash remains the
+separate admission and bundle identity. Previously the producer placed the ELF
+hash in this session field. That value fails retained-session admission even
+when its uploaded session digest is consistent. Existing frozen artifacts remain
+unchanged. The RTC adapter preserves the board validator's default arguments
+when cloning its frozen-evidence callback.
+
+The single-core host profile checks exact ELF geometry, entry, excluded SMP
+symbols, linked identity and ROM USB takeover mode two. The existing board
+profile retains mode one. Image-bound platform condition files remain sealed
+in the bundle, including physical instruction-publication and resource-ownership
+evidence. Firmware upload addresses, sizes and hashes use the existing radio
+profile and four pinned firmware artifacts. Preparation and capture continue
+through the existing board tools and coordinator claim.
+
+Fifteen startup cases, nine host cases and one native session-binding check pass
+under `~/.cache/sunstoneos/evidence/board-single-core-20261018/`. Startup executes
+the real constructors for every workload selector, including CE entropy, radio
+session, Type-C and USB2. Descriptor walks, retained SID/session state, input
+refusals and scheduler masking are checked. System registers, counters, SID and
+GIC responses are modeled; the host completion frame is synthetic. The accepted
+board, radio, protocol and entropy service evidence is reused without replay.
+One affected RTC frozen-bundle validation also passes. Focused source/ELF review
+found no remaining substantive blocker.
+
+The frozen ELF SHA256 is
+`423f3ca1c4fe5ca284263fbc390a2cae9c57a1b03eecc336ceab7c854f0216e7`.
+Physical USB, radio, entropy, network and powered-host operation remain
+unqualified. The smallest radio proposal is one coordinator-owned RAM-only
+selection-three session with the existing one-second startup and 60-second
+terminal bound. It requires actual image-bound memory/publication, USB takeover,
+SDIO/module/pin/rail ownership, SID, CE prior DMA drain/private mappings,
+characterized entropy and authorized firmware/network-peer evidence. Success
+requires a captured radio state two with the expected verified response-byte
+count; USB0 output alone does not establish radio completion. Full host
+selections additionally require the existing powered accessory and cutoff
+admission. Stop communication at the first failure or disappearance, retain
+all resources, and recover only through confirmed whole-board power removal.
+Software fixture bundles provide no physical admission.

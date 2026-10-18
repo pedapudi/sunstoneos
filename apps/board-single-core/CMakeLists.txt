@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+project(a733_board_single_core LANGUAGES C ASM)
+set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised retained board" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../board" "${CMAKE_CURRENT_BINARY_DIR}/board-base")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/a733-board-single-core.cmake")

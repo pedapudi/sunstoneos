@@ -4,7 +4,7 @@
 #include "boot.h"
 #include "cached.h"
 #include "session.h"
-#if !defined(SUNSTONE_GPU_SINGLE_CORE) && !defined(SUNSTONE_NPU_SINGLE_CORE) && !defined(SUNSTONE_RTC_SINGLE_CORE)
+#if !defined(SUNSTONE_GPU_SINGLE_CORE) && !defined(SUNSTONE_NPU_SINGLE_CORE) && !defined(SUNSTONE_RTC_SINGLE_CORE) && !defined(SUNSTONE_BOARD_SINGLE_CORE)
 #include "snapshot.h"
 #else
 #include "a733_device_memory_layout.h"
@@ -14,6 +14,8 @@
 /* Immutable producer identity is checked alongside the existing service geometry. */
 #ifdef SUNSTONE_GPU_SINGLE_CORE
 __attribute__((used,retain)) const uint64_t gpu_single_core_geometry[4]={UINT64_C(0x4153373347505331),1,592,60};
+#elif defined(SUNSTONE_BOARD_SINGLE_CORE)
+__attribute__((used,retain)) const uint64_t board_single_core_geometry[4]={UINT64_C(0x4153373342534331),1,592,60};
 #elif defined(SUNSTONE_RTC_SINGLE_CORE)
 __attribute__((used,retain)) const uint64_t rtc_single_core_geometry[4]={UINT64_C(0x4153373352545331),1,784,60};
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
@@ -35,7 +37,7 @@ int a733_smp_device_preparation_admitted(void)
     const struct a733_smp_contract *c=sd_single_core_contract();
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     const struct a733_board_session *s=gpu_application_session();
-#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+#elif defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
     const struct a733_board_session *s=board_session_snapshot();
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     const struct npu_session *s=npu_session_get();
@@ -47,7 +49,7 @@ int a733_smp_device_preparation_admitted(void)
     return preparing&&(mpidr&~UINT64_C(0xc1000000))==0&&
       (control&0x1005)==0x1005&&(flags&0x3c0)==0x3c0&&
       xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED&&counter()<c->startup_deadline&&
-#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE)
+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
       s&&s->epoch==c->epoch&&
 #else
       s&&sd&&!memcmp(s,&sd->board,sizeof(*s))&&
@@ -65,7 +67,7 @@ void kernel_main(void)
     const struct a733_smp_contract *c=sd_single_core_contract();
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     if(counter()>=c->startup_deadline||!gpu_application_session())
-#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+#elif defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
     if(counter()>=c->startup_deadline||!board_session_snapshot())
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     if(counter()>=c->startup_deadline||!npu_session_get())

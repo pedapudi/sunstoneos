@@ -123,7 +123,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     if execution_profile=='rtc-single-core-supervised-v1':
         observer=types.SimpleNamespace(validate_platform=single_core_platform)
         validate=types.FunctionType(validate.__code__,{**validate.__globals__,
-            'supervisor':types.SimpleNamespace(observer=observer)})
+            'supervisor':types.SimpleNamespace(observer=observer)},argdefs=validate.__defaults__)
     cache=validate(common,image_hash,template_hash,cache,frozen)
     for key,offset in [('initial',632),('clock',664),('electrical',696),('supervision',728)]:
         item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')

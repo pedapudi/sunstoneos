@@ -4,7 +4,7 @@
 
  static uint64_t tick_interval;
  static uint64_t next_tick;
-+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE)
++#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
 +#include "a733_cached_memory.h"
 +#include "a733_cpu_coherence.h"
 +#else
@@ -18,7 +18,7 @@
 
  void platform_init(void)
  {
-+#if !defined(SUNSTONE_GPU_SINGLE_CORE) && !defined(SUNSTONE_NPU_SINGLE_CORE) && !defined(SUNSTONE_RTC_SINGLE_CORE)
++#if !defined(SUNSTONE_GPU_SINGLE_CORE) && !defined(SUNSTONE_NPU_SINGLE_CORE) && !defined(SUNSTONE_RTC_SINGLE_CORE) && !defined(SUNSTONE_BOARD_SINGLE_CORE)
      // Identity-map peripheral space as Device-nGnRnE, and the 128 MiB RAM
      // region as normal, inner-shareable, write-back memory. Boot code/data
      // share a mapping here; separate permissions belong to the full VM layer.
@@ -44,7 +44,7 @@
                       "msr ttbr0_el1, %2\n isb\n tlbi vmalle1\n dsb sy\n isb"
 -                     :: "r"(mair), "r"(tcr), "r"((uintptr_t)level1) : "memory");
 +                     :: "r"(mair), "r"(tcr),
-+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE)
++#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE) || defined(SUNSTONE_BOARD_SINGLE_CORE)
 +                        "r"((uintptr_t)a733_cached_el1_l1)
 +#else
 +                        "r"((uintptr_t)level1)
