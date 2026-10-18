@@ -2,7 +2,7 @@
 #ifndef SUNSTONE_AIC8800_RSN
 #error "Native radio session requires the actual RSN integration"
 #endif
-enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK };
+enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP };
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -91,8 +91,8 @@ static enum a733_radio_session_result renew(struct a733_radio_session *s)
     }
     return s->transport.state==AIC8800_TRANSPORT_FAULT?fail(s):A733_SESSION_PENDING;
 }
-int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platform *p,
-    const struct a733_radio_session_config *c)
+static int initialize(struct a733_radio_session *s,struct a733_radio_platform *p,
+    const struct a733_radio_session_config *c,unsigned bootstrap)
 {
     if(!s||s->self||!p||!p->initialized||p->fault||p->clock.id||p->borrower.generation||!c||
         !c->owner_task||!c->owner||c->bootstrap_deadline<p->config.deadline_us||
@@ -107,12 +107,16 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
     }
     /* Constructors consume this private lifetime even if a later profile fails.
      * Failed construction cannot be retried over partially initialized workers. */
-    s->platform=p;s->config=*c;s->self=s;s->fault=1;atomic_init(&s->busy,0);
+    s->platform=p;s->config=*c;s->self=s;s->fault=1;s->bootstrap_only=bootstrap;atomic_init(&s->busy,0);
     if(!aic8800_firmware_init(&s->firmware,&c->firmware)||
-        !aic8800_runtime_init(&s->runtime,&c->runtime)||!aic8800_wifi_init(&s->wifi,&c->wifi)||
-        !aic8800_data_init(&s->data)||!aic8800_security_init(&s->security))return 0;
+        !aic8800_runtime_init(&s->runtime,&c->runtime)||(!bootstrap&&(!aic8800_wifi_init(&s->wifi,&c->wifi)||
+        !aic8800_data_init(&s->data)||!aic8800_security_init(&s->security))))return 0;
     s->deadline=c->bootstrap_deadline;s->fault=0;return 1;
 }
+int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
+{return initialize(s,p,c,0);}
+int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
+{return initialize(s,p,c,1);}
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
 {
     if(!enter(s))return A733_SESSION_INVALID;
@@ -163,7 +167,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
         s->stage=DISPATCH;break;
     case DISPATCH:
         if(!aic8800_dispatch_init(&s->dispatcher,t))return leave(s,fail(s));
-        s->stage=WIFI;break;
+        s->stage=s->bootstrap_only?BOOTSTRAP:WIFI;break;
     case WIFI:
         if(!t->wifi && aic8800_transport_start_wifi(t,&s->wifi,s->deadline))s->stage=DATA;
         else aic8800_dispatch_poll(&s->dispatcher);
@@ -173,6 +177,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
         else aic8800_dispatch_poll(&s->dispatcher);
         break;
     case MANAGEMENT:aic8800_dispatch_poll(&s->dispatcher);break;
+    case BOOTSTRAP:aic8800_dispatch_poll(&s->dispatcher);break;
     case NETWORK:
         if(!sunstone_net_poll_owned(&s->sockets))return leave(s,fail(s));
         break;
@@ -184,8 +189,32 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
 }
 static int admission(struct a733_radio_session *s,uint64_t deadline)
 {
-    return !s->fault&&!s->renew_pending&&s->stage>=MANAGEMENT&&deadline&&deadline<=s->deadline&&
+    return !s->bootstrap_only&&!s->fault&&!s->renew_pending&&s->stage>=MANAGEMENT&&deadline&&deadline<=s->deadline&&
         live(s)==A733_SESSION_PENDING;
+}
+int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
+{
+    if(!enter(s))return -1;
+    if(!outside(s,generation,sizeof(*generation))||s->fault){(void)leave(s,A733_SESSION_PENDING);return -1;}
+    if(s->transport.state==AIC8800_TRANSPORT_FAULT||s->dispatcher.faulted||s->runtime.state==AIC8800_RUNTIME_FAULT){
+        (void)leave(s,fail(s));return -1;
+    }
+    int result=0;
+    if(s->stage==BOOTSTRAP||s->stage==MANAGEMENT||s->stage==NETWORK){
+        enum a733_radio_session_result health=live(s);
+        if(health==A733_SESSION_RETAINED)result=-1;
+        else if(health!=A733_SESSION_BUSY&&!s->renew_pending&&s->firmware.state==AIC8800_FW_START_CONFIRMED&&
+            s->firmware.bt_patch_applied&&s->runtime.state==AIC8800_RUNTIME_RECEIVING&&
+            s->transport.state==AIC8800_TRANSPORT_RUNTIME&&s->transport.card==&s->platform->card&&
+            s->transport.firmware==&s->firmware&&s->firmware.owner==&s->transport&&
+            s->transport.runtime==&s->runtime&&s->runtime.owner==&s->transport&&
+            s->transport.receive_owner==&s->dispatcher&&s->dispatcher.initialized&&!s->dispatcher.faulted&&
+            s->dispatcher.transport==&s->transport&&
+            (!s->firmware.binding_required||s->runtime.binding_confirmed)){
+            *generation=s->borrow.generation;result=1;
+        }
+    }
+    (void)leave(s,A733_SESSION_PENDING);return result;
 }
 static int done(struct a733_radio_session *s,int ok)
 {

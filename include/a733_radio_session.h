@@ -36,6 +36,7 @@ struct a733_radio_session {
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
+    unsigned bootstrap_only;
 };
 /* Pure init, before first platform poll. Requires the actual initialized
  * platform and immutable firmware blobs. Firmware identity is an expectation;
@@ -47,6 +48,13 @@ struct a733_radio_session {
  * no identifier, timer or deterministic entropy fallback is supplied. */
 int a733_radio_session_init(struct a733_radio_session *,struct a733_radio_platform *,
     const struct a733_radio_session_config *);
+/* Same actual firmware/runtime/dispatcher graph, without Wi-Fi management,
+ * security or IP activation. No entropy or network credentials are required. */
+int a733_radio_session_init_bootstrap(struct a733_radio_session *,struct a733_radio_platform *,
+    const struct a733_radio_session_config *);
+/* Owner-only authenticated completed firmware generation; 1 ready,0 pending/
+ * contention,-1 invalid/fault. Readiness establishes bootstrap, not HCI. */
+int a733_radio_session_bootstrap(struct a733_radio_session *,uint64_t *generation);
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *);
 /* Owner-only external prerequisite failure. Closes network admission before
  * further protocol work and retains the existing complete resource graph. */

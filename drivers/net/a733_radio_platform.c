@@ -258,6 +258,17 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
     if(!sunxi_sdio_init(&p->host,&host)||!sdio_card_init(&p->card,&p->host,&c->card))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
+int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
+{
+    if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->bluetooth.authority||
+        !b||!b->authority||!separate(p,sizeof(*p),b,sizeof(*b)))return 0;
+    for(unsigned i=0;i<2;++i)
+        if((b->expected[i].function!=0&&b->expected[i].function!=15)||
+            b->desired[i].function!=(i?0u:1u)||
+            !a733_pin_config_valid_banked(A733_PIN_M,3+i,b->expected[i])||
+            !a733_pin_config_valid_banked(A733_PIN_M,3+i,b->desired[i]))return 0;
+    p->bluetooth=*b;return 1;
+}
 static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
 {
     if(p->stage==ACQUIRE) {
@@ -297,10 +308,16 @@ static enum a733_radio_platform_result metadata(struct a733_radio_platform *p)
         return A733_RADIO_PENDING;
     }
     if(p->stage==PINS) {
-        struct a733_pin_request_banked request[8];
+        struct a733_pin_request_banked request[10];
         for(unsigned i=0;i<8;++i)request[i]=(struct a733_pin_request_banked){
             i<6?A733_PIN_G:A733_PIN_M,i<6?i:i-6,p->config.expected[i],p->config.desired[i],0,0,0};
-        enum a733_pins_result r=a733_pins_acquire_banked(p->pins,p->config.owner,request,8,&p->pin_lease,p->deadline);
+        unsigned count=8;
+        if(p->bluetooth.authority){
+            for(unsigned i=0;i<2;++i)request[8+i]=(struct a733_pin_request_banked){
+                A733_PIN_M,3+i,p->bluetooth.expected[i],p->bluetooth.desired[i],i?0:1,0,0};
+            count=10;
+        }
+        enum a733_pins_result r=a733_pins_acquire_banked(p->pins,p->config.owner,request,count,&p->pin_lease,p->deadline);
         if(!timely(p))return fail(p);
         if(r==A733_PINS_BUSY||r==A733_PINS_CONFLICT)return A733_RADIO_BUSY;
         if(r!=A733_PINS_OK)return fail(p);
@@ -454,4 +471,18 @@ enum a733_radio_platform_result a733_radio_platform_wake(struct a733_radio_platf
     if(r==A733_PINS_BUSY)return finish(p,A733_RADIO_BUSY);
     if(r!=A733_PINS_OK)return finish(p,fail(p));
     *level=value&1u;return finish(p,A733_RADIO_READY);
+}
+enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *p,
+    const struct a733_radio_borrow *token,uint64_t deadline,unsigned *level)
+{
+    if(!p||!p->initialized||!p->bluetooth.authority||!output_disjoint(p,level,sizeof(*level))||
+        !separate(token,sizeof(*token),level,sizeof(*level)))return A733_RADIO_INVALID;
+    enum a733_radio_platform_result live=a733_radio_platform_live(p,token,deadline);
+    if(live!=A733_RADIO_READY)return live;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
+    uint32_t value;
+    enum a733_pins_result r=a733_pins_read_inputs_banked(p->pins,&p->pin_lease,A733_PIN_M,16,&value,deadline);
+    if(!timely(p))return finish(p,fail(p));if(r==A733_PINS_BUSY)return finish(p,A733_RADIO_BUSY);
+    if(r!=A733_PINS_OK)return finish(p,fail(p));*level=(value>>4)&1;return finish(p,A733_RADIO_READY);
 }

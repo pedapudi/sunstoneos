@@ -121,6 +121,13 @@ static int token_live(struct a733_uart_platform *s)
     enum a733_clock_result r=a733_clock_token_status(s->registry,&s->clock);
     return r==A733_CLOCK_OK ? 1 : r==A733_CLOCK_BUSY ? 0 : -1;
 }
+enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platform *s)
+{
+    if(!s||!s->initialized||s->ops.current(s->cookie)!=1)return INVALID;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&s->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return BUSY;
+    return finish(s,fault(s));
+}
 static int uart_address(struct a733_uart_platform *s,uintptr_t a,unsigned writing)
 {
     if (a<s->uart.plan.base || a>s->uart.plan.base+0xa4 || (a&3)) return 0;
@@ -341,6 +348,11 @@ enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform
     if (locked<0) return finish(s,fault(s));
     if (!locked) return finish(s,BUSY);
     if (s->pins->failed || !time_ok(s)) return finish(s,fault(s));
+    /* A completed synchronous UART call retains its old deadline. A borrowed
+     * worker may first query its clock after firmware startup, before exchange
+     * installs the next bound. Successful live admission authorizes that READY
+     * boundary; protocol partial-frame/command deadlines remain unchanged. */
+    s->uart.deadline=deadline;
     return finish(s,READY);
 }
 enum a733_uart_platform_result a733_uart_platform_close(struct a733_uart_platform *s,unsigned quiet,uint64_t deadline)

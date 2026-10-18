@@ -48,12 +48,20 @@ struct a733_radio_platform_ops {
     int (*write)(void *,uintptr_t,uint32_t);
     int (*barrier)(void *);
 };
+/* Optional single-owner Bluetooth wake pins. The existing physical admission
+ * callback must authenticate this exact immutable extension too. PM2 remains
+ * inherited and unchanged; its reset/LPO topology is an external prerequisite. */
+struct a733_radio_bluetooth_pins {
+    uint64_t authority;
+    struct a733_pin_config expected[2],desired[2]; /* PM3 output-high, PM4 input. */
+};
 /* A borrowed card lifetime is owned by this provider, including after fault.
  * A reset, power change, expiry or owner loss cannot mint a fresh generation.
  * Existing transport workers keep their complete object/buffer graph alive. */
 struct a733_radio_borrow { uint64_t generation,owner; };
 struct a733_radio_platform {
     struct a733_radio_platform_config config;
+    struct a733_radio_bluetooth_pins bluetooth;
     struct a733_radio_platform_ops ops;
     struct a733_clock_leases *clocks;
     struct a733_pins *pins;
@@ -84,6 +92,11 @@ int a733_radio_platform_rails(const struct a733_radio_platform_config *,a733_rai
 int a733_radio_platform_init(struct a733_radio_platform *,const struct a733_radio_platform_config *,
     const struct a733_radio_platform_ops *,void *,struct a733_clock_leases *,
     struct a733_pins *,struct a733_rail_leases *,struct a733_pmic *);
+int a733_radio_platform_bluetooth(struct a733_radio_platform *,const struct a733_radio_bluetooth_pins *);
+/* Sample PM4 host-wake through the actual shared pin owner. Its level does
+ * not establish controller readiness or acknowledge an interrupt. */
+enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *,
+    const struct a733_radio_borrow *,uint64_t deadline,unsigned *level);
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *);
 /* Actual owner only. Retains resource metadata and stops the host without MMIO. */
 enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_platform *);

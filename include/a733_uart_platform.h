@@ -77,6 +77,8 @@ int a733_uart_platform_init(struct a733_uart_platform *,
     const struct a733_uart_platform_config *,const struct a733_uart_platform_ops *,
     void *,struct a733_clock_leases *,struct a733_pins *);
 enum a733_uart_platform_result a733_uart_platform_poll(struct a733_uart_platform *);
+/* Owner-only metadata retention after external authority loss; no device I/O. */
+enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platform *);
 /* One owner task may borrow the actual UART for existing task-polled protocol
  * workers after READY. Their guards call live before service. No interrupt
  * handler may access it; this binding keeps the GIC source masked throughout.
@@ -84,6 +86,9 @@ enum a733_uart_platform_result a733_uart_platform_poll(struct a733_uart_platform
  * Direct begin/drain/reinitialization through the borrowed pointer is forbidden. */
 struct a733_uart *a733_uart_platform_controller(struct a733_uart_platform *);
 enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform *,uint64_t deadline);
+/* A successful live guard also installs its admitted next-operation bound on
+ * the READY core clock callback. Higher protocol operation deadlines do not
+ * extend; callers must retain an independent fixed lifetime/session cap. */
 /* Requires stopped submissions and peer_quiescent=1. Poll advances real UART
  * drain, reset assertion, gate removal, pin restoration and clock release.
  * Any uncertain step retains every unreleased real token. No auto-retry of data
