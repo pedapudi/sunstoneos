@@ -8,9 +8,10 @@ int a733_rtc_session_valid(const struct a733_rtc_session *s)
     return s&&a733_board_session_valid(&s->board,0)&&s->board.workload==2&&
         s->magic==A733_RTC_SESSION_MAGIC&&
         ((s->version==1&&s->bytes==sizeof(*s))||
-         ((s->version==2||s->version==3)&&s->bytes==sizeof(struct a733_rtc_session_set)&&
+         ((s->version==2||s->version==3||s->version==4)&&s->bytes==sizeof(struct a733_rtc_session_set)&&
           a733_rtc_setting_valid(&((const struct a733_rtc_session_set *)s)->setting)&&
-          ((s->version==3)==!!(((const struct a733_rtc_session_set *)s)->setting.flags&A733_RTC_RUNTIME_CALENDAR))))&&
+          ((s->version>=3)==!!(((const struct a733_rtc_session_set *)s)->setting.flags&A733_RTC_RUNTIME_CALENDAR))))&&
+        (s->version!=4||((const struct a733_rtc_session_set *)s)->setting.day<65535)&&
         s->owner&&s->owner!=s->board.pmic_owner&&s->owner!=s->board.usb0_owner&&
         s->authority&&s->alarm_seconds>=1&&s->alarm_seconds<=10&&!s->reserved&&
         present(s->initial,32)&&present(s->clock,32)&&present(s->electrical,32)&&

@@ -2,6 +2,7 @@
 #define SUNSTONE_RTC_PRIVATE_H
 #include "a733_rtc_application.h"
 #include "a733_rtc.h"
+#include "service-port.h"
 #include "gicv3_spi.h"
 #include "../board/application.h"
 struct rtc_initialized_output {struct a733_rtc_snapshot calendar;struct a733_rtc_initialization initialization;};
@@ -17,7 +18,7 @@ struct rtc_application {
  struct a733_rtc driver;
  struct a733_clock_token clock;
  struct gicv3_spi spi;
- StaticTask_t task; StackType_t stack[2048]; TaskHandle_t handle;
+ StaticTask_t task,clients[2]; StackType_t stack[2048],client_stacks[2][1024]; TaskHandle_t handle,client_handles[2];
  atomic_uint result,cancel,armed,pending;
  struct a733_rtc_snapshot output;
  uint8_t digest[32];

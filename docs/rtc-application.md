@@ -291,3 +291,93 @@ those suites were not replayed.
 Physical calendar timing, UTC accuracy, native USB serialization, wake,
 calibration and retention remain unqualified. This finite consumer does not
 complete repeated updates or calendar/alarm composition for the full OS.
+
+## One owner serializes reusable application requests
+
+The service profile uses the existing 784-byte sealed session with version 4
+and the runtime-calendar flag. Its clock evidence also authorizes the two fixed
+native calendar clients. The session target seeds the application demonstration;
+registered clients may request any valid TypeA day/HMS through the setting API.
+The second demonstration target is one day later, so the seed must be below
+65535. Older profile modes retain their existing operations and extents.
+
+Two core-0 application tasks call the task-context interface in
+`include/a733_rtc_service.h`. The current FreeRTOS task handle identifies each
+client. Each client has one fixed slot and one outstanding generation. A static
+two-entry FreeRTOS queue copies slot indices to the sole core-0 owner. Request
+reservation and zero-wait enqueue occur in one short critical section. Failed
+enqueue releases only its unpublished reservation; generations never repeat.
+No application pointer survives submission.
+
+A client copies its immutable terminal result and explicitly releases the
+matching generation before submitting another request. Old generations cannot
+copy, cancel or release newer results. Another client's generation never grants
+access. Queue admission refuses an occupied slot, invalid request, unregistered
+task, poisoned service or expired session. Requests contain calendar values or
+a bounded alarm delay; they cannot supply register offsets or source settings.
+
+The same owner performs coherent reads, calendar setting and non-waking alarms.
+It retains exclusive calendar/source writer authority and the permanent clock
+lease across idle periods, released result slots and yielded waits. Every native
+transaction checks session, deadline and clock health, then uses the existing
+shared register mutex. The calendar setter releases that mutex during busy and
+settling delays. It writes only DAY/HMS; clock initialization remains at the
+sealed boot boundary.
+
+A coherent read is allowed during the owner's active alarm. Calendar setting
+and a second alarm return busy until that alarm ends. The alarm's client may
+cancel only its matching generation. Queued cancellation completes without
+starting hardware. Setting cancellation before the first attempted HMS write
+is clean; later cancellation follows bounded verified completion and reports
+late application. Authority loss stops further accesses and copied publication.
+Cancellation racing alarm completion reports the observed alarm if it has fired.
+
+Normal alarm completion disables and acknowledges only the owned source,
+restores the saved disabled target and verifies its readback. The owner masks
+the SPI and confirms it inactive before touching driver state. It separately
+waits for pending/RWP propagation after source completion, without repeating
+that completed source operation. Private driver state is reset only after the
+source is disabled/unpending, the GIC is masked/inactive/unpending and the ISR
+notification has been consumed. Uncertain failures retain every reservation,
+permanently refuse later requests, and terminalize waiting clients while live.
+There is no speculative rollback or automatic retry.
+
+The native application demonstrates two distinct sets, repeated reads, one
+completed alarm and a separately owned cancelled alarm. The second client reads
+and receives a busy setting result during the first client's alarm. Both clients
+then reuse released slots. The copied observer transcript holds at most twelve
+200-byte results behind a 16-byte header. The demonstration freezes ten results;
+per-client operation slots remain the application interface. A service frame
+uses wire version 4, the existing 64-byte identity/digest header and a 2416-byte
+payload. Host cancellation cannot impersonate a native client's request token.
+
+The focused service checks use the same owner, client tasks, API and RTC driver
+bodies with the pinned FreeRTOS POSIX port, task scheduler and queue. The fixture
+models only the hardware/provider boundary. A separate final-image check covers
+actual native sealing, task construction and MMIO callbacks. Synthetic USB
+framing does not establish native serializer operation. Physical clock accuracy,
+calendar timing, wake, backup retention and power-loss behavior still require
+board evidence. Source switching, runtime multi-client ownership outside the
+two registered tasks and wake-policy integration remain separate requirements.
+
+The service image and focused checks pass under
+`~/.cache/sunstoneos/evidence/rtc-service-native-20261018/`. Its ELF SHA256 is
+`9c5277abb1c518a2ba69d656a853072615bb0db254c61678e6e1d05720621eac`;
+the build ID is
+`36b4d3d58e8eb27a81affdb7b47b89b8e570f552aa8acce3f72f4df86e93e911`.
+Independent review reconciled 182 compiled repository inputs, 425 dependencies
+and 2,661 preserved runtime input hashes. The scheduler cases cover successful
+composition, delayed GIC deassertion, live retained partial failure,
+authority loss after an actual HMS store, queued cancellation and late setting
+cancellation followed by another read. Stale and cross-client generations are
+refused. The native check covers actual sealed admission, registered task
+construction/affinity, task privilege admission and register callbacks.
+
+The POSIX fixture configures a one-second alarm cap; the native producer
+admits two seconds. One-second requests fit that admitted range, but these are
+distinct scheduling configurations and establish no timing parity. A failed
+host compilation exposed missing POSIX feature declarations. A failed native
+fixture assertion assumed the one-second cap instead of reading the admitted
+two-second value. Both failures, original inputs and corrected recipes remain
+preserved. Only affected or unexecuted steps resumed; the successful scheduler
+cases and native image were reused. Older RTC suites were not replayed.

@@ -29,6 +29,8 @@ struct a733_rtc {
  * A single owner task performs all RTC operations, including irq().
  * Failed operations retain every reservation and never attempt rollback. */
 int a733_rtc_open(struct a733_rtc *,const struct a733_rtc_ops *,void *,uint64_t);
+/* Coherent read by the same owner; permitted during its own active alarm. */
+int a733_rtc_read(struct a733_rtc *,struct a733_rtc_time *);
 int a733_rtc_arm(struct a733_rtc *,unsigned seconds);
 int a733_rtc_irq(struct a733_rtc *);
 /* After masking and confirming GIC inactive and mask propagation complete. Cancellation

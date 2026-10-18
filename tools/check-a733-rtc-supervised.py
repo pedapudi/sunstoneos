@@ -23,6 +23,7 @@ SERIAL='sunstoneos-a733-rtc'
 
 def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,cancel=False):
     preparation.session_check(session)
+    require(not cancel or struct.unpack_from("<Q",session,600)[0]!=4,"Service cancellation requires the matching native client request token.")
     record.update(rtc_retention='whole-board-power-removal',rtc_result='unobserved');save()
     for sequence in range(1,2401):
         require(now()<deadline,'RTC capture deadline expired.')
@@ -40,7 +41,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
             record['copied_rtc_output']={'path':output.name,'bytes':len(frame)-64,'sha256':hashlib.sha256(frame[64:]).hexdigest()}
         require(now()<deadline,'RTC finalization exceeded capture deadline.')
         record['rtc_result']=({1:'observed-success',2:'observed-cancelled',3:'observed-applied-after-cancel',4:'observed-retained-failure'}[result['runtime_outcome']]
-            if result.get('runtime_outcome') else 'observed-success' if result['status']==1 else 'observed-failure')
+            if result.get('runtime_outcome') else 'observed-retained-failure' if result.get('service_retained') else 'observed-success' if result['status']==1 else 'observed-failure')
         record['durable_result']=entry.copy()
         try:
             save()
@@ -56,7 +57,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,cancel=Fals
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete RTC request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'RTC capture deadline expired after write.')
-        return bytes(device.read(0x81,200,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,2480 if struct.unpack_from("<Q",session,600)[0]==4 else 200,timeout=min(timeout,remaining)))
     return capture(exchange,session,evidence,record,save,deadline,cancel=cancel)
 
 

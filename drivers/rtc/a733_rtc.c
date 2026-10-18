@@ -68,6 +68,11 @@ int a733_rtc_open(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *contex
        !coherent(r,&r->snapshot.initial))return fail(r);
     r->state=A733_RTC_READY;return 1;
 }
+int a733_rtc_read(struct a733_rtc *r,struct a733_rtc_time *out)
+{
+    if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED))return 0;
+    return coherent(r,out)?1:fail(r);
+}
 int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
 {
     if(!r||r->state!=A733_RTC_READY||delay<1||delay>10)return 0;

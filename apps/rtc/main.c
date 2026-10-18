@@ -2,7 +2,7 @@
 #include "boot.h"
 #include <string.h>
 int board_application_task_privileged(void (*entry)(void *),void *context)
-{return !context&&entry==rtc_task;}
+{return (!context&&entry==rtc_task)||(entry==rtc_service_client&&(uintptr_t)context<2);}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
  const struct a733_rtc_session *s=rtc_admitted_session();
@@ -22,6 +22,14 @@ int board_application_start(void)
   rtc.runtime_output.boot=*initialization;
  }
  rtc.spi=(struct gicv3_spi){0x03400000,228};
+ if(s->version==4){
+  for(unsigned i=0;i<2;++i){
+   rtc.client_handles[i]=xTaskCreateStaticAffinitySet(rtc_service_client,"rtc-client",1024,
+       (void *)(uintptr_t)i,3,rtc.client_stacks[i],&rtc.clients[i],1);
+   if(!rtc.client_handles[i])return 0;
+  }
+  if(!rtc_service_prepare(rtc.client_handles,rtc.setting.day,rtc.setting.hms,rtc.session.alarm_seconds))return 0;
+ }
  rtc.handle=xTaskCreateStaticAffinitySet(rtc_task,"rtc",2048,NULL,4,rtc.stack,&rtc.task,1);
  return rtc.handle!=NULL;
 }

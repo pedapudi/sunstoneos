@@ -14,6 +14,38 @@ def decode(raw,session):
     if status!=1:
         if count or len(raw)!=64 or any(raw[32:64]):raise ValueError('Private RTC output exposed')
         return result
+    if version==4:
+        if count!=2416 or len(raw)!=2480 or hashlib.sha256(raw[64:]).digest()!=raw[32:64]:raise ValueError('RTC service extent/digest differs')
+        records,complete,retained,omitted=struct.unpack_from('<4I',raw,64)
+        if records>12 or complete not in (0,1) or retained not in (0,1) or (complete and retained):raise ValueError('RTC service terminal state invalid')
+        if any(raw[80+records*200:]):raise ValueError('RTC service private unused records exposed')
+        seed_day,seed_hms=struct.unpack_from('<2I',session,772)
+        seen=set();operations=[]
+        for i in range(records):
+            record=raw[80+i*200:80+(i+1)*200]
+            ident,client,kind,outcome,reserved=struct.unpack_from('<Q4I',record)
+            if not ident or ident in seen or client>1 or kind not in (1,2,3) or outcome not in range(1,7) or reserved or any(record[196:]):raise ValueError('RTC service record identity/state invalid')
+            seen.add(ident)
+            day,hour,minute,second,year,month,date=struct.unpack_from('<7I',record,24)
+            if outcome in (1,3) or (kind==3 and outcome==2):
+                t=datetime.datetime(year,month,date,hour,minute,second)
+                if not 1<=day<=65535 or (t.date()-datetime.date(1970,1,1)).days+1!=day:raise ValueError('RTC service calendar differs')
+            if kind==2 and outcome in (1,3):
+                report=struct.unpack_from('<14I',record,52)
+                target=(seed_day+client)*86400+(seed_hms>>16)*3600+((seed_hms>>8)&63)*60+(seed_hms&63)
+                applied=day*86400+hour*3600+minute*60+second
+                if report[9]!=6 or report[10]!=2 or report[12]!=(1 if outcome==1 else 3) or not target<=applied<=target+(report[11]+999999)//1000000:raise ValueError('RTC service applied calendar differs')
+            if kind==3 and outcome in (1,2):
+                alarm=struct.unpack_from('<22I',record,108)
+                if (alarm[20],alarm[21])!=((1,0) if outcome==1 else (0,1)):raise ValueError('RTC service alarm completion differs')
+                if tuple(alarm[7:14])!=(day,hour,minute,second,year,month,date):raise ValueError('RTC service alarm terminal sample differs')
+            operations.append({'id':ident,'client':client,'kind':kind,'outcome':outcome,'day':day})
+        if complete:
+            expected={0:[(2,1),(1,1),(3,1),(1,1)],1:[(1,1),(2,4),(2,1),(1,1),(3,2),(1,1)]}
+            if omitted or records!=10 or any([(x['kind'],x['outcome']) for x in operations if x['client']==c]!=sequence for c,sequence in expected.items()):raise ValueError('RTC native client composition differs')
+        elif not retained:raise ValueError('RTC service terminal transcript incomplete')
+        result.update(service_complete=complete,service_retained=retained,operations=operations,snapshot_sha256=raw[32:64].hex())
+        return result
     if version==3:
         if count!=104 or len(raw)!=168 or hashlib.sha256(raw[64:]).digest()!=raw[32:64]:raise ValueError('Runtime RTC digest/extent differs')
         report=struct.unpack('<14I',raw[64:120]);boot=struct.unpack('<12I',raw[120:])
