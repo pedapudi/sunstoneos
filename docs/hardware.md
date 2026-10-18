@@ -159,8 +159,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   cutoff and permanent-loss checks. The native tasks and USB binding
   are implemented. Focused supply, native MMC admission and USB callback checks
   pass. The complete [maintenance image and launcher](storage-maintenance-launch.md)
-  are integrated; focused instruction and host checks pass. Physical card
-  identification, reads, writes, faster modes and recoverable boot remain outstanding.
+  are integrated; focused instruction and host checks pass. The separate
+  [supervised read-only SD application](storage-read-application.md) now connects
+  native card identification and a sector-zero read to copied USB output.
+  Focused model, binding, cancellation and host checks pass. Its read deadline
+  cuts off publication independently of the longer board lifetime. One affected
+  case passes after a correction to the application body; the other 163 objects
+  and earlier evidence were reused. The 165-object image and source inputs are
+  reconciled under `storage-read-native-20261018/`. Physical card identification,
+  reads, writes, faster modes and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined

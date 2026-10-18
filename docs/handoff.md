@@ -167,13 +167,23 @@ carrier wiring and power, and recovery for every affected power domain.
 BAR allocation, interrupt-driven transfers, DMA, higher link speeds and power
 transitions remain required work.
 
-A supervised read-only SD application is in development for first card
-identification and an initial block read through the existing native MMC
-providers. The inserted microSD supplies a concrete future physical target.
-The separate maintenance image requires an already identified card and qualified
-watchdog, so it cannot perform this first discovery while watchdog testing is
-deferred. Storage contents remain protected; no write operation is part of the
-new application.
+The [supervised read-only SD application](storage-read-application.md) now
+identifies a card and reads sector zero through the actual native MMC providers,
+then publishes a separate copied USB result. Focused model, ownership, binding
+and host checks pass. A correction makes the active read deadline cut off
+publication while the board session remains live; its affected case passes.
+Only the application body and build ID changed during that correction; the
+other 163 objects and earlier evidence were reused. Integration reconciles the
+165-object image and its source inputs under `storage-read-native-20261018/`.
+Physical SD operation remains unqualified. The inserted microSD supplies a
+future physical target whose contents remain protected. The separate maintenance
+image still requires an identified card and qualified watchdog; this read-only
+path permits initial discovery without either prerequisite.
+
+Native SPI application integration is in development. Route and population
+research precedes selection of a usable board controller and transfer profile.
+The application will connect the existing controller and shared providers;
+physical transfers require an identified peer and verified wiring and voltage.
 
 
 ## Observed host and device state
