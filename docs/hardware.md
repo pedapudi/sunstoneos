@@ -397,7 +397,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   source inputs match integration. Physical execution remains untested.
   The second board's GPU clock and reset/bus registers both read zero under
   `gpu-clock-read-20261018/`, satisfying that current-state prerequisite.
-  Supply and initial isolation admission remain outstanding.
+  A returning 20-register PMIC probe also observes DCDC4 enabled with selector
+  30, the programmed 800 mV setting, under `gpu-supply-probe-20261018/`.
+  This is a register observation rather than a voltage measurement. Supply
+  settling/ownership and initial isolation admission remain outstanding.
   A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
   independent ELF reader. Native [MIPS preparation](gpu-mips.md) also builds

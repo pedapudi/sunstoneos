@@ -10,6 +10,14 @@ This is a physical kernel milestone. Persistent boot, native USB diagnostics,
 other CPU cores, storage services, mimus, and complete hardware support remain
 outstanding. The check does not leave an interactive OS running.
 
+The runner accepts genuine DDR evidence followed by an explicit sequence of
+successful kernel ROM returns. Repeated `--warm-return` arguments bind each
+record's initial instance to the previous returned instance, then require the
+final instance to match the current survey and live board. The runner preserves
+and hashes those records. A changed USB node alone cannot establish continuity.
+This path passes physically for the second board's returning GPU supply probe
+under `gpu-supply-probe-20261018/runtime/`; no DDR retraining was needed.
+
 ## Execution and recovery
 
 The image starts at `0x41000000`. The monitor invalidates data and instruction

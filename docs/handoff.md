@@ -119,7 +119,7 @@ instance `003:100` after successful core-1 EL3 translation/cache adoption and
 restoration. Fresh DDR,
 survey and all-secondary-OFF checks passed on `003:092` before that launch.
 The diagnostic returned normally and its process and queue claim closed.
-The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
+The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
 12 GiB; full capacity and device admission remain unqualified. Multicore work
@@ -321,10 +321,12 @@ and restoration also pass under `native-el3-cache-20261018/native-attempt/runtim
 Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
-`003:093`, has successful DDR, returning survey, SD initial-register and PMIC
+`003:101`, has successful DDR, returning survey, SD initial-register and PMIC
 evidence. Its warm launcher survey and cache-off preparation also pass under
 `warm-093-preparation/`; DMA0 remains reset with both bus gates masked. Preserve
-its recorded DDR continuity without repeating training.
+its recorded DDR continuity without repeating training. The subsequent 20-register
+PMIC probe passes under `gpu-supply-probe-20261018/runtime/`, including the GPU
+supply selector. Refresh the current launcher state before another native image.
 Both have reconnect permissions. The common access helper selects each port
 through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
 Queue assignments are in [the board-test procedure](board-test-queue.md).
@@ -606,7 +608,9 @@ The primary agent handles all further multicore work directly.
    and its existing entry requirements. USB enumeration alone does not establish
    diagnostic success.
 3. The second board's single-core SD launch candidate is prepared under
-   `second-board-20261018-3-3/single-core-admission/candidate-093/`. Its remaining
+   `second-board-20261018-3-3/single-core-admission/candidate-093/`. Its image
+   remains valid, but the instance-bound admission needs refreshing after the
+   returning GPU supply probe. Its remaining
    card-state question is whether board and card were unpowered before initial
    attachment. ROM source shows native initialization without a 1.8 V request,
    but cannot establish an unknown card's state. Await that factual answer before
@@ -623,7 +627,13 @@ The primary agent handles all further multicore work directly.
    is in progress; no physical GPU execution result exists. A second-board
    read under `gpu-clock-read-20261018/` observes GPU clock and reset/bus words
    both zero, with scratch restoration and normal same-instance return.
-   The missing DCDC4 selector read is prepared separately. Establish actual power,
+   The additional DCDC4 read passes under `gpu-supply-probe-20261018/runtime/`:
+   enable register `0x10` is `0xff`, voltage register `0x15` is `0x9e`, and its
+   seven-bit selector 30 programs 800 mV. ROM returns as `003:101`; the process
+   and claim close. The runner validates the explicit DDR-to-ROM-return chain
+   against the current survey and live instance. The frozen candidate still
+   references the earlier instance and requires updated admission before launch.
+   Establish actual power,
    memory and recovery admission for the integrated GPU,
    NPU, codec, RTC and thermal applications. Their internal operations can advance
    without camera, display or microphone accessories. Retained buffers do not
