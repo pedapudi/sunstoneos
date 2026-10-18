@@ -55,6 +55,14 @@ substantive correctness risks. The coordinator alone operates the board.
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
 
+The shared recorded-audio inference entry point is integrated. Bluetooth and I2S
+can call the existing model, recognizer and formatter with retained audio and a
+cancellation flag. The original supervised caller compiles and links with the
+extraction. One converted Bluetooth recording matches the host reference using
+the same audio; cancellation suppresses copied output after recognition unwinds.
+Evidence is under `bluetooth-mimus-native-20261017/shared-integration.json`.
+Physical audio input and execution timing remain unqualified.
+
 Integration reused the preserved images and checks. All 14 board-profile files
 and 27 Bluetooth files match their accepted worker commits. Startup code matches
 its accepted commit; its documentation also retains the previous physical result.
@@ -303,7 +311,10 @@ Before this attempt, the guarded cache-off helper ran once at SRAM address
 `0x73000`, with its bytes backed up and restored on the same ROM instance.
 One subsequent survey established every launcher predicate and ROM caller SP
 `0x000f2200`. Evidence is under `startup-stage-20261017-078/cache-off/` and
-`survey/`. A future warm-return instance needs its own verified launch state.
+`survey/`. The current `003:079` instance has also passed its guarded cache-off
+helper and returning survey; the queue has no active claim. Those records are
+under `startup-stage-20261017-079/`. A future warm-return instance needs its own
+verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
