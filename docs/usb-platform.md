@@ -157,6 +157,56 @@ supervised single-core SD workload and preserve refusal in other builds.
 These checks model register behavior; ROM transfer provenance, host admission
 and physical takeover remain required evidence.
 
+## ROM transfer provenance required for takeover
+
+The captured secure ROM under `rom-copy-20261016-084055/` has SHA-256
+`a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa` and
+covers addresses `0` through `0x10fff`. Its FEL dispatcher loads `0x17000`
+at `0x2580` and branches through the `MOV pc,r0` instruction at `0x1061c`.
+The capture therefore does not contain the USB/FEL implementation.
+
+The separately pinned nonsecure-ROM reference occupies `0x17000` through
+`0x21fff` and has SHA-256
+`95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169`.
+The following offsets apply only after the target's complete nonsecure-ROM
+capture matches that hash. At offset `0x850c`, the mode function reads the
+word at `0xf355c`; zero selects USB0, while nonzero selects the separate USB3
+implementation. Main dispatch at offsets `0x5a8` through `0x5bc` and transfer
+dispatch at `0x27f0` through `0x2838` use that selection.
+
+For USB0, receive processing calls the CPU FIFO-copy helper at offset `0x1de4`;
+its byte loop reads a fixed FIFO address and stores to CPU memory at `0x1e38`
+and `0x1e3c`. Word and halfword variants perform the same transfer at `0x1e70`
+and `0x1e84`. Transmit processing calls the helper at `0x1ed8`, whose loop
+loads CPU memory and writes a fixed FIFO address at `0x1f30` and `0x1f34`.
+The ordinary FEL read/write commands reach these helpers through transfer
+submission at `0x27e0`. Endpoint initialization at `0x18f0` writes CSR constants
+with DMA request enable clear. Execute processing sends its acknowledgment at
+`0x3118`, waits for TX packet-ready to clear at `0x312c`, and calls the target
+at `0x3134`. This path preserves the USB controller. These anchors support a
+PIO handoff for the matched implementation and reviewed FEL command history;
+they do not establish the effects of arbitrary executed payloads.
+
+Prior storage and DDR operations need separate external DMA evidence. The
+captured secure boot path can call storage dispatch at `0xbd0` before entering
+FEL. Its DMA disable helper at `0x1090` clears channel controls without polling
+the DMA status register. The pinned DDR wrapper calls board initialization at
+`0x48fad` and DRAM initialization at `0x49bdd`; the wrapper model substitutes
+both calls and cannot establish their DMA effects. The A733 manual section
+13.1.7.3 defines external DMAC status at `0x04601030`: bit 31 reports a nonempty
+MBUS FIFO, and bits 15 through 0 report busy channels. Observing those fields
+clear, channel enables clear and writer exclusion supplies concrete current
+state evidence after the DMAC clock/reset access conditions are admitted.
+It does not follow from a host authority boolean.
+
+The smallest additional ROM observation is a returning CPU copy of
+`0x17000` for `0xb000` bytes, with separate board-specific secure-ROM binding.
+Read the implementation-specific mode word only after the nonsecure-ROM hash
+matches. Detailed offline findings and input identities are preserved in
+`usb-rom-handoff-20261018-native/rom-provenance.json`. The first board's secure
+capture alone cannot establish the second board's USB implementation or DMA
+history.
+
 ## Sources and focused evidence
 
 The pinned [A733 kernel source](https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f)
