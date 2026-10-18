@@ -1,10 +1,11 @@
 # A733 compute context program producer
 
-A native producer can use published Mesa sources for the A733's exact GPU
-identity, 36.56.104.183. The required program sources and allocation rules are
-available. Native program generation and semantic admission are **not yet
-implemented**. This investigation establishes the next bounded implementation
-step; it supplies no executable GPU artifact or physical qualification.
+The [native context-program producer](gpu-compute-programs.md) implements the
+published A733 profile, 36.56.104.183. It emits the PDS programs and register
+images and embeds reproduced USC binaries. Native admission checks their
+allocations and execution profile. The [reserved compute owner](gpu-compute-reserved.md)
+builds the complete context and fixed numerical job for the GPU lifecycle
+service. Physical execution remains unqualified.
 
 Mesa source is pinned to revision `86c7176d2dd0065555521bf8c61f208bf53c75d6`.
 The existing board driver reference remains pinned to
@@ -108,40 +109,30 @@ register-bank-width feature. The cached firmware supplies width 19, giving a
 `0x80000`-byte stride. No registers were accessed during this investigation.
 
 Before physical use, the coordinator must establish the installed core
-capabilities and a supported execution mode. The first producer may admit a
-proven single-core mode and reject unknown or multiple-core execution. It must
-not copy Mesa's assumed count into hardware admission. Complete GPU support
+capabilities and a supported execution mode. The implemented producer admits the single-core construction profile. The
+[native mode observer](gpu-compute-mode.md) requires actual powered core-count
+and capability observations before startup and submission. Unknown or
+multiple-core observations refuse that profile. Complete GPU support
 still requires per-core state addressing and qualification across every core.
 
-## The next implementation must emit and admit a complete program bundle
+## Native generation and service integration are implemented
 
-The next component should expose `pvr_compute_programs_require` and
-`pvr_compute_programs_build` for one fixed A733 feature profile. These are
-proposed APIs; no declarations or placeholder implementation have been added.
+The [program implementation](../drivers/gpu/pvr_compute_programs.c) contains
+reproduced USC store/load binaries, native PDS instruction and data generation,
+and complete register-image construction. Its public builder validates the
+selected profile, spans, heap offsets, exclusions and a required native
+admission callback before writing. Fixed allocation sizes are exposed by
+[pvr_compute_programs.h](../include/pvr_compute_programs.h).
 
-1. Reproduce the two USC binaries with the pinned Mesa tools. Record nonempty
-   binary lengths, temporary-register counts, source/tool hashes and licenses.
-   Retain immutable reproducible artifacts for runtime use; a general shader
-   compiler is not needed inside FreeRTOS for these fixed context programs.
-2. Adapt the selected PDS generator branch to caller-owned offline storage.
-   Generate the four store/load programs and one termination program, using
-   admitted USC offsets and both state-buffer addresses. Derive exact lengths
-   and the seven register images from the resulting programs.
-3. Validate profile/core mode, code/data sizes, alignment, encoded address
-   widths, allocation leases, VM permissions and every known overlap before
-   writing. The output descriptor must retain every code, data and state lease.
-   Include the 512-byte resume buffer needed by later compute commands.
-4. Compare complete instruction words, data words and register images against
-   unchanged upstream generation for this profile. Add focused refusal cases
-   for malformed offsets, overlap and unsupported core mode. Check every output
-   guard and preserve all bytes on admission refusal.
-5. Pass the admitted register images to the existing context initializer.
-   Keep publication, context attachment, compute command construction,
-   completion fences and cleanup as separate operations with retained ownership.
+The existing source comparison checks complete programs and register images
+against the pinned Mesa generators. Its [evidence and reproduction procedure](gpu-compute-programs.md#compiler-reproduction-and-source-comparison)
+record source, compiler, artifact and refusal-case identities. Those checks
+establish offline generation, not physical execution.
 
-This sequence produces a usable, inspectable program bundle before adding a
-larger compiler interface. Hardware execution remains blocked on the physical
-prerequisites, especially recovery, core-mode admission, mappings and isolation.
-The investigation performed source inspection and size derivation only; it did
-not build the Mesa compiler, emit USC/PDS binaries, run performance measurements,
-or submit a board test.
+The [native compute reservation](gpu-compute-reserved.md) supplies actual retained
+parents and runs the program, VM, context and job builders. The
+[compute service](gpu-compute-service.md) publishes those resources, serializes
+submission and validates acquired output for the fixed numerical workload.
+General shaders, wider workloads and any additional observed core modes remain
+required. Physical recovery, startup, numerical execution and complete external
+transaction drain still require qualification.
