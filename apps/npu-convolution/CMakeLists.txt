@@ -3,11 +3,18 @@ project(a733_npu_convolution LANGUAGES C ASM)
 get_filename_component(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(FREERTOS_DIR "" CACHE PATH "Pinned FreeRTOS kernel source")
 set(TINYUSB_DIR "" CACHE PATH "Pinned TinyUSB source")
+option(A733_NPU_SUPERVISED "Use externally authenticated retained supervised session" OFF)
+set(npu_target a733-npu-convolution)
+if(A733_NPU_SUPERVISED)
+  set(npu_target a733-npu-convolution-supervised)
+endif()
 set(A733_NPU_HANDOFF_SOURCE "" CACHE FILEPATH "Immutable board-qualified NPU/PMIC/pin/USB handoff source")
-if(NOT EXISTS "${A733_NPU_HANDOFF_SOURCE}" OR IS_DIRECTORY "${A733_NPU_HANDOFF_SOURCE}")
+if(NOT A733_NPU_SUPERVISED AND (NOT EXISTS "${A733_NPU_HANDOFF_SOURCE}" OR IS_DIRECTORY "${A733_NPU_HANDOFF_SOURCE}"))
   message(FATAL_ERROR "Supply A733_NPU_HANDOFF_SOURCE defining a733_npu_application_boot; no default admission is provided")
 endif()
-get_filename_component(A733_NPU_HANDOFF_SOURCE "${A733_NPU_HANDOFF_SOURCE}" ABSOLUTE)
+if(NOT A733_NPU_SUPERVISED)
+  get_filename_component(A733_NPU_HANDOFF_SOURCE "${A733_NPU_HANDOFF_SOURCE}" ABSOLUTE)
+endif()
 function(apply_build_patch output source patch_file)
   execute_process(COMMAND patch --silent --output "${output}.tmp" "${source}" "${patch_file}"
     RESULT_VARIABLE status)
@@ -30,6 +37,9 @@ list(REMOVE_ITEM npu_sources
   "${a733_root}/platform/a733-smp-cached/boot.c"
   "${a733_build}/port.c" "${a733_build}/build-id.c")
 set(npu_build "${CMAKE_CURRENT_BINARY_DIR}/npu-convolution")
+if(A733_NPU_SUPERVISED)
+  set(npu_build "${CMAKE_CURRENT_BINARY_DIR}/${npu_target}")
+endif()
 file(MAKE_DIRECTORY "${npu_build}")
 apply_build_patch("${npu_build}/port.c" "${a733_build}/port.c"
   "${a733_root}/patches/freertos-smp-privileged.patch")
@@ -37,6 +47,17 @@ apply_build_patch("${npu_build}/continue.S" "${a733_root}/platform/a733-smp-cach
   "${a733_root}/apps/npu-convolution/continue.patch")
 apply_build_patch("${npu_build}/boot.c" "${a733_root}/platform/a733-smp-cached/boot.c"
   "${a733_root}/apps/dma-copy/boot.patch")
+if(A733_NPU_SUPERVISED)
+  apply_build_patch("${npu_build}/boot-supervised.c" "${npu_build}/boot.c"
+    "${a733_root}/apps/npu-convolution/boot-supervised.patch")
+  configure_file("${npu_build}/boot-supervised.c" "${npu_build}/boot.c" COPYONLY)
+  list(REMOVE_ITEM npu_sources "${a733_root}/platform/a733-smp-cached/admission.c")
+  list(APPEND npu_sources "${a733_root}/apps/npu-convolution/admission.c"
+    "${a733_root}/apps/npu-convolution/clock.c" "${a733_root}/drivers/npu/a733_npu_pll_native.c"
+    "${a733_root}/drivers/storage/storage_digest.c")
+else()
+  list(APPEND npu_sources "${A733_NPU_HANDOFF_SOURCE}")
+endif()
 apply_build_patch("${npu_build}/usb_service.c" "${a733_root}/platform/a733-smp-observe/usb_service.c"
   "${a733_root}/apps/npu-convolution/usb-service.patch")
 file(MAKE_DIRECTORY "${npu_build}/tinyusb")
@@ -85,7 +106,7 @@ if(NOT artifact_status EQUAL 0)
   message(FATAL_ERROR "Fixed NPU artifacts failed identity admission")
 endif()
 list(APPEND npu_sources "${npu_build}/artifacts.c")
-list(APPEND npu_sources ${npu_units} "${A733_NPU_HANDOFF_SOURCE}"
+list(APPEND npu_sources ${npu_units}
   "${npu_build}/port.c" "${npu_build}/continue.S" "${npu_build}/boot.c" "${npu_build}/usb_service.c"
   "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
   "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
@@ -108,12 +129,17 @@ list(APPEND npu_inputs
   "${a733_port}/port.c" "${a733_port}/portASM.S" "${a733_port}/portmacro.h"
   "${a733_root}/patches/freertos-smp-c.patch" "${a733_root}/patches/freertos-smp-asm.patch"
   "${a733_root}/patches/freertos-smp-macro.patch" "${a733_root}/patches/freertos-a733-smp.patch")
+if(A733_NPU_SUPERVISED)
+  list(APPEND npu_inputs "${a733_root}/apps/npu-convolution/session.h"
+    "${a733_root}/apps/npu-convolution/clock.h" "${a733_root}/apps/npu-convolution/boot-supervised.patch"
+    "${a733_root}/cmake/a733-npu-supervised.cmake")
+endif()
 list(REMOVE_DUPLICATES npu_inputs)
 string(REPLACE ";" "\n" npu_input_lines "${npu_inputs}")
 file(WRITE "${npu_build}/identity-inputs.txt" "${npu_input_lines}\n")
 # The final ELF hash is recorded separately; this binds the boot contract to the
 # selected application, admission source, mappings and private kernel inputs.
-set(npu_identity "npu-convolution;${a733_identity};pool=2097152;privileged-bootstrap-worker")
+set(npu_identity "npu-convolution;${a733_identity};pool=2097152;privileged-bootstrap-worker;supervised=${A733_NPU_SUPERVISED}")
 foreach(input IN LISTS npu_inputs)
   file(SHA256 "${input}" digest)
   string(APPEND npu_identity "${digest}")
@@ -125,17 +151,24 @@ file(WRITE "${npu_build}/build-id.c.tmp"
 configure_file("${npu_build}/build-id.c.tmp" "${npu_build}/build-id.c" COPYONLY)
 file(WRITE "${npu_build}/build-id.txt" "${npu_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${npu_inputs})
-add_executable(a733-npu-convolution ${npu_sources} "${npu_build}/build-id.c")
+add_executable(${npu_target} ${npu_sources} "${npu_build}/build-id.c")
 foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
   get_target_property(value a733-smp-cached-diagnostic ${property})
-  set_property(TARGET a733-npu-convolution PROPERTY ${property} "${value}")
+  set_property(TARGET ${npu_target} PROPERTY ${property} "${value}")
 endforeach()
-target_include_directories(a733-npu-convolution PRIVATE "${a733_root}/platform/a733-smp-observe"
+target_include_directories(${npu_target} PRIVATE "${a733_root}/platform/a733-smp-observe"
   "${a733_root}/drivers/usb" "${TINYUSB_DIR}/src")
-target_compile_definitions(a733-npu-convolution PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
-  SUNSTONE_A733_USB=1 A733_SMP_CONTRACT_MAGIC=0x415337334f424331ULL A733_SMP_RESULT_MAGIC=0x415337334e505231ULL
+target_compile_definitions(${npu_target} PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
+  SUNSTONE_A733_USB=1 A733_SMP_RESULT_MAGIC=0x415337334e505231ULL
   INCLUDE_xTaskGetSchedulerState=1 INCLUDE_xTaskGetCurrentTaskHandle=1
   INCLUDE_xSemaphoreGetMutexHolder=1)
-target_link_options(a733-npu-convolution PRIVATE "-Wl,--defsym=__device_pool_size=2097152"
-  "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/a733-npu-convolution.map")
-set_target_properties(a733-npu-convolution PROPERTIES SUFFIX ".elf")
+if(A733_NPU_SUPERVISED)
+  target_compile_definitions(${npu_target} PRIVATE SUNSTONE_NPU_SUPERVISED=1
+    A733_SMP_CONTRACT_MAGIC=0x415337334e504331ULL)
+  target_link_options(${npu_target} PRIVATE -Wl,--undefined=a733_npu_session_layout)
+else()
+  target_compile_definitions(${npu_target} PRIVATE A733_SMP_CONTRACT_MAGIC=0x415337334f424331ULL)
+endif()
+target_link_options(${npu_target} PRIVATE "-Wl,--defsym=__device_pool_size=2097152"
+  "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/${npu_target}.map")
+set_target_properties(${npu_target} PROPERTIES SUFFIX ".elf")

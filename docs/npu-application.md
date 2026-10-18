@@ -6,9 +6,11 @@ client. It copies 192 input bytes into private buffers, waits for a completed
 job, copies 72 output bytes, compares them with the pinned reference, and reaps
 the job before publishing a result through USB.
 
-The first profile requires inherited NPU PLL operation at 492 MHz and a stable
-800 mV DCDC2 supply. The existing startup implementation checks those values.
-Cold PLL provisioning and broader model support remain separate integrations.
+The watchdog profile adopts an inherited PLL rate that can supply 492 MHz and
+requires an existing 800 mV DCDC2 supply. The supervised profile connects the
+existing enabled-PLL retuning controller before local startup. Neither profile
+enables a disabled PLL or programs PMIC voltage. No preserved board measurement
+establishes the cold PLL or DCDC2 state. Broader model support remains separate.
 
 ## Build and admission
 
@@ -29,7 +31,7 @@ ownership and USB ownership. Owners are nonzero and distinct. Input deadlines
 are zero; initialization derives bounded deadlines from the authenticated boot
 counter deadline. No default qualified record is provided.
 
-A physical launch needs separately established cold-cache and alias exclusion,
+A physical launch of the watchdog profile needs established cold-cache and alias exclusion,
 exclusive CPU and memory ownership, coherent mappings, complete NPU SRAM
 ownership, effective command confinement, quiescent remote writers, and an
 independently qualified watchdog with ROM return. USB0, its PHY, clocks and
@@ -67,7 +69,7 @@ The result encoder checks those same indicators before publishing status.
 
 A deadline, service failure or uncertain provider state retains the session.
 The application does not close, reset, retry or free the NPU after uncertainty.
-The independent watchdog remains responsible for recovery. Successful output
+The selected recovery contract remains responsible for recovery. Successful output
 publication follows a matched DONE reply, the actual output-copy API, reference
 comparison and explicit REAP.
 
@@ -131,3 +133,95 @@ remains local to the NPU executable; the root component target is unaffected.
 Central artifacts and dependency comparisons are preserved under
 `~/.cache/sunstoneos/evidence/npu-application-20261017/central/`.
 No runtime cases were repeated, and this fixture image is not deployable.
+
+## Supervised startup and retained recovery
+
+Select `A733_NPU_SUPERVISED=ON` and build
+`a733-npu-convolution-supervised`. The root selection is mutually exclusive with
+the default handoff-source application. Supply the same three pinned artifacts,
+FreeRTOS and TinyUSB sources. The image contains no admitted session and cannot
+be launched by the watchdog-profile host tool.
+
+The host supplies one immutable session at `0x41f00000`. Its complete digest,
+build identity, epoch, generation, lease and supervisor bind the version 3 boot
+contract to this image. The contract uses magic `0x415337334e504331`, a one-second
+startup deadline and a twenty-second session window. EL3 authenticates it and
+publishes a private digest receipt before cache adoption. The primary EL1
+copies and rechecks the session after the eight-core preparation barrier;
+it never reads the protected monitor contract. The exported
+`a733_npu_session_layout` gives the exact native session and provider offsets.
+
+NPU flags `0xf7` preserve quiescence, complete shared-SRAM ownership, IRQ masking,
+remote exclusion, I2C authority and memory confinement. Their new supervision
+bit replaces the watchdog-recovery bit. USB flags `0x17` likewise preserve
+USB ownership, mappings and remote exclusion while selecting supervision.
+The original `0x7f` and `0x0f` watchdog contracts remain unchanged. These records
+must identify independently established facts, including command confinement,
+pin ownership, actual PLL consumers and independent DRAM/PHY sources. Nonzero
+digests, reservation identities and observed idle bits do not establish them.
+
+The bootstrap first samples DCDC2 through the real PMIC task and rail ledger.
+An owned startup transition publishes even a partially acquired rail into its
+platform resource record. An unsuitable supply stops startup before PLL writes.
+The same bootstrap then polls the existing PLL controller through task-bound
+native register operations, the common counter and register mutex. Acquisition
+checks the selected oscillator/reference and PERI0 routes before any PLL write,
+reserves the actual shared parents and exclusive PLL/local NPU scopes, and
+retains the authenticated whole-platform reservation. The local startup later
+atomically converts PLL ownership to shared and adopts the replacement token;
+no release/reacquire gap exists. Existing rail settling, PCK, local reset,
+SRAM, backend, memory and command checks still precede service activation.
+
+A disabled or unlocked PLL is refused. The A733 User Manual V1.00,
+section 4.1.4.1, pages 25–27, warns that PLL enable/disable can disturb other PLLs
+and destabilize the system. It gives a separate enabled-PLL frequency-change
+sequence. The manual does not explicitly require pre-DRAM execution. The
+existing cold-enable implementation chooses pre-DRAM execution from owned
+non-NPU SRAM as its conservative contract for that electrical risk; a normal
+DRAM-resident application does not satisfy it. This integration preserves that
+restriction and does not infer that a running board can safely enable its PLL.
+
+Supervised admission leaves watchdog and reset redirects disabled. Every task,
+clock, rail, SRAM and memory reservation remains owned after success, timeout or
+failure, until the external supervisor confirms full board power removal.
+USB disappearance or cable reconnection alone does not prove power removal or
+release ownership. No automatic reset, cold provisioning or voltage writer is
+introduced.
+
+The focused supervised check executes the actual linked constructor, PMIC
+service and rail consumer, bootstrap, enabled-retune controller and startup
+adoption. Its architectural state, device responses and admission evidence are
+modeled. The changed cases cover authenticated-session refusal, real rail
+publication before PLL adoption, unsuitable supply refusal and unstable-parent
+retention. Existing controller, copied-client, numerical-reference and USB
+evidence remain in their original scope; this check does not run inference or
+establish physical readiness.
+
+The supervised host tools prepare an immutable bundle and capture the existing
+NPU result frame. Preparation requires a raw session and a separate admission
+record; it supplies no board authority by default:
+
+```sh
+python apps/npu-convolution/prepare-supervised.py \
+  --image ELF --manifest image-manifest.json --session RAW --admission JSON \
+  --output BUNDLE --clang CLANG --lld LLD --objcopy OBJCOPY
+python tools/check-a733-npu-supervised.py \
+  --bundle BUNDLE --fel FEL --evidence OUT --database DB --claim ID --owner OWNER \
+  --supervised-manual-reconnect
+```
+
+The queue requires `supervised-ram-recovery` and `npu-supervised-software`
+evidence. Despite the launch option's name, reconnecting a cable does not
+release resources; recovery requires confirmed full board power removal.
+The preparation module's `validate_bundle` function provides offline bundle
+validation. It currently has no separate validation command.
+
+The preserved supervised evidence is
+`~/.cache/sunstoneos/evidence/npu-supervised-20261017/`. The first root-configured
+native link passed. The focused execution passed after two fixture setup
+corrections, using that same ELF: a Python buffer conversion and the modeled
+interrupt mask before scheduler entry. Native source did not change. The
+successful case performed seven PLL writes and adopted the replacement clock
+token; wrong voltage and an unstable PERI0 parent performed no PLL writes.
+Both failures retained their acquired rail. The check stops at token adoption;
+full local startup, worker activation and physical inference remain unqualified.

@@ -7,6 +7,7 @@
 #define A733_NPU_APPLICATION_COMMAND UINT32_C(0x33)
 #define A733_NPU_APPLICATION_FRAME UINT64_C(0x415337334e505531)
 #define A733_NPU_APPLICATION_USB_REQUIRED UINT64_C(15)
+#define A733_NPU_APPLICATION_USB_SUPERVISED UINT64_C(23)
 
 /* Immutable input supplied by a separately qualified board admission. USB bits
  * 0..3 cover exclusive USB0/PHY/whole CCU words, Device mappings, remote-owner
@@ -27,6 +28,7 @@ struct a733_npu_application_boot {
     struct a733_pin_handoff pins;
 };
 extern const struct a733_npu_application_boot a733_npu_application_boot;
+const struct a733_npu_application_boot *a733_npu_application_boot_record(void);
 extern const unsigned char a733_npu_application_model[NPU_CONVOLUTION_MODEL_BYTES];
 extern const unsigned char a733_npu_application_input[NPU_CONVOLUTION_INPUT_BYTES];
 extern const unsigned char a733_npu_application_reference[NPU_CONVOLUTION_OUTPUT_BYTES];

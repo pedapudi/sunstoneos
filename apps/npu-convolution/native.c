@@ -3,8 +3,14 @@
 #include "platform.h"
 #include "result.h"
 #include "cached.h"
+#ifdef SUNSTONE_NPU_SUPERVISED
+#include "clock.h"
+#endif
 
 static struct {
+#ifdef SUNSTONE_NPU_SUPERVISED
+    struct npu_application_clock pll;
+#endif
     struct a733_counter_clock clock;
     struct a733_clock_leases registry;
     struct a733_platform_locks locks;
@@ -34,6 +40,14 @@ static struct {
 atomic_uint a733_npu_application_failed;
 static void pmic_task(void *);
 static void bootstrap(void *);
+const struct a733_npu_application_boot *a733_npu_application_boot_record(void)
+{
+#ifdef SUNSTONE_NPU_SUPERVISED
+    const struct npu_session *s=npu_session_get();return s ? &s->boot : NULL;
+#else
+    return &a733_npu_application_boot;
+#endif
+}
 
 void a733_npu_application_fail(unsigned reason)
 {
@@ -145,6 +159,17 @@ static void bootstrap(void *argument)
         uint64_t now;
         if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
            now>=app.handoff.allowed.deadline_us)break;
+        #ifdef SUNSTONE_NPU_SUPERVISED
+        if(!a733_npu_pll_ready(&app.pll.pll)) {
+            /* Observe the real retained DCDC2 supply before any PLL change. */
+            int rail=a733_npu_startup_supply_sample(&app.startup);
+            if(rail<0)break;
+            if(!rail){vTaskDelay(1);continue;}
+            enum a733_npu_pll_result pll=a733_npu_pll_poll(&app.pll.pll);
+            if(pll==A733_NPU_PLL_RETAINED)break;
+            if(pll!=A733_NPU_PLL_READY){vTaskDelay(1);continue;}
+        }
+#endif
         enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
         if(r==A733_NPU_PLATFORM_RETAINED)break;
         if(r==A733_NPU_PLATFORM_READY) {
@@ -171,7 +196,8 @@ struct npu_convolution *a733_npu_application_client(void)
 }
 int a733_npu_application_init(TaskHandle_t client)
 {
-    const struct a733_npu_application_boot *b=&a733_npu_application_boot;
+    const struct a733_npu_application_boot *b=a733_npu_application_boot_record();
+    if(!b)return 0;
     const struct a733_npu_application_profile *p=&b->profile;
     if(app.used || !client || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
        !a733_smp_device_preparation_admitted() || !a733_npu_application_observer_admit() ||
@@ -221,6 +247,10 @@ int a733_npu_application_init(TaskHandle_t client)
        !a733_npu_startup_init(&app.startup,&app.handoff,&app.resources,&app.registry) ||
        !a733_npu_startup_bind_pmic(&app.startup,&app.pmic,&app.pmic_lifetime) ||
        !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
+#ifdef SUNSTONE_NPU_SUPERVISED
+       !npu_application_clock_init(&app.pll,npu_session_get(),&app.registry,&app.locks,&app.clock,
+           app.bootstrap_task,deadline) || !a733_npu_startup_bind_pll(&app.startup,&app.pll.pll) ||
+#endif
        !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,2) ||
        !a733_smp_device_preparation_admitted())goto failed;
     return 1;

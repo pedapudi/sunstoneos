@@ -1,21 +1,32 @@
 #include "a733_npu_application.h"
 #include "boot.h"
 #include "result.h"
+#ifdef SUNSTONE_NPU_SUPERVISED
+#include "session.h"
+_Static_assert(A733_SMP_CONTRACT_MAGIC==NPU_CONTRACT_MAGIC,"supervised launcher contract");
+#define NPU_REQUIRED A733_NPU_HANDOFF_SUPERVISED_REQUIRED
+#define USB_REQUIRED A733_NPU_APPLICATION_USB_SUPERVISED
+#else
 _Static_assert(A733_SMP_CONTRACT_MAGIC==UINT64_C(0x415337334f424331),"compact launcher contract");
+#define NPU_REQUIRED A733_NPU_HANDOFF_REQUIRED
+#define USB_REQUIRED A733_NPU_APPLICATION_USB_REQUIRED
+#endif
 _Static_assert(sizeof(struct a733_smp_contract)==224,"compact contract extent");
 _Static_assert(sizeof(struct a733_npu_application_profile)==112,"host profile ABI");
 
 int a733_npu_application_observer_admit(void)
 {
-    const struct a733_npu_application_profile *p=&a733_npu_application_boot.profile;
+    const struct a733_npu_application_boot *boot=a733_npu_application_boot_record();
+    if(!boot)return 0;
+    const struct a733_npu_application_profile *p=&boot->profile;
     const struct a733_observe_identity *id=&a733_observe_identity;
     uint64_t now=a733_smp_counter();
     return id->epoch && id->generation && id->lease && id->armed_at<id->deadline &&
         now>=id->armed_at && now<id->deadline && p->epoch==id->epoch &&
         p->generation==id->generation && p->lease==id->lease && p->npu_evidence &&
         p->command_admission && p->usb_evidence && p->pmic_evidence && p->pin_evidence &&
-        p->npu_established==A733_NPU_HANDOFF_REQUIRED &&
-        p->usb_established==A733_NPU_APPLICATION_USB_REQUIRED;
+        p->npu_established==NPU_REQUIRED &&
+        p->usb_established==USB_REQUIRED;
 }
 static uint32_t le32(const uint8_t *p)
 {return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -36,7 +47,9 @@ int a733_npu_application_frame(uint8_t out[512],const struct a733_observe_identi
     const uint8_t challenge[32],const uint8_t build[32])
 {
     if(id!=&a733_observe_identity || !a733_npu_application_observer_admit())return 0;
-    const struct a733_npu_application_profile *p=&a733_npu_application_boot.profile;
+    const struct a733_npu_application_boot *boot=a733_npu_application_boot_record();
+    if(!boot)return 0;
+    const struct a733_npu_application_profile *p=&boot->profile;
     unsigned healthy=a733_npu_application_health();
     unsigned failed=atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire);
     if(!healthy && !failed)return 0;

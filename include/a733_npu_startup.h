@@ -14,6 +14,12 @@
 #define A733_NPU_HANDOFF_I2C         (1u<<5)
 #define A733_NPU_HANDOFF_MEMORY      (1u<<6)
 #define A733_NPU_HANDOFF_REQUIRED    UINT32_C(0x7f)
+#define A733_NPU_HANDOFF_SUPERVISED  (1u<<7)
+#define A733_NPU_HANDOFF_SUPERVISED_REQUIRED UINT32_C(0xf7)
+/* Exactly one recovery contract: independent watchdog, or an authenticated
+ * supervisor retaining every resource until confirmed full power removal. */
+static inline int a733_npu_handoff_established(uint32_t flags)
+{return flags==A733_NPU_HANDOFF_REQUIRED || flags==A733_NPU_HANDOFF_SUPERVISED_REQUIRED;}
 #define A733_NPU_RAIL_SETTLE_US UINT64_C(5160)
 /* One global GPU/PCK manager, shared with GPU clients and all legacy change
  * guards. Wrappers bind its operations to the common physical counter and
@@ -29,7 +35,7 @@ struct a733_npu_startup_resources {
 /* Copy private authenticated evidence before scheduling. Flags describe prior
  * independently established proof, including remote/secure firmware exclusion,
  * NPU/shared-SRAM quiescence, secure attribution, inherited I2C clocks/pins,
- * reserved backend/command/MMU memory and independent watchdog recovery.
+ * reserved backend/command/MMU memory and the selected recovery contract.
  * Neither flags nor numeric evidence IDs establish those physical facts.
  * Command admission remains an independent prerequisite. Startup authenticates
  * exactly the supplied backend/image/descriptor table, without parsing commands.
@@ -103,6 +109,11 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);
  * Isolated legacy I2C has its own bounded physical-counter timeout; startup
  * checks its absolute deadline before and after each transaction.
  * No PMIC data write, bus reset, automatic retry or resource release occurs. */
+/* Optional first supply observation before polling a bound PLL source. The
+ * designated bootstrap owns both objects. Publishes actual partial rail leases
+ * into this startup's acquisition record; callers never edit platform state.
+ * 1 sampled 800 mV, 0 pending/contention, -1 retained. No PLL/local MMIO. */
+int a733_npu_startup_supply_sample(struct a733_npu_startup *);
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *);
 int a733_npu_startup_ready(const struct a733_npu_startup *);
 /* npu_service_activation.prepared: read-only metadata/health observation,

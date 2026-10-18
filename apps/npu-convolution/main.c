@@ -3,6 +3,9 @@
 #include "boot.h"
 #include "cached.h"
 #include "result.h"
+#ifdef SUNSTONE_NPU_SUPERVISED
+#include "session.h"
+#endif
 
 static StaticTask_t client_state;
 static StackType_t client_stack[4096] __attribute__((aligned(16)));
@@ -73,6 +76,9 @@ void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 void a733_smp_diagnostic_start(void)
 {
     configASSERT(a733_smp_device_preparation_admitted());
+    #ifdef SUNSTONE_NPU_SUPERVISED
+    configASSERT(npu_session_copy());
+#endif
     configASSERT(a733_npu_application_observer_admit());
     TaskHandle_t task=xTaskCreateStaticAffinitySet(client,"npu-check",4096,NULL,2,
         client_stack,&client_state,2);

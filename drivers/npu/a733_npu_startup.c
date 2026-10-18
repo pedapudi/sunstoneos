@@ -146,7 +146,7 @@ static enum a733_npu_platform_result acquire(void *v,const struct a733_npu_platf
         !exact_config(c,&b->handoff.allowed) || !a733_npu_platform_scopes(c,&expected) || shared!=expected ||
         !same_clock(&out->clock,&b->clock_token) ||
         out->rail!=(b->pmic.self ? b->pmic.rail.id : b->rail_token.id) || out->pck!=b->pck_token.token ||
-        b->handoff.evidence!=c->handoff || b->handoff.established!=A733_NPU_HANDOFF_REQUIRED)return fault(b);
+        b->handoff.evidence!=c->handoff || !a733_npu_handoff_established(b->handoff.established))return fault(b);
     if(!timely(b,0) || !pll_integrity(b))return fault(b);
     enum a733_clock_result cr;
     if(b->stage==CLOCK && b->pll_source) {
@@ -282,7 +282,7 @@ int a733_npu_startup_init(struct a733_npu_startup *b,const struct a733_npu_hando
         registry->now!=a733_counter_clock_now || registry->context!=s->clock ||
         s->manager.ops.now!=resource_now || s->manager.context!=s ||
         h->controller!=0x03600000 || h->evidence!=h->allowed.handoff ||
-        h->established!=A733_NPU_HANDOFF_REQUIRED || h->pck_client>=A733_GPU_RESOURCE_CLIENTS ||
+        !a733_npu_handoff_established(h->established) || h->pck_client>=A733_GPU_RESOURCE_CLIENTS ||
         !a733_npu_platform_scopes(&h->allowed,&shared) || !valid_backend(h))return 0;
     b->handoff=*h;b->shared=s;b->registry=registry;
     b->operations=(struct a733_npu_platform_operations){acquire,enter,leave,now,read_reg,write_reg};
@@ -330,6 +330,20 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *b,TaskHandle_t task)
     if(!b || !b->initialized || b->failed || b->task || !task || !privileged() ||
         xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     b->task=task;return 1;
+}
+int a733_npu_startup_supply_sample(struct a733_npu_startup *b)
+{
+    if(!task_owner(b))return -1;
+    if(b->stage!=CLOCK || b->platform.stage || !b->pll_source || !pll_integrity(b) ||
+       b->register_held || b->i2c_held || b->clock_token.id || b->pck_token.token ||
+       b->pmic.self!=&b->pmic || b->pmic.config.provider!=b->shared->native.pmic ||
+       b->shared->native.pmic_manager!=&b->shared->manager || !timely(b,0)) {
+        fault(b);return -1;
+    }
+    int r=a733_pmic_consumer_sample(&b->pmic,b->handoff.allowed.deadline_us);
+    publish(b,&b->platform.resources);b->platform.observed=b->platform.resources;
+    if(r<0 || !timely(b,0)){fault(b);return -1;}
+    return r;
 }
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
 {
