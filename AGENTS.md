@@ -17,6 +17,26 @@ of application requirements. Project issues hold work scope and dependencies.
   attribution tags, or assistant co-author tags to project files or Git metadata.
 - Use the writing skill for all communication and documentation.
 
+## Scope and simplicity
+
+- Full board hardware coverage remains required independently of mimus. Distinguish
+  usable board functions from unconnected SoC interfaces and optional application
+  features. Record the physical evidence for that distinction.
+- Prefer a complete native device path over additional isolated components when
+  its dependencies are available. Keep missing accessories and recovery conditions
+  explicit; software models do not establish physical operation.
+- Add an abstraction only for a concrete current consumer, a shared-resource
+  conflict, or an identified correctness requirement. Explain what fails without
+  it. Prefer fixed board configuration and existing providers where sufficient.
+- Keep DMA ownership, cache coherence, shared power/clock coordination, bounded
+  failure handling and storage preservation. Consolidate duplicate mechanisms;
+  do not remove these requirements merely to reduce code size.
+- Keep evidence and status updates proportional to the change. Reuse the existing
+  snapshot tools and canonical records; do not add parallel reporting systems.
+- Implement useful operational modes incrementally while retaining all required
+  modes in the hardware inventory. Defer optional frameworks, native replacements
+  for adequate development tools, and performance tuning until their stated need.
+
 ## Validation
 
 Apply [docs/validation.md](docs/validation.md) in both this project and the mimus
