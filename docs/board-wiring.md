@@ -61,6 +61,21 @@ No additional permission command is needed while that rule remains installed.
 The first reset still needs its own reviewed diagnostic and physical result;
 these preparation steps do not qualify watchdog recovery.
 
+The user cannot fit the BOOT-to-GND connection, so this protected-reset procedure
+is unavailable on the current setup. Host-controlled USB power is being assessed
+as a separate recovery candidate. The board occupies root-hub port `3-1`, with
+USB3 peer `4-0:1.0/usb4-port1`. The host exposes a per-port `disable` attribute,
+but that alone does not prove that the circuit can remove power.
+
+The [Linux USB ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-bus-usb)
+limits power cutoff to supporting hubs. The [uhubctl guidance](https://github.com/mvp/uhubctl#faq)
+also requires checking actual VBUS cutoff because advertised switching can
+remove data connectivity while leaving power on. Hub capability inspection and
+physical cutoff remain unqualified. No port power command has been issued.
+Read-only observations are under
+`~/.cache/sunstoneos/evidence/recovery-power-20261017/`.
+
+
 ```sh
 python3 tools/check-fel-input.py \
   --fel "$HOME/.cache/sunstoneos/build/sunxi-a733/sunxi-fel" \

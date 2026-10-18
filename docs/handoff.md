@@ -212,9 +212,11 @@ recordings and model identities remain the reference.
    access. Reconnecting USB has restored FEL access and permissions. It does not
    prove autonomous recovery. The queued expiry procedure requires a verified
    reset destination; its current BOOT-pad protection has not been established.
-   No pin connection is needed for ongoing software work. Preserve the inserted
-   microSD and all other storage. Physical input, enable/disarm, expiry and
-   stalled-interconnect recovery remain unqualified.
+   The user cannot fit that connection. Read-only host inspection is assessing
+   per-port USB power as an alternative recovery candidate; capability and actual
+   power cutoff remain unqualified. No power command has been issued. Preserve
+   the inserted microSD and all other storage. Physical input, enable/disarm,
+   expiry and stalled-interconnect recovery remain unqualified.
 2. Qualify the integrated maintenance image after independent recovery passes.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
