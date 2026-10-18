@@ -104,7 +104,30 @@ def main():
     parser.add_argument('--image', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--boot-only', action='store_true')
+    parser.add_argument('--all-core-transition-only', action='store_true')
     args = parser.parse_args()
+    assert not (args.boot_only and args.all_core_transition_only)
+    if args.all_core_transition_only:
+        class Transition(model.Machine):
+            def memory(self, u, access, address, size, value, core):
+                from unicorn import UC_MEM_WRITE
+                if access == UC_MEM_WRITE and address in [r+0x10080 for r in self.rdist]:
+                    value &= 0xfff0ffff  # Unimplemented PPIs are RAZ/WI.
+                super().memory(u, access, address, size, value, core)
+
+        machine=Transition(args.image)
+        machine.regs[0].update(tcr_el3=0,ttbr0_el3=0,mair_el3=0)
+        machine.mmio.update({0x02050014:0,0x02050010:0,0x070501c0:0,0x070501d4:0})
+        build_id=machine.read(machine.symbols['a733_smp_build_id'],32)
+        data=struct.pack('<6Q',0x4153373353554333,3,224,5,7,model.MASK-7)+build_id
+        data+=struct.pack('<18Q',0,24000000,480000000,480000000,9,*([0]*7),1,0,1,2,3,4)
+        ctypes.memmove(machine.ram_pointer+0x1004000,data,len(data))
+        result=machine.run(transition=True)
+        args.output.write_text(json.dumps({'image_sha256':model.sha(args.image),'result':result,
+            'limits':'Modeled complete-image startup through all eight EL1 cache enables; no hardware or scheduler qualification.'},indent=2)+'\n')
+        assert result['EL3']==list(range(8)) and result['EL1']==list(range(8)),result['trace']
+        print('PASS complete supervised image reaches cached EL1 on all eight modeled cores')
+        return
     results = []
     if args.boot_only:
         class BootPublication(Publication):

@@ -115,7 +115,7 @@ class Machine:
         self.rdist=[0x03460000+c*0x20000 for c in range(8)]
         for c,r in enumerate(self.rdist):
             self.mmio[r+8]=(c<<40)|(16 if c==7 else 0)
-            for o in [0,0x14,0x10300,0x10080,0x10d00,0x10c04,0x10400,0x10100]:self.mmio[r+o]=0
+            for o in [0,0x14,0x24,0x10300,0x10080,0x10d00,0x10c04,0x10400,0x10100]:self.mmio[r+o]=0
             self.mmio[r+0x14]=6
             self.mmio[0x07050200+c*4]=2 if c else 0
             self.mmio[0x07050220+c*4]=0
@@ -291,6 +291,10 @@ class Machine:
                'a733_cached_el1_l1','a733_cached_el1_l2']
         pages=[self.symbols[n] for n in names]
         assert len(set(pages))==5 and all(0x421f0000<=a<0x42200000 and not a&4095 for a in pages)
+        table_pages=set(pages)
+        if 'a733_supervised_publish_l1' in self.symbols:
+            temporary=self.symbols['a733_supervised_publish_l1']
+            table_pages.update((temporary,temporary+4096))
         def walk(root,va):
             desc=self.q(root+((va>>30)&511)*8)
             for shift in (21,12):
@@ -299,7 +303,7 @@ class Machine:
             return desc
         for va in range(0x42000000,0x42200000,4096):
             d=walk(pages[0],va);assert d&3==3 and d&(1<<54) and d&(1<<10) and d&(1<<6)
-            assert (d>>2)&7==(2 if va in pages else 0)
+            assert (d>>2)&7==(2 if va in table_pages else 0)
             assert bool(d&(1<<5))==(va in pages[3:])
             assert walk(pages[3],va)==0
         for va in (0x40000000,0x41000000,0x41200000,0x41fff000,0x42200000,0x47fff000):
