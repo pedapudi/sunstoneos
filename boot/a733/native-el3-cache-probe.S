@@ -8,7 +8,14 @@
 native_el3_cache_probe:
     stp x19, x20, [sp, #-32]!
     stp x21, x30, [sp, #16]
+#ifdef SUNSTONE_SECONDARY_CACHE
+    mrs x2, mpidr_el1
+    ubfx x2, x2, #8, #3
+    ldr x19, =0x4201a000
+    add x19, x19, x2, lsl #8
+#else
     ldr x19, =0x42002a80
+#endif
     ldr x2, [x19]
     cbnz x2, .Lrefuse
     str x0, [x19, #8]
@@ -26,7 +33,7 @@ native_el3_cache_probe:
     str x2, [x19, #56]
     mrs x2, scr_el3
     str x2, [x19, #64]
-#ifdef SUNSTONE_PROBE_EL1_CACHE
+#if defined(SUNSTONE_PROBE_EL1_CACHE) && !defined(SUNSTONE_SECONDARY_CACHE)
     ldr x0, [x19, #8]
     mov x1, x20
     bl native_ns_publication

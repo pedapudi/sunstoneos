@@ -2,6 +2,9 @@
  * The linked a733_cpu_continue functions come from the frozen production ELF. */
 #include "secondary-local-probe.h"
 #include "a733_cpu_continue.h"
+#ifdef SUNSTONE_SECONDARY_CACHE
+extern int native_el3_cache_probe(uint64_t epoch,uint64_t deadline);
+#endif
 
 struct context { unsigned core;uintptr_t base;volatile struct secondary_local_record *report; };
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
@@ -131,7 +134,11 @@ int secondary_local_probe(unsigned core,uint64_t epoch,uint64_t deadline,
     if(state.state!=A733_CONTINUE_GIC_READY &&
        !(state.state==A733_CONTINUE_RETAINED && state.phase>=10 && state.phase<=26 &&
          state.writes_attempted>=4 && ticks()<deadline))return 0;
-    r->state=2;if(!cleanup(&c))return 0;
+    r->state=2;
+#ifdef SUNSTONE_SECONDARY_CACHE
+    if(state.state==A733_CONTINUE_GIC_READY && !native_el3_cache_probe(epoch,deadline))return 0;
+#endif
+    if(!cleanup(&c))return 0;
     barrier();r->state=state.state==A733_CONTINUE_GIC_READY?3:4;barrier();
     return state.state==A733_CONTINUE_GIC_READY?1:2;
 }

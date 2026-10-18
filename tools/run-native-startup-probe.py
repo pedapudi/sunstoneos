@@ -316,12 +316,13 @@ def claimed(a,expected):
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     primary = None
-    is_local = m.get('schema') == 'a733-secondary-local-probe-v1'
+    is_cached = m.get('schema') == 'a733-secondary-cache-probe-v1'
+    is_local = is_cached or m.get('schema') == 'a733-secondary-local-probe-v1'
     is_identity = is_local or m.get('schema') == 'a733-secondary-identity-probe-v1'
     is_primary = is_identity or m.get('schema') == 'a733-primary-publication-probe-v1'
     prepared=supervised.validate_bundle(a.bundle)
     if is_primary:
-        primary=module('returning_cpu_host',ROOT/'tools'/('secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
+        primary=module('returning_cpu_host',ROOT/'tools'/('secondary-cache-host.py' if is_cached else 'secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
         frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
         native=primary.probe.NATIVE;profile=primary.PROFILE
     else:
@@ -405,7 +406,8 @@ def run(a):
             error=None
             try:
                 if is_primary:
-                    record['result']=primary.probe.decode((a.evidence/'report.bin').read_bytes(),nonce)
+                    record['result']=primary.probe.decode((a.evidence/'report.bin').read_bytes(),nonce,
+                        *([m['hooks']['el1_smc_return']] if is_cached else []))
                     if is_identity:
                         contract=prepared['_frozen']['contract.bin']
                         require(record['result']['epoch']==struct.unpack_from('<Q',contract,24)[0],

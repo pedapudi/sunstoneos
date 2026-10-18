@@ -14,7 +14,14 @@ native_el1_cache_probe:
     stp x25, x26, [sp, #48]
     stp x27, x28, [sp, #64]
     stp x29, x30, [sp, #80]
+#ifdef SUNSTONE_SECONDARY_CACHE
+    mrs x2, mpidr_el1
+    ubfx x2, x2, #8, #3
+    ldr x19, =0x4201a800
+    add x19, x19, x2, lsl #8
+#else
     ldr x19, =0x42002b20
+#endif
     ldr x2, [x19]
     cbnz x2, .Lel1_park
     stp x0, x1, [x19, #8]
@@ -33,8 +40,15 @@ native_el1_cache_probe:
     mov x2, x1
     mov x3, x1
     mov x1, x0
+#ifdef SUNSTONE_SECONDARY_CACHE
+    mrs x0, mpidr_el1
+    ubfx x0, x0, #8, #3
+    ldr x4, =0x03460000
+    add x4, x4, x0, lsl #17
+#else
     mov x0, #1
     ldr x4, =0x03480000
+#endif
     dsb sy
     bl probe_production_enter_el1
     b .Lel1_park
@@ -78,9 +92,15 @@ el1_return_checkpoint:
     isb
     mrs x16, mpidr_el1
     ubfx x16, x16, #8, #3
+#ifdef SUNSTONE_SECONDARY_CACHE
+    cbz x16, .Lel1_park
+    ldr x19, =0x4201a800
+    add x19, x19, x16, lsl #8
+#else
     cmp x16, #1
     b.ne .Lel1_park
     ldr x19, =0x42002b20
+#endif
     stp x0, x1, [x19, #72]
     stp x2, x3, [x19, #88]
     stp x4, x5, [x19, #104]
@@ -119,22 +139,41 @@ el1_return_checkpoint:
     ldr x16, =0x200803019
     cmp x3, x16
     b.ne .Lel1_refuse
+#ifdef SUNSTONE_SECONDARY_CACHE
+    ldr x16, =probe_production_el1_root
+#else
     ldr x16, =0x421f2000
+#endif
     cmp x4, x16
     b.ne .Lel1_refuse
     ldr x16, =0x44ff00
     cmp x5, x16
     b.ne .Lel1_refuse
     cbnz x6, .Lel1_refuse
+#ifdef SUNSTONE_SECONDARY_CACHE
+    ldr x16, =probe_production_el1_stacks
+    add x17, x20, #1
+    add x16, x16, x17, lsl #15
+#else
     ldr x16, =0x41253000
+#endif
     cmp x7, x16
     b.ne .Lel1_refuse
+#ifdef SUNSTONE_SECONDARY_CACHE
+    cmp x8, x20
+#else
     cmp x8, #1
+#endif
     b.ne .Lel1_refuse
     ldr x16, =24000000
     cmp x9, x16
     b.ne .Lel1_refuse
+#ifdef SUNSTONE_SECONDARY_CACHE
+    ldr x16, =0x81000000
+    orr x16, x16, x20, lsl #8
+#else
     ldr x16, =0x81000100
+#endif
     cmp x10, x16
     b.ne .Lel1_refuse
     cbnz x11, .Lel1_refuse

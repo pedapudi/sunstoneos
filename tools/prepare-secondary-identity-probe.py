@@ -24,9 +24,18 @@ def branch(address,target):
     return 0x14000000|((displacement//4)&0x3ffffff)
 
 
+def cached_patch_points(native):
+    # Exact offsets in the NATIVE-pinned ELF; every displaced word is checked.
+    entry=native['a733_cached_enter_el1']+0x144
+    vector=native['a733_cached_el3_vectors']+8*128+4
+    return ((entry,0xd518cc9f,'el1_observe_checkpoint'),
+            (vector,branch(vector,native['a733_cached_el3_fault']),'el1_return_checkpoint'))
+
+
 def prepare(args):
-    local=getattr(args,"local",False)
-    report=(REPORT[0],0x1b00) if local else REPORT
+    cached=getattr(args,"cached",False)
+    local=getattr(args,"local",False) or cached
+    report=(REPORT[0],0x2f00 if cached else 0x1b00) if local else REPORT
     base=json.loads((args.primary/'manifest.json').read_text())
     frozen,reservations=primary.load(args.primary,args.image,base)
     with args.image.open('rb') as stream:
@@ -40,6 +49,8 @@ def prepare(args):
                'a733_cpu_secondary_entry','a733_cpu_secondary_continue','a733_cpu_index',
                'a733_smp_counter','a733_smp_power_address','memset','memcpy')
         if local:names+=('prepare_core','a733_cpu_continue_init','a733_cpu_continue_poll','a733_cached_el3_vectors')
+        if cached:names+=('a733_cached_allow_ns_code','a733_cpu_coherence_enable_el3','a733_cached_el3_l1',
+                          'a733_cached_enter_el1','a733_cached_el1_l1','a733_cpu_el1_stacks','a733_cached_el3_fault')
         native={n:address(n) for n in names}
     require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
@@ -61,12 +72,19 @@ SECTIONS {
     commands=[]
     units=[(source+'.'+suffix,'identity-'+suffix+'.o') for suffix in ('c','S')]
     if local:units += [('boot/a733/secondary-local-probe.c','local.o'),('boot/a733/secondary-distributor-probe.c','distributor.o')]
+    if cached:units += [('boot/a733/native-el3-cache-probe.S','el3-cache.o'),('boot/a733/native-el1-cache-probe.S','el1-cache.o')]
     for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
-            '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_SECONDARY_LOCAL=1'] if local else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
+            '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_SECONDARY_LOCAL=1'] if local else []),
+            *(['-DSUNSTONE_SECONDARY_CACHE=1','-DSUNSTONE_PROBE_EL1_CACHE=1'] if cached else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
+    if cached:
+        aliases={'allow_ns_code':'a733_cached_allow_ns_code','enable_el3':'a733_cpu_coherence_enable_el3',
+                 'el3_root':'a733_cached_el3_l1','enter_el1':'a733_cached_enter_el1',
+                 'el1_root':'a733_cached_el1_l1','el1_stacks':'a733_cpu_el1_stacks'}
+        symbols += [f'--defsym=probe_production_{a}={native[n]:#x}' for a,n in aliases.items()]
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
     commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
@@ -78,7 +96,7 @@ SECTIONS {
         require(result.returncode==0,'Identity extension build failed; inspect build.log.')
     with (args.output/'identity.elf').open('rb') as stream:
         hooks={s.name:s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
-               if s.name.startswith('identity_')}
+               if s.name.startswith('identity_') or (cached and s.name.startswith(('native_el','el1_')))}
     overlay=bytearray(frozen['overlay.bin'])
     offset=return_address-primary.probe.OVERLAY[0]
     word=struct.unpack_from('<I',overlay,offset)[0]
@@ -101,6 +119,13 @@ SECTIONS {
             require(word==0xd5384244,'Secondary continuation entry differs from reviewed MRS x4,CurrentEL.')
             replacement=branch(target,hooks['identity_target']);struct.pack_into('<I',data,offset,replacement)
             patches.append({'address':target,'original':word,'replacement':replacement,'space':'native'});patched+=1
+        if cached:
+            for address,original,hook in cached_patch_points(native):
+                if start<=address<start+len(data):
+                    offset=address-start
+                    require(struct.unpack_from('<I',data,offset)[0]==original,'Cached-entry patch differs.')
+                    replacement=branch(address,hooks[hook]);struct.pack_into('<I',data,offset,replacement)
+                    patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
         path=args.output/item['name'];path.write_bytes(data)
         payloads.append(dict(item,sha256=digest(path)))
     require(patched==1,'Secondary patch did not match exactly one segment.')
@@ -108,7 +133,8 @@ SECTIONS {
            'platform/a733-smp-cached/boot.h','tools/prepare-secondary-identity-probe.py')
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
-    manifest={'schema':'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
+    if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
+    manifest={'schema':'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
@@ -116,7 +142,7 @@ SECTIONS {
         'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('Prepared sequential '+('local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
+    print('Prepared sequential '+('cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
 
 if __name__=='__main__':
@@ -124,4 +150,5 @@ if __name__=='__main__':
     for name in ('image','primary','output','clang','lld','objcopy'):
         parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument("--local",action="store_true",help="Include actual CPU preparation and local GIC setup/restoration")
+    parser.add_argument("--cached",action="store_true",help="Include production cached EL1 entry and restored SMC return")
     prepare(parser.parse_args())

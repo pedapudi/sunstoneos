@@ -22,11 +22,12 @@ FIELDS = ('epoch','core','midr','mpidr','sctlr3','sctlr1','tcr1','clusteridr','c
           'off','restored','owner_state','report_state')
 
 
-def decode(raw, nonce, local=False):
-    require(len(raw) == (0x1c00 if local else 0xa00), 'Short combined CPU report.')
+def decode(raw, nonce, local=False, cached=False):
+    local = local or cached
+    require(len(raw) == (0x3000 if cached else 0x1c00 if local else 0xa00), 'Short combined CPU report.')
     result = primary.probe.decode(raw[:256], nonce)
     header = struct.unpack_from('<32Q', raw, 256)
-    require(header[:3] == ((0x4137334c4f434131,1,0x1b00) if local else (0x4137334944454e31,1,0x900)) and header[3] and header[4] and
+    require(header[:3] == ((0x4137334341434831,1,0x2f00) if cached else (0x4137334c4f434131,1,0x1b00) if local else (0x4137334944454e31,1,0x900)) and header[3] and header[4] and
             header[5:8] == ((0xfe,2,7) if local else (0xfc,2,7)) and not any(header[8:]), 'Incomplete secondary survey.')
     require(header[4] > result['counter_after'], 'Survey deadline preceded primary preparation.')
     require(not any(raw[512:768 if local else 1024]), 'Untested CPU slots changed.')
@@ -57,9 +58,10 @@ def initial_report(nonce):
     return primary.initial_report(nonce)+bytes(0x900)
 
 
-def load(build, image, manifest, local=False):
-    report=(builder.REPORT[0],0x1b00) if local else builder.REPORT
-    require(manifest.get('schema') == ('a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
+def load(build, image, manifest, local=False, cached=False):
+    local = local or cached
+    report=(builder.REPORT[0],0x2f00 if cached else 0x1b00) if local else builder.REPORT
+    require(manifest.get('schema') == ('a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
             'Wrong secondary identity profile.')
     names = ('boot/a733/secondary-identity-probe.c','boot/a733/secondary-identity-probe.S',
@@ -67,6 +69,7 @@ def load(build, image, manifest, local=False):
              'platform/a733-smp-cached/boot.h','tools/prepare-secondary-identity-probe.py')
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
+    if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
     require(manifest['sources'] == {n:digest(ROOT/n) for n in names}, 'Identity source changed.')
     base_path = Path(manifest['primary_manifest']['path'])
     require(base_path.is_absolute() and digest(base_path) == manifest['primary_manifest']['sha256'],
@@ -80,7 +83,7 @@ def load(build, image, manifest, local=False):
             'Report overlaps existing storage.')
     with (build/'identity.elf').open('rb') as stream:
         hooks = {s.name:s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
-                 if s.name.startswith('identity_')}
+                 if s.name.startswith('identity_') or (cached and s.name.startswith(('native_el','el1_')))}
     require(hooks == manifest['hooks'], 'Identity hooks differ.')
     with image.open('rb') as stream:
         symbols = list(ELFFile(stream).get_section_by_name('.symtab').iter_symbols())
@@ -114,10 +117,18 @@ def load(build, image, manifest, local=False):
             replacement = builder.branch(target,hooks['identity_target'])
             patches.append({'address':target,'original':0xd5384244,'replacement':replacement,'space':'native'})
             struct.pack_into('<I',data,offset,replacement)
+        if cached:
+            for address,original,hook in builder.cached_patch_points(manifest['native_symbols']):
+                if item['address'] <= address < item['address']+len(data):
+                    offset = address-item['address']
+                    require(struct.unpack_from('<I',data,offset)[0] == original, 'Cached-entry displaced word differs.')
+                    replacement = builder.branch(address,hooks[hook])
+                    patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
+                    struct.pack_into('<I',data,offset,replacement)
         require(bytes(data) == (build/item['name']).read_bytes(), 'Native payload has an unreviewed change.')
         frozen[item['name']] = bytes(data)
         payloads.append(dict(item,sha256=hashlib.sha256(data).hexdigest()))
-    require(len(patches) == 2 and manifest['patches'] == patches and manifest['payloads'] == payloads,
+    require(len(patches) == (4 if cached else 2) and manifest['patches'] == patches and manifest['payloads'] == payloads,
             'Patch or payload inventory differs.')
     return frozen, dram+[('identity-report',*report)]
 

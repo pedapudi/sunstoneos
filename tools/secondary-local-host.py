@@ -13,8 +13,8 @@ HOST_SOURCES=identity.HOST_SOURCES+('tools/secondary-local-host.py',)
 MODEL_SOURCES=('checks/secondary-local-probe.py',)+identity.MODEL_SOURCES
 
 
-def decode(raw,nonce):
-    result=identity.decode(raw,nonce,local=True)
+def decode(raw,nonce,cached=False):
+    result=identity.decode(raw,nonce,local=True,cached=cached)
     require(not any(raw[0xa00:0xc00]),'Boot CPU local slot changed.')
     cores=[]
     for core in range(1,8):
@@ -37,7 +37,7 @@ def decode(raw,nonce):
     saved=struct.unpack_from('<32I',raw,0x1a28);restored=struct.unpack_from('<32I',raw,0x1aa8)
     require(state==4 and before==after and before&0x70==0x30 and not before&(1<<31) and
             1<=banks<=32 and deadline==result['startup_deadline'] and saved==restored and
-            not saved[0] and not any(saved[banks:]) and not any(raw[0x1b28:]),
+            not saved[0] and not any(saved[banks:]) and not any(raw[0x1b28:0x1c00]),
             'Distributor restoration incomplete.')
     result.update(local_initialization_completed=all(c['initialized'] for c in cores),
                   local_results=cores,distributor_restored=True)
