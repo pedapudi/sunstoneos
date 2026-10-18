@@ -114,12 +114,13 @@ checks converter disable independently of publication; resources remain retained
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
-queues. The original board on port `3-1` was physically recovered and now has
-instance `003:103` after successful Nonsecure publication, production cached EL1
-entry, SMC return and exact control restoration. Matching shutdown/OFF and DRAM
-restoration passed. The process exited and its successful queue claim closed.
-DDR continuity began with initialization and all-secondary-OFF checks on `003:092`.
-The new instance still needs a fresh launcher survey before another native run.
+queues. The original board on port `3-1` requires recovery after the subsequent
+full eight-core attempt on `003:103`: USB disappeared and no native observer
+result arrived. Its process, port lock and queue claim remain retained. Earlier
+core1 Nonsecure publication, cached EL1 entry, SMC return, exact restoration and
+matching shutdown/OFF passed; those narrower results remain valid. That DDR
+lifetime began with initialization and all-secondary-OFF checks on `003:092`.
+Do not communicate with or reuse the original board before explicit recovery.
 The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -717,3 +718,11 @@ software fixture bundle is never a deployable admission record.
    startup, live latency, concurrency, recovery and resource use. Finish
    reproducible boot/update artifacts and physical qualification of all required
    functions. The full accepted goal remains incomplete.
+
+The independent board-application worker is preparing a boot-CPU-only USB/radio
+image in `sunstoneos-worktrees/board-single-core`, from `3eca977`. It owns the new
+target and additive shared single-core startup branches; it has no board access.
+The existing USB-only and USB-plus-radio features must remain intact. It is also
+correcting a source-proven prepared-session identity mismatch, with targeted
+validation and preserved historical artifacts. This work is not a diagnosis of
+the full multicore attempt.
