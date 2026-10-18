@@ -119,6 +119,11 @@ access retains ownership and, when held, the common register mutex. If registry
 retention is busy, later calls retry only metadata. No failed operation publishes
 a partial sample or successful initialization. Terminal calls perform no MMIO.
 
+Clock-token validation runs again after acquiring the common register mutex,
+because ownership can fail while a task waits. A failed token prevents controller
+access and retains the mutex. Transient registry contention releases the mutex
+without accessing the controller and permits another attempt within the deadline.
+
 Successful initialization keeps all leases and clocks live. The driver provides
 no release or power-down API. Sleep, interrupt lifecycle integration, thermal
 policy and physical accuracy qualification remain outstanding.
@@ -151,3 +156,10 @@ contain 8,748 bytes of text/read-only data and no static writable data. The larg
 direct stack frame is 240 bytes in initialization; nested calls and callbacks
 have additional stack requirements. Exact inputs, commands, logs and artifacts
 are under `~/.cache/sunstoneos/evidence/thermal-20261016/batch1/`.
+
+The separate `checks/a733-thermal-lease-wait.c` check covers token failure and
+transient registry contention during mutex acquisition, for both startup and
+sampling. All four cases pass with sanitizers; the changed core compiles for
+AArch64. Inputs and results are under
+`~/.cache/sunstoneos/evidence/thermal-lease-wait-20261017/`. The earlier conversion
+and controller workloads were not repeated.

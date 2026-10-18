@@ -170,6 +170,14 @@ static enum a733_thermal_result lock(struct a733_thermal *p)
     if (entered!=0) p->held=1;
     if (entered!=1) return entered==0 && timely(p) ? finish(p,A733_THERMAL_BUSY) : fault(p);
     if (!timely(p)) return fault(p);
+    /* Waiting for the shared mutex can outlive the token's validity. Recheck
+     * before any controller access; registry contention has made no changes. */
+    r=a733_clock_token_status(p->registry,&p->token);
+    if (r==A733_CLOCK_BUSY) {
+        p->ops.leave(p->cookie);p->held=0;
+        return timely(p) ? finish(p,A733_THERMAL_BUSY) : fault(p);
+    }
+    if (r!=A733_CLOCK_OK || !timely(p)) return fault(p);
     return A733_THERMAL_READY; /* Internal: caller still holds both locks. */
 }
 static int unlock(struct a733_thermal *p)
