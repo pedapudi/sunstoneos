@@ -204,3 +204,46 @@ the user then removed power and reconnected. Evidence is under
 `supervised-reconnect-20261017-072/`. SCR omission does not establish a fix for
 the observed startup failure. The next diagnostic must locate the failing stage
 without repeating the full launch unchanged.
+
+## Returning A64 entry capture
+
+The SCR-free full image also failed to expose a native service. SCR access was
+a plausible early trap, not a confirmed explanation. The next diagnostic is
+`boot/a733/a64-entry-probe.S`, a separate stackless entry capture that stops before
+coherence setup, GIC changes or secondary startup. It uses the pinned FEL
+`reset64` implementation and the previously exercised A64 probe's exact return:
+RVBAR `0x20`, high word zero, then `RMR_EL3 = 2`. It installs EL3 exception
+vectors early and captures synchronous fault registers before the same return.
+It does not introduce a watchdog or another reset destination.
+
+The probe records initial `CurrentEL`, MIDR, MPIDR, CNTFRQ, CNTPCT, RVBAR,
+SCTLR_EL3, SCTLR_EL1, SCR_EL3 and the unused reset SP. SCR is read only after
+`CurrentEL == 12` is established. It reports the stack, monitor BSS, page-table
+and EL1 BSS addresses checked against the unchanged native ELF. Those addresses
+are layout metadata; reporting them does not test every referenced memory page.
+The probe writes only its 256-byte result and the established return controls.
+
+A completed returning A32 survey supplies the pre-transition counter sample.
+Its exact session JSON is reviewed as an input and must match the current USB
+identity and physical port. The post-transition sample includes host preparation
+and upload time; their difference is not a measurement of pure RMR latency.
+Inherited SCTLR_EL1 bits are reported separately from required EL3 invariants.
+The working single-core monitor initializes that inactive bank explicitly; a
+set bit alone does not establish an unsafe active EL1 regime.
+
+`tools/run-a64-entry-probe.py prepare` requires the preserved observer ELF and
+explicit build/tool paths. Run the single `checks/a64-entry-probe.py` instruction
+case, then submit the exact manifest, binary, software result and prior A32
+survey session for review. Physical execution requires the queue prerequisites
+`supervised-ram-recovery` and `a64-entry-probe-software`, plus a recovery record
+bound to the same live instance. The host waits only on passive enumeration
+until a new FEL instance appears, verifies it, copies the report, and restores
+the overwritten DRAM code/result bytes. Any transport error or missing return
+stops requests and retains ownership; there is no full-image retry.
+
+The known secure-timer recovery covers the demonstrated EL1 stall. It does not
+protect EL3 code with exceptions masked, cache/coherence changes, a stopped
+interconnect or all-core startup. Normal and captured-exception return follow
+the prior physical mechanism; an arbitrary hardware stall still needs manual
+recovery. Further staging must retain early observation and return checkpoints
+before attempting those changes.
