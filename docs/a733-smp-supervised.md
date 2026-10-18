@@ -265,16 +265,17 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning core-1 activation and target-owned power-off checkpoint
+## Returning core-1 RELEASE and redistributor checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty-eight verified
-instruction replacements redirect the C boot entry, walk blocking, the first GIC write,
-mailbox admission, secondary wait, release and secondary hardware writes,
-the first requested control write, both planning failure parks, the terminal stop,
-the initial park and sixteen EL3 exception slots. The C entry
+The native code, data, BSS and stack addresses remain unchanged. Thirty-one verified
+instruction replacements redirect C entry, walk blocking, the first GIC write,
+mailbox admission, secondary wait, RELEASE, continuation writes, GIC_READY and the
+next-core loop. They also redirect secondary hardware writes, requested control
+writes, both planning failure parks, terminal stop, initial park and sixteen EL3
+exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
 The original stack selection, BSS clearing, boot-state validation and admission
 checks execute. Cache preparation then checks core identity and deadlines and
@@ -362,7 +363,8 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 11 records the completed activation/shutdown endpoint. Checkpoint 9
+Checkpoint 12 records native GIC_READY and verified redistributor shutdown.
+Checkpoint 11 records a clean pre-RELEASE refusal followed by verified shutdown. Checkpoint 9
 captures a prohibited secondary hardware-write address and
 32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
 refuses pre-arm admission before command publication or SEV. Checkpoint
@@ -413,7 +415,7 @@ stale dirty cache aliases. Cleaning does not independently establish that condit
 A stalled maintenance instruction or barrier still needs retained ownership and
 manual recovery; a counter check cannot interrupt it.
 
-The overlay occupies `0x41020000..0x41021000`. Its nonce-bound 256-byte report at
+The overlay occupies `0x41020000..0x41022000`. Its nonce-bound 256-byte report at
 `0x42002000` is outside the native result structure. It records C entry, stack
 addresses, terminal checkpoint, architectural state and counter, native refusal
 arguments, or exception slot and fault registers. Initial-state differences and
@@ -540,7 +542,7 @@ All 47 transactions, EL1/GIC restoration and DRAM restoration passed, returning
 as USB `003:082`. Evidence is under
 `~/.cache/sunstoneos/evidence/startup-stage-20261017-081/native/runtime/`.
 
-The activation diagnostic stops at native `release`, before any RELEASE command
+The earlier activation diagnostic stopped at native `release`, before any RELEASE command
 or secondary continuation. Native power-on must finish, native ARRIVED validation
 must pass, all seven permitted callbacks must have run, and live PPU status
 must be ON with clear requests. The primary then publishes a separate shutdown
@@ -585,4 +587,73 @@ completed shutdown/restoration, missing ARRIVED, acknowledgment without OFF, a n
 post-activation exception, and a control-restoration read fault. Retained outcomes
 must contain no configuration/distributor restoration or ROM return. Artifacts are
 under `~/.cache/sunstoneos/evidence/native-secondary-off-probe-20261017/`.
-Physical secondary activation and target-owned OFF remain unqualified.
+Secondary activation, validated ARRIVED and target-owned OFF physically passed once.
+Checkpoint 11 recorded activation state 5 with matching epoch/request/acknowledgment.
+The target reported EL3, MIDR `0x412fd050`, MPIDR `0x81000100` and SCTLR_EL3
+`0xc50838`. PWRCTLR changed from 0 to 1; observed PPU status was OFF `0x100`.
+Native power reached POWERED, step 18, with seven attempts and prior ON `0x108`;
+the entry owner remained at phase 4 with ARRIVED and an ARMED command.
+Original zero control/mode/configuration values, GIC and EL1 state all restored.
+All 48 transactions, DRAM restoration and ROM service passed, returning as
+USB `003:083`. Evidence is under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-082/native/runtime/`.
+
+The RELEASE extension snapshots the redistributor before publishing RELEASE.
+A complete eight-frame TYPER affinity scan resolves core 1; frame order is
+observed rather than calculated from its core number. Admission requires
+EnableLPIs and RWP clear, WAKER.ProcessorSleep and ChildrenAsleep set, and zero
+pending/active SGI/PPI bits. All private interrupt sources must remain quiescent
+under exclusive ownership; readback alone cannot establish that condition.
+Native continuation disables its three architectural timers. No external private
+source or remote SGI writer is admitted. An ineligible snapshot records its
+reason and uses the physically proven unreleased-target OFF sequence without
+RELEASE or a redistributor write.
+
+On admission, the original RELEASE callback executes. The target selects its
+native stack, runs prepare_core and block_walks, and completes native GIC_READY.
+A guard admits only the ten exact native continuation writes and rejects a
+nonzero pending/active word before its corresponding clear. The shared planning,
+block-walk and exception hooks dispatch by actual core; target bank snapshots and
+failures cannot overwrite the primary report or execute its cleanup/ROM return.
+The target checkpoint at `0x41004eb8` follows its real cached-record state 2
+publication. The primary stops after core 1 is DISPATCHED and waits for that
+record; it never initializes core 2 or changes the real all-eight-core barrier.
+Native cache enable, SCR changes and later ICC setup remain beyond the checkpoint.
+
+Before target-owned OFF, the target restores its redistributor while still ON.
+Shutdown enables only target-local ICC_SRE_EL3.SRE/DIB/DFB as needed and disables
+Group 0 and both Group 1 enables, with readbacks, ISB and DSB. This shutdown-only
+step does not change SCR, EL2 or lower-level SRE. It disables SGI/PPI enables,
+waits for RWP, and requires pending/active zero. While disabled, it restores and
+verifies the original group, modifier, configuration and priority words, then
+restores and verifies the original enable word. It again requires zero events,
+restores the originally asleep WAKER state and waits for ChildrenAsleep.
+Only verified asleep restoration permits the established target-owned OFF sequence.
+The primary requires that evidence, the matching final acknowledgment and actual
+PPU OFF before restoring hotplug/configuration/shared distributor state.
+
+This sequence follows pinned TF-A
+[gicv3_cpuif_disable](https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_main.c)
+and its redistributor sleep helper. Restoration before OFF avoids assuming that
+redistributor registers remain accessible after CPU power-down. Pending or active
+interrupts are never reconstructed after being discarded. A fault, unknown state,
+regressing counter or timeout retains the target and primary memory reservations.
+
+A 512-byte redistributor record at `0x42002500` holds its admission state, reason,
+resolved frame, original and restored affected words, target stack/bank snapshots,
+shutdown CPU-interface values and faults. State 1 admits RELEASE; state 2 admits
+native writes; state 3 records GIC_READY; state 4 guards cleanup; state 5 means
+restored/asleep; state 6 records target failure. A separate 136-byte copy of the
+native continuation state occupies offsets 256 through 391, followed by eight
+TYPER values and fault evidence. The host copies this record before DRAM restoration.
+The two-page overlay reservation remains disjoint from original native memory;
+the existing result-arena backup contains the new record.
+
+One affected build and five focused instruction cases pass. The preflight mapping
+audits every consumed native field and patched instruction
+against the frozen ELF's DWARF and instruction bytes. Five focused cases cover
+native RELEASE/GIC_READY/restoration/OFF, awake-redistributor refusal, pending-event
+refusal, target restoration fault and ChildrenAsleep timeout. Artifacts and the
+compact mapping are under
+`~/.cache/sunstoneos/evidence/native-secondary-gic-ready-probe-20261018/`.
+Physical RELEASE, GIC_READY and redistributor restoration remain unqualified.

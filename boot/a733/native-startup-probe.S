@@ -4,6 +4,7 @@
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
 .global write_checkpoint, failed_checkpoint
 .global block_checkpoint, gic_begin, prearm_checkpoint, release_checkpoint, secondary_checkpoint
+.global next_checkpoint, ready_checkpoint, continue_write_checkpoint
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -168,6 +169,121 @@ release_checkpoint:
     ldr w11, [x13, #32]
     orr w17, w10, w11
     tbnz w17, #0, park
+    ldr x12, =0x42002500
+    ldr x13, =0x03460000
+    dsb sy
+    mov x8, #0
+    mov x9, #0
+    mov x14, #0
+rdist_scan:
+    ldr x10, [x13, #8]
+    add x17, x12, #392
+    str x10, [x17, x8, lsl #3]
+    tbnz x10, #1, rdist_scan_refused
+    lsr x11, x10, #32
+    ldr x17, =0x700
+    bic x17, x11, x17
+    cbnz x17, rdist_scan_refused
+    lsr x11, x11, #8
+    mov x17, #1
+    lsl x17, x17, x11
+    tst x9, x17
+    b.ne rdist_scan_refused
+    orr x9, x9, x17
+    cmp x11, #1
+    csel x14, x13, x14, eq
+    ubfx x11, x10, #4, #1
+    cmp x8, #7
+    cset x17, eq
+    cmp x11, x17
+    b.ne rdist_scan_refused
+    add x8, x8, #1
+    add x13, x13, #0x20, lsl #12
+    cmp x8, #8
+    b.ne rdist_scan
+    cmp x9, #255
+    b.ne rdist_scan_refused
+    cbz x14, rdist_scan_refused
+    str x14, [x12, #16]
+    ldr w17, [x14]
+    str x17, [x12, #24]
+    tbnz w17, #0, rdist_ctlr_refused // EnableLPIs must be clear.
+    tbnz w17, #3, rdist_ctlr_refused // RWP must be clear.
+    ldr w17, [x14, #20]
+    str x17, [x12, #32]
+    and w17, w17, #6
+    cmp w17, #6              // Restore only an initially asleep redistributor.
+    b.ne rdist_waker_refused
+    add x14, x14, #0x10, lsl #12
+    ldr w17, [x14, #0x100]
+    str x17, [x12, #40]
+    ldr w17, [x14, #0x200]
+    str x17, [x12, #48]
+    cbnz w17, rdist_events_refused
+    ldr w17, [x14, #0x300]
+    str x17, [x12, #56]
+    cbnz w17, rdist_events_refused
+    ldr w17, [x14, #0x80]
+    str x17, [x12, #64]
+    ldr w17, [x14, #0xd00]
+    str x17, [x12, #72]
+    ldr w17, [x14, #0xc04]
+    str x17, [x12, #80]
+    ldr w17, [x14, #0x400]
+    str x17, [x12, #88]
+    dsb sy
+    mov x17, #1
+    str x17, [x12]
+    sub w8, w1, #1           // Displaced native release instruction.
+    ldr x17, =0x410036f0
+    br x17
+rdist_scan_refused:
+    mov x17, #1
+    b rdist_refused
+rdist_ctlr_refused:
+    mov x17, #2
+    b rdist_refused
+rdist_waker_refused:
+    mov x17, #3
+    b rdist_refused
+rdist_events_refused:
+    mov x17, #4
+rdist_refused:
+    str x17, [x12, #8]       // State remains zero: no RELEASE or GICR mutation.
+    b activation_request
+next_checkpoint:
+    cmp w23, #1
+    b.ne park               // Never initialize/activate core2.
+    ldr x12, =0x42002500
+    ldr x13, =0x4200e100
+    ldr x15, =0x4200e008
+    ldr x15, [x15]
+    isb
+    mrs x14, cntpct_el0
+ready_wait:
+    isb
+    mrs x17, cntpct_el0
+    cmp x17, x14
+    b.lo park
+    cmp x17, x15
+    b.hs park
+    mov x14, x17
+    dsb sy
+    ldr x17, [x12]
+    cmp x17, #6
+    b.eq park
+    cmp x17, #3
+    b.ne ready_wait
+    ldr x17, [x13, #16]
+    cmp x17, #2
+    b.ne park
+    ldr x14, =0x42002400
+    ldr x2, [x14, #8]
+    ldr x17, [x13]
+    cmp x17, x2
+    b.ne park
+activation_request:
+    ldr x12, =0x42002400
     isb
     mrs x14, cntpct_el0
     ldr x17, =2400000
@@ -197,12 +313,30 @@ activation_wait_off:
     str x17, [x12, #56]
     tst w17, #15
     b.ne activation_wait_off
-    mov x17, #3
-    str x17, [x12]
-    ldr x16, =0x42002000
+    ldr x13, =0x42002500
+    ldr x17, [x13]
+    cbz x17, rdist_return_refusal
+    cmp x17, #5
+    b.ne park
+    mov x17, #12
+    b rdist_return
+rdist_return_refusal:
     mov x17, #11
+rdist_return:
+    mov x13, #3
+    str x13, [x12]
+    ldr x16, =0x42002000
     b publish
 secondary_checkpoint:
+    ldr x12, =0x42002500
+    ldr x17, [x12]
+    cmp x17, #1
+    b.ne secondary_unreleased
+secondary_native_wait:
+    wfe                     // Displaced wait; native code observes RELEASE.
+    ldr x17, =0x410020d0
+    br x17
+secondary_unreleased:
     cmp x20, #1
     b.ne park
     mrs x0, CurrentEL
@@ -223,12 +357,28 @@ secondary_checkpoint:
     mrs x0, mpidr_el1
     str x0, [x12, #160]
 secondary_wait_request:
+    ldr x12, =0x42002500
+    dsb sy
+    ldr x17, [x12]
+    cmp x17, #1
+    b.eq secondary_native_validate
     ldr x17, =0x41002164
     blr x17                  // Original validator; preserves x20/x21/x24/x25.
     cbnz x0, park
     ldr x0, [x21, #24]
     cmp x0, #1
+    b.eq secondary_private_armed
+    cmp x0, #2
     b.ne park
+    ldr x12, =0x42002500
+    dsb sy
+    ldr x17, [x12]
+    cmp x17, #1
+    b.ne park
+secondary_native_validate:
+    ldr x17, =0x410020d0
+    br x17                  // Native validator observes the actual RELEASE.
+secondary_private_armed:
     ldr x12, =0x42002400
     ldr x0, [x12, #8]
     cmp x0, x25
@@ -237,6 +387,7 @@ secondary_wait_request:
     ldr x0, [x12, #16]
     cmp x0, x25
     b.ne secondary_wait_request
+secondary_power_off:
     mrs x0, S3_0_C15_C2_7
     str x0, [x12, #72]
     tbnz x0, #0, park
@@ -265,6 +416,332 @@ secondary_terminal:
     dsb sy
     wfi
     b secondary_terminal
+continue_write_checkpoint:
+    ldr w8, [x0, #100]
+    cmp w8, #1
+    b.ne target_failed
+    ldr x12, =0x42002500
+    ldr x17, [x12]
+    cmp x17, #1
+    b.eq continue_write_admitted
+    cmp x17, #2
+    b.ne target_failed
+continue_write_admitted:
+    ldr x13, [x12, #16]
+    ldr x17, [x0, #72]
+    cmp x13, x17
+    b.ne target_failed
+    ldr x8, [x12, #248]
+    cmp x8, #10
+    b.hs target_failed
+    adr x17, continue_phases
+    ldr w10, [x17, x8, lsl #2]
+    ldr w9, [x0, #108]
+    cmp w9, w10
+    b.ne target_failed
+    cbz x8, continue_control
+    cmp x8, #1
+    b.eq continue_waker
+    add x13, x13, #0x10, lsl #12
+    cmp x8, #2
+    b.eq continue_disable
+    cmp x8, #3
+    b.eq continue_pending
+    cmp x8, #4
+    b.eq continue_active
+    cmp x8, #5
+    b.eq continue_group
+    cmp x8, #6
+    b.eq continue_modifier
+    cmp x8, #7
+    b.eq continue_config
+    cmp x8, #8
+    b.eq continue_priority
+    add x13, x13, #0x100
+    mov w10, #1
+    b continue_match
+continue_control:
+    ldr x13, =0x07050204
+    ldr x17, =0x42002400
+    ldr w10, [x17, #40]
+    bic w10, w10, #2
+    b continue_match
+continue_waker:
+    add x13, x13, #20
+    ldr w10, [x12, #32]
+    bic w10, w10, #2
+    b continue_match
+continue_disable:
+    add x13, x13, #0x180
+    b continue_all
+continue_pending:
+    ldr w17, [x13, #0x200]
+    cbnz w17, target_failed
+    add x13, x13, #0x280
+    b continue_all
+continue_active:
+    ldr w17, [x13, #0x300]
+    cbnz w17, target_failed
+    add x13, x13, #0x380
+    b continue_all
+continue_group:
+    add x13, x13, #0x80
+continue_all:
+    mov w10, #-1
+    b continue_match
+continue_modifier:
+    add x13, x13, #0xd00
+    mov w10, #0
+    b continue_match
+continue_config:
+    add x13, x13, #0xc04
+    ldr w10, [x12, #80]
+    ldr w17, =0xd7ffffff
+    and w10, w10, w17
+    b continue_match
+continue_priority:
+    add x13, x13, #0x400
+    ldr w10, [x12, #88]
+    and w10, w10, #0xffffff00
+    orr w10, w10, #0xf0
+continue_match:
+    cmp x1, x13
+    b.ne target_failed
+    cmp w2, w10
+    b.ne target_failed
+    add x8, x8, #1
+    str x8, [x12, #248]
+    mov x17, #2
+    str x17, [x12]           // Snapshot complete; native mutation now permitted.
+    ldr w8, [x0, #100]       // Displaced native callback instruction.
+    ldr x17, =0x41005654
+    br x17
+continue_phases:
+    .word 4,8,10,12,13,15,16,18,20,21
+ready_checkpoint:
+    cmp w20, #1
+    b.ne target_failed
+    ldr x12, =0x42002500
+    ldr x17, [x12]
+    cmp x17, #2
+    b.ne target_failed
+    ldr x17, [x12, #248]
+    cmp x17, #10
+    b.ne target_failed
+    ldr w17, [sp, #0xb0]
+    cmp w17, #2
+    b.ne target_failed
+    ldr x17, [sp, #0x88]
+    ldr x13, [x12, #16]
+    cmp x17, x13
+    b.ne target_failed
+    mov x17, sp
+    str x17, [x12, #104]
+    mrs x17, sctlr_el1
+    str x17, [x12, #128]
+    mrs x17, tcr_el1
+    str x17, [x12, #136]
+    add x13, sp, #0x40
+    add x14, x12, #256
+    mov x15, #17
+copy_continue:
+    ldr x17, [x13], #8
+    str x17, [x14], #8
+    subs x15, x15, #1
+    b.ne copy_continue
+    mov x25, x19             // Native local_boot epoch; no further C return.
+    ldr x21, =0x42005100
+    ldr x24, =0x42005180
+    ldr x13, =0x42002400
+    ldr x17, [x13, #8]
+    cmp x25, x17
+    b.ne target_failed
+    mrs x17, CurrentEL
+    str x17, [x13, #136]
+    cmp x17, #12
+    b.ne target_failed
+    mrs x17, midr_el1
+    str x17, [x13, #144]
+    ldr x14, =0x412fd050
+    cmp x17, x14
+    b.ne target_failed
+    mrs x17, sctlr_el3
+    str x17, [x13, #152]
+    ldr x14, =0x02001005
+    tst x17, x14
+    b.ne target_failed
+    mrs x17, mpidr_el1
+    str x17, [x13, #160]
+    dsb sy
+    mov x17, #3
+    str x17, [x12]
+ready_shutdown_wait:
+    ldr x17, =0x41002164
+    blr x17
+    cbnz x0, target_failed
+    ldr x17, [x21, #24]
+    cmp x17, #2
+    b.ne target_failed
+    ldr x13, =0x42002400
+    dsb sy
+    ldr x17, [x13, #16]
+    cmp x17, x25
+    b.ne ready_shutdown_wait
+    ldr x12, =0x42002500
+    mov x17, #4
+    str x17, [x12]           // Guard all target cleanup accesses and waits.
+    isb
+    mrs x14, cntpct_el0
+    ldr x17, =2400000
+    adds x15, x14, x17
+    b.cs target_failed
+    str x15, [x12, #96]
+    mrs x0, icc_sre_el3
+    str x0, [x12, #192]
+    orr x0, x0, #7
+    str x0, [x12, #200]
+    msr icc_sre_el3, x0
+    isb
+    mrs x17, icc_sre_el3
+    and x17, x17, #7
+    cmp x17, #7
+    b.ne target_failed
+    mrs x0, icc_igrpen0_el1
+    mrs x1, icc_igrpen1_el3
+    str x0, [x12, #208]
+    str x1, [x12, #216]
+    bic x0, x0, #1
+    bic x1, x1, #3
+    msr icc_igrpen0_el1, x0
+    msr icc_igrpen1_el3, x1
+    isb
+    dsb sy
+    mrs x0, icc_igrpen0_el1
+    str x0, [x12, #224]
+    tbnz x0, #0, target_failed
+    mrs x0, icc_igrpen1_el3
+    str x0, [x12, #232]
+    tst x0, #3
+    b.ne target_failed
+    ldr x13, [x12, #16]
+    add x11, x13, #0x10, lsl #12
+    mov w17, #-1
+    str w17, [x11, #0x180]
+    dsb sy
+    bl rdist_wait_rwp
+    bl rdist_require_no_events
+    ldr w17, [x12, #64]
+    str w17, [x11, #0x80]
+    ldr w17, [x12, #72]
+    str w17, [x11, #0xd00]
+    ldr w17, [x12, #80]
+    str w17, [x11, #0xc04]
+    ldr w17, [x12, #88]
+    str w17, [x11, #0x400]
+    dsb sy
+    bl rdist_wait_rwp
+target_restore_check:
+    ldr w10, [x11, #0x80]
+    str x10, [x12, #160]
+    ldr w17, [x12, #64]
+    cmp w10, w17
+    b.ne target_failed
+    ldr w10, [x11, #0xd00]
+    str x10, [x12, #168]
+    ldr w17, [x12, #72]
+    cmp w10, w17
+    b.ne target_failed
+    ldr w10, [x11, #0xc04]
+    str x10, [x12, #176]
+    ldr w17, [x12, #80]
+    cmp w10, w17
+    b.ne target_failed
+    ldr w10, [x11, #0x400]
+    str x10, [x12, #184]
+    ldr w17, [x12, #88]
+    cmp w10, w17
+    b.ne target_failed
+    ldr w17, [x12, #40]
+    str w17, [x11, #0x100]
+    dsb sy
+    bl rdist_wait_rwp
+    ldr w10, [x11, #0x100]
+    str x10, [x12, #152]
+    ldr w17, [x12, #40]
+    cmp w10, w17
+    b.ne target_failed
+    bl rdist_require_no_events
+    ldr w17, [x12, #32]
+    str w17, [x13, #20]
+    dsb sy
+    bl rdist_wait_asleep
+    str x10, [x12, #144]
+    ldr w17, [x12, #32]
+    cmp w10, w17
+    b.ne target_failed
+    ldr w10, [x13]
+    ldr w17, [x12, #24]
+    cmp w10, w17
+    b.ne target_failed
+    dsb sy
+    mov x17, #5
+    str x17, [x12]
+    ldr x12, =0x42002400
+    b secondary_power_off
+rdist_require_no_events:
+    ldr w17, [x11, #0x200]
+    cbnz w17, target_failed
+    ldr w17, [x11, #0x300]
+    cbnz w17, target_failed
+    ret
+rdist_wait_rwp:
+    isb
+    mrs x17, cntpct_el0
+    cmp x17, x14
+    b.lo target_failed
+    cmp x17, x15
+    b.hs target_failed
+    mov x14, x17
+    ldr w10, [x13]
+    tbnz w10, #3, rdist_wait_rwp
+    ret
+rdist_wait_asleep:
+    isb
+    mrs x17, cntpct_el0
+    cmp x17, x14
+    b.lo target_failed
+    cmp x17, x15
+    b.hs target_failed
+    mov x14, x17
+    ldr w10, [x13, #20]
+    tbz w10, #2, rdist_wait_asleep
+    ret
+target_block:
+    cmp x17, #1
+    b.ne park
+    ldr x17, =0x42002500
+    mrs x16, sctlr_el1
+    str x16, [x17, #112]
+    mrs x16, tcr_el1
+    str x16, [x17, #120]
+    mrs x16, tcr_el1          // Displaced native block_walks instruction.
+    ldr x17, =0x41008268
+    br x17
+target_failed:
+    ldr x17, =0x42002500
+    mrs x16, esr_el3
+    str x16, [x17, #456]
+    mrs x16, elr_el3
+    str x16, [x17, #464]
+    mrs x16, far_el3
+    str x16, [x17, #472]
+    str x1, [x17, #480]
+    str x2, [x17, #488]
+    mov x16, #6
+    str x16, [x17]
+    dsb sy
+    b park                  // Target never publishes primary report or executes RMR.
+
 prearm_checkpoint:
     ldr x12, =0x42002240
     mov w9, w1
@@ -389,6 +866,9 @@ gic_admission_refused:
     mov x17, #8
     b publish
 block_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_block
     ldr x16, =0x42002000
     mrs x17, sctlr_el1
     str x17, [x16, #152]
@@ -400,16 +880,25 @@ block_checkpoint:
     ldr x17, =0x41008268
     br x17
 stop_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_failed
     ldr x16, =0x42002000
     str x0, [x16, #96]
     str x1, [x16, #104]
     mov x17, #3
     b publish
 park_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_failed
     ldr x16, =0x42002000
     mov x17, #4
     b publish
 fault_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_failed
     ldr x16, =0x42002000
     str x18, [x16, #112]
     mrs x17, esr_el3
@@ -421,12 +910,18 @@ fault_checkpoint:
     mov x17, #5
     b publish
 write_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_failed
     ldr x16, =0x42002000
     str x1, [x16, #96]          // Register number at the untouched callback entry.
     str x2, [x16, #104]         // Proposed value; the write never executes.
     mov x17, #6
     b publish
 failed_checkpoint:
+    mrs x17, mpidr_el1
+    ubfx x17, x17, #8, #3
+    cbnz x17, target_failed
     ldr x16, =0x42002000
     mov x17, #7
 publish:

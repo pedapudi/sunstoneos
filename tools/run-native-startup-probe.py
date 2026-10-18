@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one native secondary through ARRIVED and verified target-owned power-off."""
+"""Run native core1 through RELEASE/GIC_READY and restore its redistributor before OFF."""
 import argparse
 import hashlib
 import importlib.util
@@ -22,12 +22,13 @@ require,digest,save=base.require,base.digest,base.save_json
 NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
+OVERLAY=(0x41020000,0x2000)
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
       ('el1-bss',0x41201000,0x8fd10),('result',0x42000000,0x4000),
       ('contract',0x42004000,0x1000),('monitor-bss',0x42005000,0xa590),
-      ('boot-stack',0x42010000,0x4000),('overlay',0x41020000,0x1000),
+      ('boot-stack',0x42010000,0x4000),('overlay',0x41020000,0x2000),
       ('tables',0x421f0000,0x5000))
 
 def branch(source,target):
@@ -41,6 +42,8 @@ def prepare(a):
         elf=ELFFile(f);symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
     require(tuple(symbols[n] for n in prior.SYMBOLS)==prior.LAYOUT,'Native layout changed.')
     segments,_,_=base.image_parts(a.observer)
+    require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
+                for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
     a.build.mkdir(parents=True,exist_ok=False)
     commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',ROOT/'boot/a733/native-startup-probe.S','-o',a.build/'overlay.o'],
         [a.lld,'-Ttext=0x41020000','-e','boot_checkpoint',a.build/'overlay.o','-o',a.build/'overlay.elf'],
@@ -49,7 +52,7 @@ def prepare(a):
         r=subprocess.run(list(map(str,command)),capture_output=True,text=True)
         with (a.build/'build.log').open('a') as f:f.write(r.stdout+r.stderr)
         require(r.returncode==0,'Overlay build failed; inspect log.')
-    require(0<(a.build/'overlay.bin').stat().st_size<=0x1000,'Overlay exceeds reservation.')
+    require(0<(a.build/'overlay.bin').stat().st_size<=0x2000,'Overlay exceeds reservation.')
     with (a.build/'overlay.elf').open('rb') as f:
         hooks={s.name:s['st_value'] for s in ELFFile(f).get_section_by_name('.symtab').iter_symbols()}
     code=bytearray(segments[0]['data']);patches=[]
@@ -59,6 +62,8 @@ def prepare(a):
     for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x4100a1e4,0xd5384248,'cached_checkpoint'),
                             (0x410034d4,0x2a1f03e0,'prearm_checkpoint'),
                             (0x410036ec,0x51000428,'release_checkpoint'),(0x410020cc,0xd503205f,'secondary_checkpoint'),
+                            (0x4100052c,0x910006f7,'next_checkpoint'),(0x41004eb8,0xd5033f9f,'ready_checkpoint'),
+                            (0x41005650,0xb9406408,'continue_write_checkpoint'),
                             (0x410003d0,0xb9000113,'gic_begin'),
                             (0x41008264,0xd5382050,'block_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint'),
@@ -77,12 +82,12 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
-        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint')},
+        'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce):
     require(len(raw)==256,'Short startup report.');v=struct.unpack('<32Q',raw)
-    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,12) and raw[240:]==nonce,'Startup report identity differs.')
+    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,13) and raw[240:]==nonce,'Startup report identity differs.')
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
@@ -109,6 +114,20 @@ def gic_snapshot(raw):
     result['prearm']=dict(zip(('core','reason','status_before','control','mode','status_after','state','counter'),struct.unpack_from('<8Q',raw,320)))
     result['configuration']=dict(zip(('state','core','base','original_arch','original_low','original_high','terminal_arch','terminal_low','terminal_high',
         'restored_arch','restored_low','restored_high','error','permitted_attempts','restore_status','restore_requests'),struct.unpack_from('<16Q',raw,384)))
+    return result
+
+def rdist_snapshot(raw):
+    require(len(raw)==512,'Short redistributor snapshot.')
+    names=('state','reason','base','original_ctlr','original_waker','original_enable','original_pending','original_active',
+           'original_group','original_modifier','original_config','original_priority','cleanup_deadline','target_sp',
+           'saved_sctlr1','saved_tcr1','blocked_sctlr1','blocked_tcr1','restored_waker','restored_enable',
+           'restored_group','restored_modifier','restored_config','restored_priority','original_sre','requested_sre',
+           'original_igrpen0','original_igrpen1','disabled_igrpen0','disabled_igrpen1','error_address','writes_attempted')
+    result=dict(zip(names,struct.unpack_from('<32Q',raw)))
+    result['native_continue']={'redistributor':struct.unpack_from('<Q',raw,256+72)[0],
+        **dict(zip(('core','frame','phase','state','error','initialized','entered','writes_attempted'),struct.unpack_from('<8I',raw,256+100)))}
+    result['typers']=list(struct.unpack_from('<8Q',raw,392))
+    result.update(zip(('esr','elr','far','requested_address','requested_value'),struct.unpack_from('<5Q',raw,456)))
     return result
 
 def activation_snapshot(raw):
@@ -157,6 +176,7 @@ def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     require(m['schema']=='a733-native-startup-probe-v1' and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
+    require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
     frozen={name:(a.build/name).read_bytes() for name in m['files']}
     require(all(Path(n).name==n and hashlib.sha256(b).hexdigest()==m['files'][n] for n,b in frozen.items()),'Frozen build changed.')
     prepared=supervised.validate_bundle(a.bundle)
@@ -207,7 +227,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native secondary ARRIVED and target-owned OFF before verified restoration',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native core1 RELEASE/GIC_READY, redistributor restoration/asleep and target-owned OFF',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -219,7 +239,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -227,6 +247,7 @@ def run(a):
                 record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
                 record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
                 record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
+                record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
