@@ -22,6 +22,12 @@ deferred; unrelated supervised RAM-only tests use a reviewed recovery plan.
 Physical USB programmed-I/O, C++ allocation and repeated mimus requests have
 passed their recorded workloads.
 
+The returning boot monitor now requires both interrupt affinity-routing bits
+already enabled and preserves them during cleanup. Seven focused instruction
+cases and one secure-QEMU kernel run pass under `monitor-are-20261018/`.
+The corrected monitor has no physical result; broader cleanup behavior remains
+unqualified. This change leaves the frozen multicore diagnostics untouched.
+
 [Mimus](mimus.md) matches host results on 32 development recordings through the
 [native USB application](mimus-usb.md). The model remains unchanged. Two-core
 [emulator execution](mimus-smp.md) also passes recorded and paced-input parity.
