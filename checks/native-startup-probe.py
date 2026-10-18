@@ -61,6 +61,8 @@ def check(name,scenario='normal'):
     frame_cores=list(range(8));rbase=0x03480000;gbase=rbase+0x10000
     original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0,'pending':1 if scenario=='pending-refusal' else 0,
         'active':0,'group':0x1122aabb,'modifier':0x00550000,'config':0xaaaaaaaa,'priority':0x12345678}
+    group_mask=0xfff0ffff if scenario in ('implemented-ppis','required-group-refusal') else 0xffffffff
+    original_rdist['group']&=group_mask
     rdist=original_rdist.copy();rdist['rwp']=0;rdist_writes=[];typer_reads=[];commands=[];private_wait_seen=[];sleep_attempted=[]
     local_registers={rbase:rdist['ctlr'],rbase+0x14:rdist['waker'],gbase+0x100:rdist['enable'],
         gbase+0x200:rdist['pending'],gbase+0x300:rdist['active'],gbase+0x80:rdist['group'],
@@ -159,6 +161,7 @@ def check(name,scenario='normal'):
                 data=rdist[keys[address]]
                 if address==rbase and rdist['rwp']:data|=8;rdist['rwp']-=1
                 if address==gbase+0x80 and (scenario=='cleanup-fault' and init['state']==2 or scenario=='prepower-baseline-fault' and init['stopped_before_power'] or scenario=='prewake-baseline-fault' and init['stopped_before_wake']):data^=1
+                if scenario in ('controller-refusal','required-group-refusal') and address==gbase+0x80 and init['state']==1 and rdist['group']==group_mask:data^=1
             uc.mem_write(address,data.to_bytes(size,'little'));typer_reads.append(address);return
         if address in power_registers:
             assert size==4;power_reads.append(address)
@@ -202,7 +205,7 @@ def check(name,scenario='normal'):
             else:
                 keys={gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
                 assert address in keys,hex(address)
-                rdist[keys[address]]=value
+                rdist[keys[address]]=value&group_mask if address==gbase+0x80 else value
             return
         assert not (0x07053000<=address<0x07054000),'PPU status is read-only.'
         if address in (0x07050204,0x07050224):
@@ -264,10 +267,11 @@ def check(name,scenario='normal'):
     rdist_record=host.rdist_snapshot(bytes(cpu.mem_read(0x42002500,512)))
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
     initialization=host.local_initialization_snapshot(bytes(cpu.mem_read(0x42002980,256)))
+    controller_access=host.controller_access_snapshot(bytes(cpu.mem_read(0x42002960,32)))
     a.output.with_suffix('.last-observation.json').write_text(json.dumps({
         'case':name,'assertions_complete':False,'stopped':stopped,
         'initialization':initialization,'activation':activation,
-        'rdist_writes':rdist_writes,'secondary_terminal':secondary_terminal},indent=2)+'\n')
+        'rdist_writes':rdist_writes,'secondary_terminal':secondary_terminal,'controller_access':controller_access},indent=2)+'\n')
     if scenario in ('interface-group-enabled','interface-sre-refusal'):
         assert after_interface and stopped==['park'] and observation['state']==1 and not activation['ack']
         assert initialization['state']==1 and not initialization['cpu_interface_observed']
@@ -330,7 +334,7 @@ def check(name,scenario='normal'):
     assert secondary['power']['state']==2 and secondary['power']['step']==18 and secondary['power']['writes_attempted']==7
     expected_power=[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
         [1,2,0x07050224,0x40],[1,2,0x07050204,0x10002],[0,4,0x07050204,0x10000],[0,4,0x07050224,0x40]]
-    if initialization['state']==3 or any(initialization[k] for k in ('stopped_before_power','stopped_before_wake','stopped_after_wake')):expected_power[4:4]=[[1,1,0x07050204,0x10000],[1,1,0x07050204,0x10000]]
+    if initialization['state']==3 or any(initialization[k] for k in ('stopped_before_power','stopped_before_wake','stopped_after_wake','controller_refusal_restored')):expected_power[4:4]=[[1,1,0x07050204,0x10000],[1,1,0x07050204,0x10000]]
     assert power_writes==expected_power
     assert observation['core']==1 and observation['MPIDR_EL1']==0x81000100
     assert observation['gicr_state']==rdist_record['state']==1
@@ -388,8 +392,15 @@ def check(name,scenario='normal'):
         assert initialization['pwrr']==frame_power and initialization['restored_control']==0x10000
         assert all(initialization[k]==original_rdist[k] for k in ('waker','enable','pending','active','group','modifier','config','priority'))
         assert bool(sleep_attempted)==after_wake
-    elif scenario in ('normal','power-reject'):
-        assert initialization['state']==3 and initialization['controller_state']==2 and not initialization['error']
+    elif scenario in ('normal','power-reject','controller-refusal','implemented-ppis','required-group-refusal'):
+        if scenario in ('controller-refusal','required-group-refusal'):
+            assert initialization['state']==4 and initialization['controller_state']==5 and initialization['error']==4
+            assert initialization['phase']==23 and initialization['controller_refusal_restored']==1
+            assert controller_access=={'address':gbase+0x80,'value':group_mask^1,'operation':1,'completed':1}
+        else:
+            assert initialization['state']==3 and initialization['controller_state']==2 and not initialization['error']
+            assert not initialization['controller_refusal_restored']
+            assert controller_access=={'address':gbase+0x400,'value':(original_rdist['priority']&~255)|0xf0,'operation':1,'completed':1}
         assert initialization['writes']==(12 if scenario=='power-reject' else 11)
         assert initialization['cleanup_writes']==7 and initialization['cleanup_error']==0
         assert initialization['epoch']==bundle['epoch'] and initialization['core']==1
@@ -403,7 +414,7 @@ def check(name,scenario='normal'):
     assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
-    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization})
+    reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization,'controller_access':controller_access})
 if after_interface:
     check('cpu-interface-observed-without-redistributor-writes')
     check('enabled-interface-group-retains-without-shutdown','interface-group-enabled')
@@ -421,6 +432,9 @@ elif after_wake:
     check('sleep-timeout-retains-without-shutdown','sleep-timeout')
 else:
     check('current-controller-ready-and-local-state-restored')
+    check('controller-verification-refusal-returned-after-restoration','controller-refusal')
+    check('local-group-implemented-ppis','implemented-ppis')
+    check('local-group-required-source-refusal','required-group-refusal')
     check('current-controller-retries-one-rejected-power-request','power-reject')
     check('local-initialization-refuses-pending-interrupt','pending-refusal')
     check('local-cleanup-mismatch-retains-without-shutdown','cleanup-fault')

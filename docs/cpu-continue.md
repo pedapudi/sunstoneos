@@ -116,6 +116,10 @@ local operations:
 5. Assign the local bank to nonsecure Group 1, keep timer PPIs level-sensitive,
    set SGI0 priority to `0xf0`, and enable SGI0.
 6. Verify group, modifier, enable and priority state after write completion.
+   Group verification requires all SGIs and timer PPIs 29/30 (`0x6000ffff`).
+   Unimplemented PPI bits are read-as-zero/write-ignored under Arm IHI 0069G
+   section 12.11.12; a full-width all-ones comparison is invalid. The group write
+   still assigns every implemented local source to nonsecure Group 1.
 
 The sleep transition follows the pinned
 [GICv3 redistributor implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_helpers.c).
@@ -230,3 +234,11 @@ redistributor power observation and cleanup before physical qualification.
 Earlier startup failures returned no report and cannot yet be attributed to
 this omission. Redistributor discovery and the later interrupt, cache and
 scheduler stages still require board evidence.
+
+
+Core 1 local initialization and complete restoration pass physically under
+`native-local-group-mask-20261018/`. The earlier returned refusal exposed
+`GICR_IGROUPR0 = 0xfff0ffff`, which the former full-width comparison rejected.
+The corrected required-bit check passes through final SGI0 priority verification,
+then verified shutdown and ROM return. This result covers local register setup
+with delivery disabled; EL1 transition, interrupt delivery and SMP remain required.

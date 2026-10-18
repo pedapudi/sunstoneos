@@ -874,8 +874,9 @@ completed, but no new FEL instance appeared and no result buffer was available.
 The host stopped device communication and retained its process, queue claim and
 board lock. This result does not identify whether CPU-interface access, controller
 initialization or cleanup failed. The model pass does not qualify those operations.
-The original board requires physical recovery before another operation; the
-second board was not involved. Do not repeat the same launch.
+The user subsequently recovered the original board; the second board was not
+involved. Returning diagnostics below identified a verification refusal without
+repeating the unchanged failed launch.
 
 
 ## A narrower diagnostic stops before the first redistributor write
@@ -896,6 +897,29 @@ interrupt delivery disabled.
 Two focused instruction cases pass: normal observation with unchanged local
 state, and a mismatched local-state read that retains ownership. The overlay
 occupies 9,376 bytes in the existing 16 KiB reservation. Evidence is under
-`native-before-power-20261018/`; no physical attempt has run. After recovery,
-this boundary can distinguish the new CPU-interface/controller entry path from
-the redistributor writes and cleanup in the failed complete attempt.
+`native-before-power-20261018/`. Its unchanged payload passes physically under
+`native-before-power-current-20261018/`. Subsequent power and wake/sleep probes
+also pass; the [reference audit](a733-multicore-reference-audit.md) records them.
+
+
+## Core 1 completes local interrupt initialization and restoration
+
+A returning configuration-refusal path preserves the last controller access and
+requires complete cleanup before publishing its result. It exposed phase 23,
+error 4 and IGROUPR0 readback `0xfff0ffff` under `native-local-config-report-20261018/`.
+The earlier full-width equality incorrectly rejected unimplemented PPI bits.
+
+The production controller now verifies required SGI/timer bits while retaining
+the all-ones initialization write. Source basis and focused validation are in
+[the reference audit](a733-multicore-reference-audit.md). Physical execution under
+`native-local-group-mask-20261018/native/runtime/` reaches GIC_READY, phase 26,
+with eleven initialization writes and no error. Seven cleanup writes restore
+the local bank and wake control. Matching shutdown acknowledgment, observed OFF,
+translation/shared-state restoration and saved DRAM comparison pass. ROM returns
+as `003:099`; the runner exits and its queue claim closes.
+
+This establishes the core-1 local register sequence with interrupt delivery
+disabled. Cached EL3/EL1 continuation, delivery, remaining cores, coherence and
+FreeRTOS scheduling remain required. Frozen native images that contain the older
+controller require an affected rebuild before using the correction; the returning
+overlay compiles the current controller explicitly.

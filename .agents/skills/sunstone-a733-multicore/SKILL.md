@@ -61,6 +61,14 @@ driver; that does not permit arbitrary SGI/PPI access to a powered-down frame.
 Observed `RDPD=0` means access is permitted by that power state, not that ownership,
 pending interrupt state or cleanup has been established.
 
+Validate required implemented bits, not an assumed full register width.
+`GICR_IGROUPR0` bits for unimplemented PPIs are read-as-zero/write-ignored
+(Arm IHI 0069G 12.11.12). Core 1 returned `0xfff0ffff` after an all-ones write;
+requiring `0xffffffff` caused a verified startup refusal. The continuation checks
+all SGIs and its timer PPIs 29/30 while configuring all implemented sources.
+Models must include unimplemented-bit behavior and still reject missing required
+bits. A later consumer of another PPI needs its own required-bit validation.
+
 Preserve enabled GIC distributor affinity-routing bits during cleanup. Do not
 attempt to restore them from one to zero. The returning monitor's admission and
 the [kernel evidence](../../../docs/a733-kernel.md) explain the applicable

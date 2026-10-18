@@ -23,7 +23,7 @@ NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
 OVERLAY=(0x41020000,0x4000)
-PROFILE='core1-local-interrupt-init-v1'
+PROFILE='core1-local-interrupt-init-report-v2'
 EARLY_PROFILE='core1-before-redistributor-write-v1'
 INTERFACE_PROFILE='core1-cpu-interface-only-v1'
 POWER_PROFILE='core1-before-redistributor-wake-v1'
@@ -185,8 +185,12 @@ def local_initialization_snapshot(raw):
         'redistributor','original_control','restored_control','sre_before','sre_after',
         'igrpen0','igrpen1','waker','enable','pending','active','group','modifier',
         'config','priority','pwrr','cleanup_error','cleanup_writes','stopped_before_power','cpu_interface_observed','stopped_before_wake',
-        'stopped_after_wake','awake_waker')
+        'stopped_after_wake','awake_waker','controller_refusal_restored')
     return dict(zip(names,struct.unpack('<32Q',raw)))
+
+def controller_access_snapshot(raw):
+    require(len(raw)==32,'Short controller access record.')
+    return dict(zip(('address','value','operation','completed'),struct.unpack('<4Q',raw)))
 
 def activation_snapshot(raw):
     require(len(raw)==256,'Short activation snapshot.')
@@ -303,7 +307,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('local-initialization',0x42002980,256),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -315,6 +319,7 @@ def run(a):
                 record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
                 record['local_interrupts']=local_interrupt_snapshot((a.evidence/'local-interrupts.bin').read_bytes())
                 record['local_initialization']=local_initialization_snapshot((a.evidence/'local-initialization.bin').read_bytes())
+                record['controller_access']=controller_access_snapshot((a.evidence/'controller-access.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
                 observation=record['observation'];activation=record['activation'];secondary=record['secondary']
                 require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
@@ -340,6 +345,7 @@ def run(a):
                         before_power=init['state']==4 and init['stopped_before_power']==1
                         before_wake=init['state']==4 and init['stopped_before_wake']==1
                         after_wake=init['state']==4 and init['stopped_after_wake']==1
+                        refusal=init['state']==4 and init['controller_refusal_restored']==1
                         if init['cpu_interface_observed']:
                             require(m.get('stop_after_cpu_interface') is True and init['state']==4 and
                                 (init['sre_after']&7)==7 and not (init['igrpen0']&1 or init['igrpen1']&3) and
@@ -362,7 +368,12 @@ def run(a):
                                 init['error']==1 and init['writes']>=4 and init['cleanup_writes']==2 and
                                 not any(init[k] for k in ('awake_waker','cleanup_error','stopped_before_power','stopped_before_wake','cpu_interface_observed')),
                                 'Wake/sleep boundary differs.')
-                        if init['state']==3 or before_power or before_wake or after_wake:
+                        if refusal:
+                            require(profile==PROFILE and init['controller_state']==5 and 10<=init['phase']<=26 and
+                                init['error'] in (1,2,3,4) and init['writes']>=4 and init['cleanup_writes']==7 and
+                                not any(init[k] for k in ('cleanup_error','stopped_before_power','stopped_before_wake','stopped_after_wake','cpu_interface_observed')),
+                                'Restored controller refusal differs.')
+                        if init['state']==3 or before_power or before_wake or after_wake or refusal:
                             if init['state']==3:
                                 require(not m['stop_before_power'] and not m.get('stop_before_wake',False) and not m.get('stop_after_wake',False) and
                                     init['stopped_before_power']==init['stopped_before_wake']==init['stopped_after_wake']==0 and
@@ -377,6 +388,7 @@ def run(a):
                     record['before_wake_observed']=init['state']==4 and init['stopped_before_wake']==1
                     record['wake_sleep_observed']=init['state']==4 and init['stopped_after_wake']==1
                     record['local_initialization_observed']=init['state']==3
+                    record['controller_refusal_observed']=init['state']==4 and init['controller_refusal_restored']==1
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()

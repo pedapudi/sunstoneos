@@ -1,10 +1,11 @@
 # Multicore startup must satisfy both firmware and kernel contracts
 
-The current failure is unresolved. Core 1 has physically reached EL3, completed
-CPU preparation and returned through verified shutdown. Its local interrupt
-snapshot, EL3 GIC-interface observation and redistributor power handshake also
-returned successfully. The full initialization attempt returned
-neither a report nor ROM access. That result does not identify a failing register.
+A physical diagnostic identified an incorrect interrupt-group readback check.
+Core 1 returned `GICR_IGROUPR0 = 0xfff0ffff`; the driver required `0xffffffff`
+and retained a verification failure. The corrected driver permits unimplemented
+PPI bits and now completes local initialization, restoration, shutdown and ROM
+return on core 1. Interrupt delivery, coherent cached execution, the remaining
+cores and FreeRTOS SMP scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
@@ -45,7 +46,7 @@ qualify a complete firmware replacement.
 | Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered core-1 frame. A transition from powered-off remains unqualified. |
 | Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Core 1 wake and return-to-sleep pass physically with delivery disabled. |
 | System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |
-| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | Software checks pass; physical per-core delivery and scheduling remain unqualified. |
+| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | Core 1 local configuration and restoration pass physically with delivery disabled. Per-core delivery and scheduling remain unqualified. |
 | Shutdown | Disable CPU-interface groups, synchronize, complete the sleep handshake, then power down. Applicable errata remain part of the sequence. | Earlier core-1 shutdown passed without enabling delivery. This does not qualify shutdown after normal interrupt use. |
 
 The [GIC-600 manual](https://documentation-service.arm.com/static/5e7ddddacbfe76649ba53034),
@@ -69,13 +70,14 @@ section 4.2.1, repeats the SRE exception. TF-A wakes the redistributor before
 enabling SRE; Linux enables SRE earlier. These sequences do not establish that
 an early SRE write or the diagnostic's group-enable reads cause the failure.
 
-## Diagnose the actual unobserved interval
+## Returning diagnostics distinguish verification refusals from stalls
 
-The failing overlay adds EL3 SRE setup and group-enable reads before calling
+The original failing overlay added EL3 SRE setup and group-enable reads before calling
 the portable interrupt controller. It then initializes and restores local
 interrupt state before requesting shutdown. A missing report can result from
 an explicit retained refusal, an exception, a stalled access or failed cleanup.
-There is no evidence selecting one of those causes.
+The returning refusal diagnostic below now identifies a local group-verification
+failure. Earlier attempts without reports retain their observation limits.
 
 The source trace through `boot/a733/native-local-interrupt-probe.c` and its
 assembly caller identifies the following distinct outcomes:
@@ -150,8 +152,40 @@ control restore; matching shutdown/OFF, shared restoration and saved DRAM
 comparison pass. ROM returns as `003:097`. Three instruction cases cover normal
 return and retained wake/sleep timeouts. The model now lets a running secondary
 finish after the primary parks; only the affected sleep-timeout case was rerun.
-Local interrupt configuration and its restoration remain the unobserved interval
-of the earlier failure.
+
+## Required interrupt bits replace an invalid full-width equality
+
+The returning diagnostic now preserves the controller's last register access
+and can report a configuration refusal after complete restoration. It permits
+that cleanup only after completed wake, within the original deadline, and before
+any CPU interrupt delivery. Cleanup failure still prevents shutdown and return.
+Three focused cases cover success, restored verification refusal and retained
+cleanup mismatch.
+
+The physical result under `native-local-config-report-20261018/native/runtime/`
+records phase 23 (`VERIFY_GROUP`), error 4 and a completed read of
+`0x03490080` returning `0xfff0ffff`. The controller had written all ones, but
+bits 16–19 remained zero. Full cleanup succeeded, the secondary reached OFF,
+and ROM returned as `003:098`.
+
+Arm IHI 0069G section 12.11.12, page 12-644, specifies that unimplemented
+interrupt bits in `GICR_IGROUPR0` read as zero and ignore writes. The pinned
+Linux and TF-A initializers write all ones without requiring full-width equality.
+SunstoneOS now checks mask `0x6000ffff`: all SGIs and timer PPIs 29 and 30 used
+by this startup. It still writes all ones to assign every implemented local
+source to nonsecure Group 1. Future consumers must validate their required
+interrupts when enabling them.
+
+The host sanitizer check accepts three supported masks and rejects each missing
+required SGI/timer bit. Two native instruction cases cover the observed mask and
+a missing required source. Physical execution under
+`native-local-group-mask-20261018/native/runtime/` completes the controller at
+phase 26 with no error. All eleven initialization writes and seven cleanup writes
+complete; original local state, core wake control and translation controls restore.
+Matching shutdown/OFF, shared restoration and saved DRAM comparison pass, and
+ROM returns as `003:099`. The last controller read observes SGI0 priority `0xf0`.
+This fixes the observed local-initialization refusal. It does not establish
+interrupt delivery, cache coherence or scheduling.
 
 Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.

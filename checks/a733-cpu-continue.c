@@ -8,7 +8,7 @@ struct model {
     uint32_t control,waker,enabled,pending,active,group,modifier,config,priority;
     unsigned accesses,calls,fail_at,late_at,stuck,bad_frame,bad_distributor,hotplug_writes;
     unsigned busy,wake_wait,sleep_wait;
-    uint32_t pwrr;
+    uint32_t pwrr,implemented_group;
     unsigned power_writes,group_wait,group_stuck,power_stuck,reject_once;
     unsigned power_access[3];
 };
@@ -73,12 +73,12 @@ static int write32(void *ctx,uintptr_t address,uint32_t value)
     } else if(address==g+0x180) {m->enabled&=~value;m->busy=1;}
     else if(address==g+0x280)m->pending&=~value;
     else if(address==g+0x380)m->active&=~value;
-    else if(address==g+0x80) {assert(!m->enabled);m->group=value;}
+    else if(address==g+0x80) {assert(!m->enabled);m->group=value&m->implemented_group;}
     else if(address==g+0xd00) {assert(!m->enabled);m->modifier=value;}
     else if(address==g+0xc04) {assert(!m->enabled);m->config=value;}
     else if(address==g+0x400) {assert(!m->enabled);m->priority=value;}
     else if(address==g+0x100) {
-        assert(!m->pending && !m->active && m->group==UINT32_MAX && !m->modifier);
+        assert(!m->pending && !m->active && m->group==m->implemented_group && !m->modifier);
         assert(!(m->waker&6));m->enabled|=value;m->busy=1;
     } else {assert(0);return 0;}
     return result(m);
@@ -86,7 +86,7 @@ static int write32(void *ctx,uintptr_t address,uint32_t value)
 static void setup(struct model *m,unsigned core)
 {
     memset(m,0,sizeof(*m));m->now=1;m->control=0x42;m->waker=0x12;m->sleep_wait=2;
-    m->pwrr=13;
+    m->pwrr=13;m->implemented_group=UINT32_MAX;
     m->enabled=UINT32_MAX;m->pending=UINT32_MAX;m->active=UINT32_MAX;
     m->modifier=UINT32_MAX;m->config=UINT32_MAX;m->priority=0x76543210;
     struct a733_cpu_continue_config c={.ops={read32,read64,write32,clock_read},.context=m,
@@ -123,9 +123,24 @@ static void power_cases(void)
     m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2);quiet(&m);
     puts("PASS local GIC-600 power: primary/secondary, group transition and rejected request, three access failures, two deadline failures");
 }
+static void group_cases(void)
+{
+    struct model m;
+    const uint32_t supported[]={UINT32_MAX,UINT32_C(0xfff0ffff),UINT32_C(0x6000ffff)};
+    for(unsigned i=0;i<sizeof(supported)/sizeof(supported[0]);++i) {
+        setup(&m,1);m.implemented_group=supported[i];
+        assert(run(&m)==A733_CONTINUE_GIC_READY && m.group==supported[i]);quiet(&m);
+    }
+    for(unsigned bit=0;bit<32;++bit)if((UINT32_C(0x6000ffff)>>bit)&1) {
+        setup(&m,1);m.implemented_group=UINT32_C(0xfff0ffff)&~(UINT32_C(1)<<bit);
+        assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==4 && m.cpu.phase==23);quiet(&m);
+    }
+    puts("PASS three supported local group masks and refusal of each missing required SGI/timer bit");
+}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--power")) {power_cases();return 0;}
+    if(argc==2 && !strcmp(argv[1],"--groups")) {group_cases();return 0;}
     struct model m;unsigned operations=0;
     for(unsigned core=0;core<8;++core) {
         setup(&m,core);assert(run(&m)==A733_CONTINUE_GIC_READY);

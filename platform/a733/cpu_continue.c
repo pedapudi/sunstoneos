@@ -110,7 +110,12 @@ unsigned a733_cpu_continue_poll(struct a733_cpu_continue *s)
     case PRIORITY_WRITE:(void)write32(s,g+0x400,(s->priority&~255u)|0xf0);break;
     case ENABLE:(void)write32(s,g+0x100,1);break;
     case ENABLE_WAIT:if(read32(s,r,&v))advance=!(v&8);break;
-    case VERIFY_GROUP:if(read32(s,g+0x80,&v) && v!=UINT32_MAX)fail(s,ERROR_VERIFY);break;
+    /* IHI 0069G 12.11.12: unimplemented PPI group bits are RAZ/WI.
+     * Verify all SGIs and timer PPIs 29/30 used by this startup. The all-ones
+     * initialization still assigns every implemented local source to G1NS. */
+    case VERIFY_GROUP:
+        if(read32(s,g+0x80,&v) && (v&UINT32_C(0x6000ffff))!=UINT32_C(0x6000ffff))fail(s,ERROR_VERIFY);
+        break;
     case VERIFY_MODIFIER:if(read32(s,g+0xd00,&v) && v)fail(s,ERROR_VERIFY);break;
     case VERIFY_ENABLE:if(read32(s,g+0x100,&v) && v!=1)fail(s,ERROR_VERIFY);break;
     case VERIFY_PRIORITY:if(read32(s,g+0x400,&v) && v!=((s->priority&~255u)|0xf0))fail(s,ERROR_VERIFY);break;

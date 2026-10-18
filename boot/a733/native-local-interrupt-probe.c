@@ -11,9 +11,12 @@ struct result {
     uint64_t igrpen0, igrpen1, waker, enable, pending, active, group, modifier;
     uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power;
     uint64_t cpu_interface_observed, stopped_before_wake, stopped_after_wake;
-    uint64_t awake_waker, reserved;
+    uint64_t awake_waker, controller_refusal_restored;
 };
 _Static_assert(sizeof(struct result)==256,"Host result layout");
+/* The baseline occupies 0x2900..0x2960; these four words precede result. */
+struct access_result { uint64_t address,value,operation,completed; };
+static volatile struct access_result *const access_result=(void *)UINT32_C(0x42002960);
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
 static uint32_t load(uintptr_t address)
 {barrier();uint32_t v=*(volatile uint32_t *)address;barrier();return v;}
@@ -26,13 +29,16 @@ static int read32(void *context,uintptr_t a,uint32_t *out)
        a!=0x03480000 && a!=0x03480014 && a!=0x03480024 &&
        a!=0x03490300 && a!=0x03490080 && a!=0x03490d00 &&
        a!=0x03490c04 && a!=0x03490400 && a!=0x03490100)return 0;
-    *out=load(a);return 1;
+    access_result->completed=0;access_result->address=a;access_result->operation=1;
+    *out=load(a);access_result->value=*out;access_result->completed=1;return 1;
 }
 static int read64(void *context,uintptr_t a,uint64_t *out)
 {
     (void)context;
     if(a<0x03460008 || a>0x03540008 || ((a-0x03460008)&0x1ffff))return 0;
-    barrier();*out=*(volatile uint64_t *)a;barrier();return 1;
+    access_result->completed=0;access_result->address=a;access_result->operation=2;
+    barrier();*out=*(volatile uint64_t *)a;barrier();
+    access_result->value=*out;access_result->completed=1;return 1;
 }
 static int write32(void *context,uintptr_t a,uint32_t v)
 {
@@ -62,7 +68,8 @@ static int write32(void *context,uintptr_t a,uint32_t v)
        a!=0x03490180 && a!=0x03490280 && a!=0x03490380 &&
        a!=0x03490080 && a!=0x03490d00 && a!=0x03490c04 &&
        a!=0x03490400 && a!=0x03490100)return 0;
-    store(a,v);return 1;
+    access_result->completed=0;access_result->address=a;access_result->operation=3;
+    access_result->value=v;store(a,v);access_result->completed=1;return 1;
 }
 static uint64_t ticks(void)
 {uint64_t v;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(v)::"memory");return v;}
@@ -188,7 +195,23 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
         barrier();r->state=4;barrier();return 2;
     }
 #endif
-    if(state.state!=A733_CONTINUE_GIC_READY || state.redistributor!=b->base)return 0;
+    if(state.redistributor!=b->base)return 0;
+    if(state.state!=A733_CONTINUE_GIC_READY) {
+#if !defined(SUNSTONE_PROBE_STOP_BEFORE_POWER) && !defined(SUNSTONE_PROBE_STOP_BEFORE_WAKE) && !defined(SUNSTONE_PROBE_STOP_AFTER_WAKE) && !defined(SUNSTONE_PROBE_STOP_AFTER_CPU_INTERFACE)
+        /* cpu_continue.c phases 10..26 configure/verify SGI/PPI state after
+         * completed wake. A bounded refusal may return only after the same
+         * complete local restoration required by successful initialization.
+         * Direct cleanup loads preserve the failed controller access record. */
+        if(state.state==A733_CONTINUE_RETAINED && state.phase>=10 && state.phase<=26 &&
+           state.writes_attempted>=4 && ticks()<deadline) {
+            r->state=2;
+            if(!cleanup(r,b))return 0;
+            r->controller_refusal_restored=1;
+            barrier();r->state=4;barrier();return 2;
+        }
+#endif
+        return 0;
+    }
     r->state=2;
     if(!cleanup(r,b))return 0;
     barrier();r->state=3;barrier();return 1;

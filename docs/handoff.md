@@ -115,7 +115,8 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:097` after successful interface, discovery, power-handshake and wake/sleep diagnostics. Fresh DDR,
+instance `003:099` after successful core-1 local interrupt initialization and
+restoration. Fresh DDR,
 survey and all-secondary-OFF checks passed on `003:092` before that launch.
 The diagnostic returned normally and its process and queue claim closed.
 The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
@@ -133,10 +134,11 @@ belongs directly to the primary agent, without delegation.
   The runner exited and its claim closed. Evidence is under
   `native-target-walks-frame-20261018/native/runtime/`. Three focused software
   cases cover the extended path and retained read/restoration failures.
-  The GIC-600 power-up correction remains software-tested only. Target frame
-  access passes after CPU power transition and walk blocking; the earlier
-  failure location remains unknown. Local interrupt initialization, cache
-  coherence, the other secondary cores and scheduling remain unresolved.
+  The GIC-600 power handshake, wake/sleep and full local initialization now pass
+  physically. A returned diagnostic exposed an invalid full-width IGROUPR0
+  equality; checking required SGI/timer bits fixes it. Current evidence is under
+  `native-local-group-mask-20261018/`. Interrupt delivery, cache coherence,
+  the other secondary cores and scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -308,13 +310,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:097`. The user confirmed power
+The original board on `3-1` returned as `003:099`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
-Subsequent interface, controller-discovery, power-handshake and wake/sleep diagnostics
-returned normally. The latest evidence is under
-`native-wake-sleep-20261018/native/runtime/`. Refresh the current
+Subsequent diagnostics identified and corrected a group-register verification
+refusal. Core-1 local initialization and restoration now pass under
+`native-local-group-mask-20261018/native/runtime/`. Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
 `003:093`, has successful DDR, returning survey, SD initial-register and PMIC
@@ -580,10 +582,13 @@ The primary agent handles all further multicore work directly.
    under `native-wake-sleep-20261018/`: awake WAKER is `0`, restored WAKER is `6`,
    no local configuration write runs, and matching OFF/restoration/ROM return
    complete as `003:097`. Three focused cases cover success and retained wake
-   and sleep timeouts. Next make local configuration refusals observable after
-   verified restoration; the earlier full-initialization failure is unexplained.
-   Qualify local interrupts, remaining
-   cores, cache coherence and scheduling. Preserve failed-attempt backups and
+   and sleep timeouts. The returned configuration refusal then identified
+   phase23/error4: IGROUPR0 reads `0xfff0ffff`, but the driver required all ones.
+   Arm defines unimplemented interrupt bits as read-as-zero/write-ignored.
+   The corrected required-SGI/timer-bit check passes full local initialization
+   and restoration under `native-local-group-mask-20261018/`, with observed OFF
+   and ROM return as `003:099`. Next qualify cached EL3/EL1 continuation,
+   interrupt delivery, remaining cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
    intentional watchdog expiry and unattended fault tests remain deferred;
    USB power-control work is closed.

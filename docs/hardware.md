@@ -109,9 +109,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   overlay now includes the corrected production controller and bounded local
   restoration; five instruction cases pass. One physical initialization attempt
   produced no ROM return or result buffer. Its failure location remains unknown,
-  and physical recovery is complete. Further launches await the
-  [Arm/Linux audit](a733-multicore-reference-audit.md) and an observable diagnostic
-  boundary. Interrupt initialization remains unresolved.
+  and physical recovery is complete. The
+  [Arm/Linux audit](a733-multicore-reference-audit.md) and subsequent returning
+  diagnostics identify a group-register verification refusal described below.
   The narrower EL3 GIC-interface observation passes physically under
   `native-cpu-interface-20261018/native/runtime/`: SRE reads back `0xf` and
   both physical interrupt groups are disabled. No local controller writes run;
@@ -122,8 +122,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The latter stops before WAKER, with PWRR `0x100` and WAKER `6` preserved;
   shutdown/OFF, restoration and ROM return pass. The frame was already powered.
   Wake and return-to-sleep also pass under `native-wake-sleep-20261018/`, with
-  WAKER `0` while awake and restored `6` before shutdown. Local configuration
-  and interrupt delivery remain unqualified.
+  WAKER `0` while awake and restored `6` before shutdown. Full local configuration
+  and restoration now pass under `native-local-group-mask-20261018/`. The driver
+  now checks required SGI/timer bits instead of requiring unimplemented PPI group
+  bits to read as one. Matching OFF and ROM return pass. Interrupt delivery,
+  coherent cached execution, remaining cores and scheduling remain unqualified.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
