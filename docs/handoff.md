@@ -39,10 +39,10 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-- Startup diagnosis: native page-table construction passed physically. All five
-  pages match the instruction model, and automatic ROM return and DRAM restoration
-  passed. The next diagnostic extends through cache publication; multicore
-  startup remains unresolved.
+- Startup diagnosis: native table construction and all three cache-publication
+  calls passed physically. The board returned to ROM and all reviewed DRAM was
+  restored. CPU/DSU preparation and later startup remain unresolved; the worker
+  is inspecting the next phase against the pinned hardware references.
 - Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
   audio capture are integrated. Eight focused composition cases pass. The worker
   is designing the native capture-to-mimus path; physical headset operation and
@@ -276,26 +276,26 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:076` on port `3-1`, with automatic USB access.
+The current board instance is `003:077` on port `3-1`, with automatic USB access.
 The returning native diagnostic passed through the actual corrected A32 launcher,
-stack setup, BSS clearing, admission and construction of five translation-table
-pages. All 20,480 table bytes match the instruction model. No refusal or exception
-was recorded; CNTFRQ was 24 MHz and both SCTLR banks were `0x00c50838`.
-Cache publication, cache activation, coherence and multicore operation remain
-unproven.
+stack setup, BSS clearing, admission, table construction and all three
+cache-publication calls. All 20,480 table bytes match the instruction model.
+No refusal or exception was recorded; CNTFRQ was 24 MHz and both SCTLR banks
+were `0x00c50838`. CPU/DSU preparation, cache activation, coherence and multicore
+operation remain unproven.
 
 The diagnostic returned automatically to ROM. All 41 transactions passed,
 including copied reports and reviewed DRAM restoration comparisons. The runner
 exited and its queue claim closed. Old SRAM was left to the returned ROM.
-Evidence is under `startup-stage-20261017-075/native/`; `table-comparison.json`
-records the byte comparison. The next diagnostic will extend through cache
-publication while preserving the demonstrated return conditions.
+Evidence is under `startup-stage-20261017-076/native/`; `table-comparison.json`
+records the byte comparison. The next investigation covers CPU/DSU preparation
+and its effect on the demonstrated return conditions.
 
 Before this attempt, the existing guarded 40-byte cache-off helper ran once at
 SRAM address `0x73000`, with its bytes backed up and restored on the same ROM
 instance. One subsequent survey established every launcher predicate and ROM
 caller SP `0x000f2200`. Evidence is under
-`startup-stage-20261017-075/cache-off/` and `survey/`. A future warm-return instance
+`startup-stage-20261017-076/cache-off/` and `survey/`. A future warm-return instance
 needs its own verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
@@ -425,10 +425,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Extend the physically passed table-construction checkpoint through the next
-   recoverable cache-publication boundary. Preserve the original native layout
-   and verified return conditions. Refresh admission and launch-state evidence
-   for the current ROM; reuse completed instruction cases.
+1. Diagnose CPU/DSU preparation against the pinned hardware references and
+   identify the next recoverable startup checkpoint. Table construction and
+   publication already pass physically. Preserve the original native layout
+   and verified return conditions; reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.

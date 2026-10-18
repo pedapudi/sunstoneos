@@ -62,9 +62,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The separate [supervised observer](a733-smp-supervised.md) uses manual
   reconnection and leaves the watchdog disabled. Three physical attempts produced
   no native result; scheduler execution remains unobserved. A returning native
-  diagnostic now passes actual stack setup, admission and table construction.
-  All five table pages match the instruction model; automatic ROM return and
-  DRAM restoration pass. Cache publication and later startup remain unresolved.
+  diagnostic now passes actual stack setup, admission, table construction and
+  all three cache-publication calls. All five table pages match the instruction
+  model; automatic ROM return and DRAM restoration pass. CPU/DSU preparation,
+  cache activation and later startup remain unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
