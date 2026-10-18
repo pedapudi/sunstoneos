@@ -265,21 +265,31 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native table-construction checkpoint
+## Returning native publication checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
 The native code, data, BSS and stack addresses remain unchanged. Twenty verified
-instruction replacements redirect the C boot entry, the end of table construction,
+instruction replacements redirect the C boot entry, the end of cache publication,
 the terminal stop, the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
 The original stack selection, BSS clearing, boot-state validation and admission
 checks execute. Cache preparation then checks core identity and deadlines and
-constructs five translation-table pages. The normal checkpoint at `0x41004b84`
-returns after successful table construction, before publication, cache maintenance,
-coherence, GIC or secondary initialization. The first publication call at
-`0x41004b94` would otherwise execute `DC CVAC`; it remains outside this stage.
+constructs five translation-table pages. Three publication calls clean the native
+code, data/BSS and tables to the point of coherency with `DC CVAC` and `DSB SY`.
+The normal checkpoint at `0x41004bec` returns after all three calls succeed,
+before CPU/DSU preparation, cache activation, GIC or secondary initialization.
+
+Publication covers `0x41000000..0x41200000`, `0x41200000..0x41290d10` and
+`0x421f0000..0x421f5000`. It visits every 64-byte line in order; the last data
+line ends at `0x41290d40`. The helper reads architectural state, line size and
+the counter. It checks deadlines around maintenance and after each final barrier.
+It never writes cache-enable or translation controls or invalidates data.
+Publication retains the existing admission requirement for owned memory and no
+stale dirty cache aliases. Cleaning does not independently establish that condition.
+A stalled maintenance instruction or barrier still needs retained ownership and
+manual recovery; a counter check cannot interrupt it.
 
 The overlay occupies `0x41020000..0x41021000`. Its nonce-bound 256-byte report at
 `0x42002000` is outside the native result structure. It records C entry, stack
@@ -337,10 +347,19 @@ Copied reports and all reviewed DRAM restoration comparisons passed. Evidence
 is under `startup-stage-20261017-074/native/`. Cache preparation and subsequent
 startup stages remain unresolved; this result does not establish multicore operation.
 
-One affected build and one focused table-construction instruction case pass.
-The case checks table links, secure monitor isolation, table-page attributes and
-the permitted write intervals. Architectural reads and admission MMIO are modeled.
-No publication, cache-maintenance instruction or translation-control write
-executes before return. Evidence is under
-`~/.cache/sunstoneos/evidence/native-tables-probe-20261017/`. Table construction
+The table-construction checkpoint also physically passed once. All 41 host
+transactions succeeded, the diagnostic returned to ROM, and affected DRAM was
+restored. The five captured pages match the instruction model byte for byte;
+their SHA-256 is
+`771a13a8250b68bb2b76ccf2cdac5696adb2f703f5b2bbc767b26b8b7c8b29bf`.
+Evidence is under `~/.cache/sunstoneos/evidence/startup-stage-20261017-075/native/runtime/`;
+the table instruction evidence remains under `native-tables-probe-20261017/`.
+
+One affected build and one focused publication instruction case pass. The case
+checks all three ordered line ranges, their completion barriers, successful
+returns and exclusion of CPU/DSU preparation. Architectural reads, admission
+MMIO and `DC CVAC` are modeled; it does not model cache state or writeback effects.
+The preceding six startup cases and table case remain valid for unchanged code.
+Publication evidence is under
+`~/.cache/sunstoneos/evidence/native-publication-probe-20261017/`. Publication
 and later cache/coherence startup still require physical evidence.

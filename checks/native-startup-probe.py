@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute native table construction; architectural reads and admission MMIO are modeled."""
+"""Execute native publication; cache maintenance and architectural reads are modeled."""
 import argparse
 import hashlib
 import importlib.util
@@ -40,17 +40,34 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
     if watchdog:cpu.mem_write(0x02050014,struct.pack('<I',1))
     cpu.reg_write(UC_ARM64_REG_SP,0x41414100)
     registers={'currentel':el,'mpidr_el1':0x81000000,'sctlr_el3':sctlr,'sctlr_el1':0xc50838,
-               'cntfrq_el0':0,'daif':0x3c0,'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
-    writes=[];controls=[];ticks=[];stopped=[];entered=[];injected=[]
+               'cntfrq_el0':0,'daif':0x3c0,'ctr_el0':0x8444c004,'esr_el3':0x96000004,'elr_el3':0x41000078,'far_el3':0x41201000}
+    writes=[];controls=[];ticks=[];stopped=[];entered=[];injected=[];publication=[];cleaned=[]
+    ranges=((0x41000000,0x41200000),(0x41200000,0x41290d10),(0x421f0000,0x421f5000))
     def instruction(uc,address,size,unused):
-        assert address!=0x41004558,'Publication must not execute.'
+        assert address!=0x41004c2c,'CPU/DSU preparation must not execute.'
+        if address==0x41004558:
+            assert len(publication)<3 and (not publication or publication[-1]['barriers']==1)
+            begin,end=ranges[len(publication)]
+            assert uc.reg_read(UC_ARM64_REG_X0)==begin
+            assert uc.reg_read(UC_ARM64_REG_X0+1)==end-begin
+            publication.append({'begin':begin,'end':end,'lines':0,'barriers':0});cleaned.clear()
+        if address==0x4100460c:
+            item=publication[-1]
+            assert cleaned==list(range(item['begin'],item['end'],64))
+            item['lines']=len(cleaned);item['barriers']+=1
+        if address==m['hooks']['cached_checkpoint']:
+            assert len(publication)==3 and all(item['barriers']==1 for item in publication)
         if fault and address==0x41000078 and not injected:
             injected.append(True);uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
         if address==m['hooks']['boot_checkpoint']:
             assert bytes(uc.mem_read(0x41201000,0x8fd10))==bytes(0x8fd10)
             assert bytes(uc.mem_read(0x42005000,0xa590))==bytes(0xa590)
             assert uc.reg_read(UC_ARM64_REG_SP)==0x42014000;entered.append(True)
-        text=ops.get(address,'');assert not re.match(r'(dc|ic|tlbi)\s',text,re.I),text
+        text=ops.get(address,'')
+        if re.match(r'dc\s+cvac,\s*x0$',text,re.I):
+            assert address==0x410045e0 and publication and not publication[-1]['barriers']
+            cleaned.append(uc.reg_read(UC_ARM64_REG_X0));uc.reg_write(UC_ARM64_REG_PC,address+4);return
+        assert not re.match(r'(dc|ic|tlbi)\s',text,re.I),text
         read=re.match(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
         if read:
             key=read[2].lower()
@@ -101,9 +118,9 @@ def check(name,*,mutate=False,watchdog=False,fault=False,sctlr=0xc50838,el=12):
         assert result['terminal_sp']==0x42013f10
         result['table_sha256']=hashlib.sha256(tables).hexdigest()
         (a.output.parent/'modeled-tables.bin').write_bytes(tables)
-    reports.append({'name':name,'result':result,'system_writes':controls,'mmio_writes':writes})
-check('actual-table-construction-before-publication')
+    reports.append({'name':name,'result':result,'system_writes':controls,'mmio_writes':writes,'publication':publication})
+check('actual-publication-before-cpu-and-dsu-preparation')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual patched native startup instructions with modeled system registers, counter and read-only admission MMIO. No physical cache, return, memory or board qualification.'},indent=2)+'\n')
-print('PASS one native table-construction case; no publication or cache/translation mutation.')
+    'limits':'Actual patched native startup instructions with modeled system registers, counter, read-only admission MMIO and intercepted DC CVAC. Exact maintenance addresses and barriers checked; cache state and effects are not modeled. No physical cache, return, memory or board qualification.'},indent=2)+'\n')
+print('PASS one native publication case; all three ordered line ranges complete before CPU/DSU preparation.')
