@@ -36,6 +36,27 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 ## Current integration
 
+Native I2S and JPEG device paths are integrated. The [I2S application](i2s-application.md)
+connects DMA0 capture or recorded playback to retained buffers and USB0 output.
+Its saved image passes twelve initial checks and four USB identity and failure
+checks. All 191 preserved compiler dependencies were verified; 128 repository
+dependencies match integration after accounting for the two rebuilt source files.
+The USB correction reuses 64 objects. Root configuration passes and its compiler
+and linker options match the saved build after path normalization. Broad header
+hashing changes generated identity constants; the frozen worker image retains
+its original identity. Evidence is under `i2s-application-20261017/`.
+
+The [JPEG application](jpeg-application.md) connects shared startup, decoder IOMMU
+mappings, guarded buffers and verified copied output. Its central build and
+focused software checks pass. Dependency evidence is being recovered from the
+existing build because the collector missed the compiler's filename suffix.
+The JPEG host adapter is integrated; sixteen focused cases pass, with earlier
+results preserved after a fixture repair. Its aggregate setup check reports no
+mismatches. Sources and artifacts were reconciled under
+`jpeg-supervised-host-20261017/batch1/`. The I2S host adapter is in progress.
+Neither application is physically qualified. The first board attempt still
+requires recovery of the quarantined instance.
+
 Native HDMI startup, DMA USB observation, GPU graphics resources, storage updates,
 native camera binding and fixed GPU graphics submission are integrated. The
 complete [maintenance image](storage-maintenance-launch.md) connects native

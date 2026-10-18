@@ -19,6 +19,26 @@ Do not add tests that merely repeat implementation details. Do not run accuracy
 studies for non-numerical changes. Preserve mimus restrictions on held-out data
 and training. Its substantive parity and concurrency requirements remain valid.
 
+## Resolve fixture setup before running cases
+
+Construct one valid baseline fixture with the production preparation functions
+where available. Check identities, sizes, hashes and configuration together;
+each failure case should change only the field or behavior it exercises.
+Declare modeled hardware boundaries explicitly. A modeled authority must not
+be accepted as physical evidence by production tools.
+
+Compile independent changed harness targets before their runtime cases and
+report setup errors together. Before instruction emulation, inspect the final
+ELF for required public entry points and layouts. Account for inlining and the
+actual calling convention, including the width of integer return values.
+Verify emulator privilege and interrupt-controller settings before execution.
+
+Keep these checks in the existing harness and reuse their outputs. Reject empty
+dependency inventories when recording build evidence. Routine setup repairs
+require owner verification; request another substantive review only when the
+repair changes coverage, modeled boundaries or production behavior. Preserve
+completed results and resume only failed or affected steps.
+
 ## Reuse valid evidence
 
 A successful result remains valid when its relevant inputs are unchanged:

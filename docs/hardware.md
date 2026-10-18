@@ -210,9 +210,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   for AArch64. The [stream service](i2s-stream.md) adds bounded capture and playback
   periods, client-held buffer exclusion and explicit FIFO discontinuities.
   A two-core composition passes actual resource ownership, delayed DMA drain and
-  retained failures; affected central targets link. Native stream-pool binding,
-  cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and physical
-  continuity remain open.
+  retained failures; affected central targets link. The [native I2S application](i2s-application.md)
+  connects the stream service to DMA0, a retained memory pool and USB0 result
+  capture. Capture and recorded playback constructors pass instruction checks;
+  USB failure revokes further device work. Cyclic/full-duplex operation,
+  wire-level drain, Bluetooth PCM and physical continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
@@ -540,7 +542,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Host checks and runtime instruction comparisons pass; native compilation
   succeeds. Cold startup now validates an immutable ROM profile, sequences
   domain/reset/gates and performs the source-defined VCU reset before identity
-  admission. Host checks and native compilation pass. The attached board
+  admission. Host checks and native compilation pass. The [native JPEG application](jpeg-application.md)
+  connects shared providers, decoder IOMMU mappings, guarded buffers and copied
+  USB output. Its central image builds; focused checks cover exact reference
+  comparison, guards, faults, admission and framing with modeled hardware.
+  Physical decode and nonconstant-image numerical conformance remain untested.
+  The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
 
