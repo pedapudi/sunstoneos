@@ -41,8 +41,8 @@ substantive correctness risks. The coordinator alone operates the board.
 
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
-  writes. The worker is investigating EL1 translation controls and interrupt
-  setup before secondary activation. Multicore operation remains unresolved.
+  writes. EL1 walk blocking, exact control restoration and interrupt-controller
+  reads also pass. Interrupt setup and later multicore startup remain unresolved.
 - Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
   audio capture are integrated. Eight focused composition cases pass. Native
   capture-to-mimus integration is in progress, using the existing recorded
@@ -280,29 +280,30 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:078` on port `3-1`, with automatic USB access.
-The returning native diagnostic passed through the actual corrected A32 launcher,
-stack setup, BSS clearing, admission, table construction, cache publication
-and CPU/DSU identification and planning. The controller reached its prepared
-state with no error or requested workaround writes. Observed MIDR is
-`0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is `0x073fc237`. This excludes
-identity/planner refusal as the cause on this board. Both SCTLR banks remained
-`0x00c50838`; CNTFRQ was 24 MHz. EL1 translation-control changes, GIC setup,
-cache activation and multicore operation remain unproven.
+The current board instance is `003:079` on port `3-1`, with automatic USB access.
+The returning native diagnostic passes the corrected A32 launcher, stack setup,
+BSS clearing, admission, table construction, cache publication and CPU/DSU
+planning. Observed MIDR is `0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is
+`0x073fc237`; no workaround writes are requested.
 
-The diagnostic returned automatically to ROM. All 43 transactions passed,
-including copied controller/core records and reviewed DRAM restoration comparisons.
-The runner exited and its queue claim closed. Old SRAM was left to the returned
-ROM. Evidence is under `startup-stage-20261017-077/native/`. The next investigation
-covers EL1 translation controls and GIC distributor setup before secondary
-activation, including their restoration and effect on ROM return.
+Native EL1 walk blocking and interrupt-controller reads now pass physically.
+The diagnostic temporarily sets SCTLR_EL1.M and both TCR_EL1 walk-disable bits,
+then restores SCTLR_EL1 to `0x00c50838` and TCR_EL1 to zero with exact readbacks.
+It stops before the first interrupt-controller write. GICD_CTLR is `0x37`, so
+both affinity-routing bits are already set; GICD_TYPER is `0x007b0408`.
+Interrupt setup, cache activation and multicore operation remain unproven.
 
-Before this attempt, the existing guarded 40-byte cache-off helper ran once at
-SRAM address `0x73000`, with its bytes backed up and restored on the same ROM
-instance. One subsequent survey established every launcher predicate and ROM
-caller SP `0x000f2200`. Evidence is under
-`startup-stage-20261017-077/cache-off/` and `survey/`. A future warm-return instance
-needs its own verified launch state.
+All 43 transactions passed, including copied results and reviewed DRAM
+restoration. The runner exited and its queue claim closed. Old SRAM was left
+to the returned ROM. Evidence is under `startup-stage-20261017-078/native/`.
+The next investigation covers interrupt-controller setup and later startup,
+using the observed routing state to define valid restoration.
+
+Before this attempt, the guarded cache-off helper ran once at SRAM address
+`0x73000`, with its bytes backed up and restored on the same ROM instance.
+One subsequent survey established every launcher predicate and ROM caller SP
+`0x000f2200`. Evidence is under `startup-stage-20261017-078/cache-off/` and
+`survey/`. A future warm-return instance needs its own verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -431,8 +432,8 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose EL1 translation-control changes and GIC distributor setup before
-   secondary activation. CPU/DSU identity and planning now pass physically.
+1. Diagnose GIC distributor setup and later startup before secondary activation.
+   EL1 walk blocking, exact restoration and GIC admission reads pass physically.
    Review restoration and ROM-return conditions before the next hardware change;
    preserve the native layout and reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests

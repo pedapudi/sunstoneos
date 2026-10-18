@@ -65,8 +65,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   diagnostic now passes actual stack setup, admission, table construction and
   all three cache-publication calls. All five table pages match the instruction
   model; automatic ROM return and DRAM restoration pass. Native CPU/DSU identity
-  and planning also pass, with no requested workaround writes. EL1 translation
-  controls, GIC setup, cache activation and later startup remain unresolved.
+  and planning also pass, with no requested workaround writes. EL1 walk blocking,
+  exact control restoration and GIC admission reads pass physically. Both GIC
+  affinity-routing bits are already set. GIC setup, cache activation and later
+  startup remain unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
