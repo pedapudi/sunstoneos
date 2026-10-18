@@ -86,6 +86,10 @@ comparisons are under `supervised-bundle-binding-20261017/batch1/`.
 Existing native, launcher and transport results remain valid within their scopes.
 Before physical use, compose the selected bundle's software record from these
 results and current source snapshots; older records retain superseded source hashes.
+The observer record now includes the corrected launcher and current host sources
+under `supervised-bundle-binding-20261017/batch1/integration/`. Its referenced
+artifacts were verified without replaying tests. Fresh physical entry evidence
+is still required after manual reconnection.
 The separate
 [supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
 remain disabled. Its native build and focused startup, admission and host checks
@@ -131,12 +135,20 @@ evidence. NPU and GPU packaging/capture integration is complete at the software
 level. Their shared transport remains unchanged by the observer and board
 approval correction. Physical access remains exclusive to the coordinator.
 
-Native JPEG and I2S application integration is in progress in separate worktrees.
+Native JPEG, I2S and Bluetooth integration is in progress in separate worktrees.
 JPEG connects the existing decoder to actual memory translation, shared resources
 and copied USB output. I2S connects capture or recorded playback to the actual DMA
-pool and stream service. Neither application has completed its build or focused
-checks. A separate source assessment covers cold NPU supply and PLL provisioning;
-it has issued no hardware operations.
+pool and stream service. Bluetooth connects radio firmware bootstrap, UART1 and
+controller identification without requiring a headset. These applications have
+not completed their builds or focused checks. JPEG and Bluetooth share optional
+board startup callbacks; existing board behavior is unchanged without that option.
+
+The pinned DDR loader selects the APBS1 reference-clock parent, while the current
+native PMIC provider accepts only the oscillator parent. Read-only adoption of
+the reference route is being implemented before the new application builds.
+Earlier PMIC-dependent images may refuse that inherited state. An opt-in early
+NPU PLL step is also in development; it must preserve shared SRAM and measure
+state after DDR training. Neither change has been executed on the board.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
