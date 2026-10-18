@@ -45,3 +45,11 @@ failure trace, reviewed input corrections and exact producer identities.
 The final setup recipe regenerates the passed session/profile bytes exactly.
 Base, supervised, JPEG, crypto and H.264 boot patches compose successfully.
 Existing codec, Bluetooth protocol and recognition evidence was reused.
+
+A separate Bluetooth image enables `SUNSTONE_BLUETOOTH_MIMUS=ON`; the first
+binding image had recognition disabled. One new version 3 case validates the
+native session, contract and profile, then checks the retained profile passed
+through the recognition-enabled startup branch after uploaded inputs change.
+Task creation, the application constructor and recognition are modeled in this
+case. Audio and inference were not replayed. The image and evidence are under
+`~/.cache/sunstoneos/evidence/board-session-seal-mimus-20261018`.
