@@ -50,6 +50,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
   A separate [two-core emulator target](smp.md) tests concurrent scheduling.
   [Multicore mimus](mimus-smp.md) also passes recorded-reference comparisons there.
+  One focused [runtime cleanup case](smp-runtime.md) passes actual FreeRTOS/newlib
+  task reclamation after migration in both directions, private stream closure,
+  heap restoration and static task storage reuse. Evidence under
+  `smp-runtime-cleanup-20261018/` uses QEMU and changes no production startup code.
   The [secondary power controller](cpu-start.md) matches isolated board-firmware
   writes for all seven secondary cores and compiles for AArch64. The
   [secondary entry and mailbox](cpu-entry.md) waits for verified power cleanup
@@ -389,8 +393,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks were reused. The software-only package supplies no physical admission.
   This mode retains resources until
   manual power removal and still requires actual initial isolation. Successful GPU
-  output, general drawing, repeated submission, lease disposal for reopen and
-  physical execution remain outstanding.
+  output, general drawing, lease disposal for reopen and physical execution
+  remain outstanding.
   The [native lifecycle backend](gpu-backend.md) now has instruction-model
   evidence for identity admission, restricted MMIO, memory/GIC composition,
   retained faults, and actual queue event reception. A proven physical memory
@@ -408,6 +412,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   publishes native workload memory and firmware records before startup, then
   runs owner-only jobs with timeline and guarded-output checks. Focused FreeRTOS
   emulator cases pass; central compute, lifecycle and IRQ targets link.
+  Repeated fixed arithmetic submissions now preserve live command queues and
+  require advancing completion counters before acquiring and copying results.
+  Cancellation revokes further publication and retains all resources. Five new
+  composition cases and host decoding checks pass, and the native compute mode
+  links under `gpu-completion-20261018/`. Numerical writes remain modeled;
+  arbitrary programs, physical computation and mimus acceleration remain required.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The

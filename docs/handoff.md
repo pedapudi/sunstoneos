@@ -46,14 +46,23 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-CPU, GPU and NPU work now has dedicated implementation and review owners.
-The CPU audit confirmed that native SMP newlib integration already exists;
-a focused task-deletion/reclamation case will close a documented evidence gap.
-The physical secondary-core startup failure remains unresolved. GPU work connects
-repeated numerical submissions to the native application, with preserved command
-queues and copied acquired results. NPU work extends trusted build-time model
-registration to reviewed variable-shape artifacts and repeated inference.
-Neither accelerator has a verified physical workload result.
+CPU task reclamation and repeated GPU compute submission are integrated.
+One finite QEMU case executes actual FreeRTOS/newlib cleanup after task migration
+in both directions. Private stream closure, heap restoration and reuse of static
+task storage pass. All 26 preserved source inputs match integration under
+`smp-runtime-cleanup-20261018/`; the physical startup failure remains unresolved.
+
+The GPU application executes two successive submissions of its fixed arithmetic
+workload and copies each acquired result. The service preserves command queues,
+advances completion counters and refuses output after cancellation or fault.
+Five focused composition cases and host decoding checks pass; GPU numerical
+writes remain modeled. The native compute image builds under
+`gpu-completion-20261018/`. Physical rendering and computation remain unqualified.
+
+NPU work extends trusted build-time model registration to three reviewed artifacts
+and repeated inference. Two additional model shapes match CPU references in the
+external simulator. The native image builds; implementation review and focused
+native checks remain in progress. Physical inference remains unqualified.
 
 Combined thermal/ADC monitoring and reusable read-only microSD access continue
 in separate worktrees. Continuous fan/LED control and the PCIe supply-contract
@@ -122,12 +131,12 @@ instance; physical power removal and reconnection remain required.
   focused binding checks pass; all 97 preserved repository inputs match
   integration under `hdmi-binding-20261018/`. Existing display checks were reused.
   Physical monitor output remains unqualified.
-- GPU: the supervised image now includes the PMIC clock-parent support needed
-  for the observed board configuration. One affected link and nominal offline
-  bundle validation pass; all 307 preserved repository inputs match integration
-  under `gpu-pmic-refresh-20261018/`. Existing GPU and PMIC checks were reused.
-  The software-only bundle cannot supply physical admission, and successful
-  rendering remains unqualified.
+- GPU: the native application supports fixed rendering or repeated fixed arithmetic
+  computation. The compute image includes the current PMIC clock-parent provider,
+  copied numerical results and a distinct host capture format. Focused software
+  checks pass under `gpu-completion-20261018/`; the earlier render image remains
+  preserved under `gpu-pmic-refresh-20261018/`. Actual startup, memory isolation,
+  firmware operation and successful physical workloads remain unqualified.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
