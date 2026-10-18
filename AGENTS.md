@@ -58,6 +58,10 @@ handoff, or final response does not invalidate successful test evidence.
 - Keep one implementation owner and one reviewer per integration. Review concrete
   ownership, concurrency and device behavior before execution; report only new
   findings. Integrate completed work before adding another workstream.
+- For new assignments, use `gpt-6-sol` implementation agents and `gpt-6-astra`
+  reviewers. Give each a concise task-specific context instead of the full thread.
+  Let existing agents finish their current unit before changing models. Reserve
+  review for substantive correctness risks; routine edits stay with their owner.
 - Keep handoffs concise: changed behavior, exact inputs, result, remaining gap.
   Use existing evidence tools; do not add a reporting system for bookkeeping.
 
