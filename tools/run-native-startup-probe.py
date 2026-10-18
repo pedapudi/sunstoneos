@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run native EL1 walk blocking and GIC reads, restore EL1, and return before GIC writes."""
+"""Run native distributor setup, restore affected GIC/EL1 state, and return before secondary setup."""
 import argparse
 import hashlib
 import importlib.util
@@ -56,7 +56,8 @@ def prepare(a):
     def patch(address,old,target):
         offset=address-0x41000000;require(struct.unpack_from('<I',code,offset)[0]==old,'Native instruction differs.')
         new=branch(address,target);struct.pack_into('<I',code,offset,new);patches.append([address,old,new])
-    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x410003d0,0xb9000113,'cached_checkpoint'),
+    for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x41000450,0xb201f3f8,'cached_checkpoint'),
+                            (0x410003d0,0xb9000113,'gic_begin'),
                             (0x41008264,0xd5382050,'block_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint'),
                             (0x41004440,0xd5384243,'write_checkpoint'),(0x41004d50,0xd503205f,'failed_checkpoint'),
@@ -74,12 +75,12 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
-        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint')},
+        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce):
     require(len(raw)==256,'Short startup report.');v=struct.unpack('<32Q',raw)
-    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,8) and raw[240:]==nonce,'Startup report identity differs.')
+    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,9) and raw[240:]==nonce,'Startup report identity differs.')
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
@@ -96,6 +97,13 @@ def controller_snapshot(raw,core_raw):
     state=dict(zip(('core','index','phase','error','state'),struct.unpack_from('<5I',raw,160)))
     core_names=('epoch','core','state','error','redistributor','esr','far','elr','sctlr3','ttbr3','clusteridr','startup_deadline','diagnostic_deadline')
     return {'identity':identity,'plan':plan,**state,'core_record':dict(zip(core_names,struct.unpack('<16Q',core_raw)[:13]))}
+
+def gic_snapshot(raw):
+    require(len(raw)==512,'Short GIC snapshot.')
+    result=dict(zip(('state','original_ctlr','typer','banks','terminal_ctlr','cleanup_deadline','error'),struct.unpack_from('<7Q',raw)))
+    result['original_spi']=list(struct.unpack_from('<32I',raw,64))
+    result['restored_spi']=list(struct.unpack_from('<32I',raw,192))
+    return result
 
 def caller_interval(survey):
     require(survey.get('complete') is True and survey.get('sram_restored') is True and survey.get('rom_usable') is True,'Completed current returning survey required.')
@@ -174,7 +182,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native EL1 walk blocking, restoration and read-only GIC checkpoint',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native distributor setup with verified GIC/EL1 restoration',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -185,12 +193,13 @@ def run(a):
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
-                                      ('coherence',0x4200e480,184),('core-record',0x4200e080,128)]:
+                                      ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
                 record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
                 record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
+                record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()

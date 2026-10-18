@@ -265,13 +265,14 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning native walk-blocking and GIC-read checkpoint
+## Returning native distributor checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty-four verified
+The native code, data, BSS and stack addresses remain unchanged. Twenty-five verified
 instruction replacements redirect the C boot entry, walk blocking, the first GIC write,
+completed distributor setup,
 the first requested control write, both planning failure parks, the terminal stop,
 the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
@@ -285,9 +286,13 @@ executes. Both native preparation failure parks return their diagnostic state.
 The complete native `a733_cached_block_walks` sequence executes after its original
 SCTLR_EL1 and TCR_EL1 values have been saved. It sets TCR_EL1.EPD0/EPD1 and
 SCTLR_EL1.M while EL3 remains untranslated. Native GIC CTLR/TYPER reads and
-security admission follow. The normal checkpoint replaces the first GIC store
-at `0x410003d0`, recording the live checkpoint CTLR, TYPER and proposed store
-value. No GIC write or secondary activation executes.
+security admission follow. Before the first GIC store at `0x410003d0`, the
+diagnostic captures CTLR, TYPER and every SPI-enable word. It requires both
+affinity-routing bits already set, DS clear and no pending distributor write.
+The native proposed CTLR must preserve the saved non-group bits. Only a complete
+snapshot permits the displaced store to execute. Native distributor setup then
+runs through its final CTLR verification. The normal checkpoint at `0x41000450`
+returns before secondary setup.
 
 Every returning path restores saved SCTLR_EL1, executes ISB, restores saved
 TCR_EL1 and executes ISB. Exact readbacks must match before ROM return. Restore
@@ -296,6 +301,23 @@ verification read and write; state 3 means verified restoration. An exception
 in state 2, unknown state or failed readback parks and retains ownership. A late
 exception after state 3 re-verifies under state 2. This prevents a faulting
 restoration read from repeatedly re-entering the same operation.
+
+After restoring EL1, every returning path restores affected distributor state.
+Cleanup drains pending writes, disables groups while retaining all original
+non-group CTLR bits, and waits for RWP. It clears SPI enables, waits for RWP,
+restores the saved enables and checks every word. It then restores the original
+CTLR and verifies it after RWP clears. A fresh 100 ms counter deadline bounds
+cleanup independently of the native startup lease. A fault, timeout or mismatch
+retains ownership without retry or ROM return. A stalled MMIO access still needs
+manual recovery because a counter check cannot interrupt it.
+
+The 512-byte GIC snapshot at `0x42002100..0x42002300` is inside the existing
+result-arena backup. It holds original SPI enables and their restored readbacks,
+original and native-terminal CTLR, TYPER, bank count, cleanup deadline and error.
+State 1 permits native writes only after a complete snapshot; state 2 guards
+every cleanup operation; state 3 records verified restoration. State 4 means
+cleanup failed and the board remains retained. The host durably copies this
+snapshot with the other reports before restoring DRAM.
 
 The physical boot CPU is Cortex-A55 r2p0. The pinned TF-A reset code and native
 planner request no CPU workaround writes for that revision. Conditional DSU
@@ -308,11 +330,12 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 2 means native walk blocking and GIC reads completed before any GIC
-write, with verified EL1 restoration. Checkpoint
+Checkpoint 2 means the complete native distributor phase succeeded, with
+verified EL1 and distributor restoration. Checkpoint
 6 records a requested register and value before that write; checkpoint 7 records
 a native failure park. Checkpoint 5 retains exception registers, including the
-faulting instruction address. The host copies the 184-byte native controller at
+faulting instruction address. Checkpoint 8 refuses unsafe GIC snapshot admission
+before any GIC write. The host copies the 184-byte native controller at
 `0x4200e480` and 128-byte core record at `0x4200e080`. They contain identity,
 revision plan, poll index, phase and native error state. Both intervals already
 belong to the backed-up monitor BSS. Unknown DSU revisions and register-access
@@ -324,8 +347,8 @@ valid general rollback. The [GIC specification](https://documentation-service.ar
 section 2.3.3, establishes this restriction. The existing
 [single-core monitor cleanup](../platform/a733/monitor.c) writes its saved CTLR
 after enabling affinity routing. Its cleanup is a pending correctness issue
-when that write would clear either ARE bit. This diagnostic obtains live GIC
-state before deciding how to exercise distributor setup.
+when that write would clear either ARE bit. This diagnostic admits distributor
+writes only with both ARE bits already set and preserves them during cleanup.
 
 Publication covers `0x41000000..0x41200000`, `0x41200000..0x41290d10` and
 `0x421f0000..0x421f5000`. It visits every 64-byte line in order; the last data
@@ -415,12 +438,21 @@ and DRAM restoration passed, returning as USB instance `003:078`. Evidence is
 under `~/.cache/sunstoneos/evidence/startup-stage-20261017-077/native/runtime/`;
 its four focused instruction cases remain under `native-planning-probe-20261017/`.
 
-Four focused walk-blocking/GIC-read cases pass: normal reads and restoration,
-native GIC security refusal, an exception after EL1.M is set, and a restoration
-write exception that retains ownership. Review then moved the in-progress flag
-before restoration and verification reads. Those completed cases are preserved;
-one new focused case verifies guarded reads and a late verification fault that
-parks without retry or ROM return. Final corrected artifacts and that case are
-under `~/.cache/sunstoneos/evidence/native-walks-gic-read-probe-20261017/restore-fix/`.
-Architectural reads, admission MMIO and `DC CVAC` are modeled; physical walk
-blocking, EL1 restoration and subsequent GIC startup still require evidence.
+The walk-blocking and GIC-read checkpoint physically passed once. Saved and
+restored SCTLR_EL1 were `0xc50838`; TCR_EL1 was zero. Native blocking produced
+SCTLR_EL1 `0xc50839` and TCR_EL1 `0x800080`. CTLR read `0x37`, with both ARE
+bits already set and DS clear; TYPER was `0x7b0408`, identifying eight SPI banks.
+The diagnostic made no GIC write, verified EL1 restoration, restored DRAM and
+returned as USB instance `003:079`. Evidence is under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-078/native/runtime/`.
+Its completed instruction cases remain under
+`native-walks-gic-read-probe-20261017/restore-fix/` and its linked earlier evidence.
+
+One affected build and five distributor instruction cases pass: complete native
+setup and restoration, unsafe affinity-routing admission, native final-control
+refusal, an exception after partial SPI disabling, and cleanup RWP timeout.
+The cases model write-one-clear/write-one-set enable registers, write completion,
+architectural reads and cache maintenance. They check exact affected-state
+restoration and retained failure. Evidence is under
+`~/.cache/sunstoneos/evidence/native-distributor-probe-20261017/`. Physical
+distributor restoration and subsequent secondary startup remain unqualified.

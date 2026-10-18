@@ -3,7 +3,7 @@
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
 .global write_checkpoint, failed_checkpoint
-.global block_checkpoint
+.global block_checkpoint, gic_begin
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -15,15 +15,54 @@ boot_checkpoint:
     br x17
 cached_checkpoint:
     ldr x16, =0x42002000
-    ldr w17, [x8]              // Live checkpoint CTLR, not the earlier native read.
+    mov x17, #2
+    b publish
+gic_begin:
+    ldr x16, =0x42002000
+    ldr x12, =0x42002100
+    ldr x13, =0x03400000
+    ldr w17, [x13]             // Fresh CTLR before any native GIC write.
     str x17, [x16, #192]
+    str x17, [x12, #8]
     mov w17, w21
     str x17, [x16, #200]
+    str x17, [x12, #16]
     mov w17, w19
     str x17, [x16, #208]
     mov x17, #1
     str x17, [x16, #216]
-    mov x17, #2
+    ldr w10, [x12, #8]
+    and w11, w10, #0x70
+    cmp w11, #0x30            // ARE_S/ARE_NS already set; DS clear.
+    b.ne gic_admission_refused
+    tbnz w10, #31, gic_admission_refused
+    bic w11, w10, #7
+    cmp w11, w19
+    b.ne gic_admission_refused
+    and w14, w21, #31
+    add x14, x14, #1
+    str x14, [x12, #24]
+    mov x9, #1
+    add x11, x13, #0x100
+    add x15, x12, #64
+gic_save_spi:
+    cmp x9, x14
+    b.hs gic_saved
+    ldr w17, [x11, x9, lsl #2]
+    str w17, [x15, x9, lsl #2]
+    add x9, x9, #1
+    b gic_save_spi
+gic_saved:
+    mov x17, #1
+    str x17, [x12]            // Complete snapshot precedes the first write.
+    ldr x8, =0x03400000
+    str w19, [x8]             // Displaced native instruction; live x19..x22 retained.
+    ldr x17, =0x410003d4
+    br x17
+gic_admission_refused:
+    mov x17, #5
+    str x17, [x12, #48]
+    mov x17, #8
     b publish
 block_checkpoint:
     ldr x16, =0x42002000
@@ -119,6 +158,76 @@ snapshot_bank:
     mrs x17, tcr_el1
     str x17, [x16, #232]
 snapshot:
+    ldr x12, =0x42002100
+    ldr x17, [x12]
+    cbz x17, snapshot_final
+    cmp x17, #3
+    b.eq snapshot_final
+    cmp x17, #1
+    b.ne park
+    mov x17, #2
+    str x17, [x12]            // Covers every cleanup read, write and counter sample.
+    ldr x13, =0x03400000
+    ldr x15, [x12, #24]
+    isb
+    mrs x8, cntpct_el0
+    ldr x14, =2400000         // Fresh 100 ms cleanup budget, not the startup lease.
+    adds x14, x8, x14
+    b.cs gic_counter_failed
+    str x14, [x12, #40]
+    bl gic_wait_rwp
+    str x11, [x12, #32]       // Native terminal CTLR before cleanup.
+    ldr w10, [x12, #8]
+    bic w10, w10, #7
+    str w10, [x13]            // Retains ARE and every original non-group bit.
+    dsb sy
+    bl gic_wait_rwp
+    mov x9, #1
+    add x10, x13, #0x180
+    mov w17, #-1
+gic_clear_spi:
+    cmp x9, x15
+    b.hs gic_clear_done
+    str w17, [x10, x9, lsl #2]
+    dsb sy
+    add x9, x9, #1
+    b gic_clear_spi
+gic_clear_done:
+    bl gic_wait_rwp
+    mov x9, #1
+    add x10, x13, #0x100
+    add x11, x12, #64
+gic_restore_spi:
+    cmp x9, x15
+    b.hs gic_verify_start
+    ldr w17, [x11, x9, lsl #2]
+    str w17, [x10, x9, lsl #2]
+    dsb sy
+    add x9, x9, #1
+    b gic_restore_spi
+gic_verify_start:
+    mov x9, #1
+    add x7, x12, #192
+gic_verify_spi:
+    cmp x9, x15
+    b.hs gic_restore_ctlr
+    ldr w6, [x10, x9, lsl #2]
+    str w6, [x7, x9, lsl #2]
+    ldr w17, [x11, x9, lsl #2]
+    cmp w6, w17
+    b.ne gic_spi_failed
+    add x9, x9, #1
+    b gic_verify_spi
+gic_restore_ctlr:
+    ldr w10, [x12, #8]
+    str w10, [x13]
+    dsb sy
+    bl gic_wait_rwp
+    cmp w11, w10
+    b.ne gic_ctlr_failed
+    mov x17, #3
+    str x17, [x12]
+snapshot_final:
     mrs x17, mpidr_el1
     str x17, [x16, #56]
     mrs x17, sctlr_el3
@@ -147,6 +256,33 @@ snapshot:
     mov x0, #2
     msr rmr_el3, x0
     isb
+    b park
+gic_wait_rwp:
+    isb
+    mrs x17, cntpct_el0
+    cmp x17, x8
+    b.lo gic_counter_failed
+    cmp x17, x14
+    b.hs gic_deadline_failed
+    mov x8, x17
+    ldr w11, [x13]
+    tbnz w11, #31, gic_wait_rwp
+    ret
+gic_deadline_failed:
+    mov x17, #1
+    b gic_cleanup_failed
+gic_ctlr_failed:
+    mov x17, #2
+    b gic_cleanup_failed
+gic_spi_failed:
+    mov x17, #3
+    b gic_cleanup_failed
+gic_counter_failed:
+    mov x17, #4
+gic_cleanup_failed:
+    str x17, [x12, #48]
+    mov x17, #4
+    str x17, [x12]
 park:
     wfi
     b park
