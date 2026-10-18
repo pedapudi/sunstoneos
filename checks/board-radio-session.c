@@ -20,6 +20,8 @@ enum a733_radio_platform_result a733_radio_platform_live(struct a733_radio_platf
 {assert(p==&platform&&b==&subject.borrow&&d==900);return A733_RADIO_READY;}
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *p)
 {assert(p==&platform);return A733_RADIO_RETAINED;}
+enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_platform *p)
+{assert(p==&platform);return A733_RADIO_RETAINED;}
 int aic8800_transport_attachment_ready(const struct aic8800_sdio_transport *t)
 {assert(t==&subject.transport);return boundary;}
 int aic8800_supplicant_init(struct aic8800_supplicant *s,const struct aic8800_supplicant_config *c)

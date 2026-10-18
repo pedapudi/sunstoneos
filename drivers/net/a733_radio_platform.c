@@ -88,6 +88,13 @@ static int lock(struct a733_radio_platform *p)
     if(r!=1)return -1;
     p->held=1;return timely(p)?1:-1;
 }
+enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_platform *p)
+{
+    if(!p||!p->initialized||p->ops.current(p->cookie)!=1)return A733_RADIO_INVALID;
+    unsigned expected=0;
+    if(!atomic_compare_exchange_strong_explicit(&p->busy,&expected,1,memory_order_acquire,memory_order_relaxed))return A733_RADIO_BUSY;
+    return finish(p,fail(p));
+}
 static int rd(struct a733_radio_platform *p,uintptr_t a,uint32_t *v)
 {return timely(p)&&p->ops.read(p->cookie,a,v)==1&&timely(p);}
 static int wr(struct a733_radio_platform *p,uintptr_t a,uint32_t v)

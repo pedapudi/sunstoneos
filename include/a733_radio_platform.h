@@ -81,6 +81,8 @@ int a733_radio_platform_init(struct a733_radio_platform *,const struct a733_radi
     const struct a733_radio_platform_ops *,void *,struct a733_clock_leases *,
     struct a733_pins *,struct a733_rail_leases *,struct a733_pmic *);
 enum a733_radio_platform_result a733_radio_platform_poll(struct a733_radio_platform *);
+/* Actual owner only. Retains resource metadata and stops the host without MMIO. */
+enum a733_radio_platform_result a733_radio_platform_retain(struct a733_radio_platform *);
 /* Exactly one downstream owner borrows the real enumerated card. This does not
  * select firmware or establish Wi-Fi/Bluetooth readiness. Call live before
  * every downstream operation; its deadline bounds callbacks through the host.

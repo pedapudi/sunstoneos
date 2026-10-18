@@ -38,9 +38,7 @@ static enum a733_radio_session_result fail(struct a733_radio_session *s)
     sunxi_sdio_stop(&s->platform->host,SUNXI_SDIO_CARD_ERROR);
     if(s->dispatcher.initialized)aic8800_transport_fault_receive(&s->transport,&s->dispatcher);
     else if(s->transport.initialized)aic8800_transport_poll(&s->transport);
-    if(s->borrow.generation)(void)a733_radio_platform_live(s->platform,&s->borrow,s->deadline);
-    else if(s->platform->fault||s->platform->card.state==SDIO_CARD_READY)
-        (void)a733_radio_platform_poll(s->platform);
+    (void)a733_radio_platform_retain(s->platform);
     if(s->sockets.initialized){
         atomic_store(&s->sockets.failed,1);aic8800_network_fault(&s->sockets.network);
         /* Failed network polling emits link-down and services copied replies;

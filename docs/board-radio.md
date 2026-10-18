@@ -56,8 +56,11 @@ clients consume later event copies through the existing EVENT request.
 Application tasks submit requests and receive results through the existing
 bounded copied socket queues. Network publication uses a release/acquire flag
 so clients cannot inspect partially initialized socket state. Entropy failure
-closes admission before another radio iteration, retains the actual session and
-continues pending CE retention polling. Existing replies remain receivable.
+closes admission before another radio iteration and retains the actual session.
+Client, session and external board failures set the shared watchdog revocation
+bit before publishing application failure. Failed owner iterations call only
+the entropy and platform retention APIs; they cannot submit CE work or return
+to healthy hardware polling. Existing replies remain receivable.
 
 The four pinned firmware blobs contain 391,000 bytes. At the initial one-bit
 400 kHz SDIO rate, the payload alone requires at least 7.82 seconds. Protocol

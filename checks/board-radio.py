@@ -33,7 +33,10 @@ def main():
             'apps/board/radio.c', 'apps/board/radio.h', 'apps/board/identity.h',
             'checks/board-radio.c', 'checks/board-radio-session.c',
             'drivers/net/a733_radio_session.c', 'include/a733_radio_session.h',
-            'drivers/net/aic8800_sdio_transport.c', 'include/aic8800_sdio_transport.h'])
+            'drivers/net/aic8800_sdio_transport.c', 'include/aic8800_sdio_transport.h',
+            'drivers/net/a733_radio_entropy.c', 'include/a733_radio_entropy.h',
+            'drivers/net/a733_radio_platform.c', 'include/a733_radio_platform.h',
+            'drivers/storage/storage_digest.c'])
         for dep in out.glob('*.d'):
             for name in shlex.split(dep.read_text().replace('\\\n', ' ').split(':', 1)[1]):
                 path = Path(name)
@@ -66,14 +69,19 @@ def main():
                   '-I' + str(a.freertos / 'portable/GCC/ARM_AARCH64_SRE'),
                   '-I' + str(a.tcp / 'source/include'),
                   '-I' + str(a.tcp / 'source/portable/Compiler/GCC')]
+        digest_object = out / 'host-digest.o'
+        run('host-digest', [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
+            str(out / 'host-digest.d'), '-c', 'drivers/storage/storage_digest.c', '-o', str(digest_object)])
+        artifacts.append(digest_object)
         for name in ['board-radio', 'board-radio-session']:
             artifact = out / name
             run(name + '-build', [a.cc, *common, '-fsanitize=address,undefined',
                 '-fno-omit-frame-pointer', '-Wl,--gc-sections', '-MMD', '-MF', str(out / (name + '.d')),
-                'checks/' + name + '.c', '-o', str(artifact)])
+                'checks/' + name + '.c', str(digest_object), '-o', str(artifact)])
             artifacts.append(artifact)
         for index, source in enumerate(['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
-                                        'drivers/net/aic8800_sdio_transport.c']):
+                                        'drivers/net/aic8800_sdio_transport.c',
+                                        'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c']):
             artifact = out / ('native-' + str(index) + '.o')
             run('native-' + str(index), [a.cc, '--target=aarch64-none-elf', '-mcpu=cortex-a55',
                 '-ffreestanding', '-fno-builtin', '-mgeneral-regs-only', *common,
@@ -84,7 +92,7 @@ def main():
         for name in ['board-radio', 'board-radio-session']:
             assert 'PASS board radio' in run(name, [str(out / name)])
         (out / 'result.json').write_text(json.dumps({'passed': True,
-            'scope': 'Actual coordinator and session busy admission/retention with modeled lower protocol observations; three actual native source compilations.',
+            'scope': 'Actual coordinator/profile admission/client and session busy admission/retention with modeled lower protocol observations; five actual native source compilations.',
             'limits': 'No physical SID, CE quality, RF, firmware transfer, WPA2 or IPv4 hardware qualification.'}, indent=2) + '\n')
     finally:
         preserve()

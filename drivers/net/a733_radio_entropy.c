@@ -89,6 +89,13 @@ static enum a733_radio_entropy_result retain(struct a733_radio_entropy *s)
     if(gave!=pdTRUE || r==A733_CE_BUSY)return A733_RADIO_ENTROPY_BUSY;
     s->retained=1;return A733_RADIO_ENTROPY_RETAINED;
 }
+enum a733_radio_entropy_result a733_radio_entropy_retain(struct a733_radio_entropy *s)
+{
+    if(!identity(s)||xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING||
+        xTaskGetCurrentTaskHandle()!=s->config.owner)return A733_RADIO_ENTROPY_INVALID;
+    if(!lock(&s->busy))return A733_RADIO_ENTROPY_BUSY;
+    return finish(s,retain(s));
+}
 enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy *s)
 {
     if(!identity(s) || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||

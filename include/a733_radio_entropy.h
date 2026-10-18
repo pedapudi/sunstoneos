@@ -56,6 +56,9 @@ int a733_radio_entropy_init(struct a733_radio_entropy *,const struct a733_radio_
  * Registry contention after completion retries metadata, never repeats output.
  * Failure retains CE resources; keep polling for pending metadata retention. */
 enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy *);
+/* Owner-only external revocation. Erases copies and retries retained metadata;
+ * never starts/polls hardware after application or board authority is lost. */
+enum a733_radio_entropy_result a733_radio_entropy_retain(struct a733_radio_entropy *);
 /* Callback signatures match WPA2 and network configuration. Only the recorded
  * owner or the actual FreeRTOS IP task can consume. All-or-nothing, 1..256 bytes;
  * no waiting, allocation, CE access or device callback. Exhaustion/contention

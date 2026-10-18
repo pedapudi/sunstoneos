@@ -16,6 +16,7 @@ struct board_radio_config {
     const struct board_radio_chip_id *chip_id;
     int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *);
     void *admission_context;
+    atomic_uint *recovery_state; /* Same latch as actual hardware reload CAS. */
     uint64_t startup_deadline_us,association_timeout_us,security_timeout_us;
 };
 enum board_radio_result { BOARD_RADIO_PENDING,BOARD_RADIO_NETWORK,
@@ -32,6 +33,7 @@ struct board_radio {
     atomic_uint_fast64_t completed_transfers;
     atomic_uint_fast64_t watchdog_deadline;
     atomic_uint snapshot_busy;
+    atomic_uint client_status,verified_received;
     const struct board_radio_profile *startup_profile;
     uint64_t client_ticket,client_handle;
     size_t client_sent,client_received;
@@ -90,7 +92,7 @@ struct board_radio_ce_provider {
 int board_radio_startup(struct board_radio *,struct a733_native_usb *,
     struct board_radio_ce_provider *,const void *provider_state,size_t provider_bytes,
     const struct board_radio_profile *,const uint8_t digest[32],const struct board_radio_chip_id *,
-    TaskHandle_t owner,TaskHandle_t client);
+    TaskHandle_t owner,TaskHandle_t client,atomic_uint *recovery_state);
 /* Successful nonempty controller transactions only; polling, empty status
  * reads and time alone never advance the watchdog's progress input. */
 uint64_t board_radio_completed_transfers(const struct board_radio *);
@@ -98,6 +100,12 @@ int board_radio_watchdog(struct board_radio *,uint64_t *progress,uint64_t *deadl
 /* Configured client task: one bounded TCP open/connect/send/checked receive/
  * close exchange. Returns0 pending,1 complete,-1 retained failure. */
 int board_radio_client_poll(struct board_radio *);
+/* Copied terminal status/count for the board's existing result frame. Complete
+ * requires every expected byte compared and actual socket CLOSE completion. */
+int board_radio_client_result(const struct board_radio *,unsigned *verified_bytes);
+/* Owner-only board cutoff. Latches reload refusal before application failure;
+ * subsequent owner polls advance only resource/CE retention metadata. */
+enum board_radio_result board_radio_external_failure(struct board_radio *);
 /* Serialized boot, after shared providers, CE client and real task handles.
  * Fresh retained storage; failed construction consumes this lifetime. */
 int board_radio_init(struct board_radio *,const struct board_radio_config *);

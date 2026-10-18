@@ -23,6 +23,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
         !separate(r,sizeof(*r),input,sizeof(*input)))return 0;
     const struct board_radio_config *c=input;
     if(!c->shared||!c->shared->used||!c->admit||!c->chip_id||!c->chip_id->secure_read_record||
+        !c->recovery_state||!separate(r,sizeof(*r),c->recovery_state,sizeof(*c->recovery_state))||
         !separate(r,sizeof(*r),c->shared,sizeof(*c->shared))||
         !separate(r,sizeof(*r),c->chip_id,sizeof(*c->chip_id))||
         c->session.owner_task!=c->entropy.owner||c->network.bootstrap!=c->session.owner_task||
@@ -38,6 +39,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
     r->self=r;r->config=*c;atomic_init(&r->failed,1);atomic_init(&r->network_started,0);
     atomic_init(&r->completed_transfers,0);
     atomic_init(&r->watchdog_deadline,0);atomic_init(&r->snapshot_busy,0);
+    atomic_init(&r->client_status,0);atomic_init(&r->verified_received,0);
     struct board_radio_config *p=&r->config;
     p->session.runtime.read_platform_id=platform_id;
     p->session.runtime.context=(void *)p->chip_id;
@@ -57,7 +59,9 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
 }
 static enum board_radio_result retain(struct board_radio *r)
 {
+    atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
     atomic_store_explicit(&r->failed,1,memory_order_release);
+    (void)a733_radio_entropy_retain(&r->entropy);
     (void)a733_radio_session_retain(&r->session);
     return BOARD_RADIO_RETAINED;
 }
@@ -67,21 +71,14 @@ static uint64_t bounded_deadline(struct board_radio *r,uint64_t now,uint64_t dur
     if(end>r->config.startup_deadline_us)end=r->config.startup_deadline_us;
     return duration<end-now?now+duration:end;
 }
-enum board_radio_result board_radio_poll(struct board_radio *r)
+enum board_radio_result board_radio_external_failure(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
         xTaskGetCurrentTaskHandle()!=r->config.session.owner_task)return BOARD_RADIO_INVALID;
-    enum a733_radio_entropy_result entropy=a733_radio_entropy_poll(&r->entropy);
-    /* Continue pending CE metadata retention even after radio admission closes. */
-    if(atomic_load_explicit(&r->failed,memory_order_acquire))return retain(r);
-    if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID||
-        atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
-        atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
-    uint64_t now;
-    if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
-    if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
-    enum a733_radio_session_result result=a733_radio_session_poll(&r->session);
-    if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
+    return retain(r);
+}
+static enum board_radio_result publish(struct board_radio *r,enum board_radio_result result)
+{
     uint64_t watch=r->stage==ONLINE?r->platform.config.lifetime_deadline_us:r->config.startup_deadline_us;
     if(r->stage==ONLINE&&r->startup_profile&&r->startup_profile->client_deadline_us<watch)
         watch=r->startup_profile->client_deadline_us;
@@ -93,19 +90,36 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         atomic_store_explicit(&r->watchdog_deadline,watch,memory_order_relaxed);
         atomic_store_explicit(&r->snapshot_busy,0,memory_order_release);
     }
-    if(result==A733_SESSION_BUSY)return BOARD_RADIO_PENDING;
+    return result;
+}
+enum board_radio_result board_radio_poll(struct board_radio *r)
+{
+    if(!r||r->self!=r||!r->constructed||
+        xTaskGetCurrentTaskHandle()!=r->config.session.owner_task)return BOARD_RADIO_INVALID;
+    if(atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return retain(r);
+    enum a733_radio_entropy_result entropy=a733_radio_entropy_poll(&r->entropy);
+    if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID||
+        atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
+        atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
+    uint64_t now;
+    if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
+    if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
+    enum a733_radio_session_result result=a733_radio_session_poll(&r->session);
+    if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
+    if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
     if(r->session.dispatcher.initialized){
         if(r->stage!=ONLINE&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
             r->startup_events!=UINT64_MAX)++r->startup_events;
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
-    if(r->stage==ONLINE)return aic8800_network_ready(&r->session.sockets.network)?
-        BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING;
-    if(result!=A733_SESSION_MANAGEMENT)return BOARD_RADIO_PENDING;
+    if(r->stage==ONLINE)return publish(r,aic8800_network_ready(&r->session.sockets.network)?
+        BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
     if(r->stage==STARTING){
-        if(entropy!=A733_RADIO_ENTROPY_READY)return BOARD_RADIO_PENDING;
+        if(entropy!=A733_RADIO_ENTROPY_READY)return publish(r,BOARD_RADIO_PENDING);
         uint64_t deadline=bounded_deadline(r,now,r->config.association_timeout_us);
         if(a733_radio_session_connect(&r->session,&r->config.target,deadline)){
             r->operation_deadline=deadline;r->stage=CONNECTING;
@@ -127,11 +141,12 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
             r->stage=ONLINE;atomic_store_explicit(&r->network_started,1,memory_order_release);
         }
     }
-    return r->session.fault?retain(r):BOARD_RADIO_PENDING;
+    return r->session.fault?retain(r):publish(r,BOARD_RADIO_PENDING);
 }
 int board_radio_submit(struct board_radio *r,const struct sunstone_net_request *request,uint64_t *ticket)
 {
     return r&&r->self==r&&r->constructed&&!atomic_load_explicit(&r->failed,memory_order_acquire)&&
+        !(atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)&&
         atomic_load_explicit(&r->network_started,memory_order_acquire)&&
         separate(r,sizeof(*r),request,sizeof(*request))&&separate(r,sizeof(*r),ticket,sizeof(*ticket))&&
         sunstone_net_submit(&r->session.sockets,request,ticket);
@@ -144,22 +159,26 @@ int board_radio_receive(struct board_radio *r,struct sunstone_net_reply *reply,T
 }
 uint64_t board_radio_completed_transfers(const struct board_radio *r)
 {
-    if(!r||r->self!=r||!r->constructed||atomic_load_explicit(&r->failed,memory_order_acquire))return 0;
+    if(!r||r->self!=r||!r->constructed||atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return 0;
     uint64_t count=atomic_load_explicit(&r->completed_transfers,memory_order_acquire);
-    return atomic_load_explicit(&r->failed,memory_order_acquire)?0:count;
+    return atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)?0:count;
 }
 int board_radio_watchdog(struct board_radio *r,uint64_t *progress,uint64_t *deadline)
 {
     if(!r||r->self!=r||!r->constructed||!progress||!deadline||
         !separate(r,sizeof(*r),progress,sizeof(*progress))||!separate(r,sizeof(*r),deadline,sizeof(*deadline)))return -1;
     if(!separate(progress,sizeof(*progress),deadline,sizeof(*deadline)))return -1;
-    if(atomic_load_explicit(&r->failed,memory_order_acquire))return -1;
+    if(atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     unsigned unlocked=0;
     if(!atomic_compare_exchange_strong_explicit(&r->snapshot_busy,&unlocked,1,memory_order_acquire,memory_order_relaxed))return 0;
     uint64_t p=atomic_load_explicit(&r->completed_transfers,memory_order_relaxed);
     uint64_t d=atomic_load_explicit(&r->watchdog_deadline,memory_order_relaxed);
     atomic_store_explicit(&r->snapshot_busy,0,memory_order_release);
-    if(atomic_load_explicit(&r->failed,memory_order_acquire))return -1;
+    if(atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     if(!p||!d)return 0;*progress=p;*deadline=d;return 1;
 }
 static int evidence(const uint8_t bytes[32])
@@ -201,13 +220,10 @@ static int radio_authorize(void *cookie,const struct a733_radio_platform_config 
     return p->used&&f->platform_authority&&evidence(f->platform_evidence)&&
         token->owner==f->platform.owner&&memcmp(c,&f->platform,sizeof(*c))==0;
 }
-int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
-    struct board_radio_ce_provider *p,const void *providers,size_t provider_bytes,
-    const struct board_radio_profile *f,const uint8_t expected[32],const struct board_radio_chip_id *id,
-    TaskHandle_t owner,TaskHandle_t client)
+static int startup_profile_valid(const struct board_radio_profile *f,const uint8_t expected[32],
+    const struct board_radio_chip_id *id)
 {
-    if(!r||r->self||!shared||!p||p->used||!providers||!provider_bytes||!f||!expected||!id||!owner||!client||
-        owner==client||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
+    if(!f||!expected||!id||
         f->magic!=BOARD_RADIO_PROFILE_MAGIC||f->version!=1||f->bytes!=sizeof(*f)||f->reserved||
         !f->platform_authority||!f->ce_authority||!f->secure_ce_authority||
         !evidence(f->platform_evidence)||!evidence(f->ce_evidence)||!evidence(f->entropy_evidence)||
@@ -217,8 +233,7 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
         !f->peer_port||!f->request_bytes||f->request_bytes>sizeof(f->request)||
         !f->response_bytes||f->response_bytes>sizeof(f->response)||!f->client_timeout_ticks||
         f->client_timeout_ticks>(uint32_t)(portMAX_DELAY/2)||
-        f->client_deadline_us<=f->startup_deadline_us||f->client_deadline_us>f->platform.lifetime_deadline_us||
-        !separate(r,sizeof(*r),providers,provider_bytes)||!separate(r,sizeof(*r),f,sizeof(*f)))return 0;
+        f->client_deadline_us<=f->startup_deadline_us||f->client_deadline_us>f->platform.lifetime_deadline_us)return 0;
     uint8_t actual[32];storage_digest_bytes(f,sizeof(*f),actual);
     if(memcmp(actual,expected,sizeof(actual)))return 0;
     for(unsigned i=0;i<4;++i){
@@ -228,6 +243,17 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
             if(f->firmware_address[i]<f->firmware_address[j]+f->firmware_bytes[j]&&
                 f->firmware_address[j]<f->firmware_address[i]+f->firmware_bytes[i])return 0;
     }
+    return 1;
+}
+int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
+    struct board_radio_ce_provider *p,const void *providers,size_t provider_bytes,
+    const struct board_radio_profile *f,const uint8_t expected[32],const struct board_radio_chip_id *id,
+    TaskHandle_t owner,TaskHandle_t client,atomic_uint *recovery_state)
+{
+    if(!r||r->self||!shared||!p||p->used||!providers||!provider_bytes||!owner||!client||
+        owner==client||!recovery_state||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
+        !startup_profile_valid(f,expected,id)||!separate(r,sizeof(*r),providers,provider_bytes)||
+        !separate(r,sizeof(*r),f,sizeof(*f)))return 0;
     p->used=1;p->shared=shared;p->profile=f;p->source=&r->ce_source;
     p->pool_mutex=xSemaphoreCreateMutexStatic(&p->mutex_storage);
     if(!p->pool_mutex)return 0;
@@ -239,7 +265,7 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
     int bound=a733_ce_entropy_native_init(&r->ce_source,&f->ce,&ops,p,&shared->clocks,&p->token);
     BaseType_t released=xSemaphoreGive(p->pool_mutex);
     if(!bound||released!=pdTRUE)return 0;
-    struct board_radio_config c={.shared=shared,.platform=f->platform,.chip_id=id,
+    struct board_radio_config c={.shared=shared,.platform=f->platform,.chip_id=id,.recovery_state=recovery_state,
         .admit=radio_authorize,.admission_context=p,
         .entropy={.source=&r->ce_source,.owner=owner,.pool_mutex=p->pool_mutex,.clock=&shared->counter,
             .qualification_record=f->entropy_record,.request_timeout_us=f->refill_timeout_us,
@@ -265,12 +291,24 @@ int board_radio_startup(struct board_radio *r,struct a733_native_usb *shared,
     r->startup_profile=f;return 1;
 }
 static int client_failure(struct board_radio *r)
-{atomic_store_explicit(&r->failed,1,memory_order_release);return -1;}
+{atomic_fetch_or_explicit(r->config.recovery_state,4,memory_order_acq_rel);
+ atomic_store_explicit(&r->client_status,2,memory_order_release);
+ atomic_store_explicit(&r->failed,1,memory_order_release);return -1;}
+int board_radio_client_result(const struct board_radio *r,unsigned *verified)
+{
+    if(!r||r->self!=r||!r->constructed||!verified||!separate(r,sizeof(*r),verified,sizeof(*verified)))return -1;
+    unsigned status=atomic_load_explicit(&r->client_status,memory_order_acquire);
+    *verified=atomic_load_explicit(&r->verified_received,memory_order_acquire);
+    if(status==2||atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
+    return status==1?1:0;
+}
 int board_radio_client_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||!r->startup_profile||
         xTaskGetCurrentTaskHandle()!=r->config.network.clients[0])return -1;
-    if(atomic_load_explicit(&r->failed,memory_order_acquire))return -1;
+    if(atomic_load_explicit(&r->failed,memory_order_acquire)||
+        (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     const struct board_radio_profile *f=r->startup_profile;
     if(r->client_stage==5)return 1;
     uint64_t now;if(!a733_counter_clock_now(&r->config.shared->counter,&now)||now>=f->client_deadline_us)
@@ -291,8 +329,11 @@ int board_radio_client_poll(struct board_radio *r)
         }else if(r->client_stage==3){
             if(!reply->bytes||reply->bytes>f->response_bytes-r->client_received||
                 memcmp(reply->payload,f->response+r->client_received,reply->bytes))return client_failure(r);
-            r->client_received+=reply->bytes;if(r->client_received==f->response_bytes)++r->client_stage;
-        }else if(r->client_stage==4){++r->client_stage;return 1;}
+            r->client_received+=reply->bytes;
+            atomic_store_explicit(&r->verified_received,(unsigned)r->client_received,memory_order_release);
+            if(r->client_received==f->response_bytes)++r->client_stage;
+        }else if(r->client_stage==4){++r->client_stage;
+            atomic_store_explicit(&r->client_status,1,memory_order_release);return 1;}
     }
     memset(request,0,sizeof(*request));request->handle=r->client_handle;request->timeout=f->client_timeout_ticks;
     request->port=f->peer_port;memcpy(request->address,f->peer_address,4);
