@@ -8,7 +8,7 @@
 #define CCU UINT32_C(0x02002000)
 #define SID UINT32_C(0x03006244)
 #define MASK UINT32_C(31)
-enum { ADMIT, START, ACTIVE, FAILED };
+enum { ADMIT, START, ACTIVE, FAILED, STOPPED };
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -190,7 +190,8 @@ enum a733_thermal_result a733_thermal_poll(struct a733_thermal *p)
 {
     if (!p || !p->initialized) return A733_THERMAL_INVALID;
     if (!claim(p)) return A733_THERMAL_BUSY;
-    if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
+    if (p->stage==STOPPED) return finish(p,A733_THERMAL_STOPPED);
+ if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
     if (p->fault) return fault(p);
     if (p->stage==ACTIVE) return finish(p,A733_THERMAL_READY);
     if (p->stage==ADMIT) {
@@ -214,7 +215,8 @@ enum a733_thermal_result a733_thermal_read(struct a733_thermal *p,uint64_t deadl
     if (!p || !p->initialized || !separate(p,sizeof(*p),out,sizeof(*out)) ||
         !separate(p->registry,sizeof(*p->registry),out,sizeof(*out))) return A733_THERMAL_INVALID;
     if (!claim(p)) return A733_THERMAL_BUSY;
-    if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
+    if (p->stage==STOPPED) return finish(p,A733_THERMAL_STOPPED);
+ if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
     if (p->fault) return fault(p);
     if (p->stage!=ACTIVE || !deadline) return finish(p,A733_THERMAL_INVALID);
     p->deadline=deadline;
@@ -237,4 +239,24 @@ enum a733_thermal_result a733_thermal_read(struct a733_thermal *p,uint64_t deadl
     if (p->sequence==UINT32_MAX) return fault(p);
     sample.sequence=++p->sequence;sample.observed_us=p->last_now;*out=sample;
     return finish(p,A733_THERMAL_SAMPLE);
+}
+
+enum a733_thermal_result a733_thermal_stop(struct a733_thermal *p,uint64_t deadline)
+{
+ if (!p || !p->initialized) return A733_THERMAL_INVALID;
+ if (!claim(p)) return A733_THERMAL_BUSY;
+ if (p->stage==STOPPED) return finish(p,A733_THERMAL_STOPPED);
+ if (p->stage==FAILED) return finish(p,A733_THERMAL_RETAINED);
+ if (p->fault) return fault(p);
+ if (p->stage!=ACTIVE || !deadline) return finish(p,A733_THERMAL_INVALID);
+
+ p->deadline=deadline;
+ enum a733_thermal_result r=lock(p);
+ if (r!=A733_THERMAL_READY) return r;
+ if (!clocks(p,1) || !bits(p,THS+0x10,MASK,0) ||
+     !update(p,THS+0x14,MASK,0) || !update(p,THS+0x18,MASK,0) ||
+     !update(p,THS+4,MASK,0) || !bits(p,THS+4,MASK,0) ||
+     !bits(p,THS+0x14,MASK,0) || !bits(p,THS+0x18,MASK,0) ||
+     !unlock(p)) return fault(p);
+ p->stage=STOPPED;return finish(p,A733_THERMAL_STOPPED);
 }

@@ -1,0 +1,12 @@
+--- platform.c
++++ monitor-platform.c
+@@ -133,6 +133,9 @@
+ }
+ void vApplicationIRQHandler(uint64_t interrupt)
+ {
++    extern void monitor_application_irq(unsigned);
++    if(interrupt==70){monitor_application_irq(0);return;}
++    if(interrupt==71){monitor_application_irq(1);return;}
+     unsigned c=core();
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
+     if(interrupt==30 && !c) {

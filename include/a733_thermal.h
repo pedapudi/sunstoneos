@@ -7,7 +7,7 @@
 #define A733_THERMAL_INTID 71u /* GIC INTID, equivalent to SPI 39. */
 enum a733_thermal_result { A733_THERMAL_PENDING, A733_THERMAL_BUSY,
     A733_THERMAL_READY, A733_THERMAL_AGAIN, A733_THERMAL_SAMPLE,
-    A733_THERMAL_RETAINED, A733_THERMAL_INVALID };
+    A733_THERMAL_RETAINED, A733_THERMAL_INVALID, A733_THERMAL_STOPPED };
 /* Physical channel order: CPUB, DDR, NPU, CPUL, GPU. Thresholds use calibrated
  * 12-bit hardware codes. Lower codes indicate hotter temperatures within each branch. The source
  * temperature formula has a discontinuity at code 1769; no smooth inverse or
@@ -86,7 +86,15 @@ enum a733_thermal_result a733_thermal_poll(struct a733_thermal *);
  */
 enum a733_thermal_result a733_thermal_read(struct a733_thermal *,uint64_t deadline,
     struct a733_thermal_sample *);
-/* No release, voltage change, automatic shutdown or throttling API. Faults keep
+/* No release, voltage change, automatic shutdown policy or throttling API. Faults keep
  * all authority, with metadata-only retry if registry retention returns BUSY.
  * Terminal fault polls/read calls perform no callbacks or hardware access. */
+/* Owner-task-only configured disable after READY. Caller masks its GIC IRQ
+ * before entry and supplies a fresh absolute deadline. STOPPED means converter
+ * and local interrupt enables were read back disabled; it does not prove an
+ * in-flight analog conversion drained. All clocks, resets, memory and leases
+ * remain owned. No restart/release is provided. Uncertainty faults permanently;
+ * BUSY requires checking the owner-only fault latch before retry. Repeated
+ * STOPPED calls and later poll/read calls perform no callbacks or MMIO. */
+enum a733_thermal_result a733_thermal_stop(struct a733_thermal *,uint64_t deadline);
 #endif

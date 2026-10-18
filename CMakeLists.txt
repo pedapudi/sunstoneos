@@ -225,3 +225,8 @@ option(SUNSTONE_A733_ADC "Build the supervised native GPADC board monitor" OFF)
 if(SUNSTONE_A733_ADC)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-adc.cmake")
 endif()
+
+option(SUNSTONE_A733_MONITOR "Build supervised repeated thermal/GPADC monitoring" OFF)
+if(SUNSTONE_A733_MONITOR)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-monitor.cmake")
+endif()

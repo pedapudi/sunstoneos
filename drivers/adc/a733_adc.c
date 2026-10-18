@@ -7,7 +7,7 @@
 #define ADC UINT32_C(0x02521000)
 #define CCU UINT32_C(0x02002000)
 #define MASK UINT32_C(15)
-enum {ADMIT,START,ACTIVE,FAILED};
+enum {ADMIT,START,ACTIVE,FAILED,STOPPED};
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -135,6 +135,7 @@ static int unlock(struct a733_adc *p)
 enum a733_adc_result a733_adc_poll(struct a733_adc *p)
 {
  if(!p||!p->initialized)return A733_ADC_INVALID;if(!claim(p))return A733_ADC_BUSY;
+ if(p->stage==STOPPED) return finish(p,A733_ADC_STOPPED);
  if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
  if(p->ops.current(p->cookie)!=1)return fault(p);
  if(p->stage==ACTIVE)return finish(p,A733_ADC_READY);
@@ -151,7 +152,8 @@ enum a733_adc_result a733_adc_read(struct a733_adc *p,uint64_t deadline,struct a
 {
  if(!p||!p->initialized||!out||!separate(out,sizeof(*out),p,sizeof(*p))||
  !separate(out,sizeof(*out),p->registry,sizeof(*p->registry)))return A733_ADC_INVALID;
- if(!claim(p))return A733_ADC_BUSY;if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
+ if(!claim(p))return A733_ADC_BUSY;if(p->stage==STOPPED) return finish(p,A733_ADC_STOPPED);
+ if(p->stage==FAILED)return finish(p,A733_ADC_RETAINED);if(p->fault)return fault(p);
  if(p->ops.current(p->cookie)!=1||p->stage!=ACTIVE||!deadline)return fault(p);p->deadline=deadline;
  enum a733_adc_result r=lock(p);if(r!=A733_ADC_READY)return r;
  uint32_t status;
@@ -164,4 +166,25 @@ enum a733_adc_result a733_adc_read(struct a733_adc *p,uint64_t deadline,struct a
  for(unsigned i=0;i<4;++i)if(status&BIT(i)){uint32_t code;if(!rd(p,ADC+0x80+4*i,&code)||code>4095)return fault(p);sample.code[i]=(uint16_t)code;sample.observed_us[i]=p->last_now;}
  if(!clear_observed(p,ADC+0x38,status)||!unlock(p))return fault(p);
  if(!status)return finish(p,A733_ADC_AGAIN);p->sequence=sample.sequence;*out=sample;return finish(p,A733_ADC_SAMPLE);
+}
+
+enum a733_adc_result a733_adc_stop(struct a733_adc *p,uint64_t deadline)
+{
+ if (!p || !p->initialized) return A733_ADC_INVALID;
+ if (!claim(p)) return A733_ADC_BUSY;
+ if (p->stage==STOPPED) return finish(p,A733_ADC_STOPPED);
+ if (p->stage==FAILED) return finish(p,A733_ADC_RETAINED);
+ if (p->fault) return fault(p);
+ if (p->stage!=ACTIVE || !deadline) return finish(p,A733_ADC_INVALID);
+ if (p->ops.current(p->cookie)!=1) return fault(p);
+ p->deadline=deadline;
+ enum a733_adc_result r=lock(p);
+ if (r!=A733_ADC_READY) return r;
+ if (!clocks(p,1) || !bits(p,ADC+0x0c,0x00070010,0) ||
+     !bits(p,ADC+0x10,0x00037f00,0) ||
+     !update(p,ADC+0x28,127,0) || !update(p,ADC+4,BIT(16),0) ||
+     !update(p,ADC+8,0x007f007f,0) ||
+     !bits(p,ADC+0x28,127,0) || !bits(p,ADC+4,BIT(16),0) ||
+     !bits(p,ADC+8,0x007f007f,0) || !unlock(p)) return fault(p);
+ p->stage=STOPPED;return finish(p,A733_ADC_STOPPED);
 }
