@@ -5,6 +5,7 @@
 #include "aic8800_runtime.h"
 #include "aic8800_firmware.h"
 #include "FreeRTOS_IP_Private.h"
+#include "FreeRTOS_DHCP.h"
 #include "NetworkBufferManagement.h"
 #include "task.h"
 #include <string.h>
@@ -41,6 +42,75 @@ static int authority_for(const struct aic8800_sdio_transport *t,uint64_t generat
 }
 int aic8800_network_ready(const struct aic8800_network *n)
 {return n&&n->initialized&&!atomic_load(&n->failed)&&atomic_load(&n->ready);}
+static int address_expired(const struct aic8800_network *n)
+{
+    if(!n->config.dhcp)return 0;
+    unsigned first=atomic_load(&n->address_sequence);if(first&1)return -1;
+    TickType_t start=atomic_load(&n->lease_started),limit=atomic_load(&n->lease_ticks);
+    if(!atomic_load(&n->address_ready)){start=n->address_started;limit=n->config.address_timeout;}
+    int expired=(TickType_t)(xTaskGetTickCount()-start)>=limit;
+    return first==atomic_load(&n->address_sequence)?expired:-1;
+}
+int aic8800_network_address(const struct aic8800_network *n,uint8_t value[4])
+{
+    if(!aic8800_network_ready(n)||!atomic_load(&n->address_ready)||atomic_load(&n->address_failed)||address_expired(n)!=0)return 0;
+    uint32_t address=atomic_load(&n->address_value);if(value)memcpy(value,&address,4);return 1;
+}
+int aic8800_network_status(const struct aic8800_network *n,uint32_t values[4])
+{
+    if(!aic8800_network_address(n,NULL))return 0;
+    unsigned first=atomic_load(&n->address_sequence);if(first&1)return 0;
+    values[0]=atomic_load(&n->address_value);values[1]=atomic_load(&n->mask_value);
+    values[2]=atomic_load(&n->gateway_value);values[3]=atomic_load(&n->dns_value);
+    return first==atomic_load(&n->address_sequence)&&aic8800_network_address(n,NULL);
+}
+static void address_revoke(struct aic8800_network *n)
+{atomic_store(&n->address_ready,0);atomic_store(&n->address_failed,1);}
+void aic8800_network_ip_step(void)
+{
+    struct aic8800_network *n=stack_owner;if(!n||!n->config.dhcp)return;
+    if(atomic_load(&n->failed)||atomic_load(&n->address_failed)||address_expired(n)==1)address_revoke(n);
+    /* The stack has already copied this lease into its renewal timer. Clear
+     * the retained option before a later ACK can reuse it. Only a freshly
+     * parsed option 51 may authorize another native lease publication. */
+    if(n->endpoint.xDHCPData.eDHCPState==eLeasedAddress)n->endpoint.xDHCPData.ulLeaseTime=0;
+}
+eDHCPCallbackAnswer_t xApplicationDHCPHook_Multi(eDHCPCallbackPhase_t phase,NetworkEndPoint_t *endpoint,IP_Address_t *address)
+{
+    (void)phase;(void)address;struct aic8800_network *n=stack_owner;
+    if(!n||endpoint!=&n->endpoint||!n->config.dhcp||atomic_load(&n->failed)||atomic_load(&n->address_failed))return eDHCPStopNoChanges;
+    if(address_expired(n)==1)address_revoke(n);
+    if(phase==eDHCPPhasePreRequest)endpoint->xDHCPData.ulLeaseTime=0;
+    return atomic_load(&n->address_failed)?eDHCPStopNoChanges:eDHCPContinue;
+}
+void vApplicationIPNetworkEventHook_Multi(eIPCallbackEvent_t event,NetworkEndPoint_t *endpoint)
+{
+    struct aic8800_network *n=stack_owner;if(!n||endpoint!=&n->endpoint)return;
+    if(event!=eNetworkUp){atomic_store(&n->address_ready,0);return;}
+    if(address_expired(n)==1)address_revoke(n);
+    if(atomic_load(&n->failed)||atomic_load(&n->address_failed))return;
+    uint32_t ip=endpoint->ipv4_settings.ulIPAddress;
+    if(n->config.dhcp){
+        /* The hook precedes the stack's default/minimum lease substitution.
+         * Use only the server-supplied half-lease, never an invented default. */
+        uint32_t half=endpoint->xDHCPData.ulLeaseTime;
+        if(endpoint->xDHCPData.eDHCPState!=eLeasedAddress||!half||!ip||
+            (n->leased_address&&n->leased_address!=ip)){address_revoke(n);return;}
+        uint64_t ticks=2*(uint64_t)half;
+        atomic_fetch_add(&n->address_sequence,1);
+        atomic_store(&n->lease_ticks,ticks<n->config.lease_cap?(TickType_t)ticks:n->config.lease_cap);
+        atomic_store(&n->lease_started,xTaskGetTickCount());n->leased_address=ip;
+    }else atomic_fetch_add(&n->address_sequence,1);
+    atomic_store(&n->address_value,ip);atomic_store(&n->mask_value,endpoint->ipv4_settings.ulNetMask);
+    atomic_store(&n->gateway_value,endpoint->ipv4_settings.ulGatewayAddress);
+    atomic_store(&n->dns_value,endpoint->ipv4_settings.ulDNSServerAddresses[0]);
+    atomic_fetch_add(&n->address_sequence,1);atomic_store(&n->address_ready,ip!=0);
+}
+static int dhcp_packet(const uint8_t *p,size_t bytes)
+{
+    if(bytes<42||p[12]!=8||p[13]!=0||p[14]!=0x45||p[23]!=17)return 0;
+    return p[34]==0&&p[35]==68&&p[36]==0&&p[37]==67;
+}
 void aic8800_network_fault(struct aic8800_network *n)
 {if(n&&n->initialized){atomic_store(&n->ready,0);atomic_store(&n->failed,1);}}
 static BaseType_t link_status(NetworkInterface_t *interface)
@@ -50,7 +120,8 @@ static BaseType_t output(NetworkInterface_t *interface,NetworkBufferDescriptor_t
     struct aic8800_network *n=interface->pvArgument;BaseType_t result=pdFAIL;
     if(descriptor&&descriptor->pucEthernetBuffer&&descriptor->xDataLength>=14&&descriptor->xDataLength<=1514&&aic8800_network_ready(n)) {
         const uint8_t *p=descriptor->pucEthernetBuffer;
-        if(!(p[12]==0x88&&p[13]==0x8e)) {
+        if(!(p[12]==0x88&&p[13]==0x8e)&&(aic8800_network_address(n,NULL)||
+            (n->config.dhcp&&!atomic_load(&n->address_failed)&&address_expired(n)==0&&dhcp_packet(p,descriptor->xDataLength)))) {
             struct aic8800_network_packet packet={.generation=n->generation,.queued=xTaskGetTickCount(),.bytes=(uint16_t)descriptor->xDataLength};
             memcpy(packet.ethernet,p,packet.bytes);result=xQueueSend(n->tx,&packet,0);
         }
@@ -85,7 +156,8 @@ uint32_t ulApplicationGetNextSequenceNumber(uint32_t source,uint16_t sport,uint3
 int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_network_config *c)
 {
     if(!n||!c||n->initialized||stack_owner||!aic8800_network_storage_valid(n,sizeof(*n),c)||!c->transport||!c->transport->wifi||!c->transport->data||
-        !c->tx_timeout||!c->queue_timeout||!c->entropy_record||!c->random32||!c->sequence)return 0;
+        !c->tx_timeout||!c->queue_timeout||c->dhcp>1||
+        (c->dhcp&&(!c->address_timeout||c->address_timeout>portMAX_DELAY/2||!c->lease_cap||c->lease_cap>portMAX_DELAY/2))||!c->entropy_record||!c->random32||!c->sequence)return 0;
     if(c->transport->receive_owner){
         if(!c->dispatcher||c->transport->receive_owner!=c->dispatcher||
             c->transport->receive_owner_bytes!=sizeof(*c->dispatcher)||!c->dispatcher->initialized||
@@ -108,9 +180,9 @@ int aic8800_network_activate(struct aic8800_network *n,const struct aic8800_netw
     n->tx=xQueueCreateStatic(AIC8800_NETWORK_TX_SLOTS,sizeof(struct aic8800_network_packet),n->tx_storage,&n->tx_queue);
     if(!n->tx){aic8800_network_fault(n);return 0;}
     n->interface=(NetworkInterface_t){.pcName="wifi",.pvArgument=n,.pfInitialise=link_status,.pfOutput=output,.pfGetPhyLinkStatus=link_status};
-    static const uint8_t dns[4]={0};
     FreeRTOS_AddNetworkInterface(&n->interface);
-    FreeRTOS_FillEndPoint(&n->interface,&n->endpoint,c->address,c->netmask,c->gateway,dns,c->transport->wifi->mac);
+    FreeRTOS_FillEndPoint(&n->interface,&n->endpoint,c->address,c->netmask,c->gateway,c->dns,c->transport->wifi->mac);
+    n->endpoint.bits.bWantDHCP=c->dhcp;n->address_started=xTaskGetTickCount();
     stack_owner=n;atomic_store(&n->ready,1);
     if(FreeRTOS_IPInit_Multi()!=pdPASS){aic8800_network_fault(n);return 0;}n->stack_started=1;return 1;
 }
@@ -118,6 +190,7 @@ void aic8800_network_poll(struct aic8800_network *n)
 {
     if(!n||!n->initialized)return;
     struct aic8800_sdio_transport *t=n->config.transport;
+    if(address_expired(n)==1)address_revoke(n);
     if(atomic_load(&n->failed)){if(n->stack_started&&!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
     aic8800_dispatch_poll(n->receive);
     if(n->receive->faulted||t->state==AIC8800_TRANSPORT_FAULT||!t->wifi||t->wifi->association_generation!=n->generation||
@@ -150,6 +223,9 @@ void aic8800_network_poll(struct aic8800_network *n)
         if(n->current.generation!=n->generation){aic8800_network_fault(n);return;}
         if((TickType_t)(xTaskGetTickCount()-n->current.queued)>=n->config.queue_timeout){++n->tx_dropped;n->owns_current=0;return;}
         if(!aic8800_network_ready(n))return;
+        if(!aic8800_network_address(n,NULL)&&!(n->config.dhcp&&!atomic_load(&n->address_failed)&&address_expired(n)==0&&dhcp_packet(n->current.ethernet,n->current.bytes))){
+            ++n->tx_dropped;n->owns_current=0;return;
+        }
         uint64_t now=t->card->host->last_now;
         if(n->config.tx_timeout>UINT64_MAX-now){aic8800_network_fault(n);return;}
         uint64_t deadline=now+n->config.tx_timeout;if(deadline>t->deadline)deadline=t->deadline;

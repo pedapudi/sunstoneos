@@ -29,3 +29,46 @@ size_t strlen(const char *text)
     while (text[length]) ++length;
     return length;
 }
+
+int strcmp(const char *left, const char *right)
+{
+    const unsigned char *a = (const unsigned char *)left;
+    const unsigned char *b = (const unsigned char *)right;
+    while (*a && *a == *b) { ++a; ++b; }
+    return (int)*a - (int)*b;
+}
+
+char *strchr(const char *text, int value)
+{
+    unsigned char match = (unsigned char)value;
+    for (;;) {
+        if ((unsigned char)*text == match) return (char *)text;
+        if (!*text) return NULL;
+        ++text;
+    }
+}
+
+char *strcpy(char *restrict destination, const char *restrict source)
+{
+    char *result = destination;
+    do { *destination++ = *source; } while (*source++);
+    return result;
+}
+
+char *strncpy(char *restrict destination, const char *restrict source, size_t count)
+{
+    size_t i = 0;
+    for (; i < count && source[i]; ++i) destination[i] = source[i];
+    for (; i < count; ++i) destination[i] = 0;
+    return destination;
+}
+
+int strcasecmp(const char *left, const char *right)
+{
+    for (;;) {
+        unsigned char a = (unsigned char)*left++, b = (unsigned char)*right++;
+        if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + ('a' - 'A'));
+        if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + ('a' - 'A'));
+        if (a != b || !a) return (int)a - (int)b;
+    }
+}

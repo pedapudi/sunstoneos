@@ -18,6 +18,10 @@ struct aic8800_network_config {
     int (*sequence)(void *,uint32_t,uint16_t,uint32_t,uint16_t,uint32_t *);
     void *entropy_context;
     uint64_t entropy_record;
+    /* Zero preserves fixed IPv4. DHCP never falls back to fixed defaults. */
+    uint8_t dhcp,dns[4];
+    TickType_t address_timeout; /* Finite acquisition bound; <= portMAX_DELAY/2. */
+    TickType_t lease_cap; /* Conservative maximum lifetime of each acknowledged lease. */
 };
 struct aic8800_network_packet {uint64_t generation;TickType_t queued;uint16_t bytes;uint8_t ethernet[1514];};
 struct aic8800_network {
@@ -31,7 +35,11 @@ struct aic8800_network {
     uint8_t tx_storage[AIC8800_NETWORK_TX_SLOTS*sizeof(struct aic8800_network_packet)];
     struct aic8800_network_packet current;
     uint64_t generation,rx_packets,tx_bus_completions,rx_dropped,tx_dropped;
-    atomic_uint ready,failed;
+    atomic_uint ready,failed,address_ready,address_failed,address_sequence;
+    atomic_uint_least32_t address_value,mask_value,gateway_value,dns_value;
+    TickType_t address_started;
+    atomic_uint_fast64_t lease_started,lease_ticks;
+    uint32_t leased_address; /* IP-task-owned, immutable after first lease. */
     uint8_t initialized,owns_current,active,down_sent,stack_started;
 };
 /* One stack instance for its image lifetime. Fresh storage; sole radio task
@@ -45,4 +53,8 @@ int aic8800_network_activate(struct aic8800_network *,const struct aic8800_netwo
 void aic8800_network_poll(struct aic8800_network *);
 void aic8800_network_fault(struct aic8800_network *);
 int aic8800_network_ready(const struct aic8800_network *);
+/* IP-task-only lease checks, called by the existing stack event trace hook. */
+void aic8800_network_ip_step(void);
+int aic8800_network_address(const struct aic8800_network *,uint8_t [4]);
+int aic8800_network_status(const struct aic8800_network *,uint32_t [4]);
 #endif

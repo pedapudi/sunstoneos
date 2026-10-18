@@ -72,6 +72,9 @@ target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/u
   "${board_root}/include" "${board_root}/runtime/include" "${FREERTOS_DIR}/include"
   "${storage_base}" "${TINYUSB_DIR}/src")
 file(GLOB board_tcp_sources "${SUNSTONE_TCP_DIR}/source/*.c")
+# DNS runs in the IP task; use its actual nonblocking socket internals.
+set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
+  COMPILE_DEFINITIONS DNS_BindSocket=sunstone_net_dns_bind DNS_CloseSocket=sunstone_net_dns_close)
 list(APPEND board_sources ${board_tcp_sources} "${FREERTOS_DIR}/event_groups.c"
   "${FREERTOS_DIR}/portable/MemMang/heap_4.c"
   "${SUNSTONE_TCP_DIR}/source/portable/BufferManagement/BufferAllocation_1.c")

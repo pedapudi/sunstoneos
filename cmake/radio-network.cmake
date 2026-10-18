@@ -22,6 +22,9 @@ if(SUNSTONE_TCP_DIR AND SUNSTONE_RSN_DIR)
     list(APPEND network_sources "${source}")
   endforeach()
   file(GLOB tcp_sources "${SUNSTONE_TCP_DIR}/source/*.c")
+# DNS runs in the IP task; use its actual nonblocking socket internals.
+set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
+  COMPILE_DEFINITIONS DNS_BindSocket=sunstone_net_dns_bind DNS_CloseSocket=sunstone_net_dns_close)
   add_executable(radio-network-model EXCLUDE_FROM_ALL ${network_sources} ${tcp_sources}
     "${FREERTOS_DIR}/event_groups.c" "${FREERTOS_DIR}/portable/MemMang/heap_4.c"
     "${SUNSTONE_TCP_DIR}/source/portable/BufferManagement/BufferAllocation_1.c"

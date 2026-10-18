@@ -1,10 +1,10 @@
 # Native IPv4 service over the radio transport
 
 The network service runs FreeRTOS+TCP with the native AIC8800 Ethernet
-transport. It implements static IPv4 addressing, ARP, ICMP replies, UDP, and
-outgoing TCP connections. Applications submit copied requests through
-`sunstone_net.h`; the privileged worker owns every stack socket and all radio
-polling. This document assumes familiarity with FreeRTOS tasks and IP sockets.
+transport. It implements fixed IPv4 or DHCPv4 addressing, DNS client lookups, ARP,
+ICMP replies, UDP, and outgoing TCP connections. Applications submit copied
+requests through `sunstone_net.h`; the privileged service owns socket records
+and radio polling. This document assumes familiarity with FreeRTOS tasks and IP sockets.
 
 The implementation passed native AArch64 compilation and the composed network checks. The composed model uses
 actual FreeRTOS tasks, FreeRTOS+TCP, socket allocation, the Ethernet adapter,
@@ -22,9 +22,9 @@ release history with that archive before building.
 
 The private configuration enables software IP, UDP, and TCP checksums.
 It sets a 1500-byte MTU, a 1460-byte TCP MSS, and four MSS units for each
-TCP send and receive stream. DHCP, DNS, IPv6, service discovery, and TCP server
-APIs remain required follow-on work. This initial application API supports
-UDP open, TCP open, connect, send, receive, and close.
+TCP send and receive stream. IPv6, service discovery, and TCP server APIs remain required follow-on work.
+The application API supports UDP open, TCP open, connect, send, receive, close,
+address status, DNS resolution, and cancellation.
 
 The optional `cmake/radio-network.cmake` builds `radio-network-model` with
 `SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR`, and `SUNSTONE_NETWORK_C_HEADERS`.
@@ -146,3 +146,71 @@ arguments. Evidence includes command output, the executable digest, and source
 digests. The emulator has no host network interface. No physical queue request
 is appropriate until SDIO clock, pin, power, recovery, firmware, RF profile,
 entropy, and authorized network credentials have qualified platform bindings.
+
+## Address acquisition and DNS ownership
+
+A zero `network.dhcp` field preserves fixed IPv4. Fixed profiles may supply a
+DNS server in `network.dns`. DHCP profiles require a finite `address_timeout`
+and `lease_cap`, both in FreeRTOS ticks and no greater than half the tick range.
+The stack's DHCP engine sends discovery and request messages and renews its
+leases. The adapter never treats fallback defaults as a DHCP success.
+
+Address authority is separate from association authority. The initial DHCP
+acknowledgement must include a nonzero lease time. Each acknowledged lease
+expires at the earlier of the server's original lease and the admitted cap.
+The adapter uses the server value before the stack applies its minimum lease
+or default lease substitutions. It clears the retained lease option after
+the stack copies the renewal timer and before the initial request, so each
+accepted acknowledgement must carry a fresh lease option. An unstable address
+publication denies admission without permanently revoking an otherwise valid
+lease. An acknowledgement after the lease deadline cannot restore authority.
+A changed address also revokes the address lifetime; existing
+sockets remain retained and require explicit close. Address loss returns
+`SUNSTONE_NET_ADDRESS_LOST`, while association or provider failure returns
+`SUNSTONE_NET_LINK_LOST`. DHCP control packets may pass during acquisition;
+ordinary queued packets cannot enter SDIO without current address authority.
+
+`SUNSTONE_NET_ADDRESS` waits for address authority and copies sixteen bytes:
+IPv4 address, netmask, gateway, and DNS server, each in network byte order.
+`SUNSTONE_NET_RESOLVE` accepts a copied ASCII hostname in `payload`, with its
+length in `bytes` and no terminating NUL. The length must be between one and
+253 bytes. The successful reply copies the IPv4 address into `address`.
+A missing DNS server refuses resolution. DNS cache, multicast discovery and
+IPv6 resolution are disabled in this profile.
+
+The existing IP-task event hook owns DNS starts, cancellation, parser callbacks
+and timeout callbacks. Only the pinned DNS source's bind and close call sites
+are redirected to the stack's actual IP-task socket internals. The external
+source remains unmodified. Lookup send and receive waits are zero; neither the
+radio owner nor the IP task enters the public socket bind or close wait.
+The temporary DNS socket closes synchronously, allowing the pinned stack's
+asynchronous response parser to receive replies without a lingering socket
+intercepting them.
+
+Each client has one retained DNS slot. Completion is published only after the
+IP task finishes the previous callback dispatch. `sunstone_net_cancel` admits
+only the current client's outstanding ticket. Timeout, cancellation and address
+or provider loss leave DNS storage busy until the IP task acknowledges actual
+callback cancellation. A client may receive its terminal reply before that
+acknowledgement; another DNS request then returns busy. No stale callback may
+become a later request's result. Neither a software deadline nor cancellation
+establishes physical transport drain or permits reuse of an unresolved SDIO
+transfer.
+
+The focused checker, `checks/radio-network-dhcp-dns.py`, builds one AArch64
+composition and runs DHCP acquisition, renewal and expiry; acquisition failure;
+fixed IPv4 DNS and cancellation; and renewal without a fresh lease option.
+These four cases pass with actual stack parsing and callbacks over the SDIO
+model. The fixture requires an actual ARP cache entry before DNS and an
+IP-task cancellation acknowledgement before reusing a DNS slot. Standard
+string routines required by enabled DNS also pass focused semantics checks.
+Compiler evidence covers all 92 linked objects and 255 source dependencies.
+The preserved batch is under
+`~/.cache/sunstoneos/evidence/radio-dhcp-dns-20261017/batch3/`.
+
+Earlier setup and fixture failures remain preserved beside the final image.
+One earlier DHCP composition missed a 500-tick DNS deadline after ARP became
+ready; the final composition passes, but does not establish timing robustness.
+These checks do not qualify physical RF, network credentials, entropy or radio
+operation. Run the focused checker's `--help` for pinned-source and tool inputs,
+including TinyUSB required by the root build configuration.

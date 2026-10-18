@@ -17,9 +17,72 @@
  * THE SOFTWARE. */
 #include "sunstone_net.h"
 #include "FreeRTOS_IP_Private.h"
+#include "FreeRTOS_DNS.h"
 #include "event_groups.h"
 #include <string.h>
 static struct sunstone_net *service;
+/* These two call sites are renamed only in the pinned FreeRTOS_DNS.c.
+ * Every lookup and cancellation executes in the sole IP task, including its
+ * normal parser/timer callbacks. No public bind/close wait is entered. */
+BaseType_t sunstone_net_dns_bind(Socket_t socket,uint16_t port)
+{
+    configASSERT(xIsCallingFromIPTask());
+    struct freertos_sockaddr a={.sin_family=FREERTOS_AF_INET,.sin_port=port};
+    return vSocketBind(socket,&a,sizeof(a),pdFALSE);
+}
+void sunstone_net_dns_close(Socket_t socket)
+{configASSERT(xIsCallingFromIPTask());if(socket&&socket!=FREERTOS_INVALID_SOCKET)(void)vSocketClose(socket);}
+static void dns_result(const char *name,void *context,struct freertos_addrinfo *address)
+{
+    (void)name;struct sunstone_net_dns *q=context;configASSERT(xIsCallingFromIPTask());
+    if(atomic_load(&q->state)==SUNSTONE_DNS_WAIT){
+        q->address=address&&address->ai_family==FREERTOS_AF_INET&&address->ai_addr?
+            address->ai_addr->sin_address.ulIP_IPv4:0;
+        atomic_store(&q->callback_ready,1);
+    }
+}
+void sunstone_net_ip_step(void)
+{
+    struct sunstone_net *s=service;if(!s)return;configASSERT(xIsCallingFromIPTask());
+    aic8800_network_ip_step();
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i){
+        struct sunstone_net_dns *q=&s->dns[i];unsigned state=atomic_load(&q->state);
+        uint64_t canceled=atomic_exchange(&q->cancel_requested,0);
+        if(canceled&&canceled==atomic_load(&q->ticket)&&
+            (state==SUNSTONE_DNS_START||state==SUNSTONE_DNS_WAIT||state==SUNSTONE_DNS_DONE)){
+            unsigned expected=state;
+            if(atomic_compare_exchange_strong(&q->state,&expected,SUNSTONE_DNS_CANCEL)){
+                FreeRTOS_gethostbyname_cancel(q);atomic_store(&q->state,SUNSTONE_DNS_CANCELED);
+            }
+            continue;
+        }
+        if(state==SUNSTONE_DNS_WAIT&&atomic_load(&q->callback_ready)){
+            FreeRTOS_gethostbyname_cancel(q);atomic_store(&q->state,SUNSTONE_DNS_DONE);continue;
+        }
+        if(state!=SUNSTONE_DNS_START)continue;
+        TickType_t elapsed=xTaskGetTickCount()-q->submitted;
+        if(elapsed>=q->timeout||!aic8800_network_address(&s->network,NULL)){
+            q->address=0;atomic_store(&q->state,SUNSTONE_DNS_DONE);continue;
+        }
+        /* API callback timeout is milliseconds, request timeout is ticks. The
+         * owner independently enforces its earlier absolute tick deadline. */
+        TickType_t remaining=q->timeout-elapsed;
+        uint64_t milliseconds=remaining>(portMAX_DELAY/2)/1000?portMAX_DELAY/2:
+            (uint64_t)remaining*1000/configTICK_RATE_HZ;
+        if(!milliseconds)milliseconds=1;if(milliseconds>portMAX_DELAY/2)milliseconds=portMAX_DELAY/2;
+        atomic_store(&q->callback_ready,0);atomic_store(&q->state,SUNSTONE_DNS_WAIT);
+        uint32_t value=FreeRTOS_gethostbyname_a(q->name,dns_result,q,(TickType_t)milliseconds);
+        if(value){FreeRTOS_gethostbyname_cancel(q);q->address=value;atomic_store(&q->state,SUNSTONE_DNS_DONE);}
+    }
+}
+static void dns_cancel(struct sunstone_net *s,unsigned client)
+{
+    struct sunstone_net_dns *q=&s->dns[client];unsigned state=atomic_load(&q->state);
+    if(state!=SUNSTONE_DNS_IDLE&&state!=SUNSTONE_DNS_CANCELED){
+        atomic_store(&q->cancel_requested,atomic_load(&q->ticket));
+        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);
+    }
+}
 static int independent(const struct sunstone_net *s,const void *p,size_t n)
 {
     uintptr_t a=(uintptr_t)p,b=(uintptr_t)s;
@@ -46,6 +109,8 @@ static void publish_reply(struct sunstone_net *s,struct sunstone_net_pending *p,
             p->message.request.operation!=SUNSTONE_NET_SEND&&p->message.request.operation!=SUNSTONE_NET_RECEIVE)
             s->sockets[p->slot].uncertain=1;
     }
+    if(p->message.request.operation==SUNSTONE_NET_RESOLVE&&r->result!=SUNSTONE_NET_OK)dns_cancel(s,p->message.client);
+    atomic_store(&s->cancel[p->message.client],0);
     if(xQueueSend(s->clients[p->message.client].reply_queue,r,0)!=pdPASS){atomic_store(&s->failed,1);aic8800_network_fault(&s->network);return;}
     p->active=0;
 }
@@ -72,6 +137,11 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
 {
     if(!p->active)return;
     struct sunstone_net_request *r=&p->message.request;
+    if(atomic_load(&s->cancel[p->message.client])==p->message.ticket){
+        if(p->started&&p->slot<SUNSTONE_NET_SOCKETS&&r->operation!=SUNSTONE_NET_RECEIVE&&r->operation!=SUNSTONE_NET_SEND)
+            s->sockets[p->slot].uncertain=1;
+        reply(s,p,SUNSTONE_NET_CANCELED,0,NULL,0,NULL);return;
+    }
     if((TickType_t)(xTaskGetTickCount()-p->message.submitted)>=r->timeout){
         if(p->started&&p->slot<SUNSTONE_NET_SOCKETS&&r->operation!=SUNSTONE_NET_RECEIVE&&r->operation!=SUNSTONE_NET_SEND)
             s->sockets[p->slot].uncertain=1;
@@ -87,6 +157,38 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
         if(atomic_load(&s->failed)||atomic_load(&s->network.failed)){reply(s,p,SUNSTONE_NET_LINK_LOST,0,NULL,0,NULL);return;}
         return;
     }
+    if(r->operation==SUNSTONE_NET_ADDRESS){
+        if(!aic8800_network_address(&s->network,NULL)){
+            if(atomic_load(&s->network.address_failed))reply(s,p,SUNSTONE_NET_ADDRESS_LOST,0,NULL,0,NULL);
+            return;
+        }
+        struct sunstone_net_reply result={.ticket=p->message.ticket,.result=SUNSTONE_NET_OK,.bytes=16};
+        uint32_t values[4];if(!aic8800_network_status(&s->network,values))return;
+        memcpy(result.address,values,4);memcpy(result.payload,values,sizeof(values));publish_reply(s,p,&result);return;
+    }
+    if(r->operation!=SUNSTONE_NET_CLOSE&&!aic8800_network_address(&s->network,NULL)){
+        if(atomic_load(&s->network.address_failed))reply(s,p,SUNSTONE_NET_ADDRESS_LOST,0,NULL,0,NULL);
+        return;
+    }
+    if(r->operation==SUNSTONE_NET_RESOLVE){
+        struct sunstone_net_dns *q=&s->dns[p->message.client];unsigned state=atomic_load(&q->state);
+        if(!p->started){
+            if(!atomic_load(&s->network.dns_value)){reply(s,p,SUNSTONE_NET_IO,0,NULL,0,NULL);return;}
+            if(state==SUNSTONE_DNS_CANCELED){atomic_store(&q->state,SUNSTONE_DNS_IDLE);state=SUNSTONE_DNS_IDLE;}
+            if(state!=SUNSTONE_DNS_IDLE){reply(s,p,SUNSTONE_NET_BUSY,0,NULL,0,NULL);return;}
+            memcpy(q->name,r->payload,r->bytes);q->name[r->bytes]=0;q->ticket=p->message.ticket;
+            q->submitted=p->message.submitted;q->timeout=r->timeout;q->address=0;
+            atomic_store(&q->state,SUNSTONE_DNS_START);p->started=1;
+        }else if(state==SUNSTONE_DNS_DONE){
+            unsigned expected=SUNSTONE_DNS_DONE;
+            if(!atomic_compare_exchange_strong(&q->state,&expected,SUNSTONE_DNS_IDLE))return;
+            uint32_t ip=q->address;
+            /* DONE is published only after the IP task's final access. */
+            struct sunstone_net_reply result={.ticket=p->message.ticket,.result=ip?SUNSTONE_NET_OK:SUNSTONE_NET_IO};
+            memcpy(result.address,&ip,4);publish_reply(s,p,&result);return;
+        }
+        IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return;
+    }
     if(!p->started){
         p->slot=SUNSTONE_NET_SOCKETS;
         if(r->operation==SUNSTONE_NET_OPEN_TCP||r->operation==SUNSTONE_NET_OPEN_UDP){
@@ -101,7 +203,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
             record->client=p->message.client;record->tcp=r->operation==SUNSTONE_NET_OPEN_TCP;record->handle=++s->next_handle;
             r->handle=record->handle;p->started=1;
             /* Socket defaults have zero send/receive waits in the private profile. */
-            if(!bind_start(record,s->config.network.address,r->port))return;
+            if(!bind_start(record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))return;
             p->started=2;return;
         }
         for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)if(s->sockets[i].socket&&s->sockets[i].handle==r->handle&&
@@ -112,7 +214,7 @@ static void operation(struct sunstone_net *s,struct sunstone_net_pending *p)
     }
     struct sunstone_net_socket *record=&s->sockets[p->slot];
     if(r->operation==SUNSTONE_NET_OPEN_TCP||r->operation==SUNSTONE_NET_OPEN_UDP){
-        if(p->started==1){if(bind_start(record,s->config.network.address,r->port))p->started=2;return;}
+        if(p->started==1){if(bind_start(record,(const uint8_t *)&(uint32_t){atomic_load(&s->network.address_value)},r->port))p->started=2;return;}
         FreeRTOS_Socket_t *socket=record->socket;
         if(!(xEventGroupGetBits(socket->xEventGroup)&eSOCKET_BOUND))return;
         if(listLIST_ITEM_CONTAINER(&socket->xBoundSocketListItem)==NULL){record->uncertain=1;reply(s,p,SUNSTONE_NET_IO,0,NULL,0,NULL);return;}
@@ -200,8 +302,16 @@ int sunstone_net_activate(struct sunstone_net *s)
 int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request *r,uint64_t *ticket)
 {
     if(!s||!s->initialized||!independent(s,r,sizeof(*r))||!independent(s,ticket,sizeof(*ticket))||
-        !r->timeout||r->timeout>(TickType_t)(portMAX_DELAY/2)||r->operation>SUNSTONE_NET_EVENT||r->bytes>SUNSTONE_NET_BYTES||
+        !r->timeout||r->timeout>(TickType_t)(portMAX_DELAY/2)||r->operation>SUNSTONE_NET_RESOLVE||r->bytes>SUNSTONE_NET_BYTES||
         ((r->operation==SUNSTONE_NET_SEND||r->operation==SUNSTONE_NET_RECEIVE)&&!r->bytes))return 0;
+    if(r->operation==SUNSTONE_NET_RESOLVE){
+        if(!r->bytes||r->bytes>=SUNSTONE_NET_NAME_BYTES||r->handle||r->port)return 0;
+        unsigned label=0;
+        for(unsigned j=0;j<r->bytes;++j){unsigned ch=r->payload[j];
+            if(ch=='.'){if(!label)return 0;label=0;continue;}
+            if(!((ch>='a'&&ch<='z')||(ch>='A'&&ch<='Z')||(ch>='0'&&ch<='9')||ch=='-')||++label>63)return 0;}
+        if(!label)return 0;
+    }
     int i=client(s);if(i<0)return 0;struct sunstone_net_client *c=&s->clients[i];
     if(c->pending||c->next_ticket==UINT64_MAX)return 0;
     struct sunstone_net_message m={.request=*r,.client=(unsigned)i,.ticket=++c->next_ticket,.submitted=xTaskGetTickCount()};
@@ -215,4 +325,11 @@ int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *reply
     if(xQueueReceive(s->clients[i].reply_queue,reply,wait)!=pdPASS)return 0;
     if(reply->ticket!=s->clients[i].pending){atomic_store(&s->failed,1);return 0;}
     s->clients[i].pending=0;return 1;
+}
+
+int sunstone_net_cancel(struct sunstone_net *s,uint64_t ticket)
+{
+    if(!s||!s->initialized||!ticket)return 0;int i=client(s);
+    if(i<0||s->clients[i].pending!=ticket)return 0;
+    atomic_store(&s->cancel[i],ticket);return 1;
 }

@@ -8,10 +8,11 @@
 #define SUNSTONE_NET_SOCKETS 4u
 #define SUNSTONE_NET_BYTES 1472u
 #define SUNSTONE_NET_STACK_WORDS 4096u
+#define SUNSTONE_NET_NAME_BYTES 254u
 enum sunstone_net_operation { SUNSTONE_NET_OPEN_UDP,SUNSTONE_NET_OPEN_TCP,SUNSTONE_NET_CONNECT,
-    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE,SUNSTONE_NET_EVENT };
+    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE,SUNSTONE_NET_EVENT,SUNSTONE_NET_ADDRESS,SUNSTONE_NET_RESOLVE };
 enum sunstone_net_result { SUNSTONE_NET_OK,SUNSTONE_NET_INVALID,SUNSTONE_NET_BUSY,SUNSTONE_NET_TIMEOUT,
-    SUNSTONE_NET_IO,SUNSTONE_NET_LINK_LOST };
+    SUNSTONE_NET_IO,SUNSTONE_NET_LINK_LOST,SUNSTONE_NET_ADDRESS_LOST,SUNSTONE_NET_CANCELED };
 struct sunstone_net_request {
     enum sunstone_net_operation operation;
     uint64_t handle;
@@ -42,6 +43,16 @@ struct sunstone_net_socket {
     atomic_uintptr_t disposal_address;
     uint8_t tcp,bound,closing,uncertain;
 };
+enum sunstone_net_dns_state {SUNSTONE_DNS_IDLE,SUNSTONE_DNS_START,SUNSTONE_DNS_WAIT,
+    SUNSTONE_DNS_DONE,SUNSTONE_DNS_CANCEL,SUNSTONE_DNS_CANCELED};
+struct sunstone_net_dns {
+    char name[SUNSTONE_NET_NAME_BYTES];
+    TickType_t submitted,timeout;
+    atomic_uint_fast64_t ticket; /* Identity is immutable until the IP-task fence. */
+    uint32_t address;
+    atomic_uint state,callback_ready;
+    atomic_uint_fast64_t cancel_requested;
+};
 struct sunstone_net_pending {struct sunstone_net_message message;unsigned slot;uint8_t active,started;};
 struct sunstone_net_config {
     struct aic8800_network_config network;
@@ -53,6 +64,8 @@ struct sunstone_net {
     struct sunstone_net_client clients[SUNSTONE_NET_CLIENTS];
     struct sunstone_net_socket sockets[SUNSTONE_NET_SOCKETS];
     struct sunstone_net_pending pending[SUNSTONE_NET_CLIENTS];
+    struct sunstone_net_dns dns[SUNSTONE_NET_CLIENTS];
+    atomic_uint_fast64_t cancel[SUNSTONE_NET_CLIENTS];
     QueueHandle_t requests;StaticQueue_t request_queue;
     uint8_t request_storage[SUNSTONE_NET_CLIENTS*sizeof(struct sunstone_net_message)];
     StaticTask_t task;StackType_t stack[SUNSTONE_NET_STACK_WORDS];TaskHandle_t worker;
@@ -79,6 +92,10 @@ int sunstone_net_poll_owned(struct sunstone_net *);
 int sunstone_net_activate(struct sunstone_net *);
 int sunstone_net_submit(struct sunstone_net *,const struct sunstone_net_request *,uint64_t *ticket);
 int sunstone_net_receive(struct sunstone_net *,struct sunstone_net_reply *,TickType_t wait);
+/* Current client only; request cancellation of its outstanding ticket. An
+ * already completed reply remains authoritative. DNS storage remains busy
+ * until the sole IP task acknowledges callback cancellation. */
+int sunstone_net_cancel(struct sunstone_net *,uint64_t ticket);
 /* FreeRTOS+TCP's supported socket-free override; invoked after its socket's
  * buffers/event group are disposed. Applications must not call it. */
 void sunstone_net_stack_free(void *);

@@ -13,10 +13,18 @@ void sunstone_net_stack_free(void *);
 #define ipconfigUSE_IPv4 1
 #define ipconfigUSE_IPv6 0
 #define ipconfigIPv4_BACKWARD_COMPATIBLE 0
-#define ipconfigUSE_DHCP 0
+#define ipconfigUSE_DHCP 1
+#define ipconfigUSE_DHCP_HOOK 1
+#define ipconfigDHCP_FALL_BACK_AUTO_IP 0
 #define ipconfigUSE_DHCPv6 0
 #define ipconfigUSE_RA 0
-#define ipconfigUSE_DNS 0
+#define ipconfigUSE_DNS 1
+#define ipconfigDNS_USE_CALLBACKS 1
+#define ipconfigUSE_DNS_CACHE 0
+#define ipconfigDNS_SEND_BLOCK_TIME_TICKS 0
+#define ipconfigDNS_RECEIVE_BLOCK_TIME_TICKS 0
+void sunstone_net_ip_step(void);
+#define iptraceNETWORK_EVENT_RECEIVED(event) sunstone_net_ip_step()
 #define ipconfigUSE_LLMNR 0
 #define ipconfigUSE_MDNS 0
 #define ipconfigUSE_NBNS 0
@@ -35,7 +43,7 @@ void sunstone_net_stack_free(void *);
 #define ipconfigUSE_CALLBACKS 0
 #define ipconfigSOCKET_HAS_USER_SEMAPHORE 0
 #define ipconfigSOCKET_HAS_USER_WAKE_CALLBACK 0
-#define ipconfigUSE_NETWORK_EVENT_HOOK 0
+#define ipconfigUSE_NETWORK_EVENT_HOOK 1
 #define ipconfigUSE_LINKED_RX_MESSAGES 0
 #define ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM 0
 #define ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM 0
