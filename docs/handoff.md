@@ -137,10 +137,20 @@ their inputs are unchanged.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
 
-Native thermal application integration is in progress. It connects the existing
+The [native thermal application](thermal-application.md) now connects the
 five-sensor driver to shared resources, deferred interrupt handling and copied
-application output. Calibration and controller evidence remains reusable;
-physical temperature accuracy and thermal policy remain unqualified.
+USB output. It collects two successive sets with an observation time for each
+channel. One native image, admission checks, 13 modeled native cases and four
+host cases pass. All 175 compiled repository inputs match integration under
+`thermal-application-20261018/`; existing calibration and controller evidence
+was reused. Physical acquisition, accuracy, interrupt delivery and recovery
+remain unqualified. Automatic thermal policy remains required.
+
+Native RTC integration is in progress. The initial path covers coherent calendar
+reads, a short non-waking alarm, cancellation and copied application output.
+Board topology and register semantics follow the schematic and pinned SoC RTC
+driver; the fitted board revision still requires confirmation. Calendar setting,
+clock-source initialization and retention qualification remain required work.
 
 
 ## Observed host and device state

@@ -106,12 +106,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   expiry, and reset retention remain unqualified.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
-  records the register decode and its limits. The [thermal controller](thermal.md)
+  records the register decode and its limits.
+- Thermal: **implemented** [controller](thermal.md) and
+  [native application](thermal-application.md). The controller
   implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
   critical thresholds, and interrupt-status acknowledgement. Host checks, source
-  comparisons and native compilation pass. Physical temperature accuracy,
-  interrupt delivery, thermal policy, rate changes and regulator control remain
-  outstanding.
+  comparisons and native compilation pass. The native application connects shared
+  clock and register ownership, deferred interrupts and copied USB output for
+  two successive sets across all five sensors. One affected image, admission
+  checks, 13 modeled native cases and four host cases pass; all 175 compiled
+  repository inputs match integration under `thermal-application-20261018/`.
+  Existing calibration and controller evidence was reused. Physical acquisition,
+  accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
+  policy, rate changes and regulator control remain outstanding.
 - Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
   for the 1-bit legacy-speed profile. Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
