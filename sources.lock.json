@@ -2521,5 +2521,11 @@
     "url": "https://raw.githubusercontent.com/ARM-software/arm-trusted-firmware/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c",
     "archive": "cpu-continue/drivers/arm/gic/v3/gic-x00.c",
     "sha256": "81d9f07610756503b5eb1ee71212c5b19cc3ee53e2f731e7dfac4808afcc34a6"
+  },
+  "mmc-cmd0-pacing-reference": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/mmc/mmc.c",
+    "sha256": "53a56404640fe7f2e92823cb66e7b2a184b76e39281e5b6c1fd85e8c4b050267",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/mmc/mmc.c"
   }
 }

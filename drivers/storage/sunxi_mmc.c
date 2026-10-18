@@ -56,6 +56,13 @@ static int time_ok(struct sunxi_mmc *h)
     if (n >= h->deadline_us) { fault(h, SUNXI_MMC_TIMEOUT); return 0; }
     return 1;
 }
+static void defer_command(struct sunxi_mmc *h, uint64_t delay_us)
+{
+    /* Sample after the observed clock/command completion, not before MMIO. */
+    if (!time_ok(h)) return;
+    if (h->last_us > UINT64_MAX - delay_us) { fault(h, SUNXI_MMC_TIME); return; }
+    h->retry_us = h->last_us + delay_us;
+}
 static uint32_t bits(const uint32_t *r, unsigned start, unsigned count)
 {
     unsigned word = 3 - start / 32, shift = start % 32;
@@ -266,7 +273,8 @@ static void setup(struct sunxi_mmc *h)
         if (!rd(h, 0, &v)) return;
         if ((v & ((1u << 31) | (1u << 5) | 7u)) != START) { fault(h, SUNXI_MMC_CONTROLLER); return; }
         h->setup = 6;
-        queue(h, P_IDLE, 1u << 15, 0, 0, 0); return;
+        queue(h, P_IDLE, 1u << 15, 0, 0, 0);
+        defer_command(h, 1000); return;
     default: return;
     }
 }
@@ -378,7 +386,8 @@ static void protocol(struct sunxi_mmc *h)
     switch (h->protocol) {
     case P_IDLE:
         queue(h, mmc ? P_MMC_QUERY : P_SD_IF, mmc ? (1u | RESP) : (8u | RESP | CRC),
-              mmc ? 0 : 0x1aa, 0, 0); return;
+              mmc ? 0 : 0x1aa, 0, 0);
+        defer_command(h, 2000); return;
     case P_SD_IF:
         if (r != 0x1aa) { fault(h, SUNXI_MMC_UNSUPPORTED); return; }
         queue(h, P_SD_APP, 55u | RESP | CRC, 0, 0, 0); return;

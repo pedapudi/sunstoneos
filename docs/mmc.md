@@ -26,6 +26,18 @@ the controller divides that rate by two. Identification and subsequent reads
 retain this rate. The voltage request is a nonzero subset of the OCR bits for
 3.2–3.4 V, consistent with independently admitted supplies.
 
+After confirming the enabled card clock, identification waits at least 1 ms
+before CMD0. After observing CMD0 completion, it waits at least 2 ms before CMD8
+or the eMMC CMD1 query. These intervals follow the pinned bootloader's
+[mmc_go_idle implementation](https://github.com/orangepi-xunlong/u-boot-orangepi/blob/b791be842935b27268ae3d00e943a9075495f30a/drivers/mmc/mmc.c).
+Polling remains nonblocking and checks the original deadline and retained
+ownership during both waits. Clock activation and command completion each get
+a fresh counter sample; the delays do not rely on caller scheduling intervals.
+Six focused sanitizer cases check SD/eMMC progression, expiry during either
+wait, lost ownership and counter overflow. Evidence is under
+`second-board-20261018-3-3/cmd0-pacing/`. Card/controller responses are modeled;
+physical identification remains untested.
+
 | Card profile | Identification and capacity |
 | --- | --- |
 | SD v2 SDSC | CMD8 echo `0x1aa`, CMD55/ACMD41, CID, assigned RCA, CSD, selection, status and CMD16 for 512-byte reads; byte addressing, at most 2 GiB |
