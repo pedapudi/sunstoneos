@@ -14,12 +14,16 @@ static struct a733_maintenance_transfer transfer;
 static struct a733_storage_grant grant;
 static struct a733_maintenance_lease *lease;
 static unsigned feeds;
+static unsigned revoke_mode;
 static void *task;
 static unsigned usb_owner,storage_owner;
 int a733_counter_clock_now(void *v,uint64_t *out)
 {assert(v==&clock_owner);*out=m.power.now;return 1;}
 int a733_maintenance_hw_admit(const struct a733_maintenance_transfer *t)
-{return t==&transfer;}
+{
+    if(revoke_mode==2)a733_maintenance_revoke(a733_maintenance_native_lease());
+    return t==&transfer;
+}
 int a733_maintenance_hw_task(void *owner){return owner==task;}
 int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
     struct a733_counter_clock *c,struct a733_platform_locks *locks,void *owner,
@@ -84,13 +88,24 @@ static void setup(unsigned short_session)
         .reset_by_us=14000000,.guard_us=100000};
     memset(transfer.image,0x51,32);memcpy(transfer.qualification,grant.recovery,32);
     lease=a733_maintenance_native_lease();
-    assert(a733_maintenance_bind(lease,&transfer,&clock_owner,&locks_owner,&transport,&service,&storage_owner,&usb_owner));
+    if(revoke_mode==1)a733_maintenance_revoke(lease);
+    int bound=a733_maintenance_bind(lease,&transfer,&clock_owner,&locks_owner,&transport,&service,&storage_owner,&usb_owner);
+    if(revoke_mode) {
+        assert(!bound&&!feeds&&!a733_maintenance_alive(lease));
+        assert(!a733_maintenance_bind(lease,&transfer,&clock_owner,&locks_owner,&transport,&service,&storage_owner,&usb_owner));
+        assert(!a733_maintenance_alive(lease)&&!feeds);return;
+    }
+    assert(bound);
     assert(a733_maintenance_alive(lease)&&!feeds);
     assert(a733_storage_update_init(&service,&m.platform,&grant,1000000));assert(observe());
 }
 int main(int argc,char **argv)
 {
-    assert(argc==2);setup(!strcmp(argv[1],"cutoff-guard"));
+    assert(argc==2);
+    if(!strcmp(argv[1],"revoke-before-bind"))revoke_mode=1;
+    else if(!strcmp(argv[1],"revoke-during-bind"))revoke_mode=2;
+    setup(!strcmp(argv[1],"cutoff-guard"));
+    if(revoke_mode){printf("maintenance %s passed; binding never revived lease\n",argv[1]);return 0;}
     if(!strcmp(argv[1],"cutoff-guard")) {
         /* The short fixed session cutoff is the smaller bound. The immutable
          * fixture grant remains unchanged after bind. */

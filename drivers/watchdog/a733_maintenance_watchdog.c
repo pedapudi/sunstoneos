@@ -6,7 +6,7 @@
 #include <string.h>
 
 struct a733_maintenance_lease {
-    atomic_uint claimed,state; /* live1, reload committed2, revoked4, final drain8. */
+    atomic_uint claimed,state; /* live1, reload committed2, revoked4, final drain8, binding16. */
     struct a733_maintenance_transfer transfer;
     struct a733_counter_clock *clock;
     struct a733_platform_locks *locks;
@@ -55,7 +55,8 @@ int a733_maintenance_bind(struct a733_maintenance_lease *l,
     if(l!=&native)return 0;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong(&l->claimed,&expected,1))return bad(l);
-    atomic_init(&l->state,4);
+    expected=0;
+    if(!atomic_compare_exchange_strong(&l->state,&expected,16))return bad(l);
     if(!t || !t->storage || !clock || !clock->initialized || clock->frequency!=24000000 ||
        !locks || !locks->initialized || locks->now!=a733_counter_clock_now || locks->context!=clock ||
        !transport || !service || !storage_task || !usb_task || storage_task==usb_task ||
@@ -68,19 +69,21 @@ int a733_maintenance_bind(struct a733_maintenance_lease *l,
        t->reload_after_us-t->reload_before_us>1000 ||
        t->maximum_recovery_us<t->minimum_reload_us ||
        t->reset_by_us<=t->maximum_recovery_us ||
-       t->storage->deadline_us>t->reset_by_us-t->maximum_recovery_us)return 0;
+       t->storage->deadline_us>t->reset_by_us-t->maximum_recovery_us)return bad(l);
     uint64_t until,now;
     struct a733_storage_grant checked;
     a733_storage_grant_encode(t->storage,l->grant);
     if(!a733_storage_grant_decode(&checked,l->grant,sizeof(l->grant)) || !bound(t,t->reload_before_us,&until) ||
        a733_maintenance_hw_admit(t)!=1 || a733_counter_clock_now(clock,&now)!=1 ||
-       now<t->reload_after_us || now>=until)return 0;
+       now<t->reload_after_us || now>=until)return bad(l);
     l->transfer=*t;l->clock=clock;l->locks=locks;l->transport=transport;l->service=service;
     l->storage_task=storage_task;l->usb_task=usb_task;l->worker_now=l->usb_now=now;
     atomic_init(&l->live_until,until);atomic_init(&l->version,0);
     atomic_init(&l->admitted,0);atomic_init(&l->command,0);atomic_init(&l->operation,0);
     atomic_init(&l->chunk[0],0);atomic_init(&l->chunk[1],0);
-    atomic_store_explicit(&l->state,1,memory_order_seq_cst);return 1;
+    expected=16;
+    return atomic_compare_exchange_strong_explicit(&l->state,&expected,1,
+        memory_order_seq_cst,memory_order_seq_cst);
 }
 static uint32_t word(const uint8_t *p)
 {return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}

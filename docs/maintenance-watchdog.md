@@ -38,6 +38,8 @@ counter, shared register mutex and distinct storage/USB task handles before the
 scheduler starts. Admission checks EL1, Device identity mappings, watchdog mode,
 reset policy, output pulse, RTC clock configuration and ROM redirect state.
 It does not arm, reload or disarm the timer during binding.
+Revocation before or during binding is permanent. Atomic admission transitions
+cannot replace that revocation with a live lease.
 
 ## A verified chunk and host response permit one reload
 
@@ -112,6 +114,8 @@ compilation covers the changed core and hardware adapter. The composed check and
 is in `~/.cache/sunstoneos/evidence/maintenance-watchdog-20261017/batch2`.
 The cutoff case and changed core object passed separately in the adjacent
 `cutoff` directory; the prior cases and unchanged native adapter were reused.
+The `bind-revoke` check separately passed revocation before and during admission,
+with only the changed core object rebuilt.
 These checks cannot establish physical reload or recovery behavior.
 
 The original watchdog diagnostics and USB observer remain nonfeeding. Their

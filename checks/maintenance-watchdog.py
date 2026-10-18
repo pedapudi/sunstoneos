@@ -12,7 +12,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', required=True, type=Path)
     p.add_argument('--native-tree', required=True, type=Path)
-    p.add_argument('--case', choices=['completion-and-final-drain','pending-deadline','loss','cutoff-guard'], action='append')
+    p.add_argument('--case', choices=['completion-and-final-drain','pending-deadline','loss','cutoff-guard',
+        'revoke-before-bind','revoke-during-bind'], action='append')
     p.add_argument('--core-only', action='store_true', help='Reuse unchanged native hardware-adapter evidence.')
     p.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     a = p.parse_args()
@@ -80,7 +81,8 @@ def main():
         records.append(dict(path=str(path),sha256=sha,snapshot=str(target.relative_to(out))))
     (out/'inputs.json').write_text(json.dumps(records,indent=2))
     run(host_flags+sources+['-o',out/'maintenance'], 'host-build.log')
-    cases = a.case or ['completion-and-final-drain','pending-deadline','loss','cutoff-guard']
+    cases = a.case or ['completion-and-final-drain','pending-deadline','loss','cutoff-guard',
+        'revoke-before-bind','revoke-during-bind']
     for case in cases:
         run([out/'maintenance',case],case+'.log')
     for i, src in enumerate(native):
