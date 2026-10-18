@@ -26,7 +26,7 @@ static void probe(void *unused)
     report("I2C inherited control=", bus.control);
     // Read only the normal register page and documented identity/rail settings.
     // Writing a register address before repeated START does not program it.
-    const uint8_t registers[] = {0xff, 0x0e, 0x0f, 0x03, 0x10, 0x11,
+    const uint8_t registers[] = {0xff, 0x0e, 0x0f, 0x03, 0x10, 0x15, 0x11,
         0x12, 0x19, 0x1a, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x2f, 0x31, 0x33,
         0x39, 0x3f};
     for (unsigned i = 0; i < sizeof(registers); ++i) {
