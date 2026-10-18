@@ -1,6 +1,9 @@
 #include "a733_cached_memory.h"
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#include "a733_device_memory_layout.h"
+#endif
 #define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
 #define BIT(n) (UINT64_C(1) << (n))
 uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
@@ -21,18 +24,36 @@ int a733_cached_memory_prepare(void)
         !a733_cpu_index(mpidr, &core) || core) return 0;
     uintptr_t wb = (uintptr_t)__device_pool_start, we = (uintptr_t)__device_pool_end;
     uintptr_t nc = (uintptr_t)__uncached_pool_start, ne = (uintptr_t)__uncached_pool_end;
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    struct a733_device_memory_layout layout;
+    if (!a733_device_memory_tables_admitted(&layout) ||
+        (uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > 0x42000000 ||
+        wb != layout.wb_start || we != layout.wb_end || nc != layout.nc_start || ne != layout.nc_end) return 0;
+#else
     if ((uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > wb || we < wb ||
         (we != wb && ((wb | we) & 4095 || we - wb > 2097152 || we > 0x41f00000)) ||
         (ne != nc && (nc != 0x41c00000 || ne != 0x41e00000 || we > nc))) return 0;
+#endif
     if (a733_cpu_coherence_tables(a733_cached_el3_l1, a733_cached_el3_l2,
             (uintptr_t)a733_cached_el3_l2, 3) != 1 ||
         a733_cpu_coherence_tables(a733_cached_el1_l1, a733_cached_el1_l2,
             (uintptr_t)a733_cached_el1_l2, 1) != 1) return 0;
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    /* Both regimes use identical memory attributes. New EL1 blocks deny EL0. */
+    for (uintptr_t a = wb; a < ne; a += 0x200000) {
+        unsigned i = (unsigned)((a - 0x40000000) >> 21);
+        uint64_t common = a | BIT(54) | BIT(10) | (UINT64_C(3) << 8) | 1 |
+            (a < we ? UINT64_C(4) : UINT64_C(8));
+        a733_cached_el3_l2[i] = common | BIT(5) | BIT(6);
+        a733_cached_el1_l2[i] = common | BIT(53);
+    }
+#else
     if (ne != nc) {
         /* Change both aliases before any cache adoption; preserve NS/AP/XN. */
         a733_cached_el3_l2[14] = (a733_cached_el3_l2[14] & ~UINT64_C(28)) | 8;
         a733_cached_el1_l2[14] = (a733_cached_el1_l2[14] & ~UINT64_C(28)) | 8;
     }
+#endif
     for (unsigned i = 0; i < 512; ++i) {
         uintptr_t a = 0x42000000 + (uintptr_t)i * 4096;
         uint64_t v = a | BIT(54) | BIT(10) | BIT(6) | 3;
@@ -44,5 +65,9 @@ int a733_cached_memory_prepare(void)
     }
     a733_cached_el3_l2[16] = (uintptr_t)a733_cached_el3_l3 | 3;
     a733_cached_el1_l2[16] = 0; /* Secure monitor and tables remain inaccessible at EL1. */
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    return a733_device_memory_tables_complete();
+#else
     return 1;
+#endif
 }

@@ -1,3 +1,6 @@
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#include "a733_device_memory_layout.h"
+#endif
 #include "cached.h"
 #include "a733_cached_memory.h"
 #include <stddef.h>
@@ -129,7 +132,14 @@ _Noreturn void a733_cached_el1(unsigned c,uint64_t epoch,uint64_t startup,uint64
     a733_cached_runtime[c].epoch=epoch;a733_cached_runtime[c].startup_deadline=startup;
     a733_cached_runtime[c].diagnostic_deadline=diagnostic;a733_cached_runtime[c].redistributor=rdist;
     if(a733_smp_pre_scheduler(c,epoch,startup/24)!=1)a733_cached_smc(3,0x201);
-    if(!c) {a733_smp_primary_el1();a733_cached_smc(4,0x202);}
+    if(!c) {
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+        int prepared;
+        do { prepared = a733_device_memory_prepare(); } while (prepared == 0);
+        if (prepared != 1) a733_cached_smc(3, 0x203);
+#endif
+        a733_smp_primary_el1();a733_cached_smc(4,0x202);
+    }
     uint64_t last=0;
     while(!__atomic_load_n(&ucPrimaryCoreInitDoneFlag,__ATOMIC_ACQUIRE)) {
         uint64_t now=a733_smp_counter();

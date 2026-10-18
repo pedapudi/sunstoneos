@@ -1,3 +1,6 @@
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#include "a733_device_memory_layout.h"
+#endif
 #include "cached.h"
 #include "a733_cpu_continue.h"
 #include <stddef.h>
@@ -81,6 +84,9 @@ void a733_smp_boot(void)
     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
     RESULT->generation=admission.generation;RESULT->start_counter=a733_smp_counter();
     RESULT->status=UINT64_MAX;RESULT->stage=1;
+    #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+    #endif
     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;

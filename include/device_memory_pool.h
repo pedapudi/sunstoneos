@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define DEVICE_MEMORY_PAGE 4096u
-#define DEVICE_MEMORY_MAX_PAGES 512u
+#define DEVICE_MEMORY_MAX_PAGES 196608u /* 768 MiB; ledger size is independent. */
 #define DEVICE_MEMORY_MAX_ALLOCATIONS 32u
 
 enum device_memory_state { DEVICE_MEMORY_FREE, DEVICE_MEMORY_CPU,
@@ -33,6 +33,11 @@ struct device_memory_pool {
 int device_memory_pool_init(struct device_memory_pool *, uintptr_t, uint64_t, size_t);
 int device_memory_acquire(struct device_memory_pool *, uint64_t owner, size_t bytes,
                           struct device_memory_lease *, struct device_memory_extent *);
+/* Power-of-two physical/CPU alignment, at least 4096 bytes. Both aliases must
+ * have the same alignment phase. Searches occupied extents, never every page;
+ * first-fit placement and retained ownership match the ordinary API. */
+int device_memory_acquire_aligned(struct device_memory_pool *, uint64_t owner, size_t bytes,
+    size_t alignment, struct device_memory_lease *, struct device_memory_extent *);
 int device_memory_describe(const struct device_memory_pool *, struct device_memory_lease,
                            struct device_memory_extent *, enum device_memory_state *);
 int device_memory_release(struct device_memory_pool *, struct device_memory_lease);

@@ -50,10 +50,13 @@ int device_memory_describe(const struct device_memory_pool *p, struct device_mem
     return 1;
 }
 
-int device_memory_acquire(struct device_memory_pool *p, uint64_t owner, size_t bytes,
-                          struct device_memory_lease *lease, struct device_memory_extent *out)
+int device_memory_acquire_aligned(struct device_memory_pool *p, uint64_t owner, size_t bytes,
+    size_t alignment, struct device_memory_lease *lease, struct device_memory_extent *out)
 {
     if (!p || !p->initialized || !owner || !bytes || !lease || !out ||
+        alignment < DEVICE_MEMORY_PAGE || (alignment & (alignment - 1)) ||
+        alignment > (size_t)DEVICE_MEMORY_MAX_PAGES * DEVICE_MEMORY_PAGE ||
+        ((p->backing.cpu ^ p->backing.physical) & (alignment - 1)) ||
         bytes > p->backing.bytes || !p->next_generation ||
         !output_ok(p, lease, sizeof(*lease)) || !output_ok(p, out, sizeof(*out)) ||
         overlap((uintptr_t)lease, sizeof(*lease), (uintptr_t)out, sizeof(*out))) return 0;
@@ -61,19 +64,37 @@ int device_memory_acquire(struct device_memory_pool *p, uint64_t owner, size_t b
     unsigned total = (unsigned)(p->backing.bytes / DEVICE_MEMORY_PAGE), slot = 0;
     while (slot < DEVICE_MEMORY_MAX_ALLOCATIONS && p->allocations[slot].state != DEVICE_MEMORY_FREE) ++slot;
     if (slot == DEVICE_MEMORY_MAX_ALLOCATIONS) return 0;
-    for (unsigned first = 0; first <= total - pages; ++first) {
-        unsigned i;
-        for (i = 0; i < DEVICE_MEMORY_MAX_ALLOCATIONS; ++i) {
+    uint64_t address = p->backing.physical;
+    unsigned first = 0;
+    /* Every jump passes at least one occupied extent. Alignment can skip more
+     * free pages, but never causes another scan of the same blocking extent. */
+    for (unsigned attempt = 0; attempt <= DEVICE_MEMORY_MAX_ALLOCATIONS; ++attempt) {
+        uint64_t delta = (-(uint64_t)address) & (alignment - 1);
+        if (delta > p->backing.bytes || delta / DEVICE_MEMORY_PAGE > total - first) return 0;
+        first += (unsigned)(delta / DEVICE_MEMORY_PAGE);
+        if (first > total || pages > total - first) return 0;
+        unsigned next = first;
+        for (unsigned i = 0; i < DEVICE_MEMORY_MAX_ALLOCATIONS; ++i) {
             const struct device_memory_allocation *a = &p->allocations[i];
-            if (a->state != DEVICE_MEMORY_FREE && first < a->first + a->pages && a->first < first + pages) break;
+            if (a->state != DEVICE_MEMORY_FREE && first < a->first + a->pages && a->first < first + pages &&
+                next < a->first + a->pages) next = a->first + a->pages;
         }
-        if (i != DEVICE_MEMORY_MAX_ALLOCATIONS) continue;
-        uint64_t generation = p->next_generation++;
-        p->allocations[slot] = (struct device_memory_allocation){owner, generation, first, pages, DEVICE_MEMORY_CPU};
-        *lease = (struct device_memory_lease){(uintptr_t)p, owner, generation, slot};
-        return device_memory_describe(p, *lease, out, NULL);
+        if (next == first) {
+            uint64_t generation = p->next_generation++;
+            p->allocations[slot] = (struct device_memory_allocation){owner, generation, first, pages, DEVICE_MEMORY_CPU};
+            *lease = (struct device_memory_lease){(uintptr_t)p, owner, generation, slot};
+            return device_memory_describe(p, *lease, out, NULL);
+        }
+        first = next;
+        if (first > total) return 0;
+        address = p->backing.physical + (uint64_t)first * DEVICE_MEMORY_PAGE;
     }
     return 0;
+}
+int device_memory_acquire(struct device_memory_pool *p, uint64_t owner, size_t bytes,
+                          struct device_memory_lease *lease, struct device_memory_extent *out)
+{
+    return device_memory_acquire_aligned(p, owner, bytes, DEVICE_MEMORY_PAGE, lease, out);
 }
 
 int device_memory_release(struct device_memory_pool *p, struct device_memory_lease l)

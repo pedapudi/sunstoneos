@@ -12,7 +12,12 @@
 #define A733_SMP_RESULT_ADDRESS UINT64_C(0x42000000)
 /* Host publishes magic last, after the immutable contract and image. The image
  * copies this record before mutation; no field authorizes arbitrary MMIO/code.
- * Proof of watchdog/FEL qualification and exclusive ownership stays external. */
+ * Proof of watchdog/FEL qualification and exclusive ownership stays external.
+ * Version 1 requires reserved[] zero. The large-memory image requires version 2:
+ * reserved[] = {layout ID, DRAM reservation ID, WB start, WB end, NC start, NC end}.
+ * Host qualification must bind real DRAM and remote-firmware exclusion evidence
+ * to these linked ranges, build ID, epoch, generation and watchdog lease.
+ * A nonzero reservation ID alone supplies no physical qualification. */
 struct a733_smp_contract {
     uint64_t magic, version, bytes, epoch, generation, inverse_generation;
     uint8_t build_id[32];

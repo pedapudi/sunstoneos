@@ -9,6 +9,8 @@ extern uint64_t a733_cached_el1_l1[512], a733_cached_el1_l2[512];
  * release. No CPU accesses table pages after publication. External boot
  * admission must establish cold exclusive ownership and absence of aliases;
  * register checks cannot establish cache/interconnect or remote-user state.
+ * The extended profile requires actual version-2 boot admission before table
+ * construction. Its new WB/NC blocks deny EL0 access in the EL1 regime.
  */
 int a733_cached_memory_prepare(void);
 #endif

@@ -1,12 +1,24 @@
 #include "boot.h"
 #include <stddef.h>
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#include "a733_device_memory_layout.h"
+#define CONTRACT_VERSION 2u
+#else
+#define CONTRACT_VERSION 1u
+#endif
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {
-    if(!c || c->magic!=A733_SMP_CONTRACT_MAGIC || c->version!=1 ||
+    if(!c || c->magic!=A733_SMP_CONTRACT_MAGIC || c->version!=CONTRACT_VERSION ||
        c->bytes!=sizeof(*c) || !c->epoch || !c->generation ||
        c->inverse_generation!=~c->generation || !c->lease)return 0;
     for(unsigned i=0;i<32;++i)if(c->build_id[i]!=a733_smp_build_id[i])return 0;
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+    const struct a733_device_memory_layout layout = { A733_DEVICE_MEMORY_LAYOUT,
+        A733_DEVICE_WB_START, A733_DEVICE_WB_END, A733_DEVICE_NC_START, A733_DEVICE_NC_END };
+    if(!a733_device_memory_handoff_valid(&layout,c->reserved))return 0;
+#else
     for(unsigned i=0;i<6;++i)if(c->reserved[i])return 0;
+#endif
     /* Limit one immutable watchdog lease to the documented four-second mode.
      * Deadlines reserve at least one second for reset after diagnostic stop. */
     if(c->armed_at>now || now>=c->startup_deadline ||
