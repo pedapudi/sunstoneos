@@ -102,13 +102,19 @@ native HDMI colorbar application are integrated and pass their focused software
 checks. Their physical operation remains untested. Inspect live assignments
 before changing their files.
 
+The supervised GPU mode is integrated. Its root-configured build and focused
+session, launcher, packaging and refusal cases pass. All 151 repository
+dependencies match the integrated sources, so the worker's linked image is reused
+without another build. Default-mode compatibility units also compile. Evidence
+and source reconciliation are under `gpu-supervised-20261017/batch1/`.
+
 The HDMI application connects actual providers to a fixed 720p60 colorbar.
 Its central build matches all 65 repository dependencies, and its 17 focused
 software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
 routing and physical output remain outstanding. Active NPU work connects
 supervised startup and enabled-clock retuning. Cold clock provisioning and an
 unsuitable supply still require a separate implementation and physical evidence.
-Separate workers own the NPU packaging/capture path and supervised GPU admission.
+Separate workers own the NPU and GPU packaging/capture paths.
 Both reuse existing device implementations and require focused software review
 before execution. Physical access remains exclusive to the coordinator.
 
