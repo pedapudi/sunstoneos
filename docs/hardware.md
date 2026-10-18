@@ -95,12 +95,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   restoration. ROM returns as `003:109` after saved DRAM restoration; evidence
   is under `primary-publication-probe-20261018/physical-108/`. This result ends
   before GIC configuration and secondary release.
-  The remaining secondary cores, per-core interrupt setup, cache coherence and
-  scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
+  Cores 2–7 now also pass production entry, identity observation, matching shutdown
+  acknowledgment, independent OFF observation and configuration restoration under
+  `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
+  cores 6–7 are A76 r4p1. ROM returned as `003:110`, with saved DRAM restored.
+  Every secondary therefore has physical entry and shutdown evidence. Per-core
+  interrupt setup on the remaining cores, cache coherence and scheduling remain
+  unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;
-  the correction has no physical result yet. One read-only ROM batch identifies
+  subsequent returning physical results appear below. One read-only ROM batch identifies
   all eight frame affinities and reports their power-down permission bits clear
   under `gic600-registers-20261018-089/`. This does not establish local interrupt
   initialization or identify the earlier failure location.

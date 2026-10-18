@@ -4,10 +4,12 @@ The [CPU startup controller](../platform/a733/cpu_start.c) implements the A733
 secondary-core entry-address and power-request sequence. Host failure checks
 pass, and its complete writes match isolated instructions from the published
 board firmware for cores 1 through 7. The controller compiles for AArch64.
-Core 1 power-on, native entry and target-owned shutdown now pass on the board;
-the primary observes OFF before restoring saved state. The remaining cores and
-multicore FreeRTOS remain unqualified. The [startup record](a733-smp-supervised.md)
-holds the physical evidence and the later interrupt-initialization failure.
+Power-on, production entry and target-owned shutdown now pass on every
+secondary core. The primary observes OFF before restoring saved configuration.
+The sequential cores 2–7 result is under `secondary-identity-probe-20261018/`;
+core 1 has earlier returning evidence. Multicore FreeRTOS remains unqualified.
+The [startup record](a733-smp-supervised.md) holds the physical observations and
+remaining interrupt, cache-coherence and scheduling requirements.
 
 ON and OFF are the hardware controller's reported power states for the target
 core. The board and primary core remain powered while a secondary core is OFF.
@@ -32,8 +34,9 @@ affinity level 1 for the core index and requires the other affinity levels to
 be zero. It accepts the architectural flag bits and refuses reserved bits or
 an index outside 0 through 7. The board device tree describes six Cortex-A55
 cores followed by two Cortex-A76 cores. Physical MIDR observations identify
-cores 0 and 1 as Cortex-A55 r2p0; the remaining cores still need identification
-before selecting their startup operations.
+cores 0–5 as Cortex-A55 r2p0 and cores 6–7 as Cortex-A76 r4p1. The latter
+report MIDR `0x414fd0b1`. Startup must select revision controls from each target's
+observed identity and preserve its own translation controls.
 
 The entry must be four-byte aligned and lie in DRAM below 4 GiB. This is the
 initial image-placement constraint. It does not describe the processor's full

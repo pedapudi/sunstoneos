@@ -1126,5 +1126,20 @@ cover sequential execution and restoration of all six targets, acknowledgment
 without OFF, and restoration-readback failure. Five host cases cover the expanded
 report and backup ranges, retained transport failure and rejection of incomplete
 results or changed reservations. CPU registers, power states and host transport
-are modeled. Physical secondary execution remains pending. The original board's
-warm launcher preparation passes on `003:109` without repeating DDR training.
+are modeled. The subsequent physical attempt passed all six cores on the original
+board, returning from `003:109` to responsive ROM `003:110`. All 45 host
+transactions passed; saved DRAM restored, the runner exited and its claim closed.
+
+Cores 2–5 report MIDR `0x412fd050` (A55 r2p0), and cores 6–7 report
+`0x414fd0b1` (A76 r4p1). The A76 targets have SCTLR_EL3 `0x30c50838` and
+SCTLR_EL1 `0x30d50838`. Their TCR_EL1 values differ: core 6 reports
+`0x600e12242aa`, core 7 `0x8250e02a402a`. These observations apply to this reset
+lifetime. Future launches must read each target's controls again. Every target
+reports matching epoch acknowledgment, PPU status `0x100` with OFF state bits,
+and configuration restoration. Physical evidence is in
+`secondary-identity-probe-20261018/physical-109/runtime/`.
+
+Together with the earlier core-1 result, this establishes production entry and
+shutdown for every secondary. It does not establish local interrupt initialization
+on the remaining cores, interrupt delivery, mutable cache coherence or scheduling.
+The full-image attempt still has no failure-location observation.

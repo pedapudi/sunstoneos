@@ -333,8 +333,14 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned successfully as `003:109`, identity
-`[7,2725,1097068,0,0]`, after the complete-image primary-preparation diagnostic.
+The original board on `3-1` returned successfully as `003:110`, identity
+`[7,2729,1097069,0,0]`, after the sequential cores 2–7 diagnostic.
+All six targets reached production entry, reported identity, acknowledged
+shutdown and reached OFF before their configuration restored. Saved DRAM
+restored, ROM responded, the runner exited and the claim closed as passed.
+Evidence is under `secondary-identity-probe-20261018/physical-109/runtime/`.
+
+The preceding primary-preparation diagnostic returned as `003:109`.
 Its report confirms completed preparation and exact EL3/EL1 control restoration;
 all saved DRAM was restored, ROM responded, and the runner exited with its claim
 closed as passed. Evidence is under
@@ -603,7 +609,17 @@ and requires matching shutdown acknowledgment plus observed OFF before restoring
 its configuration. Three instruction cases and five host cases pass. The primary
 preparation prefix was reused for the two failure cases. The first board's warm
 survey, unchanged cache-off helper and follow-up survey pass on `003:109`;
-DDR continuity is preserved. Physical secondary execution remains pending.
+DDR continuity is preserved. The sequential survey then passed physically on
+all six targets and returned as `003:110`. Cores 2–5 identify as A55 r2p0;
+cores 6–7 identify as A76 r4p1. The A76 targets reported different nonzero
+TCR_EL1 values, reinforcing the requirement to preserve each target's own
+controls. All six PPU observations had OFF in the low state bits. The runner
+exited and its claim closed. No reconnect is needed.
+
+The next CPU work is the complete-image local-initialization boundary with
+cleanup matched to all observed revisions. Reuse proven entry/shutdown and
+core-1 cached-entry evidence; do not repeat the unobserved full launch unchanged.
+Interrupt delivery, mutable cache coherence and scheduling remain outstanding.
 
 The [GPU publication audit](gpu-single-core-publication.md) supports retaining
 its frozen image under the existing clean-entry contract. PMIC return101 is a
