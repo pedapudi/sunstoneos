@@ -48,7 +48,9 @@ substantive correctness risks. The coordinator alone operates the board.
   verifies OFF and restores saved state before returning to ROM. Execution after
   RELEASE, cache coherence and scheduling remain unresolved. The diagnostic for
   secondary interrupt initialization passes five focused software cases, but its
-  physical launch did not return. Source diagnosis continues without board access.
+  physical launch did not return. A further observer now reports selected failures
+  before any redistributor write and returns only after observed target OFF.
+  Its three focused software cases pass; the physical failure remains unlocalized.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. The image links; actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -67,20 +69,25 @@ substantive correctness risks. The coordinator alone operates the board.
   Evidence is under `jpeg-nonconstant-20261017/`. Startup now copies and verifies
   the complete session against its admitted digest before provider initialization;
   USB failure revokes board liveness before parking execution. The affected image
-  and focused checks pass. All 188 preserved repository inputs match integration
-  under `jpeg-sealing-20261018/`; prior decoder evidence was reused.
-- H.264: the fixed Baseline IDR fixture matches its CPU reference, and selected
-  A733 runtime register traces pass after a structure-field audit. Native driver,
-  application and copied-output integration are in progress.
+  and focused checks pass. Frozen inputs are reconciled under
+  `jpeg-sealing-20261018/`; prior decoder evidence was reused. That image retains
+  the JPEG provider source from before the separate H.264 addition.
+- H.264: the fixed Baseline IDR/I_PCM application is integrated, including native
+  initialization, guarded DMA buffers, pixel verification and copied USB output.
+  Its image and focused checks pass; all 174 compiled repository inputs match
+  integration. The independent CPU reference and instruction traces were reused.
+  Physical decoding and general H.264 support remain unqualified. Evidence is
+  under `h264-native-20261018/`.
 - Crypto: the native SHA-256/AES application is integrated. Its image links,
-  focused application and host checks pass, and all 223 preserved repository
-  inputs match integration. A physical snapshot confirms the adopted CE clocks.
+  and focused application and host checks pass. A physical snapshot confirms
+  the adopted CE clocks.
   Predecessor task completion, future launch exclusion, secure status access
   and memory authority remain physical prerequisites. A boot-path audit is
   investigating the predecessor handoff. Inspection of the actual DDR initializer
   found no crypto launch path; actual ROM/FEL history remains unresolved. No board
-  crypto command has executed. The session-binding and USB failure corrections
-  are in progress before this image is eligible for physical use.
+  crypto command has executed. Session binding and USB failure revocation are
+  corrected; the affected image and focused checks pass. All 183 preserved
+  repository inputs match integration under `crypto-sealing-20261018/`.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -94,7 +101,7 @@ Session integrity needs the same follow-up in camera, I2S and HDMI startup.
 Their admission functions hash the complete session, but their application entry
 functions later copy live bytes without comparing the copied digest with the
 authenticated digest. Field validation alone does not bind that later copy.
-Correct these consumers after crypto; reuse unaffected device checks.
+These corrections are in progress; unaffected device checks remain reusable.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
 
@@ -179,6 +186,9 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
   initialization diagnostic and five focused cases. Only its corrected timeout
   fixture was repeated. The physical attempt and retained backups are under
   `startup-stage-20261017-083/native/runtime/`; no result or restoration was observed.
+  `native-secondary-prewrite-observer-20261018/` contains the later observer and
+  three focused cases for target admission refusal, primary snapshot exception
+  and capture-fault retention. Its physical use awaits recovery.
 - Crypto clocks: `crypto-clocks-20261018-082/session.json` records 13 read-only
   CCU/RTC observations. The CE clock, gates and reset releases are enabled;
   these observations do not prove engine quiescence or secure-register access.
@@ -187,6 +197,8 @@ Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
   repository input. The original admission-fixture sanitizer failure is retained,
   and only the corrected admission case was repeated. The modeled-authority
   package is not deployable; physical admission requires actual evidence.
+  The corrected image is identified by `crypto-sealing-20261018/handoff.json`;
+  its unchanged arithmetic evidence was reused without replay.
   `ce-predecessor-20261018/assessment.md` records the bounded DDR/ROM source audit
   and the proposed ROM observation. Board recovery precedes that observation.
 - Bluetooth: `bluetooth-mimus-native-20261017/integration.json` reconciles all
@@ -236,10 +248,11 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose the non-returning secondary interrupt-initialization attempt before
-   another board launch. Core-1 activation, entry and target-owned shutdown before
-   RELEASE pass physically. The later diagnostic has no physical result; inspect
-   hardware assumptions and model gaps before selecting another observation.
+1. Recover the board before the reviewed pre-write failure observer. Core-1
+   activation, entry and shutdown before RELEASE pass physically. The later
+   diagnostic has no physical result; the new observer captures selected target
+   admission failures and primary snapshot exceptions before interrupt writes.
+   It still retains post-write failures and cannot recover a stalled MMIO access.
    Preserve the held claim and backups until physical recovery is confirmed.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.

@@ -594,6 +594,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
+  The [native H.264 application](h264-native.md) implements one fixed 48-by-32
+  Baseline IDR picture with direct-sample macroblocks. Its image and focused
+  admission, executor, guarded-copy and USB checks pass with modeled hardware.
+  The independent CPU output and selected A733 instruction traces were reused.
+  Physical H.264 decoding, prediction, transform coefficients, interframe
+  references, multiple slices and wider profiles remain outstanding.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
@@ -622,7 +628,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   snapshot confirms the adopted CE clock configuration. Actual predecessor task
   accounting, future launch exclusion, secure status access and memory admission
   remain required before physical operation. No TRNG capability is claimed by
-  this application.
+  this application. Startup now binds the private session to the admitted digest;
+  USB failure revokes board liveness before parking. The affected image and
+  focused binding/failure checks pass without repeating arithmetic checks.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the

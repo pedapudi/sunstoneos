@@ -39,6 +39,10 @@ kernel and U-Boot references. Native SHA-256 and AES execution uses repository
 source; the [crypto application](crypto-application.md) loads no opaque CE
 firmware or Linux crypto library. Its fixed AES reference comes from NIST
 SP 800-38A, as recorded in [the cipher evidence](crypto-cipher.md).
+The [H.264 application](h264-native.md) adapts open-source Linux Cedrus control
+and uses pinned H6-CedarC source references. Its source manifest records licenses
+and hashes. A733 CedarC libraries provide instruction references; the native
+image does not load those Linux libraries. FFmpeg supplies the host pixel oracle.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and
