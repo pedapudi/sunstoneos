@@ -109,21 +109,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A [physical SRAM trial](watchdog.md) also passes ROM-redirect and watchdog
   reset-policy programming/restoration with the timer disabled. Timer enabling,
   expiry, and reset retention remain unqualified.
-- RTC and watchdog: **implemented** [native RTC read and alarm application](rtc-application.md).
-  It connects the SoC calendar, one non-waking alarm, deferred interrupt handling,
-  cancellation and copied USB output through shared clock and register ownership.
-  One affected image, focused driver checks, native instruction emulation and host
-  checks pass. All 174 compiled repository inputs match integration under
-  `rtc-native-20261018/`. The schematic and pinned driver support the selected SoC
-  RTC; the fitted board revision still requires confirmation. Physical operation,
-  native USB serialization and retention remain unqualified. Authenticated
-  cold-start calendar setting and crystal initialization are also implemented;
-  their focused host and native instruction checks pass under
-  `rtc-calendar-native-20261018/`. The RTC-only startup interval accommodates
-  documented calendar writes; other applications keep their original deadlines.
-  Runtime calendar updates, alarm wake, calibration, reset-cause reporting and
-  applicable retention modes remain outstanding. Independent watchdog evidence
-  and limits are recorded separately above.
+- RTC and watchdog: **implemented** [native RTC operations](rtc-application.md)
+  include coherent reads, a non-waking alarm with deferred interrupt handling,
+  explicit cold-start crystal/calendar initialization and one authenticated
+  calendar update from the running owner task. Runtime waits yield without holding
+  the shared register mutex. Results distinguish cancellation before a write,
+  verified completion after late cancellation and retained partial failure.
+  Successful reports publish the same coherent calendar pair used for verification.
+  Focused driver, native instruction and host checks pass, including midnight
+  rollover and refusal of further I/O after ownership or deadline loss. Evidence
+  and source reconciliation are under `rtc-runtime-native-20261018/`; earlier
+  cold-start and alarm evidence remains valid for its frozen inputs.
+  Repeated read/set/alarm composition, concurrent clients, wake, calibration,
+  reset-cause reporting and applicable retention modes remain required.
+  The fitted board revision, physical operation, UTC accuracy and native USB
+  serialization remain unqualified. Independent watchdog evidence is recorded above.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.

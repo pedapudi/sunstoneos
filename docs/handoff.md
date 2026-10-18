@@ -146,21 +146,17 @@ host cases pass. All 175 compiled repository inputs match integration under
 was reused. Physical acquisition, accuracy, interrupt delivery and recovery
 remain unqualified. Automatic thermal policy remains required.
 
-The [native RTC application](rtc-application.md) now connects coherent calendar
-reads, one non-waking alarm, deferred interrupt acknowledgement, cancellation and
-copied USB output. One affected image and focused driver, native instruction and
-host checks pass. All 174 compiled repository inputs match integration under
-`rtc-native-20261018/`; accepted artifact and dependency evidence was reused.
-The fitted board revision, physical operation and native USB serialization remain
-unqualified. Explicit cold-start calendar setting and crystal initialization
-are also integrated. Their image and focused initialization, failure, sealing
-and host checks pass under `rtc-calendar-native-20261018/`. The RTC target uses
-six seconds for startup within its unchanged 60-second lifetime; other targets
-retain the one-second default. The source and frozen image reconcile with the
-unrelated additive SD API declaration. Earlier alarm and IRQ evidence was reused.
-Runtime calendar updates are now in development through the owner task and
-existing RTC application. Alarm wake, calibration, reset-cause reporting and
-retention qualification remain required work.
+The [native RTC application](rtc-application.md) integrates coherent reads,
+a non-waking alarm, explicit cold-start source/calendar initialization and one
+owner-task calendar update. The runtime setter yields during hardware waits,
+retains partial failures and publishes the verified coherent calendar pair.
+Its affected image and focused runtime/cancellation/rollover/host checks pass
+under `rtc-runtime-native-20261018/`. All owned files match integration; four
+compiled-input differences are accepted additive clock and PMIC support unused
+by this RTC path. No additional build or old-case replay was needed.
+Repeated read/set/alarm composition and concurrent clients remain required,
+as do wake, calibration, reset-cause reporting and physical retention. The board
+revision, physical timing, UTC accuracy and native USB remain unqualified.
 
 The [native PCIe application](pcie-application.md) now connects the root-port
 driver and shared providers to x1 Gen1 link observation, read-only endpoint
