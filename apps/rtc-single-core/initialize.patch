@@ -1,0 +1,11 @@
+--- apps/rtc/initialize.c
++++ initialize.c
+@@ -2,7 +2,7 @@
+ #include "boot.h"
+ /* This provider exists only during the sealed primary EL3 hook. The authenticated
+  * clock authority excludes all inherited32k consumers/writers, not just tasks. */
+-static const struct a733_smp_contract *initializing;
++static const struct a733_smp_contract *initializing __attribute__((section(".rtc_runtime_retained")));
+ static int allowed(void)
+ {
+  uint64_t el,mpidr;__asm__ volatile("mrs %0, CurrentEL\n mrs %1, mpidr_el1":"=r"(el),"=r"(mpidr));

@@ -1,5 +1,5 @@
 #include "boot.h"
-#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE)
+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE) || defined(SUNSTONE_RTC_SINGLE_CORE)
 #include "session.h"
 #include "a733_device_memory_layout.h"
 #include "a733_cached_memory.h"
@@ -22,6 +22,10 @@ const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *c
 {return c==&admission?gpu_admission.session_digest:NULL;}
 const uint8_t *gpu_application_entry_digest(const struct a733_smp_contract *c)
 {return c==&admission?gpu_admission.entry_digest:NULL;}
+#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+static struct a733_smp_contract rtc_runtime_contract __attribute__((section(".rtc_runtime_retained")));
+static unsigned rtc_runtime_secondary_off __attribute__((section(".rtc_runtime_retained")));
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
 static struct a733_smp_contract npu_runtime_contract __attribute__((section(".npu_runtime_retained")));
@@ -75,6 +79,10 @@ void sd_single_core_monitor_init(void)
     for(uint64_t *p=__gpu_retained_start;p<__gpu_retained_end;++p)*p=0;
     for(unsigned i=0;i<sizeof(gpu_admission)/8;++i)((uint64_t *)&gpu_admission)[i]=((const volatile uint64_t *)source)[i];
 #else
+#ifdef SUNSTONE_RTC_SINGLE_CORE
+    extern uint64_t __rtc_retained_start[],__rtc_retained_end[];
+    for(uint64_t *p=__rtc_retained_start;p<__rtc_retained_end;++p)*p=0;
+#endif
 #ifdef SUNSTONE_NPU_SINGLE_CORE
     extern uint64_t __npu_retained_start[],__npu_retained_end[];
     for(uint64_t *p=__npu_retained_start;p<__npu_retained_end;++p)*p=0;
@@ -99,6 +107,12 @@ void sd_single_core_monitor_init(void)
      * Both regimes are still cache-disabled; no table has been adopted. */
     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+    extern int rtc_session_prepare(const struct a733_smp_contract *);
+    if(!secondaries_off()||!board_session_prepare(&admission)||
+       !rtc_session_prepare(&admission)||!a733_cached_memory_prepare())finish(1);
+    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
+    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     if(!npu_single_core_seal(&admission)||!secondaries_off()||!a733_cached_memory_prepare())finish(1);
     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
@@ -110,6 +124,8 @@ void sd_single_core_monitor_init(void)
     secondary_off_admitted=1;
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     gpu_runtime_contract=admission;gpu_runtime_secondary_off=1;
+#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+    rtc_runtime_contract=admission;rtc_runtime_secondary_off=1;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     npu_runtime_contract=admission;npu_runtime_secondary_off=1;
 #endif
@@ -195,6 +211,10 @@ void sd_single_core_monitor_init(void)
 #endif
     mmio_write(GICD_BASE, (saved.ctlr & ~7U) | 0x33U);
     wait_clear(GICD_BASE, 1U << 31);
+#ifdef SUNSTONE_RTC_SINGLE_CORE
+    extern int rtc_boot_route(void);
+    if(!rtc_boot_route())finish(1);
+#endif
     value = admission.diagnostic_deadline;
     __asm__ volatile("msr cntps_cval_el1, %0" :: "r"(value));
     value = 1;
@@ -219,6 +239,8 @@ const struct a733_smp_contract *sd_single_core_contract(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return &gpu_runtime_contract;
+#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+    return &rtc_runtime_contract;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     return &npu_runtime_contract;
 #else
@@ -230,6 +252,8 @@ int sd_single_core_secondaries_admitted(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return gpu_runtime_secondary_off==1;
+#elif defined(SUNSTONE_RTC_SINGLE_CORE)
+    return rtc_runtime_secondary_off==1;
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
     return npu_runtime_secondary_off==1;
 #else

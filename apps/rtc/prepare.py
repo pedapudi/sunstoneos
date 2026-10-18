@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Offline preparation of one supervised fixed RTC application session."""
+import io
+import types
+from elftools.elf.elffile import ELFFile
 import datetime
 import hashlib
 import importlib.util
@@ -19,9 +22,46 @@ SCHEMA='a733-rtc-supervised-bundle-v1'
 CONTRACT_MAGIC=0x4153373352544331
 REQUEST_MAGIC=0x4153373352544c31
 
+artifact=board.supervisor.observer.artifact
+PROFILES={'sunstone-a733-rtc':'rtc-supervised-v1',
+          'sunstone-a733-rtc-single-core':'rtc-single-core-supervised-v1'}
+def image_manifest_check(manifest,raw):
+    target=manifest.get('target');profile=PROFILES.get(target)
+    require(profile and manifest.get('execution_profile')==profile and
+            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested RTC image manifest required.')
+    elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    marker=symbols.get('rtc_single_core_geometry')
+    if target=='sunstone-a733-rtc-single-core':
+        require(marker is not None and marker['st_size']==32 and
+                symbols.get('sd_single_core_entry')['st_value']==elf['e_entry'] and
+                not any(n in symbols for n in ('a733_cpu_start_init','a733_cpu_primary_continue',
+                    'a733_smp_pre_scheduler','FreeRTOS_SGI_Handler')),'RTC single-core startup differs.')
+        address=int(marker['st_value']);parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and
+            not p['p_flags']&2 and p['p_vaddr']<=address and address+32<=p['p_vaddr']+p['p_filesz']]
+        require(len(parts)==1,'RTC geometry must be immutable and file backed.')
+        offset=address-parts[0]['p_vaddr']
+        require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373352545331,1,784,60),
+                'RTC single-core execution geometry differs.')
+    else:require(marker is None,'Single-core RTC image requires its execution profile.')
+    return profile
+
+def single_core_platform(value,prepared,identity,port):
+    require(value.get('schema')=='a733-rtc-single-core-platform-v1' and value.get('identity')==identity and
+            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
+            'RTC single-core platform admission differs.')
+    required={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion',
+              'dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded',
+              'physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping',
+              'physical-counter-continuity','rom-usb0-pio-takeover',
+              'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
+    require(set(value.get('conditions',{}))==required,'RTC single-core platform conditions differ.')
+    for item in value['conditions'].values():artifact(item)
+    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
+            'RTC platform record must establish actual entry conditions.')
+
 def session_check(raw):
     require(len(raw) in (768,784),'RTC session must be768 or784bytes.')
-    require(board.session_check(raw[:592])==2,'RTC requires USB0/provider selection2.')
+    require(board.session_check(raw[:592],usb_reference_modes=(1,2))==2,'RTC requires USB0/provider selection2.')
     version=struct.unpack_from('<Q',raw,600)[0]
     require((len(raw)==768 and version==1) or (len(raw)==784 and version in (2,3,4)),'RTC version/extent differs.')
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373352544131,version,len(raw)),'Invalid RTC session extension.')
@@ -75,11 +115,16 @@ def build_launcher(out,clang,lld):
         require(r.returncode==0,'RTC launcher build failed; inspect retained log.')
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,execution_profile="rtc-supervised-v1"):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-rtc-supervised-entry-v1','Wrong RTC admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
+    validate=board.validate_admission
+    if execution_profile=='rtc-single-core-supervised-v1':
+        observer=types.SimpleNamespace(validate_platform=single_core_platform)
+        validate=types.FunctionType(validate.__code__,{**validate.__globals__,
+            'supervisor':types.SimpleNamespace(observer=observer)})
+    cache=validate(common,image_hash,template_hash,cache,frozen)
     for key,offset in [('initial',632),('clock',664),('electrical',696),('supervision',728)]:
         item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
         if str(path) not in cache:
@@ -116,8 +161,9 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-rtc' and mf.get('execution_profile')=='rtc-supervised-v1' and mf.get('final_elf')==ih,'Tested RTC image manifest required.')
-    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
+    execution_profile=image_manifest_check(mf,snapshots['image.elf'])
+    require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='rtc-single-core-supervised-v1' else 1),'RTC USB takeover mode differs from execution profile.')
+    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,execution_profile=execution_profile)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
@@ -136,7 +182,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     evidence={}
     for i,(path,data) in enumerate(cache.items()):
         name=f'evidence-{i}.bin';(out/name).write_bytes(data);evidence[path]={'name':name,'sha256':hashlib.sha256(data).hexdigest()}
-    p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
+    p=dict(schema=SCHEMA,physical_access=False,execution_profile=execution_profile,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
     base.save_json(out/'prepared.json',p);return validate_bundle(out)
 
 def validate_bundle(bundle):
@@ -146,13 +192,15 @@ def validate_bundle(bundle):
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'RTC bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'RTC image changed.')
     manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-rtc' and manifest.get('execution_profile')=='rtc-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'RTC image manifest differs.')
+    execution_profile=image_manifest_check(manifest,(out/'image.elf').read_bytes())
+    require(p.get('execution_profile', 'rtc-supervised-v1')==execution_profile,'RTC execution profile differs.')
     sizes={name:(out/name).stat().st_size for name in p['files']}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'RTC protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'RTC initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
+    require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='rtc-single-core-supervised-v1' else 1),'RTC USB takeover mode differs from execution profile.')
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,execution_profile)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'RTC build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
     require(raw==expected_raw,'RTC session differs from admitted derivation.')

@@ -429,3 +429,50 @@ The corrected hook follows the declared argument widths. Only affected or
 unexecuted cases resumed. No production source, image or prior evidence changed.
 Physical USB operation, clock accuracy, wake/retention and recovery qualification
 remain outstanding.
+
+## Boot-CPU service startup has focused software evidence
+
+`apps/rtc-single-core` builds `sunstone-a733-rtc-single-core.elf` with the
+existing RTC owner, two native clients, and USB transcript serializer. It uses
+the supervised single-core monitor and FreeRTOS SRE port already used by SD,
+GPU and NPU applications. Secondary CPUs remain off; their power state is
+checked before RTC bus access. No secondary startup or SMP barrier is linked.
+
+The monitor authenticates both the full RTC session and its board prefix before
+provider construction. Target-local patches place these copies, early RTC
+initialization state and the runtime contract in retained RAM. The monitor clears
+that RAM before admission; EL1 BSS clearing preserves it. EL1 cannot read secure
+monitor state. RTC and GIC registers use identity-mapped, outer-shareable Device
+memory. IRQ228 remains disabled until the RTC owner rearms its existing binding.
+Static task construction is followed by DAIF masking before USB provider binding
+and again before scheduler startup.
+
+The host preparation and capture tools accept the distinct
+`rtc-single-core-supervised-v1` profile. Preparation checks immutable ELF geometry,
+entry, excluded SMP symbols and exact image hash. It binds USB ROM PIO takeover
+mode 2 to this profile; the existing profile requires mode 1. Platform evidence
+must cover actual boot-CPU cache entry, secondary OFF state, physical instruction
+publication, USB takeover and exclusive resource ownership. Frozen condition
+bytes are retained with the bundle and validated without reopening original paths.
+
+Twelve changed startup/profile cases and five packaging/capture cases pass under
+`~/.cache/sunstoneos/evidence/rtc-single-core-20261018/`. They cover authenticated
+session retention, actual descriptor walks, native owner/client/provider
+construction, admission refusals, profile binding, launcher compilation, frozen
+evidence and capture with a retained native service transcript. The descriptor,
+GIC, RTC, counter and system-register responses are modeled. Existing service,
+calendar and USB evidence is reused without replaying those operations.
+The frozen ELF SHA256 is
+`078c6e40a3eb30a31b2a3d7e5085c5e0300bb6ee5b0a7a42d76f2becefef4bc2`.
+Focused independent source/ELF review found no remaining substantive blocker.
+
+Physical RTC timing, calendar changes and USB service capture remain unqualified.
+The coordinator may propose one RAM-only attempt with six seconds for startup
+and a 60-second native lifetime, using the existing 59-second host capture.
+Actual image-bound evidence must establish DDR/cache publication, exclusive RTC
+and R_CCU ownership, a stable admitted source and supply, client calendar-write
+authority, USB ROM takeover and complete-power-removal recovery. A successful
+capture must contain the existing ten-result service demonstration. Stop after
+the first transport failure or disappearance and retain every resource until
+confirmed whole-board power removal. Software fixture bundles supply no physical
+authority.

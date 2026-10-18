@@ -1,0 +1,13 @@
+--- apps/rtc/snapshot.c
++++ snapshot.c
+@@ -9,8 +9,8 @@
+  struct a733_rtc_initialization initialization;
+  struct a733_rtc_boot boot;
+  unsigned attempted,ready;
+-} admitted;
+-static const struct a733_smp_contract *boot_contract;
++} admitted __attribute__((section(".rtc_runtime_retained")));
++static const struct a733_smp_contract *boot_contract __attribute__((section(".rtc_runtime_retained")));
+ static int access_ok(void)
+ {
+  uint64_t el,mpidr;
