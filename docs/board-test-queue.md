@@ -1,12 +1,13 @@
-# Serialize physical tests while development proceeds in parallel
+# Serialize tests per board while development proceeds in parallel
 
 Development workers build and check components in separate worktrees, then submit
 physical test proposals through `tools/board-test-queue.py`. One coordinator
 reviews proposals and performs board operations. The tool stores metadata in
 SQLite and never executes submitted procedures.
 
-The default database is `~/.cache/sunstoneos/board-tests.sqlite3`, shared by all
-worktrees. Keep the database on the local host filesystem. SQLite transactions
+Each board has a separate database, shared by worktrees targeting that board.
+The original board on port `3-1` uses the default
+`~/.cache/sunstoneos/board-tests.sqlite3`. Keep the database on the local host filesystem. SQLite transactions
 and a unique index permit only one active claim. A claim remains active after the
 claiming command exits, the coordinator disconnects, or the host restarts. There
 is no automatic expiry, retry, or claim release.
@@ -24,6 +25,24 @@ uses `/tmp/sunstoneos-a733-3-1.lock` across USB re-enumeration. It checks that t
 selected node has not changed before yielding it to the caller. Other ports and
 non-A733 mimus boards do not share this lock. The queue schedules SunstoneOS
 tests only; it does not reserve unrelated boards.
+
+## Attached boards have independent ownership
+
+| USB port | Card | Queue database | Coordinator token |
+| --- | --- | --- | --- |
+| `3-1` | Original microSD; preserve contents | `board-tests.sqlite3` | `board-test-coordinator.token` |
+| `3-3` | User-reported 32 GB microSD; preserve contents | `board-tests-3-3.sqlite3` | `board-test-coordinator-3-3.token` |
+
+Set `SUNSTONE_USB_PORT=3-1` or `SUNSTONE_USB_PORT=3-3` on each runner command.
+This selects a physical port before the existing lock and identity checks.
+The original board is reserved for direct multicore investigation; the second
+can run independent device work after its own recovery and platform admission.
+
+Queue and token files are under `~/.cache/sunstoneos/`. Use the matching
+`--database` and `--token-file` arguments. A failure halts that board's queue;
+recovery evidence and admission never transfer between boards. Do not copy a
+live device identity, RAM reservation or electrical qualification to the second
+board. USB enumeration numbers change; the physical port identifies ownership.
 
 ## Initialize once and submit immutable proposals
 

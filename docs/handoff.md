@@ -96,9 +96,12 @@ in the next native images. The combined monitor image includes the complete prer
 checks converter disable independently of publication; resources remain retained.
 Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
-The bounded observer attempt on the reconnected board did not return. Instance
-`003:084` is quarantined; the runner retains its lock and claim. Further device
-commands are stopped pending physical recovery and source diagnosis.
+The user reconnected the original board after the failed observer attempt.
+Instance `003:086` responds in ROM recovery on port `3-1`; the old holder and
+claim are closed. The second board is on port `3-3`, with a user-reported 32 GB
+microSD. Its independent queue is initialized; its access rule awaits the user’s
+sudo command. Both cards remain untouched. Multicore work belongs directly to
+the primary agent, without delegation.
 
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
@@ -277,11 +280,20 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The last board instance is `003:084` on port `3-1`. Its diagnostic did not return
-and the instance is quarantined. Runner session `51570` retains the board lock
-and queue claim `03a79df09c6883041185a6dd61ebdb46fec5e97cb1f1990f13a569d0e4cc3944`.
-Do not send further device commands or terminate the ownership holder before
-coordinator recovery review. Physical reconnection remains required.
+The original board is on port `3-1`, currently instance `003:086`. Its ROM
+identity responds and its existing permissions work. The failed `003:084`
+runner was stopped after confirmed reconnection, and its failed queue claim
+was closed. The first fresh DDR attempt refused two-device discovery before any
+USB command; its record remains under `reconnect-20261018-086/ddr/`.
+This preflight refusal caused no hardware failure or RAM modification.
+
+The common access helper now selects an explicit physical port through
+`SUNSTONE_USB_PORT`, preserves each port’s session permissions, and records
+failures independently. The second board is on port `3-3`; its permissions are
+pending the user-run enable command. Queue assignments are in
+[the board-test procedure](board-test-queue.md). Fresh DDR and platform evidence
+are still required for each board before native execution.
+
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
 BSS clearing, admission, table construction, cache publication and CPU/DSU
 planning. Observed MIDR is `0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is
@@ -414,21 +426,22 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-The next offline diagnostic will bypass the primary interrupt-frame scan and
-stop core 1 after native RELEASE and CPU preparation, before translation-walk
-changes or any redistributor access. It must copy the observed state, use the
-proven target-owned shutdown and verify actual OFF before returning. Pinned
-sources support the redistributor base and stride but do not establish safe
-access to every frame while cores are off; a stalled read remains a hypothesis.
-The implementation owner and reviewer are preparing this narrower boundary in
-an isolated worktree. No further physical attempt is authorized by this plan.
+The narrower diagnostic is integrated. It bypasses the primary interrupt-frame
+scan and stops core 1 after native RELEASE and CPU preparation, before
+translation-walk changes or any redistributor access. It copies the observed
+state, uses target-owned shutdown and verifies actual OFF before returning.
+One overlay build and three focused instruction cases passed under
+`native-secondary-release-pre-gic-20261018/`; there is no physical result yet.
+Pinned sources support the redistributor base and stride but do not establish
+safe access to every frame while cores are off. A stalled read remains a
+hypothesis. The primary agent will handle all further multicore work directly.
 
 1. Diagnose the nonreturning pre-write observer before another launch. Core-1
    activation, entry and shutdown before RELEASE pass physically, but both the
    interrupt-initialization diagnostic and its failure observer returned no report.
-   Preserve the held claim and backups until physical recovery is confirmed.
-   A further power reconnect requires fresh DDR and admission. Do not repeat
-   the same observer unchanged. The failed UFS probe, intentional watchdog expiry
+   Preserve the failed-attempt backups. The original board has now recovered;
+   the changed diagnostic requires fresh DDR and admission. Do not repeat
+   the failed observer unchanged. The failed UFS probe, intentional watchdog expiry
    and unattended fault tests remain deferred; USB power-control work is closed.
 2. Qualify all-core startup, interrupts, scheduler results and coherent memory
    through the supervised observer before dependent full-device images.

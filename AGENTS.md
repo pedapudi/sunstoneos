@@ -78,7 +78,9 @@ second build while preserving checks for the actual requested application.
   sources and compiled dependencies instead of generated cache files.
 - After context recovery, read the objective and inspect current changes. Reuse
   unchanged source summaries and evidence instead of rediscovering the workstream.
-- Keep one implementation owner and one reviewer per integration. Review concrete
+- The primary agent handles multicore diagnosis, implementation, review and board
+  tests directly, as requested by the user. Do not delegate multicore work.
+- For other integrations, keep one implementation owner and one reviewer. Review concrete
   ownership, concurrency and device behavior before execution; report only new
   findings. Integrate completed work before adding another workstream.
 - Request further work from a completed reviewer with `followup_task`.

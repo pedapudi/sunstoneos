@@ -23,6 +23,27 @@ sudo python3 tools/usb-access.py enable-session
 python3 tools/usb-access.py check-session
 ```
 
+With multiple A733 boards attached, select the physical port explicitly. Enable
+access for the second board without replacing the first board's session:
+
+```sh
+sudo python3 tools/usb-access.py enable-session --port 3-3
+python3 tools/usb-access.py check-session --port 3-3
+```
+
+Undo only that board's session with:
+
+```sh
+sudo python3 tools/usb-access.py disable-session --port 3-3
+```
+
+Existing board runners can select a port through a process-local environment
+variable, for example `SUNSTONE_USB_PORT=3-1 python3 tools/run-ddr.py ...`.
+An explicit `--port` overrides the environment selector. Without a selector,
+discovery refuses multiple matching devices. Device identities, recovery
+records, queues and locks remain separate for each port. Never choose the first
+matching USB device.
+
 The rule grants the selected user access whenever the FEL device reconnects on
 its current physical USB port. It matches both the port and USB ID, and checks
 the controller path before changing permissions. Keep the board on that port.
@@ -40,7 +61,7 @@ Undo the session rule and restore the attached device's original ACL with:
 sudo python3 tools/usb-access.py disable-session
 ```
 
-Disable also works with the board unplugged. Removed device nodes no longer
+Select the port when multiple sessions exist. Disable also works with the board unplugged. Removed device nodes no longer
 carry permissions to restore. If another process changed the attached device's
 ACL, disable removes the reconnect rule but refuses to overwrite those changes.
 Its saved state remains available for inspection and a later restoration attempt.
