@@ -59,10 +59,15 @@ Five focused composition cases and host decoding checks pass; GPU numerical
 writes remain modeled. The native compute image builds under
 `gpu-completion-20261018/`. Physical rendering and computation remain unqualified.
 
-NPU work extends trusted build-time model registration to three reviewed artifacts
-and repeated inference. Two additional model shapes match CPU references in the
-external simulator. The native image builds; implementation review and focused
-native checks remain in progress. Physical inference remains unqualified.
+NPU registration now accepts three reviewed compiled convolution artifacts,
+selected before scheduling and fixed for the context lifetime. Two additional
+model shapes match CPU references in the external simulator. Native construction,
+two successive requests, result copies and matching completion release pass
+focused modeled checks under `npu-models-20261018/`. First-result mismatch and
+wrong completion tickets prevent success publication. The built image is for
+software validation only; physical inference and memory confinement remain
+unqualified. Arbitrary models, runtime model switching and mimus acceleration
+remain required follow-up work.
 
 Combined thermal/ADC monitoring is integrated with repeated copied samples,
 shared-parent ownership and readback-confirmed converter disable on stop.

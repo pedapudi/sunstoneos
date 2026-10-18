@@ -653,11 +653,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Focused native instruction checks pass with modeled scheduling and hardware.
   Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
-  release. [Fixed convolution registration](npu-convolution.md) authenticates
+  release. [Trusted convolution registration](npu-convolution.md) authenticates
   the complete compiled model, private allocations and commands before startup
   and publication. Copied inputs, matching output completion and explicit result
   reaping pass focused emulator checks. The output bytes are modeled, so these
-  checks do not establish inference. The [native memory session](npu-reserved.md)
+  checks do not establish inference. Registration now accepts three reviewed
+  compiler artifacts with different tensor sizes, selected before scheduling
+  and fixed for the context lifetime. The native application runs two successive
+  jobs and publishes both completion identities and up to 400 result bytes.
+  Two additional compiler/simulator cases match CPU references; focused native
+  construction, result and failure checks pass with modeled device output under
+  `npu-models-20261018/`. The software-validation image is not deployable.
+  Arbitrary model uploads, runtime switching, other operators and mimus
+  acceleration remain outstanding. The [native memory session](npu-reserved.md)
   now reserves one linker-owned allocation for all six buffers and private
   tables, then invokes the actual authenticated preparation path. Focused
   emulator checks execute native translation/cache operations and retain the
