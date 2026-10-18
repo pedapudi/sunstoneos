@@ -53,7 +53,14 @@ Their focused software evidence is preserved and reconciled with the integrated
 sources. The NPU application also builds through the root CMake configuration
 when its handoff and artifact paths are supplied. The central link passes;
 application source properties remain isolated from other targets. Existing
-runtime evidence is reused. Physical NPU execution still needs real boot authority.
+runtime evidence is reused. The supervised image also links through the root
+configuration. Its actual PMIC sampling, PLL retuning and startup token adoption
+pass with modeled device responses. The 460 preserved build inputs were checked;
+native inputs match, so the worker image is reused without rebuilding. Physical
+NPU execution still needs real boot authority and full startup qualification.
+The host adapter passes 33 cases plus five binding regressions; its nine source
+files match the final snapshot. Evidence is under `npu-supervised-20261017/` and
+`npu-supervised-host-20261017/`.
 
 The [board application](board-application.md) integrates shared startup, separate
 Type-C service and power tasks, simultaneous USB0 output and USB2 sector reads,
@@ -107,16 +114,19 @@ session, launcher, packaging and refusal cases pass. All 151 repository
 dependencies match the integrated sources, so the worker's linked image is reused
 without another build. Default-mode compatibility units also compile. Evidence
 and source reconciliation are under `gpu-supervised-20261017/batch1/`.
+The GPU host adapter also passes 19 focused cases. All eight source files and
+preserved artifacts match integration; evidence is under
+`gpu-supervised-host-20261017/`. Physical rendering remains untested.
 
 The HDMI application connects actual providers to a fixed 720p60 colorbar.
 Its central build matches all 65 repository dependencies, and its 17 focused
 software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
-routing and physical output remain outstanding. Active NPU work connects
-supervised startup and enabled-clock retuning. Cold clock provisioning and an
-unsuitable supply still require a separate implementation and physical evidence.
-Separate workers own the NPU and GPU packaging/capture paths.
-Both reuse existing device implementations and require focused software review
-before execution. Physical access remains exclusive to the coordinator.
+routing and physical output remain outstanding. Cold NPU clock provisioning
+and an unsuitable supply still require a separate implementation and physical
+evidence. NPU and GPU packaging/capture integration is complete at the software
+level. Before another physical launch, apply the same frozen queue-to-upload
+binding to the older observer and board adapters. Physical access remains
+exclusive to the coordinator.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture

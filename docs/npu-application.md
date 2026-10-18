@@ -225,3 +225,10 @@ successful case performed seven PLL writes and adopted the replacement clock
 token; wrong voltage and an unstable PERI0 parent performed no PLL writes.
 Both failures retained their acquired rail. The check stops at token adoption;
 full local startup, worker activation and physical inference remain unqualified.
+
+The supervised host adapter passes 33 packaging/capture cases and five additional
+checks that bind queue approval to the initially validated bytes. Baseline cases
+were preserved when that binding changed. The host batch built its SRAM launcher
+once and reused the native ELF. Evidence is under
+`npu-supervised-host-20261017/`; the final software record is
+`binding1/software.json`. No host fixture establishes numerical inference.

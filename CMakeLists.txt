@@ -131,7 +131,10 @@ include(cmake/smp-runtime.cmake)
 include(cmake/a733-smp.cmake)
 include(cmake/a733-smp-cached.cmake)
 set(A733_NPU_HANDOFF_SOURCE "" CACHE FILEPATH "Explicit native NPU application handoff source")
-if(A733_NPU_HANDOFF_SOURCE)
+option(A733_NPU_SUPERVISED "Build retained supervised native NPU application" OFF)
+if(A733_NPU_SUPERVISED)
+  include(cmake/a733-npu-supervised.cmake)
+elseif(A733_NPU_HANDOFF_SOURCE)
   # Keep application source properties local and consume the cached boot inputs
   # before later profiles replace their directory variables.
   add_subdirectory(apps/npu-convolution native-npu EXCLUDE_FROM_ALL)

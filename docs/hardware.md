@@ -519,7 +519,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   release window. The [native convolution application](npu-application.md)
   connects cached startup, reserved memory, actual providers, the convolution
   client and checked USB results. Native linking and modeled application checks
-  pass; modeled output does not establish numerical inference. Concrete boot
+  pass; modeled output does not establish numerical inference. The supervised
+  image connects actual PMIC sampling, enabled-PLL retuning and startup token
+  adoption; focused checks pass with modeled device responses. Its host path
+  passes 33 packaging/capture cases and five frozen-input binding regressions.
+  Disabled-PLL provisioning and unsuitable supply voltage remain unsupported
+  entry conditions. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 

@@ -174,3 +174,16 @@ linked ELF and manifest, actual compiler dependency files, default objects,
 modeled prerequisite fixtures, frozen bundle, launcher results and native case
 results. Modeled prerequisites are explicitly labeled as software fixtures and
 must never be used for physical admission.
+
+The coordinator uses `tools/check-a733-gpu-supervised.py` to launch a reviewed
+bundle and capture copied pixels. Required arguments are `--bundle`, `--fel`,
+`--evidence`, `--database`, `--claim`, `--owner` and
+`--supervised-manual-reconnect`. The tool binds queue approval to the initial
+bundle hashes, checks the embedded firmware and preserves raw replies before
+decoding. Successful output requires all 64 chunks and a durable complete image.
+Every uncertain post-entry outcome, including successful capture, retains the
+A733 port lock until confirmed full board power removal.
+
+Nineteen focused host cases pass under `gpu-supervised-host-20261017/`. They use
+modeled replies and do not establish successful GPU rendering. Existing native,
+launcher and protocol evidence is reused without rebuilding or replaying it.
