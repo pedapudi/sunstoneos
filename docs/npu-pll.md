@@ -3,8 +3,9 @@
 The native PLL controller programs a fixed 492 MHz output from the 24 MHz
 reference. It implements the documented disabled-PLL enable sequence and a
 separate enabled-PLL retune sequence. An optional [atomic handoff](npu-clock-handoff.md)
-transfers its reservations to NPU startup. A concrete cold boot resource provider
-and physical PLL qualification remain required.
+transfers its reservations to NPU startup. The supervised native application
+provides an explicit live-DRAM enable mode. Physical PLL qualification remains
+required for every mode.
 
 The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to the
 NPU domain's DCDC2 supply. The PLL's internal LDO is a separate control. PLL
@@ -67,7 +68,7 @@ video/NPU modes refuse admission. DRAM0 selectors are limited to DDR/PERI1
 sources. DE- or NPU-selected DRAM0 is refused even when its output gate is off.
 The controller never migrates consumers or writes their registers.
 
-The two entry modes have different additional requirements:
+The three entry modes have different additional requirements:
 
 - **Disabled PLL enable:** execution, stack, data and every callback must reside
   in owned non-NPU SRAM before DRAM initialization. This profile excludes the
@@ -82,6 +83,33 @@ The two entry modes have different additional requirements:
   independent DRAM and PHY sources. The manual identifies a PHY clock path in
   normal DRAM operation; the DRAM0 selector alone does not prove that path.
   The controller leaves unrelated running RAM and its clocks untouched.
+- **Live-DRAM disabled PLL enable:** the PLL, output and lock detector must be
+  off, with LOCK clear. The full snapshot must show DRAM0 enabled, its reset
+  released, its controller sourced by DDRPLL and its external memory clock
+  selected from the separate PHY PLL. No update may be pending. Independent
+  PHY operation, stable fabric parents and exclusion of every PLL_NPU consumer
+  and writer remain authenticated prerequisites. This supervised mode retains
+  every reservation through success or failure and never disables or retries
+  the PLL. It uses the existing method-2 sequence and timeout handling.
+
+The live-DRAM mode follows a concrete Linux runtime precedent at the pinned
+revision above. `vip_drv_device_platform.c` calls `clk_set_rate(pclk)` and later
+`clk_prepare_enable(mclk)`; the device tree binds that parent to PLL_NPU.
+Its CCU descriptor uses `CLK_SET_RATE_UNGATE`. The pinned
+[clock core](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/clk/clk.c#L2278)
+temporarily enables such a clock before changing its rate. Enabling the module
+also recursively enables its parent. The CCU gate helper explicitly handles
+a disabled PLL: output off, LDO on, PLL on, lock detector on, wait for lock,
+then output on. These calls run in the normal DRAM-resident driver path.
+
+This source establishes a runtime implementation, not the board's current state
+or physical safety. The manual warns that enabling a PLL can disturb other PLLs;
+independent selectors do not remove that analogue risk. The live mode therefore
+requires a supervised single attempt and full power removal after the session.
+Software deadlines depend on a responsive CPU and interconnect. Unlike the
+Linux helper's warning-only lock failure, SunstoneOS retains failure without
+opening the output gate. Its pre-DRAM mode remains available under its original
+conservative contract; the manual does not mandate that restriction.
 
 Reference checks accept the existing 24 MHz oscillator/reference profile. PLL
 modulation, fractional interpolation, smooth updates and dithering must be
@@ -137,12 +165,12 @@ The concrete provider must authenticate cold boot/remote handoff, register
 security access, physical reference and parent state, independent recovery and
 memory residency. It must share a monotonic clock with registry and mutex
 operations. The existing scheduler-based register mutex cannot be assumed
-available before DRAM and scheduler initialization. Actual board qualification
-must precede any physical enable or retune request.
+available before DRAM and scheduler initialization. Reviewed entry conditions
+and the selected recovery plan must precede a physical qualification attempt.
 
 ## Focused validation
 
-The new host model uses the real common clock registry and modeled registers.
+The controller fixture uses the real common clock registry and modeled registers.
 It checks both sequences, timed lock admission, retained exclusive ownership,
 unchanged consumers, unsafe admission refusal, partial acquisition, token
 replacement, time regression, write/readback failures and deadline failures on
@@ -150,3 +178,13 @@ both sides of unlock. It also checks bounded failure when the PLL never locks.
 The native files are compiled for AArch64. These checks establish controller
 behavior; they do not establish analog PLL stability, remote exclusion, safe
 RAM clocks or a production cold boot provider.
+
+The native live-DRAM composition is recorded under
+`~/.cache/sunstoneos/evidence/npu-live-20261017/batch1/`. One affected native link
+and the three changed cases passed on their first attempt. The successful case
+executes the real PMIC provider, PLL enable, clock transfer, ON-domain startup
+and service activation with modeled hardware responses. An OFF domain causes
+retained local-startup refusal after PLL preparation; lock timeout retains
+ownership without opening the output. No PCK or DRAM clock writes occur, and
+SRAM reset remains deasserted. Existing controller and numerical suites were
+not rerun. These results do not establish physical operation or inference.

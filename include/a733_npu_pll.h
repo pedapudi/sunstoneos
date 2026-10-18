@@ -12,7 +12,8 @@ enum a733_npu_pll_snapshot {
     A733_NPU_PLL_DRAM, A733_NPU_PLL_DRAM_BUS,
     A733_NPU_PLL_CM_VE_DEC, A733_NPU_PLL_CM_VE_ENC, A733_NPU_PLL_CM_NPU
 };
-enum a733_npu_pll_mode { A733_NPU_PLL_COLD_ENABLE=1, A733_NPU_PLL_ENABLED_RETUNE };
+enum a733_npu_pll_mode { A733_NPU_PLL_COLD_ENABLE=1, A733_NPU_PLL_ENABLED_RETUNE,
+    A733_NPU_PLL_LIVE_ENABLE };
 enum a733_npu_pll_result { A733_NPU_PLL_READY, A733_NPU_PLL_BUSY,
     A733_NPU_PLL_PENDING, A733_NPU_PLL_RETAINED };
 struct a733_npu_pll_config {
@@ -37,6 +38,11 @@ struct a733_npu_pll_operations {
      * active PLL consumers vulnerable to the documented enable disturbance.
      * ENABLED_RETUNE requires known independent DRAM/PHY sources and exclusion
      * of every NPU-parent route; unrelated running RAM must stay untouched.
+     * LIVE_ENABLE uses the same retained exclusion with live DRAM, an exactly
+     * disabled PLL and independent DDRPLL/PHY routes. It is a separate,
+     * supervised one-attempt policy: mux independence does not eliminate the
+     * documented analogue disturbance of other PLLs. CPU/interconnect response
+     * is required for software deadlines. Never disable, roll back or retry.
      * A numeric handoff or observed idle register is not that authority.
      * BUSY has no effects. PENDING/RETAINED publish all partially acquired
      * tokens; subsequent calls may add but never replace an admitted token.

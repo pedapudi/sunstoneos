@@ -82,7 +82,7 @@ def session_profile(raw,layout):
     require(struct.unpack_from('<3Q',raw,boot+npu+24)==(p['npu_owner'],p['npu_evidence'],0) and
         struct.unpack_from('<3Q',raw,boot+pmic)==(p['pmic_owner'],p['pmic_evidence'],0) and
         struct.unpack_from('<3Q',raw,pll)==(p['npu_owner'],p['npu_evidence'],0) and
-        struct.unpack_from('<I',raw,pll+24)[0]==2,'Uploaded deadlines/retune authority differ.')
+        struct.unpack_from('<I',raw,pll+24)[0] in (2,3),'Uploaded deadlines/PLL authority differ.')
     return {**p,'supervisor':owner,'whole_platform':whole}
 
 
@@ -118,6 +118,11 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,froz
         'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','enabled-retune-snapshot'},
         'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},
         'supervision':{'manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure'}}
+    if struct.unpack_from('<I',raw,pll+24)[0]==3:
+        required['clock'].remove('enabled-retune-snapshot')
+        required['clock'].update({'live-disabled-pll-quiescent-on-snapshot',
+            'native-dram-continuations-and-shared-sram-abandonment',
+            'supervised-cross-pll-disturbance-risk'})
     for name,offset in [('clock',112),('power',144),('supervision',176)]:
         data=evidence(record[name]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],name+' record digest differs.')
         facts=json.loads(data)

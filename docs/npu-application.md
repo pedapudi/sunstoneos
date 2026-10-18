@@ -8,9 +8,14 @@ the job before publishing a result through USB.
 
 The watchdog profile adopts an inherited PLL rate that can supply 492 MHz and
 requires an existing 800 mV DCDC2 supply. The supervised profile connects the
-existing enabled-PLL retuning controller before local startup. Neither profile
-enables a disabled PLL or programs PMIC voltage. No preserved board measurement
+PLL controller before local startup. Its explicit live-DRAM profile can enable
+a disabled PLL while adopting a quiescent NPU domain already ON. Neither profile
+programs PMIC voltage. No preserved board measurement
 establishes the cold PLL or DCDC2 state. Broader model support remains separate.
+The fixed model and command streams come from pinned external NPU compiler
+artifacts. DDR initialization also retains its existing pinned boot firmware.
+Replacing those dependencies is deferred until hardware functionality and
+performance work are complete.
 
 ## Build and admission
 
@@ -172,14 +177,35 @@ atomically converts PLL ownership to shared and adopts the replacement token;
 no release/reacquire gap exists. Existing rail settling, PCK, local reset,
 SRAM, backend, memory and command checks still precede service activation.
 
-A disabled or unlocked PLL is refused. The A733 User Manual V1.00,
-section 4.1.4.1, pages 25–27, warns that PLL enable/disable can disturb other PLLs
-and destabilize the system. It gives a separate enabled-PLL frequency-change
-sequence. The manual does not explicitly require pre-DRAM execution. The
-existing cold-enable implementation chooses pre-DRAM execution from owned
-non-NPU SRAM as its conservative contract for that electrical risk; a normal
-DRAM-resident application does not satisfy it. This integration preserves that
-restriction and does not infer that a running board can safely enable its PLL.
+Session PLL mode 2 retains enabled-PLL retuning and the original domain-OFF
+startup. Mode 3 selects [live-DRAM enable](npu-pll.md), with disabled PLL, output
+and lock detector, clear LOCK, independent live DDRPLL/PHY sources and a quiescent
+domain already ON. Other partial PLL states are refused. The 608-byte session
+layout and USB protocol are unchanged; the exact PLL bytes bind the selected mode.
+
+Mode 3 requires both PCK command and status to report ON. Local startup releases
+the existing core/AXI/AHB resets and enables the module using the retained
+resources. It preserves SRAM reset bit 19 and the SRAM mapping, skips all PCK
+timing and power writes, and never requests OFF. The pinned PCK provider likewise
+avoids a power transition when a domain is already ON. The default OFF startup
+path remains unchanged.
+
+Before startup, the authenticated session must establish abandonment of both
+shared SRAM aliases: CPU `0x74000..0xf3fff` and the NPU's internal SRAM window.
+No CPU, DMA engine, remote firmware or retained FEL continuation may use them.
+The native ELF places all loadable code, data, stacks, vectors, tables and results
+in `0x41000000..0x42200000`; the existing all-core preparation barrier precedes
+construction. All native tasks and callbacks retain those image allocations.
+The supervised image never returns through FEL. Its privileged Device mapping
+still permits SRAM access, so this is exclusive private-image ownership, not
+isolation against arbitrary privileged code. External users require independent
+exclusion; pointer placement and ON status cannot establish that exclusion.
+
+The host requires explicit live-profile snapshot, SRAM-abandonment and supervised
+cross-PLL disturbance records. They supplement existing clock, rail and recovery
+evidence. The manual's analogue-disturbance warning still applies, and software
+timeouts require responsive CPU/interconnect hardware. No physical safety or
+successful inference is inferred from the Linux runtime source or modeled tests.
 
 Supervised admission leaves watchdog and reset redirects disabled. Every task,
 clock, rail, SRAM and memory reservation remains owned after success, timeout or
@@ -224,7 +250,7 @@ interrupt mask before scheduler entry. Native source did not change. The
 successful case performed seven PLL writes and adopted the replacement clock
 token; wrong voltage and an unstable PERI0 parent performed no PLL writes.
 Both failures retained their acquired rail. The check stops at token adoption;
-full local startup, worker activation and physical inference remain unqualified.
+that evidence does not cover full local startup, worker activation or inference.
 
 The supervised host adapter passes 33 packaging/capture cases and five additional
 checks that bind queue approval to the initially validated bytes. Baseline cases
@@ -232,3 +258,16 @@ were preserved when that binding changed. The host batch built its SRAM launcher
 once and reused the native ELF. Evidence is under
 `npu-supervised-host-20261017/`; the final software record is
 `binding1/software.json`. No host fixture establishes numerical inference.
+
+The live-DRAM mode has separate evidence under
+`~/.cache/sunstoneos/evidence/npu-live-20261017/batch1/`. The first root-configured
+link and focused execution pass with ELF SHA-256
+`16e8952bbf11ebe3cbd84dd94efa4c8b104148dcbc3cb1513c7a546e5d597df9`.
+All 468 build and fixture inputs were archived before execution. The successful
+case reaches actual service activation through the constructor, PMIC sampling,
+PLL enable, token transfer and local ON-domain startup. The worker does not
+execute commands. OFF-domain and lock-timeout cases retain resources; host
+checks refuse missing SRAM-abandonment or disturbance evidence and unknown
+modes. Hardware responses, architecture and external admission are modeled.
+No previous scheduler, controller, numerical or USB workload was rerun, and no
+physical operation was performed.

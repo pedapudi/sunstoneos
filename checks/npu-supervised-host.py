@@ -61,8 +61,13 @@ def admission_fixture(prep,image,raw,layout,build,directory):
         'physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')
     platform=write('platform.json',{**common,**profile,'schema':'a733-npu-convolution-platform-v1',
         'conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
-    clock=write('clock.json',{**common,'pll_sha256':pll_hash,'conditions':dict.fromkeys((
-        'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','enabled-retune-snapshot'),proof)})
+    clock_conditions={'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',
+        'no-autonomous-parent-selector-writers','enabled-retune-snapshot'}
+    if struct.unpack_from('<I',raw,pll+24)[0]==3:
+        clock_conditions.remove('enabled-retune-snapshot')
+        clock_conditions.update({'live-disabled-pll-quiescent-on-snapshot',
+            'native-dram-continuations-and-shared-sram-abandonment','supervised-cross-pll-disturbance-risk'})
+    clock=write('clock.json',{**common,'pll_sha256':pll_hash,'conditions':dict.fromkeys(sorted(clock_conditions),proof)})
     power=write('power.json',{**common,'supply_uv':800000,'boot_sha256':boot_hash,
         'conditions':dict.fromkeys(('dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'),proof)})
     supervision=write('supervision.json',{**common,'supervisor':profile['supervisor'],'one_attempt':True,
@@ -74,6 +79,41 @@ def admission_fixture(prep,image,raw,layout,build,directory):
     for offset,ref in ((112,clock),(144,power),(176,supervision)):value[offset:offset+32]=bytes.fromhex(ref['sha256'])
     (directory/'session.bin').write_bytes(value)
     return directory/'session.bin',Path(admission_ref['path'])
+
+def live_checks(image,session,directory):
+    """Only changed mode admission; reuse launcher/USB evidence without execution."""
+    directory.mkdir();prep=load('npu_live_prepare',ROOT/'apps/npu-convolution/prepare-supervised.py')
+    image_raw=image.read_bytes();raw=session.read_bytes()
+    _,_,build,layout=prep.image_data(image_raw)
+    assert len(raw)==608 and struct.unpack_from('<I',raw,layout[3]+24)[0]==3
+    packed,admission=admission_fixture(prep,image_raw,raw,layout,build,directory)
+    raw=packed.read_bytes();admission_raw=admission.read_bytes();cache={}
+    prep.validate_admission(admission_raw,raw,build,layout,sha(image_raw),cache)
+    record=json.loads(admission_raw);clock=Path(record['clock']['path']);original=clock.read_bytes()
+    refused=[]
+    for condition in ('native-dram-continuations-and-shared-sram-abandonment','supervised-cross-pll-disturbance-risk'):
+        facts=json.loads(original);del facts['conditions'][condition]
+        changed=json.dumps(facts,sort_keys=True).encode();clock.write_bytes(changed)
+        changed_record=copy.deepcopy(record);changed_record['clock']['sha256']=sha(changed)
+        changed_admission=json.dumps(changed_record,sort_keys=True).encode()
+        changed_raw=bytearray(raw);changed_raw[112:144]=hashlib.sha256(changed).digest()
+        changed_raw[80:112]=hashlib.sha256(changed_admission).digest()
+        try:prep.validate_admission(changed_admission,bytes(changed_raw),build,layout,sha(image_raw))
+        except ValueError as error:
+            assert str(error)=='clock facts do not cover this entry.',str(error)
+            refused.append({'condition':condition,'reason':str(error)})
+        else:raise AssertionError('Missing live-DRAM evidence was accepted: '+condition)
+        finally:clock.write_bytes(original)
+    invalid=bytearray(raw);struct.pack_into('<I',invalid,layout[3]+24,4)
+    try:prep.session_profile(invalid,layout)
+    except ValueError as error:
+        assert str(error)=='Uploaded deadlines/PLL authority differ.',str(error)
+        refused.append({'condition':'unknown-mode'})
+    else:raise AssertionError('Unknown PLL mode accepted')
+    result={'passed':True,'mode':3,'session_bytes':len(raw),'refused':refused,
+        'image_sha256':sha(image_raw),'runner_sha256':sha(Path(__file__).read_bytes()),
+        'prepare_sha256':sha(Path(prep.__file__).read_bytes()),'physical_access':False}
+    (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n');return result
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

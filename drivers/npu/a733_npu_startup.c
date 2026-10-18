@@ -95,11 +95,12 @@ static int pll_ops_equal(const struct a733_npu_pll_operations *a,const struct a7
 static int pll_integrity(const struct a733_npu_startup *b)
 {
     const struct a733_npu_pll *p=b->pll_source;
-    if(!p)return !b->pll_binding_self && !b->pll_transferred && !b->pll_whole_platform;
+    if(!p)return !b->pll_binding_self && !b->pll_transferred && !b->pll_whole_platform && !b->platform.adopt_on;
     if(b->pll_binding_self!=b || p->self!=p || !p->initialized || p->failed ||
         p->registry!=b->registry || p->successor!=b || p->transferred!=b->pll_transferred ||
         !pll_config_equal(&p->config,&b->pll_config) || !pll_ops_equal(&p->ops,&b->pll_operations) ||
-        p->cookie!=b->pll_cookie)return 0;
+        p->cookie!=b->pll_cookie ||
+        b->platform.adopt_on!=(unsigned)(p->config.mode==A733_NPU_PLL_LIVE_ENABLE))return 0;
     if(b->pll_transferred && (!a733_npu_pll_ready(p) || !p->resources.whole_platform ||
         p->resources.whole_platform!=b->pll_whole_platform || p->observed.whole_platform!=b->pll_whole_platform ||
         !same_clock(&p->resources.clock,&b->clock_token) || !same_clock(&p->observed.clock,&b->clock_token)))return 0;
@@ -309,6 +310,9 @@ int a733_npu_startup_bind_pll(struct a733_npu_startup *b,struct a733_npu_pll *p)
     const uint32_t masks[]={0x0300001f,0x8700001f,0x8700001f};
     for(unsigned i=0;i<3;++i)
         if((p->config.consumers[i]&masks[i])!=b->handoff.allowed.fabric[i])return 0;
+    if(p->config.mode==A733_NPU_PLL_LIVE_ENABLE &&
+       (b->handoff.established!=A733_NPU_HANDOFF_SUPERVISED_REQUIRED ||
+        !a733_npu_platform_adopt_on(&b->platform)))return 0;
     b->pll_source=p;b->pll_binding_self=b;b->pll_config=p->config;
     b->pll_operations=p->ops;b->pll_cookie=p->cookie;p->successor=b;
     return 1;

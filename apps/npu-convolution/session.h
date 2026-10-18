@@ -8,6 +8,10 @@
 /* Authenticated immutable page; clock evidence includes independent DRAM/PHY
  * sources, all PLL_NPU consumers/writers, and the complete snapshot below.
  * Evidence binds physical prerequisites; nonzero fields do not prove them. */
+/* Fixed application profiles: ENABLED_RETUNE uses the original domain-OFF
+ * startup; LIVE_ENABLE adopts a quiescent domain already ON. The latter also
+ * requires complete abandonment of both shared-SRAM aliases, including every
+ * bootloader/FEL continuation, before the native scheduler starts. */
 struct npu_session {
     uint64_t magic,version,bytes,epoch,generation,lease;
     uint8_t image[32],evidence[32],clock[32],power[32],supervision[32];

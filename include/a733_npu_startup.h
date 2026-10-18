@@ -99,6 +99,8 @@ int a733_npu_startup_bind_pmic(struct a733_npu_startup *,struct a733_pmic *,
  * authority; binding does not infer those facts from metadata.
  * Bootstrap polling atomically publishes stable PLL_NPU ownership and adopts
  * the fresh token while preserving exclusive local NPU and all parent scopes.
+ * LIVE_ENABLE additionally selects quiescent-ON adoption, only with the
+ * supervised handoff and its independently established SRAM abandonment.
  * This does not bypass rail, PCK, local platform or service admission. */
 int a733_npu_startup_bind_pll(struct a733_npu_startup *,struct a733_npu_pll *);
 int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);

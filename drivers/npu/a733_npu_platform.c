@@ -38,6 +38,13 @@ int a733_npu_platform_init(struct a733_npu_platform *p,
     for (unsigned i=0;i<3;++i) p->selected_mhz[i]=parent_mhz[i][(config.fabric[i]>>24)&7];
     return 1;
 }
+int a733_npu_platform_adopt_on(struct a733_npu_platform *p)
+{
+    if(!p || !p->initialized || p->failed || p->stage!=ACQUIRE || p->adopt_on ||
+       p->resources.clock.id || p->resources.rail || p->resources.pck ||
+       p->observed.clock.id || p->observed.rail || p->observed.pck || p->wrote)return 0;
+    p->adopt_on=1;return 1;
+}
 static int timely(struct a733_npu_platform *p)
 {
     uint64_t now;
@@ -109,7 +116,7 @@ static int baseline(struct a733_npu_platform *p)
         check(p,CCU+0x5e0,BIT(18),BIT(18)) && check(p,R_CCU+0x1ac,1,1) &&
         check(p,CCU+0xb00,BIT(31),0) && check(p,CCU+0xb04,0xf0001,BIT(19)) &&
         check(p,CCU+0x1b1c,1,0) &&
-        check(p,PCK,0xf,0) && check(p,PCK+8,0xf,0);
+        check(p,PCK,0xf,p->adopt_on ? 8 : 0) && check(p,PCK+8,0xf,p->adopt_on ? 8 : 0);
 }
 struct step {uint32_t address,mask,value;};
 /* Reset AHB, AXI, core; establish module rate; bus then module clocks; domain ON.
@@ -161,7 +168,7 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
         const struct step *s=&steps[p->step];
         uint32_t value=p->step==3 ? p->divisor-1 : s->value;
         ok=update(p,s->address,s->mask,value);
-        if (ok && ++p->step==sizeof(steps)/sizeof(*steps)) p->stage=POWER_WAIT;
+        if (ok && ++p->step==(p->adopt_on ? 6 : sizeof(steps)/sizeof(*steps))) p->stage=POWER_WAIT;
     } else if (ok && p->stage==POWER_WAIT) {
         uint32_t value;
         ok=rd(p,PCK+8,&value);
@@ -170,10 +177,10 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
             if (value==8) {
                 ok=p->last_now<=UINT64_MAX-2000;
                 if(ok) {p->settle_until=p->last_now+2000;p->stage=SETTLE;}
-            } else if (value!=0) ok=0;
+            } else if (value!=0 || p->adopt_on) ok=0;
         }
     } else if (ok && p->stage==SETTLE) {
-        ok=check(p,PCK+8,0xf,8) && check(p,CCU+0xb04,0xf0001,0xf0001) &&
+        ok=check(p,PCK+8,0xf,8) && (!p->adopt_on || check(p,PCK,0xf,8)) && check(p,CCU+0xb04,0xf0001,0xf0001) &&
             check(p,CCU+0xb00,0x8700001f,BIT(31)|(p->divisor-1));
         if(ok)p->stage=COMPLETE;
     }

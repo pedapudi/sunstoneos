@@ -16,7 +16,8 @@ static const uint32_t offsets[A733_NPU_PLL_SNAPSHOTS]={
 int a733_npu_pll_scopes(const struct a733_npu_pll_config *c,a733_clock_mask_t *shared,a733_clock_mask_t *exclusive)
 {
     if (!c || !shared || !exclusive || shared==exclusive || !c->owner || !c->handoff || !c->deadline_us ||
-        (c->mode!=A733_NPU_PLL_COLD_ENABLE && c->mode!=A733_NPU_PLL_ENABLED_RETUNE)) return 0;
+        (c->mode!=A733_NPU_PLL_COLD_ENABLE && c->mode!=A733_NPU_PLL_ENABLED_RETUNE &&
+         c->mode!=A733_NPU_PLL_LIVE_ENABLE)) return 0;
     const uint32_t *s=c->consumers;
     a733_clock_mask_t parents=A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC;
     /* Supported parent selectors: AHB SYS24/PERI0_600, NSI SYS24/PERI0_800,
@@ -37,6 +38,11 @@ int a733_npu_pll_scopes(const struct a733_npu_pll_config *c,a733_clock_mask_t *s
     uint32_t pll=c->initial_control;
     if (c->mode==A733_NPU_PLL_COLD_ENABLE) {
         if ((pll&(BIT(31)|BIT(29)|BIT(27))) || (s[8]&BIT(31)) || (s[9]&BIT(16))) return 0;
+    } else if (c->mode==A733_NPU_PLL_LIVE_ENABLE) {
+        /* DDRPLL feeds the controller; DDRCLK comes from its separate PHY PLL.
+         * Preserve both full words and refuse updates/low-frequency switching. */
+        if ((pll&(BIT(31)|BIT(29)|LOCK|BIT(27))) ||
+            (s[8]&(BIT(31)|UINT32_C(0x07010000)))!=BIT(31) || !(s[9]&BIT(16))) return 0;
     } else if ((pll&(BIT(31)|BIT(30)|BIT(29)|LOCK))!=(BIT(31)|BIT(30)|BIT(29)|LOCK)) return 0;
     *shared=parents;*exclusive=A733_CLOCK_PLL_NPU|A733_CLOCK_NPU;return 1;
 }
@@ -109,6 +115,7 @@ static int baseline(struct a733_npu_pll *p)
      * and phase-interpolator setting must be the documented reset profile. */
     return check(p,CTRL,~LOCK,p->expected_control) &&
         (p->config.mode!=A733_NPU_PLL_ENABLED_RETUNE || check(p,CTRL,LOCK,LOCK)) &&
+        (p->config.mode!=A733_NPU_PLL_LIVE_ENABLE || check(p,CTRL,LOCK,0)) &&
         check(p,CCU+0x2a4,1,0) && check(p,CCU+0x2a8,BIT(31),0) &&
         check(p,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
         check(p,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
@@ -160,7 +167,7 @@ enum a733_npu_pll_result a733_npu_pll_poll(struct a733_npu_pll *p)
     int ok=1,complete=0;
     if (p->stage==BASELINE) {ok=baseline(p);if(ok)p->stage=PROGRAM;}
     else if (p->stage==PROGRAM) {
-        const struct step *s=p->config.mode==A733_NPU_PLL_COLD_ENABLE ? &cold[p->step] : &retune[p->step];
+        const struct step *s=p->config.mode==A733_NPU_PLL_ENABLED_RETUNE ? &retune[p->step] : &cold[p->step];
         ok=update(p,s->address,s->mask,s->value);
         if (ok && ++p->step==6) {
             ok=p->last_now<=UINT64_MAX-3;

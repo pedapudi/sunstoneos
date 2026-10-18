@@ -55,6 +55,10 @@ def build(args,out):
         inputs.update(Path(p) for p in shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]))
     inputs.update([Path(__file__),ROOT/'checks/a733-smp-cached.py',ROOT/'CMakeLists.txt',
         ROOT/'cmake/aarch64-clang.cmake',b/'compile_commands.json',b/'npu-supervised/a733-npu-convolution-supervised/identity-inputs.txt'])
+    inputs.update(ROOT/p for p in ('checks/npu-supervised-host.py','apps/npu-convolution/prepare-supervised.py',
+        'apps/npu-convolution/observe.py','apps/npu-convolution/artifacts.py','tools/check-a733-npu-supervised.py',
+        'tools/check-a733-smp-supervised.py','tools/check-a733-smp.py','tools/check-a733-smp-observe.py',
+        'tools/usb-access.py'))
     import capstone, unicorn, elftools
     inputs.update([Path(sys.executable),Path(shutil.which('clang')),args.lld,
                    Path(capstone.__file__),Path(unicorn.__file__),Path(elftools.__file__)])
@@ -71,12 +75,19 @@ def build(args,out):
         layout={name:symbols[name]['st_value'] for name in ('__bss_end','__device_pool_start','__device_pool_end')}
         assert layout['__bss_end']<=layout['__device_pool_start']<layout['__device_pool_end']<=0x41f00000
         assert layout['__device_pool_end']-layout['__device_pool_start']==2097152
+        ranges=[(segment['p_vaddr'],segment['p_vaddr']+segment['p_memsz'])
+            for segment in elf.iter_segments() if segment['p_type']=='PT_LOAD' and segment['p_memsz']]
+        assert all(0x41000000<=a<b<=0x42200000 for a,b in ranges), 'Native image uses SRAM or unreserved memory'
+        layout['loaded_ranges']=ranges
+        for name in ('a733_cached_el3_vectors','a733_cached_el1_vectors','a733_cpu_el1_stacks',
+                     '__a733_smp_boot_stack_top','__tables_start','__tables_end'):
+            assert name in symbols and 0x41000000<=symbols[name]['st_value']<=0x42200000, name
     save(out/'layout.json',layout)
     save(out/'image-manifest.json',{'target':'a733-npu-convolution-supervised','protocol_version':1,'final_elf':sha(image),
         'physical_access':False,'external_session_required':True})
     return image
 
-def execute(image,out):
+def execute(image,out,live=False,selected_case=None):
     model=module('cached_model',ROOT/'checks/a733-smp-cached.py')
     from unicorn import UC_MEM_WRITE
     stops=set()
@@ -86,11 +97,12 @@ def execute(image,out):
         selected=0xff
         bus_phase='idle'
         rail_selector=30
+        lock_missing=False
         def memory(self,u,access,address,size,value,c):
             if access==UC_MEM_WRITE and address<0x41000000:
                 self.writes.append((address,value))
                 if address==0x020022a0:
-                    self.mmio[address]=value|(0x10000000 if value&(1<<29) else 0);return
+                    self.mmio[address]=value|(0x10000000 if value&(1<<29) and not self.lock_missing else 0);return
                 if address==0x02003920:
                     self.mmio[address]=value;self.mmio[0x020039a0]=value&0x10000;return
                 if address==0x7083008:
@@ -133,6 +145,12 @@ def execute(image,out):
                 self.translations+=1;u.reg_write(model.UC_ARM64_REG_PC,pc+4);return
             super().instruction(u,pc,size,c)
     m=Machine(image);sym=m.symbols;u=m.cpus[0]
+    required=('a733_npu_application_failed','a733_npu_platform_ready','a733_npu_session_layout',
+        'a733_smp_contract_valid','a733_smp_diagnostic_start','a733_smp_entry','bootstrap',
+        'app','a733_pmic_poll','a733_clock_token_status','vTaskDelay','vTaskSuspend',
+        'vTaskStartScheduler','pxCurrentTCBs','xSchedulerRunning')
+    missing=[name for name in required if name not in sym]
+    assert not missing, 'Fixture requires actual native symbols: '+', '.join(missing)
     def write(a,data):ctypes.memmove(m.ram_pointer+a-0x41000000,bytes(data),len(data))
     def word(a,value):write(a,struct.pack('<Q',value))
     def uint(a,value):write(a,struct.pack('<I',value))
@@ -190,9 +208,10 @@ def execute(image,out):
     put(boot+off('a733_npu_application_boot','pins')+off('a733_pin_handoff','authorized')+11*4,3,'I')
     consumers=(*fabric,0,0,0,0,0x80000,0x80000000,0x10000,0,0,0)
     put(pll+off('a733_npu_pll_config','owner'),1);put(pll+off('a733_npu_pll_config','handoff'),17)
-    put(pll+off('a733_npu_pll_config','mode'),2,'I')
+    put(pll+off('a733_npu_pll_config','mode'),3 if live else 2,'I')
     for i,x in enumerate(consumers):put(pll+off('a733_npu_pll_config','consumers')+4*i,x,'I')
-    put(pll+off('a733_npu_pll_config','initial_control'),0xf8103f00,'I')
+    initial=0x40104500 if live else 0xf8103f00
+    put(pll+off('a733_npu_pll_config','initial_control'),initial,'I')
     write(0x41f00000,session);(out/'modeled-session.bin').write_bytes(session)
     contract=struct.pack('<6Q',0x415337334e504331,3,224,5,7,(1<<64)-8)+session[48:80]
     contract+=struct.pack('<14Q',24,24000024,480000024,480000024,9,*([0]*7),11,0)+hashlib.sha256(session).digest()
@@ -200,8 +219,13 @@ def execute(image,out):
     assert call('npu_session_copy')==0
     assert call('npu_session_valid',0x41f00000)==1
     refused=[]
-    for label,offset,fmt,value in [('cold',pll+off('a733_npu_pll_config','mode'),'I',1),
-        ('disabled',pll+off('a733_npu_pll_config','initial_control'),'I',0),('watchdog-mask',boot+96,'Q',127)]:
+    negatives=[('cold',pll+off('a733_npu_pll_config','mode'),'I',1),
+        ('disabled',pll+off('a733_npu_pll_config','initial_control'),'I',0),('watchdog-mask',boot+96,'Q',127)]
+    if live:
+        negatives=[('partly-enabled',pll+off('a733_npu_pll_config','initial_control'),'I',initial|(1<<31)),
+            ('npu-ddr-parent',pll+off('a733_npu_pll_config','consumers')+8*4,'I',0x84000000),
+            ('ddr-update',pll+off('a733_npu_pll_config','consumers')+8*4,'I',0x88000000)]
+    for label,offset,fmt,value in negatives:
         raw=bytes(session);put(offset,value,fmt);write(0x41f00000,session)
         assert call('npu_session_valid',0x41f00000)==0;refused.append(label)
         session[:]=raw;write(0x41f00000,session)
@@ -225,66 +249,88 @@ def execute(image,out):
     for name in ('ullCriticalNestings','ullPortInterruptNestings'):write(sym[name],bytes(8*8))
     checkpoint=bytes(m.ram);clock_at=m.clock
     results={}
-    for mode in ('retune-adopt','wrong-rail','bad-parent'):
+    modes=('live-on','domain-off','lock-timeout') if live else ('retune-adopt','wrong-rail','bad-parent')
+    assert selected_case is None or selected_case in modes
+    for mode in modes:
+        if selected_case and mode!=selected_case:continue
         ctypes.memmove(m.ram_pointer,checkpoint,len(checkpoint));m.clock=clock_at;m.writes=[];m.bus_phase='idle';m.selected=0xff
         m.rail_selector=31 if mode=='wrong-rail' else 30
+        m.lock_missing=mode=='lock-timeout'
         m.mmio.update({0x07090160:0x10000002,0x02002000:0xf8000000|(99<<16)|(99<<8),
             0x020020a0:0xfe126310 if mode!='bad-parent' else 0,0x020020a8:0,0x020020ac:0,
             0x02003908:0x0e060e06,0x02003988:0x0e060000,
-            0x020022a0:0xf8103f00,0x020022a4:0,0x020022a8:0,0x020022ac:0x30000000,
+            0x020022a0:initial,0x020022a4:0,0x020022a8:0,0x020022ac:0x30000000,
             0x020022b0:0xb0000,0x02003920:0,0x020039a0:0,
             0x07010010:0,0x0701019c:0x10001,0x07025000:0x22,0x07025014:0,0x07025024:0,0x07025210:0,
             0x03400000:0,0x0340011c:0,0x0340021c:0,0x0340031c:0,
             0x708300c:0x40,0x7083010:0xf8,0x7083020:0x30,0x7083018:0,0x708301c:0,
             0x7083200:0,0x7083210:0xc0,0x7083214:0,0x7083218:0,0x708321c:0,
             0x7083314:0,0x7083318:0,0x708331c:0,0x7083014:5<<3})
+        if live:
+            m.mmio.update({0x070101ac:1,0x020025c0:1<<6,0x020025e0:1<<18,
+                0x07064000:0 if mode=='domain-off' else 8,0x07064008:0 if mode=='domain-off' else 8})
         for off_,value in zip((0x500,0x580,0x588,0xa80,0xa88,0xa8c,0xb00,0xb04,0xc00,0xc0c,0x1b10,0x1b14,0x1b1c),consumers):m.mmio[0x02002000+off_]=value
         word(sym['pxCurrentTCBs'],bootstrap);cpu();u.reg_write(model.UC_ARM64_REG_X0,address)
         entry=sym['bootstrap'];polls=0
-        while polls<180:
+        while polls<320:
             pc=run(entry,{sym['vTaskDelay'],sym['vTaskSuspend']});polls+=1
             if pc==sym['vTaskSuspend']:break
-            if v(startup+off('a733_npu_startup','pll_transferred')):break
+            if not live and v(startup+off('a733_npu_startup','pll_transferred')):break
             context=u.context_save();registers=dict(m.regs[0]);word(sym['pxCurrentTCBs'],pmic_task)
             result=call('a733_pmic_poll',provider)
             assert result in (0,1,3),('PMIC model failure',mode,result,polls,hex(u.reg_read(model.UC_ARM64_REG_PC)))
             u.context_restore(context);m.regs[0]=registers;word(sym['pxCurrentTCBs'],bootstrap)
             m.clock+=24000;entry=u.reg_read(model.UC_ARM64_REG_LR);u.reg_write(model.UC_ARM64_REG_PC,entry)
-        assert polls<180
+        assert polls<320
         pll_writes=[x for x in m.writes if x[0] in (0x020022a0,0x02003920)]
         rail=startup+off('a733_npu_startup','pmic')+off('a733_pmic_consumer','rail')
         published=startup+off('a733_npu_startup','platform')+off('a733_npu_platform','resources')
         assert q(rail+off('a733_rail_token','id')) and q(published+off('a733_npu_platform_resources','rail'))==q(rail)
-        if mode=='retune-adopt':
-            assert pc==sym['vTaskDelay'] and v(startup+off('a733_npu_startup','pll_transferred'))==1 and pll_writes
+        if mode in ('retune-adopt','live-on'):
+            assert pc==sym['vTaskSuspend' if live else 'vTaskDelay'] and v(startup+off('a733_npu_startup','pll_transferred'))==1 and pll_writes
             token=startup+off('a733_npu_startup','clock_token');source_token=source+off('a733_npu_pll','resources')+off('a733_npu_pll_resources','clock')
             assert m.read(token,layouts['a733_clock_token'][0])==m.read(source_token,layouts['a733_clock_token'][0])
             assert call('a733_clock_token_status',registry,token)==0
             assert not v(sym['a733_npu_application_failed'])
+            if live:
+                assert v(address+app['ready'])==1 and v(address+app['worker_admitted'])==1
+                assert call('a733_npu_platform_ready',startup+off('a733_npu_startup','platform'))==1
+                assert m.mmio[0x020022a0]&0xf8000000==0xf8000000
+                assert m.mmio[0x02002b04]&0xf0001==0xf0001
         else:
-            assert pc==sym['vTaskSuspend'] and v(sym['a733_npu_application_failed']) and not pll_writes
-            assert not v(startup+off('a733_npu_startup','pll_transferred'))
+            assert pc==sym['vTaskSuspend'] and v(sym['a733_npu_application_failed'])
+            if not live:assert not pll_writes and not v(startup+off('a733_npu_startup','pll_transferred'))
+            else:assert not v(address+app['ready']) and pll_writes
+        if live:
+            assert not [x for x in m.writes if 0x07064000<=x[0]<0x07065000], 'ON adoption must never write PCK'
+            assert not [x for x in m.writes if x[0] in (0x02002c00,0x02002c0c)], 'DRAM clocks must remain untouched'
+            assert all(value&(1<<19) for address_,value in m.writes if address_==0x02002b04), 'SRAM reset changed'
+            if mode=='lock-timeout':assert not m.mmio[0x020022a0]&(1<<27)
         results[mode]={'bootstrap_polls':polls,'pll_writes':pll_writes,'rail_identity':q(rail),'retained':True}
         save(out/('case-'+mode+'.json'),{'image_sha256':sha(image),'runner_sha256':sha(Path(__file__)),
             'model_sha256':sha(Path(model.__file__)),'result':results[mode]})
     save(out/'session-layout.json',{'exported':list(struct.unpack('<8Q',m.read(sym['a733_npu_session_layout'],64))),
         'typed_layouts':layouts,'fixture_sha256':sha(out/'modeled-session.bin')})
+    if live and selected_case is None:
+        host_check=module('npu_live_host_check',ROOT/'checks/npu-supervised-host.py')
+        results['host']=host_check.live_checks(image,out/'modeled-session.bin',out/'host')
     return {'passed':True,'admission_refusals':refused+['watchdog-contract','changed-session'],
         'cases':results,'native_translation_instructions':m.translations,
-        'limits':'System registers, AT/cache effects, immutable boot evidence, PLL lock and PMIC bus responses are modeled. Native constructors, PMIC service/rail sampling, common leases/mutexes, bootstrap retune and startup token adoption execute. Private repeated model-buffer SHA uses hashlib over actual bytes. No physical readiness, numerical inference, scheduler qualification, or old workload replay.'}
+        'limits':'System registers, AT/cache effects, immutable boot evidence, PLL lock and PMIC bus responses are modeled. Native constructors, PMIC service/rail sampling, common leases/mutexes and bootstrap execute. Live mode also executes actual local ON-domain startup and service activation; worker commands and numerical inference do not execute. Private repeated model-buffer SHA uses hashlib over actual bytes. No physical readiness, scheduler qualification, or old workload replay.'}
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('freertos','tinyusb','lld','artifacts'):p.add_argument('--'+name,type=Path)
     p.add_argument('--evidence',type=Path,required=True);p.add_argument('--image',type=Path)
-    p.add_argument('--build-only',action='store_true');args=p.parse_args();out=args.evidence.resolve()
+    p.add_argument('--build-only',action='store_true');p.add_argument('--live',action='store_true')
+    p.add_argument('--case');args=p.parse_args();out=args.evidence.resolve()
     out.mkdir(parents=True,exist_ok=False)
     try:
         image=args.image.resolve() if args.image else build(args,out)
         shutil.copy2(__file__,out/'executed-check.py')
         if args.build_only:print('BUILT '+str(image));return
-        save(out/'result.json',execute(image,out))
+        save(out/'result.json',execute(image,out,args.live,args.case))
     except Exception as error:
         (out/'failure.txt').write_text(repr(error)+'\n');raise
     print('PASS supervised native supply, retune and retained startup adoption')

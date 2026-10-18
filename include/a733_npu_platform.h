@@ -56,7 +56,7 @@ struct a733_npu_platform {
     uint64_t last_now, settle_until;
     a733_clock_mask_t shared;
     uint32_t parent_hz, divisor, selected_mhz[3];
-    unsigned initialized, stage, step, failed, wrote;
+    unsigned initialized, stage, step, failed, wrote, adopt_on;
 };
 /* Pure validation; refusal preserves output. Unsupported fabric parents and
  * fractional rates are refused. Parent leases are separate from FABRIC. */
@@ -65,9 +65,16 @@ int a733_npu_platform_scopes(const struct a733_npu_platform_config *, a733_clock
  * Callbacks/context and admitted resources remain live for platform lifetime. */
 int a733_npu_platform_init(struct a733_npu_platform *,
     const struct a733_npu_platform_config *, const struct a733_npu_platform_operations *, void *);
-/* Cold local startup only: module/bus off, core/AXI/AHB resets asserted, SRAM
+/* Select before acquisition, under the same authenticated private ownership.
+ * Require quiescent ON (command and status 8), the existing gated/reset local
+ * baseline and abandoned shared SRAM. Preserve SRAM reset/mapping and all PCK
+ * registers; no OFF transition occurs. Caller and callbacks remain immutable.
+ * This does not establish quiescence or SRAM abandonment from observed bits. */
+int a733_npu_platform_adopt_on(struct a733_npu_platform *);
+/* Default local startup: module/bus off, core/AXI/AHB resets asserted, SRAM
  * reset deasserted, CM_NPU mode disabled and domain OFF. Existing critical
- * AHB/MBUS and PCK clock gates must already be enabled.
+ * AHB/MBUS and PCK clock gates must already be enabled. Explicit adopt_on
+ * replaces only the OFF-domain requirement and omits the power transition.
  * Inherited PLL_NPU must divide to 492 MHz; this API never retunes a shared PLL,
  * changes voltage, acknowledges NPU events, or submits device commands.
  * Each poll performs bounded work. Failure stops all subsequent callbacks;

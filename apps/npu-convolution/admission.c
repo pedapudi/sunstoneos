@@ -31,7 +31,7 @@ int npu_session_valid(const struct npu_session *s)
        p->usb_established!=A733_NPU_APPLICATION_USB_SUPERVISED ||
        b->npu.owner!=p->npu_owner || b->npu.handoff!=p->npu_evidence || b->npu.deadline_us ||
        b->pmic.owner!=p->pmic_owner || b->pmic.identity!=p->pmic_evidence || b->pmic.startup_deadline ||
-       s->pll.mode!=A733_NPU_PLL_ENABLED_RETUNE || s->pll.deadline_us ||
+       (s->pll.mode!=A733_NPU_PLL_ENABLED_RETUNE && s->pll.mode!=A733_NPU_PLL_LIVE_ENABLE) || s->pll.deadline_us ||
        s->pll.owner!=p->npu_owner || s->pll.handoff!=p->npu_evidence)return 0;
     struct a733_npu_pll_config pll=s->pll;pll.deadline_us=1;
     struct a733_npu_platform_config local=b->npu;local.deadline_us=1;
