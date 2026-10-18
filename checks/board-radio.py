@@ -64,7 +64,8 @@ def main():
 
     try:
         common = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                  '-DSUNSTONE_AIC8800_RSN=1', '-ffunction-sections', '-fdata-sections',
+                  '-DSUNSTONE_AIC8800_RSN=1', '-DINCLUDE_xSemaphoreGetMutexHolder=1',
+                  '-ffunction-sections', '-fdata-sections',
                   '-Inetwork/include', '-Iinclude', '-I' + str(a.freertos / 'include'),
                   '-I' + str(a.freertos / 'portable/GCC/ARM_AARCH64_SRE'),
                   '-I' + str(a.tcp / 'source/include'),
