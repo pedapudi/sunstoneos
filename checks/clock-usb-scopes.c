@@ -35,7 +35,7 @@ int main(void)
     struct a733_clock_token forged=typec;
     forged.exclusive=A733_CLOCK_USB2;
     assert(a733_clock_token_status(&registry,&forged)==A733_CLOCK_INVALID);
-    assert(a733_clock_acquire(&registry,6,0,A733_CLOCK_BIT(67),10,&out)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&registry,6,0,A733_CLOCK_BIT(69),10,&out)==A733_CLOCK_INVALID);
     assert(a733_clock_release(&registry,&usb2,10)==A733_CLOCK_OK);
     assert(a733_clock_release(&registry,&typec,10)==A733_CLOCK_OK);
     assert(a733_clock_token_status(&registry,&pmic)==A733_CLOCK_OK);
