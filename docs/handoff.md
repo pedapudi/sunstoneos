@@ -37,13 +37,13 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 | Worktree | Assigned work |
 | --- | --- |
-| Storage integration | Complete maintenance image and launcher integrated; focused software checks passed |
 | Camera worker | Native OV5640 transport, resource binding and retained single-frame readout |
 | Graphics worker | Real render context, geometry/fragment submission and checkable color output |
 | USB host worker | Native USB2/xHCI enumeration and one direct storage-device read |
 | Type-C worker | Concrete host power/role and bounded I2C provider for the USB2 path |
 | NPU application worker | Native fixed convolution application, checked output and USB observation |
-| Shared clock integration | TWI11 scope and wider private layout integrated; maintenance image uses the new ABI |
+| Mimus integration worker | Cached native SMP runtime, shared providers and recorded/paced recognition |
+| Radio entropy worker | Connect actual asynchronous CE entropy to copied network random-byte callbacks |
 | Independent reviewers | Changed runtime ownership, deadlines and focused verification before execution |
 
 Inspect live agent status before assigning overlapping work. Native HDMI startup,
