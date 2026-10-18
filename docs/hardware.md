@@ -654,8 +654,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   engine faults invalidate buffered bytes; focused checks and native compilation
   pass. The [native board application](board-application.md) connects actual
   platform identity, radio startup, entropy, association and a bounded TCP client.
-  Focused application checks and central native linking pass; full startup and
-  physical operation remain untested. Entropy qualification, wider modes,
+  A boot-CPU-only image now retains all four USB/radio workload selectors.
+  Fifteen actual startup cases, nine host cases and native session-identity
+  acceptance/refusal pass under `board-single-core-20261018/`. Focused review
+  is accepted; all 569 frozen inputs match integration. Physical startup and
+  operation remain untested. Entropy qualification, wider modes,
   shutdown and physical topology/recovery remain outstanding.
   [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
   through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,

@@ -1046,3 +1046,34 @@ instruction. Do not repeat the full launch unchanged: first distinguish the new
 complete-image primary publication path from the later secondary/runtime path
 with a source-bound returning diagnostic. All-core physical entry, interrupts,
 coherence, scheduling and USB result capture remain outstanding.
+
+## A returning probe isolates complete-image primary preparation
+
+The offline builder `tools/prepare-primary-publication-probe.py` binds one overlay
+to the complete ELF identified above. It locates the single direct call from
+native boot to `a733_cached_prepare`, verifies the image hash, and replaces that
+call with an observer. The observer executes the unchanged production callee.
+It returns before interrupt-distributor configuration or secondary-core release.
+
+The observer admits the physically recorded A55 r2p0 and DSU identity, for which
+the production revision plan requests no workaround writes. It records original
+EL1 and EL3 controls, observes successful preparation, verifies EL3 restoration,
+and restores the original EL1 SCTLR and TCR with readbacks. A restoration mismatch
+parks without requesting reset. The success path uses the previously exercised
+RVBAR/RMR return sequence. Physical return of this overlay remains unverified.
+
+The overlay occupies `0x41020000..0x41024000`; its 256-byte report starts at
+`0x42018000`, outside native allocated sections and BSS clearing. The builder
+checks those reservations against ELF sections and records the patch, payloads,
+linked addresses and source hashes. A physical runner must save and restore
+these intervals and every native writable/uploaded interval, zero the report,
+and supply a fresh nonce. Preparation does not grant board access.
+
+Evidence under `primary-publication-probe-20261018/` records two passing instruction
+cases. The first executes actual boot, all 42,165 publication lines, control
+restoration and the return request. It permits only the two return-vector MMIO
+writes. The second resumes the captured restoration boundary and injects a
+readback mismatch; execution retains control without reset, and the host decoder
+rejects the report. The shared startup prefix runs once. These results model
+instructions and registers; physical cache visibility and USB return remain
+outstanding. Host transport integration and review are required before deployment.

@@ -48,6 +48,16 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
+The complete board application now has a boot-CPU-only profile with actual USB,
+radio, crypto entropy and network providers. All four workload selectors pass
+startup instruction checks. Fifteen startup cases, nine host cases and one
+native identity-binding check pass under `board-single-core-20261018/`; focused
+Astra review is accepted. Integration matches all 325 repository and 244 external
+frozen inputs without replaying tests. Both host profiles now bind sessions to
+the linked native build identity. The affected RTC callback retains function
+defaults, and its existing frozen bundle validates. Physical USB/radio execution,
+entropy qualification and topology/power admission remain outstanding.
+
 CPU task reclamation and repeated GPU compute submission are integrated.
 One finite QEMU case executes actual FreeRTOS/newlib cleanup after task migration
 in both directions. Private stream closure, heap restoration and reuse of static
@@ -569,8 +579,12 @@ mapping; unchanged routine evidence is explicitly reconciled in
 The prepared full image was then launched once on the original board; USB
 disappeared and no native observer result arrived. Do not repeat it unchanged.
 The next returning diagnostic should distinguish the new complete-image primary
-publication path from later secondary entry and scheduling. Generate bindings
-from this ELF; the old returning overlay's addresses do not apply. The second
+publication path from later secondary entry and scheduling. The returning primary-setup overlay is now built from this ELF and passes
+actual-boot restoration and retained-failure instruction checks under
+`primary-publication-probe-20261018/`. It replaces one call and executes the
+unchanged production preparation function before returning. Its host transport
+integration and physical review remain next; the old overlay's addresses do not
+apply. The second
 board was not accessed. The retained original-board process is recorded in
 `full-image/process.json`; only explicit recovery permits closing its claim.
 
