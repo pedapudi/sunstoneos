@@ -582,7 +582,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   connects shared providers, decoder IOMMU mappings, guarded buffers and copied
   USB output. Its central image builds; focused checks cover exact reference
   comparison, guards, faults, admission and framing with modeled hardware.
-  Physical decode and nonconstant-image numerical conformance remain untested.
+  A nonconstant diagnostic now has an exact CPU-decoded reference and integrated
+  native copy/layout and host checks. Its sparse-coefficient oracle does not
+  establish general JPEG numerical conformance. Physical decoding remains untested.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.

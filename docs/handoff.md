@@ -58,9 +58,13 @@ substantive correctness risks. The coordinator alone operates the board.
   and copied-output checks pass. All 155 preserved repository inputs match
   integration. No microphone is connected; physical capture and inference timing
   remain unqualified. Evidence is under `i2s-mimus-20261017/`.
-- JPEG: a nonconstant qualification fixture is being integrated into the existing
-  application. Its independent integer oracle matches the pinned CPU decoder
-  exactly. Native fixture selection and copied-output binding remain in progress.
+- JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
+  all 2,304 CPU-decoded samples exactly; the native link and focused parser,
+  copy/layout and host refusal checks pass. Physical decoding remains unqualified.
+  Evidence is under `jpeg-nonconstant-20261017/`.
+- H.264: a bounded Baseline IDR operation is being derived from pinned Cedrus
+  source and A733 runtime instructions. Native driver integration remains pending;
+  reference traces will determine register, scratch-buffer and output requirements.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.

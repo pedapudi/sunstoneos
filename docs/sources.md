@@ -106,10 +106,17 @@ it does not run a Zephyr kernel. Controller firmware remains a separate opaque
 dependency. [Bluetooth integration](bluetooth-native.md) records the exercised
 incoming-headset path and outstanding physical qualification.
 
+The JPEG diagnostic uses FFmpeg 8.0.1 (`7:8.0.1-3ubuntu2`) as an open-source
+host decoder reference. It is not linked into SunstoneOS. The
+[numerical reference record](jpeg-application.md#exact-nonconstant-diagnostic)
+identifies the selected decoder, input/output hashes, executable and shared
+libraries. The native driver uses its own source implementation.
+
 The following opaque dependencies have distinct execution roles:
 
 | Dependency | Current use | Documentation and remaining gap |
 | --- | --- | --- |
+| CedarC runtime libraries | Executable instructions provide JPEG register, table and layout references; the libraries are not loaded by FreeRTOS | [Codec sources](video-codecs.md) pin the published package and library hashes. Source-availability and redistribution assessments remain outstanding; cached notices are preserved. |
 | Board boot0 | Selected power, clock and DDR-training routines execute during RAM bring-up | [Boot record](boot.md) and source lock identify the exact binary, reviewed entry points and physical observations. A separate license assessment is not recorded. |
 | PowerVR firmware | Native GPU loader stages code for the internal MIPS processor | [GPU record](gpu.md) pins hardware selection, firmware ABI, hash and accompanying license. Physical firmware execution remains unqualified. |
 | AIC8800D80 firmware | Native SDIO loader uploads Wi-Fi code and Bluetooth data, patches and configuration | [Firmware record](radio-firmware.md) specifies revision selection, lengths, hashes and protocol. [Radio provenance](radio.md) records unresolved redistribution terms. Physical radio operation remains unqualified. |
