@@ -467,3 +467,15 @@ void a733_mmc_platform_update_retain(struct a733_mmc_platform *p,struct a733_sto
 
 int a733_mmc_platform_storage(struct a733_mmc_platform *p,const void *v,size_t n)
 {return p&&p->initialized&&outside(p,v,n);}
+
+enum a733_mmc_platform_result a733_mmc_platform_retain(struct a733_mmc_platform *p)
+{
+    if(!p||!p->initialized)return A733_MMC_INVALID;
+    if(!enter_api(p))return A733_MMC_BUSY;
+    if(p->update||p->ops.current(p->cookie)!=1)return finish(p,A733_MMC_INVALID);
+    (void)fail(p);
+    enum a733_mmc_platform_result r=
+        ((p->clock.id&&!p->clock_retained)||(p->rail.id&&!p->rail_retained))?
+        A733_MMC_BUSY:A733_MMC_RETAINED;
+    return finish(p,r);
+}

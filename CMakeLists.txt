@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 project(sunstoneos LANGUAGES C ASM)
+option(SUNSTONE_A733_STORAGE_READ "Supervised read-only SD0 application" OFF)
+if(SUNSTONE_A733_STORAGE_READ)
+ set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
+endif()
 
 set(FREERTOS_DIR "" CACHE PATH "Pinned FreeRTOS kernel source directory")
 if(NOT EXISTS "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE/port.c")
@@ -198,4 +202,9 @@ endif()
 option(SUNSTONE_A733_PCIE "Build supervised native PCIe direct-endpoint observation" OFF)
 if(SUNSTONE_A733_PCIE)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-pcie.cmake")
+endif()
+
+if(SUNSTONE_A733_STORAGE_READ)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-read.cmake")
+
 endif()

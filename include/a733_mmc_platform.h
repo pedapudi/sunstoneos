@@ -87,6 +87,11 @@ enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *,
     struct sunxi_mmc_result *,uint64_t deadline);
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *,
     struct sunxi_mmc_card *,uint64_t deadline);
+/* Explicit read-only cancellation/failure retention. The designated current
+ * owner may call after expiry; no live-I/O admission or MMIO occurs. Rejects
+ * update-bound providers. BUSY means serialization/metadata bookkeeping must
+ * be retried; output must already be revoked and borrowed buffers retained. */
+enum a733_mmc_platform_result a733_mmc_platform_retain(struct a733_mmc_platform *);
 /* Private service composition. A copied pointer cannot establish ownership:
  * the service authenticates its self, exact platform and complete grant. */
 int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);
