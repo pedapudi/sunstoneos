@@ -158,6 +158,14 @@ endpoint configuration and copied USB output. Physical use requires an identifie
 endpoint and verified carrier wiring and power. BAR allocation, interrupt-driven
 transfers, DMA, higher link speeds and power transitions remain required work.
 
+A supervised read-only SD application is in development for first card
+identification and an initial block read through the existing native MMC
+providers. The inserted microSD supplies a concrete future physical target.
+The separate maintenance image requires an already identified card and qualified
+watchdog, so it cannot perform this first discovery while watchdog testing is
+deferred. Storage contents remain protected; no write operation is part of the
+new application.
+
 
 ## Observed host and device state
 
