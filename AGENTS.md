@@ -44,6 +44,23 @@ port. The user's selective validation policy replaces unconditional full-suite
 reruns; substantive correctness requirements still apply. A commit, clean rebase,
 handoff, or final response does not invalidate successful test evidence.
 
+## Efficient tool use and coordination
+
+- Discover unfamiliar paths with one scoped `rg --files` search, then reuse the
+  discovered paths. Do not add existence checks before every known-file read.
+- Read relevant symbols or sections. Summarize large manifests and command
+  results; do not print entire inventories or repeatedly request truncated output.
+- After a failed command, identify its cause before retrying. Preserve completed
+  steps and resume only the failed or affected steps. Stop repeated downloads
+  after a stable access failure and use an available authoritative source.
+- After context recovery, read the objective and inspect current changes. Reuse
+  unchanged source summaries and evidence instead of rediscovering the workstream.
+- Keep one implementation owner and one reviewer per integration. Review concrete
+  ownership, concurrency and device behavior before execution; report only new
+  findings. Integrate completed work before adding another workstream.
+- Keep handoffs concise: changed behavior, exact inputs, result, remaining gap.
+  Use existing evidence tools; do not add a reporting system for bookkeeping.
+
 ## Hardware access
 
 - Parallel workers develop in isolated worktrees and use separate build/evidence
