@@ -205,6 +205,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Focused host checks and native compilation pass. SPI4 route activation refuses
   its unproven package signal mapping. Board admission, physical peers, DMA,
   advanced modes and SPIF remain outstanding.
+  The [supervised SPI3 application](spi-application.md) now connects the native
+  providers to an authorized header peer exchange and copied USB response.
+  It verifies the BLDO1 configuration for the 1.8 V PE signal bank without
+  changing its voltage. One image link, admission checks, thirteen modeled native
+  cases and four host groups pass. Integration reuses those artifacts with
+  documented default-startup and additive-header differences. Physical exchange,
+  electrical compatibility and peer recovery remain unqualified.
 - PWM and ADC: **planned**, with [board routing identified](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses).
   Native fan PWM integration is in development for PD5/PWM0 channel 5.
   The status LED, header alternatives and display backlight output remain in scope.

@@ -185,10 +185,14 @@ future physical target whose contents remain protected. The separate maintenance
 image still requires an identified card and qualified watchdog; this read-only
 path permits initial discovery without either prerequisite.
 
-Native SPI application integration uses SPI3 chip select 0 on the header,
-with BLDO1 supplying its 1.8 V signal bank. Focused software validation is in
-progress. Physical transfers require an identified peer, authorized command
-effects and verified wiring and voltage.
+The [native SPI application](spi-application.md) integrates SPI3 chip select 0
+on the header, with BLDO1 supplying its 1.8 V signal bank. One native link,
+admission and nominal-provider checks, thirteen modeled native cases and four
+host groups pass. Evidence and integration reconciliation are preserved under
+`spi-application-20261018/`. The obsolete fixture clock-token producer now derives
+its layout from the final image; the initial refusal and completed build were
+preserved. Physical transfers require an identified peer, authorized command
+effects, verified wiring and voltage, and recovery for every affected supply.
 
 The [PWM and ADC routing audit](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
 identifies the fan, status LED, header alternatives and display outputs, plus

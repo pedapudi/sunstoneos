@@ -54,6 +54,11 @@ The [PCIe implementation](pcie.md) uses the pinned board kernel and U-Boot as
 register and sequence references. The [native application](pcie-application.md)
 executes repository controller and PHY source under FreeRTOS; it loads neither
 a PCIe firmware blob nor either reference operating environment.
+The [SPI application](spi-application.md) uses repository controller and platform
+source under FreeRTOS. Board-kernel and U-Boot sources provide register and routing
+references; the AXP8191 table in the pinned U-Boot supplies the BLDO1 voltage
+decoder fields. The native image loads no SPI firmware blob. Its component
+record identifies the source revision, schematic route and electrical limits.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and
