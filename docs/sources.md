@@ -43,6 +43,12 @@ The [H.264 application](h264-native.md) adapts open-source Linux Cedrus control
 and uses pinned H6-CedarC source references. Its source manifest records licenses
 and hashes. A733 CedarC libraries provide instruction references; the native
 image does not load those Linux libraries. FFmpeg supplies the host pixel oracle.
+The [native RTC application](rtc-application.md) adapts the pinned board kernel's
+GPL-2.0-or-later SoC RTC calendar and alarm operations. Its
+[source manifest](../apps/rtc/sources.json) records the exact driver, clock and
+board-description inputs. Repository source executes these operations under
+FreeRTOS; no RTC firmware blob or Linux runtime is loaded. The component document
+records conflicting manual descriptions and the unresolved external-RTC board variant.
 The [NPU reference record](npu.md) pins the VIPLite driver, A733 SDK, and
 TIM-VX parser. It records binary-analysis provenance and format-inspection evidence.
 The [address relocation record](nbg-relocation.md) pins the SDK library and

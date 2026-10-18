@@ -146,11 +146,14 @@ host cases pass. All 175 compiled repository inputs match integration under
 was reused. Physical acquisition, accuracy, interrupt delivery and recovery
 remain unqualified. Automatic thermal policy remains required.
 
-Native RTC integration is in progress. The initial path covers coherent calendar
-reads, a short non-waking alarm, cancellation and copied application output.
-Board topology and register semantics follow the schematic and pinned SoC RTC
-driver; the fitted board revision still requires confirmation. Calendar setting,
-clock-source initialization and retention qualification remain required work.
+The [native RTC application](rtc-application.md) now connects coherent calendar
+reads, one non-waking alarm, deferred interrupt acknowledgement, cancellation and
+copied USB output. One affected image and focused driver, native instruction and
+host checks pass. All 174 compiled repository inputs match integration under
+`rtc-native-20261018/`; accepted artifact and dependency evidence was reused.
+The fitted board revision, physical operation and native USB serialization remain
+unqualified. Calendar setting, clock-source initialization, alarm wake and
+retention qualification remain required work.
 
 Native PCIe application integration is in progress. It connects the existing
 root-port driver and shared providers to x1 Gen1 link observation, read-only

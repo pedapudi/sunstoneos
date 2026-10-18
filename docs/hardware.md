@@ -104,6 +104,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A [physical SRAM trial](watchdog.md) also passes ROM-redirect and watchdog
   reset-policy programming/restoration with the timer disabled. Timer enabling,
   expiry, and reset retention remain unqualified.
+- RTC and watchdog: **implemented** [native RTC read and alarm application](rtc-application.md).
+  It connects the SoC calendar, one non-waking alarm, deferred interrupt handling,
+  cancellation and copied USB output through shared clock and register ownership.
+  One affected image, focused driver checks, native instruction emulation and host
+  checks pass. All 174 compiled repository inputs match integration under
+  `rtc-native-20261018/`. The schematic and pinned driver support the selected SoC
+  RTC; the fitted board revision still requires confirmation. Physical operation,
+  native USB serialization and retention remain unqualified. Calendar setting,
+  clock-source initialization, alarm wake, reset-cause reporting and applicable
+  retention modes remain outstanding. Independent watchdog evidence and limits
+  are recorded separately above.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
