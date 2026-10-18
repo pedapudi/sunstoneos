@@ -206,5 +206,9 @@ endif()
 
 if(SUNSTONE_A733_STORAGE_READ)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-read.cmake")
+endif()
 
+option(SUNSTONE_A733_SPI "Build the supervised native SPI application" OFF)
+if(SUNSTONE_A733_SPI)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-spi.cmake")
 endif()

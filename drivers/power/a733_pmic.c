@@ -16,6 +16,7 @@ static int profile(enum a733_rail rail,struct profile *p)
     case A733_RAIL_DCDC4:*p=(struct profile){0x10,3,0x15,127};break;
     case A733_RAIL_DCDC8:*p=(struct profile){0x10,7,0x19,127};break;
     case A733_RAIL_DCDC9:*p=(struct profile){0x11,0,0x1a,127};break;
+    case A733_RAIL_BLDO1:*p=(struct profile){0x20,6,0x2a,31};break;
     case A733_RAIL_BLDO2:*p=(struct profile){0x20,7,0x2b,31};break;
     case A733_RAIL_BLDO5:*p=(struct profile){0x21,2,0x2e,31};break;
     case A733_RAIL_CLDO1:*p=(struct profile){0x21,3,0x2f,31};break;
@@ -32,7 +33,7 @@ int a733_pmic_decode(enum a733_rail rail,uint8_t enable,uint8_t selector,struct 
     struct profile p;if(!out || !profile(rail,&p))return 0;
     unsigned code=selector&p.mask,mv=0;
     if(rail==A733_RAIL_DCDC1 || rail==A733_RAIL_DC1SW2) {if(code<=28)mv=1000+100*code;}
-    else if(rail==A733_RAIL_BLDO2 || rail==A733_RAIL_BLDO5 || rail==A733_RAIL_CLDO1 || rail==A733_RAIL_CLDO2 || rail==A733_RAIL_CLDO5) {if(code<=29)mv=500+100*code;}
+    else if(rail==A733_RAIL_BLDO1 || rail==A733_RAIL_BLDO2 || rail==A733_RAIL_BLDO5 || rail==A733_RAIL_CLDO1 || rail==A733_RAIL_CLDO2 || rail==A733_RAIL_CLDO5) {if(code<=29)mv=500+100*code;}
     else if(rail==A733_RAIL_ELDO6) {if(code<=40)mv=500+25*code;}
     else if(code<=((rail==A733_RAIL_DCDC8 || rail==A733_RAIL_DCDC9) ? 101u : 87u))
         mv=code<=70 ? 500+10*code : 1200+20*(code-70);

@@ -37,7 +37,9 @@ struct a733_spi_platform_ops {
      * this controller before enabling it. Every subsequent SPI mux writer
      * must honor the same exclusive controller lease. The four-pin lease
      * alone does not establish whole-controller pad exclusion. START
-     * establishes stable24MHz source, rail/PIO mappings and watchdog recovery.
+     * establishes stable24MHz source, rail/PIO mappings and operation-specific qualified recovery. Supervised
+     * permanent retention/manual power removal is permitted; a software deadline
+     * cannot recover stalled MMIO or establish reset of an independently powered peer.
      * STOP excludes submissions/peer activity and authorizes original pin-state
      * restoration. Every route, including SPI0 storage pins and SPI1 display
      * pins, requires specific authority. 0 pending; 1 granted; other uncertain. */

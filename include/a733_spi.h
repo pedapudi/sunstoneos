@@ -60,7 +60,10 @@ struct a733_spi {
  * pins. Boot storage and alternate functions must be excluded by the platform.
  * Serialize all calls; callbacks cannot reenter. Keep callback context and
  * controller storage immutable to other tasks. All objects and buffers must
- * be disjoint. Independent watchdog recovery is required for stalled MMIO.
+ * be disjoint. Operation-specific recovery must be qualified before physical use. Supervised
+ * RAM-only operation may retain all resources until manual power removal.
+ * Software deadlines cannot recover stalled MMIO; qualify the physical recovery
+ * path and all independently powered peers.
  * Invalid arguments return -1 without I/O. Otherwise return current state. */
 int a733_spi_begin(struct a733_spi *, const struct a733_spi_ops *, void *,
                    const struct a733_spi_format *, uint64_t deadline);
