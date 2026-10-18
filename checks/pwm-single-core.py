@@ -11,12 +11,15 @@ args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;o
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/pwm/prepare.py')
+providers=mod('pwm_nominal_providers',r/'checks/a733-provider-fixture.py')
+raw=bytearray(args.session.read_bytes());providers.validate_nominal_providers(raw,usb_reference_mode=2)
 image=args.image;e=native.Image(image);e.path=image;e.ops={}
+_,_,build=prep.base.image_parts(image);raw[48:80]=build;raw=bytes(raw)
 for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True).splitlines():
  m=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
  if m:e.ops[int(m[1],16)]=m[2].strip()
 events={e.address('a733_cpu_coherence_publish')}|{a for a,op in e.ops.items() if op.split()[0].lower() in ('mrs','msr','at','wfe')}
-raw=bytearray(args.session.read_bytes());_,_,build=prep.base.image_parts(image);raw[48:80]=build;raw=bytes(raw)
+
 class Machine(shared.Machine):
  def __init__(self,variant='nominal'):
   compat=types.SimpleNamespace(session_check=prep.session_check,embedded_reference=lambda *a:None,request_bytes=prep.request_bytes)

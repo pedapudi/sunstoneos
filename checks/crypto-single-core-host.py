@@ -9,7 +9,8 @@ r=Path(__file__).resolve().parents[1]
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 prep=mod('rtc_single_host',r/'apps/crypto/prepare.py');tool=mod('rtc_single_tool',r/'tools/check-a733-crypto-supervised.py')
-raw=bytearray(a.session.read_bytes());image_hash=hashlib.sha256(a.image.read_bytes()).hexdigest();facts=a.output/'MODEL-NOT-PHYSICAL';facts.mkdir()
+providers=mod('crypto_host_nominal_providers',r/'checks/a733-provider-fixture.py')
+raw=providers.nominal_provider_session(a.session.read_bytes(),usb_reference_mode=2);image_hash=hashlib.sha256(a.image.read_bytes()).hexdigest();facts=a.output/'MODEL-NOT-PHYSICAL';facts.mkdir()
 def put(n,value):
  b=json.dumps(value,sort_keys=True).encode();p=(facts/(n+'.json')).resolve();p.write_bytes(b);return {'path':str(p),'sha256':hashlib.sha256(b).hexdigest()}
 identity='CRYPTO-SOFTWARE-MODEL';port='NO-PHYSICAL-PORT'

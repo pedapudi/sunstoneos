@@ -14,7 +14,8 @@ LED_FACTS=['pl7_gpio_route','complete_latch_authority','bldo1_1800000_dcdc1_3300
 def produce(image,out):
  out.mkdir(parents=True,exist_ok=False);prep=module('pwm_fixture_prepare',ROOT/'apps/pwm/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
- raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(280));struct.pack_into('<3I',raw,488,0,1<<31,1<<31);struct.pack_into('<5Q',raw,592,0x4153373350574131,2,872,23,91)
+ providers=module('pwm_nominal_providers',ROOT/'checks/a733-provider-fixture.py')
+ raw=providers.nominal_provider_session(baseline.read_bytes(),usb_reference_mode=1);assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(280));struct.pack_into('<5Q',raw,592,0x4153373350574131,2,872,23,91)
  raw[760:768]=bytes((0,0,0,7,0,1,0,0));struct.pack_into('<IIQ',raw,768,0,24000000,2000000)
  target=dict(identity='pwm-service-software-only-model',port='no-physical-port',image_sha256=ih)
  def record(name,value):
@@ -34,7 +35,7 @@ def produce(image,out):
  ddr=record('ddr.json',dict(**target,schema='a733-ddr-reservation-v1',exclusive=True,published_cache_disabled=True,remote_writers_excluded=True,ranges=[[0x41000000,0x42200000]],evidence=[evidence]))
  admission=dict(**target,schema='a733-pwm-supervised-entry-v1',reservation=100,session_template_sha256=hashlib.sha256(raw).hexdigest(),ddr=ddr,platform=platform,**refs,whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,preserve_microsd=True,one_attempt=True,evidence=[evidence]))
  path=out/'admission.json';path.write_text(json.dumps(admission,indent=2)+'\n');prep.validate_admission(admission,ih,hashlib.sha256(raw).hexdigest(),raw)
- (out/'fixture-inputs.json').write_text(json.dumps(dict(baseline=str(baseline),baseline_sha256=hashlib.sha256(baseline.read_bytes()).hexdigest(),image_sha256=ih,build_id=identity.hex(),physical_access=False),indent=2)+'\n')
+ (out/'fixture-inputs.json').write_text(json.dumps(dict(baseline=str(baseline),baseline_sha256=hashlib.sha256(baseline.read_bytes()).hexdigest(),image_sha256=ih,build_id=identity.hex(),provider_source=str(providers.SOURCE),provider_source_sha256=providers.SOURCE_SHA256,physical_access=False),indent=2)+'\n')
  return template,path
 if __name__=='__main__':
  import argparse

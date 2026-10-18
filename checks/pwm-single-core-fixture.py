@@ -7,13 +7,9 @@ def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def produce(image,out):
  fixture=mod('pwm_fixture',r/'checks/pwm-service-fixture.py');template,admission=fixture.produce(image,out)
- raw=bytearray(template.read_bytes());struct.pack_into('<I',raw,532,2)
- # Real PMIC construction requires inherited PL0/PL1 mux2 with valid pull/drive.
- # Reuse the full nominal profile from the accepted thermal startup producer.
- nominal=Path.home()/'.cache/sunstoneos/evidence/thermal-single-core-20261018/MODEL-session.bin'
- reference_raw=nominal.read_bytes();assert reference_raw[564:570]==bytes((2,1,1,2,1,1))
- raw[564:570]=reference_raw[564:570];template.write_bytes(raw)
- (out/'provider-profile.json').write_text(json.dumps(dict(source=str(nominal),sha256=hashlib.sha256(reference_raw).hexdigest(),fields='PL0/PL1 function, pull, drive',offset=564,bytes=raw[564:570].hex(),physical_access=False),indent=2)+'\n')
+ providers=mod('pwm_single_nominal_providers',r/'checks/a733-provider-fixture.py')
+ raw=providers.nominal_provider_session(template.read_bytes(),usb_reference_mode=2);template.write_bytes(raw)
+ (out/'provider-profile.json').write_text(json.dumps(dict(source=str(providers.SOURCE),sha256=providers.SOURCE_SHA256,fields='Fixed workload-2 PMIC/USB configuration',offset=488,bytes=raw[488:570].hex(),physical_access=False),indent=2)+'\n')
  record=json.loads(admission.read_text());path=Path(record['platform']['path']);fact=json.loads(path.read_text())
  reference=json.loads((out/'ddr.json').read_text())['evidence'][0]
  conditions=('primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity','rom-usb0-pio-takeover','usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded')
