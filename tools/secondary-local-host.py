@@ -13,8 +13,8 @@ HOST_SOURCES=identity.HOST_SOURCES+('tools/secondary-local-host.py',)
 MODEL_SOURCES=('checks/secondary-local-probe.py',)+identity.MODEL_SOURCES
 
 
-def decode(raw,nonce,cached=False):
-    result=identity.decode(raw,nonce,local=True,cached=cached)
+def decode(raw,nonce,cached=False,coherent=False):
+    result=identity.decode(raw,nonce,local=True,cached=cached,coherent=coherent)
     require(not any(raw[0xa00:0xc00]),'Boot CPU local slot changed.')
     cores=[]
     for core in range(1,8):

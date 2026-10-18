@@ -22,12 +22,13 @@ FIELDS = ('epoch','core','midr','mpidr','sctlr3','sctlr1','tcr1','clusteridr','c
           'off','restored','owner_state','report_state')
 
 
-def decode(raw, nonce, local=False, cached=False):
+def decode(raw, nonce, local=False, cached=False, coherent=False):
+    cached = cached or coherent
     local = local or cached
-    require(len(raw) == (0x3000 if cached else 0x1c00 if local else 0xa00), 'Short combined CPU report.')
+    require(len(raw) == (0x4200 if coherent else 0x3000 if cached else 0x1c00 if local else 0xa00), 'Short combined CPU report.')
     result = primary.probe.decode(raw[:256], nonce)
     header = struct.unpack_from('<32Q', raw, 256)
-    require(header[:3] == ((0x4137334341434831,1,0x2f00) if cached else (0x4137334c4f434131,1,0x1b00) if local else (0x4137334944454e31,1,0x900)) and header[3] and header[4] and
+    require(header[:3] == ((0x413733434f484531,1,0x4100) if coherent else (0x4137334341434831,1,0x2f00) if cached else (0x4137334c4f434131,1,0x1b00) if local else (0x4137334944454e31,1,0x900)) and header[3] and header[4] and
             header[5:8] == ((0xfe,2,7) if local else (0xfc,2,7)) and not any(header[8:]), 'Incomplete secondary survey.')
     require(header[4] > result['counter_after'], 'Survey deadline preceded primary preparation.')
     require(not any(raw[512:768 if local else 1024]), 'Untested CPU slots changed.')
@@ -37,7 +38,7 @@ def decode(raw, nonce, local=False, cached=False):
         s = dict(zip(FIELDS, values))
         require(s['epoch'] == s['request'] == s['ack'] == header[3] and s['core'] == core and
                 s['ready'] == s['restored'] == 1 and s['owner_state'] == s['report_state'] == 2 and
-                not s['off'] & 15 and not any(values[27:]), 'Core entry/shutdown/restoration incomplete.')
+                not s['off'] & 15 and (values[27:] == (1,0,0,0,0) if coherent else not any(values[27:])), 'Core entry/shutdown/restoration incomplete.')
         require(s['midr'] & 0xffffffffff0ffff0 == (0x410fd050 if core < 6 else 0x410fd0b0) and
                 not s['mpidr'] & ~0x000000ffc1ffffff and
                 not s['mpidr'] & 0x000000ff00ff00ff and (s['mpidr'] >> 8) & 255 == core and
@@ -58,10 +59,11 @@ def initial_report(nonce):
     return primary.initial_report(nonce)+bytes(0x900)
 
 
-def load(build, image, manifest, local=False, cached=False):
+def load(build, image, manifest, local=False, cached=False, coherent=False):
+    cached = cached or coherent
     local = local or cached
-    report=(builder.REPORT[0],0x2f00 if cached else 0x1b00) if local else builder.REPORT
-    require(manifest.get('schema') == ('a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
+    report=(builder.REPORT[0],0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else builder.REPORT
+    require(manifest.get('schema') == ('a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
             'Wrong secondary identity profile.')
     names = ('boot/a733/secondary-identity-probe.c','boot/a733/secondary-identity-probe.S',
@@ -70,6 +72,7 @@ def load(build, image, manifest, local=False, cached=False):
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
+    if coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     require(manifest['sources'] == {n:digest(ROOT/n) for n in names}, 'Identity source changed.')
     base_path = Path(manifest['primary_manifest']['path'])
     require(base_path.is_absolute() and digest(base_path) == manifest['primary_manifest']['sha256'],

@@ -67,11 +67,28 @@ int identity_primary_run(void)
         while(a733_cpu_entry_poll(&owner)==A733_CPU_ENTRY_PENDING) {}
         slot->owner_state=owner.state;slot->report_state=owner.report.state;barrier();
         if(owner.state!=A733_CPU_ENTRY_DISPATCHED || owner.report.state!=A733_ENTRY_RELEASED)return 0;
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+        while(!slot->reserved[0]) {barrier();if(!before(HEADER->deadline))return 0;}
+        if(slot->reserved[0]!=1)return 0;
+#else
         while(!slot->ready) {barrier();if(!before(HEADER->deadline))return 0;}
-        if(slot->ready!=1 || slot->epoch!=HEADER->epoch || slot->core!=core ||
+        if(slot->ready!=1)return 0;
+#endif
+        if(slot->epoch!=HEADER->epoch || slot->core!=core ||
            slot->midr!=owner.report.midr || slot->mpidr!=owner.report.mpidr ||
            slot->sctlr3!=owner.report.sctlr || slot->target_control!=slot->control ||
            slot->target_mode!=slot->mode || (slot->power_before&1))return 0;
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+    }
+    // All targets are released before waiting for cached shared-memory work.
+    for(unsigned core=IDENTITY_FIRST_CORE;core<8;++core) {
+        volatile struct identity_slot *slot=&SLOTS[core];
+        uintptr_t config=0x08001000+core*0x1000,control=0x07050200+core*4;
+        uintptr_t mode=control+0x20,status=0x07052008+core*0x1000;
+        HEADER->core=core;barrier();
+        while(!slot->ready) {barrier();if(!before(HEADER->deadline))return 0;}
+        if(slot->ready!=1)return 0;
+#endif
         slot->request=HEADER->epoch;barrier();__asm__ volatile("sev":::"memory");
         while(slot->ack!=HEADER->epoch) {barrier();if(!before(HEADER->deadline))return 0;}
         do {if(!before(HEADER->deadline))return 0;slot->off=read32(status);}while(slot->off&15);
@@ -86,6 +103,15 @@ int identity_primary_run(void)
     }
 #ifdef SUNSTONE_SECONDARY_LOCAL
     if(!secondary_distributor_restore(HEADER->deadline))return 0;
+#endif
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+    // Every writer has completed NS clean+invalidate and reached observed OFF.
+    // Capture the resulting physical memory before the host restores its backup.
+    extern unsigned char a733_cpu_el1_stacks[];
+    const volatile uint64_t *shared=(void *)a733_cpu_el1_stacks;
+    volatile uint64_t *copy=(void *)0x4201b200;
+    for(unsigned i=0;i<4096/8;++i)copy[i]=shared[i];
+    barrier();
 #endif
     HEADER->state=2;barrier();return 1;
 }

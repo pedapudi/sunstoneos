@@ -66,6 +66,14 @@ identity_target:
     str x13, [x16, #112]
     orr w15, w12, w13
     tbnz w15, #0, identity_park
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+    // Identity is complete; the primary may release the next target while this
+    // target prepares its private state. Final ready remains a separate field.
+    mov x15, #1
+    dsb sy
+    str x15, [x16, #216]
+    dsb sy
+#endif
 #ifdef SUNSTONE_SECONDARY_LOCAL
     // Preserve the target identities across actual production C functions.
     mov x19, x16

@@ -55,6 +55,9 @@ native_el1_cache_probe:
 .size native_el1_cache_probe,.-native_el1_cache_probe
 
 el1_observe_checkpoint:
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+    bl identity_coherence_el1
+#endif
     mov x0, #0x733
     mrs x1, CurrentEL
     mrs x2, sctlr_el1
@@ -100,6 +103,20 @@ el1_return_checkpoint:
     cmp x16, #1
     b.ne .Lel1_park
     ldr x19, =0x42002b20
+#endif
+#ifdef SUNSTONE_SECONDARY_COHERENCE
+    // The stackless EL1 interval returns only after all writers stop and this
+    // target completes NS cache cleaning. Preserve its proof in Device memory.
+    cmp x25, #1
+    b.ne .Lel1_refuse
+    ldr x17, =0x4201b000
+    add x17, x17, x16, lsl #6
+    stp x20, x21, [x17, #8]
+    stp x26, x27, [x17, #24]
+    stp x28, x29, [x17, #40]
+    mov x16, #3
+    dsb sy
+    str x16, [x17]
 #endif
     stp x0, x1, [x19, #72]
     stp x2, x3, [x19, #88]

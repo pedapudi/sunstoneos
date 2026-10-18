@@ -13,8 +13,8 @@ HOST_SOURCES=local.HOST_SOURCES+('tools/secondary-cache-host.py',)
 MODEL_SOURCES=('checks/secondary-cache-probe.py',)+local.MODEL_SOURCES
 
 
-def decode(raw,nonce,smc_return):
-    result=local.decode(raw,nonce,cached=True)
+def decode(raw,nonce,smc_return,coherent=False):
+    result=local.decode(raw,nonce,cached=True,coherent=coherent)
     require(not any(raw[0x1c00:0x2100]) and not any(raw[0x2800:0x2900]),
             'Unused cache report storage changed.')
     cores=[]
