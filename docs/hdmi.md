@@ -3,9 +3,10 @@
 SunstoneOS implements a bounded HDMI controller, PHY and TV0 colorbar path for
 the Orange Pi Zero 3W miniHDMI connector. The implementation accepts exact
 1280×720 at 60 Hz and 1920×1080 at 60 Hz, with RGB888 and one pixel per clock.
-It has not produced qualified physical output. A native power, clock and shared
-system-control binding, authenticated analog initial state, and a connected
-monitor remain prerequisites.
+It has not produced qualified physical output. A
+[native resource binding](hdmi-native.md) connects the shared providers.
+Qualified image-owned cold/analog inputs and a connected monitor remain
+prerequisites.
 
 The runtime is `drivers/display/a733_hdmi.c` and `a733_hdmi_phy.c`, with the
 public interface in `include/a733_hdmi.h`. The [TV0 timing controller](tcon-tv.md)
@@ -25,8 +26,8 @@ The acquire callback must provide an authentic common clock token, stable
 24 MHz oscillator and SFR clocks, VO1 power domain 10, released bus resets,
 and held PMIC rail reservations. Its exclusive VO1 scope covers both TV
 controllers, HDMI/eDP, shared TOP registers, PLL consumers and domain/reset
-writers. Clock bit 63 is reserved for this scope; the registry at this
-component's source base cannot yet mint it. The native binding remains required.
+writers. The common registry assigns bit 63 to this exclusive scope. The native
+binding obtains its actual token before device access.
 
 The resistor controls at `0x03000160` and `0x03000164` require common authority
 for both complete shared words. Every writer must participate in that authority.
@@ -43,8 +44,9 @@ inherited; its safe initial value remains a physical admission requirement.
 
 The schematic identifies VDD08_HDMI and VCC18_HDMI; board software names DCDC2
 and CLDO2 supplies. DCDC2 is shared with the NPU. Connector 5 V comes through a
-diode from VCC5V, with no connector power GPIO shown. The native binding must
-resolve actual rail ownership and voltages before this runtime can run on board.
+diode from VCC5V, with no connector power GPIO shown. The native binding obtains
+rail ownership and reads programmed voltages.
+Electrical compatibility still requires physical qualification.
 
 ## Preparation and output are separate operations
 
