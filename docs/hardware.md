@@ -95,7 +95,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;
-  the correction has no physical result yet.
+  the correction has no physical result yet. One read-only ROM batch identifies
+  all eight frame affinities and reports their power-down permission bits clear
+  under `gic600-registers-20261018-089/`. This does not establish local interrupt
+  initialization or identify the earlier failure location.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

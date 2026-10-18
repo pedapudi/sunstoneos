@@ -50,14 +50,18 @@ CPU task reclamation and repeated GPU compute submission are integrated.
 One finite QEMU case executes actual FreeRTOS/newlib cleanup after task migration
 in both directions. Private stream closure, heap restoration and reuse of static
 task storage pass. All 26 preserved source inputs match integration under
-`smp-runtime-cleanup-20261018/`; the physical startup failure remains unresolved.
+`smp-runtime-cleanup-20261018/`; physical scheduling remains unresolved.
 
 The GPU application executes two successive submissions of its fixed arithmetic
 workload and copies each acquired result. The service preserves command queues,
 advances completion counters and refuses output after cancellation or fault.
 Five focused composition cases and host decoding checks pass; GPU numerical
 writes remain modeled. The native compute image builds under
-`gpu-completion-20261018/`. Physical rendering and computation remain unqualified.
+`gpu-completion-20261018/`. The supervised host now selects its protocol from the
+frozen manifest and verifies both submissions before saving the complete output.
+Thirty-three focused host cases pass under `gpu-physical-proposal-20261018/`;
+the existing ELF was reused. This image genuinely depends on the eight-core boot
+barrier. Physical rendering and computation remain unqualified.
 
 NPU registration now accepts three reviewed compiled convolution artifacts,
 selected before scheduling and fixed for the context lifetime. Two additional
@@ -67,7 +71,11 @@ focused modeled checks under `npu-models-20261018/`. First-result mismatch and
 wrong completion tickets prevent success publication. The built image is for
 software validation only; physical inference and memory confinement remain
 unqualified. Arbitrary models, runtime model switching and mimus acceleration
-remain required follow-up work.
+remain required follow-up work. The NPU controller now requires the supported
+MMU control value before submit, completion and close. Ninety-six focused
+single-bit corruption cases and native compilation pass under
+`npu-first-physical-20261018/`. This refusal check does not establish effective
+engine confinement; address bypass and coefficient bounds remain unresolved.
 
 Combined thermal/ADC monitoring is integrated with repeated copied samples,
 shared-parent ownership and readback-confirmed converter disable on stop.
@@ -111,8 +119,11 @@ to the primary agent, without delegation.
   Evidence is under `reconnect-20261018-086/native/runtime/`.
   The driver now implements the missing GIC-600 redistributor power-up handshake.
   Focused host checks and two native instruction cases pass under
-  `gic600-power-20261018/`. The correction is not physically tested. Per-core
-  interrupt initialization, cache coherence and scheduling remain unresolved.
+  `gic600-power-20261018/`. The correction is not physically tested. One read-only ROM batch subsequently
+  identified all eight redistributor affinities and power states. All frames
+  reported `RDPD=0`; the missing handshake is not an established explanation of
+  the earlier failures. Per-core interrupt initialization, cache coherence and
+  scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -404,6 +415,13 @@ scope and dependencies. [Issue 12](https://github.com/pedapudi/sunstoneos/issues
 tracks the deferred native NPU toolkit. Suitable open-source dependencies remain
 preferred; opaque replacements follow hardware functionality and optimization.
 
+Second-board DDR/survey proposals are prepared offline under
+`second-board-20261018-3-3/preparation/`. The coordinator must review the recovery
+plan and execute each phase through the second board's queue. No DDR or SD
+operation has run on that board. The SD host now requires the native client's two
+successful reads as well as the USB results. Five focused host cases pass; the
+frozen native image was reused.
+
 ## Next actions
 
 The accepted [goal](goal.md) prioritizes complete native device integration.
@@ -418,9 +436,12 @@ redistributor power-up sequence. That sequence is implemented and passes focused
 software checks; its connection to the physical failure remains a hypothesis.
 The primary agent handles all further multicore work directly.
 
-1. Extend the returning diagnostic to observe redistributor identity and power
-   state before any SGI/PPI access. Review power-up and matching cleanup against
-   the pinned Arm implementation before a physical attempt. Then qualify local
+1. Use the successful ROM observation under `gic600-registers-20261018-089/`:
+   distributor IIDR is `0x0201643b`, frame affinity matches indices 0–7, and all
+   power-down permission bits are clear. These observations precede another CPU
+   power transition; they do not establish its later interrupt state. Extend the
+   returning diagnostic through the next unresolved target boundary with matching
+   cleanup, then qualify local
    interrupts, the remaining cores, cache coherence and scheduling. Preserve the
    failed-attempt backups and reuse the successful release/preparation evidence.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests

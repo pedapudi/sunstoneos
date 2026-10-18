@@ -1,156 +1,71 @@
-Build SunstoneOS in ~/git/sunstoneos into a minimal FreeRTOS-based OS for the Orange Pi
-Zero 3W, fully support all usable onboard hardware, and run ~/git/mimus natively.
-Proceed autonomously through implementation, integration, physical bring-up,
-qualification, and subsequent performance optimization.
+Build SunstoneOS into a complete, practical FreeRTOS-based OS for the Orange Pi Zero 3W/A733, support all usable onboard hardware, and run ~/git/mimus natively. Proceed autonomously through implementation, physical integration, qualification and subsequent performance optimization.
 
-1. Make complete device integration the top priority Finish integrating existing
-components before expanding isolated infrastructure. A complete device path includes
-native initialization, resource ownership, application access, successful operations,
-interrupts where applicable, and bounded failure recovery.
+Work in ~/git/sunstoneos-worktrees/bringup. Read AGENTS.md, docs/goal.md, docs/handoff.md and docs/hardware.md before continuing. Preserve existing work and reuse valid evidence.
 
-Use a reviewed recovery plan for each physical test, then complete shared platform
-services and integrate dependent devices. Supervised RAM-only bring-up may use
-manual USB reconnection. Watchdog reset qualification and USB power automation
-are deferred; neither blocks unrelated integration. Intentional reset, unattended
-fault tests and persistent writes retain their recovery requirements. Choose work
-by how directly it advances physical functionality or removes a concrete
-integration blocker.
+1. Prioritize working hardware
 
-When physical testing is blocked, complete native image integration and focused software
-checks. Continue independent work without treating emulation as physical qualification.
+Complete native device paths before adding infrastructure or expanding software-only demonstrations. Each path must include initialization, resource ownership, application access, successful operations, interrupts where applicable, and appropriate failure handling.
 
-2. Preserve complete hardware coverage Support all CPU cores, memory, interrupts,
-clocks, resets, power, DMA, storage, exposed buses, USB, Wi-Fi, Bluetooth, audio,
-cameras, displays, GPU, NPU, video/image codecs, PCIe, timers, watchdogs, thermal
-management, security engines, and remaining usable onboard functions.
+Support all CPU cores, memory, interrupts, clocks, resets, power, DMA, storage, exposed buses, USB, Wi-Fi, Bluetooth, audio, camera and display interfaces, GPU, NPU, codecs, PCIe, timers, watchdogs, thermal management, security engines and other usable onboard functions. Application requirements do not narrow hardware coverage.
 
-Maintain an inventory of capabilities, operational modes, application interfaces,
-dependencies, shared-resource constraints, and qualification evidence. Account for
-mutually exclusive modes. Do not omit hardware because mimus does not use it or because
-implementation is difficult. A CPU fallback does not satisfy GPU or NPU support.
+FreeRTOS must be the runtime OS. Linux may supply driver source and development references but must not be a runtime dependency.
 
-Distinguish unconnected SoC interfaces from usable board functions using schematics and
-physical identification. Implement operational modes incrementally while retaining
-outstanding requirements in the inventory.
+2. Finish multicore bring-up directly
 
-3. Keep SunstoneOS minimal and practical FreeRTOS is the runtime OS. Linux may provide
-source references and development tools but must not be a runtime dependency. Native
-drivers, adapted open-source code, firmware blobs, and reverse engineering are allowed.
+The primary agent must personally handle multicore diagnosis, implementation, review and board testing without delegation.
 
-Prefer fixed board configuration and existing shared services where sufficient. Add
-abstractions only for concrete consumers, actual resource conflicts, or identified
-correctness requirements. Explain what fails without each new mechanism. Consolidate
-duplication.
+Reuse the successful physical core-1 release, preparation, shutdown and ROM-return evidence. Continue from the implemented GIC-600 redistributor power-up correction: establish the relevant physical state, provide matching diagnostic cleanup, and qualify per-core interrupt initialization, all remaining cores, cache coherence and FreeRTOS scheduling.
 
-Preserve necessary DMA ownership, cache coherence, shared power/clock coordination,
-bounded failure handling, and storage protection.
+Do not repeat a failed launch without a concrete correction or a narrower diagnostic justified by new evidence.
 
-Defer optional frameworks, speculative features, and the native NPU development toolkit
-until hardware functionality is complete. External development tools remain acceptable.
-Keep the native toolkit tracked as lower-priority follow-up work.
+3. Use both boards and parallel development efficiently
 
-4. Run the existing mimus application Preserve the existing model, weights, and
-established transcription, punctuation, and formatting requirements. Establish reference
-parity before accelerator optimization. Do not retrain or substitute a smaller model
-merely to meet performance targets.
+Keep independent identities, permissions, locks, queues and evidence for the boards on USB ports 3-1 and 3-3. Preserve both microSD cards. Qualify the second board’s DDR, platform state and recovery independently.
 
-Develop with recorded 16 kHz mono audio and paced replay while no microphone is
-available. Implement both I2S microphone and Bluetooth headset input, including
-hands-free control and voice transport.
+Use the original board for direct multicore work and the second for eligible independent hardware integration. The primary agent coordinates physical access. Subagents develop without hardware access and submit frozen artifacts for queued testing.
 
-Use OV5640 as the first camera target. Keep DSI panel configuration separate from
-controller support until a panel is selected. Investigate Hawkeye 64 MP compatibility
-separately without assuming full-resolution support.
+Use Sol 6.1 medium implementation workers and focused Astra review for substantive correctness risks. Run independent complete device workstreams concurrently when they can advance without conflicting edits or integration bottlenecks. Integrate completed work promptly and reassign useful work instead of leaving workers idle unnecessarily.
 
-Missing accessories remain explicit physical qualification blockers. Continue everything
-possible with available equipment.
+4. Preserve recovery and storage
 
-5. Pursue ambitious performance after hardware functionality After every required
-hardware function works, target complete warm recognition time of at most 0.05 times
-audio duration. Pursue 0.01 times audio duration as a stretch target whose feasibility
-must be demonstrated.
+Start with supervised RAM-only execution and reviewed return procedures. Stop device communication after the first transport failure; preserve evidence and require explicit recovery before reuse.
 
-For ten seconds of audio, these targets mean 500 ms and 100 ms respectively. Measure
-from available PCM to formatted transcription, including feature extraction, inference,
-decoding, punctuation, accelerator transfers, and synchronization.
+Do not make watchdog expiry or USB power automation prerequisites for unrelated work. Keep the failed UFS probe disabled until its failure and recovery are resolved. Persistent writes require established recovery and preservation of existing contents.
 
-Report model loading/startup time and live end-of-speech latency separately. Use
-representative recording lengths and sustained operation; do not establish compliance
-from one favorable clip or accelerator kernel timing.
+5. Run the existing mimus application
 
-Evaluate optimized CPU, GPU, and NPU execution. Use the combination that improves the
-complete application; do not require all three to participate in each transcription.
-Preserve model integrity and established accuracy criteria. Arithmetic changes require
-the relevant accuracy evaluation.
+Preserve its model, weights, transcription, punctuation and formatting requirements. Establish reference parity before acceleration; do not substitute a smaller model to meet performance targets.
 
-The 0.05-times target is an acceptance requirement. The 0.01-times stretch target does
-not justify indefinite optimization after a bounded investigation establishes the
-remaining limitation.
+Use recorded 16 kHz mono audio and paced replay while no microphone is attached. Implement I2S microphone and Bluetooth headset input.
 
-6. Develop in parallel without hardware collisions Use isolated worktrees, explicit file
-ownership, and separate build/evidence directories. Assign workers complete integration
-outcomes where practical.
+No MIPI camera or display is attached. Support OV5640 first; keep DSI panel configuration separate until a panel is selected. Record accessory-dependent qualification blockers and continue independent work.
 
-Coordinate physical tests through queues and exclusive target locks. Workers develop
-through source inspection, host checks, and emulation, then submit bounded physical test
-requests.
+6. Keep the system minimal
 
-If multiple boards become available, identify each explicitly and use separate
-permissions, locks, queues, and evidence. Qualify recovery independently on each board.
-Never select an arbitrary matching USB device.
+Prefer fixed configuration, existing services and suitable open-source implementations. Add abstractions only for concrete consumers or demonstrated correctness requirements.
 
-Preserve existing storage contents. Stop communication after transport failures or
-disappearance; do not retry resets, downloads, or reconnections automatically around
-unresolved failures.
+Document third-party source, firmware and tool dependencies, their licenses, provenance and execution locations. Opaque dependencies are temporarily acceptable. Defer their replacement and the native NPU development toolkit until hardware functionality and performance tuning are complete. Do not rewrite adequate open-source dependencies merely to make them repository-native.
 
-7. Validate parsimoniously Before each test batch, identify the changed behavior,
-credible failure risk, and smallest check that resolves it.
+7. Validate parsimoniously
 
-Reuse successful evidence while relevant source, toolchain, configuration, fixtures,
-model, firmware, and hardware conditions remain valid. Commits, handoffs, conflict-free
-rebases, and documentation updates do not justify rerunning tests.
+Before each test batch, identify the changed behavior, credible failure risk and smallest useful check. Reuse successful builds and tests while their relevant inputs remain valid. Run only affected or previously unexecuted cases after fixture repairs.
 
-Build affected targets only. Reuse matching artifacts and avoid unnecessary flashing.
-Run broader integration checks when shared foundations change or a milestone lacks valid
-evidence.
+Do not rerun tests for commits, handoffs or documentation changes. Avoid recurring benchmarks during bring-up. Fix recurring fixture setup defects instead of repeatedly repairing individual runs.
 
-Repeated trials and performance measurements require a concrete question and a declared
-sample count or stopping rule. Do not run recurring benchmarks during hardware bring-up.
-Preserve substantive correctness and recovery requirements.
+8. Optimize after hardware functionality
 
-8. Track outcomes efficiently Maintain project issues, the hardware support matrix, and
-a concise handoff. Keep one authoritative record for each fact. Let the progress
-dashboard derive its contents from those records.
+After required hardware functions work, achieve complete warm mimus recognition within 0.05 times audio duration. Investigate 0.01 times as a bounded stretch target.
 
-Distinguish implemented, software-tested, physically working, and qualified. Record the
-next useful action and actual blockers. Preserve reproducible artifacts and relevant
-evidence without creating duplicate reporting systems.
+Measure PCM-to-formatted-transcription time, including preprocessing, inference, decoding, punctuation, transfers and synchronization. Report loading and live end-of-speech latency separately. Evaluate CPU, GPU and NPU execution while preserving model integrity and accuracy.
 
-Use the writing skill for all communication. Never add vendor attribution tags,
-generated-by notices, or assistant co-author tags to repository content or Git metadata.
-Preserve required third-party legal notices.
+9. Track progress and continue autonomously
 
-9. Work autonomously within established boundaries Inspect sources and firmware, obtain
-dependencies, edit both repositories, build tools, commit locally, maintain tracking
-issues, and execute approved procedures on verified project boards.
+Keep GitHub issues, the hardware matrix and handoff current. Let the existing dashboard derive progress from those records. Distinguish implemented, software-tested, physically working and qualified.
 
-Do not push or merge without authorization. Leave unrelated devices and other workers’
-processes undisturbed. Preserve storage and establish recovery before persistent writes.
+Use the writing skill. Never add vendor attribution tags, generated-by notices or assistant co-author tags; preserve required legal notices.
 
-Resolve routine engineering decisions independently. Ask only for unavailable physical
-actions, missing information that materially blocks progress, or actions outside the
-authorized scope. Report the smallest necessary user action and continue independent
-work.
+Local commits and issue updates are authorized. Do not push or merge without authorization.
 
-10. Complete the entire system Completion requires reproducible bootable images,
-recovery and update procedures, working native mimus transcription, physical
-qualification of every required hardware function, and the 0.05-times recognition
-target.
+Continue across intermediate milestones while useful authorized work remains. Ask only for necessary physical actions, genuinely blocking information or actions outside scope. Report usage-limit interruptions explicitly.
 
-Include representative concurrent workloads, cancellation and error recovery, applicable
-power transitions, sustained operation, and measured resource use.
-
-Booting, a transcription demonstration, compiling drivers, or individually passing
-software models are intermediate milestones. Do not declare completion while required
-integration or qualification remains outstanding. Documented limitations do not
-substitute for successful implementation.
+Completion requires reproducible bootable images, recovery and update procedures, native mimus, physical qualification of every required hardware function, representative concurrent workloads and the 0.05-times recognition target. Missing accessories and documented limitations remain outstanding requirements.

@@ -763,3 +763,20 @@ The [continuation driver](cpu-continue.md) now includes the GIC-600 redistributo
 power-up sequence omitted from previous images. Its software checks pass; the
 returning diagnostic still needs observation and cleanup for that power change
 before physical execution. The earlier failures remain unlocalized.
+
+
+## ROM reads identify all interrupt frames without changing their state
+
+One read-only batch on port `3-1`, instance `003:089`, returned 25 words:
+GICD_IIDR and both halves of GICR_TYPER plus GICR_PWRR for each of eight frames.
+The distributor reports `0x0201643b`. Frame `n` reports affinity `n << 8`, and
+only the eighth frame sets the last-frame bit. GICR_PWRR reads `n << 8` for each
+frame; all power-down permission and group-transition bits are clear.
+
+The batch used the existing port lock and reviewed queue claim. It made no
+register, RAM or media writes, exited successfully and closed its claim. Evidence
+is under `~/.cache/sunstoneos/evidence/gic600-registers-20261018-089/`.
+This establishes accessible identification and power registers in the returned
+ROM state. It does not establish SGI/PPI contents or the state after another CPU
+power transition. The missing driver handshake remains a required correction,
+but these observations do not establish it as the cause of earlier failures.
