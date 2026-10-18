@@ -1,0 +1,229 @@
+#include "a733_npu_application.h"
+#include "aarch64_device_memory.h"
+#include "platform.h"
+#include "result.h"
+#include "cached.h"
+
+static struct {
+    struct a733_counter_clock clock;
+    struct a733_clock_leases registry;
+    struct a733_platform_locks locks;
+    struct a733_npu_startup_resources resources;
+    struct a733_npu_startup startup;
+    struct a733_npu_handoff handoff;
+    struct a733_pins_native pin_native;
+    struct a733_pins pins;
+    struct a733_rail_leases rails;
+    struct a733_pmic_native pmic_native;
+    struct a733_pmic pmic;
+    struct a733_pmic_lifetime pmic_lifetime;
+    struct a733_pmic_config pmic_config;
+    struct a733_npu_reserved reserved;
+    struct device_memory_lease lease;
+    struct device_memory_extent extent;
+    struct device_memory_allocation allocation;
+    struct device_memory_pool *pool;
+    struct device_memory_extent backing;
+    struct a733_clock_token usb;
+    StaticTask_t task[2];
+    StackType_t stack[2][4096] __attribute__((aligned(16)));
+    TaskHandle_t pmic_task,bootstrap_task,client;
+    atomic_uint ready,worker_admitted;
+    unsigned used,creating;
+} app;
+atomic_uint a733_npu_application_failed;
+static void pmic_task(void *);
+static void bootstrap(void *);
+
+void a733_npu_application_fail(unsigned reason)
+{
+    unsigned expected=0;
+    atomic_compare_exchange_strong_explicit(&a733_npu_application_failed,&expected,
+        reason ? reason : 1,memory_order_release,memory_order_relaxed);
+}
+static _Noreturn void fatal(void *unused)
+{
+    (void)unused;a733_npu_application_fail(1);
+    if(xTaskGetSchedulerState()==taskSCHEDULER_RUNNING)vTaskSuspend(NULL);
+    platform_panic("NPU application retained",0);
+}
+unsigned a733_npu_application_health(void)
+{
+    if(!app.used)return 0;
+    if(atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
+       atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
+       atomic_load_explicit(&app.locks.retained,memory_order_acquire))
+        a733_npu_application_fail(17);
+    return !atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire);
+}
+static int live(void)
+{return a733_npu_application_health();}
+static int image(const void *p,size_t bytes,int write)
+{
+    extern unsigned char __device_pool_start[];
+    uintptr_t a=(uintptr_t)p,limit=(uintptr_t)__device_pool_start;
+    if(!p || !bytes || a<0x41000000 || a>=limit || bytes>limit-a)return 0;
+    for(uintptr_t page=a&~(uintptr_t)4095;page<a+bytes;page+=4096) {
+        struct aarch64_translation t;
+        if(!aarch64_device_translate(page,write,&t) || t.physical!=page ||
+           t.attributes!=0xff || t.shareability!=3)return 0;
+    }
+    return 1;
+}
+static int parent(void)
+{
+    const struct a733_npu_reserved *s=&app.reserved;
+    if(!s->admitted || !s->pool || s->pool!=app.pool || !s->pool->initialized ||
+       s->pool->backing.cpu!=app.backing.cpu || s->pool->backing.physical!=app.backing.physical ||
+       s->pool->backing.bytes!=app.backing.bytes || s->lease.pool!=app.lease.pool ||
+       s->lease.slot!=app.lease.slot || s->lease.owner!=app.lease.owner ||
+       s->lease.generation!=app.lease.generation || app.lease.slot>=DEVICE_MEMORY_MAX_ALLOCATIONS ||
+       s->extent.cpu!=app.extent.cpu || s->extent.physical!=app.extent.physical ||
+       s->extent.bytes!=A733_NPU_RESERVED_BYTES || s->extent.bytes!=app.extent.bytes)return 0;
+    const struct device_memory_allocation *a=&s->pool->allocations[app.lease.slot];
+    return a->owner==app.allocation.owner && a->generation==app.allocation.generation &&
+        a->first==app.allocation.first && a->pages==app.allocation.pages && a->state==DEVICE_MEMORY_DEVICE;
+}
+static int worker(void *cookie)
+{
+    uint64_t el,now;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
+    if(el!=4 || cookie!=&app.reserved.convolution.native || !live() || !parent() ||
+       !atomic_load_explicit(&app.worker_admitted,memory_order_acquire) ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+       xTaskGetCurrentTaskHandle()!=app.reserved.convolution.service.worker ||
+       !a733_counter_clock_now(&app.clock,&now) || now>=app.handoff.allowed.deadline_us) {
+        a733_npu_application_fail(2);return 0;
+    }
+    return 1;
+}
+static int read_reg(void *p,unsigned off,uint32_t *v)
+{return worker(p) && a733_npu_native_operations.read(p,off,v);}
+static int write_reg(void *p,unsigned off,uint32_t v)
+{return worker(p) && a733_npu_native_operations.write(p,off,v);}
+static uint64_t ticks(void *p)
+{if(!worker(p))fatal(NULL);return a733_npu_native_operations.microseconds(p);}
+static void delay(void *p,unsigned us)
+{if(!worker(p))fatal(NULL);a733_npu_native_operations.delay(p,us);}
+static void barrier(void *p)
+{if(!worker(p))fatal(NULL);a733_npu_native_operations.barrier(p);}
+static int publish(void *p,const struct a733_npu_mmu_image *m,const struct a733_npu_command *c,int boot)
+{return worker(p) && a733_npu_native_operations.publish(p,m,c,boot);}
+static int finish(void *p,const struct a733_npu_command *c,int canceled)
+{return worker(p) && a733_npu_native_operations.finish(p,c,canceled);}
+const struct a733_npu_ops a733_npu_application_operations={read_reg,write_reg,ticks,delay,barrier,publish,finish};
+
+static int pin_enter(void *cookie,uint64_t deadline)
+{
+    return cookie==&app && live() && xTaskGetCurrentTaskHandle()==app.pmic_task &&
+        a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline);
+}
+static void pin_leave(void *cookie)
+{if(cookie!=&app)fatal(NULL);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
+static int pin_now(void *cookie,uint64_t *out)
+{return cookie==&app && live() && a733_counter_clock_now(&app.clock,out);}
+
+BaseType_t a733_npu_application_task_privileged(TaskFunction_t entry,void *argument)
+{
+    return (app.creating && argument==&app && (entry==pmic_task || entry==bootstrap)) ||
+        npu_service_task_privileged(entry,argument) ? pdTRUE : pdFALSE;
+}
+static void pmic_task(void *argument)
+{
+    if(argument!=&app)fatal(NULL);
+    for(;;) {
+        if(!live())break;
+        enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
+        if(r!=A733_PMIC_READY && r!=A733_PMIC_PENDING && r!=A733_PMIC_BUSY)break;
+        vTaskDelay(1);
+    }
+    a733_npu_application_fail(3);vTaskSuspend(NULL);fatal(NULL);
+}
+static void bootstrap(void *argument)
+{
+    if(argument!=&app)fatal(NULL);
+    for(;;) {
+        uint64_t now;
+        if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
+           now>=app.handoff.allowed.deadline_us)break;
+        enum a733_npu_platform_result r=npu_convolution_startup_poll(&app.reserved.convolution);
+        if(r==A733_NPU_PLATFORM_RETAINED)break;
+        if(r==A733_NPU_PLATFORM_READY) {
+            /* Worker may wake on another core inside activate(). Its admission
+             * therefore precedes activation; client readiness follows success. */
+            atomic_store_explicit(&app.worker_admitted,1,memory_order_release);
+            enum npu_service_result a=npu_service_activate(&app.reserved.convolution.service);
+            if(a==NPU_SERVICE_OK) {
+                atomic_store_explicit(&app.ready,1,memory_order_release);
+                vTaskSuspend(NULL);fatal(NULL);
+            }
+            if(a!=NPU_SERVICE_BUSY)break;
+        }
+        vTaskDelay(1);
+    }
+    a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
+}
+unsigned a733_npu_application_ready(void)
+{return atomic_load_explicit(&app.ready,memory_order_acquire) && live();}
+struct npu_convolution *a733_npu_application_client(void)
+{
+    return app.used && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
+        xTaskGetCurrentTaskHandle()==app.client && a733_npu_application_ready() ? &app.reserved.convolution : NULL;
+}
+int a733_npu_application_init(TaskHandle_t client)
+{
+    const struct a733_npu_application_boot *b=&a733_npu_application_boot;
+    const struct a733_npu_application_profile *p=&b->profile;
+    if(app.used || !client || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
+       !a733_smp_device_preparation_admitted() || !a733_npu_application_observer_admit() ||
+       !image(&app,sizeof(app),1) || !image(b,sizeof(*b),0) ||
+       !image(a733_npu_application_model,NPU_CONVOLUTION_MODEL_BYTES,0) ||
+       !image(a733_npu_application_input,NPU_CONVOLUTION_INPUT_BYTES,0) ||
+       !image(a733_npu_application_reference,NPU_CONVOLUTION_OUTPUT_BYTES,0) ||
+       !p->npu_owner || !p->pmic_owner || !p->usb_owner || !p->bridge_owner ||
+       p->npu_owner==p->pmic_owner || p->npu_owner==p->usb_owner || p->pmic_owner==p->usb_owner ||
+       p->bridge_owner==p->npu_owner || p->bridge_owner==p->pmic_owner || p->bridge_owner==p->usb_owner ||
+       b->npu.owner!=p->npu_owner || b->npu.handoff!=p->npu_evidence || b->npu.deadline_us ||
+       b->pmic.owner!=p->pmic_owner || b->pmic.identity!=p->pmic_evidence || b->pmic.startup_deadline)return 0;
+    app.used=1;app.client=client;
+    uint64_t deadline=a733_observe_identity.deadline/24;
+    if(!a733_counter_clock_init(&app.clock,24000000) ||
+       !a733_clock_leases_init(&app.registry,a733_counter_clock_now,&app.clock) ||
+       !a733_platform_locks_init(&app.locks,a733_counter_clock_now,&app.clock) ||
+       !a733_npu_startup_resources_init(&app.resources,&app.clock,&app.locks))goto failed;
+    const struct a733_pins_locks pin_locks={pin_enter,pin_leave,pin_now,&app};
+    const struct a733_rail_binding rail_binding={&app.registry,&app.resources.manager,
+        p->bridge_owner,a733_counter_clock_now,&app.clock};
+    if(!a733_pins_native_init(&app.pin_native,&pin_locks) ||
+       !a733_pins_init_banks(&app.pins,&app.pin_native.operations,&app.pin_native,&b->pins) ||
+       !a733_rail_leases_init(&app.rails,&rail_binding) ||
+       a733_clock_acquire(&app.registry,p->usb_owner,A733_CLOCK_FABRIC,
+           A733_CLOCK_USB0|A733_CLOCK_USB01_REF,deadline,&app.usb)!=A733_CLOCK_OK)goto failed;
+    if(!a733_npu_reserved_prepare(&app.reserved,p->npu_owner,a733_npu_application_model,
+        NPU_CONVOLUTION_MODEL_BYTES,0x03600000,fatal,NULL))goto failed;
+    app.lease=app.reserved.lease;app.extent=app.reserved.extent;
+    app.pool=app.reserved.pool;app.backing=app.pool->backing;
+    app.allocation=*device_memory_lookup(app.reserved.pool,app.lease);
+    app.creating=1;
+    app.pmic_task=xTaskCreateStaticAffinitySet(pmic_task,"npu-pmic",4096,&app,4,app.stack[0],&app.task[0],1);
+    app.bootstrap_task=xTaskCreateStaticAffinitySet(bootstrap,"npu-boot",4096,&app,4,app.stack[1],&app.task[1],1);
+    app.creating=0;
+    if(!app.pmic_task || !app.bootstrap_task)goto failed;
+    app.pmic_config=b->pmic;app.pmic_config.startup_deadline=deadline;
+    if(!a733_pmic_native_init(&app.pmic_native,&app.locks,app.pmic_task) ||
+       !a733_pmic_init(&app.pmic,&app.pmic_config,&app.pmic_native.operations,&app.pmic_native,
+           &app.registry,&app.rails,&app.pins) ||
+       a733_pmic_identity(&app.pmic,&app.pmic_lifetime)!=A733_PMIC_READY)goto failed;
+    struct a733_npu_handoff base={.allowed=b->npu,.controller=0x03600000,
+        .evidence=p->npu_evidence,.command_admission=p->command_admission,
+        .established=(uint32_t)p->npu_established,.pck_client=0};
+    base.allowed.deadline_us=deadline;
+    if(!npu_convolution_handoff(&app.reserved.convolution,&base,&app.handoff) ||
+       !a733_npu_startup_init(&app.startup,&app.handoff,&app.resources,&app.registry) ||
+       !a733_npu_startup_bind_pmic(&app.startup,&app.pmic,&app.pmic_lifetime) ||
+       !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
+       !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,2) ||
+       !a733_smp_device_preparation_admitted())goto failed;
+    return 1;
+failed:
+    a733_npu_application_fail(5);return 0;
+}

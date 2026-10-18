@@ -1,0 +1,34 @@
+--- continue.S
++++ continue.S
+@@ -307,10 +307,11 @@
+     b \handler
+     .space 124
+ .endm
+-// Current EL with SP0 is never an admitted runtime context.
+-.rept 4
+-    vector a733_cached_cold_fault
+-.endr
++// The private NPU bootstrap, PMIC and worker run at EL1t on SP_EL0.
++    vector .Lsync_bhb
++    vector .Lirq_bhb
++    vector a733_cached_cold_fault
++    vector a733_cached_cold_fault
+ .rept 2
+     vector .Lsync_bhb
+     vector .Lirq_bhb
+@@ -336,10 +337,15 @@
+     b.ne .Lsync_fault
+     mrs x0, esr_el1
+     and x0, x0, #0xffff
++    cmp x0, #120
++    b.eq .Lobserve
+     cmp x0, #119
+     b.eq .Lexit
+     ldp x0, x1, [sp], #16
+     b FreeRTOS_SWI_Handler
++.Lobserve:
++    ldp x0, x1, [sp], #16
++    b a733_observe_exception
+ .Lexit:
+     ldp x0, x1, [sp], #16
+     b a733_smp_exit_privileged
