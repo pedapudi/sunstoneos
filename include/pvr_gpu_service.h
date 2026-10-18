@@ -7,6 +7,7 @@
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
 struct pvr_compute_service;
+struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
@@ -17,7 +18,7 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
-    PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE };
+    PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -107,6 +108,7 @@ struct pvr_gpu_service_config {
     int (*compute_mode)(void *);
     /* Concrete native free-list/HWRT owner; published before compute and power. */
     struct a733_gpu_graphics_memory *graphics;
+    struct pvr_render_service *render;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -121,11 +123,14 @@ struct pvr_gpu_service_reply {
     uint32_t free_list_error, free_list_pending;
     uint32_t compute_phase, compute_error, compute_job_error;
     uint32_t graphics_phase;
+    uint32_t render_phase, render_error, render_checked;
+    uint32_t render_first_pixel, render_pixel_count, render_pixels[64];
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
     uint64_t ticket;
     unsigned client;
+    uint32_t render_first_pixel;
 };
 struct pvr_gpu_service_client {
     TaskHandle_t task;
@@ -202,4 +207,10 @@ int pvr_gpu_service_collect(struct pvr_gpu_service *, uint64_t ticket,
  */
 int pvr_gpu_service_interrupt(struct pvr_gpu_service *, BaseType_t *woken);
 BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t, void *);
+/* Queue one copied 64-pixel output slice for the current session owner, using
+ * the same send/collect ticket lifetime. Requires completed verified render.
+ * first_pixel is a multiple of 64 below 4096. Reply owns its copied pixels;
+ * device backing remains retained. No application pointer reaches the worker. */
+int pvr_gpu_service_render_read(struct pvr_gpu_service *, uint32_t first_pixel,
+    TickType_t wait, uint64_t *ticket);
 #endif

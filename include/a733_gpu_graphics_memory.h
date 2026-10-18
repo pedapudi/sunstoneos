@@ -2,9 +2,12 @@
 #define SUNSTONE_A733_GPU_GRAPHICS_MEMORY_H
 #include "a733_gpu_compute_reserved.h"
 #include "pvr_render_target.h"
+#include "pvr_render_service.h"
 
 #define A733_GPU_GRAPHICS_TABLE_PAGES 16u
 #define A733_GPU_GRAPHICS_MAPS (PVR_RENDER_REGIONS + 2u)
+#define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 4u)
+#define A733_GPU_RENDER_FW UINT32_C(0xc0a00000)
 enum a733_gpu_graphics_phase { A733_GPU_GRAPHICS_NEW, A733_GPU_GRAPHICS_ACQUIRED,
     A733_GPU_GRAPHICS_BOUND, A733_GPU_GRAPHICS_DATA, A733_GPU_GRAPHICS_TABLES,
     A733_GPU_GRAPHICS_READY, A733_GPU_GRAPHICS_FAILED };
@@ -30,15 +33,17 @@ struct a733_gpu_graphics_memory {
     struct device_memory_extent backing_extent, payload_extent, shared_extent, table_extent;
     struct pvr_render_requirements render;
     struct pvr_render_target target;
-    struct pvr_gpu_mapping maps[A733_GPU_GRAPHICS_MAPS];
+    struct pvr_gpu_mapping maps[A733_GPU_GRAPHICS_MAX_MAPS];
     struct pvr_gpu_vm_requirements requirements;
     struct a733_gpu_vm_memory vm;
     uint64_t table_pages[A733_GPU_GRAPHICS_TABLE_PAGES], firmware_page;
-    struct pvr_mips_object object;
+    struct pvr_mips_object object, render_object;
+    uint64_t render_pages[3];
+    struct pvr_render_service submission;
     struct pvr_free_list_config lists[2]; /* local, global */
     struct pvr_free_list_page local_pages[PVR_RENDER_LOCAL_PAGES];
     struct pvr_free_list_page global_pages[PVR_FREE_LIST_MAX_PAGES];
-    uint32_t acquired[2], cursor;
+    uint32_t acquired[2], cursor, fixed_clear;
     enum a733_gpu_graphics_phase phase;
 };
 /* Native identity-image constructor, before scheduler/backend binding. Require
@@ -51,6 +56,11 @@ struct a733_gpu_graphics_memory {
  * No power/MMIO/publication. The caller subsequently binds the real backend.
  */
 int a733_gpu_graphics_memory_prepare(struct a733_gpu_graphics_memory *,
+    struct a733_gpu_reserved *, struct a733_gpu_compute_reserved *,
+    struct pvr_gpu_service *, uint64_t owner, const struct a733_gpu_graphics_profile *);
+/* Same native construction with real fixed 64x64 clear resources. The supplied
+ * render dimensions must be 64x64. Existing prepare remains resource-only. */
+int a733_gpu_graphics_memory_prepare_clear(struct a733_gpu_graphics_memory *,
     struct a733_gpu_reserved *, struct a733_gpu_compute_reserved *,
     struct pvr_gpu_service *, uint64_t owner, const struct a733_gpu_graphics_profile *);
 /* Called before service preparation writes. Validates the combined native
@@ -67,4 +77,8 @@ int a733_gpu_graphics_memory_poll(struct a733_gpu_graphics_memory *);
  * perform no translation/cache/shared-memory access. Reclamation needs real
  * device isolation, firmware drain and explicit disposal, none supplied here. */
 void a733_gpu_graphics_memory_abort(struct a733_gpu_graphics_memory *);
+/* Direct native identity check for the embedded render service. No callback
+ * substitution can authenticate a different allocator or graphics owner. */
+int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *);
+uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *);
 #endif

@@ -44,7 +44,7 @@ int pvr_cccb_init(struct pvr_cccb *s, const struct pvr_cccb_ops *ops, void *ctx,
     *s=value; return 1;
 }
 
-int pvr_cccb_begin(struct pvr_cccb *s, const struct pvr_cccb_command *cmd,
+static int begin_valid(struct pvr_cccb *s, const struct pvr_cccb_command *cmd,
                    unsigned count, const uint32_t *cleanup, unsigned cleanups,
                    uint64_t deadline)
 {
@@ -64,6 +64,16 @@ int pvr_cccb_begin(struct pvr_cccb *s, const struct pvr_cccb_command *cmd,
     }
     if (total+PVR_CCCB_HEADER_BYTES>s->size/2) return 0;
     for (unsigned i=0;i<cleanups;++i) if (!cleanup[i] || (cleanup[i]&3)) return 0;
+    return 1;
+}
+
+int pvr_cccb_begin(struct pvr_cccb *s, const struct pvr_cccb_command *cmd,
+                   unsigned count, const uint32_t *cleanup, unsigned cleanups,
+                   uint64_t deadline)
+{
+    if (!begin_valid(s, cmd, count, cleanup, cleanups, deadline)) return 0;
+    uint32_t total = 0;
+    for (unsigned i = 0; i < count; ++i) total += PVR_CCCB_HEADER_BYTES + cmd[i].bytes;
     memcpy(s->commands,cmd,count*sizeof(*cmd));
     memset(s->kick,0,sizeof(s->kick));
     put32(s->kick,PVR_CCB_MAGIC|101u);
@@ -150,6 +160,7 @@ enum pvr_cccb_result pvr_cccb_poll(struct pvr_cccb *s)
     if (!s) return PVR_CCCB_INVALID;
     if (s->phase==PVR_CCCB_FAILED) return PVR_CCCB_FAULT;
     if (s->phase==PVR_CCCB_IDLE) return PVR_CCCB_OK;
+    if (s->phase==PVR_CCCB_STAGED) return PVR_CCCB_AGAIN;
     if (s->phase<PVR_CCCB_FORMAT || s->phase>PVR_CCCB_WAIT) return PVR_CCCB_INVALID;
     if (s->queue->epoch!=s->epoch ||
         (s->queue->phase!=PVR_CCB_ACTIVE &&
@@ -173,7 +184,8 @@ enum pvr_cccb_result pvr_cccb_poll(struct pvr_cccb *s)
         break;
     case PVR_CCCB_PUBLISH:
         if (s->ops.barrier(s->context,PVR_CCB_RELEASE)!=1) return fail(s,PVR_CCCB_IO);
-        put32(s->kick+12,s->cursor); s->phase=PVR_CCCB_SUBMIT; break;
+        put32(s->kick+12,s->cursor);
+        s->phase=s->paired ? PVR_CCCB_STAGED : PVR_CCCB_SUBMIT; break;
     case PVR_CCCB_SUBMIT: {
         enum pvr_ccb_result r=pvr_ccb_submit(s->queue,s->kick,now,s->deadline,&s->token);
         if (r==PVR_CCB_OK) { s->write=s->cursor; s->phase=PVR_CCCB_WAIT; }
@@ -198,4 +210,89 @@ enum pvr_cccb_result pvr_cccb_abort(struct pvr_cccb *s)
     if (!s || s->phase==PVR_CCCB_NEW) return PVR_CCCB_INVALID;
     if (s->phase==PVR_CCCB_FAILED) return PVR_CCCB_FAULT;
     return fail(s,PVR_CCCB_QUEUE);
+}
+
+static int pair_fault(struct pvr_cccb_pair *p)
+{
+    p->phase = 4;
+    pvr_cccb_abort(p->geometry); pvr_cccb_abort(p->fragment);
+    return -1;
+}
+int pvr_cccb_pair_begin(struct pvr_cccb_pair *p, struct pvr_cccb *g, struct pvr_cccb *f,
+    const struct pvr_cccb_command *gc, unsigned gn, const struct pvr_cccb_command *fc, unsigned fn,
+    const uint32_t *gr, unsigned grn, const uint32_t *fr, unsigned frn, uint64_t deadline)
+{
+    if (!range(p, sizeof(*p)) || !range(g, sizeof(*g)) || !range(f, sizeof(*f)) ||
+        !disjoint(p, sizeof(*p), g, sizeof(*g)) || !disjoint(p, sizeof(*p), f, sizeof(*f)) ||
+        !disjoint(g, sizeof(*g), f, sizeof(*f)) || p->phase || g->serial || f->serial ||
+        g->paired || f->paired || g->queue != f->queue || g->epoch != f->epoch ||
+        g->ops.now != f->ops.now || g->context != f->context ||
+        g->firmware_context > UINT32_MAX - 152 || g->firmware_context + 152 != f->firmware_context ||
+        !begin_valid(g, gc, gn, gr, grn, deadline) || !begin_valid(f, fc, fn, fr, frn, deadline) ||
+        !disjoint(p, sizeof(*p), g->queue, sizeof(*g->queue)) ||
+        !disjoint(p, sizeof(*p), gc, gn * sizeof(*gc)) ||
+        !disjoint(p, sizeof(*p), fc, fn * sizeof(*fc)) ||
+        (grn && !disjoint(p, sizeof(*p), gr, grn * sizeof(*gr))) ||
+        (frn && !disjoint(p, sizeof(*p), fr, frn * sizeof(*fr)))) return 0;
+    for (unsigned i = 0; i < gn; ++i)
+        if (gc[i].bytes && (!disjoint(p, sizeof(*p), gc[i].payload, gc[i].bytes) ||
+            !outside(f, gc[i].payload, gc[i].bytes))) return 0;
+    for (unsigned i = 0; i < fn; ++i)
+        if (fc[i].bytes && (!disjoint(p, sizeof(*p), fc[i].payload, fc[i].bytes) ||
+            !outside(g, fc[i].payload, fc[i].bytes))) return 0;
+    if (!outside(f, gc, gn * sizeof(*gc)) || !outside(g, fc, fn * sizeof(*fc)) ||
+        (grn && !outside(f, gr, grn * sizeof(*gr))) ||
+        (frn && !outside(g, fr, frn * sizeof(*fr)))) return 0;
+    /* All validation precedes admission; these calls perform no callbacks. */
+    if (!pvr_cccb_begin(g, gc, gn, gr, grn, deadline)) return 0;
+    if (!pvr_cccb_begin(f, fc, fn, fr, frn, deadline)) {
+        pvr_cccb_abort(g); pvr_cccb_abort(f); return 0;
+    }
+    g->paired = f->paired = 1;
+    p->geometry = g; p->fragment = f; p->epoch = g->epoch;
+    p->deadline = deadline; p->last_now = g->last_now > f->last_now ? g->last_now : f->last_now;
+    p->phase = 1; return 1;
+}
+int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
+{
+    if (!p || !p->phase) return -1;
+    if (p->phase == 3) return 1;
+    if (p->phase == 4) return -1;
+    struct pvr_cccb *g = p->geometry, *f = p->fragment;
+    struct pvr_ccb *q = g->queue;
+    uint64_t now;
+    if (q->phase != PVR_CCB_ACTIVE || q->epoch != p->epoch ||
+        g->phase == PVR_CCCB_FAILED || f->phase == PVR_CCCB_FAILED ||
+        g->ops.now(g->context, &now) != 1 || now < p->last_now ||
+        now < g->last_now || now < f->last_now || now < q->last_now || now >= p->deadline)
+        return pair_fault(p);
+    p->last_now = now;
+    if (p->phase == 1) {
+        if (g->phase != PVR_CCCB_STAGED) {
+            if (pvr_cccb_poll(g) == PVR_CCCB_FAULT) return pair_fault(p);
+        } else if (f->phase != PVR_CCCB_STAGED) {
+            if (pvr_cccb_poll(f) == PVR_CCCB_FAULT) return pair_fault(p);
+        } else {
+            memset(p->kick, 0, sizeof(p->kick));
+            put32(p->kick, PVR_CCB_MAGIC | 117u);
+            memcpy(p->kick + 8, g->kick + 8, 32);
+            memcpy(p->kick + 40, f->kick + 8, 32);
+            enum pvr_ccb_result r = pvr_ccb_submit(q, p->kick, now, p->deadline, &p->token);
+            if (r == PVR_CCB_OK) {
+                g->write = g->cursor; f->write = f->cursor; p->phase = 2;
+            } else if (r != PVR_CCB_AGAIN) return pair_fault(p);
+        }
+    } else {
+        enum pvr_ccb_result r = pvr_ccb_collect(q, p->token, &p->status);
+        if (r == PVR_CCB_OK) {
+            if (p->status != 1) return pair_fault(p);
+            g->status = f->status = p->status;
+            g->phase = f->phase = PVR_CCCB_IDLE; p->phase = 3;
+        } else if (r != PVR_CCB_AGAIN) return pair_fault(p);
+    }
+    if (g->ops.now(g->context, &now) != 1 || now < p->last_now ||
+        now < g->last_now || now < f->last_now || now < q->last_now || now >= p->deadline)
+        return pair_fault(p);
+    p->last_now = now;
+    return p->phase == 3 ? 1 : 0;
 }

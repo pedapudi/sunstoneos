@@ -13,7 +13,7 @@
 enum pvr_cccb_region { PVR_CCCB_CONTROL, PVR_CCCB_COMMANDS };
 enum pvr_cccb_phase { PVR_CCCB_NEW, PVR_CCCB_FORMAT, PVR_CCCB_IDLE,
     PVR_CCCB_SPACE, PVR_CCCB_WRITE, PVR_CCCB_PUBLISH, PVR_CCCB_SUBMIT,
-    PVR_CCCB_WAIT, PVR_CCCB_FAILED };
+    PVR_CCCB_WAIT, PVR_CCCB_FAILED, PVR_CCCB_STAGED };
 enum pvr_cccb_result { PVR_CCCB_OK, PVR_CCCB_AGAIN, PVR_CCCB_INVALID,
     PVR_CCCB_FAULT };
 enum pvr_cccb_error { PVR_CCCB_NO_ERROR, PVR_CCCB_IO, PVR_CCCB_CLOCK,
@@ -47,7 +47,7 @@ struct pvr_cccb {
     uint64_t epoch, deadline, last_now, serial;
     uint32_t phase, error, status, size, firmware_context;
     uint32_t write, read, cursor, count, index, payload_offset, writing_payload;
-    uint32_t total;
+    uint32_t total, paired;
     struct pvr_ccb_token token;
     struct pvr_cccb_command commands[PVR_CCCB_MAX_COMMANDS];
     unsigned char kick[PVR_CCB_COMMAND_BYTES];
@@ -93,4 +93,25 @@ int pvr_cccb_begin(struct pvr_cccb *, const struct pvr_cccb_command *, unsigned 
  */
 enum pvr_cccb_result pvr_cccb_poll(struct pvr_cccb *);
 enum pvr_cccb_result pvr_cccb_abort(struct pvr_cccb *);
+/* Two independently owned client rings publish before one combined geometry /
+ * fragment KICK. This owner alone advances both rings until completion/fault.
+ * Both share one kernel queue, epoch, clock callback/context and deadline.
+ * Input payloads remain borrowed until pair completion; any uncertain write or
+ * KICK failure faults both clients and retains their complete backing. */
+struct pvr_cccb_pair {
+    struct pvr_cccb *geometry, *fragment;
+    struct pvr_ccb_token token;
+    uint64_t epoch, deadline, last_now;
+    uint32_t phase, status;
+    unsigned char kick[PVR_CCB_COMMAND_BYTES];
+};
+/* Fresh zero pair; IDLE, never previously submitted client rings. Admission is
+ * atomic without I/O. Each cleanup list is already selected by the producer;
+ * partial-render fragment kicks must omit cleanup records per firmware ABI. */
+int pvr_cccb_pair_begin(struct pvr_cccb_pair *, struct pvr_cccb *, struct pvr_cccb *,
+    const struct pvr_cccb_command *, unsigned, const struct pvr_cccb_command *, unsigned,
+    const uint32_t *, unsigned, const uint32_t *, unsigned, uint64_t deadline);
+/* One bounded client step or one combined submit/collect. Return 1 accepted,
+ * 0 pending, -1 fault. Acceptance does not establish either GPU timeline. */
+int pvr_cccb_pair_poll(struct pvr_cccb_pair *);
 #endif
