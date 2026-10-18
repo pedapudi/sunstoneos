@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe native pre-write failure on either CPU; retain capture faults without retry."""
+"""Check core1 RELEASE through CPU preparation, before GICR access, then observed OFF."""
 import argparse
 import atexit
 import hashlib
@@ -18,6 +18,7 @@ p.add_argument('--case',help='Run only the named focused case; preserve other co
 a=p.parse_args();spec=importlib.util.spec_from_file_location('startup_host',ROOT/'tools/run-native-startup-probe.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle/'prepared.json').read_bytes())
 assert bundle['image_sha256']==host.NATIVE and bundle['launcher_sha256']==host.LAUNCH
+assert m.get('execution_profile')==host.PROFILE
 ops={};labels={}
 for path in (a.bundle/'image.elf',a.build/'overlay.elf'):
     result=subprocess.run([str(a.objdump),'-d','--no-show-raw-insn',str(path)],capture_output=True,text=True,check=True).stdout
@@ -64,10 +65,11 @@ def check(name,scenario='normal'):
         if active[0]==1 and address==labels['secondary_wait_request'] and rdist_state==0:private_wait_seen.append(address)
         observation_state=struct.unpack('<Q',uc.mem_read(0x42002700,8))[0]
         if address==labels['observe_prewrite']:capture_entries.append(active[0])
-        snapshot_fault=scenario=='primary-snapshot-fault' and active[0]==0 and address==labels['rdist_scan']
         capture_fault=scenario=='capture-fault' and active[0]==1 and address==labels['observe_requests'] and observation_state==1
-        if (snapshot_fault or capture_fault) and not injected:
-            registers.update(elr_el3=address,far_el3=0x03460008 if snapshot_fault else 0x07050204);injected.append(True)
+        if active[0]==1 and address==labels['target_block']:
+            for register in range(20,26):uc.reg_write(UC_ARM64_REG_X0+register,0xdead0000+register)
+        if capture_fault and not injected:
+            registers.update(elr_el3=address,far_el3=0x07050204);injected.append(True)
             uc.reg_write(UC_ARM64_REG_PC,0x41008a00);return
         assert address!=0x41000480 or not secondary_started,'No second CPU loop iteration.'
         assert address not in (0x41005094,0x410050ac,0x4100822c,0x41004760),'No native cache/SCR stage.'
@@ -113,20 +115,7 @@ def check(name,scenario='normal'):
             else:stopped.append('park')
             uc.emu_stop()
     def read(uc,access,address,size,value,unused):
-        if 0x03460000<=address<0x03560000:
-            assert power_registers[0x07053008]&15==8,'No GICR accesses after CPU OFF.'
-            if size==8:
-                frame=(address-0x03460008)//0x20000
-                assert address==0x03460008+frame*0x20000 and 0<=frame<8
-                data=(frame_cores[frame]<<40)|1|(16 if frame==7 else 0);typer_reads.append([active[0],frame])
-            else:
-                assert size==4
-                fields={rbase:'ctlr',rbase+20:'waker',gbase+0x100:'enable',gbase+0x200:'pending',gbase+0x300:'active',
-                    gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
-                assert address in fields,(name,hex(address))
-                data=rdist[fields[address]]
-                if address==rbase and rdist['rwp']:data|=8;rdist['rwp']-=1
-            uc.mem_write(address,struct.pack('<Q' if size==8 else '<I',data));return
+        assert not 0x03460000<=address<0x03560000, 'No GICR reads on either CPU.'
         if address in power_registers:
             assert size==4;power_reads.append(address)
             data=power_registers[address]
@@ -146,26 +135,7 @@ def check(name,scenario='normal'):
         uc.mem_write(address,struct.pack('<I',data))
     def write(uc,access,address,size,value,unused):
         if address==0x42005118 and value:commands.append(value)
-        if 0x03460000<=address<0x03560000:
-            assert active[0]==1 and power_registers[0x07053008]&15==8
-            state=struct.unpack('<Q',uc.mem_read(0x42002500,8))[0];assert state in (2,4) and size==4
-            rdist_writes.append([state,address,value])
-            if address==rbase+20:
-                if value&2:
-                    sleep_attempted.append(address)
-                    assert state==4 and per_core[1]['icc_sre_el3']&7==7 and not per_core[1]['icc_igrpen0_el1']&1 and not per_core[1]['icc_igrpen1_el3']&3
-                    assert all(rdist[n]==original_rdist[n] for n in ('enable','group','modifier','config','priority'))
-                    assert not rdist['pending'] and not rdist['active']
-                    rdist['waker']=value&~4 if scenario=='ca-timeout' else value|4
-                else:rdist['waker']=value&~4
-            elif address==gbase+0x180:rdist['enable']&=~value;rdist['rwp']=2
-            elif address==gbase+0x100:rdist['enable']|=value;rdist['rwp']=2
-            elif address==gbase+0x280:assert not rdist['pending'];rdist['pending']&=~value
-            elif address==gbase+0x380:assert not rdist['active'];rdist['active']&=~value
-            else:
-                fields={gbase+0x80:'group',gbase+0xd00:'modifier',gbase+0xc04:'config',gbase+0x400:'priority'}
-                assert address in fields and not rdist['enable'];rdist[fields[address]]=value;rdist['rwp']=2
-            return
+        assert not 0x03460000<=address<0x03560000, 'No GICR writes on either CPU.'
         assert not (0x07053000<=address<0x07054000),'PPU status is read-only.'
         if address in (0x07050204,0x07050224):
             assert size==4
@@ -226,7 +196,7 @@ def check(name,scenario='normal'):
         assert stopped==['park'] and observation['state']==1 and observation['origin']==1
         assert capture_entries==[1] and len(injected)==1 and activation['state']==1
         assert configuration['state']==snapshot['state']==rdist_record['state']==1
-        assert not rdist_writes and commands==[1,2] and not activation['request'] and not activation['ack']
+        assert not typer_reads and not rdist_writes and commands==[1,2] and not activation['request'] and not activation['ack']
         assert not any(key in ('rmr_el3','s3_0_c15_c2_7') for core,key,value in controls)
         reports.append({'name':name,'retained':True,'observation':observation,'activation':activation,'redistributor':rdist_record,'capture_entries':capture_entries,'system_writes':controls});return
     assert stopped==['return'],(name,hex(cpu.reg_read(UC_ARM64_REG_PC)),activation,snapshot['configuration'],bytes(cpu.mem_read(host.REPORT,48)).hex())
@@ -249,36 +219,38 @@ def check(name,scenario='normal'):
     assert activation['epoch']==activation['request']==activation['ack']==observation['epoch']==bundle['epoch']
     assert not rdist_writes and not rdist_record['writes_attempted'] and not rdist_record['reason']
     assert activation['last_ppu']&15==0 and activation['restored_control']==0x10000 and activation['restored_mode']==0x40
-    assert capture_entries==[1 if scenario=='target-admission' else 0]
+    assert capture_entries==[1]
     assert observation['CurrentEL']==12 and observation['SCTLR_EL3']==0xc50838 and observation['MIDR_EL1']==0x412fd050
     assert observation['control']==0x10000 and observation['mode']==0x40
     assert [power_registers[a] for a in (0x07050204,0x07050224)]==[0x10000,0x40]
     assert secondary['power']['state']==2 and secondary['power']['step']==18 and secondary['power']['writes_attempted']==7
     assert power_writes==[[0,1,0x07050224,0x41],[0,1,0x07050204,0x10001],[0,1,0x07050204,0x10000],[0,1,0x07050224,0x40],
         [1,2,0x07050224,0x40],[1,2,0x07050204,0x10002],[0,4,0x07050204,0x10000],[0,4,0x07050224,0x40]]
+    assert observation['core']==1 and observation['MPIDR_EL1']==0x81000100
+    assert observation['gicr_state']==rdist_record['state']==1 and not typer_reads
+    assert commands==[1,2] and secondary['owner']['state']==2 and secondary['owner']['phase']==5
+    assert secondary['report']['state']==2 and not injected
+    assert not [[key,value] for core,key,value in controls if core==1 and key in ('sctlr_el1','tcr_el1')]
     if scenario=='target-admission':
-        assert observation['origin']==1 and observation['core']==1 and observation['MPIDR_EL1']==0x81000100
-        assert observation['SCTLR_EL1']==0xc51838 and observation['gicr_state']==rdist_record['state']==1
+        assert observation['origin']==1 and observation['SCTLR_EL1']==0xc51838
         assert observation['controller']['state']==5 and observation['controller']['index']==2 and observation['controller']['error']==3
         assert observation['controller']['core_record']['state']==6
-        assert commands==[1,2] and secondary['owner']['state']==2 and secondary['owner']['phase']==5
-        assert secondary['report']['state']==2 and not injected
     else:
-        assert observation['origin']==2 and observation['core']==0 and observation['MPIDR_EL1']==0x81000000
-        assert observation['SCTLR_EL1']==0xc50839 and observation['gicr_state']==rdist_record['state']==0
-        assert observation['ELR_EL3']==labels['rdist_scan'] and observation['FAR_EL3']==0x03460008 and injected
-        assert result['elr']==observation['ELR_EL3'] and result['far']==observation['FAR_EL3']
-        assert commands==[1] and secondary['owner']['phase']==4 and secondary['report']['state']==1
+        assert observation['origin']==3 and observation['SCTLR_EL1']==0xc50838 and observation['TCR_EL1']==0
+        assert observation['controller']['state']==4 and observation['controller']['error']==0
+        assert observation['controller']['core']==1 and observation['controller']['identity']['mpidr']==0x81000100
+        assert observation['controller']['core_record']['state']==1 and observation['controller']['core_record']['epoch']==bundle['epoch']
+        assert not any(observation['controller']['plan'][key] for key in ('actlr','actlr2','actlr3','ectlr','clusteractlr','patch'))
     assert all(rdist[n]==original_rdist[n] for n in original_rdist)
     assert snapshot['state']==3 and snapshot['error']==0 and snapshot['banks']==9 and snapshot['original_ctlr']==0x37
     assert snapshot['original_spi'][1:9]==snapshot['restored_spi'][1:9]==original_spi[1:9]
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
     reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries})
-check('target-sctlr1-admission-failure-observed-before-gic-write','target-admission')
-check('primary-snapshot-exception-observed-before-release','primary-snapshot-fault')
+check('released-target-prepared-before-walks-and-gicr')
+check('released-target-preparation-refusal-observed-without-gicr','target-admission')
 check('failure-capture-read-fault-retains-without-retry','capture-fault')
-a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'instruction_cases':True,
+a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'execution_profile':host.PROFILE,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual failed admission/capture/OFF paths with modeled system registers, exceptions, GIC and PPU. Does not identify the unobserved physical083 failure, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
-print(f'PASS {len(reports)} focused pre-write failure cases; observed OFF or retained capture fault.')
+    'limits':'Actual RELEASE, CPU preparation, eligible refusal, capture retention and OFF paths with modeled system registers, exceptions, distributor and PPU. Any GICR access is rejected. Does not identify physical083/084 failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
+print(f'PASS {len(reports)} focused RELEASE-before-GICR cases; observed OFF or retained capture fault.')

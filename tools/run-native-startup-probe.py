@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Observe native pre-write failures or finish core1 RELEASE/GIC_READY and verified OFF."""
+"""Observe core1 RELEASE and CPU preparation before walk blocking or redistributor access."""
 import argparse
 import hashlib
 import importlib.util
@@ -23,6 +23,7 @@ NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
 OVERLAY=(0x41020000,0x2000)
+PROFILE='core1-release-pre-gic-v1'
 REPORT=0x42002000
 # Includes every byte written by actual stack/BSS initialization and admission.
 DRAM=(('native-code',0x41000000,0x12078),('native-data',0x41200000,0x21),
@@ -80,7 +81,7 @@ def prepare(a):
             data=bytes(code) if index==0 else segment['data'];name=f'segment-{index}.bin'
             (a.build/name).write_bytes(data);payloads.append({'name':name,'address':segment['address'],'bytes':len(data)})
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
-    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
+    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':PROFILE,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
         'overlay_reservation':{'address':OVERLAY[0],'bytes':OVERLAY[1]},'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint','next_checkpoint','ready_checkpoint','continue_write_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
@@ -181,7 +182,7 @@ def claimed(a,expected):
 
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
-    require(m['schema']=='a733-native-startup-probe-v1' and m['native_sha256']==NATIVE,'Wrong startup image.')
+    require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==PROFILE and m['native_sha256']==NATIVE,'Wrong startup image.')
     require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
     require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
     frozen={name:(a.build/name).read_bytes() for name in m['files']}
@@ -192,7 +193,7 @@ def run(a):
     require(all(survey['result']['launcher_gates'].values()),'Actual A32 launcher gates fail; establish cache-off state separately.')
     software_raw=a.software.read_bytes();software=json.loads(software_raw)
     require(software.get('schema')=='a733-native-startup-software-v1' and software.get('physical_access') is False and
-            software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
+            software.get('execution_profile')==PROFILE and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
     expected={a.build/'manifest.json':manifest_hash,a.software.resolve():hashlib.sha256(software_raw).hexdigest(),
               a.survey.resolve():hashlib.sha256(survey_raw).hexdigest(),(a.bundle/'prepared.json').resolve():prepared['_prepared_sha256']}
     recovery,recovery_hash=claimed(a,expected);require(digest(a.fel)==base.FEL_HASH,'Pinned FEL executable required.')
@@ -234,7 +235,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','Native core1 RELEASE/GIC_READY, redistributor restoration/asleep and target-owned OFF',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native core1 RELEASE and CPU preparation before any redistributor access, then target-owned OFF',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -257,6 +258,13 @@ def run(a):
                 record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
                 record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
+                observation=record['observation'];activation=record['activation'];secondary=record['secondary']
+                require(record['result']['checkpoint']==13 and observation['state']==5 and observation['origin'] in (1,3), 'No completed target observation.')
+                require(activation['state']==5 and activation['epoch']==activation['request']==activation['ack']==observation['epoch'] and not activation['last_ppu']&15, 'No matching observed-OFF handshake.')
+                require(record['redistributor']['state']==1 and record['redistributor']['writes_attempted']==0 and not any(record['redistributor']['typers']), 'Redistributor boundary crossed.')
+                require(secondary['command']['state']==secondary['report']['state']==2 and secondary['command']['epoch']==observation['epoch'], 'Actual RELEASE not observed.')
+                require(record['gic']['state']==3 and record['gic']['configuration']['state']==3 and record['result']['restore_state']==3, 'Restoration incomplete.')
+                record['preparation_observed']=observation['origin']==3
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()

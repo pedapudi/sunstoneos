@@ -272,7 +272,7 @@ preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
 The native code, data, BSS and stack addresses remain unchanged. Thirty-one verified
 instruction replacements redirect C entry, walk blocking, the first GIC write,
-mailbox admission, secondary wait, RELEASE, continuation writes, GIC_READY and the
+mailbox admission, secondary wait, RELEASE, excluded GIC writes/readiness and the
 next-core loop. They also redirect secondary hardware writes, requested control
 writes, both planning failure parks, terminal stop, initial park and sixteen EL3
 exception slots. The C entry
@@ -363,10 +363,10 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 13 records a guarded pre-write failure and verified target OFF.
-Its observation record distinguishes the failing CPU. Checkpoint 12 records
-native GIC_READY and verified redistributor shutdown.
-Checkpoint 11 records a clean pre-RELEASE refusal followed by verified shutdown. Checkpoint 9
+Checkpoint 13 records target CPU preparation or an eligible preparation refusal,
+followed by verified target OFF. The observation origin distinguishes those
+outcomes. This diagnostic stops before target walk blocking and any redistributor
+access. Checkpoint 9
 captures a prohibited secondary hardware-write address and
 32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
 refuses pre-arm admission before command publication or SEV. Checkpoint
@@ -678,46 +678,57 @@ retain before the first redistributor write. Independently, the primary's first
 TYPER scan and redistributor snapshot had not been physically observed to complete.
 These are source-backed observation gaps, not established causes of the failed attempt.
 
-The corrected observer keeps the full success span and adds two failure returns.
-A target failure is eligible only with a complete redistributor snapshot and zero
-admitted continuation writes. The target captures its actual banks, fault registers,
-native coherence controller and cached record. It verifies actual core 1, A55 r2p0,
-EL3, disabled EL3 caches, matching RELEASE/report epoch and clear power requests.
-It reloads its core, epoch and mailbox registers independently of interrupted C
-frames, then waits for the primary's private shutdown request. No redistributor
-or CPU-interface restoration runs because no such write was admitted.
+The current overlay selects execution profile `core1-release-pre-gic-v1`.
+It removes the primary redistributor scan and snapshot. After the existing
+core-1 arrival, power and epoch guards, it permits actual native RELEASE.
+The secondary selects its reserved stack, publishes RELEASED, installs the
+cached exception vectors and disables local timer outputs. Native CPU/DSU
+identification and preparation then run under the existing first-write guard.
 
-A primary exception is eligible only when its faulting address belongs to the
-explicit read-only scan/snapshot instruction interval. It requires no redistributor
-admission or write, native POWERED/release-phase ownership, an ARMED command and
-ARRIVED report for the matching epoch, EL3 with caches off, and clear requests.
-It requests the already proven unreleased-target OFF sequence. A stalled MMIO
-access remains unrecoverable by a counter check; this path handles exceptions only.
+The target stops at the entry to `a733_cached_block_walks`, before its displaced
+instruction or any target EL1 control write. The observation requires a PREPARED
+coherence controller, a matching epoch/core record in state 1, and disabled
+target caches and translation. It records raw SCTLR_EL1 and TCR_EL1. It reloads
+core, epoch and mailbox pointers independently of C register allocation and
+validates the actual RELEASE command and RELEASED report. The primary stops
+before initializing core 2.
 
-Both returns require a distinct failure handshake, matching final acknowledgment
-and observed PPU OFF before existing cleanup. Checkpoint 13 reports the failure;
-it never claims GIC_READY. A failure after any attempted redistributor write remains
-retained. Unknown states also retain ownership. Capture marks its state before new register/MMIO reads
-or copies; a capture fault parks without retrying those operations.
+A preparation failure before that boundary is eligible for observation only
+before any admitted CPU/DSU or redistributor write. Actual core 1, A55 r2p0,
+EL3, disabled EL3 caches, matching command/report epoch and clear power requests
+remain required. A capture fault marks its state and parks without repeating
+register reads or copies. Unknown states retain ownership.
+
+Both successful preparation and an eligible refusal use the proven private
+shutdown handshake. The target requests its own power-off. The primary requires
+the matching acknowledgment and independently observed PPU OFF before restoring
+control/mode, reset configuration, EL1 controls and distributor state. No
+redistributor or CPU-interface cleanup is needed because neither is accessed.
+Target observation waits retain on a regressing or expired startup counter;
+the OFF wait retains its separate 100 ms bound.
 
 The 512-byte observation at `0x42002700` remains inside the result-arena backup.
 Its first sixteen 64-bit fields are state, origin, epoch, core, CurrentEL, MPIDR,
-SCTLR_EL3, SCTLR_EL1, TCR_EL1, ESR, ELR, FAR, control, mode, redistributor state
-and MIDR. Origin 1 means target failure; origin 2 means primary snapshot exception.
-State 1 guards capture, state 2 publishes target failure, state 3 publishes primary
-failure, state 4 requests shutdown and state 5 records acknowledgment plus OFF.
-The raw 184-byte target coherence controller begins at offset 128; its 128-byte
-cached record begins at offset 312. The host durably copies all 512 bytes before
-DRAM restoration. An ELF DWARF/symbol audit verifies both source addresses and sizes.
+SCTLR_EL3, SCTLR_EL1, TCR_EL1, ESR, ELR, FAR, control, mode, release-admission
+state and MIDR. Origin 1 means target preparation refusal; origin 3 means the
+prepared target reached the boundary. State 1 guards capture, state 2 publishes
+the target observation, state 4 requests shutdown and state 5 records
+acknowledgment plus OFF. The raw 184-byte target coherence controller begins at
+offset 128; its 128-byte cached record begins at offset 312. The host durably
+copies all 512 bytes before DRAM restoration. The old redistributor record is
+retained as a zero-access witness: its marker is 1, write count and TYPER slots
+remain zero. The runner distinguishes preparation from a returning refusal.
 
-Three focused cases pass: target SCTLR_EL1 admission refusal, a primary TYPER
-read exception and a failure-capture read exception. Earlier whole-phase success,
-clean admission refusals and post-mutation retention evidence remain preserved;
-those success paths keep their original gates. The new artifacts and pre-change
-source/evidence snapshot are under
-`~/.cache/sunstoneos/evidence/native-secondary-prewrite-observer-20261018/`.
-No repeated physical attempt is qualified by these software results.
-
+One affected overlay build and three focused instruction cases passed: successful
+target preparation with poisoned C callee-saved registers, target SCTLR_EL1
+preparation refusal, and a capture read exception that retains ownership. Every redistributor read or write fails
+the fixture. These cases model architectural registers, exceptions, distributor
+and PPU behavior; physical return and CPU preparation still require observation.
+The image, software result and frozen inputs are under
+`~/.cache/sunstoneos/evidence/native-secondary-release-pre-gic-20261018/`.
+The earlier GIC_READY and pre-write observer images remain immutable under
+`native-secondary-gic-ready-probe-20261018/` and
+`native-secondary-prewrite-observer-20261018/` in the evidence cache.
 
 The pre-write observer was attempted once after confirmed power reconnection on
 USB instance `003:084`. Fresh DDR initialization, returning platform survey and
