@@ -26,6 +26,12 @@ firmware processor. A source used for instruction comparison is not necessarily
 a runtime dependency. Document opaque dependencies; defer their replacement
 until functionality and performance tuning are complete.
 
+When adapting upstream initialization, follow the effective implementation,
+including build options, weak-symbol overrides and SoC-specific callbacks.
+For example, the generic TF-A redistributor power hooks have GIC-600 overrides
+in the [implementation-specific driver](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c).
+Copying only the generic call sequence can omit the hardware power protocol.
+
 ## Carry ownership through the native application
 
 Use the existing [clock leases](../../../docs/clock-leases.md),

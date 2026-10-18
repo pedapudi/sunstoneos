@@ -69,6 +69,14 @@ instructions, structure offsets and hash checks are one binary's ABI. A rebuilt
 native image requires fresh symbol/disassembly verification and affected fixture
 updates; never transplant old patch addresses into a new build.
 
+Verify that the executed path contains the proposed correction. Editing the
+controller source does not change a frozen ELF called by an overlay. Trace the
+build's generated sources, patches and linked objects before claiming coverage.
+The cached image compiles the portable continuation controller through
+[`cmake/a733-smp-cached.cmake`](../../../cmake/a733-smp-cached.cmake) and
+[`continuation-core.patch`](../../../platform/a733-smp-cached/continuation-core.patch).
+Reuse that split when needed instead of maintaining a diagnostic copy of the driver.
+
 At a checkpoint inside C, reload core, epoch and mailbox identities from validated
 storage. Callee-saved registers may hold values assigned by that C function until
 it returns; they need not match the earlier assembly frame. Observe the target's

@@ -33,6 +33,11 @@ Follow [boot evidence](../../../docs/boot.md) and the existing runner for the
 chosen operation. Preserve both microSD cards. Inspect the command before running
 it; a tool's filename is not proof that it only touches RAM.
 
+Read-only MMIO can still stall the processor if the target block is inaccessible.
+Establish the required power, clock and reset state before reading its registers.
+An exception handler or host timeout cannot guarantee recovery from a stalled bus
+access. Use documented always-accessible status registers for initial discovery.
+
 - After a cold reconnect, establish protocol identity and DDR initialization
   before native DRAM execution. DDR training and two page comparisons do not
   qualify complete capacity, stability or DMA reachability.
