@@ -126,7 +126,7 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     if(!rd(p,PIO+0x40,&mode)||!rd(p,PIO+0x48,&value))return 0;
     mode=(mode>>shift)&3;value=(value>>shift)&3;
     if(p->config.kind==SUNXI_MMC_SD) {
-        if((mode!=0&&mode!=2)||value!=2||!rd(p,PIO+0x70,&select)||!(select&1))return 0;
+        if(mode>2||value!=2||!rd(p,PIO+0x70,&select)||!(select&1))return 0;
     } else if(mode!=3||value!=0)return 0; /* PC status uses a different encoding. */
     if(initial)p->voltage_mode=mode;
     return mode==p->voltage_mode;

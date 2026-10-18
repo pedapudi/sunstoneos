@@ -79,8 +79,13 @@ one-bit SD route. PMIC snapshots prove programmed values, not wiring, measured
 voltage or settling. Those remain authenticated physical prerequisites.
 No regulator output is changed.
 
-GPIO voltage checks are also read-only. SD requires PF's manual 3.3 V mode,
-3.3 V status and the 3.3 V voltage-selector bit. eMMC requires PC's manual 1.8 V
+GPIO voltage checks are also read-only. SD accepts PF's manual 3.3 V modes
+0/2 or adaptive mode 1, with sensed 3.3 V status 2 and the 3.3 V selector bit.
+The exact inherited mode is retained; a subsequent mode, status or selector
+change causes retained refusal before further controller commands. The A733
+manual sections 18.14.4.6 and 18.14.6.1–3 define adaptive mode as adjustment of
+the internal withstand circuit to detected voltage, separately from PF supply
+selection. No voltage setting is written. eMMC requires PC's manual 1.8 V
 mode and its distinct 1.8 V status encoding. Every writer that could change the
 bank voltage must remain excluded for the session's lifetime.
 

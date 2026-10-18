@@ -218,11 +218,20 @@ The exact ROM pin handoff passes focused actual-provider composition checks for
 identification/read, inherited mismatch, active module clock, uncertain pin write
 and unsupported nearby mux. Five host authority cases and the actual native
 session/configuration parser also pass. MMIO, card and time effects remain
-modeled. The affected image recompiles SD platform, SD admission and its unique
-build identity; it reuses all 163 other accepted objects, including native
-startup. Its ELF hash is
-`a7f627c195f440ed9ff73ffcac0c53100b8ae67e04d0726b7b293f884f92a3f3`.
+modeled. The subsequent adaptive-voltage image recompiles only SD platform and its
+unique build identity; it reuses all 164 other pin-handoff objects, including
+SD admission and native startup. Its ELF hash is
+`f9a8d5da96c08fb5d8111c3fd9cc81389a15ca9080255b21184c15d076e9cc95`.
 Evidence is under `~/.cache/sunstoneos/evidence/second-board-20261018-3-3/sd-rom-pins/`.
 This image retains the earlier storage startup profile; newer CPU/startup
 corrections are not included. Physical entry still requires the coordinator's
 admission of that exact profile.
+
+PF adaptive mode is accepted only with sensed 3.3 V, selected 3.3 V and the
+original mode unchanged throughout live checks. Four focused actual-provider
+cases pass for an adaptive-mode read and separate mode, status and selector
+loss during a pending read. Each loss retains ownership and the buffer before
+further card commands. This adds no voltage writes or switching commands.
+Qualified stable supplies, actual signaling and excluded voltage writers remain
+required. Adaptive evidence is under
+`~/.cache/sunstoneos/evidence/second-board-20261018-3-3/sd-adaptive-voltage/`.
