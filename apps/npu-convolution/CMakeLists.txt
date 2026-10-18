@@ -20,7 +20,9 @@ endfunction()
 
 # Reuse the native boot/translation/kernel inputs, replacing only its application,
 # task-privilege hook and vectors. The diagnostic target remains excluded.
-include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-smp-cached.cmake")
+if(NOT TARGET a733-smp-cached-diagnostic)
+  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-smp-cached.cmake")
+endif()
 get_target_property(npu_sources a733-smp-cached-diagnostic SOURCES)
 list(REMOVE_ITEM npu_sources
   "${a733_root}/platform/a733-smp-cached/diagnostic.c"

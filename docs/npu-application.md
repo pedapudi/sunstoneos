@@ -12,12 +12,15 @@ Cold PLL provisioning and broader model support remain separate integrations.
 
 ## Build and admission
 
-Build `apps/npu-convolution` as a standalone CMake project with the pinned
-FreeRTOS and TinyUSB source directories. Supply `A733_NPU_HANDOFF_SOURCE`,
+Build from the repository root or from the standalone `apps/npu-convolution`
+CMake project with the pinned FreeRTOS and TinyUSB source directories.
+Supply `A733_NPU_HANDOFF_SOURCE`,
 `A733_NPU_MODEL`, `A733_NPU_INPUT` and `A733_NPU_REFERENCE`. The artifact generator
 checks the fixed hashes recorded in `apps/npu-convolution/artifacts.py`; it does
 not invoke a model compiler. The existing compiler artifacts remain in the
 external cache. The target is `a733-npu-convolution`.
+The root build enables this target only when a handoff source is supplied.
+Application-specific source properties stay within its CMake subdirectory.
 
 The handoff source defines the immutable `a733_npu_application_boot` record.
 Its session identifiers must match the compact observer boot contract. The
@@ -119,3 +122,12 @@ focused instruction composition passed on that preserved ELF. Preparation used
 mismatching cases each executed OPEN, SUBMIT, STATUS and REAP; the failed reply
 stopped before REAP and completion publication. Raw inputs, image and case
 records are in `~/.cache/sunstoneos/evidence/npu-application-20261017/batch1`.
+
+The root configuration also builds and links the native application with the
+explicit refusal fixture. Its 101 unchanged repository dependencies match the
+preserved runtime inputs. The remaining header change is conditional on a
+newlib option that this target does not enable. Application operation renaming
+remains local to the NPU executable; the root component target is unaffected.
+Central artifacts and dependency comparisons are preserved under
+`~/.cache/sunstoneos/evidence/npu-application-20261017/central/`.
+No runtime cases were repeated, and this fixture image is not deployable.

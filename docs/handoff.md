@@ -50,7 +50,10 @@ full recognition on the native image and physical execution remain untested.
 The [native NPU application](npu-application.md), [radio entropy provider](radio-entropy.md),
 [Type-C source controller](typec.md) and [USB2 host path](usb2-host.md) are integrated.
 Their focused software evidence is preserved and reconciled with the integrated
-sources. The NPU application still needs real boot authority.
+sources. The NPU application also builds through the root CMake configuration
+when its handoff and artifact paths are supplied. The central link passes;
+application source properties remain isolated from other targets. Existing
+runtime evidence is reused. Physical NPU execution still needs real boot authority.
 
 The [board application](board-application.md) integrates shared startup, separate
 Type-C service and power tasks, simultaneous USB0 output and USB2 sector reads,
