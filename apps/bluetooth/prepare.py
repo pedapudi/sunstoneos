@@ -48,7 +48,7 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
     return spans
 
 
-def build_launcher(output, clang, lld):
+def build_launcher(output, clang, lld, execute=None):
     # Generate the same reviewed supervisor base; only this image's tiny entry
     # validation differs. No timer/reset writes or hardware operation occurs.
     text = (ROOT / 'platform/a733-smp-supervised/launch.c').read_text()
@@ -66,12 +66,15 @@ def build_launcher(output, clang, lld):
     commands = [[clang, *flags, '-c', output / name, '-o', output / obj] for name, obj in [('launch.S', 'entry.o'), ('launch.c', 'launch.o')]]
     commands += [[lld, '-T', output / 'launch.ld', output / 'entry.o', output / 'launch.o', '-o', output / 'launch.elf'],
                  ['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', output / 'launch.elf', output / 'launch.bin']]
-    for command in commands:
+    (output / 'launcher-commands.json').write_text(json.dumps([[str(x) for x in c] for c in commands], indent=2) + '\n')
+    for index, command in enumerate(commands):
+        if execute is not None:
+            execute('launcher-' + str(index), command, output / ['entry.o', 'launch.o', 'launch.elf', 'launch.bin'][index])
+            continue
         result = subprocess.run(list(map(str, command)), capture_output=True, text=True)
         with (output / 'launcher.log').open('a') as log:
             log.write(result.stdout + result.stderr)
         require(result.returncode == 0, 'Bluetooth SRAM launcher failed; preserve the stopped build.')
-    (output / 'launcher-commands.json').write_text(json.dumps([[str(x) for x in c] for c in commands], indent=2) + '\n')
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'SRAM launcher extent differs.')
 
 

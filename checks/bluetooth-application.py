@@ -30,6 +30,7 @@ def main():
     for name in ['output', 'freertos', 'tcp', 'hci-reference', 'image', 'build-dir']:
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--cc', default='/usr/bin/clang-21')
+    parser.add_argument('--lld', default='/home/sunil/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     parser.add_argument('--resume', action='store_true')
     a = parser.parse_args();out = a.output.resolve();out.mkdir(parents=True, exist_ok=a.resume)
     state_path = out / 'steps.json'
@@ -37,6 +38,8 @@ def main():
     inputs = json.loads((out / 'inputs.json').read_text()) if (out / 'inputs.json').exists() else {}
     tool = Path(a.cc).resolve()
     tools = {str(tool): sha(tool), str(Path(sys.executable).resolve()): sha(Path(sys.executable).resolve())}
+    for configured in [a.lld, '/usr/lib/llvm-21/bin/llvm-objcopy']:
+        resolved = Path(configured).resolve();tools[str(resolved)] = sha(resolved)
     native_captured = False
     if (out / 'tools.json').exists():
         assert tools == json.loads((out / 'tools.json').read_text())
@@ -54,7 +57,10 @@ def main():
         for path in [Path(__file__), ROOT / 'CMakeLists.txt', ROOT / 'cmake/a733-bluetooth.cmake',
                      *[p for p in (ROOT / 'apps/bluetooth').iterdir() if p.is_file()]]:
             capture(path)
-        for dep in [*out.glob('*.d'), *([] if native_captured else a.build_dir.rglob('*.o.d'))]:
+        for path in (out / 'launcher').glob('*'):
+            if path.is_file():
+                capture(path)
+        for dep in [*out.glob('*.d'), *(out / 'launcher').glob('*.d'), *([] if native_captured else a.build_dir.rglob('*.o.d'))]:
             capture(dep)
             for name in shlex.split(dep.read_text().replace('\\\n', ' ').split(':', 1)[1]):
                 path = Path(name)
@@ -107,6 +113,11 @@ def main():
             capture(path)
         shutil.copyfile(reference, out / 'bt-ref.h')
         native_image = out / 'bluetooth-native.elf';shutil.copyfile(a.image, native_image)
+        manifest_path = a.build_dir / 'bluetooth-application/image-manifest.json'
+        manifest = json.loads(manifest_path.read_text());capture(manifest_path)
+        assert manifest['target'] == 'sunstone-a733-bluetooth' and manifest['execution_profile'] == 'bluetooth-supervised-v1'
+        assert manifest['final_elf'] == sha(native_image)
+        assert manifest['build_id'] == (a.build_dir / 'bluetooth-application/build-id.txt').read_text().strip()
         common = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DSUNSTONE_AIC8800_RSN=1',
                   '-DINCLUDE_xSemaphoreGetMutexHolder=1', '-ffunction-sections', '-fdata-sections',
                   '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Inetwork/include', '-Iinclude',
@@ -118,17 +129,39 @@ def main():
                    'drivers/power/a733_pmic.c', 'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
                    'drivers/pinctrl/a733_pin_tables.c', 'drivers/storage/sdio_card.c', 'drivers/storage/sunxi_sdio.c',
                    'apps/bluetooth/result.c','checks/bluetooth-uart.c','drivers/uart/a733_uart_platform.c']
-        objects = []
+        objects = [];setup_errors = []
         for index, source in enumerate(sources):
             obj = out / f'host-{index}.o';dep = out / f'host-{index}.d'
-            run('compile-' + str(index), [a.cc, *common, '-MMD', '-MF', dep, '-c', source, '-o', obj], obj, dep)
+            try:
+                run('compile-' + str(index), [a.cc, *common, '-MMD', '-MF', dep, '-c', source, '-o', obj], obj, dep)
+            except subprocess.CalledProcessError as error:
+                setup_errors.append(str(error))
             objects.append(obj)
+        launcher = out / 'launcher';launcher.mkdir(exist_ok=True)
+        prep = load('bluetooth_launcher_preparation', ROOT / 'apps/bluetooth/prepare.py')
+        try:
+            def launcher_run(name, command, artifact):
+                if '-c' in command:
+                    dep = artifact.with_suffix('.d');command = [*command, '-MMD', '-MF', dep]
+                    run(name, command, artifact, dep)
+                else:
+                    run(name, command, artifact)
+            prep.build_launcher(launcher, a.cc, a.lld, launcher_run)
+        except (SystemExit, subprocess.CalledProcessError) as error:
+            setup_errors.append(str(error))
+        if setup_errors:
+            raise SystemExit('Independent setup failures (no runtime cases executed):\n' + '\n'.join(setup_errors))
         groups = {'application': [0, 1, 2, 3, 4, 15], 'session': [5],
                   'wake': [6, 7, 8, 9, 10, 11, 12, 13, 14], 'uart': [0,7,11,12,16,17]}
         for name, indices in groups.items():
             executable = out / ('bluetooth-' + name + '.elf')
-            run(name + '-link', [a.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
-                *[objects[i] for i in indices], '-o', executable], executable)
+            try:
+                run(name + '-link', [a.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
+                    *[objects[i] for i in indices], '-o', executable], executable)
+            except subprocess.CalledProcessError as error:
+                setup_errors.append(str(error))
+        if setup_errors:
+            raise SystemExit('Independent link failures (no runtime cases executed):\n' + '\n'.join(setup_errors))
         preserve()
         for name in groups:
             args = [out / 'captured-frame.bin', out / 'captured-profile.bin'] if name == 'application' else []
