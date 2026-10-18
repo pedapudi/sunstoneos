@@ -53,6 +53,11 @@ port. The user's selective validation policy replaces unconditional full-suite
 reruns; substantive correctness requirements still apply. A commit, clean rebase,
 handoff, or final response does not invalidate successful test evidence.
 
+Inspect effective feature flags before choosing a build configuration. Select
+the intended application and cover the changed branches it uses; a headset-only
+build does not cover changed transcription startup. This prevents an avoidable
+second build while preserving checks for the actual requested application.
+
 ## Efficient tool use and coordination
 
 - Discover unfamiliar paths with one scoped `rg --files` search, then reuse the
