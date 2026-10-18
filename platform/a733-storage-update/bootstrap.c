@@ -40,8 +40,9 @@ static int mmc_admit(void *p,const struct a733_mmc_platform_config *c,const stru
        c->kind!=b->kind||c->emmc_host!=b->emmc_host||c->voltage_mask!=b->voltage_mask||
        memcmp(c->fabric,b->fabric,sizeof(c->fabric))||memcmp(c->fabric_hz,b->fabric_hz,sizeof(c->fabric_hz))||
        memcmp(c->expected,b->expected,sizeof(c->expected))||memcmp(c->desired,b->desired,sizeof(c->desired))||
-       t->owner!=c->owner||a733_clock_token_status(&n->clocks,t)!=A733_CLOCK_OK)return -1;
-    return 1;
+       t->owner!=c->owner)return -1;
+    enum a733_clock_result r=a733_clock_token_status(&n->clocks,t);
+    return r==A733_CLOCK_BUSY?0:r==A733_CLOCK_OK?1:-1;
 }
 /* The USB task owns both tokens from acquisition through permanent retention.
  * Startup calls this only after clock acquisition and all supply snapshots.
