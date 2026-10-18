@@ -39,14 +39,18 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-- Startup diagnosis: native table construction and all three cache-publication
-  calls passed physically. The board returned to ROM and all reviewed DRAM was
-  restored. CPU/DSU preparation and later startup remain unresolved; the worker
-  is inspecting the next phase against the pinned hardware references.
+- Startup diagnosis: table construction, cache publication and CPU/DSU planning
+  passed physically. The observed identity is supported and needs no workaround
+  writes. The worker is investigating EL1 translation controls and interrupt
+  setup before secondary activation. Multicore operation remains unresolved.
 - Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
-  audio capture are integrated. Eight focused composition cases pass. The worker
-  is designing the native capture-to-mimus path; physical headset operation and
-  conversion to mimus's 16 kHz input remain outstanding.
+  audio capture are integrated. Eight focused composition cases pass. Native
+  capture-to-mimus integration is in progress, using the existing recorded
+  inference path and unchanged model. Physical headset operation remains untested.
+- I2S: native finite capture-to-mimus integration is in progress in a separate
+  worktree. It shares the recorded inference entry point with Bluetooth while
+  retaining independent capture, memory and task ownership. No microphone is
+  connected; physical capture remains untested.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -276,26 +280,28 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:077` on port `3-1`, with automatic USB access.
+The current board instance is `003:078` on port `3-1`, with automatic USB access.
 The returning native diagnostic passed through the actual corrected A32 launcher,
-stack setup, BSS clearing, admission, table construction and all three
-cache-publication calls. All 20,480 table bytes match the instruction model.
-No refusal or exception was recorded; CNTFRQ was 24 MHz and both SCTLR banks
-were `0x00c50838`. CPU/DSU preparation, cache activation, coherence and multicore
-operation remain unproven.
+stack setup, BSS clearing, admission, table construction, cache publication
+and CPU/DSU identification and planning. The controller reached its prepared
+state with no error or requested workaround writes. Observed MIDR is
+`0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is `0x073fc237`. This excludes
+identity/planner refusal as the cause on this board. Both SCTLR banks remained
+`0x00c50838`; CNTFRQ was 24 MHz. EL1 translation-control changes, GIC setup,
+cache activation and multicore operation remain unproven.
 
-The diagnostic returned automatically to ROM. All 41 transactions passed,
-including copied reports and reviewed DRAM restoration comparisons. The runner
-exited and its queue claim closed. Old SRAM was left to the returned ROM.
-Evidence is under `startup-stage-20261017-076/native/`; `table-comparison.json`
-records the byte comparison. The next investigation covers CPU/DSU preparation
-and its effect on the demonstrated return conditions.
+The diagnostic returned automatically to ROM. All 43 transactions passed,
+including copied controller/core records and reviewed DRAM restoration comparisons.
+The runner exited and its queue claim closed. Old SRAM was left to the returned
+ROM. Evidence is under `startup-stage-20261017-077/native/`. The next investigation
+covers EL1 translation controls and GIC distributor setup before secondary
+activation, including their restoration and effect on ROM return.
 
 Before this attempt, the existing guarded 40-byte cache-off helper ran once at
 SRAM address `0x73000`, with its bytes backed up and restored on the same ROM
 instance. One subsequent survey established every launcher predicate and ROM
 caller SP `0x000f2200`. Evidence is under
-`startup-stage-20261017-076/cache-off/` and `survey/`. A future warm-return instance
+`startup-stage-20261017-077/cache-off/` and `survey/`. A future warm-return instance
 needs its own verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
@@ -425,10 +431,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose CPU/DSU preparation against the pinned hardware references and
-   identify the next recoverable startup checkpoint. Table construction and
-   publication already pass physically. Preserve the original native layout
-   and verified return conditions; reuse completed instruction cases.
+1. Diagnose EL1 translation-control changes and GIC distributor setup before
+   secondary activation. CPU/DSU identity and planning now pass physically.
+   Review restoration and ROM-return conditions before the next hardware change;
+   preserve the native layout and reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.
