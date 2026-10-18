@@ -80,3 +80,29 @@ and existing AArch64 toolchain. The [native camera contract](camera-native.md)
 retains the device ownership and completed-frame requirements. Continuous
 capture, wider modes, interrupts and general reclamation remain outside this
 single-frame application and still require implementation and qualification.
+
+## Retained launch session
+
+The camera image now retains the complete authenticated session during primary
+EL3 admission. Its local boot hook copies the session, rehashes that copy against
+the private admitted contract, validates it and publishes the whole retained
+object, including readiness, before cached setup. A failed attempt cannot be
+retried; failed publication makes the copy unavailable.
+
+Application startup consumes that retained copy before initializing any shared
+USB or camera provider. It preserves the admitted bytes separately from the
+runtime deadline adjustments. Mutating the original live session after sealing
+cannot replace camera ownership, media settings or evidence identities. The
+patch applies to the camera's own boot object; shared boot sources are unchanged.
+Existing camera provider, pixel, transport and physical qualification limits
+remain in force.
+
+Focused binding checks passed against the corrected native image under
+`~/.cache/sunstoneos/evidence/camera-binding-20261018/`. The nominal session came
+from the existing production preparation functions using the final ELF's build
+ID and exact evidence hashes. The checks execute full contract validation,
+shape-valid mutations before sealing, failed publication and later consumption
+of the retained copy. They verify that publication covers both session bytes and
+the readiness receipt. Cache publication and the first provider boundary are
+modeled; no camera provider, sensor or pixel work was repeated. The generated
+camera boot hook precedes cached setup and is the target's sole boot object.

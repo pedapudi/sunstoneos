@@ -1,4 +1,5 @@
 #include "application.h"
+#include "snapshot.h"
 #include "cached.h"
 #include "platform.h"
 #include <string.h>
@@ -29,8 +30,9 @@ int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
 void a733_smp_diagnostic_start(void)
 {
  if(!a733_smp_device_preparation_admitted())platform_panic("camera memory",1);
- volatile const uint8_t *source=(void *)A733_STORAGE_SESSION_ADDRESS;
- for(unsigned i=0;i<sizeof(app.session);++i)((uint8_t *)&app.session)[i]=source[i];
+ const struct camera_session *source=camera_admitted_session();
+ if(!source)platform_panic("camera sealed session",2);
+ app.session=*source;
  if(!camera_session_valid(&app.session,a733_smp_counter())||app.session.epoch!=a733_cached_runtime[0].epoch||
 #ifndef SUNSTONE_CAMERA_SUPERVISED
     app.session.deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline

@@ -16,16 +16,20 @@ foreach(source IN ITEMS
  drivers/storage/sunxi_mmc.c drivers/watchdog/a733_maintenance_watchdog.c)
  list(REMOVE_ITEM camera_sources "${camera_root}/${source}")
 endforeach()
-list(REMOVE_ITEM camera_sources "${storage_build}/build-id.c")
+list(REMOVE_ITEM camera_sources "${storage_build}/build-id.c" "${storage_build}/boot.c")
 if(SUNSTONE_CAMERA_SUPERVISED)
  list(REMOVE_ITEM camera_sources "${storage_build}/boot.c" "${camera_root}/platform/a733/maintenance_watchdog.c")
- apply_build_patch("${camera_build}/boot.c" "${storage_build}/boot.c"
+ apply_build_patch("${camera_build}/boot-supervised.c" "${storage_build}/boot.c"
   "${camera_root}/platform/a733-smp-supervised/boot.patch")
- list(APPEND camera_sources "${camera_build}/boot.c")
+ set(camera_boot "${camera_build}/boot-supervised.c")
+else()
+ set(camera_boot "${storage_build}/boot.c")
 endif()
+apply_build_patch("${camera_build}/boot.c" "${camera_boot}" "${camera_root}/apps/camera/boot.patch")
+list(APPEND camera_sources "${camera_build}/boot.c")
 # Retain maintained boot/platform/EL3 return mechanics. Its boot patch publishes
 # the immutable 4KiB session page and does not decode a storage grant.
-foreach(source IN ITEMS apps/camera/main.c apps/camera/admission.c apps/camera/capture.c apps/camera/usb0.c
+foreach(source IN ITEMS apps/camera/main.c apps/camera/admission.c apps/camera/snapshot.c apps/camera/capture.c apps/camera/usb0.c
  drivers/camera/ov5640.c drivers/camera/a733_camera_platform.c drivers/camera/a733_csi_receiver.c
  drivers/camera/a733_camera_route.c drivers/camera/a733_camera_dma.c drivers/camera/a733_camera_capture.c
  drivers/camera/a733_camera_native.c drivers/iommu/a733_iommu.c drivers/i2c/a733_twi.c
@@ -53,6 +57,7 @@ if(SUNSTONE_CAMERA_SUPERVISED)
 endif()
 file(GLOB camera_headers "${camera_root}/apps/camera/*.h")
 set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
+ "${camera_root}/apps/camera/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
 set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;640x480;NV16;USB0-sink;retained")
