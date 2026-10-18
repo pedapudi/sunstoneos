@@ -348,10 +348,14 @@ Protection against hostile tasks, arbitrary models and concurrent clients is
 subsequent OS isolation qualification. Exclusive ownership of all disposable
 board RAM can remove conflicts with unrelated RAM allocations, but it cannot
 protect executing code, tables, the recovery path or peripheral registers from
-an unconstrained engine address. The current admission therefore still requires
-a source-backed account of the selected model's address modes and access bounds,
-or effective independently established hardware confinement. No broader RAM
-ownership claim or reviewed hash supplies that account.
+an unconstrained engine address. The [address-path review](npu-address-path.md)
+now identifies the existing
+page-directory MMU as the intended external confinement method for the exact
+trusted model, with complete ownership of internal SRAM. It traces the selected
+revision-9.2 simulator's descriptor, coefficient, input and output paths and
+excludes its observed flat mode. Physical behavior remains under test; the
+coordinator must bind this reviewed method and actual board prerequisites to
+the immutable session. No admission flag or host-parser rule changes here.
 
 The smallest useful coordinator observations precede command submission:
 
@@ -365,11 +369,10 @@ The smallest useful coordinator observations precede command submission:
 - Read DCDC2 through the existing PMIC service and confirm enabled, settled
   800 mV under retained PMIC and pin ownership. The application supplies no
   voltage change. Confirm local reset/gate and shared SRAM ownership prerequisites.
-- Complete a focused review of command/descriptor address modes, prefetch bounds,
-  internal SRAM routing and alternate physical-address routes. If existing vendor
-  source cannot establish a route, obtain authoritative register documentation
-  or a separately reviewed, bounded hardware observation. A successful output
-  alone cannot establish confinement.
+- Bind the focused address-path review to the exact model, command allocations,
+  table image and native MMU readback. Establish complete internal SRAM ownership
+  and the admitted zero external-SRAM configuration. The first attempt tests
+  physical behavior; a successful output alone cannot qualify fault isolation.
 
 After those prerequisites are established, freeze the selected model, native
 ELF, raw session and admission records with the existing preparation tool.
