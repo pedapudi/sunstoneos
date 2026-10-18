@@ -195,3 +195,12 @@ context; the boot monitor repeats admission before CPU/coherence startup.
 Reviewed secure/nonsecure memory authority and every other external prerequisite
 remain required. A returning survey with the remaining gates satisfied justifies
 one reviewed corrected launch; a failed gate or transport stops that sequence.
+
+The physical returning survey passed on the recovered board. It recorded all
+remaining launcher predicates as true, copied the report and verified full SRAM
+restoration. The subsequent SCR-free launch still produced no native observer;
+its single refusal-report read timed out. The host stopped communication, and
+the user then removed power and reconnected. Evidence is under
+`supervised-reconnect-20261017-072/`. SCR omission does not establish a fix for
+the observed startup failure. The next diagnostic must locate the failing stage
+without repeating the full launch unchanged.

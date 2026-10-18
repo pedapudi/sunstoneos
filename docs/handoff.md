@@ -134,17 +134,15 @@ comparisons are under `supervised-bundle-binding-20261017/batch1/`.
 Existing native, launcher and transport results remain valid within their scopes.
 Before physical use, compose the selected bundle's software record from these
 results and current source snapshots; older records retain superseded source hashes.
-The current observer software record binds the corrected launcher and current
-host sources under `supervised-observer-integration-20261017/3d41031/`.
-Its referenced artifacts were verified without replaying tests.
-The [supervised all-core observer](a733-smp-supervised.md) requires a disabled
-watchdog. Its native build and focused startup, admission and host checks pass.
-Both physical attempts produced no native USB observer. The corrected launcher
-was used on the second attempt after confirmed power removal and fresh entry
-checks. Its single refusal-report read timed out; no scheduler result arrived.
-User reconnection cleared the failed session after its holder stopped and the
-queue recorded the failure. The new instance has fresh DDR evidence. Offline
-launch analysis must identify the next useful change before another attempt.
+The current observer software record binds the tested native image, SCR-free
+launcher and current host under `supervised-reconnect-20261017-072/software.json`.
+The [supervised all-core observer](a733-smp-supervised.md) leaves the watchdog
+disabled. Three physical attempts produced no native USB observer. The latest
+attempt followed a successful returning register survey and fresh entry checks;
+its single refusal-report read timed out. Removing the suspect SCR access did
+not resolve startup. The user has reconnected and the failed session is closed.
+Next diagnosis must locate the failing stage using the previously working
+single-core return path before another full-image attempt.
 
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its supervised mode
@@ -244,35 +242,32 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:072` on port `3-1`, with automatic USB access.
-Fresh DDR initialization passed and returned to ROM; no native image has executed
-on this instance. Evidence is under `supervised-reconnect-20261017-072/`.
-The preceding instance, `003:071`, supplied the failed multicore observation below.
-User-confirmed power removal replaced the previous failed instance. The installed
-session rule restored access automatically, and the old holder stopped before
-the queue resumed. Fresh RAM-only DDR initialization reported 12,288 MiB; two
-4 KiB pages matched and the loader returned to FEL. Thirty-nine read-only control
-and status values matched the prior reviewed entry conditions: secondary cores
-inactive, watchdog disabled, USB0 inherited, E902 and DMA0/1 disabled, and the
-active crypto engine idle. These checks establish the recorded entry conditions;
-they do not qualify all-core execution or coherence.
+The current board instance is `003:073` on port `3-1`, with automatic USB access.
+User-confirmed power removal replaced the failed instance. Its holder stopped,
+the queue recorded the failure and subsequent claims resumed. No device command
+has been issued to this new instance, and DDR has not been initialized.
+The recovery record is `supervised-reconnect-20261017-073/recovery.json`.
+The user is away for several hours; avoid another full-image attempt without a
+specific diagnostic or correction.
 
-Evidence is under `supervised-reconnect-20261017/`. Its `prepared/` bundle reuses
-the tested native image and corrected launcher with fresh admission and session
-identities. No executable was rebuilt. The second attempt completed uploads,
-readback and one execution request, but no native observer appeared within
-19 seconds. The sole refusal-report read then failed with USB timeout error -7.
-Device communication stopped immediately. After the next user reconnection, the
-coordinator verified the replacement instance, stopped the retained process and
-closed the failed claim. Its failure record remains in `runtime/session.json`.
-Fresh entry-control observations are still required before another multicore launch.
+On the preceding instance, fresh DDR initialization reported 12,288 MiB and two
+4 KiB pages matched. Thirty-nine read-only control/status values matched the
+reviewed entry conditions. The returning SRAM survey then captured SVC mode,
+disabled MMU/caches, primary MPIDR, zero frequency declaration and RMR, and an
+advancing counter. Every remaining launcher predicate passed. The survey restored
+both SRAM intervals and ROM remained responsive; SCR was deliberately unread.
+This is physical evidence for the survey and entry conditions, not multicore
+startup or coherence. Records are under `supervised-reconnect-20261017-072/`.
 
-The counter-frequency correction addresses the ROM's unset frequency declaration,
-but did not establish physical startup. Neither attempt produced a diagnostic
-frame or refusal report, so the failure location remains unknown. Compare the
-SRAM launcher, architecture transition and native boot with the previously
-working single-core USB path before requesting another reconnect. Preserve both
-attempts and successful software evidence; do not repeat the full test batch.
+The following SCR-free launch reused the unchanged native image. Uploads,
+readback and one execution request succeeded, but no observer appeared within
+19 seconds. The sole refusal-report read failed with USB timeout error -7.
+Communication stopped immediately. The subsequent user reconnect allowed the
+coordinator to close that retained session. Its `runtime/session.json` remains
+the failure record. The invalid-access hypothesis did not resolve startup;
+the failing instruction or stage remains unknown. Preserve successful evidence
+and investigate the actual launcher/native entry against the working single-core
+path before selecting another bounded diagnostic.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -382,8 +377,8 @@ recordings and model identities remain the reference.
 
 1. Diagnose the failed multicore launch offline and identify the smallest useful
    correction or diagnostic before another physical attempt. The user reconnected
-   after the refusal-report timeout; the new instance has fresh DDR evidence.
-   Refresh the required entry observations for the selected diagnostic.
+   after the SCR-free attempt timed out; the new instance has no DDR state.
+   Reuse the working return path and refresh admission for the selected diagnostic.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.

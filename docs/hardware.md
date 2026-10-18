@@ -58,12 +58,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   observing ROM return. The exact offline bundle is prepared; physical USB
   timing, independent recovery and complete-image execution remain unqualified.
   The separate [supervised observer](a733-smp-supervised.md) uses manual
-  reconnection and leaves the watchdog disabled. Its first physical attempt
-  produced no native result; scheduler execution remains unobserved. A launcher
-  correction for the ROM's unset counter-frequency declaration passes focused
-  software checks. A second physical attempt with that correction also produced
-  no observer; its single refusal-report read timed out. Offline startup diagnosis
-  continues before another attempt.
+  reconnection and leaves the watchdog disabled. Three physical attempts produced
+  no native result; scheduler execution remains unobserved. A returning SRAM
+  survey passed the remaining launcher predicates and restored ROM service.
+  Removing a suspect SCR read did not resolve full startup. Its bounded
+  refusal-report read timed out; the user reconnected. Offline stage diagnosis
+  continues before another full-image attempt.
 - DDR: **tested** for initialization and distinct transfers to two 4 KiB pages.
   Firmware reports 12 GiB LPDDR5; full capacity and stability remain untested.
 - Memory mappings, interrupt dispatch, and task scheduling: **tested** on the
