@@ -275,6 +275,10 @@ def validate_platform(value, prepared, identity, port):
     required={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
               'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
               'usb-device-mapping','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
+    if prepared.get('execution_profile')=='npu-single-core-supervised-v1':
+        required.remove('source-backed-cpu-dsu-transition')
+        required.update({'primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover',
+            'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'})
     require(set(value.get('conditions',{}))==required, 'Observer entry conditions are incomplete.')
     for item in value['conditions'].values(): artifact(item)
     require(value.get('usb_evidence')==prepared['usb_evidence'] and value.get('npu_evidence')==prepared['npu_evidence'] and

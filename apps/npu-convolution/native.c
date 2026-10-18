@@ -1,5 +1,10 @@
 #include "a733_npu_application.h"
+#include <string.h>
 #include "aarch64_device_memory.h"
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+#include "a733_usb_platform.h"
+#include "a733_usb_platform_native.h"
+#endif
 #include "platform.h"
 #include "result.h"
 #include "cached.h"
@@ -30,7 +35,12 @@ static struct {
     struct device_memory_allocation allocation;
     struct device_memory_pool *pool;
     struct device_memory_extent backing;
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+    struct a733_usb_platform usb_platform;
+    TaskHandle_t usb_task;
+#else
     struct a733_clock_token usb;
+#endif
     StaticTask_t task[2];
     StackType_t stack[2][4096] __attribute__((aligned(16)));
     TaskHandle_t pmic_task,bootstrap_task,client;
@@ -38,6 +48,17 @@ static struct {
     unsigned used,creating;
 } app;
 atomic_uint a733_npu_application_failed;
+static int preparation_admitted(void)
+{
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+    /* The SRE static-task constructor restores IRQ delivery before scheduling.
+     * No EL1 timer is armed yet; restore the preparation window's mask before
+     * calling the shared startup authority. */
+    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    __asm__ volatile("msr daifset,#15":::"memory");
+#endif
+    return a733_smp_device_preparation_admitted();
+}
 static void pmic_task(void *);
 static void bootstrap(void *);
 const struct a733_npu_application_boot *a733_npu_application_boot_record(void)
@@ -201,7 +222,7 @@ int a733_npu_application_init(TaskHandle_t client)
     if(!b)return 0;
     const struct a733_npu_application_profile *p=&b->profile;
     if(app.used || !client || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
-       !a733_smp_device_preparation_admitted() || !a733_npu_application_observer_admit() ||
+       !preparation_admitted() || !a733_npu_application_observer_admit() ||
        !image(&app,sizeof(app),1) || !image(b,sizeof(*b),0) ||
        (!a733_npu_application_model_bytes || a733_npu_application_model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) ||
        (!a733_npu_application_input_bytes || a733_npu_application_input_bytes>NPU_CONVOLUTION_IO_CAPACITY) ||
@@ -226,8 +247,13 @@ int a733_npu_application_init(TaskHandle_t client)
     if(!a733_pins_native_init(&app.pin_native,&pin_locks) ||
        !a733_pins_init_banks(&app.pins,&app.pin_native.operations,&app.pin_native,&b->pins) ||
        !a733_rail_leases_init(&app.rails,&rail_binding) ||
+#ifndef SUNSTONE_NPU_SINGLE_CORE
        a733_clock_acquire(&app.registry,p->usb_owner,A733_CLOCK_FABRIC,
-           A733_CLOCK_USB0|A733_CLOCK_USB01_REF,deadline,&app.usb)!=A733_CLOCK_OK)goto failed;
+           A733_CLOCK_USB0|A733_CLOCK_USB01_REF,deadline,&app.usb)!=A733_CLOCK_OK
+#else
+       0
+#endif
+       )goto failed;
     if(!a733_npu_reserved_prepare(&app.reserved,p->npu_owner,a733_npu_application_model,
         a733_npu_application_model_bytes,0x03600000,fatal,NULL))goto failed;
     app.lease=app.reserved.lease;app.extent=app.reserved.extent;
@@ -255,9 +281,62 @@ int a733_npu_application_init(TaskHandle_t client)
        !npu_application_clock_init(&app.pll,npu_session_get(),&app.registry,&app.locks,&app.clock,
            app.bootstrap_task,deadline) || !a733_npu_startup_bind_pll(&app.startup,&app.pll.pll) ||
 #endif
-       !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,2) ||
-       !a733_smp_device_preparation_admitted())goto failed;
+       !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+           1
+#else
+           2
+#endif
+       ) ||
+       !preparation_admitted())goto failed;
     return 1;
 failed:
     a733_npu_application_fail(5);return 0;
 }
+
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+static int usb_now(void *cookie,uint64_t *out)
+{return cookie==&app&&live()&&a733_counter_clock_now(&app.clock,out);}
+static int usb_authorize(void *cookie,const struct a733_usb_platform_config *c,const struct a733_clock_token *t)
+{
+    const struct a733_npu_application_boot *b=a733_npu_application_boot_record();
+    if(cookie!=&app||!live()||!b||xTaskGetCurrentTaskHandle()!=app.usb_task||
+       !a733_npu_application_observer_admit()||c->owner!=b->profile.usb_owner||
+       c->handoff!=b->profile.usb_evidence||c->cold_reference!=A733_USB_ROM_DEVICE||
+       c->deadline_us!=a733_observe_identity.deadline/24||
+       memcmp(c->fabric,b->npu.fabric,sizeof(c->fabric))||
+       memcmp(c->rate_hz,b->npu.rate_hz,sizeof(c->rate_hz))||
+       a733_clock_token_status(&app.registry,t)!=A733_CLOCK_OK)return 0;
+    const uintptr_t mmio[]={0x02002000,0x04100000,0x07090160};
+    for(unsigned i=0;i<3;++i){struct aarch64_translation t;
+        if(!aarch64_device_translate(mmio[i],1,&t)||t.physical!=mmio[i]||t.attributes||t.shareability!=2)return 0;}
+    /* Authenticated external admission owns persistent USB rails, IRQ exclusion,
+     * the ROM PIO predecessor and absence of outstanding external DMA. */
+    return 1;
+}
+static int usb_enter(void *cookie,uint64_t deadline)
+{return cookie==&app&&live()&&xTaskGetCurrentTaskHandle()==app.usb_task&&
+    a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline);}
+static void usb_leave(void *cookie)
+{if(cookie!=&app)fatal(NULL);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
+static void usb_retain(void *cookie)
+{if(cookie==&app)a733_platform_lock_retain(&app.locks,A733_PLATFORM_REGISTER_LOCK);a733_npu_application_fail(18);}
+int npu_single_core_usb_poll(void)
+{
+    if(!app.used||!live())return -1;
+    if(!app.usb_task){
+        app.usb_task=xTaskGetCurrentTaskHandle();
+        const struct a733_npu_application_boot *b=a733_npu_application_boot_record();
+        struct a733_usb_platform_config c={.owner=b->profile.usb_owner,.handoff=b->profile.usb_evidence,
+            .deadline_us=a733_observe_identity.deadline/24,.cold_reference=A733_USB_ROM_DEVICE};
+        memcpy(c.fabric,b->npu.fabric,sizeof(c.fabric));memcpy(c.rate_hz,b->npu.rate_hz,sizeof(c.rate_hz));
+        const struct a733_usb_platform_ops ops={usb_now,usb_authorize,usb_enter,usb_leave,usb_retain,
+            a733_usb_platform_native_read,a733_usb_platform_native_write};
+        if(!a733_usb_platform_init(&app.usb_platform,&c,&ops,&app,&app.registry))return -1;
+    }
+    if(xTaskGetCurrentTaskHandle()!=app.usb_task)return -1;
+    enum a733_usb_platform_result r=a733_usb_platform_poll(&app.usb_platform);
+    if(r==A733_USB_PLATFORM_PREPARED)return 1;
+    return r==A733_USB_PLATFORM_PENDING||r==A733_USB_PLATFORM_BUSY?0:-1;
+}
+#endif

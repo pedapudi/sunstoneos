@@ -1,8 +1,9 @@
 # Native compiled convolution application
 
-The native application combines the cached eight-core boot image, a permanent
-NPU memory reservation, the PMIC provider, NPU startup and the trusted compiled-model
-client. Build-time selection chooses one of the three reviewed models in
+The native application combines a retained boot monitor, a permanent NPU memory
+reservation, the PMIC provider, NPU startup and the trusted compiled-model client.
+The supervised build supports either the cached eight-core startup or an
+independent image running on the boot CPU. Build-time selection chooses one of the three reviewed models in
 [the registration catalogue](npu-convolution.md). The client copies the selected
 input into private buffers, waits for matched completion, copies and compares
 the output, and successfully reaps the job before submitting a second input.
@@ -389,3 +390,67 @@ Every deviation refuses progress and retains the controller without later
 callbacks. The changed controller also compiles for AArch64. Existing model,
 cache-maintenance, service and numerical-reference evidence remains applicable
 to its original inputs; no physical command or performance measurement occurred.
+
+
+## Supervised convolution on the boot CPU
+
+The target `a733-npu-convolution-single-core` runs the reviewed trusted convolution
+without starting secondary CPUs. Build it from the repository root, or configure
+`apps/npu-convolution-single-core` with the existing toolchain, FreeRTOS, TinyUSB
+and fixed model/input/reference arguments. The all-core target remains available;
+all-core hardware support remains required independently.
+
+The boot monitor copies and authenticates the session at EL3 before providers
+initialize. It requires every secondary power state, control and mode to be OFF.
+A retained session and bounded runtime contract survive EL1 BSS clearing. The
+monitor contract, saved state and translation tables remain inaccessible through
+the actual EL1 page tables. Device registers use outer-shareable Device memory;
+application state and the compact 2 MiB pool use inner-shareable write-back memory.
+The cache-disabled EL3 copy completes with a system barrier before EL1 enables
+caching. Existing NPU publication and output-cache maintenance remain in use.
+
+The single-core SRE FreeRTOS port runs the trusted client, worker, PMIC, bootstrap
+and USB tasks at EL1. Task creation can restore IRQ delivery before scheduling;
+the application masks exceptions again before checking preparation authority.
+The monitor disables all SPIs, including NPU interrupt 97. This workload polls
+NPU completion. Its USB service calls directly from its trusted task. USB startup
+uses the existing ROM-device takeover provider with the NPU application's common
+clock registry and register mutex. It retains the reference clock and follows
+the provider's PIO checks, detach interval, device reset and PHY setup.
+
+The host binds the execution profile `npu-single-core-supervised-v1` to immutable
+ELF geometry, the boot entry and the absence of secondary-startup and EL0 SVC
+entry points. Single-core sessions use version 2; the all-core supervised session
+uses version 1. The same preparation and capture tools support both profiles.
+The single-core admission additionally requires primary cache-transition and
+secondary-OFF evidence, the ROM USB PIO predecessor, disabled/inactive/clear USB
+interrupts 188–190, and settled USB supplies with their writers excluded.
+These conditions supplement existing NPU, SRAM, DMA, PMIC, PLL and recovery authority.
+
+The frozen image is `~/.cache/sunstoneos/evidence/npu-single-core-20261018/image.elf`.
+Its SHA-256 is
+`150fb6097ae55f6be7541ee992fb86b68be8930ed9e369f0347a3c77c4979517`.
+The adjacent manifest, compiler dependency closure and snapshots preserve 177
+compiled inputs and 70 linked objects. Eleven focused startup cases execute
+native admission, retained copying, EL1 clearing, descriptor walks, static task
+construction and the USB takeover provider. Seven host cases cover immutable
+profile refusals, package validation, copied two-job capture and USB device-version
+matching. Six preprocessing comparisons preserve the accepted SD and GPU branches.
+System registers, GIC, counter, USB hardware state and task execution state remain
+modeled; the private artifact hash helper uses host SHA-256 over the actual bytes.
+Existing model/reference and translated-address-path evidence is reused. No NPU
+inference, scheduler qualification or physical access occurs in these checks.
+
+The preserved `package-final/bundle` contains conspicuous software-only admission
+fixtures and must not be deployed. A coordinator must produce a fresh bundle from
+actual board evidence using `apps/npu-convolution/prepare-supervised.py`. Bind the
+session to the frozen build identity, exact PLL/provider snapshots and selected
+board instance. Establish exclusive compact DDR, cache/alias exclusion, secondary
+OFF state, internal SRAM ownership, supported NPU MMU mode, stable 800 mV DCDC2,
+independent DRAM/PHY sources, USB supplies and the ROM PIO lifetime before launch.
+Use the existing `tools/check-a733-npu-supervised.py` capture command for one
+supervised RAM-only attempt. The native window is 20 seconds and host capture
+is bounded to 19 seconds. Success requires two distinct matched jobs and both
+copied outputs. Stop communication after the first transport failure. Keep every
+resource until confirmed removal of all board power sources, including after
+success. Physical translation, provider state and NPU inference remain unresolved.

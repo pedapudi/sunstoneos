@@ -91,7 +91,13 @@ void a733_smp_diagnostic_start(void)
 #endif
     configASSERT(a733_npu_application_observer_admit());
     TaskHandle_t task=xTaskCreateStaticAffinitySet(client,"npu-check",4096,NULL,2,
-        client_stack,&client_state,2);
+        client_stack,&client_state,
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+        1
+#else
+        2
+#endif
+    );
     configASSERT(task && a733_npu_application_init(task));
     a733_observe_service_start();
     vTaskStartScheduler();platform_panic("scheduler returned",0);

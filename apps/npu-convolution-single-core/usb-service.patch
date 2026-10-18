@@ -1,0 +1,39 @@
+--- usb_service.c
++++ npu-single-core-usb-service.c
+@@ -11,8 +11,6 @@
+ static unsigned initialized,received,sent,response_bytes,complete;
+ static uint32_t sequence;
+ static uint8_t challenge[32],request[64],response[1040] __attribute__((aligned(64)));
+-extern void *volatile pxCurrentTCBs[];
+-extern unsigned char a733_observe_svc_return[];
+ static const tusb_desc_device_t device={
+     .bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,.bcdUSB=0x200,
+     .bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefe8,.bcdDevice=0x0103,
+@@ -60,12 +58,12 @@
+ }
+ void a733_observe_privileged(void)
+ {
+-    uint64_t el,core,pc,psr,sp0,daif;
+-    __asm__ volatile("mrs %0,CurrentEL\n mrs %1,tpidr_el1\n mrs %2,elr_el1\n mrs %3,spsr_el1\n mrs %4,sp_el0\n mrs %5,daif"
+-        :"=r"(el),"=r"(core),"=r"(pc),"=r"(psr),"=r"(sp0),"=r"(daif));
+-    if(el!=4 || core || pc!=(uintptr_t)a733_observe_svc_return || (psr&15) || !(daif&128) ||
+-        pxCurrentTCBs[0]!=(void *)&task_state || (sp0&15) || sp0<(uintptr_t)task_stack ||
+-        sp0>(uintptr_t)(task_stack+2048))a733_observe_failure(9);
++    uint64_t el,mpidr;__asm__ volatile("mrs %0,CurrentEL\n mrs %1,mpidr_el1":"=r"(el),"=r"(mpidr));
++    if(el!=4||(mpidr&~UINT64_C(0xc1000000)))a733_observe_failure(9);
++    extern int npu_single_core_usb_poll(void);
++    int prepared=npu_single_core_usb_poll();
++    if(prepared<0)a733_observe_failure(13);
++    if(!prepared)return;
+     if(!a733_npu_application_observer_admit())a733_observe_failure(12);
+     a733_observe_deadline();
+     if(!initialized){tusb_rhport_init_t init={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_HIGH};
+@@ -82,7 +80,7 @@
+     a733_observe_deadline();
+ }
+ static void usb_task(void *unused)
+-{(void)unused;for(;;){a733_observe_svc();vTaskDelay(1);}}
++{(void)unused;for(;;){a733_observe_privileged();vTaskDelay(1);}}
+ void a733_observe_service_start(void)
+ {
+     configASSERT(xTaskCreateStaticAffinitySet(usb_task,"observe",2048,NULL,4,task_stack,&task_state,1));

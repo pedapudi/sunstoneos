@@ -111,7 +111,7 @@ def main(argv=None):
         record=json.loads(admission);require(record['identity']==identity and record['port']==port,'NPU admission covers another live instance.')
     return supervisor.run_session(args,bundle,prepared,lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
         lambda device,same,deadline,record,save:capture_device(device,same,deadline,prepared,args.evidence,record,save),
-        product=protocol.PRODUCT,serial=protocol.SERIAL,bcd_device=0x0101,capture_seconds=19,result_key='npu_result',
+        product=protocol.PRODUCT,serial=protocol.SERIAL,bcd_device=0x0103,capture_seconds=19,result_key='npu_result',
         source_files=source_files(),description='Supervised NPU convolution; retain all resources until manual whole-board power removal')
 
 if __name__=='__main__':

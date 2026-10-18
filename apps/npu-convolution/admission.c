@@ -4,9 +4,14 @@
 #include "result.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-static struct npu_session session;
-static unsigned copied,authenticated;
-static uint8_t authenticated_digest[32];
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+#define RETAINED __attribute__((section(".npu_runtime_retained")))
+#else
+#define RETAINED
+#endif
+static struct npu_session session RETAINED;
+static unsigned copied RETAINED,authenticated RETAINED;
+static uint8_t authenticated_digest[32] RETAINED;
 const uint64_t a733_npu_session_layout[8]={sizeof(struct npu_session),
     offsetof(struct npu_session,boot),sizeof(struct a733_npu_application_boot),
     offsetof(struct npu_session,pll),sizeof(struct a733_npu_pll_config),
@@ -16,7 +21,7 @@ static int present(const uint8_t p[32])
 {unsigned v=0;for(unsigned i=0;i<32;++i)v|=p[i];return v!=0;}
 int npu_session_valid(const struct npu_session *s)
 {
-    if(!s || s->magic!=NPU_SESSION_MAGIC || s->version!=1 || s->bytes!=sizeof(*s) ||
+    if(!s || s->magic!=NPU_SESSION_MAGIC || s->version!=NPU_SESSION_VERSION || s->bytes!=sizeof(*s) ||
        !s->epoch || !s->generation || !s->lease || !s->supervisor || !s->whole_platform ||
        !present(s->image) || !present(s->evidence) || !present(s->clock) ||
        !present(s->power) || !present(s->supervision))return 0;
@@ -65,8 +70,26 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
      * eight-core barriers. EL1 never reads the protected monitor contract. */
     memcpy(authenticated_digest,digest,32);authenticated=1;return 1;
 }
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+int npu_single_core_seal(const struct a733_smp_contract *c)
+{
+    uint64_t el;__asm__ volatile("mrs %0,CurrentEL":"=r"(el));
+    if(el!=12||copied||!authenticated)return 0;
+    memcpy(&session,(const void *)NPU_SESSION_ADDRESS,sizeof(session));
+    uint8_t digest[32];storage_digest_bytes(&session,sizeof(session),digest);
+    if(memcmp(digest,authenticated_digest,32)||!npu_session_valid(&session)||
+       memcmp(session.image,a733_smp_build_id,32)||session.epoch!=c->epoch||
+       session.generation!=c->generation||session.lease!=c->lease)return 0;
+    copied=1;
+    /* EL3 is cache disabled; DSB publishes the retained bytes before EL1 adopts WB. */
+    __asm__ volatile("dsb sy":::"memory");return 1;
+}
+#endif
 int npu_session_copy(void)
 {
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+    return copied&&a733_smp_device_preparation_admitted();
+#endif
     if(copied || !authenticated || !a733_smp_device_preparation_admitted())return 0;
     memcpy(&session,(const void *)NPU_SESSION_ADDRESS,sizeof(session));
     uint8_t digest[32];storage_digest_bytes(&session,sizeof(session),digest);

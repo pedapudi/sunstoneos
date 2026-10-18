@@ -59,6 +59,10 @@ def admission_fixture(prep,image,raw,layout,build,directory):
     conditions=('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
         'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping',
         'physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')
+    if struct.unpack_from('<Q',raw,8)[0]==2:
+        conditions=tuple(c for c in conditions if c!='source-backed-cpu-dsu-transition')+(
+            'primary-cache-transition-and-secondary-off','rom-usb0-pio-takeover',
+            'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded')
     platform=write('platform.json',{**common,**profile,'schema':'a733-npu-convolution-platform-v1',
         'conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
     clock_conditions={'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',

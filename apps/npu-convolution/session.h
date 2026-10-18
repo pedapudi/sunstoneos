@@ -4,6 +4,13 @@
 #define NPU_SESSION_ADDRESS UINT64_C(0x41f00000)
 #define NPU_SESSION_MAGIC UINT64_C(0x415337334e504131)
 #define NPU_CONTRACT_MAGIC UINT64_C(0x415337334e504331)
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+#define NPU_SESSION_VERSION 2
+struct a733_smp_contract;
+int npu_single_core_seal(const struct a733_smp_contract *);
+#else
+#define NPU_SESSION_VERSION 1
+#endif
 #define NPU_WINDOW_TICKS (UINT64_C(20)*24000000)
 /* Authenticated immutable page; clock evidence includes independent DRAM/PHY
  * sources, all PLL_NPU consumers/writers, and the complete snapshot below.

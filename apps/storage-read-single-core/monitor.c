@@ -1,5 +1,5 @@
 #include "boot.h"
-#ifdef SUNSTONE_GPU_SINGLE_CORE
+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_NPU_SINGLE_CORE)
 #include "session.h"
 #include "a733_device_memory_layout.h"
 #include "a733_cached_memory.h"
@@ -22,6 +22,10 @@ const uint8_t *gpu_application_contract_digest(const struct a733_smp_contract *c
 {return c==&admission?gpu_admission.session_digest:NULL;}
 const uint8_t *gpu_application_entry_digest(const struct a733_smp_contract *c)
 {return c==&admission?gpu_admission.entry_digest:NULL;}
+#elif defined(SUNSTONE_NPU_SINGLE_CORE)
+static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+static struct a733_smp_contract npu_runtime_contract __attribute__((section(".npu_runtime_retained")));
+static unsigned npu_runtime_secondary_off __attribute__((section(".npu_runtime_retained")));
 #else
 static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
 #endif
@@ -71,6 +75,10 @@ void sd_single_core_monitor_init(void)
     for(uint64_t *p=__gpu_retained_start;p<__gpu_retained_end;++p)*p=0;
     for(unsigned i=0;i<sizeof(gpu_admission)/8;++i)((uint64_t *)&gpu_admission)[i]=((const volatile uint64_t *)source)[i];
 #else
+#ifdef SUNSTONE_NPU_SINGLE_CORE
+    extern uint64_t __npu_retained_start[],__npu_retained_end[];
+    for(uint64_t *p=__npu_retained_start;p<__npu_retained_end;++p)*p=0;
+#endif
     for(unsigned i=0;i<sizeof(admission)/8;++i)((uint64_t *)&admission)[i]=((const volatile uint64_t *)source)[i];
 #endif
     __asm__ volatile("dsb sy":::"memory");
@@ -91,6 +99,10 @@ void sd_single_core_monitor_init(void)
      * Both regimes are still cache-disabled; no table has been adopted. */
     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+#elif defined(SUNSTONE_NPU_SINGLE_CORE)
+    if(!npu_single_core_seal(&admission)||!secondaries_off()||!a733_cached_memory_prepare())finish(1);
+    a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
+    a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
 #else
     if(!board_session_prepare(&admission)||!storage_read_session_prepare(&admission)||
        !secondaries_off())finish(1);
@@ -98,6 +110,8 @@ void sd_single_core_monitor_init(void)
     secondary_off_admitted=1;
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     gpu_runtime_contract=admission;gpu_runtime_secondary_off=1;
+#elif defined(SUNSTONE_NPU_SINGLE_CORE)
+    npu_runtime_contract=admission;npu_runtime_secondary_off=1;
 #endif
     __asm__ volatile("dsb sy":::"memory");
     /* Snapshot helpers hash and publish before any providers. EL3 remains
@@ -205,6 +219,8 @@ const struct a733_smp_contract *sd_single_core_contract(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return &gpu_runtime_contract;
+#elif defined(SUNSTONE_NPU_SINGLE_CORE)
+    return &npu_runtime_contract;
 #else
     return &admission;
 #endif
@@ -214,6 +230,8 @@ int sd_single_core_secondaries_admitted(void)
 {
 #ifdef SUNSTONE_GPU_SINGLE_CORE
     return gpu_runtime_secondary_off==1;
+#elif defined(SUNSTONE_NPU_SINGLE_CORE)
+    return npu_runtime_secondary_off==1;
 #else
     return secondary_off_admitted==1;
 #endif

@@ -84,9 +84,40 @@ def image_data(raw):
     return parts,address,build,layout
 
 
+def image_manifest_check(manifest,raw,session=None):
+    profiles={'a733-npu-convolution-supervised':'npu-supervised-v1',
+              'a733-npu-convolution-single-core':'npu-single-core-supervised-v1'}
+    target=manifest.get('target');require(target in profiles and manifest.get('final_elf')==sha(raw),
+        'Exact reviewed supervised NPU image required.')
+    profile=profiles[target]
+    if target=='a733-npu-convolution-single-core':
+        require(manifest.get('execution_profile')==profile and manifest.get('workload')=='trusted-convolution-repeat',
+            'Single-core NPU manifest profile differs.')
+    else:
+        require(manifest.get('execution_profile',profile)==profile,'All-core NPU profile differs.')
+    elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    marker=symbols.get('npu_single_core_geometry')
+    if target=='a733-npu-convolution-single-core':
+        require(marker is not None and marker['st_size']==32 and
+            ('sd_single_core_entry' in symbols and symbols['sd_single_core_entry']['st_value'])==elf['e_entry'] and
+            not any(name in symbols for name in ('a733_cpu_start_init','a733_cpu_primary_continue',
+                'a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','a733_observe_svc')),
+            'Single-core NPU startup differs.')
+        address=int(marker['st_value']);parts=[v for v in elf.iter_segments() if v['p_type']=='PT_LOAD' and
+            not v['p_flags']&2 and v['p_vaddr']<=address and address+32<=v['p_vaddr']+v['p_filesz']]
+        require(len(parts)==1,'NPU geometry must be immutable and file backed.')
+        offset=address-parts[0]['p_vaddr'];geometry=struct.unpack('<4Q',parts[0].data()[offset:offset+32])
+        require(geometry==(0x415337334e505331,1,image_data(raw)[3][0],20),'NPU execution geometry differs.')
+    else:require(marker is None,'Single-core NPU image requires its execution profile.')
+    if session is not None:
+        require(struct.unpack_from('<Q',session,8)[0]==(2 if marker is not None else 1),
+            'Session execution version differs from native image.')
+    return profile
+
+
 def session_profile(raw,layout):
     size,boot,boot_bytes,pll,pll_bytes,npu,pmic,pins=layout
-    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,1,size),'Distinct native NPU session required.')
+    require(len(raw)==size and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,struct.unpack_from("<Q",raw,8)[0],size) and struct.unpack_from("<Q",raw,8)[0] in (1,2),'Distinct native NPU session required.')
     epoch,generation,lease=struct.unpack_from('<3Q',raw,24);owner,whole=struct.unpack_from('<2Q',raw,208)
     require(all((epoch,generation,lease,owner,whole)),'Session identities must be nonzero.')
     p=dict(zip(PROFILE_FIELDS,struct.unpack_from('<14Q',raw,boot)))
@@ -127,7 +158,7 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,froz
     for ref in ddr['evidence']:evidence(ref)
     platform=json.loads(evidence(record['platform']));original=protocol.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{**profile,'image_sha256':image_hash},identity,port)
+    validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':('npu-single-core-supervised-v1' if struct.unpack_from('<Q',raw,8)[0]==2 else 'npu-supervised-v1')},identity,port)
     required={
         'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','enabled-retune-snapshot'},
         'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},
@@ -179,8 +210,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
     parts,address,build,layout=image_data(image_raw);profile=session_profile(raw,layout)
     manifest_record=json.loads(manifest_raw)
-    require(manifest_record.get('target')=='a733-npu-convolution-supervised' and
-        manifest_record.get('final_elf')==sha(image_raw),'Exact reviewed supervised native manifest required.')
+    execution_profile=image_manifest_check(manifest_record,image_raw,raw)
     cache=validate_admission(admission_raw,raw,build,layout,sha(image_raw));output=Path(output);output.mkdir(parents=True,exist_ok=False)
     build_launcher(output,clang,lld,objcopy)
     fixed={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'admission.json':admission_raw,'session.bin':raw}
@@ -195,7 +225,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     request,contract=request_bytes(address,build,raw,profile)
     fixed.update({'request.bin':request,'contract.bin':contract,'result-zero.bin':bytes(16384),'report-zero.bin':bytes(128)})
     for name,data in fixed.items():(output/name).write_bytes(data)
-    p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'model_name':selected_model(image_raw)['name'],**profile,
+    p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'model_name':selected_model(image_raw)['name'],'execution_profile':execution_profile,**profile,
         'session_layout':list(layout),'segments':uploads,'entry_evidence':evidence,'launcher_sha256':digest(output/'launch.bin'),
         'files':{p.name:digest(p) for p in output.iterdir() if p.is_file()}}
     save_json(output/'prepared.json',p);return validate_bundle(output)
@@ -211,7 +241,8 @@ def validate_bundle(bundle):
     require(p.get('model_name','conv8')==selected_model(data['image.elf'])['name'],'Selected model differs from image.')
     require(p['image_sha256']==sha(data['image.elf']) and p['build_id']==build.hex() and p['session_layout']==list(layout) and
         all(p.get(k)==v for k,v in profile.items()),'Prepared native/session metadata differs.')
-    manifest=json.loads(data['image-input-manifest.json']);require(manifest.get('target')=='a733-npu-convolution-supervised' and manifest.get('final_elf')==p['image_sha256'],'Manifest differs.')
+    manifest=json.loads(data['image-input-manifest.json']);execution_profile=image_manifest_check(manifest,data['image.elf'],raw)
+    require(p.get('execution_profile',execution_profile)==execution_profile,'Prepared execution profile differs.')
     cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
     require(all(sha(cache[path])==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen proof differs.')
     validate_admission(data['admission.json'],raw,build,layout,p['image_sha256'],cache,True)
