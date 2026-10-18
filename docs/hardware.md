@@ -61,8 +61,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   timing, independent recovery and complete-image execution remain unqualified.
   The separate [supervised observer](a733-smp-supervised.md) uses manual
   reconnection and leaves the watchdog disabled. Three physical attempts produced
-  no native result; scheduler execution remains unobserved. A returning SRAM
-  survey passed the remaining launcher predicates and restored ROM service.
+  no native result; scheduler execution remains unobserved. A returning native
+  diagnostic now passes actual stack setup, admission and table construction.
+  All five table pages match the instruction model; automatic ROM return and
+  DRAM restoration pass. Cache publication and later startup remain unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -414,14 +416,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   checks and native compilation pass. [Synchronous headset transport](bluetooth-audio.md)
   adds actual SCO/eSCO setup and acceptance, CVSD with signed 16-bit PCM over HCI,
   copied audio buffers and separate controller credits. Focused host checks and
-  nine native consumer compilations pass. Controller capabilities, real security
-  and scheduling providers, physical headset audio, wired PCM routing, wider
-  codecs and mandatory remaining call-control procedures remain outstanding.
+  nine native consumer compilations pass. Physical controller capabilities,
+  headset audio, wired PCM routing, wider codecs and mandatory remaining
+  call-control procedures remain outstanding.
   The [native Bluetooth application](bluetooth-native.md) connects firmware
-  bootstrap, UART1, H4/HCI identification and copied USB output. Its central
-  image and four focused composition cases pass; seventeen host and launcher
-  wrapper cases pass. These checks use modeled hardware and establish no
-  physical identity, pairing, connection or headset audio.
+  bootstrap, UART1, H4/HCI identification and copied USB output. Its headset mode
+  reuses Zephyr secure pairing and RAM key policy, requires observed authentication
+  and encryption, and publishes copied 8 kHz PCM after synchronous disconnect.
+  Eight focused composition cases and the native link pass. Outgoing composition,
+  native USB audio framing, physical headset operation and mimus input remain
+  unqualified. The earlier identification cases remain valid for that mode.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
@@ -444,8 +448,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [receive dispatcher](radio-dispatch.md) supplies one receive owner, copied
   scan/station events and bounded retirement of unsupported records. Emulator
   checks pass for sustained packet delivery, backpressure and retained ambiguous
-  records. Physical identity and platform binding, DHCP/DNS/IPv6, server sockets,
-  reconnection, wider Wi-Fi security modes, pairing and headset audio remain open.
+  records. DHCP lease authority and copied DNS requests are integrated; four
+  focused stack cases and the combined board link pass. Fixed-address and DHCP
+  startup profiles pass sanitizer checks. An unexplained earlier DNS deadline
+  miss remains a timing limitation. Physical networking, IPv6, server sockets,
+  reconnection and wider Wi-Fi security modes remain open.
 
 - Camera: The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes

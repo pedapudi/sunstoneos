@@ -39,12 +39,14 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-- Startup diagnosis: the returning page-table checkpoint is integrated and
-  reviewed. One new instruction case passes. Physical execution is next;
-  multicore startup remains unresolved.
+- Startup diagnosis: native page-table construction passed physically. All five
+  pages match the instruction model, and automatic ROM return and DRAM restoration
+  passed. The next diagnostic extends through cache publication; multicore
+  startup remains unresolved.
 - Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
-  audio capture are integrated. Eight focused composition cases pass. Physical
-  headset operation and conversion to mimus's 16 kHz input remain outstanding.
+  audio capture are integrated. Eight focused composition cases pass. The worker
+  is designing the native capture-to-mimus path; physical headset operation and
+  conversion to mimus's 16 kHz input remain outstanding.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -274,25 +276,27 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:075` on port `3-1`, with automatic USB access.
+The current board instance is `003:076` on port `3-1`, with automatic USB access.
 The returning native diagnostic passed through the actual corrected A32 launcher,
-stack setup, BSS clearing and admission checks. It reached the checkpoint before
-cache preparation with no refusal or exception. CNTFRQ was initialized to 24 MHz;
-both EL3 and EL1 control registers were `0x00c50838`. This establishes the early
-native startup path. Cache setup, coherence and multicore operation remain unproven.
+stack setup, BSS clearing, admission and construction of five translation-table
+pages. All 20,480 table bytes match the instruction model. No refusal or exception
+was recorded; CNTFRQ was 24 MHz and both SCTLR banks were `0x00c50838`.
+Cache publication, cache activation, coherence and multicore operation remain
+unproven.
 
-The diagnostic returned automatically to ROM. Its copied report and all reviewed
-DRAM restoration comparisons passed; the runner exited and the queue claim closed.
-Old SRAM was left to the returned ROM. Evidence is under
-`startup-stage-20261017-074/native/`. The next diagnostic will cover page-table
-construction and return before cache publication.
+The diagnostic returned automatically to ROM. All 41 transactions passed,
+including copied reports and reviewed DRAM restoration comparisons. The runner
+exited and its queue claim closed. Old SRAM was left to the returned ROM.
+Evidence is under `startup-stage-20261017-075/native/`; `table-comparison.json`
+records the byte comparison. The next diagnostic will extend through cache
+publication while preserving the demonstrated return conditions.
 
-Before this attempt, a warm-return survey found instruction caching enabled.
-The existing 40-byte cache-off helper ran once at fresh SRAM address `0x73000`;
-its bytes were backed up and restored on the same ROM instance. A subsequent
-survey established every launcher predicate and ROM caller SP `0x000f2200`.
-Evidence is under `startup-stage-20261017-074/cache-off/` and `cache-off-survey/`.
-A future warm-return instance needs its own verified launch state.
+Before this attempt, the existing guarded 40-byte cache-off helper ran once at
+SRAM address `0x73000`, with its bytes backed up and restored on the same ROM
+instance. One subsequent survey established every launcher predicate and ROM
+caller SP `0x000f2200`. Evidence is under
+`startup-stage-20261017-075/cache-off/` and `survey/`. A future warm-return instance
+needs its own verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -421,10 +425,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Extend the physically passed native initialization checkpoint through actual
-   page-table construction, then return before cache publication. Preserve the
-   original native layout, back up the table interval and verify the changed
-   return hook. Refresh admission and launch-state evidence for the current ROM.
+1. Extend the physically passed table-construction checkpoint through the next
+   recoverable cache-publication boundary. Preserve the original native layout
+   and verified return conditions. Refresh admission and launch-state evidence
+   for the current ROM; reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.
