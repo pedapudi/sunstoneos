@@ -37,12 +37,12 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 | Worktree | Assigned work |
 | --- | --- |
-| Storage integration | Native PMIC/MMC/USB checks passed; complete image remains with the maintenance worker |
-| Maintenance image worker | Dedicated boot/runtime image and immutable storage session using the integrated watchdog |
+| Storage integration | Complete maintenance image and launcher integrated; focused software checks passed |
 | Camera worker | Native OV5640 transport, resource binding and retained single-frame readout |
 | Graphics worker | Real render context, geometry/fragment submission and checkable color output |
 | USB host worker | Native USB2/xHCI enumeration and one direct storage-device read |
 | Type-C worker | Concrete host power/role and bounded I2C provider for the USB2 path |
+| NPU application worker | Native fixed convolution application, checked output and USB observation |
 | Shared clock integration | TWI11 scope and wider private layout integrated; maintenance image uses the new ABI |
 | Independent reviewers | Changed runtime ownership, deadlines and focused verification before execution |
 
@@ -51,8 +51,11 @@ DMA USB observation, GPU graphics resources, storage core/host updates and the
 maintenance watchdog are integrated. The connected storage tasks are also
 integrated and their focused PMIC, MMC admission and USB callback checks pass.
 Watchdog revocation now survives both pre-bind and concurrent-bind faults; the
-two new interleaving checks passed. The complete maintenance image is being
-assembled in its isolated worktree.
+two new interleaving checks passed. The complete
+[maintenance image](storage-maintenance-launch.md) now connects those tasks,
+immutable launch admission, fatal-fault revocation and protected host backups.
+Its linked instruction and host checks pass; the main build configuration and
+source comparison reuse that evidence without a second compilation or execution.
 Graphics submission and USB host/Type-C integration have separate owners.
 
 The GPU central integration compiles and links six affected targets against the
@@ -143,7 +146,9 @@ records preserve earlier source comparisons, build artifacts and source pins.
 `gpu-central-integration-20261017/integration.json` records the latest GPU links,
 component reconciliation and storage/watchdog integration. Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
-`native-handoff.json` and `native-root-reconcile.json`. Reuse results only
+`native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
+evidence and central source reconciliation are under `storage-maintenance-20261017/`.
+Reuse results only
 within their recorded source, ABI, configuration and hardware conditions.
 
 The shared clock registry now uses 128-bit masks, 128 slots and 48-byte tokens.
@@ -152,7 +157,7 @@ high-bit ownership check passed; 61 affected native units and three compatibilit
 fixtures compiled without replaying earlier workloads. Evidence is under
 `clock-wide-20261017/`. All token producers and consumers must use the same
 layout. Previously sealed images retain their original ABI and evidence; the
-complete maintenance image will compile its current consumers together.
+complete maintenance image compiles its current consumers together.
 The latest storage bootstrap contention correction follows that compile batch
 and is included in the maintenance image build, not the earlier object evidence.
 S_TWI1 and USB2 now have independent exclusive scopes. S_TWI1 holds APBS1
@@ -198,10 +203,10 @@ recordings and model identities remain the reference.
    No pin connection is needed for ongoing software work. Preserve the inserted
    microSD and all other storage. Physical input, enable/disarm, expiry and
    stalled-interconnect recovery remain unqualified.
-2. Complete the native maintenance image with the reviewed storage/USB tasks,
-   watchdog and final clock ABI. Its physical use additionally requires card/range
-   ownership, protected backups and actual recovery qualification. No prepared
-   bundle grants those conditions by itself.
+2. Qualify the integrated maintenance image after independent recovery passes.
+   Its physical use requires card/range ownership, protected backups and actual
+   controller, memory and supply admission. No prepared bundle grants those
+   conditions by itself.
 3. Finish native camera binding and actual GPU graphics submission. Connect
    immutable boot admission, genuine resource ownership and qualified memory
    to executable applications. Retained buffers permit neither invented drain

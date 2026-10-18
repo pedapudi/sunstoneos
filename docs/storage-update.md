@@ -110,7 +110,9 @@ FreeRTOS tasks for the shared PMIC provider, storage operations and USB. One
 permanent bootstrap object contains their common clock, mutex, pin and rail
 managers. The storage task owns the service; the USB task owns framing and actual
 IN completion. The maintenance lease binds these same objects and task handles.
-The dedicated launcher and complete image require separate integration evidence.
+The complete [maintenance image and launcher](storage-maintenance-launch.md)
+compose these tasks with immutable boot admission and permanent fault revocation.
+Their focused instruction and host checks pass; physical operation remains unqualified.
 
 USB preparation acquires real shared supply leases and checks copied snapshots
 from the common PMIC provider. The immutable boot record supplies the qualified

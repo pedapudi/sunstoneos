@@ -68,3 +68,16 @@ Documentation edits and commits do not require another emulator run.
 The separate [SMP target](smp.md) tests two-core scheduling with shared memory,
 queues, and mutexes. Select `smp-kernel-model` explicitly to build it; the original
 single-core check and physical board images retain their own ports.
+
+The [storage maintenance image](storage-maintenance-launch.md) connects the native
+PMIC, storage and USB tasks with watchdog supervision. Configure with both
+`FREERTOS_DIR` and `TINYUSB_DIR` pointing to the pinned sources, then select its
+target explicitly:
+
+```sh
+cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" \
+  --target sunstone-a733-storage-maintenance -j 8
+```
+
+The resulting ELF requires a separate immutable launch session and physical
+recovery evidence before board execution. Building it does not authorize storage writes.

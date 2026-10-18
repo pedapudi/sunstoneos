@@ -106,8 +106,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [maintenance watchdog](maintenance-watchdog.md) passes focused progress,
   cutoff and permanent-loss checks. The native tasks and USB binding
   are implemented. Focused supply, native MMC admission and USB callback checks
-  pass; complete-image integration remains pending. Physical identification/read/write operation,
-  faster modes and recoverable boot remain outstanding.
+  pass. The complete [maintenance image and launcher](storage-maintenance-launch.md)
+  are integrated; focused instruction and host checks pass. Physical card
+  identification, reads, writes, faster modes and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
