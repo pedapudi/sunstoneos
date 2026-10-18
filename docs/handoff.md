@@ -46,11 +46,21 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-The ADC and reusable RTC implementations are integrated. The next combined
-thermal/ADC monitor and reusable fan/LED work have design proposals only.
-Their implementation workers stopped at the account usage limit before starting
-those extensions. Preserve the frozen prior worktrees and evidence; resume from
-the proposals after capacity is available. No physical test is running.
+The ADC and reusable RTC implementations are integrated. Three software paths
+are active: combined thermal/ADC monitoring, reusable fan/LED control, and the
+actual native USB serializer for repeated RTC results. The implementation workers
+have resumed after the usage-limit interruption. Existing frozen images and
+successful evidence remain preserved; none of these extensions has a new result.
+
+The PWM owner coordinates shared clock edits: an APBS0 stability reservation for
+always-on GPIO access, corresponding PMIC ownership, and atomic publication of
+a stable GPADC24M parent for thermal/ADC coexistence. The monitor owner imports
+that prerequisite rather than editing the registry concurrently. Normal monitor
+stop must distinguish halted publication from stopped converters; fan updates
+may introduce an explicit low interval. Device-specific reviews cover those
+behaviors before execution. Only the coordinator may operate the board.
+No physical test is running. Host metadata still identifies the quarantined
+instance; physical power removal and reconnection remain required.
 
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
