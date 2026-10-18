@@ -21,9 +21,10 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void){return task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
 int a733_counter_clock_now(void *p,uint64_t *n){assert(p==&shared.counter);*n=time_us;return 1;}
 int a733_radio_entropy_init(struct a733_radio_entropy *e,const struct a733_radio_entropy_config *c)
-{assert(e==&app.entropy&&c->source==&source&&c->clock==&shared.counter);return 1;}
+{assert(e==&app.entropy&&c->source==&source&&c->clock==&shared.counter);atomic_init(&e->fault,0);return 1;}
 enum a733_radio_entropy_result a733_radio_entropy_poll(struct a733_radio_entropy *e)
-{assert(e==&app.entropy);++entropy_calls;return entropy_failed?A733_RADIO_ENTROPY_RETAINED:A733_RADIO_ENTROPY_READY;}
+{assert(e==&app.entropy);++entropy_calls;if(entropy_failed){atomic_store(&e->fault,1);return A733_RADIO_ENTROPY_BUSY;}
+ return A733_RADIO_ENTROPY_READY;}
 int a733_radio_entropy_bytes(void *p,uint8_t *o,size_t n){(void)p;(void)o;(void)n;return 0;}
 int a733_radio_entropy_random32(void *p,uint32_t *o){(void)p;(void)o;return 0;}
 int a733_radio_entropy_sequence(void *p,uint32_t a,uint16_t b,uint32_t c,uint16_t d,uint32_t *o)

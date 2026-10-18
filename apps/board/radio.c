@@ -74,7 +74,9 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     enum a733_radio_entropy_result entropy=a733_radio_entropy_poll(&r->entropy);
     /* Continue pending CE metadata retention even after radio admission closes. */
     if(atomic_load_explicit(&r->failed,memory_order_acquire))return retain(r);
-    if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID)return retain(r);
+    if(entropy==A733_RADIO_ENTROPY_RETAINED||entropy==A733_RADIO_ENTROPY_INVALID||
+        atomic_load_explicit(&r->entropy.fault,memory_order_acquire)||
+        atomic_load_explicit(&r->config.entropy.source->engine->fault,memory_order_acquire))return retain(r);
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
     if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
