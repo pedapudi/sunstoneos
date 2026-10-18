@@ -77,7 +77,8 @@ substantive correctness risks. The coordinator alone operates the board.
   and memory authority remain physical prerequisites. A boot-path audit is
   investigating the predecessor handoff. Inspection of the actual DDR initializer
   found no crypto launch path; actual ROM/FEL history remains unresolved. No board
-  crypto command has executed.
+  crypto command has executed. The session-binding and USB failure corrections
+  follow the JPEG correction before this image is eligible for physical use.
 - Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
   the combined board image links. Profile checks pass under ASan/UBSan. An earlier
   unexplained DNS deadline miss remains a timing limitation.
@@ -86,6 +87,14 @@ substantive correctness risks. The coordinator alone operates the board.
 Component documents and the hardware matrix hold the remaining integrations.
 The [historical handoff](handoff-history-20261017.md) preserves earlier artifact
 locations and reconciliation details; it is not a current qualification record.
+
+Session integrity needs the same follow-up in camera, I2S and HDMI startup.
+Their admission functions hash the complete session, but their application entry
+functions later copy live bytes without comparing the copied digest with the
+authenticated digest. Field validation alone does not bind that later copy.
+Correct these consumers after JPEG and crypto; reuse unaffected device checks.
+NPU already compares its private copy with the retained authenticated digest,
+and GPU already copies and verifies its session at EL3.
 
 
 ## Observed host and device state
