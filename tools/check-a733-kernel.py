@@ -20,14 +20,46 @@ def load_module(name, path):
     return module
 
 
-def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_tool_hash):
+def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_tool_hash, warm_raw=()):
     """Validate copied records against the selected live instance under its lock.
 
     The survey producer pins the FEL executable. Older survey records omit its
     hash, so DDR's recorded hash and the current tool must both match that pin.
+    Explicit successful kernel returns connect DDR to a later ROM instance.
     This admits initialized RAM; it does not qualify peripheral ownership.
     """
     ddr, survey = (json.loads(value) for value in raw)
+    previous_node = ddr.get("device")
+    previous_identity = ddr.get("node_identity")
+    if not (isinstance(previous_node, str)
+            and Path(previous_node).parent.parent == Path("/dev/bus/usb")
+            and Path(previous_node).parent.name.isdigit() and Path(previous_node).name.isdigit()
+            and isinstance(previous_identity, list) and len(previous_identity) == 5
+            and all(type(part) is int for part in previous_identity)):
+        raise RuntimeError("DDR evidence does not identify its original USB instance.")
+    for value in warm_raw:
+        returned = json.loads(value)
+        terminal = returned.get("result", {})
+        next_node = returned.get("returned_node")
+        next_identity = returned.get("returned_identity")
+        if not (returned.get("complete") is True
+                and returned.get("launch_attempted") is True
+                and returned.get("transport_failed") is False
+                and returned.get("automatic_access") is True
+                and returned.get("mode") == "kernel"
+                and returned.get("port") == port
+                and returned.get("tool_sha256") == tool_hash == pinned_tool_hash
+                and returned.get("initial_node") == previous_node
+                and returned.get("initial_identity") == previous_identity
+                and isinstance(next_node, str) and next_node.startswith("/dev/bus/usb/")
+                and next_node != previous_node
+                and isinstance(next_identity, list) and len(next_identity) == 5
+                and all(type(part) is int for part in next_identity)
+                and next_identity != previous_identity
+                and terminal.get("magic") == 0x534b4552
+                and terminal.get("stage") == 5 and terminal.get("status") == 0):
+            raise RuntimeError("Warm-return evidence does not establish contiguous successful ROM return.")
+        previous_node, previous_identity = next_node, next_identity
     result = ddr.get("result", {})
     gates = survey.get("result", {}).get("launcher_gates", {})
     required_gates = {"svc", "little_endian", "mmu_caches_endian_off",
@@ -35,7 +67,7 @@ def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_too
     if not (ddr.get("complete") is True and result.get("magic") == 0x53524444
             and result.get("stage") == 5 and result.get("board_result") == 0
             and isinstance(result.get("dram_mib"), int) and result["dram_mib"] > 0
-            and ddr.get("node_identity") == identity and ddr.get("device") == str(node)
+            and previous_identity == identity and previous_node == str(node)
             and ddr.get("tool_sha256") == tool_hash == pinned_tool_hash
             and survey.get("complete") is True and survey.get("physical_access") is True
             and survey.get("rom_usable") is True and survey.get("sram_restored") is True
@@ -71,11 +103,16 @@ def main(argv=None):
     parser.add_argument("--ram-input", type=Path, help="Input bundle loaded at 0x43000000; at most 32 MiB")
     parser.add_argument("--ram-input-present", action="store_true", help="Verify existing RAM input instead of uploading it")
     parser.add_argument("--return-timeout", type=float, default=10)
-    parser.add_argument("--ddr-evidence", type=Path, help="Successful DDR session for the current board instance")
-    parser.add_argument("--platform-survey", type=Path, help="Returning A32 survey for that same instance; paired with --ddr-evidence")
+    parser.add_argument("--ddr-evidence", type=Path, help="Successful DDR session for this board, before any supplied warm returns")
+    parser.add_argument("--platform-survey", type=Path, help="Returning A32 survey for the current instance; paired with --ddr-evidence")
+    parser.add_argument("--warm-return", type=Path, action="append", default=[],
+                        help="Successful kernel session connecting DDR to the current instance; repeat in execution order")
     args = parser.parse_args(argv)
     if bool(args.ddr_evidence) != bool(args.platform_survey):
         parser.error("--ddr-evidence and --platform-survey must be supplied together.")
+    if args.warm_return and not args.ddr_evidence:
+        parser.error("--warm-return requires --ddr-evidence and --platform-survey.")
+    warm_returns = tuple(path.read_bytes() for path in args.warm_return)
     admission = None
     if args.ddr_evidence:
         admission = (args.ddr_evidence.read_bytes(), args.platform_survey.read_bytes())
@@ -103,6 +140,13 @@ def main(argv=None):
         (args.evidence / "platform-survey.json").write_bytes(admission[1])
         record["admission"] = {"ddr_sha256": hashlib.sha256(admission[0]).hexdigest(),
                                "survey_sha256": hashlib.sha256(admission[1]).hexdigest()}
+        if warm_returns:
+            record["admission"]["warm_returns"] = []
+            for index, raw in enumerate(warm_returns):
+                name = f"warm-return-{index + 1}.json"
+                (args.evidence / name).write_bytes(raw)
+                record["admission"]["warm_returns"].append(
+                    {"file": name, "sha256": hashlib.sha256(raw).hexdigest()})
 
 
     def save():
@@ -150,7 +194,7 @@ def main(argv=None):
                 config = dict(port=port.name, sysfs=str(port.resolve()))
                 record.update(initial_node=str(node), initial_identity=node_identity, port=port.name)
                 if admission:
-                    validate_platform_admission(admission, node, node_identity, port.name, record["tool_sha256"], failure_helper.FEL_HASH)
+                    validate_platform_admission(admission, node, node_identity, port.name, record["tool_sha256"], failure_helper.FEL_HASH, warm_returns)
                 if "soc=00001903(A733)" not in transaction("version"):
                     raise RuntimeError("Target is not the verified A733.")
                 # The forced-FEL reset entry must still match the inspected ROM words.
