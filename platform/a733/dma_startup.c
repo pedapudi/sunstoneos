@@ -32,7 +32,7 @@ static enum a733_dma_platform_result acquire(void *cookie,const struct a733_dma_
     if(!task_owner(b) || b->register_held || !c || !out || !exact(c,&b->handoff.allowed) ||
         !a733_dma_platform_scopes(&b->handoff.allowed,&expected) || shared!=expected ||
         b->handoff.controller!=0x04601000 || b->handoff.evidence!=c->handoff ||
-        b->handoff.owned_channels!=0xffff || b->handoff.established!=A733_DMA_HANDOFF_REQUIRED) {
+        b->handoff.owned_channels!=0xffff || b->handoff.established!=(b->supervised?A733_DMA_HANDOFF_SUPERVISED:A733_DMA_HANDOFF_REQUIRED)) {
         if(b) b->failed=1;
         return A733_DMA_PLATFORM_RETAINED;
     }
@@ -74,8 +74,8 @@ static int write_reg(void *cookie,uintptr_t address,uint32_t value)
     struct a733_dma_startup *b=cookie;
     return task_owner(b) && b->register_held && a733_dma_platform_native_write(0,address,value);
 }
-int a733_dma_startup_init(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
-    struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks)
+static int initialize(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
+    struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks,unsigned supervised)
 {
     a733_clock_mask_t shared;
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !b || b->initialized ||
@@ -90,12 +90,18 @@ int a733_dma_startup_init(struct a733_dma_startup *b,const struct a733_dma_hando
         locks->now!=a733_counter_clock_now || locks->context!=clock ||
         h->controller!=0x04601000 || h->owned_channels!=0xffff || !h->service_channels ||
         (h->service_channels&~h->allowed.desired_cpu) || h->evidence!=h->allowed.handoff ||
-        h->established!=A733_DMA_HANDOFF_REQUIRED || !a733_dma_platform_scopes(&h->allowed,&shared)) return 0;
-    b->handoff=*h;b->clock=clock;b->registry=registry;b->locks=locks;
+        h->established!=(supervised?A733_DMA_HANDOFF_SUPERVISED:A733_DMA_HANDOFF_REQUIRED) || !a733_dma_platform_scopes(&h->allowed,&shared)) return 0;
+    b->supervised=supervised;b->handoff=*h;b->clock=clock;b->registry=registry;b->locks=locks;
     b->operations=(struct a733_dma_platform_operations){acquire,enter,leave,now,read_reg,write_reg};
     if(!a733_dma_platform_init(&b->platform,&h->allowed,&b->operations,b)) return 0;
     b->initialized=1;return 1;
 }
+int a733_dma_startup_init(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
+    struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks)
+{return initialize(b,h,clock,registry,locks,0);}
+int a733_dma_startup_supervised_init(struct a733_dma_startup *b,const struct a733_dma_handoff *h,
+    struct a733_counter_clock *clock,struct a733_clock_leases *registry,struct a733_platform_locks *locks)
+{return initialize(b,h,clock,registry,locks,1);}
 int a733_dma_startup_bind_task(struct a733_dma_startup *b,TaskHandle_t task)
 {
     if(!b || !b->initialized || b->failed || b->task || !task || !privileged() ||

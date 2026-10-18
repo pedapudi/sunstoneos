@@ -10,6 +10,8 @@
 #define A733_DMA_HANDOFF_DRAINED         (1u<<3)
 #define A733_DMA_HANDOFF_IRQ_MASKED      (1u<<4)
 #define A733_DMA_HANDOFF_RECOVERY        (1u<<5)
+#define A733_DMA_HANDOFF_MANUAL_POWER_REMOVAL (1u<<6)
+#define A733_DMA_HANDOFF_SUPERVISED UINT32_C(0x5f)
 #define A733_DMA_HANDOFF_REQUIRED        UINT32_C(0x3f)
 /* Private boot-authority record. These assertions must refer to independently
  * established board evidence. Populating flags or an ID cannot establish MCU
@@ -32,7 +34,7 @@ struct a733_dma_startup {
     struct a733_clock_leases *registry;
     struct a733_platform_locks *locks;
     TaskHandle_t task;
-    unsigned initialized, failed, register_held;
+    unsigned initialized, failed, register_held, supervised;
 };
 /* Private EL1 storage, initialized before the scheduler. Copy the authenticated
  * boot record. Registry and shared locks must already use exactly
@@ -41,6 +43,11 @@ struct a733_dma_startup {
  * mappings; preserve their lifetimes. All pointers must identify disjoint objects.
  */
 int a733_dma_startup_init(struct a733_dma_startup *,const struct a733_dma_handoff *,
+    struct a733_counter_clock *,struct a733_clock_leases *,struct a733_platform_locks *);
+/* Separate supervised entry: quiet/drained/IRQ facts remain required; 0x5f
+ * replaces watchdog recovery with an externally owned manual power-removal
+ * session. No timeout authorizes reset, release, drain or buffer reuse. */
+int a733_dma_startup_supervised_init(struct a733_dma_startup *,const struct a733_dma_handoff *,
     struct a733_counter_clock *,struct a733_clock_leases *,struct a733_platform_locks *);
 /* Register the exact bootstrap task before scheduling starts, once. */
 int a733_dma_startup_bind_task(struct a733_dma_startup *,TaskHandle_t);

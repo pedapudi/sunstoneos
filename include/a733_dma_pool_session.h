@@ -34,6 +34,9 @@ struct a733_dma_pool_session {
     struct dma_service_job jobs[DMA_SERVICE_JOBS];
     struct a733_dma_segment segments[DMA_SERVICE_JOBS];
     struct a733_dma_mapping mappings[DMA_SERVICE_JOBS][2];
+    struct a733_dma_mapping stream_mappings[A733_I2S_STREAM_PERIODS];
+    unsigned periods,period_bytes;
+    enum a733_i2s_direction direction;
     unsigned count, copy_bytes, admitted;
     atomic_uint state;
     TaskHandle_t bootstrap;
@@ -46,8 +49,9 @@ struct a733_dma_pool_session {
  * outside the linker pool. The handoff is copied; other objects remain private
  * and immutable for platform lifetime. fatal_cookie, if present, refers to
  * private image state whose complete allocation stays outside the pool.
- * Real external exclusion, alias control, coherent caches and watchdog recovery
- * must already be established. This constructor cannot establish them.
+ * Real external exclusion, alias control, coherent caches and admitted recovery
+ * must already be established. The default entry requires watchdog recovery;
+ * the explicit supervised stream entry retains state for manual power removal. This constructor cannot establish them.
  * Creates the actual deferred worker and its only privileged bootstrap task.
  * Three pages per selected DMA0 channel: descriptors, source, destination.
  * Failure after acquisition retains the parent and prohibits another instance.
@@ -58,6 +62,17 @@ struct a733_dma_pool_session {
  */
 int a733_dma_pool_session_init(struct a733_dma_pool_session *,
                               const struct a733_dma_pool_config *);
+/* Fixed I2S0 consumer of the same native singleton and DMA worker. One selected
+ * DMA channel, 2..8 period pages plus one descriptor page. The profile/cookie
+ * must be protected image memory; direction admits only its exact FIFO route.
+ * Period payloads are whole frames, at most4096 bytes, 8-access aligned.
+ * Parent and every allocation remain DEVICE for the image lifetime. */
+int a733_dma_pool_session_stream_init(struct a733_dma_pool_session *,
+    const struct a733_dma_pool_config *,const struct dma_service_i2s_stream_profile *,
+    unsigned periods,unsigned period_bytes);
+int a733_dma_pool_session_stream_supervised_init(struct a733_dma_pool_session *,
+    const struct a733_dma_pool_config *,const struct dma_service_i2s_stream_profile *,
+    unsigned periods,unsigned period_bytes);
 /* Use with the private FreeRTOS port's task-privilege hook. Only the exact
  * bootstrap creation and existing service worker creation receive EL1t. */
 BaseType_t a733_dma_pool_task_privileged(TaskFunction_t, void *);

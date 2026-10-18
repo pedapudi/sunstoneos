@@ -1,5 +1,6 @@
 #include "a733_dma_pool_session.h"
 #include "aarch64_device_memory.h"
+#include "a733_i2s_platform.h"
 
 _Static_assert(A733_DMA_CHANNELS<=DMA_SERVICE_JOBS,"one job per selected channel");
 
@@ -45,14 +46,24 @@ static int parent(const struct a733_dma_pool_session *s)
     return r->owner==owned_record.owner && r->generation==owned_record.generation &&
         r->first==owned_record.first && r->pages==owned_record.pages &&
         r->state==DEVICE_MEMORY_DEVICE && s->count && s->count<=DMA_SERVICE_JOBS &&
-        owned_extent.bytes==(size_t)s->count*3*DEVICE_MEMORY_PAGE;
+        owned_extent.bytes==(size_t)(s->periods?s->periods+1:s->count*3)*DEVICE_MEMORY_PAGE &&
+        (!s->periods || (s->count==1 && s->periods>=2 && s->periods<=A733_I2S_STREAM_PERIODS));
 }
 static int exact_mapping(struct a733_dma_pool_session *s,const struct a733_dma_mapping *m)
 {
-    if(!parent(s) || !m || m->bytes!=DEVICE_MEMORY_PAGE ||
-       (unsigned)m->access>A733_DMA_DESCRIPTORS || (uintptr_t)m->cpu<owned_extent.cpu) return 0;
+    if(!parent(s) || !m || (unsigned)m->access>A733_DMA_DESCRIPTORS ||
+       (uintptr_t)m->cpu<owned_extent.cpu) return 0;
     size_t off=(uintptr_t)m->cpu-owned_extent.cpu;
-    if(off>=owned_extent.bytes || off%DEVICE_MEMORY_PAGE ||
+    if(s->periods){
+        if(off>=owned_extent.bytes || m->bus!=owned_extent.physical+off)return 0;
+        if(m->access==A733_DMA_DESCRIPTORS){
+            if(!((off==0 && m->bytes==4096) ||
+                 (off%64==0 && off/64<s->periods && m->bytes==64)))return 0;
+        }else if(off<4096 || off%4096 || m->bytes!=4096 ||
+                 m->access!=(s->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ))return 0;
+        return a733_dma_native_operations.validate_mapping(&s->native,m);
+    }
+    if(m->bytes!=DEVICE_MEMORY_PAGE || off>=owned_extent.bytes || off%DEVICE_MEMORY_PAGE ||
        m->bus!=owned_extent.physical+off) return 0;
     unsigned bank=(unsigned)(off/DEVICE_MEMORY_PAGE)/s->count;
     enum a733_dma_access role=bank==0 ? A733_DMA_DESCRIPTORS : bank==1 ? A733_DMA_READ : A733_DMA_WRITE;
@@ -81,9 +92,11 @@ static void write_reg(void *cookie,uintptr_t address,uint32_t value)
 static void cache(void *cookie,enum a733_dma_cache operation,void *cpu,size_t bytes)
 {
     struct a733_dma_pool_session *s=cookie;worker_owner(s);
-    if((uintptr_t)cpu<owned_extent.cpu || bytes!=DEVICE_MEMORY_PAGE) fail(s);
+    if((uintptr_t)cpu<owned_extent.cpu) fail(s);
     size_t off=(uintptr_t)cpu-owned_extent.cpu;
-    if(off>=owned_extent.bytes || off%DEVICE_MEMORY_PAGE) fail(s);
+    int page=bytes==4096 && off%4096==0;
+    int descriptor=s->periods && bytes==64 && off%64==0 && off/64<s->periods;
+    if(off>=owned_extent.bytes || (!page&&!descriptor) || bytes>owned_extent.bytes-off) fail(s);
     a733_dma_native_operations.cache(&s->native,operation,cpu,bytes);
 }
 static void barrier(void *cookie)
@@ -97,7 +110,12 @@ static int mapping(void *cookie,const struct a733_dma_mapping *m)
     return exact_mapping(cookie,m);
 }
 static int fifo(void *cookie,const struct a733_dma_endpoint *endpoint,enum a733_dma_access access)
-{ (void)cookie;(void)endpoint;(void)access;return 0; }
+{
+    struct a733_dma_pool_session *s=cookie;
+    if(!privileged() || !parent(s) || !s->periods)return 0;
+    if(xTaskGetSchedulerState()==taskSCHEDULER_RUNNING)worker_owner(s);
+    return a733_dma_native_operations.validate_fifo(&s->native,endpoint,access);
+}
 static const struct a733_dma_operations operations={read_reg,write_reg,cache,barrier,ticks,mapping,fifo};
 
 BaseType_t a733_dma_pool_task_privileged(TaskFunction_t entry,void *argument)
@@ -137,7 +155,8 @@ static void bootstrap(void *argument)
     }
     vTaskSuspend(NULL);fail(s);
 }
-int a733_dma_pool_session_init(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c)
+static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c,
+    const struct dma_service_i2s_stream_profile *stream,unsigned periods,unsigned period_bytes,unsigned supervised)
 {
     if(!privileged() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED || !s || !c ||
        instance || (uintptr_t)s%_Alignof(struct a733_dma_pool_session) ||
@@ -170,16 +189,56 @@ int a733_dma_pool_session_init(struct a733_dma_pool_session *s,const struct a733
     }
     if(!image((const void *)(uintptr_t)c->fatal,4,0) ||
        (c->fatal_cookie && !image(c->fatal_cookie,1,1)) ||
-       !a733_dma_startup_init(&s->startup,c->handoff,c->clock,c->registry,c->locks)) return 0;
+       !(supervised?a733_dma_startup_supervised_init(&s->startup,c->handoff,c->clock,c->registry,c->locks):
+         a733_dma_startup_init(&s->startup,c->handoff,c->clock,c->registry,c->locks))) return 0;
+    if(stream){
+        struct a733_i2s_plan plan;
+        uint16_t channels=c->handoff->service_channels;
+        if(!image(stream,sizeof(*stream),0) || !stream->stream.cookie ||
+           !image(stream->stream.cookie,sizeof(struct a733_i2s_platform),1) ||
+           periods<2 || periods>A733_I2S_STREAM_PERIODS || !period_bytes || period_bytes>4096 ||
+           !channels || (channels&(channels-1)) ||
+           !a733_i2s_plan(&stream->stream.format,&plan) || period_bytes%plan.frame_bytes ||
+           period_bytes%(plan.dma_width*8) ||
+           (unsigned)stream->stream.direction>A733_I2S_TRANSMIT)return 0;
+        s->periods=periods;s->period_bytes=period_bytes;s->direction=stream->stream.direction;
+    }
     for(unsigned ch=0;ch<A733_DMA_CHANNELS;++ch)
         if(c->handoff->service_channels&(1u<<ch)) ++s->count;
     s->copy_bytes=c->copy_bytes;
-    if(!device_memory_acquire(pool,c->handoff->allowed.owner,(size_t)s->count*3*4096,
+    if(!device_memory_acquire(pool,c->handoff->allowed.owner,(size_t)(periods?periods+1:s->count*3)*4096,
                               &s->lease,&s->extent)) return 0;
     instance=s;owned_pool=pool;owned_lease=s->lease;owned_extent=s->extent;
     s->pool=pool;s->admitted=1;
     struct device_memory_allocation *record=device_memory_lookup(pool,s->lease);
     record->state=DEVICE_MEMORY_DEVICE;owned_record=*record;
+    if(stream){
+        enum a733_dma_access role=s->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ;
+        unsigned width=stream->stream.format.container_bits/8;
+        uintptr_t port=s->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO;
+        struct dma_memory_window windows[]={
+            {s->extent.cpu,s->extent.physical,4096,DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)},
+            {s->extent.cpu+4096,s->extent.physical+4096,(size_t)periods*4096,DMA_MEMORY_ROLE(role)}};
+        struct dma_fifo_port fifo={port,A733_I2S0_DMA_REQUEST,1u<<width,1u<<8,
+            s->direction==A733_I2S_RECEIVE?A733_DMA_READ:A733_DMA_WRITE};
+        if(!a733_dma_native_init(&s->native,c->handoff->controller,c->handoff->controller,
+            windows,2,&fifo,1,c->fatal,c->fatal_cookie))goto failed;
+        unsigned channel=0;while(!(c->handoff->service_channels&(1u<<channel)))++channel;
+        for(unsigned i=0;i<periods;++i){
+            uintptr_t cpu=s->extent.cpu+(i+1)*4096;
+            uint64_t physical=s->extent.physical+(i+1)*4096;
+            s->stream_mappings[i]=(struct a733_dma_mapping){(void *)cpu,physical,4096,role};
+            struct a733_dma_endpoint ram={physical,0,width,8},device={port,3,width,8};
+            s->segments[i]=(struct a733_dma_segment){s->direction==A733_I2S_RECEIVE?device:ram,
+                s->direction==A733_I2S_RECEIVE?ram:device,period_bytes};
+            if(!exact_mapping(s,&s->stream_mappings[i]))goto failed;
+        }
+        s->jobs[0]=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=channel,.stream=stream,
+            .transfer={{(void *)s->extent.cpu,s->extent.physical,4096,A733_DMA_DESCRIPTORS},
+                       s->segments,periods,s->stream_mappings,periods}};
+        if(!exact_mapping(s,&s->jobs[0].transfer.descriptors) ||
+           !a733_i2s_stream_valid(&stream->stream,&s->jobs[0].transfer))goto failed;
+    }else{
     size_t bank=(size_t)s->count*4096;
     struct dma_memory_window windows[3];
     const enum a733_dma_access roles[]={A733_DMA_DESCRIPTORS,A733_DMA_READ,A733_DMA_WRITE};
@@ -203,6 +262,7 @@ int a733_dma_pool_session_init(struct a733_dma_pool_session *s,const struct a733
            !exact_mapping(s,&s->mappings[job][0]) || !exact_mapping(s,&s->mappings[job][1])) goto failed;
         ++job;
     }
+    }
     creating_bootstrap=1;
     s->bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"dma-boot",A733_DMA_POOL_BOOT_STACK,s,
         c->priority,s->bootstrap_stack,&s->bootstrap_state,c->affinity);
@@ -224,3 +284,12 @@ failed:
     atomic_store_explicit(&s->state,A733_DMA_POOL_FAILED,memory_order_release);
     return 0;
 }
+
+int a733_dma_pool_session_init(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c)
+{return initialize(s,c,NULL,0,0,0);}
+int a733_dma_pool_session_stream_init(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c,
+    const struct dma_service_i2s_stream_profile *profile,unsigned periods,unsigned bytes)
+{return profile?initialize(s,c,profile,periods,bytes,0):0;}
+int a733_dma_pool_session_stream_supervised_init(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c,
+    const struct dma_service_i2s_stream_profile *profile,unsigned periods,unsigned bytes)
+{return profile?initialize(s,c,profile,periods,bytes,1):0;}

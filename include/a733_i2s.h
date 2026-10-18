@@ -47,7 +47,10 @@ enum a733_i2s_resource_result {
  * Callbacks are bounded, ordered and non-reentrant. READY acquire guarantees
  * leased pins, stable exact clocks and a fresh reset I2S0. release requires
  * producer/DMA quiescence. Parent clock leases can outlive this local capture.
- * Hardware watchdog protection remains mandatory for native access. */
+ * Native access requires actual IRQ/clock/producer ownership and admitted
+ * recovery: qualified watchdog or explicit supervised manual power removal.
+ * Supervision retains every uncertain DMA allocation; timeout or reconnection
+ * does not establish drain or authorize reuse. */
 struct a733_i2s_operations {
     enum a733_i2s_resource_result (*acquire)(void *, const struct a733_i2s_plan *, uint64_t);
     enum a733_i2s_resource_result (*acquire_poll)(void *, uint64_t);

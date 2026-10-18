@@ -20,7 +20,9 @@ struct a733_dma_native {
 /* Zero-initialize once. MMIO window is exactly 0x2000 bytes. Initialization
  * inspects CPU translation/cache state but does not read device registers.
  * fatal must not return; invalid callback use traps if it does return.
- * The caller must establish independent watchdog recovery before physical use.
+ * Physical use requires admitted recovery: qualified independent watchdog or
+ * an explicitly supervised session retaining all state until manual power removal.
+ * A supervisor deadline never establishes DMA drain or permits buffer reuse.
  */
 int a733_dma_native_init(struct a733_dma_native *, uintptr_t register_cpu,
                          uint64_t register_physical, const struct dma_memory_window *, size_t,
