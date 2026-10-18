@@ -53,7 +53,13 @@ struct a733_ce_ops {
      * For TRNG capability: immutable characterized health profile bound to this silicon, RC16M,
      * supplies and the double-entropy-source mode enabled here; native secure-read permissions and, for configure_health, secure-write
      * authority while both tests are disabled; stable AHB/NSI/MBUS paths; both
-     * GIC routes owned/masked; qualified recovery. This provides authority, not
+     * GIC routes owned/masked; qualified recovery. A supervised RAM-only image
+     * may bind confirmed whole-board power removal as terminal recovery while
+     * retaining the DEVICE page, descriptors, keys and all authority forever
+     * on uncertainty. Manual removal supplies no live drain or reuse proof;
+     * initial DMA drain, mappings, exclusion and entropy qualification remain
+     * mandatory. A CPU/interconnect stall can prevent software deadlines.
+     * This provides authority, not
      * measured entropy or substitute register observations.
      * Memory must be private normal RAM, mapped to the specified CE physical
      * addresses without IOMMU inference. SHA or AES capability requires the complete

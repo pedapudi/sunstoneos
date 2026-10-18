@@ -3,8 +3,25 @@
 #include <stdint.h>
 #include <stddef.h>
 #define A733_BOARD_SESSION_ADDRESS UINT64_C(0x41f00000)
+#define A733_BOARD_SUPERVISED_SESSION_MAGIC UINT64_C(0x4153373342535332)
+#define A733_BOARD_SUPERVISED_CONTRACT_MAGIC UINT64_C(0x4153373342534332)
+#define A733_BOARD_SUPERVISED_RESULT_MAGIC UINT64_C(0x4153373342535232)
+#ifdef SUNSTONE_BOARD_SUPERVISED
+#define A733_BOARD_SESSION_MAGIC A733_BOARD_SUPERVISED_SESSION_MAGIC
+#define A733_BOARD_CONTRACT_MAGIC A733_BOARD_SUPERVISED_CONTRACT_MAGIC
+#define A733_BOARD_SESSION_VERSION 2u
+#define A733_BOARD_CONTRACT_VERSION 2u
+#else
 #define A733_BOARD_SESSION_MAGIC UINT64_C(0x41533733424f4131)
 #define A733_BOARD_CONTRACT_MAGIC UINT64_C(0x41533733424f4331)
+#define A733_BOARD_SESSION_VERSION 1u
+#define A733_BOARD_CONTRACT_VERSION 1u
+#endif
+#define A733_BOARD_SUPERVISED_SECONDS 60u
+/* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
+ * odd selections include radio. This is a fixed staged application choice. */
+static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}
+static inline int a733_board_host_workload(unsigned workload){return workload<2;}
 /* Immutable little-endian image-owned input. No pointer or storage grant is
  * accepted. Evidence hashes identify externally qualified, reviewed facts;
  * producing this record does not itself establish those facts. */
@@ -13,7 +30,9 @@ struct a733_board_session {
     uint8_t image[32],qualification[32];
     uint64_t minimum_reload_us,maximum_recovery_us,guard_us,reset_by_us;
     uint32_t rtc_control,rtc_divider,rtc_source,reserved0;
-    uint64_t deadline_us,reload_before_ticks,reload_after_ticks;
+    uint64_t deadline_us;
+    union {uint64_t reload_before_ticks;uint64_t session_start_ticks;};
+    uint64_t reload_after_ticks;
     uint64_t topology,cold_master,memory_authority,recovery_authority;
     uint8_t wiring[32],memory[32],recovery[32];
     uint64_t sid_authority;

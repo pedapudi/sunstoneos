@@ -135,3 +135,94 @@ artifacts, generated sources and actual dependency records are preserved in
 `central-snapshot/` beside the original batch; `central-integration.json`
 identifies the image and reused external inputs. The original focused runtime
 checks were not repeated.
+
+## Supervised RAM-only entry
+
+`SUNSTONE_BOARD_SUPERVISED=ON` selects the same complete board application with
+an explicitly different supervised contract. It reuses the cached all-core
+foundation's supervised boot patch. The watchdog and reset redirects must be
+disabled. The image neither admits an armed timer nor reloads one. The original
+armed build remains the default and rejects supervised sessions.
+
+Supervised selections zero and one retain the complete USB2 host path, with
+selection one also starting radio. Selection two starts shared providers and
+USB0 only; selection three adds radio to that path. The last two selections
+construct no Type-C source or USB2 host and require no powered TYPEC24 accessory.
+The full host path remains a separate required function. Its qualified source,
+switch, comparator, attachment and accessory cutoff requirements still apply.
+USB0 reports state three for a disabled host and never implies a sector result.
+
+The supervised session remains 592 bytes at `0x41f00000`, with magic
+`0x4153373342535332` and version two. All uploaded timer, RTC, timestamp and
+deadline fields are zero. The separate 224-byte contract uses magic
+`0x4153373342534332` and version two. Its last six words bind the session address,
+size and complete SHA256. The SRAM launcher derives session start from the real
+counter, allows one second for startup and sets a sixty-second terminal bound.
+This initial bound accommodates the known firmware transfer minimum; it is not
+a measured claim that radio startup will finish within it. EL1 preserves the
+immutable admitted session and derives a private lifetime from cached startup.
+
+The source-owned PIO USB0 and radio providers may retain all authority until
+confirmed removal of every board power source. The CE session similarly keeps
+its DEVICE page, descriptor and data backing after uncertainty. No uncertain
+path releases memory, resets the engine or grants a new lifetime. Copied-output
+admission closes before metadata retention. Manual power removal supplies no
+live DMA-drain proof. Initial quiescence, prior CE DMA drain, private mappings,
+cache-line ownership, remote/secure-master exclusion, masked IRQs and actual
+entropy characterization/startup for the admitted silicon and health epoch
+remain prerequisites.
+
+CPU-scheduled Type-C service and GPIO cutoff continue independently of a failed
+host worker. CPU or interconnect stalls can prevent software deadlines and GPIO
+access. The recovery plan must account for every board and accessory power
+source; software cannot claim autonomous VBUS cutoff after such a stall. The
+image retains resources while stopped. Reconnection begins a new session only
+after confirmed power removal and fresh initialization, preserving the microSD.
+
+`apps/board/prepare.py` performs offline preparation and exposes
+`validate_bundle(bundle)` for the root-owned live tool. It requires a reviewed
+`a733-board-supervised-entry-v2` record and a binary session template; it supplies
+no physical defaults. Inputs are snapshotted once for parsing, hashing and
+copying. The bundle seals its image, manifest, session, optional radio profile,
+firmware and evidence snapshots. Ordinary DDR admission covers
+`0x41000000..0x42200000`; radio additionally requires a reviewed
+`0x43000000..0x43100000` reservation. No radio asset is uploaded outside those
+reviewed ranges. Preparation does not open a device. `observe.py` validates
+captured bytes; live transport and device ownership belong to the coordinator.
+
+The supervised descriptor uses PID `0xefe8`, device revision `0x0100`, product
+`sunstoneos native board` and serial `sunstoneos-a733-board`. The root tool must
+require these complete descriptors on the admitted port. A one-byte zero request
+returns the existing 72-byte header and optional copied sector. Fresh epoch,
+generation and lease identify each prepared session; the response binds epoch,
+generation and the profile hash. There is no separate challenge field.
+
+Supervised radio input uses profile version two with the same 1856-byte layout.
+Uploaded platform/CE handoffs and absolute deadline fields must be zero. After
+validating the raw session/profile hash, boot copies the profile into private
+lifetime storage. It derives handoffs from the admitted generation, a forty-second
+bootstrap bound, a fifty-second startup bound, and a client lifetime ending ten
+milliseconds before the sixty-second session deadline. The private copy uses the
+existing native constructor version and its own computed digest. Physical
+qualification, chip identity, health epoch, firmware spans and peer data remain
+unchanged. USB output identifies the original reviewed raw-profile digest.
+
+The coordinator's live command is `tools/check-a733-board-supervised.py` with
+`--bundle`, `--fel`, `--evidence`, `--database`, `--claim`, `--owner` and
+`--supervised-manual-reconnect`. Its bounded capture remains separate from offline
+preparation and file decoding. Native frame receipt establishes only the
+selected operation: selection two reports USB0/provider service; selection three
+also requires the verified TCP response; selections zero and one require the
+copied sector. Independent watchdog behavior is not part of this experiment.
+
+The software-only supervised checkpoint is retained under
+`~/.cache/sunstoneos/evidence/board-supervised-20261017/batch1/`. The complete
+native image built successfully with SHA256
+`9cd129422d349a0a3d6738aea265211a304371122ddc6431592f2f949d1438fc`.
+Focused checks passed for immutable admission, the sixty-second SRAM handoff,
+exact firmware upload spans, private radio-profile derivation, selected task
+construction, terminal software cutoff and radio metadata retention. ELF checks
+confirmed the permitted USB descriptor and absence of hardware-watchdog admit
+and reload symbols. Constructor boundaries in startup checks were modeled;
+physical provider admission remains untested. Existing armed,
+provider, protocol and scheduler evidence was reused. No board was accessed.

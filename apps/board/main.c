@@ -8,7 +8,13 @@
 struct board_application board;
 struct board_provider providers;
 static struct board_radio radio;
+#ifdef SUNSTONE_BOARD_SUPERVISED
+static struct board_radio_profile runtime_profile;
+static uint8_t runtime_profile_digest[32];
+#endif
+#ifndef SUNSTONE_BOARD_SUPERVISED
 static uint64_t seen_progress;
+#endif
 static uint64_t service_deadline(void)
 {return atomic_load_explicit(&board.live_until,memory_order_acquire)-10000;}
 int board_live(void *unused)
@@ -98,6 +104,7 @@ static void radio_client(void *unused)
         vTaskDelay(1);
     }
 }
+#ifndef SUNSTONE_BOARD_SUPERVISED
 static void supervise(void *unused)
 {
     (void)unused;for(;;){
@@ -128,6 +135,20 @@ static void supervise(void *unused)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
+#else
+static void supervise(void *unused)
+{
+    (void)unused;for(;;){
+        /* Software observation only. A stopped CPU/interconnect can prevent
+         * this task; confirmed whole-board power removal owns recovery. */
+        if(!board_live(NULL)){
+            board_fail(NULL);
+            if(a733_board_host_workload(board.session.workload))a733_typec_revoke(&board.typec.provider);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+#endif
 static const struct board_radio_profile *radio_profile(void)
 {
     const struct a733_board_session *s=&board.session;
@@ -138,13 +159,21 @@ static const struct board_radio_profile *radio_profile(void)
     }
     const struct board_radio_profile *p=(const void *)(uintptr_t)s->radio_profile_address;
     uint8_t hash[32];storage_digest_bytes(p,sizeof(*p),hash);
-    if(memcmp(hash,s->radio_profile_digest,32)||p->platform.handoff!=s->generation||
+    if(memcmp(hash,s->radio_profile_digest,32))return NULL;
+#ifdef SUNSTONE_BOARD_SUPERVISED
+    if(!board_radio_profile_runtime(&runtime_profile,p,s,runtime_profile_digest))return NULL;
+    p=&runtime_profile;
+#endif
+    if(p->platform.handoff!=s->generation||
        p->platform.topology.identity!=s->topology||p->platform.lifetime_deadline_us>s->deadline_us-10000||
        p->ce.handoff!=s->generation||memcmp(p->platform.fabric,s->fabric,sizeof(s->fabric))||
        memcmp(p->platform.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz))||
        memcmp(p->ce.fabric,s->fabric,sizeof(s->fabric))||memcmp(p->ce.fabric_hz,s->fabric_hz,sizeof(s->fabric_hz)))return NULL;
     uint64_t owners[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner,p->platform.owner,p->ce.owner};
-    for(unsigned i=0;i<6;++i){if(!owners[i])return NULL;for(unsigned j=0;j<i;++j)if(owners[i]==owners[j])return NULL;}
+    for(unsigned i=0;i<6;++i){
+        if(!owners[i]){if(i==2||i==3){if(!a733_board_host_workload(s->workload))continue;}return NULL;}
+        for(unsigned j=0;j<i;++j)if(owners[i]==owners[j])return NULL;
+    }
     const struct board_radio_chip_id *id=board_radio_chip_id();
     if(!id||id->secure_read_record!=s->sid_authority)return NULL;
     return p;
@@ -155,7 +184,13 @@ static int host_admit(void *context,const struct a733_usb2_platform_config *c)
 {
     struct board_application *b=context;
     return b==&board&&board_live(NULL)&&!memcmp(c,&b->host_config,sizeof(*c))&&
-        a733_board_session_valid(&b->session,a733_smp_counter())?1:-1;
+        a733_board_session_valid(
+#ifdef SUNSTONE_BOARD_SUPERVISED
+            &b->admitted_session,
+#else
+            &b->session,
+#endif
+            a733_smp_counter())?1:-1;
 }
 void a733_smp_diagnostic_start(void)
 {
@@ -164,9 +199,20 @@ void a733_smp_diagnostic_start(void)
     for(unsigned i=0;i<sizeof(board.session);++i)((uint8_t *)&board.session)[i]=source[i];
     if(!a733_board_session_valid(&board.session,a733_smp_counter())||
        board.session.epoch!=a733_cached_runtime[0].epoch||
-       board.session.deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline)platform_panic("board session",2);
+#ifndef SUNSTONE_BOARD_SUPERVISED
+       board.session.deadline_us*24!=a733_cached_runtime[0].diagnostic_deadline
+#else
+       a733_cached_runtime[0].startup_deadline<A733_SMP_COUNTER_HZ
+#endif
+       )platform_panic("board session",2);
+#ifdef SUNSTONE_BOARD_SUPERVISED
+    board.admitted_session=board.session;
+    board.session.session_start_ticks=a733_cached_runtime[0].startup_deadline-A733_SMP_COUNTER_HZ;
+    board.session.deadline_us=a733_cached_runtime[0].diagnostic_deadline/24;
+#endif
     struct a733_board_session *s=&board.session;
-    atomic_init(&board.radio_result,s->workload?1:0);
+    atomic_init(&board.radio_result,a733_board_radio_workload(s->workload)?1:0);
+#ifndef SUNSTONE_BOARD_SUPERVISED
     board.window=(struct a733_watchdog_window){s->deadline_us,s->guard_us,s->rtc_control,s->rtc_divider,s->rtc_source};
     atomic_init(&board.watchdog_state,1);
     uint64_t initial=s->reload_before_ticks/24+s->minimum_reload_us-s->guard_us-1000;
@@ -175,12 +221,18 @@ void a733_smp_diagnostic_start(void)
     if(!a733_watchdog_hw_admit(&board.window))platform_panic("board watchdog",3);
     /* USB-only admission uses one fixed arm window. Radio renewals require
      * completed nonempty transfers under fixed operation/session deadlines. */
+#else
+    atomic_init(&board.watchdog_state,1);
+    atomic_init(&board.live_until,s->deadline_us);
+    atomic_init(&board.result,a733_board_host_workload(s->workload)?0:3);
+#endif
     struct a733_native_usb_config b={.identity=s->generation};
     b.pmic.owner=s->pmic_owner;b.pmic.identity=s->generation;b.pmic.startup_deadline=s->deadline_us;
     for(unsigned i=0;i<2;++i)b.pmic.pins[i]=(struct a733_pin_config){s->pmic_pins[i][0],s->pmic_pins[i][1],s->pmic_pins[i][2]};
-    b.pins.authorized[A733_PIN_L]=UINT32_C(3)|(UINT32_C(1)<<8)|(UINT32_C(1)<<9)|(UINT32_C(1)<<12)|(UINT32_C(1)<<13);
+    b.pins.authorized[A733_PIN_L]=UINT32_C(3);
+    if(a733_board_host_workload(s->workload))b.pins.authorized[A733_PIN_L]|=(UINT32_C(1)<<8)|(UINT32_C(1)<<9)|(UINT32_C(1)<<12)|(UINT32_C(1)<<13);
     b.pins.latch[0]=(struct a733_pin_latch_handoff){s->latch_identity,s->latch_owner,s->latch_known_mask,s->latch_value};
-    if(s->workload){
+    if(a733_board_radio_workload(s->workload)){
         b.pins.authorized[A733_PIN_G]=0x3f;b.pins.authorized[A733_PIN_M]=3;
         b.pins.latch[1]=(struct a733_pin_latch_handoff){s->latch_m_identity,s->latch_m_owner,s->latch_m_known_mask,s->latch_m_value};
     }
@@ -190,11 +242,18 @@ void a733_smp_diagnostic_start(void)
     if(!a733_native_usb_init(&providers.shared,&b,board_live,board_fail,NULL))platform_panic("board shared providers",4);
     TaskFunction_t functions[]={pmic,board_usb0_task,typec,power,board_host_task,radio_owner,radio_client,supervise};
     const char *names[]={"board-pmic","board-usb0","board-typec","board-power","board-usb2","board-radio","board-net","board-watchdog"};
-    for(unsigned i=0;i<(s->workload?8u:5u);++i){
+    for(unsigned i=0;i<8;++i){
+        if(i>=2&&i<=4&&!a733_board_host_workload(s->workload))continue;
+        if(i>=5&&!a733_board_radio_workload(s->workload)
+#ifdef SUNSTONE_BOARD_SUPERVISED
+           &&i!=7
+#endif
+           )continue;
         board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
         if(!board.handles[i])platform_panic("board tasks",5);
     }
     if(!a733_native_usb_bind(&providers.shared,board.handles[0],board.handles[1]))platform_panic("board bind",6);
+    if(a733_board_host_workload(s->workload)){
     struct a733_typec_native_config tc={.clocks=&providers.shared.clocks,.pins=&providers.shared.pins,
         .rails=&providers.shared.rails,.pmic=&providers.shared.pmic,.locks=&providers.shared.locks,
         .provider_task=board.handles[2],.power_task=board.handles[3]};
@@ -213,10 +272,17 @@ void a733_smp_diagnostic_start(void)
     if(!pool||!a733_usb2_native_init(&board.host,hc,&providers.shared.locks,board.handles[4],pool,
        &providers.shared.clocks,&providers.shared.rails,&providers.shared.pmic,&providers.shared.gpu,
        &board.typec.provider,host_admit,&board))platform_panic("board usb2",8);
-    if(s->workload){
+    }
+    if(a733_board_radio_workload(s->workload)){
         const struct board_radio_profile *profile=radio_profile();
         if(!profile||!board_radio_startup(&radio,&providers.shared,&providers.ce,&providers,sizeof(providers),
-           profile,s->radio_profile_digest,board_radio_chip_id(),board.handles[5],board.handles[6],&board.watchdog_state))
+           profile,
+#ifdef SUNSTONE_BOARD_SUPERVISED
+           runtime_profile_digest,
+#else
+           s->radio_profile_digest,
+#endif
+           board_radio_chip_id(),board.handles[5],board.handles[6],&board.watchdog_state))
             platform_panic("board radio",9);
     }
     vTaskStartScheduler();platform_panic("board scheduler returned",9);

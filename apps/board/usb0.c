@@ -4,6 +4,11 @@
 #include "tusb.h"
 #include "device/dcd.h"
 #include <string.h>
+#ifdef SUNSTONE_BOARD_SUPERVISED
+#define BOARD_USB0_PID 0xefe8
+#else
+#define BOARD_USB0_PID 0xefea
+#endif
 static unsigned polling;
 static _Noreturn void stop(void){for(;;)vTaskDelay(1);}
 void a733_usb_prepare(void)
@@ -15,7 +20,7 @@ void a733_usb_assert(void){stop();}
 uint32_t tusb_time_millis_api(void){return (uint32_t)(a733_smp_counter()/24000);}
 void tusb_time_delay_ms_api(uint32_t ms){if(ms>150||!board_live(NULL))stop();vTaskDelay(pdMS_TO_TICKS(ms));}
 static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,
-    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefea,.bcdDevice=0x0100,
+    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=BOARD_USB0_PID,.bcdDevice=0x0100,
     .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
 static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
 static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
@@ -54,7 +59,7 @@ static void exchange(void)
     unsigned result=atomic_load_explicit(&board.result,memory_order_acquire);
     put32(response,0x52414f42);put32(response+4,1);put32(response+8,result);put32(response+12,result==1?512:0);
     unsigned radio=atomic_load_explicit(&board.radio_result,memory_order_acquire);
-    if(board.session.workload&&(atomic_load_explicit(&board.watchdog_state,memory_order_acquire)&4))radio=3;
+    if(a733_board_radio_workload(board.session.workload)&&(atomic_load_explicit(&board.watchdog_state,memory_order_acquire)&4))radio=3;
     put32(response+16,radio);
     put32(response+20,radio==2?atomic_load_explicit(&board.radio_bytes,memory_order_acquire):0);
     put32(response+24,(uint32_t)board.session.epoch);put32(response+28,(uint32_t)(board.session.epoch>>32));

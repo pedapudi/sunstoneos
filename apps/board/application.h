@@ -11,8 +11,23 @@ _Static_assert(offsetof(struct a733_board_session,radio_profile_digest)==368,"ob
 _Static_assert(offsetof(struct a733_board_session,workload)==400,"observer workload");
 _Static_assert(offsetof(struct board_radio_profile,response_bytes)==sizeof(struct board_radio_profile)-520,
     "observer response extent");
+_Static_assert(sizeof(struct board_radio_profile)==1856 &&
+    offsetof(struct board_radio_profile,firmware_address)==432 &&
+    offsetof(struct board_radio_profile,firmware_bytes)==464,"offline profile wire geometry");
+_Static_assert(offsetof(struct board_radio_profile,platform)==184 &&
+    offsetof(struct a733_radio_platform_config,handoff)==8 &&
+    offsetof(struct a733_radio_platform_config,deadline_us)==16 &&
+    offsetof(struct a733_radio_platform_config,lifetime_deadline_us)==24 &&
+    offsetof(struct board_radio_profile,ce)==336 && offsetof(struct a733_ce_config,handoff)==8 &&
+    offsetof(struct a733_ce_config,deadline_us)==24 &&
+    offsetof(struct board_radio_profile,bootstrap_deadline_us)==1232 &&
+    offsetof(struct board_radio_profile,startup_deadline_us)==1288 &&
+    offsetof(struct board_radio_profile,client_deadline_us)==1320,"offline relative-profile fields");
 struct board_application {
     struct a733_board_session session;
+#ifdef SUNSTONE_BOARD_SUPERVISED
+    struct a733_board_session admitted_session;
+#endif
     struct a733_typec_native typec;
     struct a733_usb2_native host;
     struct a733_usb2_platform_config host_config;
@@ -28,6 +43,11 @@ struct board_provider {
     struct a733_native_usb shared;
     struct board_radio_ce_provider ce;
 };
+#ifdef SUNSTONE_BOARD_SUPERVISED
+/* Outputs are private, mutually disjoint and separate from immutable inputs. */
+int board_radio_profile_runtime(struct board_radio_profile *,const struct board_radio_profile *,
+    const struct a733_board_session *,uint8_t[32]);
+#endif
 extern struct board_application board;
 extern struct board_provider providers;
 int board_live(void *);

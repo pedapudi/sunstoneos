@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--tcp', type=Path, required=True)
     parser.add_argument('--rsn', type=Path, required=True)
     parser.add_argument('--headers', type=Path, required=True)
+    parser.add_argument('--supervised', action='store_true')
     parser.add_argument('--resume', action='store_true')
     a = parser.parse_args()
     out = a.output.resolve()
@@ -83,7 +84,7 @@ def main():
     run('configure',['cmake','-S',source/'apps/board','-B',build,f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',
         f'-DFREERTOS_DIR={out}/dependencies/freertos',f'-DTINYUSB_DIR={out}/dependencies/tinyusb',
         f'-DSUNSTONE_TCP_DIR={out}/dependencies/tcp',f'-DSUNSTONE_RSN_DIR={out}/dependencies/{a.rsn.name}',
-        f'-DSUNSTONE_NETWORK_C_HEADERS={out}/dependencies/headers','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'])
+        f'-DSUNSTONE_NETWORK_C_HEADERS={out}/dependencies/headers','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',f'-DSUNSTONE_BOARD_SUPERVISED={"ON" if a.supervised else "OFF"}'])
     run('build',['cmake','--build',build,'--target','sunstone-a733-board','-j4'])
     image = build/'sunstone-a733-board.elf'
     dependencies = {}
@@ -116,6 +117,17 @@ def main():
         else:
             cleaned.append(flags[index]);index += 1
     flags = cleaned
+    if a.supervised:
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('board_supervised_check',source/'checks/board-supervised.py')
+        check=importlib.util.module_from_spec(spec);spec.loader.exec_module(check)
+        result=check.run(image,out,source,compiler,run,steps,steps_path)
+        (out/'image-manifest.json').write_text(json.dumps({'target':'sunstone-a733-board',
+            'execution_profile':'board-supervised-v2','final_elf':sha(image),
+            'build_id':(build/'board-application/build-id.txt').read_text().strip(),
+            'compiled_dependencies':dependencies},indent=2)+'\n')
+        (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+        print(json.dumps(result,indent=2));return
     fixture = out/'client.elf'
     run('client-build',flags+[source/'apps/board/client.c',source/'checks/board-application.c',
         source/'runtime/memory.c','-nostdlib',f'-fuse-ld={linker}','-Wl,-Ttext=0x41000000',

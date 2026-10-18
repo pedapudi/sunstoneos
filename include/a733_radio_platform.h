@@ -32,6 +32,10 @@ enum a733_radio_platform_result { A733_RADIO_PENDING, A733_RADIO_BUSY,
  * remote firmware, GIC handlers and all independent module reset/power writers.
  * It proves source-supported quiescence, Device mappings, retained pin-latch
  * authority, stable inherited PM2/LPO behavior and independent recovery.
+ * Supervised RAM-only PIO operation may use confirmed whole-board power removal
+ * as terminal recovery while retaining card, pins, clocks, buffers and all
+ * borrowers. No retry/reuse or live drain follows uncertainty. This does not
+ * relax any attached CE DMA/entropy or other powered-accessory requirement.
  * It does not replace actual clock/pin/rail observations and ownership. */
 struct a733_radio_platform_ops {
     int (*now_us)(void *,uint64_t *);

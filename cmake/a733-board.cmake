@@ -16,6 +16,7 @@ if(NOT board_tcp_verify EQUAL 0)
   message(FATAL_ERROR "Native board TCP source authentication failed")
 endif()
 include("${SUNSTONE_SOURCE_ROOT}/cmake/radio-security.cmake")
+option(SUNSTONE_BOARD_SUPERVISED "Retained RAM-only board session with manual power-removal recovery" OFF)
 set(board_root "${SUNSTONE_SOURCE_ROOT}")
 set(board_build "${CMAKE_CURRENT_BINARY_DIR}/board-application")
 file(MAKE_DIRECTORY "${board_build}")
@@ -32,9 +33,15 @@ endforeach()
 list(REMOVE_ITEM board_sources "${storage_build}/boot.c" "${storage_build}/build-id.c")
 apply_build_patch("${board_build}/boot.c" "${board_root}/platform/a733-smp-cached/boot.c"
   "${board_root}/apps/board/boot.patch")
-list(APPEND board_sources "${board_build}/boot.c")
+if(SUNSTONE_BOARD_SUPERVISED)
+  apply_build_patch("${board_build}/boot-supervised.c" "${board_build}/boot.c"
+    "${board_root}/platform/a733-smp-supervised/boot.patch")
+  list(APPEND board_sources "${board_build}/boot-supervised.c")
+else()
+  list(APPEND board_sources "${board_build}/boot.c")
+endif()
 foreach(source IN ITEMS
-  apps/board/main.c apps/board/admission.c apps/board/client.c apps/board/usb0.c apps/board/identity.c
+  apps/board/main.c apps/board/radio_profile.c apps/board/admission.c apps/board/client.c apps/board/usb0.c apps/board/identity.c
   drivers/usb/a733_typec.c platform/a733/typec_native.c drivers/i2c/a733_twi.c drivers/i2c/a733_twi_native.c
   drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c
   platform/a733/memory_uncached.c platform/a733/memory_reservations.c runtime/device_memory_pool.c
@@ -80,7 +87,7 @@ set(board_inputs ${board_all_sources} ${board_external_headers} ${board_host_sou
 file(GLOB board_headers "${board_root}/apps/board/*.h")
 list(APPEND board_inputs ${board_headers})
 list(REMOVE_DUPLICATES board_inputs)
-set(board_identity "native-board-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;USB0-device;USB2-host;NC;fixed-watchdog-window")
+set(board_identity "native-board-1;${SUNSTONE_BOARD_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;USB0-device;USB2-host;NC;fixed-watchdog-window")
 foreach(input IN LISTS board_inputs)
   file(SHA256 "${input}" board_digest)
   string(APPEND board_identity "${board_digest}")
@@ -97,9 +104,17 @@ target_include_directories(sunstone-a733-board BEFORE PRIVATE "${board_root}/app
   "${board_root}/platform/a733-storage-update" "${board_root}/platform/a733-smp-cached"
   "${board_root}/drivers/usb" "${TINYUSB_DIR}/src" "${board_root}/include"
   "${board_root}/runtime/include" "${FREERTOS_DIR}/include" "${storage_base}")
+if(SUNSTONE_BOARD_SUPERVISED)
+  target_compile_definitions(sunstone-a733-board PRIVATE SUNSTONE_BOARD_SUPERVISED=1)
+  set(board_contract_magic 0x4153373342534332ULL)
+  set(board_result_magic 0x4153373342535232ULL)
+else()
+  set(board_contract_magic 0x41533733424f4331ULL)
+  set(board_result_magic 0x41533733424f5231ULL)
+endif()
 target_compile_definitions(sunstone-a733-board PRIVATE SUNSTONE_SECURE_MONITOR=1
   SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_USB=1
-  A733_SMP_CONTRACT_MAGIC=0x41533733424f4331ULL A733_SMP_RESULT_MAGIC=0x41533733424f5231ULL)
+  A733_SMP_CONTRACT_MAGIC=${board_contract_magic} A733_SMP_RESULT_MAGIC=${board_result_magic})
 target_link_options(sunstone-a733-board PRIVATE -nostdlib -static -Wl,--gc-sections
   -Wl,--defsym=__uncached_pool_size=2097152 -Wl,--defsym=__device_pool_size=2097152 "-Wl,-T,${storage_build}/link.ld"
   "-Wl,-Map,${board_build}/image.map")

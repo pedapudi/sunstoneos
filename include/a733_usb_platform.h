@@ -22,6 +22,12 @@ struct a733_usb_platform_ops {
      * pending interrupt and no ISR executing or retaining controller access.
      * The same authority establishes
      * independent recovery, external DMA exclusion/drain and USB0 reset safety.
+     * A supervised RAM-only USB0 PIO image may instead bind an explicit manual
+     * whole-board power-removal plan: retain every resource on uncertainty,
+     * never enable USB0 DMA, and never reuse this lifetime before confirmed
+     * removal of every board power source. This supplies no autonomous cutoff
+     * or live DMA-drain guarantee. Initial external DMA exclusion/drain and
+     * reset safety remain required. Host/source ports need separate authority.
      * Cold reference also excludes all USB1/remote PHY consumers. Supplies
      * include VDD-USB, VCC33-USB and VCC33-18-USB; no voltage is programmed here.
      * 0 waits without mutation; other results fail. A native rail/connector
