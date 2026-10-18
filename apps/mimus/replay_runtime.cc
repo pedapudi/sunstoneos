@@ -20,7 +20,13 @@ void capture(void *) {
     for (;;) {
         Job job;
         configASSERT(xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
         while (job.replay->state() == sunstone::Replay::State::Running) {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+            mimus_native_checkpoint();
+#endif
             uint64_t now = (mimus::asr::platform::MonotonicNanos() - job.start_ns) / 1000;
 #ifdef SUNSTONE_MIMUS_NATIVE
             const auto previous_due = job.replay->next_due_us();
@@ -36,6 +42,9 @@ void capture(void *) {
             const uint32_t wait_ms = due > now ? uint32_t((due - now + 999) / 1000) : 1;
             vTaskDelay(pdMS_TO_TICKS(wait_ms));
         }
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
         uint32_t finished = 1;
         // No use of the borrowed Replay object after publishing completion.
         configASSERT(xQueueSend(done, &finished, portMAX_DELAY) == pdTRUE);
@@ -61,6 +70,9 @@ bool mimus_replay_run(std::span<const int16_t> pcm, ReplayConsumer consumer, voi
     bool success = true;
     uint32_t consumed = 0;
     for (;;) {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
         const auto state = replay.state();
         if (state != sunstone::Replay::State::Running && state != sunstone::Replay::State::Complete) {
             success = false;
@@ -84,8 +96,14 @@ bool mimus_replay_run(std::span<const int16_t> pcm, ReplayConsumer consumer, voi
 #ifdef SUNSTONE_MIMUS_NATIVE
     mimus_native_waiting(0);
 #endif
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    mimus_native_checkpoint();
+#endif
     uint32_t finished;
     configASSERT(xQueueReceive(done, &finished, portMAX_DELAY) == pdTRUE);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    mimus_native_checkpoint();
+#endif
     success = success && replay.state() == sunstone::Replay::State::Complete;
     const uint64_t elapsed = (mimus::asr::platform::MonotonicNanos() - job.start_ns) / 1000;
     char line[224];

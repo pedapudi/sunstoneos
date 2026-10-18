@@ -26,7 +26,13 @@ void worker(void *) {
         Job job;
         configASSERT(xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE);
         configASSERT(portGET_CORE_ID() == 1);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
         job.function(job.context, job.begin, job.end, 1);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
         // Publishing completion releases all callback stores. The caller
         // keeps the borrowed context and buffers alive until this message.
         configASSERT(xQueueSend(done, &job.sequence, portMAX_DELAY) == pdTRUE);
@@ -35,6 +41,9 @@ void worker(void *) {
 void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy);
     configASSERT(portGET_CORE_ID() == 0);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    mimus_native_checkpoint();
+#endif
     busy = true;
     if (count < 2) {
         function(context, 0, count, 0);
@@ -50,6 +59,9 @@ void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
         configASSERT(sequence == submitted);
         completed = sequence;
     }
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    mimus_native_checkpoint();
+#endif
     busy = false;
 #ifdef SUNSTONE_MIMUS_NATIVE
     mimus_native_inference_progress();

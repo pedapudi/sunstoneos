@@ -1,6 +1,7 @@
 #include "native.h"
 #include "session.h"
 #include "cached.h"
+#include "boot.h"
 #include "a733_native_usb.h"
 #include "a733_maintenance_watchdog_internal.h"
 #include "a733_cpu_coherence.h"
@@ -20,8 +21,15 @@ static TaskHandle_t handles[3];
 static atomic_uint state,finished,log_length,acknowledged,drain_complete,input_waiting;
 static atomic_uint_fast64_t inference_progress;
 static uint8_t log_bytes[LOG_CAPACITY];
-static uint64_t live_until,minimum,seen;
+static uint64_t live_until;
+#ifndef SUNSTONE_MIMUS_SUPERVISED
+static uint64_t minimum,seen;
+#endif
 static unsigned paced,polling;
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+static uint8_t session_sha256[32];
+static uint64_t session_epoch,session_generation;
+#endif
 static void exchange(void);
 void a733_usb_poll(void);
 static int live(void *unused)
@@ -32,13 +40,22 @@ static int live(void *unused)
         a733_smp_counter()/24<window.deadline_us;
 }
 static void fail(void *unused)
-{(void)unused;atomic_fetch_or_explicit(&state,4,memory_order_seq_cst);}
+{(void)unused;atomic_fetch_or_explicit(&state,4,memory_order_seq_cst);
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+ atomic_store_explicit(&providers.counter.failed,1,memory_order_release);
+#endif
+}
 void a733_storage_maintenance_stop(void){fail(NULL);}
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context);
 static _Noreturn void stop(void)
 {fail(NULL);for(;;)vTaskDelay(1);}
+void mimus_native_checkpoint(void)
+{if(!live(NULL))stop();}
 void platform_puts(const char *text)
 {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    mimus_native_checkpoint();
+#endif
     taskENTER_CRITICAL();
     unsigned used=atomic_load_explicit(&log_length,memory_order_relaxed);
     size_t bytes=strlen(text);
@@ -78,6 +95,7 @@ static void supervise(void *unused)
         if(!live(NULL))stop();
         uint64_t progress=atomic_load_explicit(&inference_progress,memory_order_acquire);
         uint64_t now=a733_smp_counter()/24;
+#ifndef SUNSTONE_MIMUS_SUPERVISED
         if(progress!=seen && !atomic_load_explicit(&finished,memory_order_acquire)){
             uint64_t before,after;
             /* Only completed parallel ranges earn a renewal. Task execution,
@@ -88,9 +106,12 @@ static void supervise(void *unused)
             if(next>window.deadline_us-window.guard_us)next=window.deadline_us-window.guard_us;
             __atomic_store_n(&live_until,next,__ATOMIC_RELEASE);seen=progress;
         }
+#else
+        (void)progress;
+#endif
         if(atomic_load_explicit(&drain_complete,memory_order_acquire)){
-            /* Complete output remains in RAM until independently qualified
-             * watchdog expiry. The host must persist it before acknowledging. */
+            /* Acknowledgement ends work, never memory ownership. The default
+             * watchdog or explicit supervised power removal owns recovery. */
             fail(NULL);
         }
         if(now>=window.deadline_us)stop();vTaskDelay(pdMS_TO_TICKS(20));
@@ -115,7 +136,13 @@ void a733_usb_poll(void){a733_usb_prepare();if(polling)dcd_int_handler(0);}
 void a733_usb_trace(uint32_t event,uint32_t first,uint32_t second){(void)event;(void)first;(void)second;if(!live(NULL))stop();}
 void a733_usb_assert(void){stop();}
 static const tusb_desc_device_t device={.bLength=sizeof(tusb_desc_device_t),.bDescriptorType=TUSB_DESC_DEVICE,
-    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=0xefea,.bcdDevice=0x0100,
+    .bcdUSB=0x200,.bMaxPacketSize0=64,.idVendor=0x1f3a,.idProduct=
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    0xefe8
+#else
+    0xefea
+#endif
+    ,.bcdDevice=0x0100,
     .iManufacturer=1,.iProduct=2,.iSerialNumber=3,.bNumConfigurations=1};
 static const uint8_t hs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,512)};
 static const uint8_t fs[]={TUD_CONFIG_DESCRIPTOR(1,1,0,TUD_CONFIG_DESC_LEN+TUD_VENDOR_DESC_LEN,0,100),TUD_VENDOR_DESCRIPTOR(0,4,0x02,0x81,64)};
@@ -130,8 +157,15 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  if(!i){out[0]=0x0304;out[1]=0x0409;return out;}if(i>=5)return NULL;size_t n=strlen(text[i]);out[0]=(uint16_t)(0x0300|2*n+2);for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;}
 /* Host sends {offset,acknowledged bytes} as two little-endian u32 values.
  * A response is {total,finished,offset,payload bytes}, followed by up to 1024
- * captured bytes. The host acknowledges only bytes already fsynced to disk. */
-static uint8_t response[1040];static unsigned response_size,response_sent,response_done,response_transferred;
+ * captured bytes. Supervised responses append epoch/generation/session SHA256
+ * before payload; default response framing remains unchanged. The host
+ * acknowledges only bytes already fsynced to disk. */
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+#define RESPONSE_HEADER 64u
+#else
+#define RESPONSE_HEADER 16u
+#endif
+static uint8_t response[RESPONSE_HEADER+1024];static unsigned response_size,response_sent,response_done,response_transferred;
 static uint32_t get32(const uint8_t *p){return a733_storage_wire32(p);}
 static void put32(uint8_t *p,uint32_t x){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(x>>(8*i));}
 void tud_mount_cb(void){}
@@ -155,11 +189,15 @@ static void exchange(void)
     atomic_store_explicit(&acknowledged,ack,memory_order_release);
     unsigned bytes=total-offset;if(bytes>1024)bytes=1024;
     put32(response,total);put32(response+4,complete);put32(response+8,offset);put32(response+12,bytes);
-    memcpy(response+16,log_bytes+offset,bytes);response_size=bytes+16;response_sent=0;response_transferred=0;response_done=offset;
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+    for(unsigned i=0;i<8;++i){response[16+i]=(uint8_t)(session_epoch>>(8*i));response[24+i]=(uint8_t)(session_generation>>(8*i));}
+    memcpy(response+32,session_sha256,32);
+#endif
+    memcpy(response+RESPONSE_HEADER,log_bytes+offset,bytes);response_size=bytes+RESPONSE_HEADER;response_sent=0;response_transferred=0;response_done=offset;
 }
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
-{if(interface||!response_size||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;if(response_transferred==response_size&&response_sent==response_size){response_done+=response_size-16;
- if(response_size==16&&get32(response+4)==1&&atomic_load_explicit(&acknowledged,memory_order_acquire)==get32(response))atomic_store_explicit(&drain_complete,1,memory_order_release);
+{if(interface||!response_size||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;if(response_transferred==response_size&&response_sent==response_size){response_done+=response_size-RESPONSE_HEADER;
+ if(response_size==RESPONSE_HEADER&&get32(response+4)==1&&atomic_load_explicit(&acknowledged,memory_order_acquire)==get32(response))atomic_store_explicit(&drain_complete,1,memory_order_release);
  response_size=0;}}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
 void a733_smp_diagnostic_start(void)
@@ -169,13 +207,26 @@ void a733_smp_diagnostic_start(void)
     memcpy(raw,(void *)A733_STORAGE_SESSION_ADDRESS,sizeof(raw));
     if(!a733_mimus_wire_valid(raw)||a733_storage_wire64(raw)!=A733_STORAGE_SESSION_MAGIC||
        a733_storage_wire64(raw+24)!=a733_cached_runtime[0].epoch||
-       a733_storage_wire64(raw+256)*24!=a733_cached_runtime[0].diagnostic_deadline)platform_panic("mimus session",2);
+#ifndef SUNSTONE_MIMUS_SUPERVISED
+       a733_storage_wire64(raw+256)*24!=a733_cached_runtime[0].diagnostic_deadline
+#else
+       a733_storage_wire64(raw+8)!=2||a733_storage_wire64(raw+16)!=704||
+       !a733_smp_contract_valid((const void *)A733_SMP_CONTRACT_ADDRESS,a733_smp_counter())
+#endif
+       )platform_panic("mimus session",2);
+#ifndef SUNSTONE_MIMUS_SUPERVISED
     window=(struct a733_watchdog_window){a733_storage_wire64(raw+256),a733_storage_wire64(raw+128),a733_storage_wire32(raw+144),a733_storage_wire32(raw+148),a733_storage_wire32(raw+152)};
     minimum=a733_storage_wire64(raw+112);uint64_t before=a733_storage_wire64(raw+640)/24;
     if(!a733_storage_wire_bounds(raw,a733_smp_counter())||minimum<=window.guard_us+A733_MAINTENANCE_OPERATION_US||
        !a733_watchdog_hw_admit(&window))platform_panic("mimus watchdog",3);
     live_until=before+minimum-window.guard_us-A733_MAINTENANCE_OPERATION_US;
     if(live_until>window.deadline_us-window.guard_us)live_until=window.deadline_us-window.guard_us;
+#else
+    window.deadline_us=a733_cached_runtime[0].diagnostic_deadline/24;
+    live_until=window.deadline_us;
+    storage_digest_bytes(raw,sizeof(raw),session_sha256);
+    session_epoch=a733_storage_wire64(raw+24);session_generation=a733_storage_wire64(raw+32);
+#endif
     struct a733_native_usb_config b={.identity=a733_storage_wire64(raw+32)};
     b.pmic.owner=a733_storage_wire64(raw+512);b.pmic.identity=b.identity;b.pmic.startup_deadline=live_until;
     for(unsigned i=0;i<2;++i)b.pmic.pins[i]=(struct a733_pin_config){raw[632+3*i],raw[633+3*i],raw[634+3*i]};

@@ -102,7 +102,11 @@ static bool recognition_error(const char *message)
     if (!audio) return recognition_error(asr::ErrorName(audio.error()));
     asr::Arena arena({reinterpret_cast<uint8_t *>(0x46000000), 16 * 1024 * 1024});
     asr::SetInternalArena(internal_arena);
-    asr::SetYieldHook([] { taskYIELD(); });
+    asr::SetYieldHook([] {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
+        taskYIELD(); });
     report_clock();
     asr::ResetProfile();
     uint64_t start = asr::platform::MonotonicNanos();
@@ -156,7 +160,11 @@ static void recognize(void *)
         const bool paced = mimus_service_wait(inputs);
         application_deadline.store(counter() + 180 * COUNTER_HZ, std::memory_order_relaxed);
         mimus::asr::SetInternalArena(internal_arena);
-        mimus::asr::SetYieldHook([] { taskYIELD(); });
+        mimus::asr::SetYieldHook([] {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
+        taskYIELD(); });
         bool success = paced ? mimus_transcribe_paced(inputs) : transcribe(inputs);
         application_deadline.store(UINT64_MAX, std::memory_order_relaxed);
         mimus_service_finish(success);
@@ -176,7 +184,11 @@ static void recognize(void *)
     }
 #ifdef SUNSTONE_MIMUS_PACED
     asr::SetInternalArena(internal_arena);
-    asr::SetYieldHook([] { taskYIELD(); });
+    asr::SetYieldHook([] {
+#ifdef SUNSTONE_MIMUS_SUPERVISED
+        mimus_native_checkpoint();
+#endif
+        taskYIELD(); });
 #ifdef SUNSTONE_MIMUS_NATIVE
     const bool success = mimus_native_paced() ? mimus_transcribe_paced(inputs) : transcribe(inputs);
 #else

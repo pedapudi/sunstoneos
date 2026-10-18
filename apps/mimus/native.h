@@ -4,6 +4,8 @@
 extern "C" {
 #endif
 void mimus_native_inference_progress(void);
+/* Metadata-only liveness boundary; terminal tasks retain all borrowed memory. */
+void mimus_native_checkpoint(void);
 void mimus_native_finished(int success);
 int mimus_native_paced(void);
 void mimus_native_waiting(int);

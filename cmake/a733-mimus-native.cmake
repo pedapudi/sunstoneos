@@ -6,11 +6,12 @@ endif()
 if(NOT TARGET sunstone-a733-storage-maintenance)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
+option(SUNSTONE_MIMUS_SUPERVISED "Retained mimus session with manual whole-board power removal" OFF)
 set(mimus_native_build "${CMAKE_CURRENT_BINARY_DIR}/mimus-native")
 file(MAKE_DIRECTORY "${mimus_native_build}")
 get_target_property(mimus_native_sources sunstone-a733-storage-maintenance SOURCES)
 foreach(source IN ITEMS
-  platform/a733-storage-maintenance/main.c platform/a733-storage-maintenance/session.c
+  platform/a733-storage-maintenance/main.c platform/a733-storage-maintenance/session.c platform/a733-storage-maintenance/admission.c
   platform/a733-storage-update/bootstrap.c platform/a733-storage-update/worker.c platform/a733-storage-update/usb.c
   drivers/watchdog/a733_maintenance_watchdog.c drivers/storage/a733_storage_update.c
   drivers/storage/storage_update_usb.c drivers/storage/a733_mmc_platform.c
@@ -18,6 +19,12 @@ foreach(source IN ITEMS
   list(REMOVE_ITEM mimus_native_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 list(REMOVE_ITEM mimus_native_sources "${storage_build}/build-id.c")
+if(SUNSTONE_MIMUS_SUPERVISED)
+ list(REMOVE_ITEM mimus_native_sources "${storage_build}/boot.c" "${SUNSTONE_SOURCE_ROOT}/platform/a733/maintenance_watchdog.c")
+ apply_build_patch("${mimus_native_build}/boot.c" "${storage_build}/boot.c" "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-supervised/boot.patch")
+ list(APPEND mimus_native_sources "${mimus_native_build}/boot.c")
+endif()
+list(APPEND mimus_native_sources "${SUNSTONE_SOURCE_ROOT}/apps/mimus/admission.c")
 apply_build_patch("${mimus_native_build}/link-base.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link.ld"
   "${SUNSTONE_SOURCE_ROOT}/apps/mimus/link.patch")
 apply_build_patch("${mimus_native_build}/link.ld" "${mimus_native_build}/link-base.ld"
@@ -46,7 +53,7 @@ list(APPEND mimus_native_inputs ${mimus_native_asr_sources} ${mimus_native_model
   "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/freertos_tasks_c_additions.h"
   "${SUNSTONE_SOURCE_ROOT}/platform/qemu-smp/freertos_tasks_c_additions.h")
 list(REMOVE_DUPLICATES mimus_native_inputs)
-set(mimus_native_identity "native-mimus-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;two-inference-workers;WBWA")
+set(mimus_native_identity "native-mimus-1;${SUNSTONE_MIMUS_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;two-inference-workers;WBWA")
 foreach(input IN LISTS mimus_native_inputs)
   file(SHA256 "${input}" input_digest)
   string(APPEND mimus_native_identity "${input_digest}")
@@ -69,7 +76,12 @@ target_include_directories(${mimus_native_target} PRIVATE "${SUNSTONE_SOURCE_ROO
   "${MIMUS_DIR}/firmware/components/pipeline/include")
 target_compile_definitions(${mimus_native_target} PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
   SUNSTONE_A733_USB=1 SUNSTONE_MIMUS_NATIVE=1 SUNSTONE_MIMUS_PACED=1
-  A733_SMP_CONTRACT_MAGIC=0x415337334d494331ULL A733_SMP_RESULT_MAGIC=0x415337334d495231ULL)
+ )
+if(SUNSTONE_MIMUS_SUPERVISED)
+ target_compile_definitions(${mimus_native_target} PRIVATE SUNSTONE_MIMUS_SUPERVISED=1 A733_SMP_CONTRACT_MAGIC=0x415337334d494333ULL A733_SMP_RESULT_MAGIC=0x415337334d495233ULL)
+else()
+ target_compile_definitions(${mimus_native_target} PRIVATE A733_SMP_CONTRACT_MAGIC=0x415337334d494331ULL A733_SMP_RESULT_MAGIC=0x415337334d495231ULL)
+endif()
 target_link_options(${mimus_native_target} PRIVATE -nostdlib -static -Wl,--gc-sections -Wl,--wrap=_impure_ptr
   "-Wl,-T,${mimus_native_build}/link.ld" -Wl,--defsym=__runtime_heap_size=4194304
   "-Wl,-Map,${mimus_native_build}/image.map")

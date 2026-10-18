@@ -151,37 +151,73 @@ concurrent workloads, cancellation during inference, stack-use measurement,
 physical worker execution, and the performance target remain outstanding.
 
 
-## Native eight-core application image
+## Native eight-core recognition and supervised capture
 
-The `sunstone-a733-mimus-native` target combines cached eight-core FreeRTOS
+The `sunstone-a733-mimus-native` image combines cached eight-core FreeRTOS
 startup with the existing recorded and paced recognition paths. Recognition
-uses two inference workers because the current engine reserves two worker
-scratch areas. The model, arithmetic, punctuation and formatting remain unchanged.
+uses two inference workers because the engine reserves two worker scratch
+areas. The model, arithmetic, punctuation, formatting and prerecorded inputs
+remain unchanged. Recorded and paced emulator parity evidence remains scoped
+to the fixtures described above; native recognition is not physically qualified.
 
-The image shares native counter, lock, PMIC, clock, rail, pin and USB providers
-with the storage maintenance image. Application and launch-session identities
-are separate. The mimus image does not initialize MMC or receive storage authority.
-Its runtime supplies SMP newlib, C++ constructors and a 4 MiB heap. Preloaded
-assets begin at `0x43000000`; the 16 MiB inference arena begins at `0x46000000`.
+The image uses the existing native counter, lock, PMIC, clock, rail, pin and USB
+providers. It initializes no MMC controller and receives no storage authority.
+Its runtime supplies SMP newlib, C++ constructors and a 4 MiB heap. Authenticated
+assets begin at `0x43000000`; the exclusive 16 MiB inference arena begins at
+`0x46000000`. Shared startup publishes the complete asset span before cached
+application execution. The application checks its SHA-256, individual extents
+and existing payload CRCs before recognition.
 
-Watchdog renewal requires completed inference work. During paced input, consumed
-samples can renew the deadline only while recognition awaits input. Scheduler
-heartbeats, stalled inference and terminal sessions cannot renew it. The host
-saves output durably before acknowledging it over USB.
+The default image retains its watchdog session, startup, protocol and renewal
+requirements. Completed inference ranges earn renewal; paced samples earn
+renewal only while recognition awaits input. Scheduler, PMIC and USB activity
+cannot renew a stalled or terminal session. Default physical admission still
+requires independently qualified watchdog recovery.
 
-Configure the main project with `MIMUS_DIR`, `NEWLIB_ROOT`, `NEWLIB_SMP_ROOT`,
-`FREERTOS_DIR` and `TINYUSB_DIR` set to their pinned locations, then build:
+`SUNSTONE_MIMUS_SUPERVISED=ON` selects a distinct immutable session and launch
+ABI for RAM-only operation. Uploaded watchdog fields and deadlines are zero.
+The maintained supervised SRAM launcher derives a 180-second absolute deadline
+from the live counter. The host capture window is 179 seconds. Neither bound
+claims a board throughput guarantee: saved emulator output reports 3,604,010
+microseconds of recorded computation and 23,344,837 microseconds for the paced
+fixture, including its 21.75 seconds of audio pacing. No performance test is
+part of this integration.
 
-```sh
-cmake --build "$HOME/.cache/sunstoneos/build/qemu-virt" \
-  --target sunstone-a733-mimus-native -j 8
-```
+Supervised terminal states retain every task, provider, asset, inference buffer
+and allocation until manual whole-board power removal. USB faults revoke the
+application state and shared counter through metadata only. Existing range,
+yield, replay and output boundaries refuse further work after revocation or
+deadline. A callback already in progress may finish. A task parks in place,
+keeping its borrowed context alive. A parked task does not unwind that context,
+manufacture completion, release memory or establish device drain.
 
-Ten focused lifecycle, packaging and capture cases passed on the component image.
-The central mimus and maintenance images also compile and link. Evidence under
-`~/.cache/sunstoneos/evidence/mimus-native-20261017-lifecycle/` preserves the
-component input comparison, central build and artifact snapshot. Earlier
-recognition parity remains scoped to the emulator images described above.
-Full recognition on this native image and physical execution remain untested.
-Board execution requires independent watchdog recovery and authenticated boot,
-memory and provider admission; an offline package does not establish them.
+`apps/mimus/prepare.py` validates the actual native ELF, linked build identity,
+704-byte scalar session ABI, exact recorded/paced assets and successful host
+reference. The supervised session adds the linked build digest at bytes
+656–687; default reserved bytes remain zero. Preparation freezes the image,
+assets, session, launcher and referenced entry evidence. The admission digest
+covers all session fields except its own repeated digest at bytes 80–111;
+the complete session hash covers that digest too. Physical entry records must
+establish exclusive image/assets/arena DDR ownership, cached multicore
+coherence, provider ownership, sink power and manual whole-board power removal.
+Creating records does not establish these conditions.
+
+`tools/check-a733-mimus-supervised.py` uses the shared coordinator claim,
+exclusive board lock, frozen approval binding, SRAM backup and one-attempt
+transport. It requires USB identity `1f3a:efe8`, product `sunstoneos native mimus`
+and serial `sunstoneos-a733-mimus`. The existing eight-byte request and durable
+acknowledgement protocol remain. Supervised responses add epoch, generation
+and the full session digest to their 64-byte header; the default header stays
+16 bytes. Every copied log fragment is persisted before acknowledgement. The
+terminal acknowledgement must complete, and the existing parity checker must
+match the frozen host reference, before success is published. Any transport,
+identity, deadline, journal or parity failure retains ownership and requires
+manual recovery. It issues no reset or retry.
+
+Configure the root project with pinned `MIMUS_DIR`, `NEWLIB_ROOT`,
+`NEWLIB_SMP_ROOT`, `FREERTOS_DIR` and `TINYUSB_DIR`; select supervised mode when
+required, then build `sunstone-a733-mimus-native`. Earlier native watchdog
+lifecycle and packaging evidence remains under
+`~/.cache/sunstoneos/evidence/mimus-native-20261017-lifecycle/`. Recorded input
+support does not qualify microphones, Bluetooth SCO, a live resampler or live
+utterance capture. Physical execution remains the board coordinator's task.
