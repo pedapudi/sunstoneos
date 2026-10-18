@@ -10,6 +10,7 @@
 #include "mimus/asr/model.h"
 #include "mimus/asr/recognizer.h"
 #include "mimus/asr/platform.h"
+#include "mimus/asr/parallel.h"
 #include "mimus/asr/profile.h"
 #include "mimus/asr/wav.h"
 #include "mimus/asr/scratch.h"
