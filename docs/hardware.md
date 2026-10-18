@@ -69,9 +69,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   exact control restoration and GIC admission reads pass physically. Both GIC
   affinity-routing bits are already set. Complete distributor setup and exact
   restoration of its control and SPI enables now pass physically. Secondary
-  admission and read-only power preflight also pass through the first proposed
-  entry-address write, which was intercepted. No secondary activation occurred;
-  CPU configuration, cache activation and scheduling remain unresolved.
+  admission, power preflight and reset configuration also pass. The three reset
+  settings were written, checked and restored while the core remained OFF; the
+  first power request was intercepted. Core activation, cache coherence and
+  scheduling remain unresolved.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.

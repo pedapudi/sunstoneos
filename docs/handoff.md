@@ -44,8 +44,8 @@ substantive correctness risks. The coordinator alone operates the board.
   passed physically. The observed identity is supported and needs no workaround
   writes. EL1 walk blocking, exact control restoration and interrupt-controller
   reads also pass. Complete distributor setup and restoration now pass physically.
-  First-secondary admission and read-only power preflight also pass. CPU
-  configuration, activation, cache coherence and scheduling remain unresolved.
+  First-secondary admission, power preflight and reset configuration also pass.
+  Core activation, cache coherence and scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. The image links; actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -83,7 +83,7 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:081` on port `3-1`, with automatic USB access.
+The current board instance is `003:082` on port `3-1`, with automatic USB access.
 The returning native diagnostic passes the corrected A32 launcher, stack setup,
 BSS clearing, admission, table construction, cache publication and CPU/DSU
 planning. Observed MIDR is `0x412fd050`, CLUSTERIDR is `0x41` and CLUSTERCFR is
@@ -97,19 +97,21 @@ and returns to its original value. All eight SPI-enable banks match their saved
 values; both affinity-routing bits remain set. CPU activation, cache coherence
 and multicore scheduling remain unproven.
 
-First-secondary admission and read-only power preflight now pass physically.
-The target remained OFF with clear control/mode request bits. Native execution
-armed its mailbox, then proposed `0x41002000` at entry register `0x08002004`.
-The diagnostic intercepted that first write; no CPU configuration or power
-write executed, and the secondary report remained zero. GIC and EL1 restoration
-passed. All 47 transactions, including copied state and DRAM restoration, passed.
+First-secondary reset configuration now passes physically while the core remains
+OFF. Native execution set the entry address to `0x41002000` and selected AArch64
+reset, then completed the readbacks and publication barrier. The diagnostic
+intercepted the subsequent power-mode request at `0x07050224`; no core activated.
+All three configuration registers returned to their original zero values, with
+verified OFF state and clear request bits. GIC and EL1 restoration also passed.
+All 47 transactions, including copied state and DRAM restoration, passed.
 The runner exited and its queue claim closed. Evidence is under
-`startup-stage-20261017-080/native/`.
+`startup-stage-20261017-081/native/`.
 
 Fresh reads before that launch established all seven secondaries OFF with clear
 request bits; see `startup-stage-20261017-080/cpu-state/session.json`. The next
-investigation covers CPU configuration and the boundary before actual power
-activation. The current `003:081` instance needs its own verified launch state.
+investigation covers core activation and a target-owned shutdown sequence from
+pinned firmware source. The primary must observe the core OFF before restoring
+memory. The current `003:082` instance needs its own verified launch state.
 The user may be away for several hours; continue bounded returning diagnostics
 before another full-image attempt.
 
@@ -134,10 +136,11 @@ browser test or manual status update.
 
 Raw artifacts are under `~/.cache/sunstoneos/evidence/`. Current evidence:
 
-- Startup: `startup-stage-20261017-080/native/runtime/session.json` records
-  first-secondary admission before its first CPU write, with verified GIC/EL1
-  restoration. `native-secondary-preflight-probe-20261017/` contains the frozen
-  probe and three focused cases. Earlier distributor evidence remains under
+- Startup: `startup-stage-20261017-081/native/runtime/session.json` records
+  secondary reset configuration before its first power request, with verified
+  configuration and GIC/EL1 restoration.
+  `native-secondary-configuration-probe-20261017/` contains the frozen probe
+  and five focused cases. Earlier distributor evidence remains under
   `startup-stage-20261017-079/`.
 - Bluetooth: `bluetooth-mimus-native-20261017/integration.json` reconciles all
   changed files and preserved inputs. Its `native-final/manifest.json` identifies
@@ -187,9 +190,9 @@ Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
 1. Diagnose native setup after the distributor checkpoint before another full
-   multicore launch. First-secondary admission now reaches the intercepted
-   entry-address write; activation and later execution remain unproven.
-   Review restoration and ROM-return conditions before the next hardware change;
+   multicore launch. Secondary reset configuration now reaches the intercepted
+   power request; activation and later execution remain unproven.
+   Establish target-owned shutdown and observed OFF state before ROM return;
    preserve the native layout and reuse completed instruction cases.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
