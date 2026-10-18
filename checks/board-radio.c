@@ -19,6 +19,18 @@ static int client_model;
 static struct sunstone_net_request copied_request;
 static uint64_t copied_ticket;
 static enum a733_radio_session_result session_result=A733_SESSION_MANAGEMENT;
+/* ASan retains the unused native startup callback table. These boundaries
+ * must never execute in the profile/coordinator check; native image owns them. */
+int a733_platform_lock_enter(struct a733_platform_locks *p,enum a733_platform_lock l,uint64_t d)
+{(void)p;(void)l;(void)d;assert(0);return 0;}
+void a733_platform_lock_leave(struct a733_platform_locks *p,enum a733_platform_lock l)
+{(void)p;(void)l;assert(0);}
+int a733_platform_lock_retain(struct a733_platform_locks *p,enum a733_platform_lock l)
+{(void)p;(void)l;assert(0);return 0;}
+int a733_ce_native_read(void *p,uintptr_t a,uint32_t *v){(void)p;(void)a;(void)v;assert(0);return 0;}
+int a733_ce_native_write(void *p,uintptr_t a,uint32_t v){(void)p;(void)a;(void)v;assert(0);return 0;}
+int a733_ce_native_sync(void *p,struct a733_ce_memory *m,enum a733_ce_sync s)
+{(void)p;(void)m;(void)s;assert(0);return 0;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
 int a733_counter_clock_now(void *p,uint64_t *n){assert(p==&shared.counter);*n=time_us;return 1;}

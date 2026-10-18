@@ -86,3 +86,23 @@ busy admission with explicit lower-worker observations. It does not replay
 existing firmware, association, security or network suites. Native compilation
 and the complete board image link cover the real providers separately. Software
 checkpoints do not establish physical radio or entropy qualification.
+
+The selected batch passed both AddressSanitizer/UndefinedBehaviorSanitizer host
+executables and compiled the application, session, transport, entropy adapter
+and platform for AArch64. The profile cases use actual SHA-256 and refuse a
+changed digest, mismatched chip ID, missing qualification evidence, health
+reconfiguration and overlapping firmware spans. Coordinator cases exercise
+partial TCP sends/receives, current deadline publication, shared recovery-latch
+refusal and metadata-only owner polling after fault. The session case proves
+that a busy transport leaves supplicant storage fresh before later attachment.
+
+Inputs, artifacts, tool identity and logs are preserved under
+`~/.cache/sunstoneos/evidence/board-radio-20261017/resume1/`.
+The coordinator executable has SHA-256
+`cba7a93af5328268b7227c54ffdd408fb4e432714df4f2126577db783df1e57d`.
+The earlier host link failure remains in `initial/`. The continuation reused
+its verified successful SHA-256 object and completed only unfinished steps.
+Host fixtures model lower protocol observations; unused native callback-table
+boundaries abort if invoked. These checks do not execute the native startup
+constructor or qualify physical CE, SID, RF, WPA2 or IPv4 operation. The complete
+native board image supplies the real constructor and provider linkage.

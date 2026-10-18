@@ -21,6 +21,8 @@ def main():
     for name in ['output', 'freertos', 'tcp', 'headers']:
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--cc', default='/usr/bin/clang-21')
+    p.add_argument('--reuse-digest', type=Path,
+                   help='Reuse only an unchanged preserved digest object from a stopped batch')
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -71,14 +73,32 @@ def main():
                   '-I' + str(a.tcp / 'source/include'),
                   '-I' + str(a.tcp / 'source/portable/Compiler/GCC')]
         digest_object = out / 'host-digest.o'
-        run('host-digest', [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
-            str(out / 'host-digest.d'), '-c', 'drivers/storage/storage_digest.c', '-o', str(digest_object)])
+        if a.reuse_digest:
+            prior = a.reuse_digest.resolve()
+            prior_inputs = json.loads((prior / 'inputs.json').read_text())
+            prior_artifacts = json.loads((prior / 'artifacts.json').read_text())
+            assert digest(prior / 'host-digest.o') == prior_artifacts['host-digest.o']
+            assert digest(Path(a.cc).resolve()) == json.loads((prior / 'compiler.json').read_text())['sha256']
+            for name in shlex.split((prior / 'host-digest.d').read_text().replace('\\\n', ' ').split(':', 1)[1]):
+                source = Path(name).resolve() if Path(name).is_absolute() else (ROOT / name).resolve()
+                assert digest(source) == prior_inputs[str(source)]['sha256']
+            shutil.copyfile(prior / 'host-digest.o', digest_object)
+            shutil.copyfile(prior / 'host-digest.d', out / 'host-digest.d')
+            (out / 'reuse.json').write_text(json.dumps({'digest_object': str(prior / 'host-digest.o'),
+                'sha256': digest(digest_object), 'scope': 'Unchanged successful digest compilation only.'}, indent=2) + '\n')
+        else:
+            run('host-digest', [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
+                str(out / 'host-digest.d'), '-c', 'drivers/storage/storage_digest.c', '-o', str(digest_object)])
         artifacts.append(digest_object)
         for name in ['board-radio', 'board-radio-session']:
             artifact = out / name
+            obj = out / (name + '.o')
             run(name + '-build', [a.cc, *common, '-fsanitize=address,undefined',
-                '-fno-omit-frame-pointer', '-Wl,--gc-sections', '-MMD', '-MF', str(out / (name + '.d')),
-                'checks/' + name + '.c', str(digest_object), '-o', str(artifact)])
+                '-fno-omit-frame-pointer', '-MMD', '-MF', str(out / (name + '.d')),
+                '-c', 'checks/' + name + '.c', '-o', str(obj)])
+            artifacts.append(obj)
+            run(name + '-link', [a.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
+                str(obj), str(digest_object), '-o', str(artifact)])
             artifacts.append(artifact)
         for index, source in enumerate(['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
                                         'drivers/net/aic8800_sdio_transport.c',
