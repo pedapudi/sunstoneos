@@ -1,0 +1,13 @@
+--- boot-supervised.c
++++ boot-rtc.c
+@@ -86,3 +86,3 @@
+-    extern int board_identity_prepare(uint64_t);
+-    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
++    extern int rtc_session_prepare(const struct a733_smp_contract *);
++    if(!rtc_session_prepare(&admission))a733_smp_stop(3,0x30d);
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+@@ -106,2 +106,4 @@
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
++    extern int rtc_boot_route(void);
++    if(!rtc_boot_route())a733_smp_stop(3,0x30e);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));

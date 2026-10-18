@@ -189,3 +189,8 @@ option(SUNSTONE_A733_THERMAL "Build supervised native thermal monitoring" OFF)
 if(SUNSTONE_A733_THERMAL)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-thermal.cmake")
 endif()
+
+option(SUNSTONE_A733_RTC "Build supervised native RTC read/alarm diagnostic" OFF)
+if(SUNSTONE_A733_RTC)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-rtc.cmake")
+endif()
