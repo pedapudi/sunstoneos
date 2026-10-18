@@ -346,6 +346,15 @@ static int finish(void *v,uint64_t token,uint64_t d)
     int r=p->ops.drain(p->cookie,token,d);
     return (r==0||r==1)&&timely(p)?r:fail(p);
 }
+int a733_video_platform_retained_copy(void *v,uint64_t token,uint64_t d,
+    int (*copy)(void *,uint64_t,uint64_t),void *cookie)
+{
+    struct a733_video_platform *p=v;
+    if(!p||!copy||p->failed||!p->prepared||token!=p->token||d!=p->deadline||!timely(p))return -1;
+    int h=held(p);if(h!=1)return h;
+    int r=copy(cookie,token,d);
+    return (r==0||r==1)&&timely(p)?r:fail(p);
+}
 const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void)
 {
     static const struct a733_video_jpeg_ops ops={clock_now,acquire,prepare,jpeg_read,jpeg_write,finish};

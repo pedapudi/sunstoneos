@@ -42,6 +42,17 @@ int a733_video_jpeg_begin(struct a733_video_jpeg_run *r,
     return 1;
 }
 
+int a733_video_jpeg_begin_retained(struct a733_video_jpeg_run *r,
+    const struct a733_video_jpeg_ops *ops,void *ctx,
+    const struct a733_video_jpeg_job *job,uint64_t deadline,
+    int (*copy_verified)(void *,uint64_t,uint64_t))
+{
+    if(!copy_verified)return 0;
+    int result=a733_video_jpeg_begin(r,ops,ctx,job,deadline);
+    if(result==1){r->retained_readout=1;r->retained_copy=copy_verified;}
+    return result;
+}
+
 /* These compound IDs take the legacy MJPEG decoder and split-register map in
  * the pinned package. None is a physical identity observed on this board.
  */
@@ -89,7 +100,7 @@ int a733_video_jpeg_poll(struct a733_video_jpeg_run *r)
     int result = 1;
     uint32_t v = 0;
     if (!r || r->state == A733_VIDEO_JPEG_NEW) return -1;
-    if (r->state == A733_VIDEO_JPEG_DONE) return 1;
+    if (r->state == A733_VIDEO_JPEG_DONE || r->state == A733_VIDEO_JPEG_COPIED) return 1;
     if (r->state == A733_VIDEO_JPEG_FAULT) return -1;
     if (!time_ok(r)) return fault(r);
     switch (r->state) {
@@ -169,11 +180,11 @@ int a733_video_jpeg_poll(struct a733_video_jpeg_run *r)
         r->state=A733_VIDEO_JPEG_FINISH;
         break;
     case A733_VIDEO_JPEG_FINISH:
-        result=r->ops.finish(r->context,r->token,r->deadline);
-        if (result == 1) r->state=A733_VIDEO_JPEG_DONE;
+        result=(r->retained_readout?r->retained_copy:r->ops.finish)(r->context,r->token,r->deadline);
+        if (result == 1) r->state=r->retained_readout?A733_VIDEO_JPEG_COPIED:A733_VIDEO_JPEG_DONE;
         break;
     default: return fault(r);
     }
     if ((result != 0 && result != 1) || !time_ok(r)) return fault(r);
-    return r->state == A733_VIDEO_JPEG_DONE ? 1 : 0;
+    return (r->state == A733_VIDEO_JPEG_DONE || r->state == A733_VIDEO_JPEG_COPIED) ? 1 : 0;
 }

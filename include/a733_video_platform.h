@@ -29,14 +29,16 @@ struct a733_video_platform_ops {
     int (*now_us)(void *,uint64_t *);
     /* Authenticate startup authority, reserve both masters and IRQ81, freeze
      * job input and aliases, and establish quiet/drained inherited state plus
-     * independent recovery. Require PCK domain2 ON and an identity-readable
+     * independent recovery for legacy drain, or explicit supervised permanent
+     * retention until whole-board power removal for retained-copy use. Neither
+     * policy substitutes for initial transaction/walk drain. Require PCK domain2 ON and an identity-readable
      * reset-deasserted decoder in INHERITED mode. COLD_NS_ROM instead requires
      * genuine, fixed, readable NS-ROM mapping, decoder OFF/reset held, and
      * exclusive cold-start authority. ROM bytes are observed by this binding;
      * caller claims alone never identify silicon. This callback must not change hardware or
      * translations. Nonzero stable token BEFORE any admission; retain always.
      * Also validate rail/operating point, Device mappings and common mutex.
-     * Return1 complete,0 pending,-1 uncertain. No native authority provider yet.
+     * Return1 complete,0 pending,-1 uncertain. The fixed JPEG application supplies the supervised retained authority.
      */
     int (*admit)(void *,const struct a733_video_platform_config *,
                  const struct a733_video_jpeg_job *,uint64_t,uint64_t *);
@@ -82,6 +84,13 @@ int a733_video_platform_init(struct a733_video_platform *,
     const struct a733_video_platform_config *,const struct a733_video_platform_ops *,void *);
 /* Immutable adapter table for a733_video_jpeg_begin(...,p,...). */
 const struct a733_video_jpeg_ops *a733_video_platform_jpeg_ops(void);
+/* Distinct retained-copy gate. Validates actual prepared platform/token/time
+ * and common leases before calling the bounded private-copy verifier. Its1
+ * permits only the verified CPU copy; no DMA drain, ownership transfer, release
+ * or buffer reuse. All reservations persist until whole-board power removal.
+ * Initial isolation/drain and source-derived mappings remain prerequisites. */
+int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
+    int (*)(void *,uint64_t,uint64_t),void *);
 /* Read/write only within the checked platform/codec allowlists. Caller holds
  * admitted ownership and mutex; these functions do not acquire authority.
  * Non-AArch64 builds refuse; no host model can silently become native I/O.

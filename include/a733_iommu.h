@@ -53,6 +53,9 @@ struct a733_iommu_admission {
     uint64_t token;
     uint16_t excluded_masters, powered_masters;
     uint8_t inherited_resolved, transactions_drained, clocks_held, recovery_qualified;
+    /* Decoder-only supervised mode: permanent retention until confirmed whole-
+     * board power removal; never substitutes for initial transaction drain. */
+    uint8_t retained_power_removal;
 };
 struct a733_iommu_ops {
     int (*now_us)(void *, uint64_t *);
@@ -89,6 +92,7 @@ struct a733_iommu_fault {
     uint32_t bank_status[2], l1_status[2], l2_status[2];
     uint32_t walk_address_low[2][2], walk_address_high[2][2], walk_data[2][2];
     uint32_t micro_status[10], micro_low[10], micro_high[10], micro_data[10];
+    uint16_t scanned_masters; /* Only these micro status sets were accessed. */
     uint8_t complete; /* Partial diagnostic data remains valid after IO failure. */
 };
 struct a733_iommu {
@@ -99,6 +103,7 @@ struct a733_iommu {
     void *context;
     uint64_t deadline, now, wait_until;
     unsigned index, phase;
+    uint16_t translated_masters, accessible_masters;
     enum a733_iommu_state state;
     uint8_t initialized;
 };
@@ -112,6 +117,14 @@ struct a733_iommu {
  */
 int a733_iommu_init(struct a733_iommu *, const struct a733_iommu_ops *,
                     void *, const struct a733_iommu_tables *);
+/* Fixed decoder profile translates6/7 only. Both banks and all ten masters
+ * remain exclusively excluded/drained at entry. Only6/7 must be powered; every
+ * skipped master must remain physically quiescent and unavailable for the whole
+ * session. No micro MMIO is issued for skipped sets (source skip-mask policy).
+ * Accepts real independent recovery OR explicit permanent supervised retention.
+ * No later master admission, bank sharing, DMA reuse or release is authorized. */
+int a733_iommu_init_decoder(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 int a733_iommu_open(struct a733_iommu *, uint64_t deadline_us);
 /* At most one MMIO/cache/admission operation, with pre/post deadline checks.
  * Source flush holds its request for at least 10us, then clears it. This is

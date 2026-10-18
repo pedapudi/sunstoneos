@@ -1,0 +1,2 @@
+#include "a733_jpeg_application.h"
+#define A733_STORAGE_SESSION_ADDRESS A733_BOARD_SESSION_ADDRESS

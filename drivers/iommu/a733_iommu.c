@@ -148,8 +148,10 @@ static int admitted(const struct a733_iommu *s)
 {
     const struct a733_iommu_admission *a=&s->admission;
     return a->token && a->excluded_masters==A733_IOMMU_REAL_MASTERS &&
-        a->powered_masters==A733_IOMMU_REAL_MASTERS && a->inherited_resolved==1 &&
-        a->transactions_drained==1 && a->clocks_held==1 && a->recovery_qualified==1;
+        a->powered_masters==s->accessible_masters && a->inherited_resolved==1 &&
+        a->transactions_drained==1 && a->clocks_held==1 &&
+        (a->recovery_qualified==1 || (s->translated_masters==0xc0 &&
+         a->recovery_qualified==0 && a->retained_power_removal==1));
 }
 int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
                     void *ctx,const struct a733_iommu_tables *t)
@@ -162,8 +164,21 @@ int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
     /* Camera allocation policy is narrower than the hardware's 34-bit IOVA. */
     for(unsigned i=0;i<t->count;++i)
         if(t->spans[i].iova+t->spans[i].bytes>UINT64_C(0x100000000))return -1;
-    *s=(struct a733_iommu){.ops=*ops,.tables=*t,.context=ctx,.initialized=1};return 1;
+    *s=(struct a733_iommu){.ops=*ops,.tables=*t,.context=ctx,.initialized=1,
+        .translated_masters=2,.accessible_masters=A733_IOMMU_REAL_MASTERS};return 1;
 }
+int a733_iommu_init_decoder(struct a733_iommu *s,const struct a733_iommu_ops *ops,
+    void *ctx,const struct a733_iommu_tables *tables)
+{
+    int r=a733_iommu_init(s,ops,ctx,tables);
+    if(r==1){s->translated_masters=0xc0;s->accessible_masters=0xc0;}
+    return r;
+}
+/* The pinned v2 source skips unavailable microsets in its MMIO wrappers.
+ * No skipped status is interpreted as an observation. Global bank registers
+ * remain accessible under the retained IOMMU clocks and exclusion contract. */
+static int accessible(const struct a733_iommu *s,unsigned master)
+{return !!(s->accessible_masters & (1u<<master));}
 int a733_iommu_open(struct a733_iommu *s,uint64_t d)
 {
     if(!s || !s->initialized || s->state!=A733_IOMMU_NEW || !d || d<=s->now)return -1;
@@ -172,7 +187,7 @@ int a733_iommu_open(struct a733_iommu *s,uint64_t d)
 /* Each ordinary write receives its own readback; flush request writes have no
  * invented completion bit. kind1 waits, kind2 writes without readback. */
 struct operation { uint32_t off,value; unsigned kind; };
-static struct operation operation(unsigned i,uint64_t table)
+static struct operation operation(unsigned i,uint64_t table,uint16_t translated)
 {
     struct operation p={0,0,0};
     if(i<2) { p.off=i*0x10000+0x20;p.value=(uint32_t)(table>>14); }
@@ -181,7 +196,7 @@ static struct operation operation(unsigned i,uint64_t table)
     else if(i<8) { p.off=(i-6)*0x10000+0x60;p.value=1; }
     else if(i<10) { p.off=(i-8)*0x10000+0x80;p.value=0; }
     else if(i<20) { p.off=masters[i-10].micro_offset+0x30;p.value=0; }
-    else if(i<30) { p.off=masters[i-20].micro_offset+4;p.value=(masters[i-20].id!=1); }
+    else if(i<30) { p.off=masters[i-20].micro_offset+4;p.value=!(translated&(1u<<masters[i-20].id)); }
     else if(i<32) { p.off=(i-30)*0x10000+0x30;p.value=3;p.kind=2; }
     else if(i<42) { p.off=masters[i-32].micro_offset+0x18;p.value=1;p.kind=2; }
     else if(i==42) { p.kind=1; }
@@ -194,7 +209,16 @@ static int program(struct a733_iommu *s)
 {
     uint32_t v;
     if(s->index==49) { s->state=A733_IOMMU_ACTIVE;return 1; }
-    struct operation p=operation(s->index,s->tables.physical);
+    while(s->index<42) {
+        unsigned i=s->index,m;
+        if(i>=10&&i<20)m=i-10;
+        else if(i>=20&&i<30)m=i-20;
+        else if(i>=32)m=i-32;
+        else break;
+        if(accessible(s,masters[m].id))break;
+        ++s->index;
+    }
+    struct operation p=operation(s->index,s->tables.physical,s->translated_masters);
     if(p.kind==1) {
         if(!s->phase) {
             if(s->now>UINT64_MAX-10)return fail(s);
@@ -222,7 +246,10 @@ static int scan_step(struct a733_iommu *s)
             k==6?&s->fault.walk_address_low[b][1]:k==7?&s->fault.walk_address_high[b][1]:
             &s->fault.walk_data[b][1];off+=offsets[k];
     } else if(i<58) {
-        unsigned m=(i-18)/4,k=(i-18)%4;off=masters[m].micro_offset+0x38+k*4;
+        unsigned m=(i-18)/4,k=(i-18)%4;
+        if(!accessible(s,masters[m].id)){s->index+=4-k;return 0;}
+        s->fault.scanned_masters|=(uint16_t)(1u<<masters[m].id);
+        off=masters[m].micro_offset+0x38+k*4;
         out=k==0?&s->fault.micro_status[m]:k==1?&s->fault.micro_low[m]:
             k==2?&s->fault.micro_high[m]:&s->fault.micro_data[m];
     } else {
@@ -269,6 +296,7 @@ int a733_iommu_poll(struct a733_iommu *s)
             unsigned k=s->index-4;
             if(read_reg(s,(k/2)*0x10000+0xb0+(k%2)*4,&v)!=1)return -1;
         } else if(s->index<18) {
+            if(!accessible(s,masters[s->index-8].id)){++s->index;return 0;}
             if(read_reg(s,masters[s->index-8].micro_offset+0x38,&v)!=1)return -1;
         } else { s->state=A733_IOMMU_PUBLISH;return 0; }
         if(v)return fail(s);
