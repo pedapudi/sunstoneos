@@ -287,7 +287,7 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     The capture callback consumes only the newly enumerated native instance.
     Every uncertain post-entry outcome retains the physical lock and queue claim.
     """
-    require(0<capture_seconds<=59 and result_key in ('scheduler_result','board_result'),
+    require(0<capture_seconds<=59 and result_key in ('scheduler_result','board_result','npu_result'),
             'Unsupported supervised capture bounds.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
     ready()
