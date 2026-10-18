@@ -4,8 +4,9 @@ A physical diagnostic identified an incorrect interrupt-group readback check.
 Core 1 returned `GICR_IGROUPR0 = 0xfff0ffff`; the driver required `0xffffffff`
 and retained a verification failure. The corrected driver permits unimplemented
 PPI bits and now completes local initialization, restoration, shutdown and ROM
-return on core 1. All seven secondaries also have physical entry and shutdown
-evidence. Local interrupt setup on the remaining cores, interrupt delivery, cache
+return on core 1. All seven secondaries now also pass production CPU preparation, local interrupt
+initialization, restoration and shutdown under
+`secondary-local-probe-20261018/physical-110/`. Interrupt delivery, cache
 coherence and FreeRTOS SMP scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
@@ -43,11 +44,11 @@ qualify a complete firmware replacement.
 
 | Boundary | Reference requirement | SunstoneOS evidence and remaining gap |
 | --- | --- | --- |
-| CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | All seven secondaries pass entry, release and shutdown. Core 1 also passes CPU preparation; preparation on cores 2–7 remains unqualified. |
-| Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered core-1 frame. A transition from powered-off remains unqualified. |
-| Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Core 1 wake and return-to-sleep pass physically with delivery disabled. |
+| CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | All seven secondaries pass entry, release, production CPU preparation and shutdown. |
+| Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered frames of all seven secondaries. A transition from powered-off remains unqualified. |
+| Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. All seven secondaries pass wake and return-to-sleep physically with delivery disabled. |
 | System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |
-| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | Core 1 local configuration and restoration pass physically with delivery disabled. Per-core delivery and scheduling remain unqualified. |
+| Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | All seven secondaries pass local configuration and restoration physically with delivery disabled. Per-core delivery and scheduling remain unqualified. |
 | Shutdown | Disable CPU-interface groups, synchronize, complete the sleep handshake, then power down. Applicable errata remain part of the sequence. | Earlier core-1 shutdown passed without enabling delivery. This does not qualify shutdown after normal interrupt use. |
 
 The [GIC-600 manual](https://documentation-service.arm.com/static/5e7ddddacbfe76649ba53034),

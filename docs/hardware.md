@@ -99,9 +99,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
   cores 6–7 are A76 r4p1. ROM returned as `003:110`, with saved DRAM restored.
-  Every secondary therefore has physical entry and shutdown evidence. Per-core
-  interrupt setup on the remaining cores, cache coherence and scheduling remain
-  unresolved. Earlier interrupt diagnostics returned no report;
+  Every secondary also passes production CPU preparation and local interrupt
+  initialization under `secondary-local-probe-20261018/physical-110/`. Local and
+  shared state restore before responsive ROM return as `003:111`. Interrupt
+  delivery, concurrent cache coherence and scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;
@@ -136,7 +137,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and restoration now pass under `native-local-group-mask-20261018/`. The driver
   now checks required SGI/timer bits instead of requiring unimplemented PPI group
   bits to read as one. Matching OFF and ROM return pass. Interrupt delivery,
-  coherent cached execution, remaining cores and scheduling remain unqualified.
+  coherent cached execution and scheduling remain unqualified.
   Core 1 also passes production EL3 translation/cache adoption and exact control
   restoration under `native-el3-cache-20261018/native-attempt/runtime/`.
   Local cleanup, observed OFF, shared-state/DRAM restoration and ROM return pass.
@@ -329,6 +330,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   documented default-startup and additive-header differences. Physical exchange,
   electrical compatibility and peer recovery remain unqualified.
 - PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
+  The complete application has a boot-CPU-only profile under
+  `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and
+  focused host checks pass. Physical waveform and delivery remain unqualified.
   PWM0 channel 5 on PD5 supports 40 kHz duty changes, verified GPIO-low stop and
   restart under retained ownership. Optional PL7 LED commands preserve neighboring
   outputs. Actual provider/pin, four linked cases and host command/admission
@@ -854,6 +858,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   native composition pass. Physical hashing/cipher operation, authenticated and
   wider cipher modes, other hashes, asymmetric operations and secure key handling
   remain outstanding. Internal hardware key erasure is unproven.
+  A boot-CPU-only SHA/AES application is integrated under
+  `crypto-single-core-20261018/`, with twelve startup groups and six host groups
+  passing. This permits independent device validation; physical CE operation and
+  entropy quality remain unqualified.
   The [native SHA/AES application](crypto-application.md) now connects actual
   shared providers, the singleton retained page and copied USB results. Its
   native link and focused admission, orchestration, publication and host checks

@@ -6,8 +6,9 @@ pass, and its complete writes match isolated instructions from the published
 board firmware for cores 1 through 7. The controller compiles for AArch64.
 Power-on, production entry and target-owned shutdown now pass on every
 secondary core. The primary observes OFF before restoring saved configuration.
-The sequential cores 2–7 result is under `secondary-identity-probe-20261018/`;
-core 1 has earlier returning evidence. Multicore FreeRTOS remains unqualified.
+Production CPU preparation and local interrupt initialization also pass on all
+seven targets under `secondary-local-probe-20261018/physical-110/`. Multicore
+FreeRTOS remains unqualified.
 The [startup record](a733-smp-supervised.md) holds the physical observations and
 remaining interrupt, cache-coherence and scheduling requirements.
 

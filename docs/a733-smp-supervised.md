@@ -1168,4 +1168,15 @@ shutdown and return. The instruction cases reuse the saved primary startup
 checkpoint and exercise A76 r4p1 preparation with the observed per-target reset
 controls. Six host cases cover the larger report and backup, restored refusal,
 invalid results and transport failure. Hardware responses remain modeled;
-physical local initialization on cores 2–7 is pending.
+physical results follow below.
+
+Physical execution passes on all seven secondaries under
+`secondary-local-probe-20261018/physical-110/runtime/`. Every controller reaches
+GIC_READY at phase 26 without error, completing eleven initialization writes
+and seven cleanup writes. Each target restores its local state and actual
+translation controls, acknowledges shutdown and reaches independently observed
+OFF before its core configuration restores. The shared distributor and saved
+DRAM restore. All 45 host transactions succeed; ROM returns as `003:111`, and
+the runner exits with its claim closed. This establishes CPU preparation and
+local interrupt initialization for all observed A55 r2p0 and A76 r4p1 targets.
+CPU interrupt delivery remains disabled; concurrent execution is not exercised.

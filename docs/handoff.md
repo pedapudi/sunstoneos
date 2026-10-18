@@ -1,13 +1,15 @@
 # Current work
 
-The sequential local interrupt diagnostic is compiled and software-tested under
-`secondary-local-probe-20261018/`. It calls production CPU preparation and local
-GIC setup on cores 1–7, restores each target before OFF, then restores the
-shared distributor. Three instruction cases and six host cases pass; the actual
-primary boot checkpoint was reused. Physical execution is pending. The original
-board remains on port 3-1, instance 003:110, with continuous DDR evidence. Its
-fresh returning SRAM survey reports instruction cache enabled, so the accepted
-cache-off helper and follow-up survey precede native execution.
+All seven secondary cores now pass production CPU preparation and local GIC
+initialization on the original board. Each target restores its local interrupt
+state and actual translation controls before matching shutdown acknowledgment
+and independently observed OFF. Shared distributor and saved DRAM restoration
+also pass. Evidence is under `secondary-local-probe-20261018/physical-110/`.
+The runner exited and the claim closed as passed. Current ROM is `003:111`,
+identity `[7,2741,1097070,0,0]`, on port `3-1`. No reconnect is needed.
+Interrupt delivery, cached execution on the remaining cores, concurrent cache
+coherence and FreeRTOS scheduling remain outstanding. Preserve DDR continuity;
+refresh warm launcher state before the next native operation.
 
 The complete PWM fan/LED and SHA-256/AES applications now have independent
 boot-CPU profiles. Their frozen images and focused results are integrated under
@@ -15,6 +17,13 @@ boot-CPU profiles. Their frozen images and focused results are integrated under
 inputs match; final PWM fixture/document revisions match the accepted follow-up
 snapshot. Integration did not rebuild images or repeat checks. Physical device
 operation and admission remain outstanding.
+
+PWM and crypto nominal fixtures now share pinned provider settings and reject
+missing NSI/MBUS gates or PMIC pin settings before ELF loading or instruction
+execution. Six focused host cases pass under `provider-fixture-20261018/`;
+all seven integrated source files match. This corrects repeated setup omissions
+without changing native images or repeating their instruction checks.
+
 
 The [accepted goal](goal.md) requires native FreeRTOS, complete board hardware
 support and local mimus transcription. The [hardware matrix](hardware.md) is the
@@ -77,8 +86,10 @@ The thermal driver now accepts normalized 24 MHz references from 19.2, 24 and
 check and Astra review pass under `thermal-clock-reference-20261018/`. All 338
 repository and 243 external frozen inputs match integration. Relevant image
 layout is unchanged, so the accepted startup and host cases were reused.
-The second board still needs current APB1/GPADC clock observations and physical
-supply, ownership, entry and recovery admission before thermal acquisition.
+The second board reports APB1 `0x03000005` (100 MHz) and GPADC clock
+`0x80000000` (enabled normalized SYS24) under
+`thermal-clock-reference-20261018/clock-observation-101/`. Physical supply,
+ownership, entry and recovery admission remain required before acquisition.
 
 The complete board application now has a boot-CPU-only profile with actual USB,
 radio, crypto entropy and network providers. All four workload selectors pass
@@ -180,7 +191,7 @@ belongs directly to the primary agent, without delegation.
   physically. A returned diagnostic exposed an invalid full-width IGROUPR0
   equality; checking required SGI/timer bits fixes it. Current evidence is under
   `native-local-group-mask-20261018/`. Interrupt delivery, cache coherence,
-  the other secondary cores and scheduling remain unresolved.
+  cached execution on the other secondary cores and scheduling remain unresolved.
 - Bluetooth: authenticated finite headset capture, 8-to-16 kHz conversion and
   native mimus transcription are integrated. Actual host
   recognition matches the reference for the same converted audio, and cancellation
@@ -358,12 +369,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned successfully as `003:110`, identity
-`[7,2729,1097069,0,0]`, after the sequential cores 2–7 diagnostic.
-All six targets reached production entry, reported identity, acknowledged
-shutdown and reached OFF before their configuration restored. Saved DRAM
-restored, ROM responded, the runner exited and the claim closed as passed.
-Evidence is under `secondary-identity-probe-20261018/physical-109/runtime/`.
+The original board on `3-1` returned successfully as `003:111`, identity
+`[7,2741,1097070,0,0]`, after sequential production CPU preparation and local
+GIC initialization on all seven secondaries. Every target completed all eleven
+controller writes and seven cleanup writes. Target controls, local state,
+shared distributor and saved DRAM restored. All 45 host transactions succeeded;
+the runner exited and its claim closed as passed. Evidence is under
+`secondary-local-probe-20261018/physical-110/runtime/`.
 
 The preceding primary-preparation diagnostic returned as `003:109`.
 Its report confirms completed preparation and exact EL3/EL1 control restoration;
@@ -641,9 +653,10 @@ TCR_EL1 values, reinforcing the requirement to preserve each target's own
 controls. All six PPU observations had OFF in the low state bits. The runner
 exited and its claim closed. No reconnect is needed.
 
-The next CPU work is the complete-image local-initialization boundary with
-cleanup matched to all observed revisions. Reuse proven entry/shutdown and
-core-1 cached-entry evidence; do not repeat the unobserved full launch unchanged.
+Production CPU preparation and local initialization now also pass on all seven
+secondaries under `secondary-local-probe-20261018/physical-110/`. Next extend
+the core-1 cached-entry result to the remaining cores, then establish concurrent
+coherence and delivery. Do not repeat the unobserved full launch unchanged.
 Interrupt delivery, mutable cache coherence and scheduling remain outstanding.
 
 The [GPU publication audit](gpu-single-core-publication.md) supports retaining
