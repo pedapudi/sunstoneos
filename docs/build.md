@@ -15,9 +15,10 @@ output stay in the user cache.
 set -e
 cache="$HOME/.cache/sunstoneos"
 freertos=$(python3 tools/fetch-sources.py freertos)
+tinyusb=$(python3 tools/fetch-sources.py tinyusb)
 cmake -S . -B "$cache/build/qemu-virt" \
   -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-clang.cmake \
-  -DFREERTOS_DIR="$freertos"
+  -DFREERTOS_DIR="$freertos" -DTINYUSB_DIR="$tinyusb"
 cmake --build "$cache/build/qemu-virt" -j 8
 python3 tools/check-kernel.py "$cache/build/qemu-virt/kernel-check.elf"
 ```
@@ -29,6 +30,10 @@ On the development host, LLD and QEMU were extracted from Ubuntu packages into
 The installed host supplies their shared libraries; no system package installation
 was required. Package versions were LLD `1:21.1.8-6ubuntu1` and QEMU
 `1:10.2.1+ds-1ubuntu3.2`.
+
+The central configuration also prepares storage targets that require TinyUSB.
+Supply its pinned source even when selecting a kernel or PMIC-only build target;
+those targets do not link USB code.
 
 The toolchain preserves explicitly supplied `CMAKE_C_COMPILER`,
 `CMAKE_ASM_COMPILER` and `CMAKE_CXX_COMPILER` paths. Set `SUNSTONE_LLD` to the
