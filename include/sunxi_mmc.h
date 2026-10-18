@@ -80,8 +80,9 @@ struct sunxi_mmc_write_authority {
     /* Exactly 1 authorizes this exact immutable request for this actual card
      * session. Bounded, non-reentrant; temporary arguments must not be retained
      * or changed. The provider must own the range and enforce qualified recovery,
-     * durable backup and physical write-protect policy. No such native provider
-     * exists yet. An arbitrary callback is not evidence of that authority. */
+     * durable backup and physical write-protect policy. The concrete storage update service binds this policy to actual backup reads,
+     * immutable range ownership and trusted host artifacts. An arbitrary callback
+     * is not evidence of that authority. */
     int (*admit)(void *,const struct sunxi_mmc_write_identity *,
                  const struct sunxi_mmc_write_request *);
 };
@@ -124,7 +125,8 @@ int sunxi_mmc_read(struct sunxi_mmc *, uint64_t first_sector, uint32_t blocks,
  * descriptors are copied; the caller may reuse those descriptors after return.
  * Writes use CMD24 separately for each sector in the active user area. No atomic
  * multi-sector, power-loss durability, rollback or readback claim is made.
- * Existing native platform APIs and register filters remain read-only. */
+ * Default native platform APIs and register filters remain read-only; the
+ * separate concrete storage service may bind an authenticated writer. */
 int sunxi_mmc_write(struct sunxi_mmc *,const struct sunxi_mmc_write_request *,
                     const struct sunxi_mmc_write_authority *);
 void sunxi_mmc_poll(struct sunxi_mmc *);

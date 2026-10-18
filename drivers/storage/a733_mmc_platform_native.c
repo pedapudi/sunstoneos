@@ -1,4 +1,5 @@
 #include "a733_mmc_platform_native.h"
+#include "a733_storage_update.h"
 #include "a733_platform_locks.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
@@ -56,7 +57,10 @@ static void retain(void *cookie)
 }
 static int allowed(struct a733_mmc_platform_native *n,uintptr_t a,unsigned writing)
 {
-    if(!current(n)||!a733_mmc_platform_native_address_selected(n->kind,n->emmc_host,a,writing))return 0;
+    if(!current(n))return 0;
+    unsigned index=n->kind==SUNXI_MMC_SD?0:n->emmc_host==A733_MMC_EMMC_SDC3?3:2;
+    int fifo=writing&&a==0x04020000+index*0x1000+0x200&&n->update;
+    if(!fifo&&!a733_mmc_platform_native_address_selected(n->kind,n->emmc_host,a,writing))return 0;
     return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
 }
@@ -75,7 +79,9 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     unsigned index=n->kind==SUNXI_MMC_SD?0:n->emmc_host==A733_MMC_EMMC_SDC3?3:2;
     uintptr_t base=0x04020000+index*0x1000;
     uintptr_t module=0x02002d00+index*0x10;
-    if(a==0x03400198) {
+    if(a==base+0x200) {
+        if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
+    } else if(a==0x03400198) {
         if(v!=(1u<<(index+1)))return 0;
     } else if(a==module||a==module+0xc) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
@@ -84,10 +90,13 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         uint32_t old=*(volatile const uint32_t *)a;
         if((old^v)&~mask)return 0;
     } else if(a==base+0x18) {
-        if(v&(1u<<10))return 0; /* Never enable data writes. */
+        if(v&(1u<<10)) {
+            if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
+        }
         if(!(v&(1u<<21)))switch(v&63) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
         case 16:case 17:case 18:case 41:case 55:break;
+        case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;
         default:return 0;
         }
     }
@@ -126,3 +135,11 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
     struct a733_platform_locks *locks,void *task,enum sunxi_mmc_kind kind,
     int (*admission)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *cookie)
 {return a733_mmc_platform_native_init_selected(n,locks,task,kind,A733_MMC_EMMC_SDC2,admission,cookie);}
+
+int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,struct a733_storage_update *u)
+{
+    if(!n||!n->initialized||n->update||!u||!current(n)||!a733_storage_update_owned(u,u->platform)||
+       u->platform->update!=u||u->platform->cookie!=n||u->platform->ops.write!=write32||
+       u->platform->config.kind!=n->kind||u->platform->config.emmc_host!=n->emmc_host)return 0;
+    n->update=u;return 1;
+}

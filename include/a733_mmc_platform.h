@@ -7,7 +7,8 @@
 enum a733_mmc_emmc_host { A733_MMC_EMMC_SDC2=0, A733_MMC_EMMC_SDC3=1 };
 /* Private, permanent provider. SD selects SDC0; eMMC explicitly selects SDC2
  * or SDC3. Zero preserves the existing default SDC2 selection.
- * No close, power change, media write, recovery or raw-command API exists. */
+ * Default APIs are read-only. A separate actual storage update service may bind
+ * a permanent range owner. No close, power change, recovery or raw-command API exists. */
 struct a733_mmc_platform_config {
     uint64_t owner, handoff, topology, deadline_us, lifetime_deadline_us;
     enum sunxi_mmc_kind kind;
@@ -43,6 +44,7 @@ struct a733_mmc_platform_ops {
     int (*barrier)(void *);
     int (*outside)(void *,const void *,size_t);
 };
+struct a733_storage_update;
 struct a733_mmc_platform {
     struct a733_mmc_platform_config config;
     struct a733_mmc_platform_ops ops;
@@ -58,6 +60,7 @@ struct a733_mmc_platform {
     struct a733_pmic_request request;
     struct a733_pmic_snapshot snapshots[3];
     struct sunxi_mmc core;
+    struct a733_storage_update *update; /* Exclusive permanent service binding. */
     atomic_uint busy;
     a733_clock_mask_t shared;
     uintptr_t base, module, bus;
@@ -84,4 +87,12 @@ enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *,
     struct sunxi_mmc_result *,uint64_t deadline);
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *,
     struct sunxi_mmc_card *,uint64_t deadline);
+/* Private service composition. A copied pointer cannot establish ownership:
+ * the service authenticates its self, exact platform and complete grant. */
+int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);
+int a733_mmc_platform_update_bind(struct a733_mmc_platform *,struct a733_storage_update *);
+enum a733_mmc_platform_result a733_mmc_platform_update_poll(struct a733_mmc_platform *,struct a733_storage_update *);
+enum a733_mmc_platform_result a733_mmc_platform_update_io(struct a733_mmc_platform *,struct a733_storage_update *,
+    unsigned operation,uint64_t first,uint32_t blocks,void *,size_t,uint64_t deadline);
+void a733_mmc_platform_update_retain(struct a733_mmc_platform *,struct a733_storage_update *);
 #endif

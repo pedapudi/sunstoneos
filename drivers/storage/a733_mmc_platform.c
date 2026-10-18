@@ -1,4 +1,5 @@
 #include "a733_mmc_platform.h"
+#include "a733_storage_update.h"
 #define CCU UINT32_C(0x02002000)
 #define PIO UINT32_C(0x02000000)
 #define GIC UINT32_C(0x03400000)
@@ -58,7 +59,7 @@ static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
 static int timely(struct a733_mmc_platform *p)
 {
     uint64_t now;
-    if(p->ops.now_us(p->cookie,&now)!=1||now<p->last_now)return 0;
+    if((p->update&&!a733_storage_update_alive(p->update))||p->ops.now_us(p->cookie,&now)!=1||now<p->last_now)return 0;
     p->last_now=now;return now<p->deadline&&now<p->config.lifetime_deadline_us;
 }
 static enum a733_mmc_platform_result finish(struct a733_mmc_platform *p,enum a733_mmc_platform_result r)
@@ -198,7 +199,7 @@ static int supply_poll(struct a733_mmc_platform *p)
 /* Core callbacks execute only within one admitted, mutex-held poll. Pin and
  * shared-manager methods are never called recursively through these callbacks. */
 static int core_guard(struct a733_mmc_platform *p)
-{return p->core_call&&p->held&&!p->fault&&p->ops.current(p->cookie)==1&&timely(p);}
+{return p->core_call&&p->held&&!p->fault&&(!p->update||a733_storage_update_alive(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
 static int core_read(void *v,uint32_t off,uint32_t *out)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&rd(p,p->base+off,out);if(!ok)fail(p);return ok;}
 static int core_write(void *v,uint32_t off,uint32_t value)
@@ -357,9 +358,9 @@ static int enter_api(struct a733_mmc_platform *p)
     unsigned zero=0;
     return p&&p->initialized&&atomic_compare_exchange_strong_explicit(&p->busy,&zero,1,memory_order_acquire,memory_order_relaxed);
 }
-enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p)
+static enum a733_mmc_platform_result poll_owned(struct a733_mmc_platform *p,struct a733_storage_update *owner)
 {
-    if(!p||!p->initialized)return A733_MMC_INVALID;
+    if(!p||!p->initialized||p->update!=owner)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1)return finish(p,A733_MMC_INVALID);
@@ -384,15 +385,15 @@ enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p
     return finish(p,result);
 }
 static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigned operation,
-    uint64_t first,uint32_t blocks,void *out,size_t bytes,uint64_t deadline)
+    uint64_t first,uint32_t blocks,void *out,size_t bytes,uint64_t deadline,struct a733_storage_update *owner)
 {
-    if(!p||!p->initialized||!out||!outside(p,out,bytes)||!deadline||deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
+    if(!p||!p->initialized||p->update!=owner||!out||!outside(p,out,bytes)||!deadline||deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1||p->stage!=READY||
        (operation==1?p->core.state!=SUNXI_MMC_DONE:p->core.state!=SUNXI_MMC_READY)||
        (p->core.borrowed&&!separate(out,bytes,p->core.borrowed,p->core.borrowed_bytes)))return finish(p,A733_MMC_INVALID);
-    if(operation==0) {
+    if(operation==0||operation==3) {
         const struct sunxi_mmc_card *c=&p->core.card;
         if(!blocks||blocks>SUNXI_MMC_MAX_BLOCKS||bytes!=(size_t)blocks*512||
            first>=c->sectors||blocks>c->sectors-first)
@@ -407,8 +408,14 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
     r=lock(p);if(r<0)return finish(p,fail(p));if(!r)return finish(p,A733_MMC_BUSY);
     if(!running(p)||!timely(p))return finish(p,fail(p));
     p->core_call=1;
-    if(operation==0) {
-        int ok=sunxi_mmc_read(&p->core,first,blocks,out,bytes,deadline);p->core_call=0;
+    if(operation==0||operation==3) {
+        int ok;
+        if(operation==3) {
+            const struct sunxi_mmc_write_authority authority={owner,a733_storage_update_authorize};
+            ok=owner&&a733_storage_update_owned(owner,p)&&
+                sunxi_mmc_write(&p->core,&owner->request,&authority);
+        }else ok=sunxi_mmc_read(&p->core,first,blocks,out,bytes,deadline);
+        p->core_call=0;
         if(p->fault||p->core.state==SUNXI_MMC_FAULT)return finish(p,fail(p));
         return finish(p,ok?A733_MMC_PENDING:A733_MMC_INVALID);
     }
@@ -420,10 +427,43 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
 }
 enum a733_mmc_platform_result a733_mmc_platform_read(struct a733_mmc_platform *p,
     uint64_t first,uint32_t blocks,uint8_t *buffer,size_t bytes,uint64_t deadline)
-{return command(p,0,first,blocks,buffer,bytes,deadline);}
+{return command(p,0,first,blocks,buffer,bytes,deadline,NULL);}
 enum a733_mmc_platform_result a733_mmc_platform_take(struct a733_mmc_platform *p,
     struct sunxi_mmc_result *out,uint64_t deadline)
-{return command(p,1,0,0,out,sizeof(*out),deadline);}
+{return command(p,1,0,0,out,sizeof(*out),deadline,NULL);}
 enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *p,
     struct sunxi_mmc_card *out,uint64_t deadline)
-{return command(p,2,0,0,out,sizeof(*out),deadline);}
+{return command(p,2,0,0,out,sizeof(*out),deadline,NULL);}
+
+enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p)
+{return poll_owned(p,NULL);}
+int a733_mmc_platform_update_bind(struct a733_mmc_platform *p,struct a733_storage_update *u)
+{
+    if(!p||!p->initialized||!u||!outside(p,u,sizeof(*u))||!a733_storage_update_owned(u,p)||!enter_api(p))return 0;
+    int ok=!p->update&&!p->fault&&p->stage==READY&&p->core.state==SUNXI_MMC_READY&&p->ops.current(p->cookie)==1;
+    if(ok)p->update=u;
+    atomic_store_explicit(&p->busy,0,memory_order_release);return ok;
+}
+enum a733_mmc_platform_result a733_mmc_platform_update_poll(struct a733_mmc_platform *p,struct a733_storage_update *u)
+{return u&&a733_storage_update_owned(u,p)?poll_owned(p,u):A733_MMC_INVALID;}
+enum a733_mmc_platform_result a733_mmc_platform_update_io(struct a733_mmc_platform *p,struct a733_storage_update *u,
+    unsigned op,uint64_t first,uint32_t blocks,void *buffer,size_t bytes,uint64_t deadline)
+{
+    if(!u||!a733_storage_update_owned(u,p)||(op!=0&&op!=1&&op!=3))return A733_MMC_INVALID;
+    if(op==0) {
+        uint64_t offset=u->state==A733_STORAGE_READ_START?u->read_blocks:u->written_blocks;
+        if((u->state!=A733_STORAGE_READ_START&&u->state!=A733_STORAGE_VERIFY_START)||
+           buffer!=u->readback||bytes!=u->chunk_bytes||blocks!=bytes/512||
+           first!=u->grant.first+offset||deadline!=u->operation_deadline)return A733_MMC_INVALID;
+    }
+    if(op==1&&(buffer!=&u->result||bytes!=sizeof(u->result)||deadline!=u->operation_deadline||
+       (u->state!=A733_STORAGE_READ_WAIT&&u->state!=A733_STORAGE_WRITE_WAIT&&u->state!=A733_STORAGE_VERIFY_WAIT)))return A733_MMC_INVALID;
+    if(op==3&&(buffer!=u->request.source||bytes!=u->request.bytes||first!=u->request.first_sector||
+       blocks!=u->request.blocks||deadline!=u->request.deadline_us))return A733_MMC_INVALID;
+    return command(p,op,first,blocks,buffer,bytes,deadline,u);
+}
+void a733_mmc_platform_update_retain(struct a733_mmc_platform *p,struct a733_storage_update *u)
+{if(p&&p->update==u&&enter_api(p))finish(p,fail(p));}
+
+int a733_mmc_platform_storage(struct a733_mmc_platform *p,const void *v,size_t n)
+{return p&&p->initialized&&outside(p,v,n);}

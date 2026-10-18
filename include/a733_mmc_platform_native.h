@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_A733_MMC_PLATFORM_NATIVE_H
 #define SUNSTONE_A733_MMC_PLATFORM_NATIVE_H
 #include "a733_mmc_platform.h"
+#include "a733_storage_update.h"
 struct a733_platform_locks;
 struct a733_mmc_platform_native {
     struct a733_mmc_platform_ops operations;
@@ -9,6 +10,7 @@ struct a733_mmc_platform_native {
     int (*admit)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *);
     enum sunxi_mmc_kind kind;
     enum a733_mmc_emmc_host emmc_host;
+    struct a733_storage_update *update;
     unsigned initialized;
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
@@ -54,4 +56,15 @@ int a733_mmc_platform_native_init(struct a733_mmc_platform_native *,
 int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *,
     struct a733_platform_locks *,void *owner_task,enum sunxi_mmc_kind,enum a733_mmc_emmc_host,
     int (*admit)(void *,const struct a733_mmc_platform_config *,const struct a733_clock_token *),void *);
+/* Exact data-write boundary used by the native adapter after task/mutex
+ * admission. It adds no write authority to the default aperture filter. */
+static inline int a733_mmc_platform_native_transfer_allowed(enum sunxi_mmc_kind kind,
+    enum a733_mmc_emmc_host host,const struct a733_storage_update *u,uintptr_t a,uint32_t v)
+{
+    return u&&u->platform&&u->platform->config.kind==kind&&u->platform->config.emmc_host==host&&
+        a733_storage_update_mmio(u,a,v);
+}
+/* Bind once after the actual service owns this exact platform. Existing native
+ * initialization and address helper remain read-only until this binding. */
+int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *,struct a733_storage_update *);
 #endif
