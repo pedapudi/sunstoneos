@@ -49,7 +49,7 @@ set(pwm_inputs ${pwm_sources} ${pwm_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/apps/pwm/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/apps/pwm/platform.patch" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES pwm_inputs)
-set(pwm_identity "native-pwm-fan1;supervised60;PD5-40k-50pct-4000pulses;IRQ67;retained-low;${CMAKE_C_COMPILER_VERSION}")
+set(pwm_identity "native-pwm-service2;supervised60;PD5-40k-continuous;bounded-duty-stop-restart;PL7-GPIO;IRQ67;retained-low;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS pwm_inputs)
  file(SHA256 "${input}" pwm_hash)
  string(APPEND pwm_identity "${pwm_hash}")
@@ -66,7 +66,7 @@ target_link_options(sunstone-a733-pwm PRIVATE -nostdlib -static -Wl,--gc-section
 set_target_properties(sunstone-a733-pwm PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
 set(pwm_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@pwm_build@/manifest.json" "{\"target\":\"sunstone-a733-pwm\",\"execution_profile\":\"pwm-supervised-v1\",\"build_id\":\"@pwm_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@pwm_build@/manifest.json" "{\"target\":\"sunstone-a733-pwm\",\"execution_profile\":\"pwm-service-supervised-v1\",\"build_id\":\"@pwm_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${pwm_manifest_script}" pwm_manifest_script @ONLY)
 file(WRITE "${pwm_build}/finish-manifest.cmake" "${pwm_manifest_script}")

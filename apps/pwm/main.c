@@ -9,7 +9,10 @@ int board_application_pins(struct a733_pin_handoff *pins)
 {
  const struct pwm_session *s=pwm_admitted_session();
  if(!pins||!s||memcmp(&s->board,&board.admitted_session,sizeof(s->board)))return 0;
- pins->authorized[A733_PIN_D]|=1u<<5;return 1;
+ pins->authorized[A733_PIN_D]|=1u<<5;
+ if(s->led_enabled){pins->authorized[A733_PIN_L]|=1u<<7;
+  pins->latch[0]=(struct a733_pin_latch_handoff){s->latch_identity,s->latch_owner,s->latch_known_mask,s->latch_value};}
+ return 1;
 }
 int board_application_start(void)
 {

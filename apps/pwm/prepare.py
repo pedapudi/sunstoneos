@@ -15,14 +15,14 @@ def module(name,path):
 board=module('pwm_board_prepare',ROOT/'apps/board/prepare.py')
 base=board.base
 require=base.require
-SCHEMA='a733-pwm-supervised-bundle-v1'
+SCHEMA='a733-pwm-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373350574331
 REQUEST_MAGIC=0x4153373350574c31
 
 def session_check(raw):
-    require(len(raw)==784,'PWM session must be 784 bytes.')
+    require(len(raw)==872,'PWM session must be 872 bytes.')
     require(board.session_check(raw[:592])==2,'PWM requires USB0/provider selection 2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373350574131,1,784),'Invalid pwm session extension.')
+    require(struct.unpack_from('<3Q',raw,592)==(0x4153373350574131,2,872),'Invalid pwm session extension.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid pwm owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing PWM authority.')
@@ -30,7 +30,15 @@ def session_check(raw):
     require(ef in (0,15) and ep<=2 and ed<=3 and df==7 and dp<=2 and dd<=3 and not r0 and not r1,'Invalid fixed PD5 route.')
     apb,hz,operation=struct.unpack_from('<IIQ',raw,768)
     source=apb>>24;parent=24000000 if source==0 else 600000000 if source==3 else 0;div=(apb&31)+1
-    require(not apb&~0x0300001f and parent and not parent%div and hz==parent//div and 200000<=operation<=5000000,'Invalid bounded PWM clock/profile.')
+    require(not apb&~0x0300001f and parent and not parent%div and hz==parent//div and 200000<=operation<=50000000,'Invalid bounded PWM clock/profile.')
+    led,latch_id,latch_owner,known,value=struct.unpack_from('<3Q2I',raw,784)
+    ef,ep,ed=raw[816:819];apbs,hz=struct.unpack_from('<2I',raw,824);maximum,reserved=struct.unpack_from('<2I',raw,864)
+    require(led in (0,1) and not any(raw[819:824]) and not reserved and 1<=maximum<=1000,'Invalid PWM service geometry.')
+    if led:
+        source=apbs>>24;div=(apbs&31)+1
+        require(latch_id and latch_owner and known==0x3fff and not value&~0x3fff and ef in (0,1,15) and ep<=2 and ed<=3 and any(raw[832:864]),'Missing LED pin/latch authority.')
+        require(not apbs&~0x0700001f and source in (0,4) and not 24000000%div and hz==24000000//div,'Unsupported RPIO clock profile.')
+    else:require(not any(raw[792:864]),'Disabled LED carries authority/profile.')
 
 def embedded_reference(image,session):
     """Bind actual immutable geometry and const build ID before behavioral use."""
@@ -40,7 +48,7 @@ def embedded_reference(image,session):
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'PWM image has no symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
-    expected=struct.pack('<5Q',0x4153373350574131,784,256,25000,4000)
+    expected=struct.pack('<5Q',0x4153373350574131,872,512,25000,0)
     for name,body in [('pwm_geometry',expected)]:
         require(name in symbols,'Missing immutable PWM geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong PWM geometry size.')
@@ -56,7 +64,7 @@ def embedded_reference(image,session):
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,784)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,872)
     return request,bytes(contract)
 
 def build_launcher(out,clang,lld):
@@ -92,8 +100,16 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         required={'initial':['cold_pwm0_controller','all_pwm0_clients_excluded','remote_firmware_excluded','irq67_owned_disabled_drained','no_clock_reset_writers','exclusive_pd5_route'],
             'memory':['identity_device_mappings','no_aliases','permanent_reservation'],
             'power':['bldo1_pd_1800000','source_qualified_settling','fan_5v_topology_reviewed','q2_r89_loading_reviewed','no_external_gate_driver','fan_operation_permitted','no_voltage_pad_writers'],
-            'supervision':['whole_board_power_removal','permanent_resource_retention','one_attempt','no_watchdog_arm','no_reset_retry','no_claim_of_fault_fan_off']}[key]
+            'supervision':['whole_board_power_removal','permanent_resource_retention','one_attempt','no_watchdog_arm','no_reset_retry','no_claim_of_fault_fan_off','continuous_output_until_power_removal_on_fault']}[key]
         require(all(fact.get(k) is True for k in required),'Required PWM physical fact absent.')
+    if struct.unpack_from('<Q',raw,784)[0]:
+        item=record['led'];path=Path(item['path']);require(path.is_absolute(),'LED authority path must be absolute.')
+        if str(path) not in cache:
+            require(not frozen,'Missing frozen LED authority.');cache[str(path)]=path.read_bytes()
+        data=cache[str(path)];fact=json.loads(data)
+        require(hashlib.sha256(data).digest()==raw[832:864] and hashlib.sha256(data).hexdigest()==item['sha256'],'LED authority differs.')
+        require(fact.get('schema')=='a733-pwm-led-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'LED authority covers another image/instance.')
+        require(all(fact.get(k) is True for k in ('pl7_gpio_route','complete_latch_authority','bldo1_1800000_dcdc1_3300000','r_apbs0_stable_profile','no_optical_off_claim','remote_gpio_writers_excluded')),'LED physical fact missing.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
@@ -102,7 +118,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-pwm' and mf.get('execution_profile')=='pwm-supervised-v1' and mf.get('final_elf')==ih,'Tested PWM image manifest required.')
+    require(mf.get('target')=='sunstone-a733-pwm' and mf.get('execution_profile')=='pwm-service-supervised-v1' and mf.get('final_elf')==ih,'Tested PWM image manifest required.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -135,7 +151,7 @@ def validate_bundle(bundle):
         require(hashlib.sha256(data[name]).hexdigest()==h,'PWM input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'PWM image changed.')
     manifest=json.loads(data['image-input-manifest.json'])
-    require(manifest.get('target')=='sunstone-a733-pwm' and manifest.get('execution_profile')=='pwm-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'PWM image manifest differs.')
+    require(manifest.get('target')=='sunstone-a733-pwm' and manifest.get('execution_profile')=='pwm-service-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'PWM image manifest differs.')
     sizes={name:len(value) for name,value in data.items()}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'PWM protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'PWM initial report backing changed.')

@@ -15,7 +15,7 @@
      write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
      if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
      uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
-+    /* Owned cold PWM0 SPI67: no unexplained pending/active event is discarded. */
++    /* Owned cold PWM0 GIC interrupt67 (SPI index35): no unexplained pending/active event is discarded. */
 +    if((read32(0x03400108)|read32(0x03400208)|read32(0x03400308))&(1u<<3))
 +        a733_smp_stop(3,0x30d);
 +    write32(0x03400088,read32(0x03400088)|(1u<<3));

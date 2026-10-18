@@ -19,6 +19,10 @@ struct pwm_application {
  unsigned constructed,active,masked,retaining,rearm_wait,error;
  uint64_t deadline;
  uint8_t session_digest[32];
+ struct pwm_request accepted;
+ uint64_t rejected_sequence,command_deadline,completion_before,command_completed_us;
+ unsigned ready,boot_stopping,command_pending,command_started,ack_state,rejection;
+
 };
 extern struct pwm_application pwm;
 void pwm_task(void *);
@@ -26,4 +30,5 @@ void pwm_application_irq(void);
 void pwm_cancel(void);
 int pwm_output_ready(void);
 int pwm_copy(uint8_t *);
+int pwm_submit(const uint8_t request[80]);
 #endif

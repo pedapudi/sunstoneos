@@ -47,13 +47,22 @@ void tud_vendor_tx_cb(uint8_t i,uint32_t n)
 {if(i||n>response_sent-response_transferred)stop();response_transferred+=n;
  if(response_transferred==response_bytes&&response_sent==response_bytes)response_bytes=0;}
 void tud_vendor_tx_complete_cb(uint8_t i){(void)i;}
+static uint8_t command[80];
+static unsigned command_bytes,command_active;
+static uint64_t command_receive_deadline;
 static void pwm_exchange(void)
 {
- /* Cancellation is consumed even while a response is staged. */
- if(tud_vendor_available()){
-  uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request>1)stop();
+ if(command_active){
+  if(a733_smp_counter()/24>=command_receive_deadline){pwm_cancel();command_active=0;command_bytes=0;return;}
+  unsigned available=tud_vendor_available(),remaining=80-command_bytes;
+  if(available){unsigned n=available<remaining?available:remaining;
+   if(tud_vendor_read(command+command_bytes,n)!=n)stop();command_bytes+=n;}
+  if(command_bytes==80){int r=pwm_submit(command);if(r){command_active=0;command_bytes=0;}}
+ }else if(tud_vendor_available()){
+  uint8_t request;if(tud_vendor_read(&request,1)!=1||request>2)stop();
   if(request==1){pwm_cancel();response_bytes=response_sent;if(response_transferred==response_sent)response_bytes=0;}
-  else if(!response_bytes){if(!pwm_copy(response))return;response_bytes=256;response_sent=response_transferred=0;}
+  else if(request==2){command_active=1;command_bytes=0;command_receive_deadline=a733_smp_counter()/24+100000;}
+  else if(!response_bytes){if(!pwm_copy(response))return;response_bytes=PWM_RECORD_BYTES;response_sent=response_transferred=0;}
  }
  if(response_bytes&&response_sent<response_bytes){
   if(response[8]==1&&!pwm_output_ready()){response_bytes=response_sent;if(response_transferred==response_sent)response_bytes=0;return;}

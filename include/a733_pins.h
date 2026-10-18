@@ -190,4 +190,10 @@ enum a733_pins_result a733_pins_irq_ack(struct a733_pins *,
     const struct a733_pin_lease_banked *, unsigned bank, uint32_t mask, uint64_t deadline);
 enum a733_pins_result a733_pins_held_banked(struct a733_pins *,
     const struct a733_pin_lease_banked *, int *held, uint64_t deadline);
+/* Fixed PD5 restart under the same exact token. Caller has verified PWM0
+ * channel5 disabled and all producer/control writers remain excluded. Only a
+ * verified retained GPIO output-low can resume mux7; pull/drive and neighbors
+ * stay unchanged. Any attempted-write uncertainty faults/retains ownership. */
+enum a733_pins_result a733_pins_pwm0_fan_resume(struct a733_pins *,
+    const struct a733_pin_lease_banked *,unsigned users_quiescent,uint64_t deadline);
 #endif

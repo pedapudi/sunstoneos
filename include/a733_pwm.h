@@ -6,11 +6,13 @@
 #define A733_PWM_BASE UINT32_C(0x02527000)
 #define A733_PWM_INTID 67u
 /* Fixed board consumer: whole PWM0 is owned, output is channel5/PD5 mux7.
- * Only SYS_CLK24M, finite pulses and an unreleased output-low stop are used. */
+ * SYS_CLK24M supports finite pulses or the fixed continuous fan service. */
 struct a733_pwm_config {
  uint64_t owner,handoff,deadline_us;
  uint32_t apb0,apb0_hz,period_ns,duty_ns,pulses,active_high;
  struct a733_pin_config expected,desired;
+ unsigned led_enabled;struct a733_pin_config led_expected;
+ uint32_t apbs0,apbs0_hz;
 };
 struct a733_pwm_plan { uint32_t pcr,ppr,ticks,active;uint64_t duration_us; };
 /* Pure exact-tick planning; no rounding, hardware or pointer authority. */
@@ -48,13 +50,15 @@ struct a733_pwm {
  struct a733_rail_token rail;
  struct a733_pmic_lifetime power;
  struct a733_pmic_request request;
- struct a733_pmic_snapshot supply;
+ struct a733_pmic_snapshot supply,led_supply;
  struct a733_pwm_report report;
  a733_clock_mask_t shared;
  atomic_uint busy;
  uint64_t last_now;
  uint32_t initial_bgr;
  unsigned initialized,fault,held,clock_retained,rail_retained;
+ unsigned service_step,service_run,service_ticks,rail_index,led_level;
+ uint64_t service_deadline,service_completed;
 };
 /* Zero once. Actual managers/adapters/config storage must be disjoint and live
  * permanently. Init is pure. Physical admission establishes cold controller,
@@ -63,10 +67,18 @@ struct a733_pwm {
 int a733_pwm_init(struct a733_pwm *,const struct a733_pwm_config *,const struct a733_pwm_ops *,void *,
  struct a733_clock_leases *,struct a733_pins *,struct a733_rail_leases *,struct a733_pmic *);
 enum a733_pwm_result a733_pwm_poll(struct a733_pwm *,unsigned irq_notice);
-/* Caller has configured/rearmed the actual primary Group1NS level SPI67.
+/* Caller has configured/rearmed the actual primary Group1NS level GIC interrupt67 (SPI index35).
  * Hardware pulse start is last, after complete plan and control readbacks. */
 enum a733_pwm_result a733_pwm_start(struct a733_pwm *);
 /* Owner-only metadata after revocation, including expiry. BUSY bookkeeping
  * retries are explicit. A retained result never claims the fan stopped. */
 enum a733_pwm_result a733_pwm_retain(struct a733_pwm *);
+/* Continuous fixed40kHz service (config.pulses==0). One owner request at a time.
+ * Each start/duty change includes disable/low/reconfigure/resume. An accepted
+ * command returns PENDING; poll completes it when service_step becomes0 and
+ * service_completed advances. Each start requires its own IRQ observation.
+ * Stop is reusable; retention/cancellation remains terminal. */
+enum a733_pwm_result a733_pwm_led(struct a733_pwm *,unsigned on,uint64_t absolute_deadline);
+enum a733_pwm_result a733_pwm_control(struct a733_pwm *,unsigned active_ticks,
+    unsigned run,uint64_t absolute_deadline);
 #endif

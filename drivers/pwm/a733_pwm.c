@@ -27,20 +27,24 @@ enum { CLOCK,RAIL,RAIL_WAIT,IDENTITY,SUBMIT,SNAPSHOT,REAP,ADMIT,ENABLE,RELEASE,C
 int a733_pwm_plan(const struct a733_pwm_config *c,struct a733_pwm_plan *p,a733_clock_mask_t *shared)
 {
  if(!c||!p||!shared||!c->owner||!c->handoff||!c->deadline_us||!c->period_ns||
- c->duty_ns>c->period_ns||!c->pulses||c->pulses>65536||c->active_high>1||
+ c->led_enabled>1||c->duty_ns>c->period_ns||c->pulses>65536||c->active_high>1||
  (c->apb0&~UINT32_C(0x0300001f))||
  (c->expected.function!=0&&c->expected.function!=15)||c->desired.function!=7||
  !a733_pin_config_valid_banked(A733_PIN_D,5,c->expected)||
  !a733_pin_config_valid_banked(A733_PIN_D,5,c->desired))return 0;
+ if(c->led_enabled&&(!a733_pin_config_valid_banked(A733_PIN_L,7,c->led_expected)||
+    (c->led_expected.function!=0&&c->led_expected.function!=1&&c->led_expected.function!=15)||
+    (c->apbs0&~UINT32_C(0x0700001f))||((c->apbs0>>24)!=0&&(c->apbs0>>24)!=4)||
+    24000000%((c->apbs0&31)+1)||c->apbs0_hz!=24000000/((c->apbs0&31)+1)))return 0;
  uint64_t ticks=(uint64_t)c->period_ns*24,active=(uint64_t)c->duty_ns*24;
  if(ticks%1000||active%1000||!(ticks/=1000)||ticks>65536||(active/=1000)>65535)return 0;
  unsigned source=c->apb0>>24,div=(c->apb0&31)+1,hz=source==0?24000000:source==3?600000000:0;
  if(!hz||hz%div||c->apb0_hz!=hz/div)return 0;
  uint64_t duration=((uint64_t)c->period_ns*c->pulses+999)/1000;
  if(duration>1000000)return 0; /* This finite owner never requests over1 second. */
- *p=(struct a733_pwm_plan){((c->pulses-1)<<16)|BIT(9)|(c->active_high?BIT(8):0),
+ *p=(struct a733_pwm_plan){(c->pulses?((c->pulses-1)<<16)|BIT(9):0)|(c->active_high?BIT(8):0),
  ((uint32_t)(ticks-1)<<16)|(uint32_t)active,(uint32_t)ticks,(uint32_t)active,duration};
- *shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|(source==3?A733_CLOCK_PERI0:0);return 1;
+ *shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|(source==3?A733_CLOCK_PERI0:0)|(c->led_enabled?A733_CLOCK_APBS0:0);return 1;
 }
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);}
@@ -53,7 +57,7 @@ static enum a733_pwm_result fail(struct a733_pwm *p,unsigned error)
  return A733_PWM_RETAINED;
 }
 static int timely(struct a733_pwm *p)
-{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->config.deadline_us;}
+{uint64_t n;if(p->ops.now_us(p->cookie,&n)!=1||n<p->last_now)return 0;p->last_now=n;return n<p->config.deadline_us&&(!p->service_step||n<p->service_deadline);}
 static enum a733_pwm_result finish(struct a733_pwm *p,enum a733_pwm_result r)
 {if(p->held){p->ops.leave(p->cookie);p->held=0;}atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
 static int api(struct a733_pwm *p)
@@ -74,6 +78,7 @@ static int health(struct a733_pwm *p)
 static int profile(struct a733_pwm *p)
 {
  uint32_t v,ref;
+ if(p->config.led_enabled&&(!rd(p,0x0701000c,&v)||(v&0x0700001f)!=p->config.apbs0))return 0;
  if(!rd(p,0x07090160,&v)||(v&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
  (((v>>14)&3)!=0&&((v>>14)&3)!=3)||!rd(p,0x02002000,&ref)||(ref&0xf8000000)!=0xf8000000)return 0;
  unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
@@ -113,29 +118,34 @@ static enum a733_pwm_result metadata(struct a733_pwm *p)
  switch(p->report.phase){
  case CLOCK:{enum a733_clock_result r=a733_clock_acquire(p->clocks,p->config.owner,p->shared,A733_CLOCK_PWM0,p->config.deadline_us,&p->clock);
   if(r==A733_CLOCK_BUSY)return A733_PWM_BUSY;if(r!=A733_CLOCK_OK)return fail(p,2);break;}
- case RAIL:{enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,A733_RAIL_BIT(A733_RAIL_BLDO1),0,p->config.deadline_us,&p->rail);
+ case RAIL:{enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,A733_RAIL_BIT(A733_RAIL_BLDO1)|(p->config.led_enabled?A733_RAIL_BIT(A733_RAIL_DCDC1):0),0,p->config.deadline_us,&p->rail);
   if(r==A733_RAIL_BUSY)return A733_PWM_BUSY;if(r!=A733_RAIL_PENDING)return fail(p,3);break;}
  case RAIL_WAIT:{enum a733_rail_result r=a733_rail_poll(p->rails,&p->rail);
   if(r==A733_RAIL_BUSY)return A733_PWM_BUSY;if(r==A733_RAIL_PENDING)return A733_PWM_PENDING;if(r!=A733_RAIL_READY)return fail(p,3);break;}
  case IDENTITY:{enum a733_pmic_status r=a733_pmic_identity(p->pmic,&p->power);
   if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)return A733_PWM_BUSY;if(r!=A733_PMIC_READY)return fail(p,4);
   break;}
- case SUBMIT:{enum a733_pmic_status r=a733_pmic_submit(p->pmic,p->config.owner,&p->rail,A733_RAIL_BLDO1,p->config.deadline_us,&p->request);
+ case SUBMIT:{enum a733_pmic_status r=a733_pmic_submit(p->pmic,p->config.owner,&p->rail,p->rail_index?A733_RAIL_DCDC1:A733_RAIL_BLDO1,p->config.deadline_us,&p->request);
   if(r==A733_PMIC_BUSY)return A733_PWM_BUSY;if(r!=A733_PMIC_PENDING||!p->request.id)return fail(p,4);
   break;}
- case SNAPSHOT:{enum a733_pmic_status r=a733_pmic_result(p->pmic,&p->request,&p->supply);
+ case SNAPSHOT:{struct a733_pmic_snapshot *s=p->rail_index?&p->led_supply:&p->supply;
+  enum a733_pmic_status r=a733_pmic_result(p->pmic,&p->request,s);
   if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)return A733_PWM_BUSY;
-  if(r!=A733_PMIC_COMPLETE||p->supply.rail!=A733_RAIL_BLDO1||p->supply.page_before||p->supply.page_after||
-  p->supply.chip!=3||p->supply.revision||p->supply.enabled!=1||p->supply.decoded!=1||p->supply.programmed_uv!=1800000)return fail(p,4);
+  if(r!=A733_PMIC_COMPLETE||s->rail!=(p->rail_index?A733_RAIL_DCDC1:A733_RAIL_BLDO1)||s->page_before||s->page_after||
+  s->chip!=3||s->revision||s->enabled!=1||s->decoded!=1||s->programmed_uv!=(p->rail_index?3300000u:1800000u))return fail(p,4);
   break;}
  case REAP:{enum a733_pmic_status r=a733_pmic_reap(p->pmic,&p->request);if(r==A733_PMIC_BUSY)return A733_PWM_BUSY;
-  if(r!=A733_PMIC_COMPLETE)return fail(p,4);p->request=(struct a733_pmic_request){0};break;}
+  if(r!=A733_PMIC_COMPLETE)return fail(p,4);p->request=(struct a733_pmic_request){0};
+  if(p->config.led_enabled&&!p->rail_index){p->rail_index=1;p->report.phase=SUBMIT-1;}
+  break;}
  case ADMIT:if(p->ops.admit(p->cookie,&p->config,&p->clock)!=1)return fail(p,5);break;
- case PINS:{struct a733_pin_request_banked r={A733_PIN_D,5,p->config.expected,p->config.desired,0,0,0};
-  enum a733_pins_result v=a733_pins_acquire_banked(p->pins,p->config.owner,&r,1,&p->pin,p->config.deadline_us);
+ case PINS:{struct a733_pin_request_banked r[2]={{A733_PIN_D,5,p->config.expected,p->config.desired,0,0,0},
+  {A733_PIN_L,7,p->config.led_expected,{1,0,1},0,0,0}};
+  enum a733_pins_result v=a733_pins_acquire_banked(p->pins,p->config.owner,r,p->config.led_enabled?2:1,&p->pin,p->config.deadline_us);
   if(v==A733_PINS_BUSY||v==A733_PINS_CONFLICT)return A733_PWM_BUSY;if(v!=A733_PINS_OK)return fail(p,6);break;}
  case PIN_LOW:{enum a733_pins_result r=a733_pins_pwm0_fan_low(p->pins,&p->pin,1,p->config.deadline_us);
   if(r==A733_PINS_BUSY)return A733_PWM_BUSY;if(r!=A733_PINS_OK)return fail(p,14);
+  if(!timely(p))return fail(p,17);
   p->report.gpio_low=1;break;}
  default:return fail(p,7);
  }
@@ -183,6 +193,88 @@ static enum a733_pwm_result hardware(struct a733_pwm *p,unsigned notice)
  }
  ++p->report.phase;return A733_PWM_PENDING;
 }
+/* Continuous updates deliberately stop first; they may truncate the last pulse.
+ * Source/owned-pending drain precedes stale-notice invalidation and every rearm. */
+static enum a733_pwm_result cycle(struct a733_pwm *p,unsigned notice)
+{
+ if(p->service_step&&p->last_now>=p->service_deadline)return fail(p,17);
+ if(!p->service_step&&!notice)return p->report.phase==RUN?A733_PWM_RUNNING:p->report.phase==DONE?A733_PWM_COMPLETE:A733_PWM_ARMED;
+ if(p->service_step==2){
+  enum a733_pins_result r=a733_pins_pwm0_fan_low(p->pins,&p->pin,1,p->service_deadline);
+  if(r==A733_PINS_BUSY)return A733_PWM_BUSY;if(r!=A733_PINS_OK)return fail(p,14);
+  if(!timely(p))return fail(p,17);
+  p->report.gpio_low=1;p->report.waveform_stopped=1;
+  if(!p->service_run){p->report.phase=DONE;p->service_step=0;++p->service_completed;p->report.completed_us=p->last_now;return A733_PWM_COMPLETE;}
+  p->service_step=3;return A733_PWM_PENDING;
+ }
+ if(p->service_step==4){
+  int lock=p->ops.enter(p->cookie,p->service_deadline);
+  if(!lock)return A733_PWM_BUSY;if(lock!=1)return fail(p,8);p->held=1;
+  if(!profile(p)||!zero(p,PER))return fail(p,18);
+  p->ops.leave(p->cookie);p->held=0;
+  enum a733_pins_result r=a733_pins_pwm0_fan_resume(p->pins,&p->pin,1,p->service_deadline);
+  if(r==A733_PINS_BUSY)return A733_PWM_BUSY;if(r!=A733_PINS_OK)return fail(p,14);
+  if(!timely(p))return fail(p,17);
+  p->report.gpio_low=0;p->service_step=5;return A733_PWM_PENDING;
+ }
+ int lock=p->ops.enter(p->cookie,p->service_step?p->service_deadline:p->config.deadline_us);
+ if(!lock)return A733_PWM_BUSY;if(lock!=1)return fail(p,8);p->held=1;
+ if(!profile(p))return fail(p,9);
+ uint32_t v;
+ if(p->service_step==1){
+  if(!wr(p,GIC+0x188,BIT(3))||!exact(p,PIER,0)||!exact(p,PER,0)||!exact(p,PCGR,0)||
+     !wr(p,PISR,BIT(5))||!rd(p,GIC,&v)||(v&BIT(31))||!rd(p,GIC+0x308,&v)||(v&BIT(3))||
+     !wr(p,GIC+0x288,BIT(3))||!rd(p,GIC+0x208,&v)||(v&BIT(3)))return fail(p,18);
+  p->report.irq_seen=0;p->report.started=0;p->service_step=2;return A733_PWM_PENDING;
+ }
+ if(p->service_step==3){
+  if(!zero(p,PER)||!exact(p,PCGR,BIT(5))||!rd(p,PCR,&v))return fail(p,18);
+  if(v&BIT(11))return A733_PWM_PENDING;
+  uint32_t ppr=UINT32_C(599)<<16|p->service_ticks;
+  if(!exact(p,PCR,BIT(8))||!exact(p,PPR,ppr)||!exact(p,PWM+0x248,0))return fail(p,18);
+  p->plan.ppr=ppr;p->plan.active=p->service_ticks;p->report.ppr=ppr;p->report.pcr=BIT(8);
+  p->service_step=4;return A733_PWM_PENDING;
+ }
+ if(p->service_step==5){
+  if(!zero(p,PER)||!zero(p,PIER)||!zero(p,PISR)||!rd(p,PCR,&v)||v!=BIT(8)||
+     !rd(p,PPR,&v)||v!=p->plan.ppr||!rd(p,PCGR,&v)||v!=BIT(5)||
+     !rd(p,GIC,&v)||(v&BIT(31))||!rd(p,GIC+0x308,&v)||(v&BIT(3))||
+     !wr(p,GIC+0x288,BIT(3))||!rd(p,GIC+0x208,&v)||(v&BIT(3))||
+     !exact(p,PIER,BIT(5))||!wr(p,GIC+0x108,BIT(3))||
+     !rd(p,GIC+0x108,&v)||!(v&BIT(3))||!exact(p,PER,BIT(5)))return fail(p,18);
+  p->report.started=1;p->report.started_us=p->last_now;p->report.waveform_stopped=0;
+  p->report.phase=RUN;p->service_step=6;return A733_PWM_RUNNING;
+ }
+ if(notice){
+  if(p->report.phase!=RUN||p->report.irq_seen||!rd(p,PISR,&p->report.pisr)||p->report.pisr!=BIT(5)||
+     !exact(p,PIER,0)||!wr(p,PISR,BIT(5)))return fail(p,12);
+  p->report.irq_seen=1;
+  if(p->service_step==6){p->service_step=0;++p->service_completed;p->report.completed_us=p->last_now;}
+ }
+ return p->report.phase==RUN?A733_PWM_RUNNING:A733_PWM_PENDING;
+}
+enum a733_pwm_result a733_pwm_led(struct a733_pwm *p,unsigned on,uint64_t deadline)
+{
+ if(!p||!p->initialized||on>1)return A733_PWM_INVALID;if(!api(p))return A733_PWM_BUSY;
+ if(p->ops.current(p->cookie)!=1||!p->config.led_enabled||p->service_step||p->report.phase<ARMED)return finish(p,A733_PWM_INVALID);
+ if(p->fault||!timely(p))return finish(p,fail(p,1));
+ if(deadline<=p->last_now||deadline>p->config.deadline_us||deadline-p->last_now>100000)return finish(p,A733_PWM_INVALID);
+ int ok=health(p);if(ok<0)return finish(p,fail(p,9));if(!ok)return finish(p,A733_PWM_BUSY);
+ enum a733_pins_result r=a733_pins_write_outputs(p->pins,&p->pin,A733_PIN_L,BIT(7),on?BIT(7):0,deadline);
+ if(r==A733_PINS_BUSY)return finish(p,A733_PWM_BUSY);if(r!=A733_PINS_OK)return finish(p,fail(p,19));
+ if(!timely(p))return finish(p,fail(p,17));p->led_level=on;return finish(p,A733_PWM_COMPLETE);
+}
+enum a733_pwm_result a733_pwm_control(struct a733_pwm *p,unsigned ticks,unsigned run,uint64_t deadline)
+{
+ if(!p||!p->initialized||run>1||!ticks||ticks>=600)return A733_PWM_INVALID;
+ if(!api(p))return A733_PWM_BUSY;
+ if(p->ops.current(p->cookie)!=1||p->config.pulses||p->config.period_ns!=25000||!p->config.active_high||
+    p->report.phase<ARMED||p->service_step)return finish(p,A733_PWM_INVALID);
+ if(p->fault||!timely(p))return finish(p,fail(p,1));
+ if(deadline<=p->last_now||deadline>p->config.deadline_us||deadline-p->last_now>100000)return finish(p,A733_PWM_INVALID);
+ p->service_ticks=ticks;p->service_run=run;p->service_deadline=deadline;p->service_step=1;
+ return finish(p,A733_PWM_PENDING);
+}
 enum a733_pwm_result a733_pwm_poll(struct a733_pwm *p,unsigned notice)
 {
  if(!p||!p->initialized||notice>1)return A733_PWM_INVALID;if(!api(p))return A733_PWM_BUSY;
@@ -190,6 +282,7 @@ enum a733_pwm_result a733_pwm_poll(struct a733_pwm *p,unsigned notice)
  if(p->fault)return finish(p,fail(p,p->report.error));
  if(!timely(p))return finish(p,fail(p,1));
  int ok=health(p);if(ok<0)return finish(p,fail(p,9));if(!ok)return finish(p,A733_PWM_BUSY);
+ if(!p->config.pulses&&p->report.phase>=ARMED)return finish(p,cycle(p,notice));
  if(notice&&p->report.phase!=RUN)return finish(p,fail(p,12));
  if(p->report.phase==ARMED)return finish(p,A733_PWM_ARMED);
  if(p->report.phase==DONE)return finish(p,A733_PWM_COMPLETE);
@@ -199,7 +292,7 @@ enum a733_pwm_result a733_pwm_poll(struct a733_pwm *p,unsigned notice)
 enum a733_pwm_result a733_pwm_start(struct a733_pwm *p)
 {
  if(!p||!p->initialized)return A733_PWM_INVALID;if(!api(p))return A733_PWM_BUSY;
- if(p->ops.current(p->cookie)!=1||p->report.phase!=ARMED)return finish(p,A733_PWM_INVALID);
+ if(p->ops.current(p->cookie)!=1||!p->config.pulses||p->report.phase!=ARMED)return finish(p,A733_PWM_INVALID);
  if(p->fault||!timely(p))return finish(p,fail(p,1));
  int ok=health(p);if(ok<0)return finish(p,fail(p,9));if(!ok)return finish(p,A733_PWM_BUSY);
  int lock=p->ops.enter(p->cookie,p->config.deadline_us);if(!lock)return finish(p,A733_PWM_BUSY);if(lock!=1)return finish(p,fail(p,8));p->held=1;
