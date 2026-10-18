@@ -15,7 +15,7 @@ static inline int a733_pmic_native_address(uintptr_t a,unsigned writing)
     if(a&3)return 0;
     if(writing)return a==0x07083008u || a==0x0708300cu;
     switch(a) {
-    case 0x07090160: case 0x07010010: case 0x0701019c:
+    case 0x02002000: case 0x07090160: case 0x07010010: case 0x0701019c:
     case 0x07025000: case 0x03400000: case 0x0340011c:
     case 0x0340021c: case 0x0340031c:
     case 0x07083008: case 0x0708300c: case 0x07083010: case 0x07083014:

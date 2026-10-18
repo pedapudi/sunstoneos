@@ -3,8 +3,9 @@
 The runtime PMIC provider owns the always-on I2C controller and PL0/PL1 once
 for the platform lifetime. Clients submit bounded rail snapshots to its
 designated task and retrieve copied results. Independent review, focused host
-and source checks, and native compilation passed. Physical execution remains
-disabled pending independent recovery.
+and source checks, and native compilation passed. Physical operation remains
+unqualified. Supervised RAM-only execution requires reviewed entry conditions
+and retention through manual whole-board power removal.
 
 The implementation consists of [the provider API](../include/a733_pmic.h),
 [transaction state machine](../drivers/power/a733_pmic.c) and
@@ -15,10 +16,16 @@ There is no callback that substitutes a rail-read result or bus readiness.
 ## Controller ownership precedes transactions
 
 The provider reserves exclusive S_TWI0 ownership and stable APBS1, reference
-and oscillator ownership. It checks the inherited DCXO 24 MHz selection,
-APBS1 divisor, controller gate and reset release. The adopted bus must already
+and oscillator ownership. It accepts APBS1 source0 from DCXO or source4 from
+PLL_REF, with divisor field zero in either case. Source4 requires a read of
+PLL_REF at `0x02002000`: bits31:27 must all be set, and the decoded N and M
+factors must match, with N between 80 and 116. This is the existing NPU/GPU
+24 MHz reference policy. The provider also checks the inherited oscillator
+selection, controller gate and reset release. The adopted bus must already
 be enabled, idle, and have both lines released. The observed clock divisor
-must represent 10–400 kHz and remain unchanged. These are programmed clock
+must represent 10–400 kHz and remain unchanged. The first successful baseline
+also records the APBS1 selector/divisor bits. Later baseline checks refuse a
+route change, including a switch between the two otherwise supported sources. These are programmed clock
 settings; electrical timing is not measured.
 
 Before the pin manager changes muxes, the provider checks the legacy engine,
@@ -206,3 +213,33 @@ check. Its assigned cases cover both asynchronous snapshots, enabled and
 disabled outputs, supported range boundaries, the DCDC9 step transition and
 undecoded selectors. That batch also compiles the actual provider; no separate
 provider workload is scheduled for these additions.
+
+
+## Read-only adoption includes the inherited PLL reference route
+
+The A733 User Manual V1.00, section 4.2.5.3, pages 219–220, identifies APBS1
+selector4 as SYS_CLK24M and defines the divisor as M+1. The pinned kernel's
+`ccu-sun60iw2-r.c` identifies that selector as `pll-ref` in `r_apbs_parents`.
+The pinned boot0 sequence at `0x49314..0x49328` selects source4 at
+`0x07010010` while preserving the divisor. Adopting only source0 would refuse
+this inherited configuration even when its reference is already 24 MHz.
+
+The existing APBS1/reference/oscillator lease covers the additional route.
+The provider reads PLL_REF only for source4 and does not require an enabled
+PLL for source0. The native allowlist permits reading `0x02002000`; it permits
+no new write. Neither shared-clock registers nor the inherited TWI divisor
+are changed. Invalid reference settings or a later route change retain the
+provider's leases and any held I2C mutex before transaction writes proceed.
+
+`checks/a733-pmic-parent.c` composes the actual PMIC provider with the existing
+clock, pin, rail and register model. Its focused cases cover source4 snapshot
+completion, source0 without PLL_REF, changed parent routes and invalid PLL
+settings. These are software checks; they do not qualify physical clock rate,
+voltage, bus timing or recovery. Existing transaction and rail suites are reused.
+
+The focused parent-adoption batch passes with AddressSanitizer and
+UndefinedBehaviorSanitizer. The native PMIC adapter compiles for AArch64 against
+the actual eight-core FreeRTOS headers. Existing provider, rail and source
+comparison cases were not replayed. Exact source dependencies, objects,
+executables and logs are retained under
+`~/.cache/sunstoneos/evidence/pmic-parent-20261017/batch1/`.

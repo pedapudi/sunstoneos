@@ -98,10 +98,19 @@ static int bus_idle(struct a733_pmic *p)
 }
 static int baseline(struct a733_pmic *p)
 {
-    uint32_t osc,divider;
+    uint32_t osc,apbs,ref,divider;
     if(!rd(p,0x07090160,&osc) || (osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
        (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) ||
-       !match(p,0x07010010,0x0700001f,0) || !match(p,0x0701019c,0x10001,0x10001) ||
+       !rd(p,0x07010010,&apbs))return 0;
+    apbs&=UINT32_C(0x0700001f);
+    if((apbs!=0 && apbs!=UINT32_C(0x04000000)) ||
+       (p->stage!=S_BASELINE && apbs!=p->apbs1))return 0;
+    if(apbs) {
+        if(!rd(p,0x02002000,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000))return 0;
+        unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
+        if(n<80 || n>116 || n!=m)return 0;
+    }
+    if(!match(p,0x0701019c,0x10001,0x10001) ||
        !match(p,0x07025000,0xff,0x22) || !match(p,0x03400000,BIT(31),0) ||
        !match(p,0x0340011c,BIT(11),0) || !match(p,0x0340021c,BIT(11),0) ||
        !match(p,0x0340031c,BIT(11),0) || !bus_idle(p) ||
@@ -115,7 +124,7 @@ static int baseline(struct a733_pmic *p)
     unsigned denominator=(1u<<n)*(m+1)*((m==0 && (divider&0x180)==0x80) ? 11u : 10u);
     /* 10–400kHz supported read profile; no inherited divisor mutation. */
     if(denominator<60 || denominator>2400)return 0;
-    if(p->stage==S_BASELINE)p->divider=divider;
+    if(p->stage==S_BASELINE){p->apbs1=apbs;p->divider=divider;}
     else if(divider!=p->divider)return 0;
     return 1;
 }
