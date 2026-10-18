@@ -265,14 +265,14 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning OFF-secondary configuration checkpoint
+## Returning core-1 activation and target-owned power-off checkpoint
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
 `b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50`.
-The native code, data, BSS and stack addresses remain unchanged. Twenty-six verified
+The native code, data, BSS and stack addresses remain unchanged. Twenty-eight verified
 instruction replacements redirect the C boot entry, walk blocking, the first GIC write,
-mailbox admission and the first secondary hardware write,
+mailbox admission, secondary wait, release and secondary hardware writes,
 the first requested control write, both planning failure parks, the terminal stop,
 the initial park and sixteen EL3 exception slots. The C entry
 replacement records the initialized stack and replays its displaced instruction.
@@ -305,11 +305,12 @@ guard at `0x4100a1e4` admits exactly three core-1 configuration writes in order:
 reset-entry low `0x08002004 = 0x41002000`, reset-entry high `0x08002008 = 0`,
 and architecture `0x08002000 = original | 1`. Each callback retains its native
 privilege/address validation and store. Native readback checks and the publication
-barrier execute before the next callback is intercepted. The first proposed
-hotplug mode request is captured without executing it. No power-request or
-reset-release write occurs. SEV does not request PPU power; the admitted OFF
-state prevents an executing secondary from observing the command. Actual CPU
-activation requires a separate return and quiescence argument.
+barrier execute before activation. The callback then admits the native mode-on,
+control-on, control-clear and mode-clear writes, preserving all original non-request
+bits. Every other callback remains intercepted. An activation marker is stored
+before the first mode-on attempt, so an uncertain or faulting write retains ownership.
+SEV itself does not request PPU power; the pre-arm OFF condition excludes an
+executing secondary before the native power-on sequence.
 
 Every returning path restores saved SCTLR_EL1, executes ISB, restores saved
 TCR_EL1 and executes ISB. Exact readbacks must match before ROM return. Restore
@@ -319,13 +320,19 @@ in state 2, unknown state or failed readback parks and retains ownership. A late
 exception after state 3 re-verifies under state 2. This prevents a faulting
 restoration read from repeatedly re-entering the same operation.
 
-After restoring EL1, cleanup first restores the OFF core's reset configuration.
+After restoring EL1 and verifying shutdown, cleanup restores the OFF core's reset configuration.
 It marks restoration in progress before any MMIO read, requires OFF status and
 clear control/mode request bits, then captures the terminal configuration. It
 restores entry low, entry high and architecture, with barriers and exact readbacks,
 and repeats the OFF/request checks. A changed or uncertain power state retains
 the board without configuration restoration; cleanup never powers down a core.
 Only verified configuration restoration permits distributor cleanup.
+
+After activation, configuration cleanup requires a completed shutdown handshake
+and independently observed PPU OFF. The primary restores the saved pre-activation
+control/mode words while OFF and verifies exact readbacks plus another OFF read.
+An interrupted restore cannot retry. Only this verified state permits the existing
+configuration and distributor cleanup.
 
 Every returning path then restores affected distributor state.
 Cleanup drains pending writes, disables groups while retaining all original
@@ -355,7 +362,8 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 9 captures the first prohibited secondary hardware-write address and
+Checkpoint 11 records the completed activation/shutdown endpoint. Checkpoint 9
+captures a prohibited secondary hardware-write address and
 32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
 refuses pre-arm admission before command publication or SEV. Checkpoint
 6 records a requested register and value before that write; checkpoint 7 records
@@ -524,4 +532,57 @@ readback refusal, an exception after a partial configuration write, changed powe
 before cleanup, and a cleanup-read exception. The latter two retain ownership
 without retry or ROM return. Artifacts are under
 `~/.cache/sunstoneos/evidence/native-secondary-configuration-probe-20261017/`.
-Physical configuration writes and actual secondary startup remain unqualified.
+The configuration stage physically passed once. All three admitted writes completed:
+terminal architecture was 1, entry low was `0x41002000`, and entry high was zero.
+Their original and restored values were all zero; status remained OFF `0x100`
+with clear requests. Checkpoint 9 intercepted `0x07050224 = 1` before mode-on.
+All 47 transactions, EL1/GIC restoration and DRAM restoration passed, returning
+as USB `003:082`. Evidence is under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-081/native/runtime/`.
+
+The activation diagnostic stops at native `release`, before any RELEASE command
+or secondary continuation. Native power-on must finish, native ARRIVED validation
+must pass, all seven permitted callbacks must have run, and live PPU status
+must be ON with clear requests. The primary then publishes a separate shutdown
+request bound to the current epoch and waits under a fresh 100 ms monotonic deadline.
+The secondary's original wait entry redirects to a stackless diagnostic loop.
+It validates the native command, core 1, Cortex-A55 r2p0, EL3 and disabled caches
+before accepting the matching shutdown request.
+
+The target follows the pinned A55 power-down hook: set
+`CPUPWRCTLR_EL1` (`S3_0_C15_C2_7`) bit 0 and execute ISB. It clears its
+power-mode bit 0, sets control bit 1 to disable GIC wakeup, publishes its
+final acknowledgment, and enters a terminal DSB/WFI loop without further memory
+loads. The primary requires both matching acknowledgment and actual PPU OFF.
+Acknowledgment records intent; it does not establish quiescence. ARRIVED, FAULT
+and WFE alone never authorize ROM return or DRAM restoration.
+
+The platform sequence is selected for A733 by pinned TF-A revision
+`5bc9605cbfc175276920c3204658c025da3ae279`,
+[common native power management](https://raw.githubusercontent.com/InfernoEmbedded/arm-trusted-firmware/5bc9605cbfc175276920c3204658c025da3ae279/plat/allwinner/common/sunxi_native_pm_ncat2.c).
+This BSD-3-Clause source remains a host-side reference. Its CPU-off callback clears
+power-mode bit 0 and sets control bit 1.
+The pinned Cortex-A55 assembly power-down hook sets only CPUPWRCTLR bit 0
+and executes ISB. The retained vendor monitor independently uses the same
+operations at `0x480084bc`, `0x48002aa0` and terminal WFI at `0x48003790`.
+The unreleased native secondary changes DAIF, TPIDR_EL3 and VBAR_EL3 and writes
+its RAM report; it has not enabled caches, changed SMPEN, or configured GICR/ICC.
+No additional coherence or interrupt-controller rollback is inferred.
+
+A separate 256-byte record at `0x42002400` fits the existing result-arena backup.
+Its 64-bit fields at offsets 0 through 160 are state, epoch, request, acknowledgment,
+core, initial control/mode, last PPU status, deadline, target original/set PWRCTLR,
+target mode/control, restored control/mode, error, target state, EL, MIDR, SCTLR
+and MPIDR. Remaining bytes are reserved. State 1 means activation attempted;
+state 2 means shutdown requested; state 3 means acknowledgment and OFF observed;
+state 4 guards restoration; state 5 means request-word restoration verified.
+Every post-activation fault or uncertain state retains ownership. No power-down
+rollback is attempted by the primary. The host durably copies this record before
+restoring DRAM after ROM return.
+
+Five focused instruction cases pass with interleaved primary and secondary code:
+completed shutdown/restoration, missing ARRIVED, acknowledgment without OFF, a native
+post-activation exception, and a control-restoration read fault. Retained outcomes
+must contain no configuration/distributor restoration or ROM return. Artifacts are
+under `~/.cache/sunstoneos/evidence/native-secondary-off-probe-20261017/`.
+Physical secondary activation and target-owned OFF remain unqualified.

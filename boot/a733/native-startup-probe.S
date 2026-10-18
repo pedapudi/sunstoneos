@@ -3,7 +3,7 @@
 .section .text,"ax"
 .global boot_checkpoint, cached_checkpoint, stop_checkpoint, park_checkpoint, fault_checkpoint
 .global write_checkpoint, failed_checkpoint
-.global block_checkpoint, gic_begin, prearm_checkpoint
+.global block_checkpoint, gic_begin, prearm_checkpoint, release_checkpoint, secondary_checkpoint
 boot_checkpoint:
     ldr x16, =0x42002000
     mov x17, #1
@@ -50,6 +50,7 @@ configuration_allow:
     cmp x9, #1
     b.eq configuration_high
     cmp x9, #2
+    b.hi activation_allow
     b.ne configuration_blocked
     cmp x1, x13
     b.ne configuration_blocked
@@ -71,6 +72,56 @@ configuration_high:
     cmp x1, x17
     b.ne configuration_blocked
     cbnz w2, configuration_blocked
+    b configuration_permit
+activation_allow:
+    ldr x13, =0x42002400
+    cmp x9, #3
+    b.ne activation_existing
+    ldr x17, =0x07050224
+    cmp x1, x17
+    b.ne configuration_blocked
+    ldr x10, =0x42002240
+    ldr w11, [x10, #32]
+    orr w11, w11, #1
+    cmp w2, w11
+    b.ne configuration_blocked
+    ldr x17, [x10]
+    str x17, [x13, #32]
+    ldr x17, [x10, #24]
+    str x17, [x13, #40]
+    ldr x17, [x10, #32]
+    str x17, [x13, #48]
+    ldr x10, =0x42004018
+    ldr x17, [x10]
+    str x17, [x13, #8]
+    mov x17, #1
+    str x17, [x13]            // Any attempted activation forbids ordinary rollback.
+    b configuration_permit
+activation_existing:
+    ldr x17, [x13]
+    cmp x17, #1
+    b.ne configuration_blocked
+    ldr x17, =0x07050204
+    cmp x9, #4
+    b.eq activation_control_on
+    cmp x9, #5
+    b.eq activation_control_clear
+    cmp x9, #6
+    b.ne configuration_blocked
+    add x17, x17, #32
+    ldr w11, [x13, #48]
+    b activation_match
+activation_control_on:
+    ldr w11, [x13, #40]
+    orr w11, w11, #1
+    b activation_match
+activation_control_clear:
+    ldr w11, [x13, #40]
+activation_match:
+    cmp x1, x17
+    b.ne configuration_blocked
+    cmp w2, w11
+    b.ne configuration_blocked
 configuration_permit:
     add x9, x9, #1
     str x9, [x12, #104]       // Includes an admitted attempt that may fault.
@@ -84,6 +135,136 @@ configuration_blocked:
     str x17, [x16, #104]
     mov x17, #9
     b publish
+release_checkpoint:
+    ldr x12, =0x42002400
+    cmp w1, #1
+    b.ne park
+    ldr x17, [x12, #8]
+    cmp x2, x17
+    b.ne park
+    ldr x17, [x12]
+    cmp x17, #1
+    b.ne park
+    ldr x13, =0x420022e8
+    ldr x17, [x13]            // Configuration admitted attempts (offset104).
+    cmp x17, #7
+    b.ne park
+    ldr x13, =0x4200ebb0
+    ldr w17, [x13]           // Native power state at power+104.
+    cmp w17, #2
+    b.ne park
+    ldr x13, =0x4200efa4
+    ldr w17, [x13]           // Native owner phase at owner+220.
+    cmp w17, #4
+    b.ne park
+    ldr x13, =0x07053008
+    ldr w17, [x13]
+    str x17, [x12, #56]
+    and w17, w17, #15
+    cmp w17, #8
+    b.ne park
+    ldr x13, =0x07050204
+    ldr w10, [x13]
+    ldr w11, [x13, #32]
+    orr w17, w10, w11
+    tbnz w17, #0, park
+    isb
+    mrs x14, cntpct_el0
+    ldr x17, =2400000
+    adds x15, x14, x17
+    b.cs park
+    str x15, [x12, #64]
+    mov x17, #2
+    str x17, [x12]
+    str x2, [x12, #16]
+    dsb sy
+    sev
+activation_wait_off:
+    isb
+    mrs x17, cntpct_el0
+    cmp x17, x14
+    b.lo park
+    cmp x17, x15
+    b.hs park
+    mov x14, x17
+    dsb sy
+    ldr x10, [x12, #24]
+    ldr x11, [x12, #8]
+    cmp x10, x11
+    b.ne activation_wait_off
+    ldr x13, =0x07053008
+    ldr w17, [x13]
+    str x17, [x12, #56]
+    tst w17, #15
+    b.ne activation_wait_off
+    mov x17, #3
+    str x17, [x12]
+    ldr x16, =0x42002000
+    mov x17, #11
+    b publish
+secondary_checkpoint:
+    cmp x20, #1
+    b.ne park
+    mrs x0, CurrentEL
+    cmp x0, #12
+    b.ne park
+    ldr x12, =0x42002400
+    str x0, [x12, #136]
+    mrs x0, midr_el1
+    str x0, [x12, #144]
+    ldr x1, =0x412fd050
+    cmp x0, x1
+    b.ne park
+    mrs x0, sctlr_el3
+    str x0, [x12, #152]
+    ldr x1, =0x02001005
+    tst x0, x1
+    b.ne park
+    mrs x0, mpidr_el1
+    str x0, [x12, #160]
+secondary_wait_request:
+    ldr x17, =0x41002164
+    blr x17                  // Original validator; preserves x20/x21/x24/x25.
+    cbnz x0, park
+    ldr x0, [x21, #24]
+    cmp x0, #1
+    b.ne park
+    ldr x12, =0x42002400
+    ldr x0, [x12, #8]
+    cmp x0, x25
+    b.ne park
+    dsb sy
+    ldr x0, [x12, #16]
+    cmp x0, x25
+    b.ne secondary_wait_request
+    mrs x0, S3_0_C15_C2_7
+    str x0, [x12, #72]
+    tbnz x0, #0, park
+    ldr x13, =0x07050224
+    ldr w1, [x13]
+    str x1, [x12, #88]
+    ldr w2, [x13, #-32]
+    str x2, [x12, #96]
+    orr w3, w1, w2
+    tbnz w3, #0, park
+    mov x17, #1
+    str x17, [x12, #128]
+    orr x0, x0, #1
+    str x0, [x12, #80]
+    msr S3_0_C15_C2_7, x0
+    isb
+    bic w1, w1, #1
+    str w1, [x13]
+    dsb sy
+    orr w2, w2, #2
+    str w2, [x13, #-32]
+    dsb sy
+    str x25, [x12, #24]       // Intent only; primary independently requires PPU OFF.
+    dsb sy
+secondary_terminal:
+    dsb sy
+    wfi
+    b secondary_terminal
 prearm_checkpoint:
     ldr x12, =0x42002240
     mov w9, w1
@@ -301,6 +482,45 @@ snapshot_bank:
     mrs x17, tcr_el1
     str x17, [x16, #232]
 snapshot:
+    ldr x12, =0x42002400
+    ldr x17, [x12]
+    cbz x17, activation_done
+    cmp x17, #5
+    b.eq activation_done
+    cmp x17, #3
+    b.ne park
+    mov x17, #4
+    str x17, [x12]            // Covers every restoration MMIO and verification read.
+    ldr x13, =0x07053008
+activation_restore_check:
+    ldr w17, [x13]
+    tst w17, #15
+    b.ne park
+    ldr x13, =0x07050204
+    ldr w17, [x12, #40]
+    str w17, [x13]
+    dsb sy
+    ldr w17, [x12, #48]
+    str w17, [x13, #32]
+    dsb sy
+    ldr w10, [x13]
+    str x10, [x12, #104]
+    ldr w17, [x12, #40]
+    cmp w10, w17
+    b.ne park
+    ldr w10, [x13, #32]
+    str x10, [x12, #112]
+    ldr w17, [x12, #48]
+    cmp w10, w17
+    b.ne park
+    ldr x13, =0x07053008
+    ldr w17, [x13]
+    str x17, [x12, #56]
+    tst w17, #15
+    b.ne park
+    mov x17, #5
+    str x17, [x12]
+activation_done:
     ldr x12, =0x42002280
     ldr x17, [x12]
     cbz x17, configuration_done

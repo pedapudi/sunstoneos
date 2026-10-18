@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run OFF-secondary reset configuration, restore it, and return before any power request."""
+"""Run one native secondary through ARRIVED and verified target-owned power-off."""
 import argparse
 import hashlib
 import importlib.util
@@ -58,6 +58,7 @@ def prepare(a):
         new=branch(address,target);struct.pack_into('<I',code,offset,new);patches.append([address,old,new])
     for address,old,name in [(0x410000d0,0xd102c3ff,'boot_checkpoint'),(0x4100a1e4,0xd5384248,'cached_checkpoint'),
                             (0x410034d4,0x2a1f03e0,'prearm_checkpoint'),
+                            (0x410036ec,0x51000428,'release_checkpoint'),(0x410020cc,0xd503205f,'secondary_checkpoint'),
                             (0x410003d0,0xb9000113,'gic_begin'),
                             (0x41008264,0xd5382050,'block_checkpoint'),
                             (0x4100a09c,0x52801fe8,'stop_checkpoint'),(0x4100009c,0xd503205f,'park_checkpoint'),
@@ -76,12 +77,12 @@ def prepare(a):
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
     save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'native_sha256':NATIVE,
         'source_sha256':digest(ROOT/'boot/a733/native-startup-probe.S'),'host_sha256':digest(Path(__file__)),
-        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint')},
+        'patches':patches,'payloads':payloads,'hooks':{n:hooks[n] for n in ('boot_checkpoint','cached_checkpoint','stop_checkpoint','park_checkpoint','fault_checkpoint','write_checkpoint','failed_checkpoint','block_checkpoint','gic_begin','prearm_checkpoint','release_checkpoint','secondary_checkpoint')},
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
 
 def decode(raw,nonce):
     require(len(raw)==256,'Short startup report.');v=struct.unpack('<32Q',raw)
-    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,11) and raw[240:]==nonce,'Startup report identity differs.')
+    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,12) and raw[240:]==nonce,'Startup report identity differs.')
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
@@ -109,6 +110,14 @@ def gic_snapshot(raw):
     result['configuration']=dict(zip(('state','core','base','original_arch','original_low','original_high','terminal_arch','terminal_low','terminal_high',
         'restored_arch','restored_low','restored_high','error','permitted_attempts','restore_status','restore_requests'),struct.unpack_from('<16Q',raw,384)))
     return result
+
+def activation_snapshot(raw):
+    require(len(raw)==256,'Short activation snapshot.')
+    names=('state','epoch','request','ack','core','initial_control','initial_mode','last_ppu','deadline',
+           'secondary_pwr_original','secondary_pwr_set','secondary_mode','secondary_control',
+           'restored_control','restored_mode','error','secondary_state','secondary_el','secondary_midr',
+           'secondary_sctlr','secondary_mpidr')
+    return dict(zip(names,struct.unpack('<32Q',raw)))
 
 def secondary_snapshot(power,owner,mailbox):
     require(len(power)==128 and len(owner)==248 and len(mailbox)==256,'Short secondary snapshot.')
@@ -198,7 +207,7 @@ def run(a):
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
-            with usb_guard.reenumeration('sunstoneos-a733','OFF-secondary reset configuration and verified restoration before power requests',2):
+            with usb_guard.reenumeration('sunstoneos-a733','Native secondary ARRIVED and target-owned OFF before verified restoration',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
                 while True:
@@ -210,13 +219,14 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
                 record['result']=decode((a.evidence/'report.bin').read_bytes(),nonce)
                 record['controller']=controller_snapshot((a.evidence/'coherence.bin').read_bytes(),(a.evidence/'core-record.bin').read_bytes())
                 record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
+                record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
