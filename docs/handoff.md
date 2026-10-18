@@ -53,9 +53,13 @@ sources. Broader header changes do not affect those exercised paths. No runtime
 case was replayed for integration. Complete radio and USB host application
 startup remains outstanding; the NPU application still needs real boot authority.
 
-Completed implementation and review workers are idle. Inspect live agent status
-before assigning another integration. New implementations use Sol 6.1 and
-substantive reviews use Astra, with separate worktrees and short task briefs.
+Two Sol 6.1 workers are connecting the next application paths. The board
+application worker owns shared startup, independent Type-C tasks, simultaneous
+USB0 output and USB2 host reads. The radio application worker owns radio startup,
+crypto-engine entropy, association and copied IPv4 requests. Both use separate
+worktrees and coordinate their provider interface. Astra review precedes focused
+execution; neither worker may access the board. Inspect live agent status before
+assigning overlapping work.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
