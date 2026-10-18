@@ -265,7 +265,7 @@ The unchanged returning cache-off helper subsequently ran at fresh SRAM address
 `0x73000`. Same-instance restoration and a follow-up survey passed, establishing
 every launcher predicate before the native initialization checkpoint.
 
-## Returning core-1 RELEASE and redistributor checkpoint
+## Returning startup diagnostics with failure observations
 
 `tools/run-native-startup-probe.py` prepares a fixed diagnostic overlay for the
 preserved native ELF with SHA-256
@@ -363,7 +363,9 @@ boundaries. The reference is the retained `cpu-startup/monitor.disasm`, derived
 from the vendor monitor with SHA-256
 `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632`.
 
-Checkpoint 12 records native GIC_READY and verified redistributor shutdown.
+Checkpoint 13 records a guarded pre-write failure and verified target OFF.
+Its observation record distinguishes the failing CPU. Checkpoint 12 records
+native GIC_READY and verified redistributor shutdown.
 Checkpoint 11 records a clean pre-RELEASE refusal followed by verified shutdown. Checkpoint 9
 captures a prohibited secondary hardware-write address and
 32-bit value, with verified EL1 and distributor restoration. Checkpoint 10
@@ -657,3 +659,61 @@ refusal, target restoration fault and ChildrenAsleep timeout. Artifacts and the
 compact mapping are under
 `~/.cache/sunstoneos/evidence/native-secondary-gic-ready-probe-20261018/`.
 Physical RELEASE, GIC_READY and redistributor restoration remain unqualified.
+
+
+The physical `003:083` GIC_READY attempt did not return. All 27 host commands
+exited zero, including `exe`, but no new FEL instance appeared within ten seconds.
+The ROM sends the execute acknowledgment before branching to the image, so that
+exit status does not prove native entry. No report was available; the runner
+retained ownership without another board request. The failure remains unlocalized.
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/startup-stage-20261017-083/native/runtime/`.
+
+The newly reached native coherence poll rejects SCTLR_EL1 bits in mask
+`0x02001005` at identification index 2, before collecting the target identity.
+The successful ARRIVED/OFF stage captured SCTLR_EL3, not the target's reset
+SCTLR_EL1. Its instruction model had initialized both banks from the primary.
+A different target reset bank or unavailable target DSU read could therefore
+retain before the first redistributor write. Independently, the primary's first
+TYPER scan and redistributor snapshot had not been physically observed to complete.
+These are source-backed observation gaps, not established causes of the failed attempt.
+
+The corrected observer keeps the full success span and adds two failure returns.
+A target failure is eligible only with a complete redistributor snapshot and zero
+admitted continuation writes. The target captures its actual banks, fault registers,
+native coherence controller and cached record. It verifies actual core 1, A55 r2p0,
+EL3, disabled EL3 caches, matching RELEASE/report epoch and clear power requests.
+It reloads its core, epoch and mailbox registers independently of interrupted C
+frames, then waits for the primary's private shutdown request. No redistributor
+or CPU-interface restoration runs because no such write was admitted.
+
+A primary exception is eligible only when its faulting address belongs to the
+explicit read-only scan/snapshot instruction interval. It requires no redistributor
+admission or write, native POWERED/release-phase ownership, an ARMED command and
+ARRIVED report for the matching epoch, EL3 with caches off, and clear requests.
+It requests the already proven unreleased-target OFF sequence. A stalled MMIO
+access remains unrecoverable by a counter check; this path handles exceptions only.
+
+Both returns require a distinct failure handshake, matching final acknowledgment
+and observed PPU OFF before existing cleanup. Checkpoint 13 reports the failure;
+it never claims GIC_READY. A failure after any attempted redistributor write remains
+retained. Unknown states also retain ownership. Capture marks its state before new register/MMIO reads
+or copies; a capture fault parks without retrying those operations.
+
+The 512-byte observation at `0x42002700` remains inside the result-arena backup.
+Its first sixteen 64-bit fields are state, origin, epoch, core, CurrentEL, MPIDR,
+SCTLR_EL3, SCTLR_EL1, TCR_EL1, ESR, ELR, FAR, control, mode, redistributor state
+and MIDR. Origin 1 means target failure; origin 2 means primary snapshot exception.
+State 1 guards capture, state 2 publishes target failure, state 3 publishes primary
+failure, state 4 requests shutdown and state 5 records acknowledgment plus OFF.
+The raw 184-byte target coherence controller begins at offset 128; its 128-byte
+cached record begins at offset 312. The host durably copies all 512 bytes before
+DRAM restoration. An ELF DWARF/symbol audit verifies both source addresses and sizes.
+
+Three focused cases pass: target SCTLR_EL1 admission refusal, a primary TYPER
+read exception and a failure-capture read exception. Earlier whole-phase success,
+clean admission refusals and post-mutation retention evidence remain preserved;
+those success paths keep their original gates. The new artifacts and pre-change
+source/evidence snapshot are under
+`~/.cache/sunstoneos/evidence/native-secondary-prewrite-observer-20261018/`.
+No repeated physical attempt is qualified by these software results.

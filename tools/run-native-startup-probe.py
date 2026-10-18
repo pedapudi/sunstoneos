@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run native core1 through RELEASE/GIC_READY and restore its redistributor before OFF."""
+"""Observe native pre-write failures or finish core1 RELEASE/GIC_READY and verified OFF."""
 import argparse
 import hashlib
 import importlib.util
@@ -87,7 +87,7 @@ def prepare(a):
 
 def decode(raw,nonce):
     require(len(raw)==256,'Short startup report.');v=struct.unpack('<32Q',raw)
-    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,13) and raw[240:]==nonce,'Startup report identity differs.')
+    require(v[:3]==(MAGIC,1,256) and v[3] in range(2,14) and raw[240:]==nonce,'Startup report identity differs.')
     names=('checkpoint','entered_c','entry_sp','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','CNTFRQ_EL0','counter','status','detail','vector','esr','elr','far','terminal_sp')
     result=dict(zip(names,v[3:19]))
     if v[3]==6:result.update(requested_register=v[12],requested_value=v[13])
@@ -115,6 +115,13 @@ def gic_snapshot(raw):
     result['configuration']=dict(zip(('state','core','base','original_arch','original_low','original_high','terminal_arch','terminal_low','terminal_high',
         'restored_arch','restored_low','restored_high','error','permitted_attempts','restore_status','restore_requests'),struct.unpack_from('<16Q',raw,384)))
     return result
+
+def observation_snapshot(raw):
+    require(len(raw)==512,'Short pre-write failure snapshot.')
+    names=('state','origin','epoch','core','CurrentEL','MPIDR_EL1','SCTLR_EL3','SCTLR_EL1','TCR_EL1',
+           'ESR_EL3','ELR_EL3','FAR_EL3','control','mode','gicr_state','MIDR_EL1')
+    return {**dict(zip(names,struct.unpack_from('<16Q',raw))),
+            'controller':controller_snapshot(raw[128:312],raw[312:440])}
 
 def rdist_snapshot(raw):
     require(len(raw)==512,'Short redistributor snapshot.')
@@ -239,7 +246,7 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
             for name,address,size in [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x5000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
-                                      ('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
+                                      ('observation',0x42002700,512),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]:
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
             error=None
             try:
@@ -248,6 +255,7 @@ def run(a):
                 record['gic']=gic_snapshot((a.evidence/'gic.bin').read_bytes())
                 record['activation']=activation_snapshot((a.evidence/'activation.bin').read_bytes())
                 record['redistributor']=rdist_snapshot((a.evidence/'redistributor.bin').read_bytes())
+                record['observation']=observation_snapshot((a.evidence/'observation.bin').read_bytes())
                 record['secondary']=secondary_snapshot((a.evidence/'power.bin').read_bytes(),(a.evidence/'owner.bin').read_bytes(),(a.evidence/'mailbox1.bin').read_bytes())
             except (ValueError,struct.error) as e:error=e
             for name,address,size in DRAM:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))

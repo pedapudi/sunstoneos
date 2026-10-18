@@ -169,6 +169,7 @@ release_checkpoint:
     ldr w11, [x13, #32]
     orr w17, w10, w11
     tbnz w17, #0, park
+rdist_snapshot_begin:
     ldr x12, =0x42002500
     ldr x13, =0x03460000
     dsb sy
@@ -232,6 +233,7 @@ rdist_scan:
     ldr w17, [x14, #0x400]
     str x17, [x12, #88]
     dsb sy
+rdist_snapshot_end:
     mov x17, #1
     str x17, [x12]
     sub w8, w1, #1           // Displaced native release instruction.
@@ -261,6 +263,10 @@ next_checkpoint:
     isb
     mrs x14, cntpct_el0
 ready_wait:
+    ldr x10, =0x42002700
+    ldr x17, [x10]
+    cmp x17, #2
+    b.eq ready_prewrite_failure
     isb
     mrs x17, cntpct_el0
     cmp x17, x14
@@ -282,6 +288,18 @@ ready_wait:
     ldr x17, [x13]
     cmp x17, x2
     b.ne park
+    b activation_request
+ready_prewrite_failure:
+    ldr x17, [x12]
+    cmp x17, #1
+    b.ne park
+    ldr x17, [x12, #248]
+    cbnz x17, park
+    mov x12, x10
+    ldr x17, [x12, #8]
+    cmp x17, #1
+    b.ne park
+    b request_failure_off
 activation_request:
     ldr x12, =0x42002400
     isb
@@ -313,12 +331,41 @@ activation_wait_off:
     str x17, [x12, #56]
     tst w17, #15
     b.ne activation_wait_off
+    ldr x10, =0x42002700
+    ldr x17, [x10]
+    cmp x17, #4
+    b.eq observed_failure_off
+    cbnz x17, park
     ldr x13, =0x42002500
     ldr x17, [x13]
     cbz x17, rdist_return_refusal
     cmp x17, #5
     b.ne park
     mov x17, #12
+    b rdist_return
+observed_failure_off:
+    ldr x13, =0x42002500
+    ldr x17, [x13, #248]
+    cbnz x17, park
+    ldr x17, [x13]
+    ldr x11, [x10, #8]
+    cmp x11, #1
+    b.ne observed_primary_off
+    cmp x17, #1
+    b.ne park
+    b observed_off_complete
+observed_primary_off:
+    cmp x11, #2
+    b.ne park
+    cbnz x17, park
+observed_off_complete:
+    ldr x17, [x10, #16]
+    ldr x11, [x12, #8]
+    cmp x17, x11
+    b.ne park
+    mov x17, #5
+    str x17, [x10]
+    mov x17, #13
     b rdist_return
 rdist_return_refusal:
     mov x17, #11
@@ -728,6 +775,16 @@ target_block:
     ldr x17, =0x41008268
     br x17
 target_failed:
+    ldr x17, =0x42002700
+    ldr x16, [x17]
+    cbnz x16, park          // No recursive observation after any capture attempt.
+    ldr x17, =0x42002500
+    ldr x16, [x17]
+    cmp x16, #1
+    b.ne target_mutated_failure
+    ldr x16, [x17, #248]
+    cbz x16, target_prewrite_failure
+target_mutated_failure:
     ldr x17, =0x42002500
     mrs x16, esr_el3
     str x16, [x17, #456]
@@ -741,6 +798,191 @@ target_failed:
     str x16, [x17]
     dsb sy
     b park                  // Target never publishes primary report or executes RMR.
+
+primary_snapshot_fault:
+    ldr x10, [x16, #128]
+    adr x11, rdist_snapshot_begin
+    cmp x10, x11
+    b.lo primary_unobserved_fault
+    adr x11, rdist_snapshot_end
+    cmp x10, x11
+    b.hs primary_unobserved_fault
+    ldr x12, =0x42002500
+    ldr x17, [x12]
+    cbnz x17, park
+    ldr x17, [x12, #248]
+    cbnz x17, park
+    mov x9, #2
+    b observe_prewrite
+primary_unobserved_fault:
+    mov x17, #5
+    b publish
+target_prewrite_failure:
+    mov x9, #1
+observe_prewrite:
+    ldr x12, =0x42002700
+    ldr x17, [x12]
+    cbnz x17, park
+    mov x17, #1
+    str x17, [x12]           // A capture fault cannot repeat MRS/MMIO or copy.
+    str x9, [x12, #8]
+    ldr x13, =0x42002500
+    str x1, [x13, #480]
+    str x2, [x13, #488]
+    ldr x17, [x13]
+    str x17, [x12, #112]
+    ldr x10, [x13, #248]
+    cbnz x10, park
+    cmp x9, #1
+    b.ne observe_primary_state
+    cmp x17, #1
+    b.ne park
+    b observe_actual_cpu
+observe_primary_state:
+    cbnz x17, park
+observe_actual_cpu:
+    mrs x17, CurrentEL
+    str x17, [x12, #32]
+    cmp x17, #12
+    b.ne park
+    mrs x17, mpidr_el1
+    str x17, [x12, #40]
+    ubfx x10, x17, #8, #3
+    str x10, [x12, #24]
+    cmp x9, #1
+    cset x11, eq
+    cmp x10, x11
+    b.ne park
+    mrs x17, sctlr_el3
+    str x17, [x12, #48]
+    ldr x10, =0x02001005
+    tst x17, x10
+    b.ne park
+    mrs x17, midr_el1
+    str x17, [x12, #120]
+    ldr x10, =0x412fd050
+    cmp x17, x10
+    b.ne park
+    mrs x17, sctlr_el1
+    str x17, [x12, #56]
+    mrs x17, tcr_el1
+    str x17, [x12, #64]
+    mrs x17, esr_el3
+    str x17, [x12, #72]
+    mrs x17, elr_el3
+    str x17, [x12, #80]
+    mrs x17, far_el3
+    str x17, [x12, #88]
+    ldr x13, =0x42002400
+    ldr x17, [x13]
+    cmp x17, #1
+    b.ne park
+    ldr x25, [x13, #8]
+    cbz x25, park
+    str x25, [x12, #16]
+    ldr x13, =0x42002280
+    ldr x17, [x13, #104]
+    cmp x17, #7
+    b.ne park
+    ldr x13, =0x4200ebb0
+    ldr w17, [x13]
+    cmp w17, #2
+    b.ne park
+    cmp x9, #2
+    b.ne observe_command
+    ldr x13, =0x4200efa4
+    ldr w17, [x13]
+    cmp w17, #4
+    b.ne park
+observe_command:
+    mov x20, #1
+    ldr x21, =0x42005100
+    ldr x24, =0x42005180
+    ldr x17, =0x41002164
+    blr x17                  // Reloaded core/epoch pointers; no C-frame assumptions.
+    cbnz x0, park
+    ldr x17, [x21, #24]
+    cmp x9, #1
+    mov x10, #1
+    cinc x10, x10, eq
+    cmp x17, x10            // Target failure: RELEASE; primary fault: ARMED.
+    b.ne park
+    ldr x17, [x24, #40]
+    cmp x17, x10
+    b.ne park
+    ldr x17, [x24]
+    cmp x17, x25
+    b.ne park
+    ldr x17, [x24, #8]
+    cmp x17, #1
+    b.ne park
+    ldr x13, =0x07050204
+    dsb sy
+observe_requests:
+    ldr w10, [x13]
+    str x10, [x12, #96]
+    ldr w11, [x13, #32]
+    str x11, [x12, #104]
+    orr w17, w10, w11
+    tbnz w17, #0, park
+    ldr x13, =0x07053008
+    ldr w17, [x13]
+    and w17, w17, #15
+    cmp w17, #8
+    b.ne park
+    cmp x9, #1
+    b.ne observe_copy
+    mrs x17, S3_0_C15_C2_7
+    tbnz x17, #0, park
+observe_copy:
+    ldr x13, =0x4200e538
+    add x14, x12, #128
+    mov x15, #23
+observe_coherence:
+    ldr x17, [x13], #8
+    str x17, [x14], #8
+    subs x15, x15, #1
+    b.ne observe_coherence
+    ldr x13, =0x4200e100
+    mov x15, #16
+observe_record:
+    ldr x17, [x13], #8
+    str x17, [x14], #8
+    subs x15, x15, #1
+    b.ne observe_record
+    dsb sy
+    cmp x9, #1
+    b.ne observe_primary_ready
+    mov x17, #2
+    str x17, [x12]
+observe_target_wait:
+    dsb sy
+    ldr x17, [x12]
+    cmp x17, #4
+    b.ne observe_target_wait
+    ldr x13, =0x42002500
+    ldr x17, [x13]
+    cmp x17, #1
+    b.ne park
+    ldr x17, [x13, #248]
+    cbnz x17, park
+    ldr x12, =0x42002400
+    ldr x17, [x12, #16]
+    cmp x17, x25
+    b.ne observe_target_retry
+    b secondary_power_off
+observe_target_retry:
+    ldr x12, =0x42002700
+    b observe_target_wait
+observe_primary_ready:
+    mov x17, #3
+    str x17, [x12]
+    b request_failure_off
+request_failure_off:
+    mov x17, #4
+    str x17, [x12]
+    ldr x2, [x12, #16]
+    b activation_request
 
 prearm_checkpoint:
     ldr x12, =0x42002240
@@ -899,6 +1141,9 @@ fault_checkpoint:
     mrs x17, mpidr_el1
     ubfx x17, x17, #8, #3
     cbnz x17, target_failed
+    ldr x16, =0x42002700
+    ldr x17, [x16]
+    cbnz x17, park
     ldr x16, =0x42002000
     str x18, [x16, #112]
     mrs x17, esr_el3
@@ -908,7 +1153,7 @@ fault_checkpoint:
     mrs x17, far_el3
     str x17, [x16, #136]
     mov x17, #5
-    b publish
+    b primary_snapshot_fault
 write_checkpoint:
     mrs x17, mpidr_el1
     ubfx x17, x17, #8, #3
