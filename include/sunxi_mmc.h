@@ -22,8 +22,10 @@ struct sunxi_mmc_ops {
     int (*write32)(void *, uint32_t, uint32_t);
     int (*barrier)(void *);
     int (*now_us)(void *, uint64_t *);
-    /* Admit a cold card in native 1-bit legacy mode, exclusive controller/card
-     * ownership, independent recovery, settled rails and pins, accessible reset
+    /* Admit native 1-bit legacy mode with cold card authority, or the first
+     * read-only SD CMD0 initialization policy documented in storage-read-application.
+     * The latter requires native 3.3 V signaling and no failed native SD lifetime.
+     * Both require exclusive controller/card ownership, reviewed recovery, settled rails and pins, accessible reset
      * release and measured module rate. The command queue must be disabled and drained. No outstanding DMA or
      * command may exist. Remaining controller controls must have known reset
      * defaults, including disabled encryption and extended-command modes.

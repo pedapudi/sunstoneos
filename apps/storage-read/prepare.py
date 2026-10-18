@@ -80,6 +80,24 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
+def initial_policy(fact):
+    """Authorize first initialization; reset/idle/ready checks remain native work."""
+    common=['all_sd0_clients_excluded','remote_firmware_excluded',
+            'irq193_owned_disabled_drained','no_dma_queue_encryption','no_clock_reset_writers']
+    require(all(fact.get(k) is True for k in common),'Required SD0 ownership fact absent.')
+    mode=fact.get('initialization_mode','cold')
+    if mode=='cold':
+        require(fact.get('cold_sd0_controller') is True and fact.get('cold_card_protocol') is True,
+                'Cold SD0/card authority absent.')
+    elif mode=='cmd0-once':
+        require(not fact.get('cold_sd0_controller') and not fact.get('cold_card_protocol'),
+                'CMD0 initialization must not claim unestablished cold state.')
+        require(all(fact.get(k) is True for k in ('native_sd_33v_signalling',
+                'no_failed_native_lifetime','require_controller_reset_baseline',
+                'authorize_one_cmd0_initialization')),
+                'Bounded CMD0 initialization authority absent.')
+    else:raise ValueError('Unsupported SD0 initialization policy.')
+
 def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-storage-read-supervised-entry-v2','Wrong STORAGE_READ admission schema.')
@@ -92,7 +110,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'STORAGE_READ evidence differs.')
         fact=json.loads(data)
         require(fact.get('schema')=='a733-storage-read-'+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
-        required={'initial':['cold_sd0_controller','cold_card_protocol','all_sd0_clients_excluded','remote_firmware_excluded','irq193_owned_disabled_drained','no_dma_queue_encryption','no_clock_reset_writers'],
+        if key=='initial':initial_policy(fact)
+        required={'initial':[],
             'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
             'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],
             'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],

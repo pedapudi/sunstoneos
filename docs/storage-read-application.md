@@ -11,8 +11,8 @@ power-removal recovery. It does not arm a watchdog or authorize media writes.
 The service uses the existing MMC platform and controller, common clocks, PF
 pins, rails, PMIC, register mutex and memory services. SD0 uses PF0–6, one-bit
 legacy mode and active-low detection on PF6. Its 800 kHz module clock produces
-a 400 kHz card clock. The existing cold setup includes its local controller
-reset. The service adds no post-fault reset, recovery pulses or retry. It exposes
+a 400 kHz card clock. Startup verifies the reset-held controller baseline,
+then performs the existing local controller reset and card initialization. The service adds no post-fault reset, recovery pulses or retry. It exposes
 no filesystem, raw command, write, erase, trim or update authority.
 
 ## Admission binds the entire lifetime
@@ -26,8 +26,9 @@ The complete session and immutable image geometry must match the tested image.
 
 Physical admission requires current-instance evidence for these conditions:
 
-- Exclusive cold SD0/card protocol state, disabled and drained IRQ193, no DMA,
-  command queue, encryption, remote client or other clock/reset writer.
+- Exclusive SD0/card ownership, disabled and drained IRQ193, no DMA, command
+  queue, encryption, remote client or other clock/reset writer. The initial
+  authority selects either established cold state or one bounded CMD0 attempt.
 - A private PIO buffer with identity-mapped, cacheable, inner-shareable RAM,
   no aliases and permanent reservation.
 - Qualified SD slot wiring, PF routing, pulls, drives, 3.3 V domain and detection.
@@ -45,6 +46,52 @@ The existing card API copies cached CID/CSD/capacity after those checks; it does
 not reread identity. An unobserved removal and replacement between observations
 cannot establish that the original card remains inserted. Hotplug recovery and
 card substitution remain unsupported modes.
+
+## First initialization can establish the card protocol state
+
+A previously unexecuted read-only SD lifetime may select
+`initialization_mode:"cmd0-once"` in its initial authority record. This policy
+requires actual native SD 3.3 V signaling, no prior failed native SD lifetime,
+exclusive ownership, and authorization for one bounded CMD0 initialization.
+It requires the existing controller reset baseline checks; it does not assert
+that the card is already cold. Both cold-state fields must be absent or false.
+The default policy still requires both cold controller and cold card authority.
+Maintenance and write admission are unchanged.
+
+The [native platform](../drivers/storage/a733_mmc_platform.c) checks that SDC0's
+module clock is gated and its bus/reset bits are clear, and refuses enabled,
+pending or active IRQ193 state. It checks the exact inherited PF pin configuration
+and actual card presence. It enables the local bus while holding reset for at
+least ten microseconds, then verifies reset release. An inherited enabled
+controller or incompatible pin route remains a retained refusal; this policy
+adds no takeover sequence.
+
+The [native controller](../drivers/storage/sunxi_mmc.c) refuses an active command,
+busy controller/card state or enabled DMA before its software reset. It waits
+for reset bits to clear, configures one-bit legacy PIO and checks clock/control
+readback. It then sends CMD0 once with zero argument and the initialization
+sequence flag. Command completion alone cannot prove card reset because CMD0
+has no response. The driver requires CMD8's voltage/check-pattern echo, bounded
+CMD55/ACMD41 readiness, CID/RCA/CSD and selection, then CMD13 ready-for-data in
+transfer state before exposing reads. Failure retains ownership without another
+reset or CMD0 attempt.
+
+The SD Association's [Physical Layer Simplified Specification version 7.10,
+sections 4.2.1–4.2.2](https://www.sdcard.org/cms/wp-content/themes/sdcard-org/dl.php?f=Part1_Physical_Layer_Simplified_Specification_Ver7.10.pdf)
+defines CMD0 as the SD-mode software reset except for cards in Inactive state.
+It requires CMD8 before ACMD41 after reset. An Inactive card may therefore fail
+this attempt and require subsequent external recovery. This policy does not
+admit SPI mode, uncertain 1.8 V signaling, outstanding media writes or a failed
+native session. Actual signaling authority remains necessary; the host GPIO
+voltage setting alone cannot establish the card's signaling mode.
+
+The pinned A733 manual's section 11.3.8.6 defines `SEND_INIT_SEQ` at command bit
+15. The pinned bootloader's `drivers/mmc/sunxi_mmc.c` sets that flag for CMD0.
+These are the existing [MMC source references](mmc.md), not runtime dependencies.
+The first attempt preserves the medium: it issues initialization/identification
+and read commands, with no media write, erase, trim or regulator change. A power
+cycle is a recovery action after a retained failure, rather than a requirement
+solely to assert cold card state before the first eligible attempt.
 
 ## Two copied client slots share one controller buffer
 

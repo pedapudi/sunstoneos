@@ -7,10 +7,13 @@ manager, rail ledger and asynchronous PMIC provider. The
 FreeRTOS task and common register mutex for every controller, clock, GPIO-voltage
 and interrupt-register access.
 
-The binding implements a cold startup and a permanent read-only session. Physical
-storage operation remains unqualified. Independent watchdog recovery, observed
-board wiring, cold card state and eMMC population remain admission prerequisites.
-Neither software ownership nor a successful register read establishes these facts.
+The binding requires a reset-held controller baseline and a permanent session.
+Physical storage operation remains unqualified. Observed board wiring, reviewed
+recovery and eMMC population remain admission prerequisites. The read-only
+[SD service](storage-read-application.md) also permits one bounded CMD0 attempt
+from an established native SD 3.3 V signaling mode without claiming cold card
+history. Neither software ownership nor a register read establishes wiring or
+signaling mode.
 
 ## One-bit reads preserve media contents
 
@@ -83,8 +86,11 @@ bank voltage must remain excluded for the session's lifetime.
 
 ## Startup refuses inherited activity and faults
 
-Admission requires a cold native card and a locally gated controller held in
-reset. An active or failed inherited controller must not be presented as cold.
+Admission requires a locally gated controller held in reset. The general binding
+retains its cold-card contract; the read-only SD service may instead authorize
+its documented first CMD0 initialization. An active or failed inherited controller
+must not be presented as reset-held. A failed native SD lifetime cannot use the
+first-initialization policy.
 The selected interrupt must already be disabled, inactive and without a pending
 request. Startup preserves unexplained pending state and refuses it.
 
@@ -202,5 +208,6 @@ retained refusal requiring investigation.
 SD v1, wider buses, faster clocks, voltage switching, tuning, DMA, interrupts,
 hotplug, recovery, storage writes, alternate eMMC partitions, command queuing and
 power management remain required storage work. UFS remains separate. Physical
-read qualification must preserve the inserted card and wait for independent
-watchdog recovery. Performance work follows functional hardware coverage.
+read qualification must preserve the inserted card and use its reviewed recovery
+plan; the supervised read-only SD lifetime retains resources until complete
+board/card power removal. Performance work follows functional hardware coverage.

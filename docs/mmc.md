@@ -58,9 +58,11 @@ CMD16 changes the volatile read block length; it does not write media contents.
 
 The [public contract](../include/sunxi_mmc.h) requires a platform binding to
 acquire and retain exclusive ownership of the card, controller and every
-register writer. It must establish cold native card state, settled rails,
-clock/gate/reset accessibility, correct pins and independent recovery. The
-command queue must be disabled and drained, with no outstanding commands or DMA.
+register writer. It requires cold native card authority or the explicit first
+read-only [SD CMD0 initialization policy](storage-read-application.md). Both
+require settled rails, native signaling authority, clock/gate/reset accessibility,
+correct pins and reviewed recovery. The command queue must be disabled and
+drained, with no outstanding commands or DMA.
 These are physical prerequisites. Model callbacks establish none of them.
 
 For SD, physical presence must come from the board's active-low PF6 card-detect
@@ -179,9 +181,10 @@ Neither compilation nor a model establishes physical storage operation.
 ## Remaining storage coverage
 
 The native platform binding implements clock, rail, pin, reset and presence
-ownership for SDC0, SDC2 and SDC3. Its cold physical admission and independent
-recovery prerequisites remain required before a bounded identification/read
-attempt. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
+ownership for SDC0, SDC2 and SDC3. Its physical ownership, signaling, supply
+and reviewed recovery prerequisites remain required before a bounded
+identification/read attempt. Only the read-only SD service permits its explicit
+first CMD0 policy in place of cold card history. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
 CMD1 timeout require new evidence before another physical attempt.
 
 SD v1 identification, SDUC, wider buses, higher rates, voltage switching,

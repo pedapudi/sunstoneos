@@ -25,8 +25,8 @@ enum a733_mmc_platform_result { A733_MMC_PENDING, A733_MMC_BUSY,
     A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID };
 /* Bounded, non-reentrant callbacks; exactly1 means success. Authenticated
  * admission covers the immutable config and actual token, cold native card
- * state, populated eMMC, source-qualified supplies/settling, pin pulls and
- * independent recovery. It excludes every boot, DMA, IRQ, secure/remote and
+ * state (or the documented first read-only SD CMD0 policy), populated eMMC,
+ * source-qualified supplies/settling, pin pulls and reviewed recovery. It excludes every boot, DMA, IRQ, secure/remote and
  * bank-voltage writer for the complete lifetime. Inherited failed/active card
  * or controller state must not be presented as cold. All SDC2/SDC3/NAND/SPIF
  * alternate-pad and unselected-route writers are excluded before route enable.
