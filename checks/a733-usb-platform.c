@@ -54,7 +54,7 @@ static int writereg(void *c,uintptr_t a,uint32_t v)
     switch(a-C){
     case 0x1340:mask=0x87000000;assert(f->config.cold_reference);
         if((old^v)&0x07000000)assert(!((old|v)&0x80000000));
-        if((v&0x81000000)==0x81000000){
+        if(v&0x80000000){
             if(f->tight_wait)f->now=f->config.deadline_us-5;
             f->ref_enabled=f->now;
         }break;
@@ -82,7 +82,7 @@ static void init(struct fixture *f,unsigned cold)
     memset(f,0,sizeof(*f));f->now=100;f->auth_result=1;
     f->config=(struct a733_usb_platform_config){.owner=11,.handoff=12,.deadline_us=100000,
         .fabric={0,0x80000000,0x80000000},.rate_hz={24000000,24000000,24000000},.cold_reference=cold};
-    *reg(f,0x07090160)=0;*reg(f,0x070101ac)=1;
+    *reg(f,0x07090160)=0x10000002;*reg(f,0x070101ac)=1;
     *reg(f,C)=0xf8000000u|(99u<<8)|(99u<<16);
     *reg(f,C+0x580)=*reg(f,C+0x588)=0x80000000;
     *reg(f,C+0x5a4)=0x30001;*reg(f,C+0x5c0)=0x110103ff;*reg(f,C+0x5e0)=0x80000000;

@@ -1,4 +1,5 @@
 #include "a733_mmc_platform.h"
+#include "a733_clock_reference.h"
 #include "a733_storage_update.h"
 #define CCU UINT32_C(0x02002000)
 #define PIO UINT32_C(0x02000000)
@@ -90,20 +91,17 @@ static int profile(struct a733_mmc_platform *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
     if(!rd(p,UINT32_C(0x07090160),&osc)||(osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
-        (((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||!rd(p,CCU,&ref)||
-        (ref&0xf8000000u)!=0xf8000000u)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if(n<80||n>116||n!=m)return 0;
+        !rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
     for(unsigned i=0;i<3;++i)
         if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return 0;
     if(!rd(p,CCU+0x5c0,&a)||(a&(BIT(29)|BIT(24)))!=BIT(24)||
         !rd(p,CCU+0x5e0,&a)||!(a&BIT(30))||
         !rd(p,CCU+0x59c,&a)||(a&0x30001u)!=0x30001u)return 0;
     if(!(p->shared&A733_CLOCK_PERI0))return 1;
-    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(BIT(24)|BIT(1)))||
+    if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&BIT(1))||
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
         !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return 0;
-    n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
+    unsigned n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=parent_mhz[i][(p->config.fabric[i]>>24)&7],div,branches;
         switch(mhz) {

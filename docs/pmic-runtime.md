@@ -21,14 +21,16 @@ contains PL0/PL1; APBS1 clocks the I2C controller. Before GPIO or I2C access,
 the provider reads APBS0 at `0x0701000c` and accepts source0/DCXO or
 source4/SYS_CLK24M with any encoded divider from 1 through 32. It accepts APBS1
 source0 or source4 with divisor field zero. When either bus uses source4, a read
-of PLL_REF at `0x02002000` must show bits31:27 set and matching decoded N and M
-factors, with N between 80 and 116. This is the existing NPU/GPU
-24 MHz reference policy. The provider also checks the inherited oscillator
-selection, controller gate and reset release. The adopted bus must already
-be enabled, idle, and have both lines released. The observed clock divisor
-must represent 10–400 kHz and remain unchanged. The first successful baseline
-also records both buses' selector/divisor bits. Later baseline checks refuse any
-profile change, including a switch between otherwise supported sources. These are programmed clock
+of PLL_REF at `0x02002000` must show bits31:27 set, N between 80 and 116,
+and `DCXO_Hz × N = 24,000,000 × M`. The inherited oscillator must be enabled
+and stable. Source0 uses its decoded 19.2, 24 or 26 MHz rate; source4 uses the
+normalized 24 MHz reference. The enabled bus must be idle with both lines
+released. Exact integer cross-products check the inherited TWI denominator
+against 10–400 kHz using the APBS1 parent, independently of the APBS0 divider.
+The first baseline records both buses' selector/divisor bits and the TWI divisor.
+When either bus uses source0, it also records the decoded DCXO rate. Later
+checks refuse changes to those values, including a supported source change.
+These are programmed clock
 settings; electrical timing is not measured.
 
 Before the pin manager changes muxes, the provider checks the legacy engine,

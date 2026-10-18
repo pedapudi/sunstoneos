@@ -45,7 +45,13 @@ Reference initialization additionally acquires exclusive USB01_REF and verifies
 that both ports have their bus gates disabled and resets asserted. Native port
 users reserve this parent through the registry. The external authority must
 exclude remote firmware and other consumers that the registry cannot observe.
-The adoption mode instead requires the existing reference to be DCXO at 24 MHz.
+The adoption mode requires an enabled 24 MHz PHY reference: selector0
+SYS_CLK24M, or selector1 DCXO only when the decoded oscillator is 24 MHz.
+Reference initialization preserves selector1 for 24 MHz DCXO and selects
+SYS_CLK24M for 19.2 or 26 MHz DCXO. Final verification requires the captured
+selector and gate unchanged; selector1 also requires DCXO to remain 24 MHz.
+These checks do not authorize taking over an active ROM USB controller: USB0
+must still satisfy the disabled/reset baseline before any mutation.
 
 After final readback, reference initialization atomically replaces its exclusive
 parent scope with a shared reservation. The new token retains USB0 ownership;
@@ -65,7 +71,7 @@ refused. All accesses use Device mappings and full-system barriers.
 
 | Register | Operation |
 | --- | --- |
-| CCU `0x1340` | Disable the common reference, select DCXO, enable it; preserve other fields |
+| CCU `0x1340` | Disable the common reference, select a 24 MHz source, enable it; preserve other fields |
 | CCU `0x1304` | Deassert USB0 device reset, then enable its bus gate; preserve host controls |
 | USB0 `0x410` | Clear PHY loopback and SIDDQ; set external VBUS-valid under admitted sink-session ownership |
 | CCU `0x1300` | Deassert USB0 PHY reset; preserve the OHCI clock and selector |
@@ -86,7 +92,8 @@ not prove completion of previously accepted external memory transactions.
 
 Upstream admission checks AHB, NSI and MBUS selectors and rates, MSI_LITE2 gate
 and resets at CCU `0x5a4`, USB_SYS at `0x5c0`, and MSI_LITE2 MBUS at `0x5e0`.
-It admits 24 MHz DCXO and PLL_REF, with selected PERI0 outputs checked when used.
+It decodes the detected DCXO rate and requires enabled, stable DCXO and exact
+24 MHz PLL_REF, with selected PERI0 outputs checked when used.
 The corresponding FABRIC scope remains shared; this driver never changes those
 global controls. Complete cold fabric initialization is separate required work.
 

@@ -292,3 +292,23 @@ source/divider validation, reference dependency and refusal after a profile chan
 Both frozen artifacts were reconciled during integration without another run.
 Existing native images retain their earlier provider layout; these host results
 do not establish new native or physical operation.
+
+## Detected oscillator and normalized reference
+
+The SD, PMIC and USB0 platform providers share the pure decoder in
+`include/a733_clock_reference.h`. The pinned A733 manual §9.1.7.16 defines
+XO_CTRL0 bits15:14 as 0/3=24 MHz, 1=19.2 MHz and 2=26 MHz. Bits28 and1 must
+show stable and enabled. PLL_REF uses N=(bits15:8)+1 and M=(bits22:16)+1;
+validation requires N80–116 and the exact equation `DCXO_Hz × N = 24 MHz × M`.
+Thus observed 26 MHz with N96/M104 is supported without retuning. Table4-3
+lists this configuration. The pinned kernel `ccu-sun60iw2.c` confirms the fields
+and the fixed PLL_REF parent of PERI0. PERI0 bits24:23 are reserved in manual
+§4.1.6.6; bit24 is not a parent selector. Other PERI0 output, divisor, gate and
+modulation requirements remain enforced.
+
+Manual §11.3.3 defines SMHC SYS_CLK24M as fixed24 MHz from the DCXO/PLL_REF
+mux. USB01_REF differs: §4.1.6.198 defines selector0 as SYS_CLK24M and selector1
+as raw DCXO. PMIC APBS source0 also uses raw DCXO, while source4 uses the
+normalized reference. A shared clock lease does not make these rates equal.
+The manual text is pinned at SHA-256
+`219d3c21e5377d18a096765f429555d0693f7fa9b2ae2eb5bb3f225d8b6a09c2`.

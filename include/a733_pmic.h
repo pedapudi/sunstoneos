@@ -22,9 +22,10 @@ struct a733_pmic_snapshot {
  * established. The read-only provider may use supervised RAM recovery under
  * docs/a733-smp-supervised.md, retaining every lease until manual power removal.
  * An identity or register read does not prove these facts. This first profile
- * adopts an enabled, idle 24 MHz APBS1 bus: source0 DCXO or source4
- * PLL_REF, divider0. PLL_REF must satisfy the existing 24 MHz N=M profile.
- * The selected route and inherited TWI divisor stay fixed for the lifetime.
+ * adopts an enabled, idle APBS1 bus: source0 detected DCXO or source4
+ * PLL_REF, divider0. PLL_REF must decode to exactly24MHz from the detected DCXO.
+ * The selected route, raw DCXO rate when used, and inherited TWI divisor stay
+ * fixed for the lifetime; the exact baud rate must remain within 10–400 kHz.
  */
 struct a733_pmic_config {
     uint64_t owner, identity, startup_deadline;
@@ -60,7 +61,7 @@ struct a733_pmic {
     struct a733_pmic_slot slots[A733_PMIC_REQUESTS];
     atomic_uint busy;
     uint64_t last_now, next_id, deadline;
-    uint32_t divider, last_status, apbs1, apbs0;
+    uint32_t divider, last_status, apbs1, apbs0, dcxo_hz;
     unsigned stage, held, retained, failed, active, phase, byte_index;
     uint8_t values[6];
 };

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic.h"
+#include "a733_clock_reference.h"
 #define TWI UINT32_C(0x07083000)
 #define BIT(n) (UINT32_C(1)<<(n))
 enum { S_CLOCK,S_BASELINE,S_PINS,S_VERIFY,S_READY };
@@ -102,7 +103,6 @@ static int baseline(struct a733_pmic *p)
 {
     uint32_t osc,apbs,apbs0,ref,divider;
     if(!rd(p,0x07090160,&osc) || (osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
-       (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) ||
        !rd(p,0x0701000c,&apbs0))return 0;
     apbs0&=UINT32_C(0x0700001f);
     unsigned source=apbs0>>24;
@@ -112,10 +112,10 @@ static int baseline(struct a733_pmic *p)
     apbs&=UINT32_C(0x0700001f);
     if((apbs!=0 && apbs!=UINT32_C(0x04000000)) ||
        (p->stage!=S_BASELINE && apbs!=p->apbs1))return 0;
+    uint32_t dcxo=a733_clock_dcxo_hz(osc);
+    if((!source||!apbs) && p->stage!=S_BASELINE && dcxo!=p->dcxo_hz)return 0;
     if(apbs || source==4) {
-        if(!rd(p,0x02002000,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000))return 0;
-        unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-        if(n<80 || n>116 || n!=m)return 0;
+        if(!rd(p,0x02002000,&ref) || !a733_clock_ref24_valid(osc,ref))return 0;
     }
     if(!match(p,0x0701019c,0x10001,0x10001) ||
        !match(p,0x07025000,0xff,0x22) || !match(p,0x03400000,BIT(31),0) ||
@@ -130,8 +130,10 @@ static int baseline(struct a733_pmic *p)
     unsigned m=(divider>>3)&15,n=divider&7;
     unsigned denominator=(1u<<n)*(m+1)*((m==0 && (divider&0x180)==0x80) ? 11u : 10u);
     /* 10–400kHz supported read profile; no inherited divisor mutation. */
-    if(denominator<60 || denominator>2400)return 0;
-    if(p->stage==S_BASELINE){p->apbs1=apbs;p->apbs0=apbs0;p->divider=divider;}
+    uint32_t parent=apbs?24000000:a733_clock_dcxo_hz(osc);
+    if((uint64_t)parent<UINT64_C(10000)*denominator ||
+       (uint64_t)parent>UINT64_C(400000)*denominator)return 0;
+    if(p->stage==S_BASELINE){p->apbs1=apbs;p->apbs0=apbs0;p->divider=divider;p->dcxo_hz=dcxo;}
     else if(divider!=p->divider)return 0;
     return 1;
 }

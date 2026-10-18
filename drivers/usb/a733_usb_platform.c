@@ -1,10 +1,10 @@
 #include "a733_usb_platform.h"
+#include "a733_clock_reference.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
 #define USB UINT32_C(0x04100000)
 #define REF_MASK UINT32_C(0x87000000)
-#define REF_ON UINT32_C(0x81000000)
 #define W1C UINT32_C(0x70)
 enum { ACQUIRE, AUTHORIZE, BASELINE, REF_OFF, REF_SELECT, REF_ENABLE, WAIT_REF,
     DEVICE_RESET, DEVICE_GATE, WAIT_DEVICE, CORE_CHECK, PHY_CONTROL, PHY_RESET,
@@ -86,17 +86,15 @@ static int peri_rate(struct a733_usb_platform *p,uint32_t v,unsigned mhz)
 }
 static int stable(struct a733_usb_platform *p)
 {
-    uint32_t v;
-    if (!rd(p,UINT32_C(0x07090160),&v) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
+    uint32_t v,osc;
+    if (!rd(p,UINT32_C(0x07090160),&osc) ||
         !bits(p,UINT32_C(0x070101ac),1,1)) return 0;
-    /* SYS24M may select DCXO or PLL_REF. Admit both at 24 MHz instead of
-     * inferring the upstream selection from a fixed-clock DTS declaration. */
-    if (!rd(p,CCU,&v) || (v&0xf8000000u)!=0xf8000000u) return 0;
-    unsigned n=((v>>8)&255)+1,m=((v>>16)&127)+1;
-    if (n<80 || n>116 || n!=m) return 0;
+    /* Manual11.3.3 defines SYS_CLK24M as fixed24MHz from the DCXO/PLL_REF
+     * mux. Decode PLL_REF from the actual DCXO rate; DCXO need not be24MHz. */
+    if (!rd(p,CCU,&v) || !a733_clock_ref24_valid(osc,v)) return 0;
     if (p->shared&A733_CLOCK_PERI0) {
         if (!rd(p,CCU+0xa0,&v) ||
-            (v&0xff000002u)!=0xfe000000u || (((v>>8)&255)+1)<53 || (((v>>8)&255)+1)>105 ||
+            (v&0xfe000002u)!=0xfe000000u || (((v>>8)&255)+1)<53 || (((v>>8)&255)+1)>105 ||
             !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000u,0)) return 0;
         for (unsigned i=0;i<3;++i) if (!peri_rate(p,v,p->parent_mhz[i])) return 0;
     }
@@ -106,12 +104,27 @@ static int stable(struct a733_usb_platform *p)
     return bits(p,CCU+0x5a4,0x30001,0x30001) && bits(p,CCU+0x5c0,BIT(9),BIT(9)) &&
         bits(p,CCU+0x5e0,BIT(31),BIT(31));
 }
+static int reference_valid(struct a733_usb_platform *p)
+{
+    uint32_t osc;
+    return bits(p,CCU+0x1340,REF_MASK,p->reference) &&
+        (p->reference==BIT(31) ||
+         (rd(p,UINT32_C(0x07090160),&osc) && a733_clock_dcxo_hz(osc)==24000000));
+}
 static int cold(struct a733_usb_platform *p)
 {
+    uint32_t osc,v;
     if (!bits(p,CCU+0x1300,0xc0000000u,0) || !bits(p,CCU+0x1304,0x01110111,0)) return 0;
-    if (p->config.cold_reference)
-        return bits(p,CCU+0x1308,0xc0000000u,0) && bits(p,CCU+0x130c,0x00110011,0);
-    return bits(p,CCU+0x1340,REF_MASK,REF_ON);
+    if (p->config.cold_reference) {
+        if (!bits(p,CCU+0x1308,0xc0000000u,0) || !bits(p,CCU+0x130c,0x00110011,0) ||
+            !rd(p,UINT32_C(0x07090160),&osc)) return 0;
+        /* Manual4.1.6.198: selector0 SYS_CLK24M; selector1 raw DCXO. */
+        p->reference=BIT(31)|(a733_clock_dcxo_hz(osc)==24000000?BIT(24):0);
+        return 1;
+    }
+    if (!rd(p,CCU+0x1340,&v)) return 0;
+    p->reference=v&REF_MASK;
+    return (p->reference==BIT(31) || p->reference==(BIT(31)|BIT(24))) && reference_valid(p);
 }
 static int core_detached(struct a733_usb_platform *p)
 {
@@ -189,7 +202,7 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     switch (p->stage) {
     case BASELINE:ok=stable(p)&&cold(p);break;
     case REF_OFF:ok=update(p,CCU+0x1340,BIT(31),0,0);break;
-    case REF_SELECT:ok=bits(p,CCU+0x1340,BIT(31),0)&&update(p,CCU+0x1340,0x07000000,0x01000000,0);break;
+    case REF_SELECT:ok=bits(p,CCU+0x1340,BIT(31),0)&&update(p,CCU+0x1340,0x07000000,p->reference&0x07000000,0);break;
     case REF_ENABLE:ok=update(p,CCU+0x1340,BIT(31),BIT(31),0)&&wait_start(p,10);break;
     case DEVICE_RESET:ok=update(p,CCU+0x1304,BIT(24),BIT(24),0);break;
     case DEVICE_GATE:ok=update(p,CCU+0x1304,BIT(8),BIT(8),0)&&wait_start(p,40);break;
@@ -200,7 +213,7 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     /* Board phy_range 0x188 maps to TXVREF=8, RISE=0, PREEMP=2, RES=1. */
     case TUNE:ok=update(p,USB+0x418,0xf3f,0x806,0);break;
     case FORCE_DEVICE:ok=update(p,USB+0x400,0xf000,0xf000,W1C);break;
-    case VERIFY:ok=stable(p)&&core_detached(p)&&bits(p,CCU+0x1340,REF_MASK,REF_ON)&&
+    case VERIFY:ok=stable(p)&&core_detached(p)&&reference_valid(p)&&
         bits(p,CCU+0x1300,0xc0000000u,BIT(30))&&bits(p,CCU+0x1304,0x01110111,0x01000100)&&
         bits(p,USB+0x410,0xa8,0x20)&&bits(p,USB+0x420,1,1)&&bits(p,USB+0x418,0xf3f,0x806)&&
         bits(p,USB+0x400,0xf000,0xf000);break;
