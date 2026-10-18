@@ -8,9 +8,13 @@ components before expanding isolated infrastructure. A complete device path incl
 native initialization, resource ownership, application access, successful operations,
 interrupts where applicable, and bounded failure recovery.
 
-Establish reliable board recovery first, then complete shared platform services and
-integrate dependent devices. Choose work by how directly it advances physical
-functionality or removes a concrete integration blocker.
+Use a reviewed recovery plan for each physical test, then complete shared platform
+services and integrate dependent devices. Supervised RAM-only bring-up may use
+manual USB reconnection. Watchdog reset qualification and USB power automation
+are deferred; neither blocks unrelated integration. Intentional reset, unattended
+fault tests and persistent writes retain their recovery requirements. Choose work
+by how directly it advances physical functionality or removes a concrete
+integration blocker.
 
 When physical testing is blocked, complete native image integration and focused software
 checks. Continue independent work without treating emulation as physical qualification.

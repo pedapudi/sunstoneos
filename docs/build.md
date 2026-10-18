@@ -96,8 +96,11 @@ The [native board application](board-application.md) is available as
 `sunstone-a733-board` when `SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR` and
 `SUNSTONE_NETWORK_C_HEADERS` identify the authenticated networking sources and
 freestanding C headers. It links USB0 output, USB2 host reads and native radio
-startup. Its immutable session still requires qualified hardware-watchdog,
-memory and power admission before physical execution.
+startup. The default mode requires qualified hardware-watchdog admission.
+`SUNSTONE_BOARD_SUPERVISED=ON` selects the separate mode that leaves the watchdog
+disabled and retains resources until manual power removal. Both modes require
+real memory and power admission before physical execution; see the
+[supervised board procedure](board-application.md).
 
 The `sunstone-a733-camera` target connects native OV5640 capture to USB0 output.
 The separate `a733-smp-supervised` target runs the all-core observer with the

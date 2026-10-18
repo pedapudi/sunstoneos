@@ -63,7 +63,9 @@ the central board image build pass. All 156 actual repository dependencies match
 the preserved application snapshot; no runtime checks were repeated for integration.
 Full native startup, physical transfers and entropy qualification remain untested.
 
-The board image still requires a qualified hardware-watchdog window. The separate
+The default board image still requires a qualified hardware-watchdog window.
+Its integrated supervised mode leaves the watchdog disabled and retains resources
+until manual power removal. The separate
 [supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
 remain disabled. Its native build and focused startup, admission and host checks
 pass, including central integration. USB capture leaves the board running until
@@ -80,9 +82,10 @@ module and physical launch conditions remain unqualified. The
 firmware, fixed rendering and copied USB output. Its central build and focused
 retention/revocation checks pass. Missing physical isolation prevents shutdown
 or reuse; a successful fixed render retains resources for the boot. Successful
-GPU output and physical operation remain untested. Active work now integrates
-a supervised board mode and a native HDMI colorbar application in separate
-worktrees. Inspect live assignments before changing their files.
+GPU output and physical operation remain untested. The supervised board mode and
+native HDMI colorbar application are integrated and pass their focused software
+checks. Their physical operation remains untested. Inspect live assignments
+before changing their files.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture

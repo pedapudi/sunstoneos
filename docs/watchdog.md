@@ -5,8 +5,11 @@ did not return to ROM. A peripheral transaction can potentially stall the CPU
 before it services the secure interrupt. The exact instruction that stopped the
 UFS probe is unknown because its retained result is inaccessible.
 
-Further new peripheral-access sequences require a physically tested hardware
-watchdog and ROM return. The failed USB instance is recorded in
+Watchdog reset qualification is deferred. Supervised RAM-only peripheral tests
+may proceed under the [hardware access rules](../AGENTS.md#hardware-access),
+with a reviewed manual-reconnection plan and their actual admission requirements.
+Intentional watchdog expiry and unattended fault tests still require a qualified
+reset destination and recovery path. The failed USB instance is recorded in
 `~/.cache/sunstoneos/recovery-required.json`. Host loaders using
 `require_rom()` refuse that instance before sending a request, even if sysfs
 still contains its ROM descriptor. A new instance must pass normal ROM checks.
@@ -182,7 +185,7 @@ check contacts no USB device.
 
 ## Deferred physical qualification
 
-ROM communication is restored, and the SRAM configuration trial below passes.
+The SRAM configuration trial below passed on its recorded board instance.
 The [protected expiry diagnostic](watchdog-expiry.md) is implemented, but its
 physical qualification is deferred. Retain its code and evidence for future
 qualification; it is not the next development task.
