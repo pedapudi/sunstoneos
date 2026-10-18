@@ -234,8 +234,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   USB failure revokes further device work. Optional native mimus transcription
   accepts one to five seconds of retained 16 kHz mono PCM with the existing model
   and formatter. Its native link and focused capture, cancellation, admission
-  and copied-output checks pass. Physical capture and inference timing remain
-  unqualified. Cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and
+  and copied-output checks pass. Startup now retains the complete authenticated
+  session before provider initialization; the affected image and five binding
+  checks pass under `i2s-binding-20261018/`. Existing audio and inference evidence
+  was reused. Physical capture and inference timing remain unqualified.
+  Cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and
   physical continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. A sanitizer check covers bounds, guards,
@@ -477,8 +480,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   startup, completed frame copies and USB0 capture. Its supervised mode includes
   explicit manual-power-removal admission, frozen host packaging and durable
   full-frame collection. Native linking and focused mode, admission, launcher and
-  host checks pass; all 155 native dependencies match preserved evidence. No
-  camera module is connected, so physical capture remains unqualified.
+  host checks pass. Startup now retains the complete authenticated session before
+  provider initialization; the affected image and five binding checks pass under
+  `camera-binding-20261018/`. All 120 preserved repository inputs match integration.
+  No camera module is connected, so physical capture remains unqualified.
   The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
   model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)

@@ -60,9 +60,18 @@ substantive correctness risks. The coordinator alone operates the board.
   `bluetooth-mimus-native-20261017/`.
 - I2S: finite capture-to-mimus is integrated for one to five seconds of 16 kHz
   mono audio. The native image links, and focused capture, admission, cancellation
-  and copied-output checks pass. All 155 preserved repository inputs match
-  integration. No microphone is connected; physical capture and inference timing
-  remain unqualified. Evidence is under `i2s-mimus-20261017/`.
+  and copied-output checks pass. Startup retains the complete authenticated
+  session before provider initialization, including capture duration and model
+  identities. The corrected image and five focused binding checks pass; all 127
+  preserved repository inputs match integration under `i2s-binding-20261018/`.
+  Earlier audio and inference evidence under `i2s-mimus-20261017/` was reused.
+  No microphone is connected; physical capture and inference timing remain
+  unqualified.
+- Camera: startup retains and authenticates the complete session before provider
+  initialization. The corrected image and five focused binding checks pass;
+  all 120 preserved repository inputs match integration under
+  `camera-binding-20261018/`. Existing capture and pixel checks were reused.
+  No MIPI camera is connected; physical capture remains unqualified.
 - JPEG: the nonconstant diagnostic is integrated. Its integer oracle matches
   all 2,304 CPU-decoded samples exactly; the native link and focused parser,
   copy/layout and host refusal checks pass. Physical decoding remains unqualified.
@@ -97,11 +106,10 @@ Component documents and the hardware matrix hold the remaining integrations.
 The [historical handoff](handoff-history-20261017.md) preserves earlier artifact
 locations and reconciliation details; it is not a current qualification record.
 
-Session integrity needs the same follow-up in camera, I2S and HDMI startup.
-Their admission functions hash the complete session, but their application entry
-functions later copy live bytes without comparing the copied digest with the
-authenticated digest. Field validation alone does not bind that later copy.
-These corrections are in progress; unaffected device checks remain reusable.
+Session integrity corrections remain in progress for HDMI and the shared board,
+network and Bluetooth startup paths. Authenticated settings must remain bound to
+the private copies used by provider initialization; field validation alone does
+not establish that binding. Unaffected device checks remain reusable.
 NPU already compares its private copy with the retained authenticated digest,
 and GPU already copies and verifies its session at EL3.
 
