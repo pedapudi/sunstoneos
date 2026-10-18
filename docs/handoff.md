@@ -152,6 +152,12 @@ Board topology and register semantics follow the schematic and pinned SoC RTC
 driver; the fitted board revision still requires confirmation. Calendar setting,
 clock-source initialization and retention qualification remain required work.
 
+Native PCIe application integration is in progress. It connects the existing
+root-port driver and shared providers to x1 Gen1 link observation, read-only
+endpoint configuration and copied USB output. Physical use requires an identified
+endpoint and verified carrier wiring and power. BAR allocation, interrupt-driven
+transfers, DMA, higher link speeds and power transitions remain required work.
+
 
 ## Observed host and device state
 
