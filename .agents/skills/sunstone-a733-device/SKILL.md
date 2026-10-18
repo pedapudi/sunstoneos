@@ -42,6 +42,14 @@ them. A local enable bit does not establish a stable parent, settled voltage,
 exclusive register access or completed device writes. Shared parents must remain
 protected while another consumer uses them.
 
+Decode clock rates from the selected parent and its documented divider fields.
+Distinguish the raw oscillator, PLL reference output and architectural counter;
+one declared frequency does not establish the others. A valid reference output
+need not use equal multiplier and divider fields when the oscillator differs.
+Check the pinned A733 manual in `sources.lock.json` and the effective clock driver
+before rejecting an observed configuration or expanding admission. Carry the
+derived rates into dependent bus timing and timeout calculations.
+
 Trace the actual native boot and application code. A single task in an application
 does not imply a single-core image: some device images inherit the eight-core
 cached boot barrier. Conversely, do not require multicore qualification for an
@@ -57,6 +65,9 @@ uses the intended mapping.
 Startup must retain and validate session inputs before provider initialization.
 The [session contract](../../../docs/board-session-seal.md) binds identities and
 geometry; test fixtures that fabricate its authority cannot become launch evidence.
+When adapting startup, trace where validated inputs live across exception-level
+transitions and BSS clearing. Preserve those inputs until their consumers finish;
+matching structure layouts alone do not establish their lifetime.
 Separate physical prerequisites from assumptions and explain the concrete failure
 each prerequisite prevents. Do not demand hostile-task isolation merely to run a
 trusted initial workload, or claim whole-board RAM ownership protects MMIO and

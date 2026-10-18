@@ -11,6 +11,10 @@ Read the relevant repository skill when taking an assignment. Give subagents its
 path together with their file ownership and accepted evidence; they do not need
 every hardware document or the full conversation. Resolve links from the skill's
 directory. If automatic skill discovery is unavailable, open `SKILL.md` directly.
+Each assignment should also identify its worktree, owned files, frozen inputs,
+remaining evidence gap and expected deliverable. Workers open the skill from that
+worktree; the default checkout may have older guidance. Keep live USB instances
+and process ownership in the handoff and queue, where they can be refreshed.
 
 | Assignment | Skill |
 | --- | --- |

@@ -62,6 +62,19 @@ attempt to restore them from one to zero. The returning monitor's admission and
 the [kernel evidence](../../../docs/a733-kernel.md) explain the applicable
 security-state and interrupt-group requirements.
 
+Treat CPU-interface access, interrupt delivery and redistributor wake as separate
+operations. Compare their ordering with the pinned
+[TF-A CPU-interface implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_main.c).
+Do not infer that waking before enabling system-register access explains a hang;
+the reference enable path uses that order. Inspect the executing exception level,
+security state, SRE controls and group enables at the actual checkpoint.
+
+Check the observed GIC revision and applicable erratum conditions when changing
+interrupt delivery or shutdown. The narrow returning diagnostic's exclusion of
+[erratum 2384374](https://documentation-service.arm.com/static/6287e27d41e28926d04306ec?token=)
+depends on its disabled interrupt groups, SPI enables and LPIs. Revisit that
+reasoning before enabling delivery; it does not qualify general shutdown.
+
 ## Match diagnostics to the exact executable
 
 The startup overlay patches a particular frozen ELF. Its addresses, displaced
@@ -82,6 +95,13 @@ storage. Callee-saved registers may hold values assigned by that C function unti
 it returns; they need not match the earlier assembly frame. Observe the target's
 actual SCTLR/TCR banks; a fixture
 that copies primary reset values into every secondary conceals that assumption.
+
+Trace counter setup through the executed startup before interpreting CNTFRQ or
+converting deadlines. The cached secondary entry writes CNTFRQ before calling C;
+a model must execute that write rather than reuse the ROM's initial declaration.
+Keep raw ticks and microseconds distinct. Model read-only status bits separately
+from writable controls, including GICR_WAKER.ChildrenAsleep; a write value is not
+the resulting hardware status.
 
 Before extending execution, list newly attempted writes and their restoration
 requirements. Capture original state before the first write. Restore a target's
