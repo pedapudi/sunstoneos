@@ -75,7 +75,7 @@ reserved until confirmed complete-board power removal. A later launch requires
 a new cold lifetime; USB reconnection alone cannot authorize reuse.
 
 USB0 uses the existing permitted product ID `0xefe8` with distinct Bluetooth
-product and serial strings. A zero-byte request returns an 80-byte header with
+product and serial strings. A request containing one zero-valued byte returns an 80-byte header with
 session/profile identity and pending or retained-failure status. IDENTIFIED adds
 97 bytes containing the actual generations, validity mask and copied controller
 identity fields. The offline decoder rejects mismatched identities and partial
@@ -114,3 +114,20 @@ explicit modeled lower-worker completion, and the application case starts at
 its actual public initializer. Completed cases were reused; only the affected
 wake fixture was rebuilt and resumed. These host results establish no physical
 firmware upload or controller identification.
+
+The bounded host adapter uses the shared supervised session runner and the pure
+Bluetooth bundle validator and result decoder. It sends one zero-valued byte
+on USB OUT and requires one transferred byte before reading at most 177 bytes.
+Only a valid pending reply permits another query. A terminal identity or fault
+ends capture; malformed, late or failed transfers stop immediately. The copied
+frame becomes durable before its terminal result is published. Queue review
+binds the initially frozen bundle, executable image, launcher and host source
+identities. The board lock and queue claim remain retained for coordinator
+review and complete-board power removal.
+
+Native input preservation follows the actual linked-object list, compiler
+records and assembly dependency records. Recovery from the retained Bluetooth
+build records 165 linked objects and 420 input dependencies, including five
+assembly sources. Missing or empty coverage is refused. The original successful
+checks are unchanged; the recovered bytes and records are stored in the
+`dependency-recovery` directory alongside their original evidence.
