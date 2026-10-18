@@ -255,3 +255,10 @@ predicate. The counter advanced; CNTFRQ remained zero. ROM returned on USB insta
 is under `a64-entry-probe-20261017/physical-073/`. The initial EL1-state hypothesis
 is excluded for this run. Actual stack initialization, admission and later cached
 startup remain to be isolated before repeating the full launch.
+
+The following returning A32 survey on the same warm-returned ROM instance found
+SCTLR `0x00c51838`, with instruction caching enabled and MMU/data caching disabled.
+Its caller SP was `0x000f2200`. SRAM restoration and ROM response passed. Evidence
+is under `startup-stage-20261017-074/survey/`. The launcher requires instruction
+caching disabled; the earlier cold-entry survey cannot authorize this warm state.
+Review the existing returning cache-off helper before the next staged launch.

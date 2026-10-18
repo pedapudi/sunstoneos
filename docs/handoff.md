@@ -274,6 +274,12 @@ claim and runner released board ownership. The preceding power-reconnected
 instance passed fresh DDR initialization and a returning A32 survey under
 `supervised-reconnect-20261017-073/`. The warm diagnostic return preserved the
 checked memory; no further DDR initialization was needed for restoration.
+A returning A32 survey on the current instance recorded ROM caller SP
+`0x000f2200` and SCTLR `0x00c51838`. Instruction caching is enabled after the
+warm ROM return, so the existing launcher refuses its cache-state predicate.
+The survey restored SRAM and returned normally; its evidence is under
+`startup-stage-20261017-074/survey/`. Before staged native initialization, review
+and reuse the existing cache-off helper, then verify the required entry state.
 The user may be away for several hours. Continue with a specific returning
 startup diagnostic before another full-image attempt.
 
