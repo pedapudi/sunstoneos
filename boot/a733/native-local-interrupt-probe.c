@@ -10,7 +10,8 @@ struct result {
     uint64_t redistributor, original_control, restored_control, sre_before, sre_after;
     uint64_t igrpen0, igrpen1, waker, enable, pending, active, group, modifier;
     uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power;
-    uint64_t cpu_interface_observed, stopped_before_wake, reserved[3];
+    uint64_t cpu_interface_observed, stopped_before_wake, stopped_after_wake;
+    uint64_t awake_waker, reserved;
 };
 _Static_assert(sizeof(struct result)==256,"Host result layout");
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
@@ -48,6 +49,13 @@ static int write32(void *context,uintptr_t a,uint32_t v)
         volatile struct result *r=(void *)UINT32_C(0x42002980);
         r->stopped_before_wake=1;
         return 0; /* Power handshake completed; do not wake the interface. */
+    }
+#endif
+#if defined(SUNSTONE_PROBE_STOP_AFTER_WAKE)
+    if(a==0x03490180) {
+        volatile struct result *r=(void *)UINT32_C(0x42002980);
+        r->stopped_after_wake=1;
+        return 0; /* Wake completed; no SGI/PPI configuration write occurs. */
     }
 #endif
     if(a!=0x07050204 && a!=0x03480014 && a!=0x03480024 &&
@@ -145,13 +153,26 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
     while(a733_cpu_continue_poll(&state)==A733_CONTINUE_PENDING) {}
     r->controller_state=state.state;r->phase=state.phase;r->error=state.error;
     r->writes=state.writes_attempted;r->redistributor=state.redistributor;
-#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER) || defined(SUNSTONE_PROBE_STOP_BEFORE_WAKE)
+#if defined(SUNSTONE_PROBE_STOP_BEFORE_POWER) || defined(SUNSTONE_PROBE_STOP_BEFORE_WAKE) || defined(SUNSTONE_PROBE_STOP_AFTER_WAKE)
     if(((r->stopped_before_power && state.writes_attempted==2) ||
-        (r->stopped_before_wake && state.writes_attempted>=3)) &&
+        (r->stopped_before_wake && state.writes_attempted>=3) ||
+        (r->stopped_after_wake && state.writes_attempted>=4)) &&
        state.state==A733_CONTINUE_RETAINED && state.redistributor==b->base) {
-        /* No WAKER or SGI/PPI writes ran. A completed power-on request leaves
-         * this initially powered frame on. Require its exact original state
-         * before restoring core wake control and using the asleep shutdown. */
+        /* SGI/PPI configuration is untouched. The initially powered frame
+         * remains on; a completed wake must return to sleep before shutdown. */
+        if(r->stopped_after_wake) {
+            __asm__ volatile("mrs %0,icc_igrpen0_el1\n mrs %1,icc_igrpen1_el3":"=r"(g0),"=r"(g1));
+            if((g0&1) || (g1&3)) {r->cleanup_error=1;return 0;}
+            r->awake_waker=load(0x03480014);
+            if(r->awake_waker!=(b->waker&~UINT64_C(6))) {r->cleanup_error=6;return 0;}
+            ++r->cleanup_writes;store(0x03480014,(uint32_t)b->waker);
+            uint64_t previous=ticks();
+            do {
+                uint64_t now=ticks();
+                if(now<previous || now>=r->deadline) {r->cleanup_error=5;return 0;}
+                previous=now;r->waker=load(0x03480014);
+            } while(!(r->waker&4));
+        }
         r->pwrr=load(0x03480024);
         if(r->pwrr!=b->pwrr)return 0;
         r->waker=load(0x03480014);r->enable=load(0x03490100);

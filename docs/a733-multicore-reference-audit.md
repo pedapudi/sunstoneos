@@ -43,7 +43,7 @@ qualify a complete firmware replacement.
 | --- | --- | --- |
 | CPU release | Program the target entry and architecture, complete the SoC power request, then execute the secondary entry. | Core 1 entry, release, CPU preparation and shutdown passed. Other cores remain unqualified. |
 | Redistributor power | GIC-600 requires the selected frame's `GICR_PWRR` handshake before interrupt-state access. | The portable controller completes the pinned Arm sequence physically for the already-powered core-1 frame. A transition from powered-off remains unqualified. |
-| Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Physical wake completion has not been observed. |
+| Redistributor wake | Clear `ProcessorSleep` and observe `ChildrenAsleep` clear before ordinary CPU-interface writes. | The controller implements this wait. Core 1 wake and return-to-sleep pass physically with delivery disabled. |
 | System-register access | Enable the appropriate SRE controls and respect security-state banking. | Production EL3-to-EL1 code configures these controls. The returning diagnostic has a separate, narrower EL3-only setup. Neither establishes secondary interrupt delivery. |
 | Interrupt delivery | Configure local groups, priorities, enables and CPU-interface controls before receiving interrupts. | Software checks pass; physical per-core delivery and scheduling remain unqualified. |
 | Shutdown | Disable CPU-interface groups, synchronize, complete the sleep handshake, then power down. Applicable errata remain part of the sequence. | Earlier core-1 shutdown passed without enabling delivery. This does not qualify shutdown after normal interrupt use. |
@@ -141,8 +141,17 @@ PWRR zero and the refused WAKER write. PWRR remains `0x100`, WAKER remains `6`,
 and the saved local interrupt state matches. Matching shutdown, observed OFF,
 shared-state restoration and saved DRAM comparison pass; ROM returns as
 `003:096`. This establishes the handshake for an already-powered frame, not a
-power-off-to-on transition. Redistributor wake, local configuration and their
-cleanup remain the unobserved interval of the earlier failure.
+power-off-to-on transition. A subsequent wake/sleep diagnostic passes under
+`native-wake-sleep-20261018/native/runtime/`. The production controller clears
+ProcessorSleep and observes ChildrenAsleep clear, then refuses the first local
+interrupt-configuration write. Cleanup rechecks disabled CPU groups, records
+awake WAKER `0`, restores WAKER `6` and waits for sleep. Local state and core wake
+control restore; matching shutdown/OFF, shared restoration and saved DRAM
+comparison pass. ROM returns as `003:097`. Three instruction cases cover normal
+return and retained wake/sleep timeouts. The model now lets a running secondary
+finish after the primary parks; only the affected sleep-timeout case was rerun.
+Local interrupt configuration and its restoration remain the unobserved interval
+of the earlier failure.
 
 Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.

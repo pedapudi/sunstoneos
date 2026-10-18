@@ -115,7 +115,7 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:096` after successful interface, discovery and power-handshake diagnostics. Fresh DDR,
+instance `003:097` after successful interface, discovery, power-handshake and wake/sleep diagnostics. Fresh DDR,
 survey and all-secondary-OFF checks passed on `003:092` before that launch.
 The diagnostic returned normally and its process and queue claim closed.
 The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
@@ -308,13 +308,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned as `003:096`. The user confirmed power
+The original board on `3-1` returned as `003:097`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
 Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
-Subsequent interface, controller-discovery and power-handshake diagnostics
+Subsequent interface, controller-discovery, power-handshake and wake/sleep diagnostics
 returned normally. The latest evidence is under
-`native-before-wake-20261018/native/runtime/`. Refresh the current
+`native-wake-sleep-20261018/native/runtime/`. Refresh the current
 warm launcher state before its next native execution; preserve DDR continuity.
 The second board on `3-3`, instance
 `003:093`, has successful DDR, returning survey, SD initial-register and PMIC
@@ -576,8 +576,12 @@ The primary agent handles all further multicore work directly.
    the callback refuses WAKER before writing it. Local state and wake control
    restore, matched shutdown/OFF completes, and ROM returns as `003:096`.
    Three focused instruction cases cover completion, one rejected power request
-   and retained baseline mismatch. Next isolate redistributor wake and local
-   configuration; the earlier full-initialization failure remains unexplained.
+   and retained baseline mismatch. Wake and return-to-sleep subsequently pass
+   under `native-wake-sleep-20261018/`: awake WAKER is `0`, restored WAKER is `6`,
+   no local configuration write runs, and matching OFF/restoration/ROM return
+   complete as `003:097`. Three focused cases cover success and retained wake
+   and sleep timeouts. Next make local configuration refusals observable after
+   verified restoration; the earlier full-initialization failure is unexplained.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,

@@ -121,7 +121,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `native-before-power-current-20261018/` and `native-before-wake-20261018/`.
   The latter stops before WAKER, with PWRR `0x100` and WAKER `6` preserved;
   shutdown/OFF, restoration and ROM return pass. The frame was already powered.
-  Wake completion, local configuration and interrupt delivery remain unqualified.
+  Wake and return-to-sleep also pass under `native-wake-sleep-20261018/`, with
+  WAKER `0` while awake and restored `6` before shutdown. Local configuration
+  and interrupt delivery remain unqualified.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
