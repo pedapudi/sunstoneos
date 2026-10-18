@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage temporary access to the single attached Allwinner FEL USB device."""
+"""Manage reversible access to explicitly selected Allwinner FEL USB ports."""
 
 import argparse
 from contextlib import contextmanager
@@ -49,9 +49,17 @@ def command(*args, input=None):
                           capture_output=True).stdout
 
 
-def discover():
+def selected_port(port=None):
+    """An explicit argument takes precedence over process-local selection."""
+    return os.environ.get("SUNSTONE_USB_PORT") if port is None else port
+
+
+def discover(port=None):
+    port = selected_port(port)
+    if port is not None:
+        board_lock_path(port)  # Validate before resolving any sysfs path.
     matches = []
-    for device in SYS_USB.iterdir():
+    for device in ([SYS_USB / port] if port is not None else SYS_USB.iterdir()):
         try:
             ids = tuple((device / key).read_text().strip()
                         for key in ("idVendor", "idProduct"))
@@ -62,7 +70,7 @@ def discover():
         except FileNotFoundError:
             continue
     if len(matches) != 1:
-        raise ValueError(f"Expected one FEL device; found {len(matches)}.")
+        raise ValueError(f"Expected one FEL device{' on port ' + port if port else '; select --port when multiple boards are attached'}; found {len(matches)}.")
     return matches[0]
 
 
@@ -196,59 +204,104 @@ def _session_node(config):
     return node
 
 
+def sessions():
+    path = STATE_DIR / "session.json"
+    if not path.exists():
+        return {}
+    saved = json.loads(path.read_text())
+    configs = saved["sessions"] if "sessions" in saved else {saved["port"]: saved}
+    for port, config in configs.items():
+        board_lock_path(port)
+        if config["port"] != port:
+            raise ValueError("Session key does not match its USB port.")
+    return configs
+
+
+def session_rules(configs):
+    return "".join(session_rule(port, config["uid"])
+                   for port, config in sorted(configs.items()) if config["enabled"])
+
+
+def verify_rules(configs):
+    expected = session_rules(configs)
+    if (RULE.read_text() if RULE.exists() else "") != expected:
+        raise ValueError("Session rules changed; refusing to overwrite them.")
+
+
+def save_sessions(configs):
+    write_atomic(STATE_DIR / "session.json", json.dumps({"sessions": configs}) + "\n")
+
+
+def install_rules(configs):
+    rule = session_rules(configs)
+    if rule:
+        RULE.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(RULE, rule, 0o644)
+    else:
+        RULE.unlink(missing_ok=True)
+    command("udevadm", "control", "--reload-rules")
+
+
 def enable_session(node, uid):
-    config_path = STATE_DIR / "session.json"
     device = target(node)
     config = dict(uid=uid, port=device.name, sysfs=str(device.resolve()), enabled=True)
-    rule = session_rule(device.name, uid)
-    if config_path.exists():
-        previous = json.loads(config_path.read_text())
-        if any(previous[key] != config[key] for key in ("uid", "port", "sysfs")):
-            raise ValueError("Another session exists; disable it first.")
-    elif RULE.exists():
-        raise ValueError("An unmanaged session rule already exists.")
+    configs = sessions()
+    verify_rules(configs)
+    previous = configs.get(device.name)
+    if previous and any(previous[key] != config[key] for key in ("uid", "sysfs")):
+        raise ValueError("Another user or controller owns this port's session; disable it first.")
+    configs[device.name] = config
     write_atomic(STATE_DIR / "helper.py", Path(__file__).read_text())
-    write_atomic(config_path, json.dumps(config) + "\n")
-    RULE.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(RULE, rule, 0o644)
-    command("udevadm", "control", "--reload-rules")
+    save_sessions(configs)
+    install_rules(configs)
     modify("grant", node, uid, session_backup(node))
     print(f"Session access enabled on port {device.name}; survives FEL reconnects until host reboot.")
 
 
-def disable_session():
-    config_path = STATE_DIR / "session.json"
-    if not config_path.exists():
-        if RULE.exists():
-            raise ValueError("Rule exists without session state; inspect it before removal.")
-        print("No session access rule is installed.")
+def disable_session(port=None):
+    port = selected_port(port)
+    configs = sessions()
+    verify_rules(configs)
+    if port is not None:
+        board_lock_path(port)
+    elif len(configs) == 1:
+        port = next(iter(configs))
+    elif configs:
+        raise ValueError("Multiple sessions exist; select --port to disable one.")
+    if port not in configs:
+        print("No session access rule is installed for this port.")
         return
-    config = json.loads(config_path.read_text())
-    if RULE.exists() and RULE.read_text() != session_rule(config["port"], config["uid"]):
-        raise ValueError("Session rule changed; refusing to remove it.")
+    config = configs[port]
     config["enabled"] = False
-    write_atomic(config_path, json.dumps(config) + "\n")
-    RULE.unlink(missing_ok=True)
-    command("udevadm", "control", "--reload-rules")
+    save_sessions(configs)
+    install_rules(configs)
     node = session_node(config)
     if node is not None:
         backup = session_backup(node)
         if backup.exists():
             modify("revoke", node, config["uid"], backup)
-    (STATE_DIR / "helper.py").unlink(missing_ok=True)
-    config_path.unlink()
-    print("Session rule removed; saved ACL restored if its device is attached.")
+    del configs[port]
+    if configs:
+        save_sessions(configs)
+    else:
+        (STATE_DIR / "helper.py").unlink(missing_ok=True)
+        (STATE_DIR / "session.json").unlink()
+    print(f"Session rule removed for port {port}; saved ACL restored if its device is attached.")
 
 
 def session_event():
-    config_path = STATE_DIR / "session.json"
-    if not config_path.exists():
+    configs = sessions()
+    name = os.environ.get("DEVNAME")
+    if not configs:
         return
-    config = json.loads(config_path.read_text())
-    if not config["enabled"]:
+    if not name:
+        raise ValueError("USB event has no device node.")
+    node = Path(name)
+    port = target(node).name
+    config = configs.get(port)
+    if config is None or not config["enabled"]:
         return
-    node = session_node(config)
-    if node is None or os.environ.get("DEVNAME") != str(node):
+    if node != session_node(config):
         raise ValueError("USB event does not identify the configured FEL device.")
     modify("grant", node, config["uid"], session_backup(node))
 
@@ -261,7 +314,9 @@ def require_session(node, uid=None):
     if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
             or stat.S_IMODE(info.st_mode) & 0o022):
         raise ValueError("Session rule is not protected from non-root writes.")
-    if RULE.read_text() != session_rule(target(node).name, uid):
+    # The root-owned state directory and ACL backups remain private. Ordinary
+    # runners validate the public, protected udev binding without reading them.
+    if session_rule(target(node).name, uid) not in RULE.read_text():
         raise ValueError("Session rule does not cover this user and physical USB port.")
     if not os.access(node, os.R_OK | os.W_OK):
         raise ValueError("Current FEL node is not accessible.")
@@ -269,15 +324,35 @@ def require_session(node, uid=None):
 
 def quarantine_instance(node, reason, observed_identity=None):
     """Refuse further FEL requests to an instance that failed to recover."""
-    info = {"identity": observed_identity or identity(node), "reason": reason}
+    observed = observed_identity or identity(node)
+    port = "instance"
+    try:
+        if identity(node) != observed:
+            raise ValueError("USB instance changed before quarantine.")
+        candidate = target(node).name
+        board_lock_path(candidate)
+        if identity(node) != observed:
+            raise ValueError("USB instance changed during quarantine.")
+        port = candidate
+    except (OSError, ValueError):
+        pass  # A disappeared or reused node still needs its original quarantine.
+    info = {"identity": observed, "reason": reason}
     RECOVERY_REQUIRED.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(RECOVERY_REQUIRED, json.dumps(info) + "\n")
+    # Include identity even on a known port: a later failure cannot replace an
+    # earlier instance's protection, including when USB node numbers are reused.
+    key = port + "-" + "-".join(str(int(part)) for part in observed)
+    path = RECOVERY_REQUIRED.with_name(RECOVERY_REQUIRED.stem + "-" + key + ".json")
+    write_atomic(path, json.dumps(info) + "\n")
 
 
 def require_rom(node):
-    if RECOVERY_REQUIRED.exists():
-        blocked = json.loads(RECOVERY_REQUIRED.read_text())
-        if identity(node) == blocked["identity"]:
+    # Retain the old single-record file and all independently failed ports.
+    paths = [RECOVERY_REQUIRED] if RECOVERY_REQUIRED.exists() else []
+    paths += sorted(RECOVERY_REQUIRED.parent.glob(RECOVERY_REQUIRED.stem + "-*.json"))
+    observed = identity(node)
+    for path in paths:
+        blocked = json.loads(path.read_text())
+        if observed == blocked["identity"]:
             raise ValueError("This USB instance failed to recover; its cached ROM descriptor "
                              "does not prove FEL is running. " + blocked["reason"])
     device = target(node)
@@ -291,14 +366,15 @@ def main():
                                               "enable-session", "disable-session", "session-event", "check-session"))
     parser.add_argument("--user", default=os.environ.get("SUDO_USER") or pwd.getpwuid(os.getuid()).pw_name,
                         help="account receiving access (default: sudo caller)")
+    parser.add_argument("--port", help="physical USB port, for example 3-3; overrides SUNSTONE_USB_PORT; otherwise selection must be unambiguous")
     args = parser.parse_args()
     uid = pwd.getpwnam(args.user).pw_uid
     if args.action == "check-session":
-        require_session(discover(), uid)
+        require_session(discover(args.port), uid)
         print("Reconnect rule and current USB node permissions are present.")
         return
     if args.action == "status":
-        node = discover()
+        node = discover(args.port)
         identity(node)
         print(f"FEL device: {node}\n{acl(node)}", end="")
         print(f"Current process has read/write access: {os.access(node, os.R_OK | os.W_OK)}")
@@ -317,14 +393,14 @@ def main():
             session_event()
             return
         if args.action == "disable-session":
-            disable_session()
+            disable_session(args.port)
             return
-        node = discover()
+        node = discover(args.port)
         identity(node)
         if args.action == "enable-session":
             enable_session(node, uid)
             return
-        if (STATE_DIR / "session.json").exists():
+        if target(node).name in sessions():
             raise ValueError("Session access is installed; use disable-session before manual ACL changes.")
         backup = STATE_DIR / f"{node.parent.name}-{node.name}.json"
         if args.action == "remove-user":
