@@ -37,6 +37,7 @@ software behavior; physical operation remains unqualified.
 | [Cached eight-core image](a733-smp-cached.md) | Coordinated cache adoption and full native-instruction scheduler checks on all cores; central build links | Physical coherence, entry admission and complete-image execution |
 | [Eight-core diagnostic and launcher](a733-smp.md) | Scheduler image links; bounded watchdog launch, clean FEL refusal and immutable upload checks pass | Physical independent recovery, observable scheduler results and full image execution |
 | [USB observer and launcher](a733-smp-observe-host.md) | Bounded cached diagnostic frames, durable host capture and exact offline bundle; focused host/instruction checks pass | Physical recovery, entry admission, USB timing and scheduler results |
+| [Larger device-memory launcher](a733-device-launch.md) | Version-2 reservation binding, file-only uploads and bounded native launch pass focused host/instruction checks on the actual runtime ELF | Physical recovery, DRAM/entry/exclusion qualification and live device results |
 | [Device memory reservations](cached-device-reservations.md) | Linker-owned pools, actual DMA lifetime and GPU/NPU preparation under the cached eight-core barrier; host/instruction/linker checks pass | Complete native application binding, additional capacity, physical exclusion and external drain |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Actual handoff authority and physical transfer/drain |
 | [Native DMA session](dma-pool-session.md) | Actual startup/service and permanent pool ownership; two-core copy/fault composition, complete native link and focused exception-route checks pass | Physical handoff, USB result observation and physical transfer/drain |
@@ -113,8 +114,9 @@ batch and native sources are integrated. Its 197 recorded inputs and 17 artifact
 match the saved evidence. Dependency scans confirm that central header changes
 do not affect these units, so the workload was not repeated.
 HDMI passed one composed batch and native compilation; its controller sources
-and primary references are integrated. The I2S integration report still needs
-final reconciliation. Generated assembly, objects and generation inputs for the
+and primary references are integrated. I2S reconciliation is complete: component
+execution and central/extra-fixture compilation retain their separate evidence;
+no workload was repeated. Generated assembly, objects and generation inputs for the
 original DMA composition are preserved in a later-capture supplement under
 `dma-pool-session-20261016/assembly-later-capture-20261017/`. Their original
 pre-execution hashes were not recorded, so the supplement does not prove those
@@ -127,6 +129,11 @@ paths; seven focused instruction cases passed on the linked ELF. Link validation
 used an explicit all-zero admission fixture, so that image must not be deployed.
 No physical DMA result is claimed. The [application record](dma-pool-session.md)
 identifies remaining boot admission and native USB result observation.
+
+The larger device-memory launcher is integrated with its focused software
+evidence. It accepts the exact runtime layout and excludes both reserved pools
+from uploads. It creates no physical memory or recovery authority, and ROM
+return alone does not establish scheduler or device results.
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)

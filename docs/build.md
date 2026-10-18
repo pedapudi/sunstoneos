@@ -30,6 +30,12 @@ The installed host supplies their shared libraries; no system package installati
 was required. Package versions were LLD `1:21.1.8-6ubuntu1` and QEMU
 `1:10.2.1+ds-1ubuntu3.2`.
 
+The toolchain preserves explicitly supplied `CMAKE_C_COMPILER`,
+`CMAKE_ASM_COMPILER` and `CMAKE_CXX_COMPILER` paths. Set `SUNSTONE_LLD` to the
+`ld.lld` driver when selecting a linker outside `PATH`; CMake propagates that
+selection into its compiler checks. Use a fresh build directory when changing
+toolchains, because CMake caches compiler and linker flags.
+
 ## What the check establishes
 
 Three statically allocated tasks exercise the timer and scheduler. A producer
