@@ -2,7 +2,7 @@
 
 The current failure is unresolved. Core 1 has physically reached EL3, completed
 CPU preparation and returned through verified shutdown. Its local interrupt
-snapshot also returned successfully. The later initialization attempt returned
+snapshot and EL3 GIC-interface observation also returned successfully. The full initialization attempt returned
 neither a report nor ROM access. That result does not identify a failing register.
 
 This comparison is for developers changing A733 startup. It distinguishes
@@ -115,8 +115,14 @@ Unexpected SRE readback or an enabled group retains the target without shutdown.
 Three focused instruction cases pass for this profile: successful observation
 with matching OFF/return, enabled-group refusal and SRE readback refusal.
 System registers, the interrupt controller and power transitions remain modeled.
-Evidence is under `native-cpu-interface-20261018/`; physical execution is pending.
-This diagnostic does not identify a cause if the new interval cannot return.
+Physical execution also passes under `native-cpu-interface-20261018/native/runtime/`.
+SRE changes from `0x9` to `0xf`; both physical group-enable reads are zero.
+The controller and local cleanup write counts remain zero. Matching shutdown,
+independently observed OFF, shared-state restoration and saved DRAM comparison
+all pass; ROM returns as `003:094`. This establishes the interface interval for
+the observed state. It does not identify the earlier initialization failure.
+The next observation can start from controller discovery and the power-write
+boundary while preserving this successful entry and return path.
 
 Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.

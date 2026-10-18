@@ -112,6 +112,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and physical recovery is complete. Further launches await the
   [Arm/Linux audit](a733-multicore-reference-audit.md) and an observable diagnostic
   boundary. Interrupt initialization remains unresolved.
+  The narrower EL3 GIC-interface observation passes physically under
+  `native-cpu-interface-20261018/native/runtime/`: SRE reads back `0xf` and
+  both physical interrupt groups are disabled. No local controller writes run;
+  matching shutdown, observed OFF, restoration and ROM return pass. This
+  establishes CPU-interface access, not interrupt delivery or scheduling.
   Removing a suspect SCR read did not resolve full startup. Its bounded
   refusal-report read timed out; the user reconnected. Offline stage diagnosis
   continues before another full-image attempt.
@@ -226,8 +231,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and host acceptance checks. Its explicit ROM USB takeover is integrated.
   Physical ROM capture matches the inspected PIO implementation, with scratch
   restoration verified. A 19-register PMIC probe establishes enabled USB supplies
-  at programmed 1,240 mV and 800 mV, with normal ROM return. External DMA handoff,
-  refreshed warm launcher state and image admission remain prerequisites.
+  at programmed 1,240 mV and 800 mV, with normal ROM return. Warm launcher state
+  now passes after the accepted cache-off helper. DMA0 reset is asserted with
+  both clocks disabled; the maintained reset state supports current inactivity
+  without reading gated registers. Final image admission remains outstanding.
   Card operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.

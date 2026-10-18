@@ -115,8 +115,9 @@ Fan updates may introduce an explicit low interval. Only the coordinator may
 operate the board.
 Both A733 boards have working reconnect permissions and separate port locks and
 queues. The original board on port `3-1` was physically recovered and now has
-instance `003:092`. The failed runner exited and its claim closed after recovery.
-Fresh DDR preparation is required; no multicore launch has run on this instance.
+instance `003:094` after a successful interface-only diagnostic. Fresh DDR,
+survey and all-secondary-OFF checks passed on `003:092` before that launch.
+The diagnostic returned normally and its process and queue claim closed.
 The second is on `3-3`, instance `003:093` after normal PMIC-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
@@ -307,11 +308,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` is recovered as `003:092`. The user confirmed power
+The original board on `3-1` returned as `003:094`. The user confirmed power
 removal; the coordinator verified the changed USB instance and stopped the
 identified old runner. Its process exited, its claim closed and its queue resumed.
-Evidence is under `reconnect-20261018-092/recovery.json`. Fresh DDR preparation
-and a platform survey are required before native execution. The second board on `3-3`, instance
+Recovery and fresh DDR/platform evidence are under `reconnect-20261018-092/`.
+The subsequent CPU-interface diagnostic returned normally. Refresh the current
+warm launcher state before its next native execution; preserve DDR continuity.
+The second board on `3-3`, instance
 `003:093`, has successful DDR, returning survey, SD initial-register and PMIC
 evidence. Preserve its recorded DDR continuity through the normal return; refresh
 the warm launcher survey without repeating DDR training.
@@ -508,8 +511,17 @@ reads, including enabled DCDC9 at a programmed 1,240 mV and ELDO6 at 800 mV.
 The returning monitor reports status zero and ROM returns with access as
 `003:093`. Its process exited and queue claim closed. These programmed settings
 support USB supply admission; they are not measured voltages. No storage command
-has run. The next preparation refreshes the warm survey and checks DMA0 status
-only after confirming its register-access clocks and reset state.
+has run. The warm survey observed instruction caching enabled after ROM return.
+The unchanged cache-off helper and a follow-up survey pass, with scratch restored
+and every launcher predicate satisfied under `warm-093-preparation/`.
+
+DMA0 has BGR `0` and MBUS gate word `4`: its reset is asserted and both of its
+clocks are disabled. The read batch therefore skipped its gated register bank
+and restored scratch. The source review accepts this maintained reset state as
+current DMA0 inactivity under excluded writers. It does not claim completion of
+every historical interconnect write. No outstanding aborted DMA transfer was
+identified for the trusted SD/PIO launch, and no DMA clock adoption is required.
+The actual SD launch bundle remains under preparation.
 
 GPU and NPU parent-clock providers now decode the normalized 24 MHz reference
 from supported oscillator inputs. Three focused provider groups pass under
@@ -552,7 +564,11 @@ The primary agent handles all further multicore work directly.
    reads, before calling the controller. Three focused instruction cases pass
    under `native-cpu-interface-20261018/`, including retained SRE and group-enable
    refusals. Compiled inspection confirms no new redistributor or wake-control
-   writes in that interval. Its physical execution remains pending.
+   writes in that interval. Physical execution also passes: SRE changes from
+   `0x9` to `0xf`, both group-enable reads are zero, and matched shutdown/OFF,
+   shared-state restoration and saved DRAM comparison succeed. ROM returns as
+   `003:094`. Next inspect controller discovery through the power-write boundary;
+   do not repeat the full initialization attempt without isolating its outcome.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
