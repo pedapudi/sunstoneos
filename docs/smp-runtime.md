@@ -31,7 +31,8 @@ The rebuilt library also excludes its global-`errno` syscall wrappers.
 the supplied task state. The common bounded heap adapter accepts that state
 explicitly. A small [newlib patch](../patches/newlib-reclaim.patch) makes task
 cleanup distinguish the global initialization structure without reading the
-global task pointer. Task-deletion cleanup still needs a functional check.
+global task pointer. The finite task-deletion check below exercises this cleanup
+with the pinned FreeRTOS and newlib in QEMU.
 
 The link rejects references to `_impure_ptr`. Some objects in the prebuilt
 C++ library still reference that global pointer and cannot be linked into this
@@ -100,3 +101,37 @@ The image, output, library build record, and compiled-input manifest are under
 `~/.cache/sunstoneos/evidence/smp-runtime-20261016/`.
 `final.json` is the acceptance result; `initial.json` predates the added
 destination-core and shared-stream checks.
+
+## Task deletion reclaims library state before static storage reuse
+
+Set `SUNSTONE_SMP_RUNTIME_CLEANUP=ON` in a separate build directory to select
+the finite deletion case for `smp-runtime-model`. Run the existing checker with
+`--case cleanup`. The default allocation and migration workload is unchanged.
+
+The deletion case creates two tasks sequentially in the same static task and
+stack storage. Each task allocates newlib decimal-conversion state, installs
+a private cookie stream as its task-local standard output, and migrates to the
+opposite core with live library state. It verifies its task-state pointer,
+`errno` and `strtok` continuation, then deletes itself.
+
+The idle task runs the real newlib reclamation function. A linker wrapper
+publishes completion only after that function returns. The controller verifies
+the private stream's close callback, restoration of allocated heap bytes to
+a warmed baseline, and subsequent stream allocation and closure. Each recreated
+task starts with fresh library state. Ordinary task-opened streams still need
+explicit closure; this check uses standard output because newlib's task cleanup
+owns that stream.
+
+The fixture requires static allocation only and disabled MPU wrappers. In this
+FreeRTOS configuration, the kernel does not access the deleted task's control
+block after library reclamation. Those conditions permit reuse after the
+wrapper's completion publication. A compile-time guard rejects a configuration
+that would require a different reuse boundary.
+
+One session passed on 2026-10-18, with a one-second guest deadline per task and
+the existing ten-second host bound. Evidence, the compiled dependency snapshot
+and inspection of the actual wrapped destructor are under
+`~/.cache/sunstoneos/evidence/smp-runtime-cleanup-20261018/`.
+This closes the modeled library-cleanup gap. Native secondary startup, cache
+coherence and all-core scheduling remain physically unproven; the failed
+secondary interrupt-preparation attempt has no identified cause.

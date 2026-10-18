@@ -17,7 +17,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("image", type=Path)
 parser.add_argument("--qemu", default="qemu-system-aarch64")
 parser.add_argument("--trials", type=int, default=1)
-parser.add_argument("--case", choices=("kernel", "context", "runtime", "linear"), default="kernel")
+parser.add_argument("--case", choices=("kernel", "context", "runtime", "cleanup", "linear"), default="kernel")
 parser.add_argument("--evidence", type=Path,
                     default=Path.home() / ".cache/sunstoneos/evidence/smp-check.json")
 args = parser.parse_args()
@@ -55,6 +55,7 @@ for index in range(args.trials):
     marker = {"kernel": "PASS SMP: 256 cross-core queue exchanges",
               "context": "PASS SMP context: 64 task migrations",
               "runtime": "PASS SMP runtime: concurrent allocation",
+              "cleanup": "PASS SMP cleanup: two migrated tasks reclaimed",
               "linear": "PASS SMP linear: serial parity and output guards"}[args.case]
     passed = code == 0 and marker in output and "FAIL" not in output
     trials.append({"passed": passed, "exit_code": code, "output": output})

@@ -3,10 +3,15 @@ if(NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   return()
 endif()
 set(smp_libc "${NEWLIB_SMP_ROOT}/aarch64-none-elf")
+option(SUNSTONE_SMP_RUNTIME_CLEANUP "Select the finite SMP task reclamation case" OFF)
+set(smp_runtime_check checks/smp-runtime.cc)
+if(SUNSTONE_SMP_RUNTIME_CLEANUP)
+  set(smp_runtime_check checks/smp-runtime-cleanup.cc)
+endif()
 add_executable(smp-runtime-model EXCLUDE_FROM_ALL
   platform/qemu-smp/start.S platform/qemu-smp/platform.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c
-  runtime/new_delete.cc checks/smp-runtime.cc
+  runtime/new_delete.cc ${smp_runtime_check}
   "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${smp_build}/port.c" "${smp_build}/portASM.S")
 function(sunstone_smp_compile target)
@@ -24,6 +29,9 @@ function(sunstone_smp_compile target)
     "$<$<COMPILE_LANGUAGE:CXX>:-fhosted;-fno-exceptions;-fno-rtti;-fno-threadsafe-statics;-nostdinc++>")
 endfunction()
 sunstone_smp_compile(smp-runtime-model)
+if(SUNSTONE_SMP_RUNTIME_CLEANUP)
+  target_link_options(smp-runtime-model PRIVATE -Wl,--wrap=_reclaim_reent)
+endif()
 target_link_options(smp-runtime-model PRIVATE -nostdlib -static -Wl,--gc-sections
   -Wl,--wrap=_impure_ptr
   "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/runtime.ld"
