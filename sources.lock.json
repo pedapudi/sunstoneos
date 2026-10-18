@@ -2465,5 +2465,17 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
     "archive": "hdmi-research/kernel/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
     "sha256": "681e2f32ed671e8f759fa84cb108416e76adae3bf94a07a11684d5bbbbfe00ae"
+  },
+  "board-pmic-driver": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_power/pmu_axp8191.c",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/drivers/sunxi_power/pmu_axp8191.c",
+    "sha256": "e6faa518a123c374b8f9148327f5e4aeeb2d89eb2bc3e91dae9a35e06d964c59"
+  },
+  "board-pmic-registers": {
+    "revision": "b791be842935b27268ae3d00e943a9075495f30a",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
+    "archive": "u-boot-orangepi-b791be842935b27268ae3d00e943a9075495f30a/include/sunxi_power/pmu_axp8191.h",
+    "sha256": "7f8e6b5742b2906da8f448caedbd0de99f0300fa22814515cfed09612f19738f"
   }
 }

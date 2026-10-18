@@ -16,11 +16,37 @@ if(SUNSTONE_GPU_FIRMWARE)
   # Reuse the checked privilege extension with this service's private hook.
   set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/gpu-service-port.c" PROPERTIES
     COMPILE_DEFINITIONS "npu_service_task_privileged=pvr_gpu_service_task_privileged")
+  # The combined service links the real reservation adapters even when a fixture
+  # does not admit graphics. Reuse production pool geometry; absent pools stay
+  # empty and cannot confer allocation authority.
+  set(gpu_linker_inputs
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gpu_linker_inputs})
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/platform/a733/link.ld" gpu_native_linker)
+  string(FIND "${gpu_native_linker}" "    /* An absent pool" gpu_pool_start)
+  string(FIND "${gpu_native_linker}" "    /DISCARD/" gpu_pool_end)
+  if(gpu_pool_start LESS 0 OR gpu_pool_end LESS gpu_pool_start)
+    message(FATAL_ERROR "GPU service cannot locate production pool reservations")
+  endif()
+  math(EXPR gpu_pool_length "${gpu_pool_end} - ${gpu_pool_start}")
+  string(SUBSTRING "${gpu_native_linker}" ${gpu_pool_start} ${gpu_pool_length} gpu_pool_sections)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld" gpu_linker_text)
+  string(REPLACE "    /DISCARD/" "    __heap_end = .;\n${gpu_pool_sections}    /DISCARD/"
+    gpu_linker_text "${gpu_linker_text}")
+  set(gpu_service_linker "${CMAKE_CURRENT_BINARY_DIR}/gpu-service-link.ld")
+  file(WRITE "${gpu_service_linker}.tmp" "${gpu_linker_text}")
+  configure_file("${gpu_service_linker}.tmp" "${gpu_service_linker}" COPYONLY)
+  file(REMOVE "${gpu_service_linker}.tmp")
   set(gpu_compute_sources
     drivers/gpu/pvr_compute_mode.c
     drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_job.c
     drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
     drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_render_target.c
+    platform/a733/gpu_graphics_memory.c platform/a733/gpu_compute_reserved.c
+    platform/a733/memory_reservations.c platform/a733/memory_uncached.c
+    runtime/device_memory_pool.c
     platform/a733/gpu_vm_memory.c arch/aarch64/device_memory.c)
   add_executable(gpu-service-model EXCLUDE_FROM_ALL ${gpu_compute_sources}
     "${CMAKE_CURRENT_BINARY_DIR}/npu-service-start.S" platform/qemu-smp/platform.c
@@ -40,10 +66,10 @@ if(SUNSTONE_GPU_FIRMWARE)
     -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
     -O2 -g -Wall -Wextra -Werror -fstack-usage)
   target_link_options(gpu-service-model PRIVATE -nostdlib -static -Wl,--gc-sections
-    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+    "-Wl,-T,${gpu_service_linker}"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-service-model.map")
   set_target_properties(gpu-service-model PROPERTIES SUFFIX ".elf"
-    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+    LINK_DEPENDS "${gpu_service_linker};${gpu_linker_inputs}")
 
   apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/gpu-memory-platform.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/platform.c"

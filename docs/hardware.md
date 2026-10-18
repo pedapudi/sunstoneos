@@ -22,8 +22,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
-  native compilation pass. Shared native power/clock binding, analog admission,
-  physical monitor output, framebuffer routing and broader modes remain required.
+  native compilation pass. The [native startup binding](hdmi-native.md) now
+  acquires actual shared clock, CLDO2, PMIC, power-domain and register ownership;
+  composed startup/EDID and retained-fault checks pass. Analog admission,
+  complete image binding, physical monitor output, framebuffer routing and
+  broader modes remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -96,9 +99,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   eMMC routing. The [bounded write primitive](mmc-write.md) snapshots input,
   authenticates each request and confirms each sector through card status.
   Focused host checks cover SD/eMMC writes, authority loss and retained partial
-  failure; affected native consumers compile. The native platform remains
-  read-only. Actual range ownership, durable backup and qualified recovery must
-  precede its writer binding. Physical identification/read/write operation,
+  failure; affected native consumers compile. The [storage update service](storage-update.md)
+  binds the actual platform to one identified card range, preserves a durable
+  host backup, authenticates candidate chunks and checks readback before advancing.
+  Connected host/core checks pass; the default platform entry remains read-only.
+  The [maintenance watchdog](maintenance-watchdog.md) passes focused progress,
+  cutoff and permanent-loss checks. The native tasks and USB binding
+  are implemented; their focused checks and the complete maintenance image remain
+  pending. Physical identification/read/write operation,
   faster modes and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
@@ -157,8 +165,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   native linking pass. The [native DMA session](dma-pool-session.md) binds the
   actual startup/service to permanently reserved, narrowly authorized buffers.
   One two-core composition passes copy/reap, uncertain drain and late shared
-  authority failure. Its copy application compiles with eight-core headers;
-  a complete image still needs genuine platform handoff and entry integration.
+  authority failure. Its complete eight-core copy image links with privileged
+  SVC/IRQ routes and a native USB result observer. Focused instruction and host
+  capture checks pass on the linked image. Genuine platform handoff, entry
+  qualification and physical USB observation remain required.
   Physical memory exclusion, external bus drain and larger pool binding remain open.
   [DMA implementation and limits](dma.md) record the evidence. Board integration,
   both physical controllers, cache coherence, and physical transfers remain
@@ -226,8 +236,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [fixed-compute constructor](gpu-compute-reserved.md) now allocates payload,
   context and planner-sized VM tables, runs actual builders and binds the service.
   Native instruction checks pass for construction and retained capacity failure.
-  Physical computation, complete application binding, exclusion/drain, free lists
-  and wider GPU workloads remain open.
+  Physical computation, complete application binding, exclusion/drain and wider
+  GPU workloads remain open.
   The [power controller](gpu-power.md) has host/reference evidence for GPU
   clock/reset and domain transitions. The [resource manager](gpu-resources.md)
   has host/native-adapter evidence for leases, inherited settings, and retained
@@ -246,8 +256,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   evidence for backing ownership, growth, reconstruction, and deferred firmware
   responses. [Service integration](gpu-freelist-service.md) now passes bounded
   construction, deferred responses, shutdown draining, and retained faults in
-  QEMU. Concrete allocation/publication callbacks, linked render-target recovery,
-  lease disposal for reopen, and physical execution remain outstanding.
+  QEMU. The [native graphics owner](gpu-graphics-memory.md) now allocates real
+  backing, builds two hardware render-target records and publishes graphics
+  before compute and power activation. Source comparisons and native preparation,
+  capacity-refusal and deadline cases pass; six affected central targets link.
+  Geometry/fragment submissions, rendered output, lease disposal for reopen and
+  physical execution remain outstanding.
   The [native lifecycle backend](gpu-backend.md) now has instruction-model
   evidence for identity admission, restricted MMIO, memory/GIC composition,
   retained faults, and actual queue event reception. A proven physical memory

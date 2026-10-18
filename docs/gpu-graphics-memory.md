@@ -114,6 +114,13 @@ identities and preserved executables are recorded under
 `~/.cache/sunstoneos/evidence/gpu-graphics-memory-20261017/` in
 `final-inputs.json`, `reference4/` and `native2/`.
 
+All six affected central GPU service targets compile and link with the actual
+graphics and reservation adapters. Their private linker script reuses the
+production pool sections. Fixtures that do not admit graphics have empty pools;
+linking those adapters grants no usable memory. The central build and symbol
+inspection are recorded in `gpu-central-integration-20261017/`. Component runtime
+cases were not repeated for this build integration.
+
 Remaining work includes a real render context and geometry/fragment command
 rings, context-switch and vertex/fragment programs, executable commands, color
 output ownership and acquired output validation. Physical firmware startup,

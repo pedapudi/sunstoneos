@@ -41,12 +41,13 @@ software behavior; physical operation remains unqualified.
 | [Device memory reservations](cached-device-reservations.md) | Linker-owned pools, actual DMA lifetime and GPU/NPU preparation under the cached eight-core barrier; host/instruction/linker checks pass | Complete native application binding, physical exclusion and external drain |
 | [Larger device memory](device-memory-capacity.md) | Native image reserves 768 MiB write-back and 16 MiB uncached memory; allocator, native publication/refusal and affected consumer compilation pass | Physical range ownership/coherence and individual application/device mappings |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Actual handoff authority and physical transfer/drain |
-| [Native DMA session](dma-pool-session.md) | Actual startup/service and permanent pool ownership; two-core copy/fault composition, complete native link and focused exception-route checks pass | Physical handoff, USB result observation and physical transfer/drain |
+| [Native DMA session](dma-pool-session.md) | Actual startup/service, permanent pool ownership, eight-core image and native USB result frames; focused composition, instruction and host capture checks pass | Physical handoff, USB observation and transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
 | [NPU PLL](npu-pll.md) | Source-backed enable/retune and atomic startup adoption; focused host/emulator checks and native compilation pass | Concrete boot authority and physical qualification |
 | [NPU startup and convolution](npu-convolution.md) | Linker-owned session buffers, fixed model authentication, guarded startup and copied input/output ownership; focused emulator checks pass | Physical confinement, supply/domain qualification and numerical execution |
 | [GPU firmware reservations](gpu-reserved.md) | Actual retained pools, firmware/state/MIPS preparation and native translation checks; instruction and linker checks pass | Physical exclusion/coherence and complete native application binding |
-| [GPU compute reservations](gpu-compute-reserved.md) | Real retained payload/context/VM allocations, actual builders and service binding; native instruction checks pass | Physical startup, numerical output, complete application binding, free lists and wider jobs |
+| [GPU compute reservations](gpu-compute-reserved.md) | Real retained payload/context/VM allocations, actual builders and service binding; native instruction checks pass | Physical startup, numerical output, complete application binding and wider jobs |
+| [GPU graphics resources](gpu-graphics-memory.md) | Actual parent/child allocation, free lists and hardware render-target records; source/native preparation checks and six central links pass | Geometry/fragment submissions, rendered output and physical execution |
 | [GPU compute](gpu-compute-service.md) | Native workload publication, compiled fixed shader, command stream and output checking; service model passes | Physical firmware startup and numerical execution |
 | [GPU core mode](gpu-compute-mode.md) | Observed single-core capability required before startup/submission; instruction/service checks pass | Physical identity and wider core modes |
 | [GPU isolation](gpu-isolation.md) | Only exact provider success permits reclamation; focused instruction check passes | Proven request blocking and completion of all accepted external writes |
@@ -76,11 +77,14 @@ software behavior; physical operation remains unqualified.
 | [DSI video](dsi-video.md) | Four-lane RGB888/loose RGB666, continuous clock, bounded stop; source/model checks pass | Display engine, panel and physical scanout |
 | [Display PLL](display-pll.md) | Source-backed enable/retune, intermediate-rate checks and retained faults; host checks and native compilation pass | Qualified initial analog profile and physical operation |
 | [Display scanout](display-scanout.md) | Actual PHY/DSI/LCD/DE composition and atomic PLL/media adoption; host checks and native compilation pass | Qualified analog profile, memory/panel binding, independent drain and shutdown/release |
+| [Native HDMI startup](hdmi-native.md) | Actual clock, CLDO2/PMIC, power-domain and mutex binding; composed startup/EDID and retained faults pass | Qualified analog image, complete image binding and physical output |
 | [I2S capture](i2s.md) | Finite capture, DMA ownership and clock/reset/header-pin binding; host/emulator checks pass | Physical input, other controllers and attached microphone |
 | [I2S streams](i2s-stream.md) | Bounded capture/playback periods with actual service/resource ownership; two-core checks and central links pass | Native pool binding, full duplex, cyclic DMA, wire drain and physical continuity |
 | [JPEG decode and native binding](video-platform.md) | Parser/executor, admitted cold startup and per-identity reset; host checks and native compilation pass | Board ROM profile, actual memory/cache/drain authority, physical output and remaining codec families |
 | [SD/eMMC reads](mmc-platform.md) | SDC0 plus explicit SDC2/SDC3 selection, corrected eMMC pin functions and joint card ownership; focused host/native checks pass | Physical identity/reads, writes, wider modes and recoverable boot |
-| [SD/eMMC write primitive](mmc-write.md) | Copied payload, exact request admission, bounded sector writes and retained partial failures; focused host checks and current native consumers pass | Actual range/backup/recovery authority and native writer binding; platform remains read-only |
+| [SD/eMMC write primitive](mmc-write.md) | Copied payload, exact request admission, bounded sector writes and retained partial failures; focused host checks and current native consumers pass | Physical range/recovery qualification and native maintenance image |
+| [Storage updates](storage-update.md) | Actual platform/range binding, durable host backup, candidate commitments and readback; connected host/core checks pass | Focused native task/USB checks, maintenance image and physical card/recovery qualification |
+| [Maintenance watchdog](maintenance-watchdog.md) | Progress-bound renewal, final response drain and permanent loss; focused composition/cutoff checks and native objects pass | Dedicated image integration and physical reload/reset/ROM qualification |
 | [GPIO and pins](pins.md) | Shared B–M ownership, GPIO and interrupt setup; host/source checks and native compilation pass | Physical routes, GIC delivery and platform admission |
 | [Thermal sensors](thermal.md) | Calibrated sampling, alarms and critical thresholds; host/source checks and native compilation pass | Physical accuracy, GIC delivery and thermal policy |
 | [SPI platform](spi-platform.md) | Actual clock/pin/GIC binding and bounded master transfers; composed host checks and native compilation pass | Board admission, SPI4 route proof, DMA, advanced modes and physical peers |
@@ -97,40 +101,36 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 
 | Worktree | Assigned work |
 | --- | --- |
-| Bluetooth audio worker | Synchronous transport integrated; actual security, scheduling and wider codec binding remain |
-| Storage worker | Concrete native range ownership and host backup/recovery admission for boot and updates |
-| DMA integration worker | Complete compact native image links; privileged exception routes pass focused instruction checks; physical handoff and USB result observation remain |
-| Audio worker | Bounded I2S periods integrated; native stream-pool binding and wider modes remain |
-| HDMI worker | Controller/TV0 composition integrated; native power, clock and PMIC binding in progress |
-| PCIe worker | Initial native root-port preparation integrated; physical link, endpoint operations, interrupts and DMA remain |
-| USB host worker | Exposed USB2/DWC3/xHCI and Type-C integration; schematic marks USB1 data pins unconnected |
-| Device memory worker | Larger native image integrated; physical ownership and application/device mappings remain |
-| GPU worker | Native free-list and hardware render-target resource binding toward actual graphics workloads |
-| Independent reviewers | Changed runtime ownership, deadlines and retained failures before focused execution |
+| Storage worker | Focused checks for the integrated PMIC, MMC and USB tasks |
+| Maintenance image worker | Dedicated boot/runtime image and immutable storage session using the integrated watchdog |
+| Camera worker | Native OV5640 transport, resource binding and retained single-frame readout |
+| Clock worker | Independent TWI11 scope beyond the existing 64-bit registry, with coherent consumer compilation |
+| Independent reviewers | Changed runtime ownership, deadlines and focused verification before execution |
 
-Parallel work has resumed after the earlier usage limit. HDMI native binding,
-DMA USB observation, GPU graphics resources and native storage updates have
-assigned workers. Larger memory reservations and their launcher are integrated.
-Inspect live agent status before resuming or duplicating an assignment. PCIe's passed composed
-batch and native sources are integrated. Its 197 recorded inputs and 17 artifacts
-match the saved evidence. Dependency scans confirm that central header changes
-do not affect these units, so the workload was not repeated.
-HDMI passed one composed batch and native compilation; its controller sources
-and primary references are integrated. I2S reconciliation is complete: component
-execution and central/extra-fixture compilation retain their separate evidence;
-no workload was repeated. Generated assembly, objects and generation inputs for the
-original DMA composition are preserved in a later-capture supplement under
-`dma-pool-session-20261016/assembly-later-capture-20261017/`. Their original
-pre-execution hashes were not recorded, so the supplement does not prove those
-assembly bytes were compiled. The executed ELF retains its original hash.
-Other assigned implementations remain in their isolated worktrees.
+Inspect live agent status before assigning overlapping work. Native HDMI startup,
+DMA USB observation, GPU graphics resources, storage core/host updates and the
+maintenance watchdog are integrated. The connected storage tasks are also
+integrated; their additive checks remain pending. The complete maintenance image
+is being assembled in its isolated worktree. USB host implementation has no
+active worker and remains required work.
 
-The compact DMA application now links the actual eight-core platform and private
-driver privilege hook. A corrected private exception table admits EL1t SVC/IRQ
-paths; seven focused instruction cases passed on the linked ELF. Link validation
-used an explicit all-zero admission fixture, so that image must not be deployed.
-No physical DMA result is claimed. The [application record](dma-pool-session.md)
-identifies remaining boot admission and native USB result observation.
+The GPU central integration compiles and links six affected targets against the
+actual graphics/reservation adapters. Empty fixture pools remain unusable. Its
+artifacts and component source comparisons are preserved under
+`gpu-central-integration-20261017/`; existing runtime cases were not repeated.
+Component results retain their recorded inputs and do not establish physical
+HDMI, DMA, GPU or storage operation.
+
+The compact DMA image includes native result frames, privilege routing and a
+host capture path. Focused checks passed on the linked image using refused
+handoffs. That fixture image must not be deployed. Physical boot admission and
+USB/DMA operation remain required.
+
+I2S reconciliation is complete; no workload was repeated. Generated assembly,
+objects and generation inputs for the original DMA composition are preserved
+under `dma-pool-session-20261016/assembly-later-capture-20261017/`. Their original
+pre-execution hashes were not recorded, so this later capture does not prove
+those assembly bytes were compiled. The executed ELF retains its original hash.
 
 The larger device-memory launcher is integrated with its focused software
 evidence. It accepts the exact runtime layout and excludes both reserved pools

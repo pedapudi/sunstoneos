@@ -25,8 +25,8 @@ if(SUNSTONE_GPU_FIRMWARE)
     -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections
     -O2 -g -Wall -Wextra -Werror -fstack-usage)
   target_link_options(gpu-irq-model PRIVATE -nostdlib -static -Wl,--gc-sections
-    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+    "-Wl,-T,${gpu_service_linker}"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/gpu-irq-model.map")
   set_target_properties(gpu-irq-model PROPERTIES SUFFIX ".elf"
-    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+    LINK_DEPENDS "${gpu_service_linker};${gpu_linker_inputs}")
 endif()

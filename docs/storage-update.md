@@ -105,8 +105,9 @@ The service lives in `drivers/storage/a733_storage_update.c`. Its concrete
 platform writer is separate from the default read-only entry points. The USB
 mailbox has one producer and one worker. Its response copy-out returns mailbox
 storage to the producer; actual USB IN completion is a separate transport event.
-The native worker and maintenance launcher bind task, transport and watchdog
-ownership. That composition is pending separate validation.
+The native bootstrap, MMC worker and USB task bind actual PMIC, platform and
+transport ownership. USB completion is reported to the maintenance watchdog.
+Their focused validation and the complete maintenance image remain pending.
 
 The host implementation is `tools/storage-update.py`. Its `prepare` command
 constructs artifacts only. A physical launcher must establish actual target,
@@ -125,5 +126,6 @@ The connected core/host batch passes under AddressSanitizer and
 UndefinedBehaviorSanitizer. Eight streaming SHA-256 boundary vectors match the
 host reference. The affected native units and existing embedding fixtures
 compile; their old protocol workloads were not rerun. Evidence is preserved in
-`~/.cache/sunstoneos/evidence/storage-update-20261017/batch1`. Native task, mutex,
-USB and watchdog execution remains outside that result.
+`~/.cache/sunstoneos/evidence/storage-update-20261017/batch1`. Native task, mutex and
+USB execution remain outside that result. The [watchdog composition](maintenance-watchdog.md)
+has separate focused evidence; it does not establish complete image execution.
