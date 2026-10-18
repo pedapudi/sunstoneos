@@ -39,7 +39,7 @@ software behavior; physical operation remains unqualified.
 | [USB observer and launcher](a733-smp-observe-host.md) | Bounded cached diagnostic frames, durable host capture and exact offline bundle; focused host/instruction checks pass | Physical recovery, entry admission, USB timing and scheduler results |
 | [Device memory reservations](cached-device-reservations.md) | Linker-owned pools, actual DMA lifetime and GPU/NPU preparation under the cached eight-core barrier; host/instruction/linker checks pass | Complete native application binding, additional capacity, physical exclusion and external drain |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Actual handoff authority and physical transfer/drain |
-| [Native DMA session](dma-pool-session.md) | Actual startup/service and permanent pool ownership; two-core copy/fault composition and production-entry compilation pass | Complete native image handoff, larger pool geometry and physical transfer/drain |
+| [Native DMA session](dma-pool-session.md) | Actual startup/service and permanent pool ownership; two-core copy/fault composition, complete native link and focused exception-route checks pass | Physical handoff, USB result observation and physical transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
 | [NPU PLL](npu-pll.md) | Source-backed enable/retune and atomic startup adoption; focused host/emulator checks and native compilation pass | Concrete boot authority and physical qualification |
 | [NPU startup and convolution](npu-convolution.md) | Linker-owned session buffers, fixed model authentication, guarded startup and copied input/output ownership; focused emulator checks pass | Physical confinement, supply/domain qualification and numerical execution |
@@ -97,25 +97,36 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | --- | --- |
 | Bluetooth audio worker | Synchronous transport integrated; actual security, scheduling and wider codec binding remain |
 | Storage worker | Concrete native range ownership and host backup/recovery admission for boot and updates |
-| DMA integration worker | Native session and copy entry integrated; complete-image handoff and larger pool binding remain |
+| DMA integration worker | Complete compact native image links; privileged exception routes pass focused instruction checks; physical handoff and USB result observation remain |
 | Audio worker | Bounded I2S periods integrated; native stream-pool binding and wider modes remain |
-| HDMI worker | Actual PHY/controller and TV0 timing, sink discovery and diagnostic output |
+| HDMI worker | Controller/TV0 composition integrated; native power, clock and PMIC binding in progress |
 | PCIe worker | Initial native root-port preparation integrated; physical link, endpoint operations, interrupts and DMA remain |
 | USB host worker | Exposed USB2/DWC3/xHCI and Type-C integration; schematic marks USB1 data pins unconnected |
 | Device memory worker | Larger native reservations for concurrent graphics, camera, video and mimus |
 | GPU worker | Native free-list and hardware render-target resource binding toward actual graphics workloads |
 | Independent reviewers | Changed runtime ownership, deadlines and retained failures before focused execution |
 
-The parallel workers stopped at an account usage limit on the latest continuation.
-Their worktrees and evidence remain intact. Do not assume an assigned worker is
-still executing; inspect its live status before resuming. PCIe's passed composed
+Parallel work has resumed after the earlier usage limit. HDMI native binding,
+expanded memory integration and its version-2 launcher have assigned workers.
+Inspect live agent status before resuming or duplicating an assignment. PCIe's passed composed
 batch and native sources are integrated. Its 197 recorded inputs and 17 artifacts
 match the saved evidence. Dependency scans confirm that central header changes
 do not affect these units, so the workload was not repeated.
-HDMI has accepted runtime/fixture review but no integrated result. The I2S and
-DMA integration reports still need final reconciliation, including the DMA
-assembly-source provenance supplement. Other assigned implementations remain
-in their isolated worktrees.
+HDMI passed one composed batch and native compilation; its controller sources
+and primary references are integrated. The I2S integration report still needs
+final reconciliation. Generated assembly, objects and generation inputs for the
+original DMA composition are preserved in a later-capture supplement under
+`dma-pool-session-20261016/assembly-later-capture-20261017/`. Their original
+pre-execution hashes were not recorded, so the supplement does not prove those
+assembly bytes were compiled. The executed ELF retains its original hash.
+Other assigned implementations remain in their isolated worktrees.
+
+The compact DMA application now links the actual eight-core platform and private
+driver privilege hook. A corrected private exception table admits EL1t SVC/IRQ
+paths; seven focused instruction cases passed on the linked ELF. Link validation
+used an explicit all-zero admission fixture, so that image must not be deployed.
+No physical DMA result is claimed. The [application record](dma-pool-session.md)
+identifies remaining boot admission and native USB result observation.
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -240,8 +251,8 @@ Current central builds have separate identities and compile/link evidence;
 neither cached image has physical qualification.
 The actual pre-scheduler device guard is now available independently of optional
 accelerator construction. Its body is unchanged and the affected native platform
-unit compiles. A complete DMA application link still requires its pending service
-integration and actual immutable platform handoff.
+unit compiles. The complete DMA application links with an explicit zero-authority
+fixture; execution requires actual immutable platform admission.
 
 Focused corrections retain inherited IOMMU page-walk faults, preserve the NPU
 register mutex on uncertain operations before release, and reject uncertain GPU

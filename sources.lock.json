@@ -2297,5 +2297,173 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/u-boot-orangepi/b791be842935b27268ae3d00e943a9075495f30a/drivers/phy/allwinner/sunxi-cadence-combophy.c",
     "archive": "pcie/pinned/b791be842935b27268ae3d00e943a9075495f30a/sunxi-cadence-combophy.c",
     "sha256": "1522200ccdbe156b756272e22d7886712d7a64fd07050fb99cadc5f8dab0400b"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_drm_hdmi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_drm_hdmi.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_drm_hdmi.c",
+    "sha256": "427c7c7dd1214ee863fd4ac04f6ab8c39a18598be5d8449b30d2387d9ecab276"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-sunxi_hdmi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_hdmi.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/sunxi_hdmi.c",
+    "sha256": "6e5084ba7a83f328d064c65553715d6e57a17cf004b6aad0f6da21de9aaa8ed7"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-sunxi_hdmi-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_hdmi.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/sunxi_hdmi.h",
+    "sha256": "c6f9c4831ceca983920514795efaaa31a8332eaa2b5a4d9d759bec52833b806e"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-sunxi_tcon_top-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_tcon_top.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/sunxi_tcon_top.c",
+    "sha256": "4eb8f798a0d5afb813c90d384301d93181265904a89a4ab5e13370c4b488e178"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_dev-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_dev.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_dev.c",
+    "sha256": "2cfdf0d96de53bac6ac880fea6d8760511dcffe5505bcd142f392b497b3f09c2"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_dev-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_dev.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_dev.h",
+    "sha256": "8cfeb968b551fc2582da80890f5bf6dbaa8ac3f65729f9b890aeefb65c209634"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_avp-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.c",
+    "sha256": "62c12e90a66013fa8e1710a6efde29a0e5cb9aefc71c2721fb761185504018e3"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_avp-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.h",
+    "sha256": "6367140519f61fc3c9d23e1eeb6f9a03c27b9f1fe3b05871def1d5efc4e2ca46"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_fc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.c",
+    "sha256": "e308b3d38fb00d70908ef4fbaf01ab82454c6b232623820a411bb8183edaab32"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_fc-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.h",
+    "sha256": "f2434bd6367d36cc88579f560fd8ec6dc52a18dc995047f7e482f41088e68cd2"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_i2cm-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_i2cm.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_i2cm.c",
+    "sha256": "a8d9e844e64fa40bbee6ed52ff43e0bbc3e7d1e291c8febea47e36745c074ac2"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_i2cm-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_i2cm.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_i2cm.h",
+    "sha256": "d5eb421c44c8c5fcb6cafe6165ec408204cff7c7e3b6175bbae9bf06c70da1f3"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_mc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.c",
+    "sha256": "649d924d88a39f7173d7464645e1574cdbb3ee326cd92d4d680b8729cd598aeb"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_mc-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.h",
+    "sha256": "60453c6bba554ee245e112f97cf6807ca65d35099b7eac1f87163101198cf24d"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_phy-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_phy.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_phy.c",
+    "sha256": "034ede3b7da5c9ce61526c35d04294ff78a532838dec352a8a86f5f285ce236d"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-dw_phy-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_phy.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_phy.h",
+    "sha256": "491c8580300d7e9809a735c9cb21ff7ca93d5c490e5355f1017e20c0a809eec8"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-phy_snps-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_snps.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_snps.c",
+    "sha256": "f9469bbcbc31556062d44595d421ab12ba176f1332a560ea64213f97290cbdae"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-phy_snps-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_snps.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_snps.h",
+    "sha256": "e4a883b317361fce6589c8ffa3b0157a6549ad5ae6e30b7a1703ad53e5c63888"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-phy_top-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_top.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_top.c",
+    "sha256": "a91fe21d04dfcca0c46683b7fdbd14b3dad9565313faa3fca3743a78ca1e7b85"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_hdmi20-phy_top-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_top.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/phy_top.h",
+    "sha256": "ad136a3c1e17db8991f1bcaa1e4d9aa17047cba973b979b9726c3d4b0b8764a2"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-Makefile": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/Makefile",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/Makefile",
+    "sha256": "b55d78fd474559a7b724264bc058d3ecee3e6901e8e180814a38a6dddb943cac"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-tcon_top-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.h",
+    "sha256": "eb6270f6d9ea76ed874fa8f4a1b3c389bb17d907832cc524dc9297ebbd31fadd"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-tcon_tv-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv.h",
+    "sha256": "576174ed8c754aabe81b8293becd3008dbea4cd98c154992801800a50f3f475e"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-tcon_tv_reg-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.c",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.c",
+    "sha256": "8cb08c7cf5d162a20158ee75b459a4402d4f4ce2a987072d5812a786b5799c47"
+  },
+  "hdmi-kernel-bsp-drivers-drm-sunxi_device-hardware-lowlevel_tcon-tcon_tv_reg-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.h",
+    "archive": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.h",
+    "sha256": "c517868e9447868d566115a815e9a7276c8bd9ac31c3de7d97899f3746ab7401"
+  },
+  "hdmi-kernel-drivers-gpu-drm-drm_edid-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_edid.c",
+    "archive": "hdmi-research/kernel/drivers/gpu/drm/drm_edid.c",
+    "sha256": "ea6f982b723a634383472ada84072554f16acdf1d77af57192ce6604d8be941f"
+  },
+  "hdmi-kernel-include-drm-drm_edid-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/drm/drm_edid.h",
+    "archive": "hdmi-research/kernel/include/drm/drm_edid.h",
+    "sha256": "8adefd58a526cae5a2a50e3f4039f3e9f2214f4781e657dc2e300e6944b00e6b"
+  },
+  "hdmi-kernel-drivers-gpu-drm-bridge-synopsys-dw-hdmi-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
+    "archive": "hdmi-research/kernel/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
+    "sha256": "681e2f32ed671e8f759fa84cb108416e76adae3bf94a07a11684d5bbbbfe00ae"
   }
 }

@@ -7,11 +7,13 @@ static struct a733_platform_locks locks;
 static struct a733_dma_pool_session session;
 static StaticTask_t client_state;
 static StackType_t client_stack[3072];
+struct a733_dma_copy_result a733_dma_copy_result;
 /* Boot copies only the client's service handle and admitted buffer locations. */
 static struct {
     struct dma_service *service;
     const atomic_uint *state;
     unsigned count,bytes;
+    unsigned channels[DMA_SERVICE_JOBS];
     unsigned char *source[DMA_SERVICE_JOBS],*destination[DMA_SERVICE_JOBS];
 } client_view;
 static _Noreturn void fatal(void *unused)
@@ -50,8 +52,10 @@ static void client(void *unused)
             configASSERT(dst[i]==(i<client_view.bytes ? src[i] : 0xa5));
         configASSERT(request(DMA_SERVICE_REAP,job,0).phase==DMA_SERVICE_READY);
         configASSERT(request(DMA_SERVICE_CLOSE,job,0).phase==DMA_SERVICE_CLOSED);
+        atomic_fetch_or_explicit(&a733_dma_copy_result.completed_channels,
+            UINT32_C(1)<<client_view.channels[job],memory_order_relaxed);
     }
-    platform_puts("DMA copy application completed all selected channels\n");
+    atomic_store_explicit(&a733_dma_copy_result.complete,1,memory_order_release);
     /* Preserve the worker, clock lease and parent allocation after completion. */
     vTaskSuspend(NULL);fatal(NULL);
 }
@@ -71,6 +75,7 @@ void a733_smp_diagnostic_start(void)
     for(unsigned i=0;i<session.count;++i) {
         client_view.source[i]=session.mappings[i][0].cpu;
         client_view.destination[i]=session.mappings[i][1].cpu;
+        client_view.channels[i]=session.jobs[i].channel;
     }
     TaskHandle_t task=xTaskCreateStaticAffinitySet(client,"dma-copy",3072,NULL,2,
         client_stack,&client_state,2);

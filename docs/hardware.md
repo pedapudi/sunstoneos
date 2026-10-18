@@ -20,6 +20,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source comparison, composed host checks and native compilation pass. Physical
   link operation, endpoint power admission, BAR allocation, interrupts, DMA,
   Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
+- HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
+  for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
+  native compilation pass. Shared native power/clock binding, analog admission,
+  physical monitor output, framebuffer routing and broader modes remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).

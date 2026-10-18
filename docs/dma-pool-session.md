@@ -93,6 +93,49 @@ pool and applies the existing privileged-task patch to a private cached port.
 It must rebuild all consumers against the same FreeRTOS and DMA service layouts.
 The copy application does not replace the full hardware and mimus requirements.
 
+The standalone target now links the complete cached eight-core boot, scheduler,
+pool constructor, privileged bootstrap/worker and EL0 copy client. Configure it
+with an explicit source file defining the immutable handoff:
+
+```sh
+cache="$HOME/.cache/sunstoneos"
+export PATH="$cache/host/usr/lib/llvm-21/bin:$PATH"
+cmake -S apps/dma-copy -B "$cache/build/a733-dma-copy" \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/aarch64-clang.cmake" \
+  -DFREERTOS_DIR="$cache/sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2" \
+  -DA733_DMA_HANDOFF_SOURCE=/absolute/path/qualified-dma-handoff.c
+cmake --build "$cache/build/a733-dma-copy" --target a733-dma-copy -j4
+```
+
+Configuration refuses a missing handoff source. The file must define
+`const struct a733_dma_handoff a733_dma_copy_handoff` in normal immutable image
+storage. Compiling its assertions does not establish the physical facts they
+represent. The target supplies no default authority and no board launch command.
+
+A private vector patch admits synchronous exceptions and interrupts from the
+privileged driver's EL1t context through the existing kernel handlers. The
+original cached diagnostic continues to reject that context. FIQ, SError and
+unrecognized synchronous exceptions retain their fault paths. Application
+tasks return to EL0; this does not add isolation against arbitrary application
+memory corruption in the existing shared mappings.
+
+The cached platform has no console implementation. After verifying and closing
+each copy, the client records its channel bit in `a733_dma_copy_result`. It
+release-publishes completion after all selected channels finish. An observer
+must acquire-load completion before reading the mask. This RAM record is not
+a durable host result across reset; native USB observation remains required.
+
+On 17 October 2026, the target linked once with no undefined symbols and a
+2 MiB write-back pool at `0x4126b000..0x4146b000`. That link used an explicit
+all-zero handoff fixture that grants no authority and must not be deployed.
+Seven focused instruction cases on the same ELF passed for the changed
+exception routes, stack/register preservation and EL0/EL1t return modes.
+They did not execute the boot, complete application or physical DMA.
+The ELF hash is
+`220156f455bd2a59926f0801fa0b480c02ebd5659e8d502920965d89369f5151`.
+Build inputs and results are in `~/.cache/sunstoneos/evidence/dma-copy-image-20261017/`;
+instruction evidence is in `~/.cache/sunstoneos/evidence/dma-copy-vectors-20261017/`.
+
 ## Capacity and remaining hardware work
 
 The maximum sixteen-job layout consumes 48 pages, or 192 KiB. Existing prepared
