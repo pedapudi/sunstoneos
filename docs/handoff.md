@@ -36,14 +36,10 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 ## Current integration
 
-Five independent paths are active, with physical access reserved for the coordinator:
+Three independent paths are active, with physical access reserved for the coordinator:
 
-- Startup diagnosis: prepare a returning A64 probe of inherited EL1 control state
-  before cache, interrupt or secondary-core setup.
-- HDMI: build the native framebuffer path after correcting ownership and startup
-  ordering; physical monitor output remains unqualified.
-- Mimus: integrate supervised recorded and paced recognition with the unchanged
-  model, bounded failure checkpoints and durable host output.
+- Startup diagnosis: extend the physically passed A64 capture through actual stack,
+  initialization and admission checks, returning before cache preparation.
 - Bluetooth: adapt source-available pairing/security logic and connect the existing
   hands-free and synchronous audio providers. Live mimus input still needs an adapter.
 - Wi-Fi networking: connect the pinned FreeRTOS+TCP DHCP and DNS implementations
@@ -74,8 +70,8 @@ instruction cases. Sources and artifacts match integration, with a documented
 source-only reporting-key correction. Evidence is under
 `i2s-supervised-host-20261017/`. Both adapters reuse shared transport and retained
 ownership handling. Their modeled admission records cannot authorize hardware.
-Neither application is physically qualified. Further board attempts require
-recovery of the quarantined instance and diagnosis of multicore startup.
+Neither application is physically qualified. Further application attempts require
+diagnosis of multicore startup; the board has recovered and accepts returning diagnostics.
 
 The [native Bluetooth application](bluetooth-native.md) is integrated with its
 host preparation and shared capture adapter. Firmware bootstrap, UART1 and H4/HCI
@@ -107,6 +103,13 @@ connects eight-core startup, shared providers, the SMP C++ runtime and existing
 recorded/paced recognition with two inference workers. Ten focused lifecycle,
 packaging and capture cases pass. Central mimus and maintenance builds pass;
 full recognition on the native image and physical execution remain untested.
+Its supervised mode and frozen recorded/paced host adapter are now integrated.
+One image build, five default-mode compatibility compilations, 30 host groups
+and 17 native boundary cases pass. The 513 recorded dependencies were verified;
+82 repository dependencies match except for one comment-only header change.
+Evidence is under `mimus-supervised-20261017/`. Native USB exchange framing is
+source-reviewed and host-modeled; full native recognition, physical operation
+and performance remain unqualified.
 
 The [native NPU application](npu-application.md), [radio entropy provider](radio-entropy.md),
 [Type-C source controller](typec.md) and [USB2 host path](usb2-host.md) are integrated.
@@ -183,11 +186,14 @@ The GPU host adapter also passes 19 focused cases. All eight source files and
 preserved artifacts match integration; evidence is under
 `gpu-supervised-host-20261017/`. Physical rendering remains untested.
 
-The HDMI application connects actual providers to a fixed 720p60 colorbar.
-Its central build matches all 65 repository dependencies, and its 17 focused
-software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
-routing and physical output remain outstanding. NPU startup with an unsuitable
-supply remains unsupported. NPU and GPU packaging/capture integration is complete at the software
+The HDMI application supports the existing 720p60 colorbar and optional
+[RGB565 framebuffer output](hdmi-framebuffer.md) through DE1 and TV0. The framebuffer
+image build, normal start/stop and four fault cases pass. All 26 changed files and
+90 repository inputs match integration; the frozen image is reused. Evidence is
+under `hdmi-framebuffer-20261017/`. Physical isolation, DMA reachability and visible
+output remain unqualified; monitor availability is unknown.
+
+NPU startup with an unsuitable supply remains unsupported. NPU and GPU packaging/capture integration is complete at the software
 level. Their shared transport remains unchanged by the observer and board
 approval correction. Physical access remains exclusive to the coordinator.
 
@@ -255,16 +261,23 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The current board instance is `003:073` on port `3-1`, with automatic USB access.
-User-confirmed power removal replaced the failed instance. Its holder stopped,
-the queue recorded the failure and subsequent claims resumed. Fresh DDR
-initialization now passes, with 12,288 MiB reported and both pages matching.
-The loader returned to ROM. Evidence, including the recovery record, is under
-`supervised-reconnect-20261017-073/`.
-The user is away for several hours; avoid another full-image attempt without a
-specific diagnostic or correction.
+The current board instance is `003:074` on port `3-1`, with automatic USB access.
+The returning A64 diagnostic reached EL3, copied its report, returned to ROM and
+restored both overwritten DRAM spans. Initial EL3 and EL1 control registers were
+both `0x00c50838`; all recorded entry predicates passed without an exception.
+The counter advanced, and its frequency declaration remained zero. This rules
+out the suspected initial EL1 control-state failure for this run. It does not
+qualify cache setup, coherence or multicore startup.
 
-On the preceding instance, fresh DDR initialization reported 12,288 MiB and two
+Evidence is under `a64-entry-probe-20261017/physical-073/`; the completed queue
+claim and runner released board ownership. The preceding power-reconnected
+instance passed fresh DDR initialization and a returning A32 survey under
+`supervised-reconnect-20261017-073/`. The warm diagnostic return preserved the
+checked memory; no further DDR initialization was needed for restoration.
+The user may be away for several hours. Continue with a specific returning
+startup diagnostic before another full-image attempt.
+
+On the earlier instance `003:072`, fresh DDR initialization reported 12,288 MiB and two
 4 KiB pages matched. Thirty-nine read-only control/status values matched the
 reviewed entry conditions. The returning SRAM survey then captured SVC mode,
 disabled MMU/caches, primary MPIDR, zero frequency declaration and RMR, and an
@@ -389,10 +402,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Diagnose the failed multicore launch offline and identify the smallest useful
-   correction or diagnostic before another physical attempt. The user reconnected
-   after the SCR-free attempt timed out; the new instance has fresh DDR evidence.
-   Reuse the working return path and refresh admission for the selected diagnostic.
+1. Extend the passed returning A64 capture through actual stack, initialization
+   and admission checks, then return before cache preparation. Preserve the
+   original native layout and verify every diagnostic instruction change. Reuse
+   the working return path and refresh admission for the selected diagnostic.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed.
 2. Qualify the integrated maintenance image after independent recovery passes.

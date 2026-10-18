@@ -247,3 +247,11 @@ interconnect or all-core startup. Normal and captured-exception return follow
 the prior physical mechanism; an arbitrary hardware stall still needs manual
 recovery. Further staging must retain early observation and return checkpoints
 before attempting those changes.
+
+The physical A64 capture passed on 2026-10-17. It reached EL3 without an exception,
+recorded both SCTLR banks as `0x00c50838`, and satisfied every captured entry
+predicate. The counter advanced; CNTFRQ remained zero. ROM returned on USB instance
+`003:074`, and both overwritten DRAM spans were restored and compared. Evidence
+is under `a64-entry-probe-20261017/physical-073/`. The initial EL1-state hypothesis
+is excluded for this run. Actual stack initialization, admission and later cached
+startup remain to be isolated before repeating the full launch.

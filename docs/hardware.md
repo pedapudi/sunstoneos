@@ -27,8 +27,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   composed startup/EDID and retained-fault checks pass. The supervised
   [native colorbar application](hdmi-application.md) connects these providers
   to 720p60 output. Its central build and 17 focused software cases pass.
-  Analog admission, physical monitor output, framebuffer routing and broader
-  modes remain required.
+  Optional [RGB565 framebuffer output](hdmi-framebuffer.md) now connects actual
+  DE1, IOMMU and TV0 providers. Its native build, normal start/stop and four fault
+  cases pass. Analog admission, physical DMA reachability, monitor output and
+  broader modes remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -324,7 +326,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retained failures; native compilation passes. Native [media clock preparation](media-clock.md)
   supplies real shared-register ownership and inherited-parent checks. Host checks
   and native compilation pass, including finalization fault retention. Complete
-  platform binding, shutdown/release, physical scanout, live frame
+  DSI platform binding, shutdown/release, physical scanout, live frame
   updates, composition, additional formats and synchronization remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
