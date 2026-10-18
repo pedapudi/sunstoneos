@@ -30,7 +30,7 @@ apply_build_patch("${mimus_native_build}/link-base.ld" "${SUNSTONE_SOURCE_ROOT}/
 apply_build_patch("${mimus_native_build}/link.ld" "${mimus_native_build}/link-base.ld"
   "${SUNSTONE_SOURCE_ROOT}/platform/a733-storage-maintenance/link.patch")
 list(APPEND mimus_native_sources
-  "${SUNSTONE_SOURCE_ROOT}/apps/mimus/native.c" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/main.cc"
+  "${SUNSTONE_SOURCE_ROOT}/apps/mimus/native.c" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/main.cc" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/recorded.cc"
   "${SUNSTONE_SOURCE_ROOT}/apps/mimus/platform.cc" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/parallel_runtime.cc"
   "${SUNSTONE_SOURCE_ROOT}/apps/mimus/paced.cc" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/replay.cc"
   "${SUNSTONE_SOURCE_ROOT}/apps/mimus/replay_runtime.cc"

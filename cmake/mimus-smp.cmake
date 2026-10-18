@@ -26,7 +26,7 @@ foreach(target IN ITEMS smp-mimus-model smp-mimus-replay-model smp-mimus-linear-
     platform/qemu-smp/start.S platform/qemu-smp/platform.c
     runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc
     runtime/cxx_terminate.cc
-    apps/mimus/platform.cc ${mimus_entry} apps/mimus/parallel_runtime.cc
+    apps/mimus/platform.cc ${mimus_entry} apps/mimus/recorded.cc apps/mimus/parallel_runtime.cc
     "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc"
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${smp_build}/port.c" "${smp_build}/portASM.S")
