@@ -13,6 +13,14 @@ static int request(enum dma_service_operation operation,uint64_t timeout,uint64_
  if(app.reply.result==DMA_SERVICE_BUSY)return 0;
  return app.reply.result==DMA_SERVICE_OK?1:-1;
 }
+unsigned i2s_output_bytes(void)
+{
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ return app.session.capture_samples*2u;
+#else
+ return I2S_PCM_BYTES;
+#endif
+}
 int i2s_client_step(void)
 {
  unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
@@ -62,8 +70,11 @@ int i2s_client_step(void)
   if(p.slot>=I2S_PERIODS||p.frames!=I2S_PERIOD_BYTES/2||!p.ticket||
      p.first_frame!=(uint64_t)app.periods*(I2S_PERIOD_BYTES/2)||
      p.kind!=(app.session.direction?A733_I2S_TX_MEMORY_CONSUMED:A733_I2S_CAPTURED))return fault();
-  memcpy(app.output+app.periods*I2S_PERIOD_BYTES,app.period_memory[p.slot],I2S_PERIOD_BYTES);
-  app.held_period=p.ticket;++app.periods;app.stage=app.periods==I2S_PERIODS?7:6;return 0;}
+  unsigned total=i2s_output_bytes();
+  if(app.output_bytes>=total||p.ticket==app.held_period)return fault();
+  unsigned bytes=total-app.output_bytes;if(bytes>I2S_PERIOD_BYTES)bytes=I2S_PERIOD_BYTES;
+  memcpy(app.output+app.output_bytes,app.period_memory[p.slot],bytes);app.output_bytes+=bytes;
+  app.held_period=p.ticket;++app.periods;app.stage=app.output_bytes==total?7:6;return 0;}
  case 6:
   r=request(DMA_SERVICE_PERIOD_PUT,0,app.held_period);if(r<0)return fault();if(!r)return 0;
   app.stage=5;return 0;
@@ -77,17 +88,42 @@ int i2s_client_step(void)
    return fault();
   /* Every service reservation, including any final client-held period, stays
    * held. No REAP, CLOSE or allocator release occurs after this observation. */
-  if(app.stopping||app.periods!=I2S_PERIODS||!i2s_live(NULL))return fault();
+  if(app.stopping||app.output_bytes!=i2s_output_bytes()||!i2s_live(NULL))return fault();
   atomic_store_explicit(&app.result,2,memory_order_release);return 1;
  default:return fault();
  }
 }
 void i2s_client_task(void *unused)
-{(void)unused;for(;;){(void)i2s_client_step();vTaskDelay(1);}}
+{(void)unused;for(;;){(void)i2s_client_step();
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ i2s_recognition_poll();
+#endif
+ vTaskDelay(1);}}
 int i2s_output(unsigned offset,void *out,unsigned bytes)
 {
- if(!out||bytes>4096||offset>I2S_PCM_BYTES||bytes>I2S_PCM_BYTES-offset||!i2s_live(NULL)||
+ if(!out||bytes>4096||offset>i2s_output_bytes()||bytes>i2s_output_bytes()-offset||!i2s_live(NULL)||
     atomic_load_explicit(&app.cancel,memory_order_acquire)||atomic_load_explicit(&app.result,memory_order_acquire)!=2)return 0;
  memcpy(out,app.output+offset,bytes);
  return i2s_live(NULL)&&!atomic_load_explicit(&app.cancel,memory_order_acquire);
 }
+
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+int i2s_capture_valid(void)
+{
+ if(!i2s_live(NULL)||atomic_load_explicit(&app.cancel,memory_order_acquire)||
+    atomic_load_explicit(&app.result,memory_order_acquire)==3||
+    atomic_load_explicit(&app.dma.state,memory_order_acquire)==A733_DMA_POOL_FAILED)return -1;
+ if(atomic_load_explicit(&app.result,memory_order_acquire)!=2)return 0;
+ return !app.stopping&&app.stage==8&&app.output_bytes==i2s_output_bytes()&&
+  app.reply.phase==DMA_SERVICE_RESULT&&app.reply.outcome==DMA_SERVICE_CANCELED&&app.reply.holds_buffers?1:-1;
+}
+unsigned i2s_capture_bytes(void){return i2s_output_bytes();}
+int i2s_capture_copy(void *out,unsigned bytes)
+{return out&&bytes==i2s_output_bytes()&&i2s_capture_valid()==1&&
+ (memcpy(out,app.output,bytes),i2s_capture_valid()==1);}
+int i2s_copy_target(const void *p,size_t bytes)
+{
+ uintptr_t a=(uintptr_t)p,b=(uintptr_t)&app;
+ return p&&bytes<=UINTPTR_MAX-a&&(a+bytes<=b||b+sizeof(app)<=a);
+}
+#endif

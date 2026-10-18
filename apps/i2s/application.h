@@ -17,7 +17,12 @@ struct i2s_application {
  void *period_memory[I2S_PERIODS];
  struct dma_service_reply reply;
  unsigned stage,periods,primed,stopping;
+ unsigned output_bytes;
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ uint8_t output[I2S_CAPTURE_MAX_BYTES];
+#else
  uint8_t output[I2S_PCM_BYTES];
+#endif
 };
 extern struct i2s_application app;
 extern const uint8_t i2s_recorded_pcm[I2S_PCM_BYTES],i2s_recorded_pcm_digest[32];
@@ -28,4 +33,5 @@ void i2s_client_task(void *);
 int i2s_client_step(void);
 int i2s_prepare_audio(void);
 int i2s_output(unsigned,void *,unsigned);
+unsigned i2s_output_bytes(void);
 #endif

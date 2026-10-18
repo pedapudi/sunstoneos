@@ -34,7 +34,7 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  * byte offset, payload bytes(up to4096). Response: magic/version/state/offset/
  * payload bytes/total bytes, epoch/generation, immutable session SHA256,
  * then payload. One request remains in flight until the device reports TX. */
-static uint8_t response[4168],request[12];
+static uint8_t response[4240],request[12];
 static unsigned response_bytes,response_sent,response_transferred,request_bytes;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 static uint32_t get32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -56,7 +56,23 @@ static void exchange(void)
  request_bytes+=tud_vendor_read(request+request_bytes,available);
  if(request_bytes<sizeof(request))return;request_bytes=0;
  uint32_t op=get32(request),offset=get32(request+4),bytes=get32(request+8);
- if(op>2||bytes>4096||offset>I2S_PCM_BYTES||bytes>I2S_PCM_BYTES-offset||
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ if(op==3){
+  if(bytes>4096||offset>I2S_RECOGNITION_LOG||bytes>I2S_RECOGNITION_LOG-offset)stop();
+  struct i2s_recognition_snapshot snapshot={0};
+  int r=i2s_recognition_copy(offset,bytes,response+144,&snapshot);
+  unsigned state=r<0?3:r?2:0,count=r==1?bytes:0;
+  if(r!=1)memset(&snapshot,0,sizeof(snapshot));
+  put32(response,0x54533249);put32(response+4,1);put32(response+8,state);put32(response+12,offset);
+  put32(response+16,count);put32(response+20,r==1?snapshot.bytes:0);
+  put32(response+24,(uint32_t)app.admitted.epoch);put32(response+28,app.admitted.epoch>>32);
+  put32(response+32,(uint32_t)app.admitted.generation);put32(response+36,app.admitted.generation>>32);
+  storage_digest_bytes(&app.admitted,sizeof(app.admitted),response+40);
+  memcpy(response+72,&snapshot,sizeof(snapshot));
+  response_sent=response_transferred=0;response_bytes=144+count;return;
+ }
+#endif
+ if(op>2||bytes>4096||offset>i2s_output_bytes()||bytes>i2s_output_bytes()-offset||
     (op!=1&&(offset||bytes)))stop();
  if(op==2)atomic_store_explicit(&app.cancel,1,memory_order_release);
  unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
@@ -65,7 +81,7 @@ static void exchange(void)
   if(i2s_output(offset,response+72,bytes))count=bytes;else result=3;
  }
  put32(response,0x53493241);put32(response+4,1);put32(response+8,result);put32(response+12,offset);
- put32(response+16,count);put32(response+20,I2S_PCM_BYTES);
+ put32(response+16,count);put32(response+20,i2s_output_bytes());
  put32(response+24,(uint32_t)app.admitted.epoch);put32(response+28,(uint32_t)(app.admitted.epoch>>32));
  put32(response+32,(uint32_t)app.admitted.generation);put32(response+36,(uint32_t)(app.admitted.generation>>32));
  storage_digest_bytes(&app.admitted,sizeof(app.admitted),response+40);

@@ -6,6 +6,12 @@
 #define I2S_SESSION_MAGIC UINT64_C(0x4153373341555331)
 #define I2S_CONTRACT_MAGIC UINT64_C(0x4153373341554331)
 #define I2S_SESSION_SECONDS 60u
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+#include "recognition.h"
+#define I2S_SESSION_VERSION 2u
+#else
+#define I2S_SESSION_VERSION 1u
+#endif
 #define I2S_PERIODS 4u
 #define I2S_PERIOD_BYTES 4096u
 #define I2S_PCM_BYTES (I2S_PERIODS*I2S_PERIOD_BYTES)
@@ -21,7 +27,15 @@ struct i2s_session {
  struct a733_native_usb_config shared;
  struct a733_dma_handoff dma;
  struct a733_pin_config inherited[3];
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ _Alignas(8) uint32_t capture_samples;uint32_t reserved;
+ struct i2s_models models;
+#endif
 };
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+_Static_assert(sizeof(struct i2s_session)==640&&offsetof(struct i2s_session,capture_samples)==552&&
+ offsetof(struct i2s_session,models)==560,"transcription wire geometry");
+#endif
 _Static_assert(sizeof(struct i2s_session)<=4096,"protected session page");
 int i2s_session_valid(const struct i2s_session *);
 #endif

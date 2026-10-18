@@ -35,18 +35,23 @@ def bundle_bytes(bundle, prepared, name):
     return data
 
 
-def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,now=time.monotonic,pause=time.sleep):
+def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,capture_samples=None,now=time.monotonic,pause=time.sleep):
     """Persist native copied periods; TX consumption does not establish wire drain."""
     record['i2s_retention']='whole-board-power-removal';record['i2s_result']='unobserved';save()
+    if capture_samples is not None:
+        require(len(session)==640 and struct.unpack_from('<3Q',session)==(0x4153373341555331,2,640) and
+                16000<=capture_samples<=80000 and struct.unpack_from('<I',session,552)[0]==capture_samples and direction==0,
+                'I2S capture duration differs from validated transcription profile.')
+    total=16384 if capture_samples is None else capture_samples*2
     output=bytearray();offset=0;ready=False
     for sequence in range(1,605):
         require(now()<deadline,'I2S capture deadline expired.')
-        operation=1 if ready else 0;count=4096 if ready else 0
+        operation=1 if ready else 0;count=min(4096,total-offset) if ready else 0
         frame=exchange(struct.pack('<III',operation,offset,count),min(500,max(1,int((deadline-now())*1000))))
         path=evidence/f'i2s-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),'operation':operation,'offset':offset}
         record.setdefault('i2s_frames',[]).append(entry);save()
-        value=decoder.decode(frame,session,operation,offset,count)
+        value=decoder.decode(frame,session,operation,offset,count,total)
         require(now()<deadline,'I2S response arrived after deadline.')
         if value['state']==3:
             record['i2s_result']='observed-failure';save();return
@@ -55,7 +60,7 @@ def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,now=t
             pause(min(.01,max(0,deadline-now())));continue
         if not ready:ready=True;continue
         output.extend(value['payload']);offset+=count
-        if offset==16384:
+        if offset==total:
             require(direction in (0,1) and (direction==0 or bytes(output)==pcm),'I2S consumed TX memory differs from admitted PCM.')
             target=evidence/'pcm-s16le-16000-mono.bin';supervisor.durable_frame(target,output)
             info={'path':target.name,'bytes':len(output),'sha256':digest(target),'format':'S16_LE','rate_hz':16000,'channels':1,
@@ -63,7 +68,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,now=t
                   'wire_drain_established':False,'acoustic_result_established':False}
             supervisor.save_json(evidence/'pcm.json',info)
             require(now()<deadline,'I2S durable output exceeded deadline.')
-            record['copied_i2s_output']=info;record['durable_result']=entry.copy();record['i2s_result']='observed-success'
+            record['copied_i2s_output']=info
+            if capture_samples is not None:
+                if not capture_transcript(exchange,session,evidence,record,save,deadline,info,now=now,pause=pause):return
+            else:record['durable_result']=entry.copy()
+            record['i2s_result']='observed-success'
             try:save()
             except BaseException:
                 record['i2s_result']='unobserved';record.pop('durable_result',None);record.pop('copied_i2s_output',None);raise
@@ -71,12 +80,49 @@ def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,now=t
     raise supervisor.CaptureWindowExpired('I2S pending query budget exhausted.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction):
+def capture_transcript(exchange,session,evidence,record,save,deadline,pcm,*,now=time.monotonic,pause=time.sleep):
+    output=bytearray();identity=None;total=0
+    # At10ms per pending reply this budget covers the entire59s host window
+    # plus all transcript chunks. The absolute deadline remains authoritative.
+    for sequence in range(1,6201):
+        require(now()<deadline,'I2S transcription deadline expired.')
+        count=min(4096,total-len(output)) if identity is not None else 0
+        offset=len(output)
+        frame=exchange(struct.pack('<III',3,offset,count),min(500,max(1,int((deadline-now())*1000))))
+        path=evidence/f'i2s-transcript-{sequence:03}.bin';supervisor.durable_frame(path,frame)
+        entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),'operation':3,'offset':offset}
+        record.setdefault('i2s_transcript_frames',[]).append(entry);save()
+        value=decoder.decode_transcript(frame,session,offset,count)
+        require(now()<deadline,'I2S transcription response arrived after deadline.')
+        if value['state']==3:
+            record['i2s_result']='observed-failure';save();return False
+        if value['state']!=2:
+            require(identity is None,'I2S transcription regressed during copy.')
+            pause(min(.01,max(0,deadline-now())));continue
+        require(value['pcm_sha256']==pcm['sha256'] and value['samples']*2==pcm['bytes'],
+                'Transcription does not identify the durably copied PCM.')
+        if identity is None:identity=frame[72:144];total=value['total'];continue
+        require(frame[72:144]==identity,'I2S transcription identity changed during copy.')
+        output.extend(value['payload'])
+        require(len(output)<=total<=65536,'I2S transcription extent overflow.')
+        if len(output)==total:
+            require(hashlib.sha256(output).hexdigest()==value['text_sha256'],'I2S complete transcription hash differs.')
+            output.decode('utf-8')
+            target=evidence/'transcription.txt';supervisor.durable_frame(target,output)
+            info={'path':target.name,'bytes':total,'sha256':digest(target),'samples':value['samples'],
+                  'pcm_sha256':pcm['sha256'],'format':'UTF-8 recorded-engine output'}
+            supervisor.save_json(evidence/'transcription.json',info)
+            require(now()<deadline,'I2S durable transcription exceeded deadline.')
+            record['copied_i2s_transcription']=info;record['durable_result']=entry.copy();return True
+    raise supervisor.CaptureWindowExpired('I2S transcription query budget exhausted.')
+
+
+def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction,capture_samples=None):
     serial=[0]
     def exchange(packet,timeout):
         same();require(time.monotonic()<deadline,'I2S deadline before write.')
         require(device.write(0x02,packet,timeout=timeout)==12,'Incomplete I2S request.')
-        serial[0]+=1;frame=bytearray();extent=4168;part=0;header=False
+        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 72;extent=base+4096;part=0;header=False
         while len(frame)<extent:
             same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'I2S deadline during response.')
             raw=bytes(device.read(0x81,extent-len(frame),timeout=min(timeout,remaining)))
@@ -85,10 +131,10 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direc
             require(0<len(raw)<=extent-len(frame),'Invalid I2S fragment extent.')
             frame.extend(raw)
             if not header and len(frame)>=72:
-                header=True;size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized I2S response.');extent=72+size
+                header=True;size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized I2S response.');extent=base+size
                 require(len(frame)<=extent,'I2S response exceeds header extent.')
         return bytes(frame)
-    return capture(exchange,session,evidence,record,save,deadline,pcm=pcm,direction=direction)
+    return capture(exchange,session,evidence,record,save,deadline,pcm=pcm,direction=direction,capture_samples=capture_samples,now=time.monotonic,pause=time.sleep)
 
 
 def source_files():
@@ -175,7 +221,7 @@ def main(argv=None):
     return supervisor.run_session(args, bundle, prepared,
         lambda: claimed(args.database, args.claim, args.owner, bundle,prepared), validate_entry,
         lambda device, same, deadline, record, save: capture_device(
-            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction']),
+            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction'],capture_samples=prepared.get('capture_samples')),
         product='sunstoneos native I2S', serial='sunstoneos-a733-i2s',
         bcd_device=0x0100, capture_seconds=59, result_key='i2s_result',
         source_files=source_files(), description='Supervised native I2S; retain all resources until whole-board power removal')

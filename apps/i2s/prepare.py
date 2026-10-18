@@ -18,6 +18,9 @@ protocol=module('i2s_protocol',ROOT/'apps/i2s/observe.py')
 require,digest,save_json=supervisor.require,supervisor.digest,supervisor.save_json
 SCHEMA='a733-i2s-supervised-bundle-v1'
 SESSION_ADDRESS=0x41f00000
+MODEL_ADDRESSES=(0x44000000,0x44800000)
+MODELS=((7501968,'f73ccd024645387d2679eea97ae11d0c33f5e4be81b39a9430d1f5d285e8089d'),
+        (6560592,'d877604c759b688e46f7f9b4346c7d87496faf6ee64cbb8f1f9837652aade6b2'))
 CONTRACT_MAGIC=0x4153373341554331
 REQUEST_MAGIC=0x4153373341554c31
 CONDITIONS={'dma0-cpu-and-remote-users-excluded','fifo-producers-quiescent-and-prior-dma-drained',
@@ -97,7 +100,8 @@ def field(raw,layout,name):
     f=layout['fields'][name];return raw[f['offset']:f['offset']+f['size']]
 def number(raw,layout,name):return int.from_bytes(field(raw,layout,name),'little')
 def session_profile(raw,layout,identity,pcm):
-    require(len(raw)==layout['size'] and struct.unpack_from('<3Q',raw)==(0x4153373341555331,1,len(raw)),'Invalid native I2S session')
+    transcribe='capture_samples' in layout['fields']
+    require(len(raw)==layout['size'] and struct.unpack_from('<3Q',raw)==(0x4153373341555331,2 if transcribe else 1,len(raw)),'Invalid native I2S session')
     values={k:number(raw,layout,k) for k in ['epoch','generation','lease','direction','audio_cold','shared.identity','shared.pmic.owner','shared.pmic.identity','shared.pmic.startup_deadline','shared.usb.owner','shared.usb.handoff','shared.usb.deadline_us','dma.allowed.owner','dma.allowed.handoff','dma.allowed.deadline_us','dma.controller','dma.evidence','dma.established','dma.owned_channels','dma.service_channels']}
     epoch,generation,lease=(values[k] for k in ('epoch','generation','lease'))
     require(all((epoch,generation,lease)) and values['direction']<=1 and values['audio_cold']<=1,'I2S session identities/direction differ')
@@ -110,11 +114,18 @@ def session_profile(raw,layout,identity,pcm):
     require(all(owners) and len(set(owners))==3,'Conflicting I2S owners')
     require(values['dma.established']==0x5f and values['dma.owned_channels']==0xffff and values['dma.service_channels']==1 and values['dma.controller']==0x04601000,'I2S supervised DMA ownership differs')
     require(field(raw,layout,'dma.allowed.fabric')==field(raw,layout,'shared.usb.fabric') and field(raw,layout,'dma.allowed.rate_hz')==field(raw,layout,'shared.usb.rate_hz'),'I2S DMA/USB fabric profiles differ')
-    return {k:values[k] for k in ('epoch','generation','lease','direction','audio_cold')}
+    profile={k:values[k] for k in ('epoch','generation','lease','direction','audio_cold')}
+    if transcribe:
+        count=number(raw,layout,'capture_samples')
+        require(values['direction']==0 and 16000<=count<=80000 and not number(raw,layout,'reserved'),'Invalid finite I2S transcription capture')
+        require(struct.unpack('<2Q',field(raw,layout,'models.bytes'))==tuple(x[0] for x in MODELS) and
+            field(raw,layout,'models.sha256')==b''.join(bytes.fromhex(x[1]) for x in MODELS),'I2S models differ from unchanged prepared inputs')
+        profile['capture_samples']=count
+    return profile
 
 def validate_admission(admission_raw,raw,layout,identity,pcm,image_hash,cache=None,frozen=False):
     record=json.loads(admission_raw);profile=session_profile(raw,layout,identity,pcm)
-    require(record.get('schema')=='a733-i2s-supervised-entry-v1' and record.get('image_sha256')==image_hash and
+    require(record.get('schema')==('a733-i2s-supervised-entry-v2' if 'capture_samples' in profile else 'a733-i2s-supervised-entry-v1') and record.get('image_sha256')==image_hash and
         field(raw,layout,'evidence')==hashlib.sha256(admission_raw).digest() and all(record.get(k)==v for k,v in profile.items()),'I2S session does not bind reviewed image/entry')
     require(record.get('shared_sha256')==sha(field(raw,layout,'shared')) and record.get('dma_sha256')==sha(field(raw,layout,'dma')) and
         record.get('inherited_sha256')==sha(field(raw,layout,'inherited')),'I2S typed configuration differs from reviewed facts')
@@ -128,7 +139,7 @@ def validate_admission(admission_raw,raw,layout,identity,pcm,image_hash,cache=No
     ddr_raw=evidence(record['ddr']);ddr=json.loads(ddr_raw)
     require(field(raw,layout,'memory')==hashlib.sha256(ddr_raw).digest() and ddr.get('schema')=='a733-ddr-reservation-v1' and
         ddr.get('identity')==target and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and
-        ddr.get('ranges')==[[0x41000000,0x42200000]] and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual I2S compact DDR/alias ownership required')
+        ddr.get('ranges')==([[0x41000000,0x42200000],[0x44000000,0x45000000],[0x46000000,0x47000000]] if 'capture_samples' in profile else [[0x41000000,0x42200000]]) and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual I2S compact DDR/alias ownership required')
     for ref in ddr['evidence']:evidence(ref)
     platform=json.loads(evidence(record['platform']));original=supervisor.observer.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
@@ -167,10 +178,13 @@ def build_launcher(output,session_size,clang,lld,objcopy):
         require(r.returncode==0,'I2S SRAM launcher build failed; inspect build.log')
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'I2S launcher exceeds protected SRAM')
 
-def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
+def prepare(image,manifest,session,admission,output,clang,lld,objcopy,models=()):
     image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
     parts,address,identity,layout,pcm=image_data(image_raw);profile=session_profile(raw,layout,identity,pcm);m=json.loads(manifest_raw)
     require(m.get('status')=='PASS' and m.get('physical') is False and m.get('image_sha256')==sha(image_raw) and m.get('build_id')==identity.hex(),'Exact final native I2S handoff manifest required')
+    model_blobs=[Path(p).read_bytes() for p in models]
+    require(len(model_blobs)==(2 if 'capture_samples' in profile else 0),'Transcription requires exactly the pinned base and overlay')
+    for blob,(size,identity_hash) in zip(model_blobs,MODELS):require(len(blob)==size and sha(blob)==identity_hash,'I2S model source identity differs')
     cache=validate_admission(admission_raw,raw,layout,identity,pcm,sha(image_raw));output=Path(output);output.mkdir(parents=True,exist_ok=False)
     build_launcher(output,len(raw),clang,lld,objcopy)
     data={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':admission_raw};uploads=[]
@@ -178,6 +192,8 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
         if p['data']:
             name=f'segment-{i}.bin';data[name]=p['data'];uploads.append({'name':name,'address':p['address']})
     uploads.append({'name':'session.bin','address':SESSION_ADDRESS});frozen={}
+    for index,blob in enumerate(model_blobs):
+        name=f'model-{index}.bin';data[name]=blob;uploads.append({'name':name,'address':MODEL_ADDRESSES[index]})
     for i,(path,value) in enumerate(cache.items()):
         name=f'entry-evidence-{i}.bin';data[name]=value;frozen[path]={'name':name,'sha256':sha(value)}
     request,contract=request_bytes(address,identity,raw,profile);data.update({'request.bin':request,'contract.bin':contract,'result-zero.bin':bytes(16384),'report-zero.bin':bytes(128)})
@@ -203,11 +219,18 @@ def validate_bundle(bundle):
     for i,x in enumerate(parts):
         if x['data']:
             name=f'segment-{i}.bin';require(data[name]==x['data'],'I2S upload differs from ELF');expected.append({'name':name,'address':x['address']})
-    expected.append({'name':'session.bin','address':SESSION_ADDRESS});require(p['segments']==expected and p['reservations']==[{k:v for k,v in x.items() if k!='data'} for x in parts],'I2S upload/reservation list differs')
+    expected.append({'name':'session.bin','address':SESSION_ADDRESS})
+    if 'capture_samples' in profile:
+        for index,(size,identity_hash) in enumerate(MODELS):
+            name=f'model-{index}.bin';require(name in data and len(data[name])==size and sha(data[name])==identity_hash,'Frozen I2S model differs')
+            expected.append({'name':name,'address':MODEL_ADDRESSES[index]})
+    else:require(not any(name.startswith('model-') for name in data),'Unexpected model upload')
+    require(p['segments']==expected and p['reservations']==[{k:v for k,v in x.items() if k!='data'} for x in parts],'I2S upload/reservation list differs')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,profile)):require(data[name]==value,'I2S launcher identity differs')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128) and 0<len(data['launch.bin'])<=0xc00 and sha(data['launch.bin'])==p['launcher_sha256'],'I2S protected launch/result extent differs')
     p['_sizes']={k:len(v) for k,v in data.items()};p['_frozen']=data;p['_prepared_sha256']=sha(metadata);return p
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','session','admission','output','clang','lld','objcopy'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy)
+    p.add_argument('--models',type=Path,nargs=2,default=())
+    a=p.parse_args();prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy,a.models)

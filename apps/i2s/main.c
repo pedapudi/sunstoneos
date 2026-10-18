@@ -10,6 +10,9 @@ void i2s_fail(void *unused)
 {
  (void)unused;
  atomic_store_explicit(&app.fatal,1,memory_order_release);
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ i2s_recognition_abort();
+#endif
  /* Revoke the common time provider as metadata only. DMA worker callbacks
   * inspect this fault before device/cache access; startup and lease callbacks
   * also refuse subsequent time samples. Keep every active reservation held. */
@@ -85,5 +88,8 @@ void a733_smp_diagnostic_start(void)
  if(!a733_dma_pool_session_stream_supervised_init(&app.dma,&config,&app.stream,I2S_PERIODS,I2S_PERIOD_BYTES)||
     !dma_service_bind(&app.dma.service,0,app.handles[2],1))platform_panic("I2S native pool",8);
  for(unsigned i=0;i<I2S_PERIODS;++i)app.period_memory[i]=app.dma.stream_mappings[i].cpu;
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ if(!i2s_recognition_start(&s->models))platform_panic("I2S recognition",10);
+#endif
  vTaskStartScheduler();platform_panic("I2S scheduler returned",9);
 }

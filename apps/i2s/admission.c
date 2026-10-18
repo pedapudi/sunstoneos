@@ -7,7 +7,7 @@ static int present(const void *v,size_t n)
 {const uint8_t *p=v;unsigned b=0;for(size_t i=0;i<n;++i)b|=p[i];return b!=0;}
 int i2s_session_valid(const struct i2s_session *s)
 {
- if(!s||s->magic!=I2S_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||
+ if(!s||s->magic!=I2S_SESSION_MAGIC||s->version!=I2S_SESSION_VERSION||s->bytes!=sizeof(*s)||
     !s->epoch||!s->generation||!s->lease||!present(s->image,32)||!present(s->evidence,32)||
     !present(s->memory,32)||!present(s->recovery,32)||s->direction>1||s->audio_cold>1||
     memcmp(s->pcm,i2s_recorded_pcm_digest,32)||s->shared.identity!=s->generation||
@@ -19,6 +19,10 @@ int i2s_session_valid(const struct i2s_session *s)
     s->dma.owned_channels!=0xffff||s->dma.service_channels!=1||s->dma.controller!=0x04601000||
     memcmp(s->dma.allowed.fabric,s->shared.usb.fabric,sizeof(s->dma.allowed.fabric))||
     memcmp(s->dma.allowed.rate_hz,s->shared.usb.rate_hz,sizeof(s->dma.allowed.rate_hz)))return 0;
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+ if(s->direction||s->reserved||s->capture_samples<I2S_CAPTURE_MIN_SAMPLES||
+    s->capture_samples>I2S_CAPTURE_MAX_SAMPLES||!i2s_models_valid(&s->models))return 0;
+#endif
  return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
@@ -43,3 +47,12 @@ int a733_smp_power_address(unsigned core,uintptr_t address,int write)
     address==UINT32_C(0x07050220)+core*4)return 1;
  return !write&&address==UINT32_C(0x07052008)+(uintptr_t)core*0x1000;
 }
+
+#ifdef SUNSTONE_I2S_TRANSCRIBE
+int i2s_models_valid(const struct i2s_models *p)
+{
+ static const uint64_t bytes[2]={7501968,6560592};
+ static const uint8_t hashes[2][32]={{0xf7,0x3c,0xcd,0x02,0x46,0x45,0x38,0x7d,0x26,0x79,0xee,0xa9,0x7a,0xe1,0x1d,0x0c,0x33,0xf5,0xe4,0xbe,0x81,0xb3,0x9a,0x94,0x30,0xd1,0xf5,0xd2,0x85,0xe8,0x08,0x9d},{0xd8,0x77,0x60,0x4c,0x75,0x9b,0x68,0x8e,0x46,0xf7,0xf9,0xb4,0x34,0x6c,0x7d,0x87,0x49,0x6f,0xaf,0x6e,0xe6,0x4c,0xbb,0x8f,0x1f,0x98,0x37,0x65,0x2a,0xad,0xe6,0xb2}};
+ return p&&!memcmp(p->bytes,bytes,sizeof(bytes))&&!memcmp(p->sha256,hashes,sizeof(hashes));
+}
+#endif
