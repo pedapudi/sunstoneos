@@ -105,8 +105,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Connected host/core checks pass; the default platform entry remains read-only.
   The [maintenance watchdog](maintenance-watchdog.md) passes focused progress,
   cutoff and permanent-loss checks. The native tasks and USB binding
-  are implemented; their focused checks and the complete maintenance image remain
-  pending. Physical identification/read/write operation,
+  are implemented. Focused supply, native MMC admission and USB callback checks
+  pass; complete-image integration remains pending. Physical identification/read/write operation,
   faster modes and recoverable boot remain outstanding.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
