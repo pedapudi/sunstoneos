@@ -69,6 +69,8 @@ second build while preserving checks for the actual requested application.
   after a stable access failure and use an available authoritative source.
 - Preserve configured executable paths. Resolving symlinks for hashing must not
   change invocations: `ld.lld` needs its name, and Python needs its virtualenv path.
+  Reuse the generator and toolchain from a successful native configuration;
+  do not select an unverified build tool for the next device target.
 - Set `PYTHONDONTWRITEBYTECODE=1` when running Python from preserved source
   snapshots. Incidental `.pyc` files are not source inputs; compare the declared
   sources and compiled dependencies instead of generated cache files.
@@ -111,6 +113,9 @@ second build while preserving checks for the actual requested application.
   identities. Do not leave placeholder hashes or build IDs in nominal cases.
   Resolve native hooks by their defining compilation unit when local symbol
   names repeat; reject ambiguous matches during setup, before runtime cases.
+  Validate the complete nominal provider configuration with the actual driver
+  before linking. Generic board fixtures may not satisfy a device's clock,
+  power or endpoint requirements; derive those fields from its accepted fixtures.
 - Use the existing queue, evidence records and dashboard. Group physical cases
   only when their resource ownership and recovery conditions permit safe reuse.
   A retained or failed session still requires its prescribed recovery.
