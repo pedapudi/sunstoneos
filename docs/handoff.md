@@ -46,11 +46,19 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-The ADC and reusable RTC implementations are integrated. Four implementation
-paths are active in separate worktrees: combined thermal/ADC monitoring,
-reusable fan/LED control, PCIe supply-contract correction and reusable read-only
-microSD access. Each has a focused reviewer. Physical board access remains
-serialized; independent software development does not share that restriction.
+CPU, GPU and NPU work now has dedicated implementation and review owners.
+The CPU audit confirmed that native SMP newlib integration already exists;
+a focused task-deletion/reclamation case will close a documented evidence gap.
+The physical secondary-core startup failure remains unresolved. GPU work connects
+repeated numerical submissions to the native application, with preserved command
+queues and copied acquired results. NPU work extends trusted build-time model
+registration to reviewed variable-shape artifacts and repeated inference.
+Neither accelerator has a verified physical workload result.
+
+Combined thermal/ADC monitoring and reusable read-only microSD access continue
+in separate worktrees. Continuous fan/LED control and the PCIe supply-contract
+correction are now integrated with focused software evidence. The coordinator
+alone performs physical board tests; independent software work proceeds in parallel.
 
 The RTC USB integration check is complete. Five cases execute the actual native
 serializer, TinyUSB initialization, vendor FIFO, events and completion flow using
@@ -188,18 +196,17 @@ Physical timing, UTC accuracy and physical USB remain unqualified. Source switch
 wider client registration, wake, calibration, reset-cause reporting and applicable
 retention modes remain required.
 
-The [native PCIe application](pcie-application.md) now connects the root-port
-driver and shared providers to x1 Gen1 link observation, read-only endpoint
-configuration and copied USB output. One native image, sanitizer admission,
-14 modeled native cases and four host groups pass. All 174 compiled repository
-inputs match integration under `pcie-application-20261018/`; controller and PHY
-evidence was reused. Physical use requires an identified endpoint, verified
-carrier wiring and power, and recovery for every affected power domain.
-The PD-bank supply mapping also needs correction or confirmation: the initial
-PCIe profile uses BLDO2, while the detailed fan/LED routing review identifies
-BLDO1. The [PCIe contract](pcie.md) records this unresolved physical prerequisite.
-BAR allocation, interrupt-driven transfers, DMA, higher link speeds and power
-transitions remain required work.
+The [native PCIe application](pcie-application.md) connects the root-port,
+PHY and shared providers to x1 Gen1 observation and copied endpoint configuration.
+Its corrected PD-bank supply contract reserves BLDO1 alongside the DCDC2 core
+supply. Host admission separately requires fitted-board routes and named analog
+supplies with stable voltage and writer exclusion. It no longer accepts a BLDO2
+snapshot as evidence of PD-bank power. One affected image and focused provider,
+native-request and electrical-admission cases pass under
+`pcie-pd-rail-native-20261018/`; all 174 compiled repository inputs match integration.
+Earlier PHY/protocol evidence was reused. Physical routing, measured supplies,
+endpoint behavior and recovery remain unqualified. BAR allocation, interrupts,
+DMA, higher link speeds and power transitions remain required work.
 
 The [supervised read-only SD application](storage-read-application.md) now
 identifies a card and reads sector zero through the actual native MMC providers,
@@ -223,14 +230,16 @@ its layout from the final image; the initial refusal and completed build were
 preserved. Physical transfers require an identified peer, authorized command
 effects, verified wiring and voltage, and recovery for every affected supply.
 
-The [PWM and ADC routing audit](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
-identifies the fan, status LED, header alternatives and display outputs, plus
-analog board-selection inputs. The [native fan PWM application](pwm.md) now
-integrates a finite waveform, interrupt notification and a retained GPIO-low
-stop. Provider, pin, linked-image and host checks pass under
-`pwm-native-20261018/`; all compiled repository code matches integration.
-Electrical fan-off remains a physical qualification requirement. Continuous fan
-control, duty changes and safe reuse are the next PWM integration work.
+The [native fan/LED application](pwm.md) now supports continuous 40 kHz PWM,
+duty changes, verified GPIO-low stop and retained-lease restart. Optional PL7
+GPIO commands preserve neighboring outputs. Actual provider and pin checks,
+four linked cases and host command/admission checks pass under
+`pwm-service-20261018/`. All 24 owned files and 178 compiled repository inputs
+match integration; only the inactive ADC CMake option differs. The frozen image
+was reused without another build. Duty updates introduce a low interval;
+uncertain failures may leave continuous output running until full power removal.
+Physical waveform, gate discharge, fan-off current and visible LED behavior
+remain unqualified. Other PWM channels and modes remain required.
 
 The [native ADC application](adc-application.md) now samples the four board-selection
 dividers through actual shared clock, CLDO3 supply and native register providers.

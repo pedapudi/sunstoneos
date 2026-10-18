@@ -108,11 +108,11 @@ wiring separately. A PMIC snapshot cannot select or prove that topology.
 BLDO2 reads enable register `0x20` bit7 and selector `0x2b` bits4:0.
 Its source-defined range is 0.5–3.4 V in 100 mV steps; selector 13 represents
 1.8 V. Selectors 30 and 31 retain their raw bytes with `decoded=0` and no
-programmed voltage. Enable state is decoded independently. The initial PCIe
-profile attributes the PD-bank supply to BLDO2 from schematic sheet 2. The later
-fan/LED routing review identifies BLDO1 on the detailed power sheet instead.
-This unresolved mapping is recorded in [PCIe integration](pcie.md); a BLDO2
-snapshot must not be treated as proof of the PD-bank voltage.
+programmed voltage. Enable state is decoded independently. The corrected
+[PCIe integration](pcie.md) reserves BLDO1 for the PD bank, following the detailed
+power sheet. Physical admission must still establish the fitted-board route;
+a BLDO2 snapshot cannot establish BLDO1 stability. COMB1 analog supplies remain
+separately identified and admitted.
 
 DC1SW2 reads enable register `0x11` bit4 and the shared DCDC1 selector at
 `0x12` bits4:0. Its range is 1.0–3.8 V in 100 mV steps. CLDO5 reads enable

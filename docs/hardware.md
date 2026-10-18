@@ -20,9 +20,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Source comparison, composed host checks and native compilation pass. The
   [supervised application](pcie-application.md) connects the existing providers
   to retained session admission, final endpoint checks and copied USB output.
-  One native image, sanitizer admission checks, 14 modeled native cases and four
-  host groups pass. All 174 compiled repository inputs match integration under
-  `pcie-application-20261018/`; existing controller and PHY evidence was reused.
+  The corrected profile reserves BLDO1 for PD-bank power and DCDC2 for the
+  core, with separate fitted-board analog-supply admission. One affected image
+  and focused provider, native-request and host electrical-policy checks pass
+  under `pcie-pd-rail-native-20261018/`; all 174 compiled repository inputs match
+  integration. Earlier controller/PHY/protocol evidence was reused without replay.
   Physical link operation, endpoint power admission, BAR allocation, interrupts, DMA,
   Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
@@ -217,13 +219,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   cases and four host groups pass. Integration reuses those artifacts with
   documented default-startup and additive-header differences. Physical exchange,
   electrical compatibility and peer recovery remain unqualified.
-- PWM and ADC: **implemented** [finite fan PWM](pwm.md) on PD5/PWM0 channel 5,
-  with shared clock/rail/pin ownership, interrupt notification, waveform stop
-  and a retained transition to GPIO output-low. Provider, pin, linked native and
-  host checks pass under `pwm-native-20261018/`; integration preserves the tested
-  image without replay. Physical waveform, gate discharge and fan-off current
-  remain unqualified. Continuous operation, other modes, the status LED, header
-  alternatives and display backlight output remain required.
+- PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
+  PWM0 channel 5 on PD5 supports 40 kHz duty changes, verified GPIO-low stop and
+  restart under retained ownership. Optional PL7 LED commands preserve neighboring
+  outputs. Actual provider/pin, four linked cases and host command/admission
+  checks pass under `pwm-service-20261018/`; the frozen image is reused without
+  replay. Duty changes include a low interval. An uncertain failure can leave
+  continuous output active until full power removal. Physical waveform, fan-off
+  current and visible LED behavior remain unqualified. Other channels, constant
+  endpoints, additional rates/polarities, S_PWM and other operating modes remain
+  required.
   [Board routing](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
   identifies the analog inputs. [Native ADC monitoring](adc-application.md) is
   **implemented** for two raw observation sets from the GPADC0–3 board-selection
