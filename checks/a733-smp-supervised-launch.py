@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--focus-refusal', action='store_true')
+    parser.add_argument('--frequency-only', action='store_true')
     args = parser.parse_args(); bundle = args.bundle
     image = (bundle / 'launch.bin').read_bytes()
     prepared = json.loads((bundle / 'prepared.json').read_text())
@@ -123,7 +124,11 @@ def main():
             assert not writes and report[1:3] == (0,0)
         return {'case':name, 'reason':reason, 'stop':expected, 'mmio_writes':len(writes), 'counter_reads':ticks}
 
-    cases = [check('disabled watchdog publishes supervised contract and hands off',12),
+    if args.frequency_only:
+        cases=[check('ROM zero frequency declaration admitted',12,sysreg={0xee1e0f10:0}),
+               check('incompatible nonzero frequency declaration refused',13,sysreg={0xee1e0f10:19200000})]
+    else:
+        cases = [check('disabled watchdog publishes supervised contract and hands off',12),
         check('high boot input is permitted under manual supervision',12,initial={INPUT:0x100}),
         check('old request refused',1,mutation=(0x52c00,0x415337334f4c4331)),
         check('watchdog contract version refused',3,mutation=(CONTRACT+8,1)),

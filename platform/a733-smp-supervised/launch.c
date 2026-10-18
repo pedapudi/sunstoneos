@@ -28,7 +28,10 @@ static __attribute__((noinline)) void refused(uint64_t reason)
 int a733_smp_launch_prepare(void)
 {
     uint32_t frequency;__asm__ volatile("mrc p15,0,%0,c14,c0,0":"=r"(frequency));
-    ADMIT(frequency==A733_SMP_COUNTER_HZ,13);
+    /* ROM may leave the architectural frequency declaration uninitialized.
+     * Raw ticks still use the board's source-established 24 MHz counter; native
+     * startup writes CNTFRQ. Reject an incompatible nonzero declaration. */
+    ADMIT(!frequency || frequency==A733_SMP_COUNTER_HZ,13);
     /* Request words: magic,version,bytes,epoch,generation,inverse,lease,
      * build-id PA, four build-id words, four admission-digest words. */
     ADMIT(REQUEST[0]==REQUEST_MAGIC && REQUEST[1]==3 && REQUEST[2]==128,1);

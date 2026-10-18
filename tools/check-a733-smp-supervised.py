@@ -243,8 +243,29 @@ def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready):
     save();started=time.monotonic();transaction('exe','0x52000');observe(started)
     record['launch_protocol_complete']=True
     record['complete']=record.get('scheduler_result')=='observed-success'
-    record['manual_reconnect_required']=True
+    record['manual_reconnect_required']=not record.get('clean_refusal',False)
     save()
+
+
+def probe_clean_refusal(transaction,evidence,prepared,record,save,*,same_instance,transport_failed):
+    require(same_instance and not transport_failed, 'Refusal probe requires the unchanged original instance and no transport failure.')
+    require(not record.get('refusal_probe_attempted'), 'One refusal report probe only.')
+    record['refusal_probe_attempted']=True;save()
+    # The helper admits only a nonce-bound pre-RMR refusal, checks the disabled
+    # watchdog and verifies complete SRAM restoration. Any error propagates.
+    base.observe_refusal(transaction,evidence,prepared,record,save)
+    record.update(clean_refusal=True,manual_reconnect_required=False,rom_usable=True)
+    save()
+
+
+def finish_after_observation(record,save,quarantine,hold=base.hold_ownership):
+    if record.get('clean_refusal'):
+        require(record.get('refusal_probe_attempted') and record.get('sram_restored') and
+                record.get('rom_usable') and not record.get('transport_failed'),
+                'Clean refusal requires a verified report and actual SRAM restoration.')
+        record['ownership_release_permitted']=True;save()
+        return
+    retain_after_capture(record,save,quarantine,hold)
 
 
 def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
@@ -323,12 +344,13 @@ def main(argv=None):
             save();return result.stdout
         def observe(started):
             nonlocal node,identity,failed
-            old=identity; deadline=started+19
+            old=identity; deadline=started+19; original_stayed=True
             challenge=secrets.token_bytes(32);record['challenge']=challenge.hex();save()
-            # Enumeration is observed without protocol requests. Only the intended
-            # new native instance may be opened; no ROM/recovery polling follows.
+            # Enumeration is passive. A sole nonce-bound report probe is allowed
+            # only if this window ends with the original instance unchanged.
             while time.monotonic()<deadline:
                 candidate=access.session_node(port_config)
+                if candidate is None or access.identity(candidate)!=old:original_stayed=False
                 if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):
                     access.require_session(candidate)
                     require((port/'bcdDevice').read_text().strip()=='0101' and
@@ -359,19 +381,29 @@ def main(argv=None):
                     except BaseException:
                         failed=True;raise
                 time.sleep(.01)
+            candidate=access.session_node(port_config)
+            same_original=original_stayed and candidate is not None and access.identity(candidate)==old
+            if same_original and not failed:
+                access.require_session(candidate);access.require_rom(candidate)
+                probe_clean_refusal(transaction,args.evidence,prepared,record,save,
+                    same_instance=True,transport_failed=failed)
+                return
             raise CaptureWindowExpired('No native observer within bounded capture window; reconnect manually.')
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733','supervised all-core observer; manual reconnection after capture',1):
                 launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready)
-                retain_after_capture(record,save,lambda:access.quarantine_instance(node,
+                finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:
             record['transport_failed']=failed
             base.stop_after_failure(record,save,
                 lambda:access.quarantine_instance(node,'Observer attempt stopped; no requests or automatic retry.',identity),error)
             raise
-    print('Diagnostic: '+record['scheduler_result']+'. Manual reconnection required. Queue claim remains with coordinator.')
+    if record.get('clean_refusal'):
+        print('Clean pre-entry refusal '+str(record['refusal_reason'])+'. SRAM restored; ROM usable. Queue claim remains with coordinator for review.')
+    else:
+        print('Diagnostic: '+record['scheduler_result']+'. Manual reconnection required. Queue claim remains with coordinator.')
     return 0 if record['complete'] else 2
 
 

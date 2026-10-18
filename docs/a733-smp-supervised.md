@@ -24,7 +24,10 @@ begins, allowing time before the software deadline.
 
 Watchdog, FEL-flag and reset-redirect contract fields must be zero. The launcher
 and boot monitor require a disabled watchdog and inactive redirects. Neither
-writes those registers. The existing assembly launcher writes the boot CPU's
+writes those registers. The architectural counter-frequency declaration may be
+zero, as observed in ROM, or 24 MHz. Other values refuse. Raw counter arithmetic
+uses the source-established 24 MHz rate; native entry initializes the declaration.
+The existing assembly launcher writes the boot CPU's
 reset-vector address and requests its AArch64 transition through RMR. This local
 architecture transition is distinct from a hardware-watchdog system reset.
 
@@ -75,10 +78,20 @@ The host reuses sealed uploads and readback verification. It issues one `exe`,
 observes the expected USB re-enumeration, and captures a bounded sequence of
 complete native replies. It stops at the first transport failure or malformed
 reply. Successful capture saves and synchronizes the exact frame before recording
-success. Every post-entry outcome quarantines the live instance and retains the
-flock and coordinator claim, including a clean launcher refusal. The tool sends
-no recovery ROM requests and performs no automatic retry. After actual manual
-reconnection, the coordinator reviews recovery before releasing ownership.
+success. After the bounded no-native window, the tool permits one SRAM refusal-report
+probe only if the original instance remained unchanged and no transport failure
+occurred. A fresh epoch/generation/lease report must identify a clean pre-RMR
+refusal. The existing helper then checks that the watchdog is disabled and
+restores every backed-up SRAM region with readback verification. Only completed
+restoration permits release of the flock and a distinct clean-refusal result;
+the queue claim remains with the coordinator for review. The tool does not retry
+execution automatically.
+
+An invalid report, report 12 indicating requested architecture transition, failed
+transfer or incomplete restoration quarantines the instance and retains the
+flock and claim. A successful native capture also retains ownership because CPUs
+continue running. These outcomes require actual manual reconnection and
+coordinator recovery review before releasing ownership.
 
 The image includes no storage grants, storage application, microSD controller
 operation or UFS probe. Preserve the inserted microSD card during manual recovery.
@@ -110,3 +123,12 @@ host implementations. It supplies no physical admission.
 
 The native image was built once. Successful focused cases were retained while
 correcting check fixtures; no existing scheduler or USB workload was replayed.
+
+The focused frequency/refusal follow-up preserves the failed physical image and
+its original evidence. It rebuilds only the ARM SRAM launcher, adds zero and
+incompatible-frequency instruction cases, and checks clean-refusal restoration,
+fresh session identities and retained ownership after failures. The original
+all-core image and unchanged component cases are reused. The first physical
+attempt's cause remains unconfirmed because it produced neither a native frame
+nor a refusal report; the frequency change addresses a separately recorded ROM
+metadata mismatch.
