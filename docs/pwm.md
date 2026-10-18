@@ -23,6 +23,22 @@ and optional LED authority, inherited pin fields, exact APB0/APBS0 profiles,
 command limit and session lifetime. The image fixes channel, frequency and
 polarity. Requests cannot select raw registers or arbitrary pins.
 
+The boot-CPU profile builds the same fan service and optional LED owner as
+`sunstone-a733-pwm-single-core`. It uses the accepted single-core monitor and
+FreeRTOS port through private build patches. EL3 verifies that secondary CPUs
+remain off, seals both session copies and retains the runtime contract outside
+the BSS region cleared on EL1 entry. The image starts the real PMIC, USB and
+PWM tasks on the boot CPU. IRQ67 enters the single-core interrupt dispatcher;
+its route remains disabled until the PWM owner enables it. Startup rejects
+inherited enabled, pending or active IRQ67 state before distributor cleanup.
+
+The host producer binds this image to `pwm-single-core-supervised-v1`, immutable
+execution geometry and the linked build identity. This profile requires USB0
+mode 2, the existing explicit ROM PIO takeover. Its platform authority must
+establish the secondary-off baseline, code publication, USB ownership and
+supplies, and inactive USB interrupts. The original supervised service profile
+and its prepared bundles remain supported.
+
 The common clock registry reserves the whole PWM0 controller exclusively.
 Channel 5 shares a clock pair with channel 4; reset and global controls are
 not independently assigned. Stable OSC, REF and fabric reservations protect
@@ -145,6 +161,16 @@ prevents the next endpoint operation. These are software checks only.
 Software-only authorities cannot authorize a physical USB target. A physical request needs current
 image/DDR/instance authority, supply and pad ownership, known load permission,
 and the reviewed full-power-removal procedure.
+
+The boot-CPU image and its compiler dependency closure are frozen under
+`~/.cache/sunstoneos/evidence/pwm-single-core-20261018/`. Sixteen focused linked
+startup, IRQ and profile checks pass. Six host cases cover the actual producer,
+frozen package, capture binding and original bundle compatibility. The corrected
+nominal provider session also passes production preparation and bundle validation.
+The startup fixture uses the accepted PL0/PL1 PMIC pin profile; partial results
+and its initial fixture failure remain archived. Existing PWM service and driver
+evidence is reused. Physical PWM waveform, interrupt delivery, USB timing and
+LED operation remain unqualified.
 
 Other routed channels, constant endpoints, broader frequency/polarity profiles,
 S_PWM output, complementary/dead-zone/group operation, capture and input

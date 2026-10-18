@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Offline preparation of one supervised fixed PWM application session."""
+import io
+from elftools.elf.elffile import ELFFile
 import hashlib
 import importlib.util
 import json
@@ -18,6 +20,28 @@ require=base.require
 SCHEMA='a733-pwm-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373350574331
 REQUEST_MAGIC=0x4153373350574c31
+
+PROFILES={'sunstone-a733-pwm':'pwm-service-supervised-v1',
+          'sunstone-a733-pwm-single-core':'pwm-single-core-supervised-v1'}
+def image_manifest_check(manifest,raw):
+    target=manifest.get('target');profile=PROFILES.get(target)
+    require(profile and manifest.get('execution_profile')==profile and
+            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested PWM image manifest required.')
+    elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    marker=symbols.get('pwm_single_core_geometry')
+    if target=='sunstone-a733-pwm-single-core':
+        require(marker is not None and marker['st_size']==32 and
+                symbols.get('sd_single_core_entry') and symbols['sd_single_core_entry']['st_value']==elf['e_entry'] and
+                not any(n in symbols for n in ('a733_cpu_start_init','a733_cpu_primary_continue',
+                    'a733_smp_pre_scheduler','FreeRTOS_SGI_Handler')),'PWM single-core startup differs.')
+        address=int(marker['st_value']);parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and
+            not p['p_flags']&2 and p['p_vaddr']<=address and address+32<=p['p_vaddr']+p['p_filesz']]
+        require(len(parts)==1,'PWM geometry must be immutable and file backed.')
+        offset=address-parts[0]['p_vaddr']
+        require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373350575331,1,872,60),
+                'PWM single-core execution geometry differs.')
+    else:require(marker is None,'Single-core PWM image requires its execution profile.')
+    return profile
 
 def session_check(raw):
     require(len(raw)==872,'PWM session must be 872 bytes.')
@@ -85,11 +109,12 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,execution_profile="pwm-service-supervised-v1"):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-pwm-supervised-entry-v1','Wrong PWM admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
+    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen,
+        "board-single-core-supervised-v1" if execution_profile=="pwm-single-core-supervised-v1" else "board-supervised-v2")
     for key,offset in [('initial',632),('memory',664),('power',696),('supervision',728)]:
         item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
         if str(path) not in cache:
@@ -118,8 +143,9 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-pwm' and mf.get('execution_profile')=='pwm-service-supervised-v1' and mf.get('final_elf')==ih,'Tested PWM image manifest required.')
-    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
+    execution_profile=image_manifest_check(mf,snapshots['image.elf'])
+    require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='pwm-single-core-supervised-v1' else 1),'PWM USB takeover mode differs from execution profile.')
+    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,execution_profile=execution_profile)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
@@ -138,7 +164,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     evidence={}
     for i,(path,data) in enumerate(cache.items()):
         name=f'evidence-{i}.bin';(out/name).write_bytes(data);evidence[path]={'name':name,'sha256':hashlib.sha256(data).hexdigest()}
-    p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
+    p=dict(schema=SCHEMA,physical_access=False,execution_profile=execution_profile,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
     base.save_json(out/'prepared.json',p);return validate_bundle(out)
 
 def validate_bundle(bundle):
@@ -151,13 +177,15 @@ def validate_bundle(bundle):
         require(hashlib.sha256(data[name]).hexdigest()==h,'PWM input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'PWM image changed.')
     manifest=json.loads(data['image-input-manifest.json'])
-    require(manifest.get('target')=='sunstone-a733-pwm' and manifest.get('execution_profile')=='pwm-service-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'PWM image manifest differs.')
+    execution_profile=image_manifest_check(manifest,data['image.elf'])
+    require(p.get('execution_profile','pwm-service-supervised-v1')==execution_profile,'PWM execution profile differs.')
     sizes={name:len(value) for name,value in data.items()}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'PWM protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'PWM initial report backing changed.')
     raw=data['session.bin'];session_check(raw)
+    require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='pwm-single-core-supervised-v1' else 1),'PWM USB takeover mode differs from execution profile.')
     template=data['session-template.bin'];cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,execution_profile)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:data['image.elf']));require(identity.hex()==p['build_id'],'PWM build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
     require(raw==expected_raw,'PWM session differs from admitted derivation.')

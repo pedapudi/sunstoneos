@@ -200,7 +200,7 @@ def main(argv=None):
         if kind==1:running=True
         elif kind==3:running=False
     def validate_entry(identity,port):
-        preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True)
+        preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True,prepared.get("execution_profile","pwm-service-supervised-v1"))
         require(admission['identity']==identity and admission['port']==port,'PWM entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
