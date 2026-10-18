@@ -36,11 +36,11 @@ static void wait_health(void)
     }
 }
 uint32_t tusb_time_millis_api(void)
-{uint64_t now;if(!live()||!a733_counter_clock_now(&runtime->counter,&now))stop();return (uint32_t)(now/1000);}
+{uint64_t now;if(!live()||!a733_counter_clock_now(&runtime->providers.counter,&now))stop();return (uint32_t)(now/1000);}
 void tusb_time_delay_ms_api(uint32_t milliseconds)
 {
     uint64_t now;
-    if(!live()||milliseconds>150||!a733_counter_clock_now(&runtime->counter,&now)||
+    if(!live()||milliseconds>150||!a733_counter_clock_now(&runtime->providers.counter,&now)||
        now>=runtime->boot.grant.deadline_us||
        (uint64_t)milliseconds*1000>=runtime->boot.grant.deadline_us-now)stop();
     TickType_t ticks=pdMS_TO_TICKS(milliseconds);if(ticks)vTaskDelay(ticks);
@@ -52,7 +52,7 @@ void a733_usb_prepare(void)
 {
     wait_health();
     for(;;) {
-        enum a733_usb_platform_result r=a733_usb_platform_poll(&runtime->usb);
+        enum a733_usb_platform_result r=a733_usb_platform_poll(&runtime->providers.usb);
         if(r==A733_USB_PLATFORM_PREPARED)return;
         if(r!=A733_USB_PLATFORM_BUSY)stop();vTaskDelay(1);wait_health();
     }

@@ -5,6 +5,9 @@
 #include "platform.h"
 #include "mimus/asr/platform.h"
 #include <cstdio>
+#ifdef SUNSTONE_MIMUS_NATIVE
+#include "native.h"
+#endif
 
 namespace {
 struct Job { sunstone::Replay *replay; uint64_t start_ns; };
@@ -19,7 +22,13 @@ void capture(void *) {
         configASSERT(xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE);
         while (job.replay->state() == sunstone::Replay::State::Running) {
             uint64_t now = (mimus::asr::platform::MonotonicNanos() - job.start_ns) / 1000;
+#ifdef SUNSTONE_MIMUS_NATIVE
+            const auto previous_due = job.replay->next_due_us();
+#endif
             job.replay->Pump(now);
+#ifdef SUNSTONE_MIMUS_NATIVE
+            if(job.replay->next_due_us()!=previous_due)mimus_native_input_progress();
+#endif
             if (job.replay->state() != sunstone::Replay::State::Running) break;
             const uint64_t due = job.replay->next_due_us();
             // Absolute sample deadlines prevent per-frame scheduling drift.
@@ -58,6 +67,9 @@ bool mimus_replay_run(std::span<const int16_t> pcm, ReplayConsumer consumer, voi
             break;
         }
         const auto segment = replay.Take();
+#ifdef SUNSTONE_MIMUS_NATIVE
+        mimus_native_waiting(!segment.has_value());
+#endif
         if (segment) {
             if (!consumer(context, pcm.subspan(segment->begin, segment->end - segment->begin),
                           *segment, job.start_ns)) {
@@ -69,6 +81,9 @@ bool mimus_replay_run(std::span<const int16_t> pcm, ReplayConsumer consumer, voi
         } else if (state == sunstone::Replay::State::Complete) break;
         else vTaskDelay(pdMS_TO_TICKS(1));
     }
+#ifdef SUNSTONE_MIMUS_NATIVE
+    mimus_native_waiting(0);
+#endif
     uint32_t finished;
     configASSERT(xQueueReceive(done, &finished, portMAX_DELAY) == pdTRUE);
     success = success && replay.state() == sunstone::Replay::State::Complete;

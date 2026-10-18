@@ -1,0 +1,47 @@
+#ifndef SUNSTONE_A733_NATIVE_USB_H
+#define SUNSTONE_A733_NATIVE_USB_H
+#include <stdatomic.h>
+#include "a733_counter_clock.h"
+#include "a733_platform_locks.h"
+#include "a733_pmic_native.h"
+#include "a733_pins_native.h"
+#include "a733_usb_platform.h"
+#include "a733_gpu_resources_native.h"
+struct a733_native_usb_config {
+    uint64_t identity;
+    struct a733_pmic_config pmic;
+    struct a733_pin_handoff pins;
+    struct a733_usb_platform_config usb;
+    uint32_t usb_supply_uv[4];
+};
+/* One permanent owner. The application retains admission and failure policy. */
+struct a733_native_usb {
+    struct a733_native_usb_config boot;
+    struct a733_counter_clock counter;
+    struct a733_platform_locks locks;
+    struct a733_clock_leases clocks;
+    struct a733_pins_native pin_native;
+    struct a733_pins pins;
+    struct a733_gpu_resource_native gpu_native;
+    struct a733_gpu_resource_manager gpu;
+    struct a733_rail_leases rails;
+    struct a733_pmic_native pmic_native;
+    struct a733_pmic pmic;
+    struct a733_usb_platform usb;
+    struct a733_rail_token usb_rail;
+    struct a733_pmic_lifetime usb_power;
+    struct a733_pmic_request usb_request;
+    struct a733_pmic_snapshot usb_snapshot[4];
+    TaskHandle_t pmic_task,usb_task;
+    int (*live)(void *);
+    void (*fail)(void *);
+    void *context;
+    atomic_uint pmic_ready,usb_prepared;
+    unsigned used,usb_step,usb_rail_index;
+};
+int a733_native_usb_init(struct a733_native_usb *,const struct a733_native_usb_config *,
+    int (*)(void *),void (*)(void *),void *);
+int a733_native_usb_bind(struct a733_native_usb *,TaskHandle_t,TaskHandle_t);
+int a733_native_usb_step(struct a733_native_usb *);
+int a733_native_usb_health(struct a733_native_usb *);
+#endif

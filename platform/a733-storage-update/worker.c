@@ -11,9 +11,9 @@ void a733_storage_native_pmic_task(void *p)
     struct a733_storage_native *n=p;wait_activation(n);
     for(;;) {
         if(!a733_storage_native_live(n))stop(n);
-        enum a733_pmic_status r=a733_pmic_poll(&n->pmic);
+        enum a733_pmic_status r=a733_pmic_poll(&n->providers.pmic);
         if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
-            atomic_store_explicit(&n->pmic_ready,1,memory_order_release);
+            atomic_store_explicit(&n->providers.pmic_ready,1,memory_order_release);
         else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY)stop(n);
         vTaskDelay(1);
     }
@@ -21,7 +21,7 @@ void a733_storage_native_pmic_task(void *p)
 void a733_storage_native_worker_task(void *p)
 {
     struct a733_storage_native *n=p;wait_activation(n);
-    while(!atomic_load_explicit(&n->pmic_ready,memory_order_acquire)) {
+    while(!atomic_load_explicit(&n->providers.pmic_ready,memory_order_acquire)) {
         if(!a733_storage_native_live(n))stop(n);vTaskDelay(1);
     }
     for(;;) {

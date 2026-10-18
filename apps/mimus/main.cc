@@ -1,7 +1,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "platform.h"
-#include "boot.h"
+#include "timing.h"
 #include "runtime.h"
 #include "mimus/asr/model.h"
 #include "mimus/asr/recognizer.h"
@@ -23,6 +23,9 @@
 extern "C" void runtime_smp_init(void);
 #include "parallel_runtime.h"
 #endif
+#ifdef SUNSTONE_MIMUS_NATIVE
+#include "native.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -43,7 +46,7 @@ struct Assets {
 #endif
 static void report_clock()
 {
-#ifndef MONITOR_QEMU
+#if !defined(MONITOR_QEMU) && !defined(SUNSTONE_MIMUS_NATIVE)
     // Read-only decode of the pinned A733 kernel's RTC mux and CPU-L NKMP PLL.
     const uint32_t oscillator = *reinterpret_cast<volatile uint32_t *>(0x07090160);
     const uint32_t pll = *reinterpret_cast<volatile uint32_t *>(0x08871000);
@@ -174,14 +177,23 @@ static void recognize(void *)
 #ifdef SUNSTONE_MIMUS_PACED
     asr::SetInternalArena(internal_arena);
     asr::SetYieldHook([] { taskYIELD(); });
+#ifdef SUNSTONE_MIMUS_NATIVE
+    const bool success = mimus_native_paced() ? mimus_transcribe_paced(inputs) : transcribe(inputs);
+#else
     const bool success = mimus_transcribe_paced(inputs);
+#endif
 #else
     const bool success = transcribe(inputs);
 #endif
 #ifdef SUNSTONE_SMP_NEWLIB
     mimus_parallel_report();
 #endif
+#ifdef SUNSTONE_MIMUS_NATIVE
+    mimus_native_finished(success);
+    vTaskSuspend(nullptr);
+#else
     platform_exit(success ? 0 : 1);
+#endif
 #endif
 }
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
@@ -189,9 +201,8 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
     (void)task;
     platform_panic(name, 0);
 }
-extern "C" void kernel_main(void)
+extern "C" void mimus_application_start(void)
 {
-    platform_init();
 #ifdef SUNSTONE_SMP_NEWLIB
     runtime_smp_init();
 #endif
@@ -214,6 +225,13 @@ extern "C" void kernel_main(void)
 #else
     configASSERT(xTaskCreateStatic(recognize, "mimus", 16384, nullptr, 3, recognition_stack, &tasks[1]));
 #endif
+}
+#ifndef SUNSTONE_MIMUS_NATIVE
+extern "C" void kernel_main(void)
+{
+    platform_init();
+    mimus_application_start();
     vTaskStartScheduler();
     platform_panic("scheduler returned", 0);
 }
+#endif

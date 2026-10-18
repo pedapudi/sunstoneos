@@ -4,7 +4,11 @@
 #define REQUEST ((volatile const uint64_t *)0x54000)
 #define REPORT ((volatile uint64_t *)0x54100)
 #define CONTRACT ((volatile struct a733_smp_contract *)A733_SMP_CONTRACT_ADDRESS)
+#ifdef A733_MIMUS_REQUEST_MAGIC
+#define REQUEST_MAGIC A733_MIMUS_REQUEST_MAGIC
+#else
 #define REQUEST_MAGIC UINT64_C(0x4153373353544c31)
+#endif
 #define SESSION ((uint8_t *)(uintptr_t)A733_STORAGE_SESSION_ADDRESS)
 #define LIMIT UINT64_C(24000)
 extern _Noreturn void a733_smp_launch_park(void);
@@ -55,6 +59,15 @@ int a733_smp_launch_prepare(void)
         a733_storage_wire64(SESSION+24)==epoch && a733_storage_wire64(SESSION+32)==generation &&
         a733_storage_wire64(SESSION+40)==lease && !a733_storage_wire64(SESSION+640) &&
         !a733_storage_wire64(SESSION+648) && a733_storage_wire_bounds(SESSION,ticks()),3);
+#ifdef A733_MIMUS_REQUEST_MAGIC
+    ADMIT(a733_mimus_wire_valid(SESSION),3);
+    unsigned image_bits=0,recovery_bits=0;
+    for(unsigned i=0;i<32;++i) {
+        image_bits|=SESSION[48+i];recovery_bits|=SESSION[80+i];
+        ADMIT(((const volatile uint8_t *)&CONTRACT->reserved[2])[i]==SESSION[184+i],3);
+    }
+    ADMIT(image_bits&&recovery_bits,3);
+#else
     ADMIT(a733_storage_wire32(SESSION+160)==0x53554731 && a733_storage_wire32(SESSION+164)==1,3);
     unsigned image_bits=0,recovery_bits=0,nonce_bits=0;
     for(unsigned i=0;i<32;++i) {
@@ -63,6 +76,7 @@ int a733_smp_launch_prepare(void)
             ((const volatile uint8_t *)&CONTRACT->reserved[2])[i]==SESSION[184+i],3);
     }
     ADMIT(image_bits && recovery_bits && nonce_bits,3);
+#endif
     ADMIT(rd(0x07090000)==a733_storage_wire32(SESSION+144) &&
         rd(0x07090060)==a733_storage_wire32(SESSION+148) &&
         rd(0x07090160)==a733_storage_wire32(SESSION+152),3);

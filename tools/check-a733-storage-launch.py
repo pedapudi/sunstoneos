@@ -108,21 +108,17 @@ def image_manifest(path,image,identity):
             m.get('build_id')==identity.hex(),'Matching maintenance runtime manifest required.')
 
 
-def prepare(image,manifest,config_path,storage,output,clang,lld):
-    segments,address,identity=image_parts(image);image_manifest(manifest,image,identity)
-    with store_api.ProtectedDirectory(storage) as store:
-        raw,grant,storage_manifest=storage_inputs(store)
-    config=json.loads(config_path.read_text());epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
-    session=session_bytes(raw,config,digest(image),epoch,generation,lease)
-    output.mkdir(parents=True,exist_ok=False)
+def build_launcher(output,session_header,extra_flags=()):
+    """Compile the shared SRAM launcher with one application's wire validator."""
+    clang,lld=extra_flags[:2];flags_extra=list(extra_flags[2:])
     for name in ('launch.S','launch.c','launch.ld'):
         shutil.copy2(ROOT/'platform/a733-storage-launch'/name,output/name)
-    shutil.copy2(ROOT/'platform/a733-storage-maintenance/session.h',output/'session.h')
+    shutil.copy2(session_header,output/'session.h')
     shutil.copy2(ROOT/'platform/a733-smp-cached/boot.h',output/'boot.h')
     commands=[]
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding',
            '-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables',
-           '-Os','-g','-Wall','-Wextra','-Werror','-I'+str(output)]
+           *flags_extra,'-Os','-g','-Wall','-Wextra','-Werror','-I'+str(output)]
     def run(command):
         commands.append(list(map(str,command)));r=subprocess.run(command,capture_output=True,text=True)
         with (output/'build.log').open('a') as f:f.write(r.stdout+r.stderr)
@@ -131,6 +127,16 @@ def prepare(image,manifest,config_path,storage,output,clang,lld):
     run([lld,'-T',output/'launch.ld',output/'entry.o',output/'launch.o','-o',output/'launch.elf'])
     run(['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',output/'launch.elf',output/'launch.bin'])
     require(0<(output/'launch.bin').stat().st_size<=0x2000,'Launcher exceeds admitted SRAM.')
+
+
+def prepare(image,manifest,config_path,storage,output,clang,lld):
+    segments,address,identity=image_parts(image);image_manifest(manifest,image,identity)
+    with store_api.ProtectedDirectory(storage) as store:
+        raw,grant,storage_manifest=storage_inputs(store)
+    config=json.loads(config_path.read_text());epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
+    session=session_bytes(raw,config,digest(image),epoch,generation,lease)
+    output.mkdir(parents=True,exist_ok=False)
+    build_launcher(output,ROOT/'platform/a733-storage-maintenance/session.h',(clang,lld))
     shutil.copy2(image,output/'image.elf');shutil.copy2(manifest,output/'image-input-manifest.json')
     save_json(output/'configuration.json',config)
     payloads=[]

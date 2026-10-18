@@ -26,7 +26,7 @@ static uint32_t read32(uintptr_t a)
     uint32_t value=*(volatile const uint32_t *)a;
     __asm__ volatile("dsb sy":::"memory");return value;
 }
-static int same(const struct a733_maintenance_transfer *t)
+static int same(const struct a733_watchdog_window *t)
 {
     return (read32(0x02050014)&0xffff)==0x41 && (read32(0x02050010)&0xffff)==1 &&
         (read32(0x02050018)&0xffff)==2 && !(read32(0x03000024)&0x100) &&
@@ -35,7 +35,7 @@ static int same(const struct a733_maintenance_transfer *t)
         read32(0x07090000)==t->rtc_control && read32(0x07090060)==t->rtc_divider &&
         read32(0x07090160)==t->rtc_source;
 }
-int a733_maintenance_hw_admit(const struct a733_maintenance_transfer *t)
+int a733_watchdog_hw_admit(const struct a733_watchdog_window *t)
 {
     return t && xTaskGetSchedulerState()==taskSCHEDULER_NOT_STARTED && mappings() && same(t);
 }
@@ -59,7 +59,7 @@ int a733_maintenance_hw_task(void *task)
     return !nesting && !critical && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
         xTaskGetCurrentTaskHandle()==(TaskHandle_t)task;
 }
-int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
+int a733_watchdog_hw_reload(const struct a733_watchdog_window *t,
     struct a733_counter_clock *clock,struct a733_platform_locks *locks,void *task,
     atomic_uint *state,uint64_t deadline,uint64_t *before,uint64_t *after)
 {
@@ -68,7 +68,7 @@ int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
     unsigned expected=1;
     uint64_t start,end;
     if(!same(t) || a733_counter_clock_now(clock,&start)!=1 || start>=deadline ||
-       start>=t->storage->deadline_us ||
+       start>=t->deadline_us ||
        !atomic_compare_exchange_strong_explicit(state,&expected,3,memory_order_acq_rel,memory_order_acquire)) {
         a733_platform_lock_leave(locks,A733_PLATFORM_REGISTER_LOCK);return 0;
     }
@@ -80,7 +80,7 @@ int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
     *(volatile uint32_t *)(uintptr_t)0x0205000c=0x14af;
     __asm__ volatile("dsb sy":::"memory");
     if(!same(t) || a733_counter_clock_now(clock,&end)!=1 || end<start ||
-       end-start>t->guard_us || end>=t->storage->deadline_us) {
+       end-start>t->guard_us || end>=t->deadline_us) {
         atomic_fetch_or_explicit(state,4,memory_order_release);
         (void)a733_platform_lock_retain(locks,A733_PLATFORM_REGISTER_LOCK);return 0;
     }
@@ -89,4 +89,23 @@ int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
     a733_platform_lock_leave(locks,A733_PLATFORM_REGISTER_LOCK);
     if(!success)return 0;
     *before=start;*after=end;return 1;
+}
+
+static struct a733_watchdog_window window(const struct a733_maintenance_transfer *t)
+{
+    return (struct a733_watchdog_window){t->storage->deadline_us,t->guard_us,
+        t->rtc_control,t->rtc_divider,t->rtc_source};
+}
+int a733_maintenance_hw_admit(const struct a733_maintenance_transfer *t)
+{
+    if(!t||!t->storage)return 0;
+    struct a733_watchdog_window w=window(t);return a733_watchdog_hw_admit(&w);
+}
+int a733_maintenance_hw_reload(const struct a733_maintenance_transfer *t,
+    struct a733_counter_clock *clock,struct a733_platform_locks *locks,void *task,
+    atomic_uint *state,uint64_t deadline,uint64_t *before,uint64_t *after)
+{
+    if(!t||!t->storage)return 0;
+    struct a733_watchdog_window w=window(t);
+    return a733_watchdog_hw_reload(&w,clock,locks,task,state,deadline,before,after);
 }

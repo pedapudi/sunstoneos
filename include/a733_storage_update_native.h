@@ -35,42 +35,28 @@ struct a733_storage_native_boot {
     uint32_t usb_supply_uv[4];
 };
 #ifdef A733_STORAGE_NATIVE_IMPLEMENTATION
-#include "a733_counter_clock.h"
+#include "a733_native_usb.h"
 #include "a733_platform_locks.h"
 #include "a733_pmic_native.h"
 #include "a733_pins_native.h"
 #include "a733_mmc_platform_native.h"
-/* Private permanent composition. Only the three target translation units may
+/* Private permanent composition. Only the storage target translation units may
  * access this storage. No task deletion, reinitialization or release exists. */
 struct a733_storage_native {
     struct a733_storage_native_boot boot;
-    struct a733_counter_clock counter;
-    struct a733_platform_locks locks;
-    struct a733_clock_leases clocks;
-    struct a733_pins_native pin_native;
-    struct a733_pins pins;
-    struct a733_gpu_resource_native gpu_native;
-    struct a733_gpu_resource_manager gpu;
-    struct a733_rail_leases rails;
-    struct a733_pmic_native pmic_native;
-    struct a733_pmic pmic;
+    struct a733_native_usb providers;
     struct a733_mmc_platform_native mmc_native;
     struct a733_mmc_platform mmc;
     struct a733_storage_update service;
     struct a733_storage_channel channel;
     struct a733_storage_native_transport transport;
-    struct a733_usb_platform usb;
-    struct a733_rail_token usb_rail;
-    struct a733_pmic_lifetime usb_power;
-    struct a733_pmic_request usb_request;
-    struct a733_pmic_snapshot usb_snapshot[4];
     struct a733_maintenance_lease *maintenance;
     struct a733_maintenance_transfer transfer;
     StaticTask_t task[3];
     StackType_t stack[3][2048];
     TaskHandle_t task_handle[3];
-    atomic_uint active,failed,pmic_ready,service_ready,usb_prepared;
-    unsigned used,usb_step,usb_rail_index;
+    atomic_uint active,failed,service_ready;
+    unsigned used;
 };
 #else
 struct a733_storage_native;

@@ -1,6 +1,6 @@
 #include "replay_runtime.h"
 #include "platform.h"
-#include "boot.h"
+#include "timing.h"
 #include "runtime.h"
 #include "mimus/asr/recognizer.h"
 #include "mimus/asr/parallel.h"

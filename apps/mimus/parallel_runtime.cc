@@ -5,6 +5,9 @@
 #include "platform.h"
 #include "mimus/asr/parallel.h"
 #include <cstdio>
+#ifdef SUNSTONE_MIMUS_NATIVE
+#include "native.h"
+#endif
 
 namespace {
 using mimus::asr::RangeFn;
@@ -48,6 +51,9 @@ void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
         completed = sequence;
     }
     busy = false;
+#ifdef SUNSTONE_MIMUS_NATIVE
+    mimus_native_inference_progress();
+#endif
 }
 int workers() { return 2; }
 }

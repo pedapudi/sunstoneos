@@ -65,7 +65,7 @@ set(storage_extra
   drivers/pinctrl/a733_pins.c drivers/pinctrl/a733_pin_tables.c drivers/pinctrl/a733_pins_native.c
   drivers/gpu/a733_gpu_resources.c drivers/gpu/a733_gpu_resources_native.c
   drivers/usb/a733_usb_platform.c drivers/usb/a733_usb_platform_native.c
-  platform/a733/counter_clock.c platform/a733/shared_locks.c
+  platform/a733/counter_clock.c platform/a733/shared_locks.c platform/a733/native_usb.c
   drivers/watchdog/a733_maintenance_watchdog.c platform/a733/maintenance_watchdog.c
   arch/aarch64/device_memory.c)
 list(TRANSFORM storage_extra PREPEND "${storage_root}/")
