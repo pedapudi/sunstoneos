@@ -143,12 +143,15 @@ controller identification without requiring a headset. These applications have
 not completed their builds or focused checks. JPEG and Bluetooth share optional
 board startup callbacks; existing board behavior is unchanged without that option.
 
-The pinned DDR loader selects the APBS1 reference-clock parent, while the current
-native PMIC provider accepts only the oscillator parent. Read-only adoption of
-the reference route is being implemented before the new application builds.
-Earlier PMIC-dependent images may refuse that inherited state. An opt-in early
-NPU PLL step is also in development; it must preserve shared SRAM and measure
-state after DDR training. Neither change has been executed on the board.
+The native PMIC provider now accepts the APBS1 reference-clock parent selected
+by the pinned DDR loader. It verifies the 24 MHz PLL reference and rejects later
+route changes without writing clock or divisor registers. Focused provider checks
+and native compilation pass; source and artifact comparisons are under
+`pmic-parent-20261017/batch1/`. New application builds include this correction.
+Earlier sealed images retain their original provider layout and need rebuilding
+before using the additional parent support. Physical operation remains untested.
+An opt-in early NPU PLL step is also in development; it must preserve shared SRAM
+and measure state after DDR training before any later NPU admission.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture

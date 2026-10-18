@@ -123,7 +123,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   compilation pass for shared selectors, snapshot ownership and retained faults.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
-  and native compilation pass. [GPU/NPU consumers](pmic-consumers.md) now retain
+  and native compilation pass. It adopts either supported 24 MHz APBS1 parent
+  and rejects later route changes; focused reference-parent checks pass.
+  [GPU/NPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared
   provider disables their competing inherited-bus readers. Emulator checks pass
   for both consumers and retained failures. Cold bus startup, recovery, regulator
