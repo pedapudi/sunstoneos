@@ -455,8 +455,23 @@ selected voltage remain 3.3 V. Exact mode, rail stability and writer exclusion
 remain required; no voltage configuration is written. Four focused provider
 cases pass, including retained failure on mode, status or selector changes.
 Only the platform and build identity were rebuilt; 164 objects were reused.
-The image still needs exact pull/drive fields, clock/supply ownership, electrical
-admission and working startup. An independent single-core SD/USB application is
+Read-only batches now capture the exact PF pull/drive fields, oscillator and
+fabric clock controls. All seven secondary power-state registers report OFF.
+The observed oscillator and reference fields require corrected rate decoding;
+the existing admission assumes a 24 MHz oscillator. This is a software profile
+gap, not evidence of an electrical fault. The clock worker is correcting the
+mandatory SD, USB and PMIC consumers against the pinned A733 sources.
+
+A conditional PMIC clock read confirms APBS0 source 0, APBS1 source 4,
+controller gate/reset value `0x10001` and divider `0x28`. The divider read ran
+only after the clock and reset checks passed, under the same board lock.
+Every read completed, the process exited and the queue claim closed. No I2C
+transaction or register write ran. Evidence is under
+`second-board-20261018-3-3/sd-pin-clock-state/`, `sd-peri0-state/` and
+`pmic-clock-state/`.
+
+The image still needs settled supply/ownership and electrical admission,
+corrected clock decoding and working startup. An independent single-core SD/USB application is
 being integrated to permit storage qualification while multicore remains under
 diagnosis. Full all-core hardware support remains required.
 

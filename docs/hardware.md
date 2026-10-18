@@ -217,6 +217,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is now supported with sensed/selected 3.3 V, unchanged mode and stable owned
   supplies. Four provider cases pass, including retention on voltage-state
   changes. Only two objects were rebuilt and 164 reused. No card command has run.
+  Read-only pin, fabric and PMIC clock observations now supply the second board's
+  configuration under `second-board-20261018-3-3/`. Mandatory native providers
+  still need corrected oscillator/reference decoding. An independent single-core
+  SD/USB startup is in development; actual card operations remain untested.
   Detected removal permanently stops both clients. Unnoticed card replacement,
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
