@@ -3,9 +3,11 @@
 SunstoneOS has a baseline JPEG parser, hardware-table builder and checked
 register executor for the A733 video decoder. The executor compiles for native
 AArch64 and matches instruction traces from an A733/T736 runtime package.
-Physical decoding is unqualified. No native provider currently establishes the
-clock, reset, translation, cache and completion obligations required to execute
-it. The sources are not integrated into the central build.
+The [native JPEG application](jpeg-application.md) integrates the executor with
+clock/reset providers, decoder IOMMU mappings, guarded buffers and copied USB
+output. Its central image links and focused software checks pass. Physical
+decoding, memory confinement, completion and numerical conformance remain
+unqualified.
 
 This document is for engineers implementing FreeRTOS device drivers. A video
 engine (VE) contains several codec register groups. An IOMMU master identifies a
