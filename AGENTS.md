@@ -97,9 +97,13 @@ second build while preserving checks for the actual requested application.
 - Assign complete device paths: native image, host launch and capture, focused
   checks, and a bounded physical test request. Agree on their shared interfaces
   early so host integration can proceed alongside native implementation.
-- Finish current assignments before opening more work. Default to three active
-  device paths; add another only when it has independent ownership and will not
-  delay integration or physical testing of completed work.
+- Integrate completed assignments promptly. Choose the number of active device
+  paths from independent file ownership, available implementation/review capacity
+  and coordinator integration capacity; do not impose a fixed three-path limit.
+  Add a complete useful outcome when it can progress without delaying integration
+  or physical testing. Physical board serialization does not limit software work.
+  Reduce concurrency when shared edits, duplicate work or review queues impede
+  progress; do not split tasks merely to increase the worker count.
 - The coordinator integrates completed paths and prepares the next eligible
   board test while workers continue implementation. Prioritize tests that unblock
   shared startup or several devices, then ready paths with available peripherals.

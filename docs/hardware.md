@@ -123,9 +123,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   CLDO3 decoding and PWM pin support recorded separately. Prior finite RTC evidence
   remains valid for its frozen inputs. Source switching, wider runtime client
   registration, wake, calibration, reset-cause reporting and applicable retention
-  modes remain required. The fitted board revision, physical operation, UTC accuracy
-  and native USB serialization remain unqualified. Independent watchdog evidence
-  is recorded above.
+  modes remain required. Five additional frozen-image cases execute actual RTC
+  serialization and TinyUSB transfer/event flow under modeled controller and
+  lower-provider boundaries. Fragmented repeat copies and failure refusal pass
+  under `rtc-usb-native-20261018/` without a rebuild. The fitted board revision,
+  physical operation, UTC accuracy, USB hardware and full provider initialization
+  remain unqualified. Independent watchdog evidence is recorded above.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.

@@ -46,11 +46,20 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
-The ADC and reusable RTC implementations are integrated. Three software paths
-are active: combined thermal/ADC monitoring, reusable fan/LED control, and the
-actual native USB serializer for repeated RTC results. The implementation workers
-have resumed after the usage-limit interruption. Existing frozen images and
-successful evidence remain preserved; none of these extensions has a new result.
+The ADC and reusable RTC implementations are integrated. Four implementation
+paths are active in separate worktrees: combined thermal/ADC monitoring,
+reusable fan/LED control, PCIe supply-contract correction and reusable read-only
+microSD access. Each has a focused reviewer. Physical board access remains
+serialized; independent software development does not share that restriction.
+
+The RTC USB integration check is complete. Five cases execute the actual native
+serializer, TinyUSB initialization, vendor FIFO, events and completion flow using
+the frozen service image. Two identical 2,480-byte results survive fragmentation
+and backpressure; cancellation, poison and provider/deadline refusal cases pass.
+The controller endpoint/events and lower provider statuses remain modeled.
+Evidence under `rtc-usb-native-20261018/` was accepted and integrated without
+rebuilding or replaying earlier service checks. Physical USB and complete
+provider initialization remain unqualified.
 
 The shared prerequisite for fan/LED and combined monitoring is integrated:
 APBS0 stability ownership and actual PMIC source/divider validation, plus atomic
@@ -175,7 +184,7 @@ plus native binding/provider, launcher and host checks pass under
 `rtc-service-native-20261018/`. All 23 owned files match integration. Of 182 compiled
 repository inputs, four differ only by unused additive CLDO3 and PWM pin support.
 The frozen image and successful checks were reused without rebuilding or replay.
-Physical timing, UTC accuracy and native USB remain unqualified. Source switching,
+Physical timing, UTC accuracy and physical USB remain unqualified. Source switching,
 wider client registration, wake, calibration, reset-cause reporting and applicable
 retention modes remain required.
 
