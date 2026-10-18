@@ -19,7 +19,8 @@ a=p.parse_args();spec=importlib.util.spec_from_file_location('startup_host',ROOT
 m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle/'prepared.json').read_bytes())
 assert bundle['image_sha256']==host.NATIVE and bundle['launcher_sha256']==host.LAUNCH
 before_power=m.get('stop_before_power',False)
-profile=host.EARLY_PROFILE if before_power else host.PROFILE
+after_interface=m.get('stop_after_cpu_interface',False)
+profile=host.execution_profile(before_power,after_interface)
 assert m.get('execution_profile')==profile
 ops={};labels={}
 for path in (a.bundle/'image.elf',a.build/'overlay.elf'):
@@ -53,6 +54,7 @@ def check(name,scenario='normal'):
     power_registers={0x07053008:0x100,0x07050204:0x10000,0x07050224:0x40,0x08002000:0x20,0x08002004:0x48000000,0x08002008:0}
     writes=[];controls=[];ticks=[];stopped=[];injected=[];publication=[];cleaned=[];power_reads=[];events=[];configuration_writes=[];barriers=[];power_writes=[];secondary_started=[];secondary_terminal=[];active=[0];per_core={0:registers,1:dict(registers,mpidr_el1=0x81000100,tpidr_el3=0,s3_0_c15_c2_7=0,icc_sre_el3=0,icc_igrpen0_el1=0,icc_igrpen1_el3=0)}
     if scenario in ('target-admission','capture-fault'):per_core[1]['sctlr_el1']=0xc51838
+    if scenario=='interface-group-enabled':per_core[1]['icc_igrpen1_el3']=2
     capture_entries=[]
     frame_cores=list(range(8));rbase=0x03480000;gbase=rbase+0x10000
     original_rdist={'ctlr':0,'waker':0 if scenario=='waker-refusal' else 6,'enable':0,'pending':1 if scenario=='pending-refusal' else 0,
@@ -104,6 +106,7 @@ def check(name,scenario='normal'):
                 activation_state=struct.unpack('<Q',uc.mem_read(0x42002400,8))[0]
                 rdist_state=struct.unpack('<Q',uc.mem_read(0x42002500,8))[0]
                 step=500000 if ((scenario=='wake-timeout' and rdist_writes) or (scenario in ('cleanup-fault','prepower-baseline-fault') and secondary_terminal) or scenario in ('capture-fault','frame-read-fault','target-restore-fault') and secondary_terminal or scenario=='wake-timeout' and active[0]==1 and rdist_state==4 and sleep_attempted or secondary_terminal and activation_state==2 and rdist_state in (4,6)) else 1
+                if scenario in ('interface-group-enabled','interface-sre-refusal') and secondary_terminal:step=500000
                 value=(ticks[-1] if ticks else 200)+step;ticks.append(value)
             else:assert key in registers,(name,key,hex(address));value=registers[key]
             uc.reg_write(UC_ARM64_REG_X0+int(read[1]),value);uc.reg_write(UC_ARM64_REG_PC,address+4)
@@ -118,6 +121,7 @@ def check(name,scenario='normal'):
             else:
                 if scenario=='target-restore-fault' and active[0]==1 and key=='sctlr_el1' and value==0xc50838:
                     injected.append(True)  # Model a failed restoration readback.
+                elif scenario=='interface-sre-refusal' and active[0]==1 and key=='icc_sre_el3':injected.append(True)
                 else:registers[key]=value
                 uc.reg_write(UC_ARM64_REG_PC,address+4)
         elif text=='wfi':
@@ -245,6 +249,14 @@ def check(name,scenario='normal'):
     rdist_record=host.rdist_snapshot(bytes(cpu.mem_read(0x42002500,512)))
     observation=host.observation_snapshot(bytes(cpu.mem_read(0x42002700,512)))
     initialization=host.local_initialization_snapshot(bytes(cpu.mem_read(0x42002980,256)))
+    if scenario in ('interface-group-enabled','interface-sre-refusal'):
+        assert after_interface and stopped==['park'] and observation['state']==1 and not activation['ack']
+        assert initialization['state']==1 and not initialization['cpu_interface_observed']
+        assert not rdist_writes and typer_reads==expected_frame_reads
+        assert not any(key=='rmr_el3' for core,key,value in controls)
+        if scenario=='interface-group-enabled':assert initialization['igrpen1']==2
+        else:assert initialization['sre_after']==0 and injected
+        reports.append({'name':name,'retained':True,'initialization':initialization,'activation':activation});return
     if scenario=='prepower-baseline-fault':
         assert before_power and stopped==['park'] and observation['state']==1 and not activation['ack']
         assert initialization['stopped_before_power']==1 and initialization['state']==1 and not rdist_writes
@@ -323,6 +335,13 @@ def check(name,scenario='normal'):
         assert not any(observation['controller']['plan'][key] for key in ('actlr','actlr2','actlr3','ectlr','clusteractlr','patch'))
     if scenario=='pending-refusal':
         assert initialization['state']==4 and not rdist_writes
+    elif after_interface:
+        assert initialization['state']==4 and initialization['cpu_interface_observed']==1
+        assert initialization['epoch']==bundle['epoch'] and initialization['core']==1
+        assert initialization['sre_after']==7 and initialization['igrpen0']==initialization['igrpen1']==0
+        assert not any(initialization[k] for k in ('controller_state','phase','error','writes','cleanup_error',
+                                                  'cleanup_writes','stopped_before_power'))
+        assert typer_reads==expected_frame_reads and not rdist_writes and not sleep_attempted
     elif before_power:
         assert initialization['state']==4 and initialization['stopped_before_power']==1 and not rdist_writes
         assert initialization['controller_state']==5 and initialization['error']==1 and initialization['writes']==2
@@ -348,7 +367,11 @@ def check(name,scenario='normal'):
     assert snapshot['terminal_ctlr']==0x33
     assert len(publication)==3 and all(item['lines'] for item in publication)
     reports.append({'name':name,'result':result,'gic':snapshot,'secondary':secondary,'events':events,'power_reads':power_reads,'system_writes':controls,'writes':writes,'configuration_writes':configuration_writes,'barriers':barriers,'activation':activation,'power_writes':power_writes,'secondary_terminal':secondary_terminal,'redistributor':rdist_record,'rdist_writes':rdist_writes,'typer_reads':typer_reads,'commands':commands,'observation':observation,'capture_entries':capture_entries,'initialization':initialization})
-if before_power:
+if after_interface:
+    check('cpu-interface-observed-without-redistributor-writes')
+    check('enabled-interface-group-retains-without-shutdown','interface-group-enabled')
+    check('sre-readback-refusal-retains-without-shutdown','interface-sre-refusal')
+elif before_power:
     check('pre-power-boundary-and-unchanged-local-state')
     check('pre-power-state-mismatch-retains-without-shutdown','prepower-baseline-fault')
 else:
@@ -359,5 +382,5 @@ else:
     check('local-wake-timeout-retains-without-shutdown','wake-timeout')
 a.output.write_text(json.dumps({'schema':'a733-native-startup-software-v1','physical_access':False,'execution_profile':profile,'instruction_cases':True,
     'manifest_sha256':host.digest(a.build/'manifest.json'),'check_sha256':host.digest(Path(__file__)),'cases':reports,
-    'limits':'Actual RELEASE, production local interrupt controller, restored local state and observed OFF with modeled system registers, GIC and PPU. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
+    'limits':'Actual RELEASE and selected diagnostic boundary with modeled system registers, GIC and PPU. Interface-only mode omits the local controller. Does not identify physical failures, qualify fault delivery or recover stalled MMIO.'},indent=2)+'\n')
 print(f'PASS {len(reports)} focused local initialization cases; observed OFF or retained failure.')

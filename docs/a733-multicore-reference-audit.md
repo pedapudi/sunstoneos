@@ -104,6 +104,20 @@ observation that distinguishes the relevant outcomes. Preserve the successful
 entry and local-read evidence. Do not change register order merely because
 another reference uses a different permitted order.
 
+The interface-only profile now asks whether core 1 can enable EL3 GIC
+system-register access, read back SRE and observe disabled interrupt groups,
+then complete the already demonstrated shutdown. It stops before invoking the
+portable controller and writes no redistributor or wake-control register during
+the new interval. The compiled function confirms this boundary. Successful
+observation is a separate result field; baseline refusal cannot count as success.
+Unexpected SRE readback or an enabled group retains the target without shutdown.
+
+Three focused instruction cases pass for this profile: successful observation
+with matching OFF/return, enabled-group refusal and SRE readback refusal.
+System registers, the interrupt controller and power transitions remain modeled.
+Evidence is under `native-cpu-interface-20261018/`; physical execution is pending.
+This diagnostic does not identify a cause if the new interval cannot return.
+
 Source snapshots and hashes are under
 `~/.cache/sunstoneos/evidence/multicore-reference-audit-20261018/`.
 The external inputs are pinned in `sources.lock.json`; no Linux code executes

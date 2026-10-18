@@ -9,7 +9,8 @@ struct result {
     uint64_t state, epoch, core, deadline, controller_state, phase, error, writes;
     uint64_t redistributor, original_control, restored_control, sre_before, sre_after;
     uint64_t igrpen0, igrpen1, waker, enable, pending, active, group, modifier;
-    uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power, reserved[5];
+    uint64_t config, priority, pwrr, cleanup_error, cleanup_writes, stopped_before_power;
+    uint64_t cpu_interface_observed, reserved[4];
 };
 _Static_assert(sizeof(struct result)==256,"Host result layout");
 static void barrier(void) {__asm__ volatile("dsb sy":::"memory");}
@@ -123,6 +124,13 @@ int native_local_interrupt_probe(uint64_t epoch,uint64_t deadline)
     __asm__ volatile("mrs %0,icc_igrpen0_el1\n mrs %1,icc_igrpen1_el3":"=r"(g0),"=r"(g1));
     r->igrpen0=g0;r->igrpen1=g1;
     if((g0&1) || (g1&3))return 0;
+#if defined(SUNSTONE_PROBE_STOP_AFTER_CPU_INTERFACE)
+    /* IHI 0069G 11.1 permits SRE writes while the redistributor sleeps.
+     * No local MMIO has been written; leave its captured baseline untouched.
+     * Disabled groups permit the existing verified asleep-to-OFF shutdown. */
+    r->cpu_interface_observed=1;
+    barrier();r->state=4;barrier();return 2;
+#endif
     struct a733_cpu_continue state={0};
     struct a733_cpu_continue_config config={.ops={read32,read64,write32,now_us},
         .context=&state,.epoch=epoch,.deadline_us=deadline/24,.mpidr=mpidr};

@@ -548,6 +548,11 @@ The primary agent handles all further multicore work directly.
    unchanged local state before shutdown. Two instruction cases pass under
    `native-before-power-20261018/`; it has no physical result. Hold that attempt
    until the source trace supports a specific question and observable outcomes.
+   The interface-only profile now stops after EL3 GIC access and group-enable
+   reads, before calling the controller. Three focused instruction cases pass
+   under `native-cpu-interface-20261018/`, including retained SRE and group-enable
+   refusals. Compiled inspection confirms no new redistributor or wake-control
+   writes in that interval. Its physical execution remains pending.
    Qualify local interrupts, remaining
    cores, cache coherence and scheduling. Preserve failed-attempt backups and
    reuse accepted preparation and restoration evidence. The failed UFS probe,
