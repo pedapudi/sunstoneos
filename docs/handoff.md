@@ -1,15 +1,25 @@
 # Current work
 
-All seven secondary cores now pass production CPU preparation and local GIC
-initialization on the original board. Each target restores its local interrupt
-state and actual translation controls before matching shutdown acknowledgment
-and independently observed OFF. Shared distributor and saved DRAM restoration
-also pass. Evidence is under `secondary-local-probe-20261018/physical-110/`.
-The runner exited and the claim closed as passed. Current ROM is `003:111`,
-identity `[7,2741,1097070,0,0]`, on port `3-1`. No reconnect is needed.
-Interrupt delivery, cached execution on the remaining cores, concurrent cache
-coherence and FreeRTOS scheduling remain outstanding. Preserve DDR continuity;
-refresh warm launcher state before the next native operation.
+All seven secondary cores now pass cached EL3 and EL1 execution on the original
+board. Each target completes production CPU and local interrupt preparation,
+returns from EL1 through SMC, restores its translation and interrupt controls,
+and reaches independently observed OFF before shared cleanup. Saved DRAM also
+restores. Evidence: `secondary-cache-probe-20261018/physical-111/runtime/`.
+The runner exited and its claim closed as passed. Current ROM is `003:113`,
+identity `[7,2749,1097072,0,0]`, on port `3-1`. No reconnect is needed.
+Concurrent shared-memory coherence, interrupt delivery and FreeRTOS scheduling
+remain outstanding. Preserve DDR continuity and refresh warm launcher state
+before the next native operation. The cached interval performs no EL1 data
+stores and no interrupt delivery; it does not qualify runtime cache shutdown.
+
+The second board completed the 21-register PMIC probe and returned as `003:112`,
+identity `[7,2745,1097071,0,0]`, on port `3-3`. DCDC2 is enabled and programmed
+to 800 mV; CLDO3 is enabled and programmed to 1.8 V. These are register-derived
+settings; analog voltage and stability were not measured. The process exited
+and its claim closed. Evidence: `sys-supply-probe-20261018/runtime/`.
+The thermal candidate now uses this return and the earlier unchanged clock
+observations under `thermal-clock-reference-20261018/physical-candidate-adopt-112/`.
+Resource ownership, supply stability and entry admission remain outstanding.
 
 The complete PWM fan/LED and SHA-256/AES applications now have independent
 boot-CPU profiles. Their frozen images and focused results are integrated under
@@ -172,7 +182,7 @@ its process exited and its claim closed after the user reconnected the board.
 The current board state appears below. Earlier core-1 Nonsecure publication,
 cached EL1 entry, SMC return, restoration and matching shutdown/OFF remain valid
 for their recorded scope.
-The second is on `3-3`, instance `003:101` after normal GPU-supply-probe return, and
+The second is on `3-3`, instance `003:112` after normal system-supply-probe return, and
 responds as A733. Its user-reported 32 GB microSD remains untouched. DDR
 initialization, two 4 KiB page comparisons and a returning SRAM platform survey pass under `second-board-20261018-3-3/platform-attempt1/`. Firmware reports
 12 GiB; full capacity and device admission remain unqualified. Multicore work
@@ -369,13 +379,13 @@ at two distinct pages. [Boot evidence](boot.md) records initialization and the
 EL1 handoff. Board revision and populated storage remain unconfirmed.
 No persistent-storage writes have been issued.
 
-The original board on `3-1` returned successfully as `003:111`, identity
-`[7,2741,1097070,0,0]`, after sequential production CPU preparation and local
-GIC initialization on all seven secondaries. Every target completed all eleven
-controller writes and seven cleanup writes. Target controls, local state,
-shared distributor and saved DRAM restored. All 45 host transactions succeeded;
-the runner exited and its claim closed as passed. Evidence is under
-`secondary-local-probe-20261018/physical-110/runtime/`.
+The original board on `3-1` returned successfully as `003:113`, identity
+`[7,2749,1097072,0,0]`, after sequential cached EL3/EL1 entry on all seven
+secondaries. Every target returned through SMC and restored its translation
+controls and local interrupt state before matching shutdown acknowledgment and
+independently observed OFF. Shared distributor and saved DRAM restoration pass.
+All 45 host transactions succeeded; the runner exited and its claim closed.
+Evidence: `secondary-cache-probe-20261018/physical-111/runtime/`.
 
 The preceding primary-preparation diagnostic returned as `003:109`.
 Its report confirms completed preparation and exact EL3/EL1 control restoration;
@@ -394,12 +404,14 @@ Earlier core-1 local initialization, cached entry, SMC and restoration evidence
 remains valid for its recorded scope; full multicore operation is unresolved.
 
 The second board on `3-3`, instance
-`003:101`, has successful DDR, returning survey, SD initial-register and PMIC
+`003:112`, has successful DDR, returning survey, SD initial-register and PMIC
 evidence. Its warm launcher survey and cache-off preparation also pass under
 `warm-093-preparation/`; DMA0 remains reset with both bus gates masked. Preserve
 its recorded DDR continuity without repeating training. The subsequent 20-register
 PMIC probe passes under `gpu-supply-probe-20261018/runtime/`, including the GPU
-supply selector. Refresh the current launcher state before another native image.
+supply selector. The subsequent 21-register probe adds the system-supply
+selector under `sys-supply-probe-20261018/runtime/` and returns as `003:112`.
+Refresh the current launcher state before another native image.
 Both have reconnect permissions. The common access helper selects each port
 through `SUNSTONE_USB_PORT`; locks, queues and failure records are independent.
 Queue assignments are in [the board-test procedure](board-test-queue.md).
@@ -672,79 +684,30 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-Core-1 release and preparation now pass physically, with successful shutdown,
-restoration and USB ROM return. The interrupt driver lacked the GIC-600
-redistributor power-up sequence. That sequence is implemented and passes focused
-software checks; its connection to the physical failure remains a hypothesis.
-The primary agent handles all further multicore work directly.
+The primary agent handles all further multicore diagnosis, implementation,
+review and physical tests directly. All seven secondaries now pass production
+CPU preparation, local interrupt initialization, cached EL3/EL1 entry, SMC return,
+exact control restoration and shutdown. The current physical evidence is
+`secondary-cache-probe-20261018/physical-111/runtime/`. The
+[Arm/Linux audit](a733-multicore-reference-audit.md) and
+[startup record](a733-smp-supervised.md) retain source comparisons and earlier
+observations, including the corrected unimplemented interrupt-bit check.
 
-1. Continue from the successful local interrupt snapshot under
-   `native-local-interrupt-read-20261018/`. Core 1's frame is asleep with no
-   enabled, pending or active interrupts; translation controls restore and ROM
-   returns after observed OFF. The returning overlay now compiles the corrected
-   production controller and restores local state before shutdown. Five focused
-   instruction cases pass under `native-local-interrupt-init-20261018/`;
-   one physical attempt produced no ROM return or result buffer. Physical
-   recovery is complete, but no failure location is established. The same launch
-   must not repeat. The [Arm/Linux audit](a733-multicore-reference-audit.md)
-   distinguishes firmware responsibilities, permitted register ordering and
-   diagnostic refusals that currently produce no returned report.
-   A narrower overlay now stops before the first redistributor write and verifies
-   unchanged local state before shutdown. Two instruction cases pass under
-   `native-before-power-20261018/`. The identical payload passes physically under
-   `native-before-power-current-20261018/`, with unchanged local state and ROM
-   return as `003:095`.
-   The interface-only profile now stops after EL3 GIC access and group-enable
-   reads, before calling the controller. Three focused instruction cases pass
-   under `native-cpu-interface-20261018/`, including retained SRE and group-enable
-   refusals. Compiled inspection confirms no new redistributor or wake-control
-   writes in that interval. Physical execution also passes: SRE changes from
-   `0x9` to `0xf`, both group-enable reads are zero, and matched shutdown/OFF,
-   shared-state restoration and saved DRAM comparison succeed. ROM returns as
-   `003:094`. The power-handshake profile then passes physically under
-   `native-before-wake-20261018/`: PWRR remains `0x100`, WAKER remains `6`, and
-   the callback refuses WAKER before writing it. Local state and wake control
-   restore, matched shutdown/OFF completes, and ROM returns as `003:096`.
-   Three focused instruction cases cover completion, one rejected power request
-   and retained baseline mismatch. Wake and return-to-sleep subsequently pass
-   under `native-wake-sleep-20261018/`: awake WAKER is `0`, restored WAKER is `6`,
-   no local configuration write runs, and matching OFF/restoration/ROM return
-   complete as `003:097`. Three focused cases cover success and retained wake
-   and sleep timeouts. The returned configuration refusal then identified
-   phase23/error4: IGROUPR0 reads `0xfff0ffff`, but the driver required all ones.
-   Arm defines unimplemented interrupt bits as read-as-zero/write-ignored.
-   The corrected required-SGI/timer-bit check passes full local initialization
-   and restoration under `native-local-group-mask-20261018/`, with observed OFF
-   and ROM return as `003:099`. The subsequent EL3 cache probe also passes
-   physically under `native-el3-cache-20261018/native-attempt/runtime/`.
-   It executes the production adoption helpers, restores all five saved
-   controls, completes local cleanup and observed OFF, and returns as `003:100`.
-   Four instruction cases cover adoption, inherited SIF and retained readback
-   failures. Cached EL1 entry now passes as described below; interrupt delivery,
-   remaining cores, cache coherence and scheduling still require qualification. Preserve failed-attempt backups and
-   reuse accepted preparation and restoration evidence. The failed UFS probe,
-   intentional watchdog expiry and unattended fault tests remain deferred;
-   USB power-control work is closed.
-
-Core 1 now passes production cached EL1 entry and SMC return after explicit
-Nonsecure code/table publication. Four affected modeled cases pass, including
-retention when one code alias remains stale. The physical result under
-`native-ns-publication-20261018/native/runtime/` records all 32,768 code lines and
-128 table lines maintained, matching changed instructions through both physical
-address spaces, and exact restoration of temporary, EL1 and EL3 controls.
-Local cleanup, matching shutdown/OFF and DRAM restoration pass; ROM returned
-`003:103`. The process and claim closed successfully. The earlier missing-EL1
-attempt remains preserved under `native-el1-cache-20261018/` and is not counted
-as an EL1 success. Reuse the corrected publication for subsequent diagnostics.
-Next extend the proven entry to interrupt delivery, mutable cached memory,
-remaining cores and FreeRTOS scheduling. Maintenance currently admits only clean
-immutable aliases; arbitrary dirty runtime data needs its own ownership/cleanup.
-
-2. Qualify all-core startup, interrupts, scheduler results and coherent memory
-   through the supervised observer before dependent full-device images.
-   Preserve the sealed [watchdog-dependent observer](a733-smp-observe-host.md)
-   and its existing entry requirements. USB enumeration alone does not establish
-   diagnostic success.
+1. Establish concurrent shared-memory coherence and interrupt delivery using
+   the demonstrated entry and restoration paths. The existing returning
+   diagnostic permits only immutable cached code and Device-memory monitor
+   writes. A mutable-data test must define ownership, synchronization and cache
+   cleaning before shutdown; do not discard dirty Normal memory. Revisit GIC
+   shutdown errata before enabling interrupt delivery. Preserve current DDR
+   continuity and refresh warm launcher state before the next operation.
+2. Qualify all-core FreeRTOS scheduling and representative concurrent workloads
+   through the supervised observer. The earlier full launch remains unobserved;
+   do not repeat it unchanged without a correction or a narrower diagnostic
+   justified by new evidence. Preserve the sealed
+   [watchdog-dependent observer](a733-smp-observe-host.md) and its existing
+   admission requirements. USB enumeration does not establish success. The
+   failed UFS probe, intentional watchdog expiry and unattended fault tests
+   remain deferred; USB power-control work is closed.
 3. The second board's single-core SD launch candidate is prepared under
    `second-board-20261018-3-3/single-core-admission/candidate-093/`. Its image
    remains valid, but the instance-bound admission needs refreshing after the

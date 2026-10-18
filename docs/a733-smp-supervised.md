@@ -1180,3 +1180,34 @@ DRAM restore. All 45 host transactions succeed; ROM returns as `003:111`, and
 the runner exits with its claim closed. This establishes CPU preparation and
 local interrupt initialization for all observed A55 r2p0 and A76 r4p1 targets.
 CPU interrupt delivery remains disabled; concurrent execution is not exercised.
+
+## Sequential cached execution on every secondary
+
+All seven secondary cores pass production cached EL3/EL1 entry and return on
+physical hardware. The diagnostic runs each target separately after production
+CPU preparation and local interrupt initialization. It observes EL1 controls
+without data stores, then returns through SMC before enabling interrupt delivery.
+The monitor restores each target's original translation controls and local
+interrupt state. Matching shutdown acknowledgment and independently observed OFF
+precede shared distributor restoration and ROM return.
+
+The extension reuses the demonstrated core-1 helpers with per-core reports and
+ELF-derived production table and stack addresses. Four checked branch patches
+bind it to the frozen executable. The combined 12 KiB report lies in the Secure
+Device monitor window; the host includes it in saved DRAM restoration. Three
+instruction cases cover successful execution, incorrect EL1 core identity and
+failed EL3 restoration. Six host cases cover capture, expanded backup, transport
+failure, incomplete reports, changed inputs and restored early refusal.
+
+Physical evidence is under `secondary-cache-probe-20261018/physical-111/runtime/`.
+Every A55 and A76 secondary completes cached entry and SMC return with exact
+EL3/EL1 restoration. Local interrupt and shared distributor restoration pass,
+as do all 45 host transactions and saved DRAM restoration. ROM returns as
+`003:113`, identity `[7,2749,1097072,0,0]`; the process exits and its queue claim
+closes as passed. Implementation: local commit `c59967b`.
+
+This result establishes cached execution on each secondary with immutable code
+and Device-memory monitor writes. Concurrent shared-memory coherence, interrupt
+delivery and FreeRTOS scheduling remain outstanding. Runtime cache shutdown with
+dirty Normal memory requires its own maintenance protocol; the diagnostic does
+not exercise that case.

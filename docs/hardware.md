@@ -101,8 +101,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   cores 6–7 are A76 r4p1. ROM returned as `003:110`, with saved DRAM restored.
   Every secondary also passes production CPU preparation and local interrupt
   initialization under `secondary-local-probe-20261018/physical-110/`. Local and
-  shared state restore before responsive ROM return as `003:111`. Interrupt
-  delivery, concurrent cache coherence and scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
+  shared state restore before responsive ROM return as `003:111`.
+  All seven secondaries also pass cached EL3/EL1 entry and SMC return under
+  `secondary-cache-probe-20261018/physical-111/`. Translation and local interrupt
+  controls restore before each shutdown; shared state and saved DRAM restore
+  before responsive ROM return as `003:113`. Each target runs separately with
+  no EL1 data stores or interrupt delivery. Concurrent cache coherence,
+  interrupt delivery and scheduling remain unresolved. Earlier interrupt diagnostics returned no report;
   their sessions were closed after physical recovery. A missing GIC-600
   redistributor power-up handshake is now implemented. Focused host checks and
   primary/secondary native instruction cases pass under `gic600-power-20261018/`;
@@ -233,6 +238,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   under `thermal-clock-reference-20261018/`; the unchanged startup layout allows
   reuse of earlier startup and host cases. All 581 frozen inputs
   match integration; calibration, thresholds and service code are unchanged.
+  Second-board PMIC reads establish enabled DCDC2 programmed to 800 mV and
+  CLDO3 programmed to 1.8 V under `sys-supply-probe-20261018/runtime/`.
+  These register settings do not measure analog supply stability.
   Existing calibration and controller evidence was reused. Physical acquisition,
   accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
   policy, rate changes and regulator control remain outstanding.
@@ -291,7 +299,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   hotplug recovery, physical reads, writes and faster modes remain unqualified.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
-  the conditions. The [rail ledger](rail-leases.md) coordinates all 39 source-defined
+  the conditions. The second board also passes 21 register reads, including
+  the DCDC2 system-supply selector, with normal ROM return and automatic USB
+  access under `sys-supply-probe-20261018/runtime/`. No regulator settings change.
+  The [rail ledger](rail-leases.md) coordinates all 39 source-defined
   outputs with the existing DCDC2 and GPU DCDC4 owners. Host checks and native
   compilation pass for shared selectors, snapshot ownership and retained faults.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and

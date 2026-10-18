@@ -6,8 +6,10 @@ and retained a verification failure. The corrected driver permits unimplemented
 PPI bits and now completes local initialization, restoration, shutdown and ROM
 return on core 1. All seven secondaries now also pass production CPU preparation, local interrupt
 initialization, restoration and shutdown under
-`secondary-local-probe-20261018/physical-110/`. Interrupt delivery, cache
-coherence and FreeRTOS SMP scheduling remain unqualified.
+`secondary-local-probe-20261018/physical-110/`. Cached EL3/EL1 entry, SMC return
+and exact translation restoration also pass separately on every secondary under
+`secondary-cache-probe-20261018/physical-111/`. Concurrent shared-memory coherence,
+interrupt delivery and FreeRTOS SMP scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
