@@ -36,15 +36,27 @@ and maintenance watchdog supervision. These paths have no physical qualification
 
 ## Current integration
 
-Three independent paths are active, with physical access reserved for the coordinator:
+Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
+substantive correctness risks. The coordinator alone operates the board.
 
-- Startup diagnosis: extend the physically passed native initialization checkpoint
-  through page-table construction, returning before cache publication.
-- Bluetooth: adapt source-available pairing/security logic and connect the existing
-  hands-free and synchronous audio providers. Live mimus input still needs an adapter.
-- Wi-Fi networking: finish the board profile and combined image link for the
-  integrated DHCP lease and copied DNS request paths. Four focused stack cases
-  pass; an earlier unexplained DNS deadline miss remains a timing limitation.
+- Startup diagnosis: the returning page-table checkpoint is integrated and
+  reviewed. One new instruction case passes. Physical execution is next;
+  multicore startup remains unresolved.
+- Bluetooth: native pairing, authentication, hands-free control and copied 8 kHz
+  audio capture are integrated. Eight focused composition cases pass. Physical
+  headset operation and conversion to mimus's 16 kHz input remain outstanding.
+- Wi-Fi networking: fixed-address and DHCP board profiles are integrated, and
+  the combined board image links. Profile checks pass under ASan/UBSan. An earlier
+  unexplained DNS deadline miss remains a timing limitation.
+
+Integration reused the preserved images and checks. All 14 board-profile files
+and 27 Bluetooth files match their accepted worker commits. Startup code matches
+its accepted commit; its documentation also retains the previous physical result.
+Evidence is under `board-addressing-20261017/`,
+`bluetooth-headset-native-20261017/` and `native-tables-probe-20261017/`.
+The Bluetooth host batch preserved its inputs after execution because the initial
+snapshot failed; it does not establish pre-run input identity. Native USB headset
+output is linked and source-reviewed but has not executed in these checks.
 
 Native I2S and JPEG device paths are integrated. The [I2S application](i2s-application.md)
 connects DMA0 capture or recorded playback to retained buffers and USB0 output.

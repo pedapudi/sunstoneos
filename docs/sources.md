@@ -97,6 +97,15 @@ dependency inventory and unresolved documentation requirements.
 The native OS uses source-built FreeRTOS, TinyUSB, Newlib, FreeRTOS+TCP and
 selected wpa_supplicant security code where the application requires them.
 Linux drivers provide implementation references; Linux is not a board runtime.
+The native Bluetooth application reuses Zephyr's open-source BR/EDR secure
+pairing and RAM link-key policy through the existing FreeRTOS HCI owner.
+[The source manifest](../apps/bluetooth/security-source.json) pins commit
+`64e98eb5278d790f3b3e5279ca8b39b45097bbc0`, individual file hashes and the
+Apache-2.0 license. The build compiles the adapted policy into the native image;
+it does not run a Zephyr kernel. Controller firmware remains a separate opaque
+dependency. [Bluetooth integration](bluetooth-native.md) records the exercised
+incoming-headset path and outstanding physical qualification.
+
 The following opaque dependencies have distinct execution roles:
 
 | Dependency | Current use | Documentation and remaining gap |
