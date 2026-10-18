@@ -185,14 +185,17 @@ future physical target whose contents remain protected. The separate maintenance
 image still requires an identified card and qualified watchdog; this read-only
 path permits initial discovery without either prerequisite.
 
-Native SPI application integration is in development. Route and population
-research precedes selection of a usable board controller and transfer profile.
-The application will connect the existing controller and shared providers;
-physical transfers require an identified peer and verified wiring and voltage.
+Native SPI application integration uses SPI3 chip select 0 on the header,
+with BLDO1 supplying its 1.8 V signal bank. Focused software validation is in
+progress. Physical transfers require an identified peer, authorized command
+effects and verified wiring and voltage.
 
-PWM and ADC route and population research is in progress. A native PWM path
-will follow for a confirmed usable channel; the same schematic audit will
-identify which ADC functions are available before a separate implementation.
+The [PWM and ADC routing audit](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses)
+identifies the fan, status LED, header alternatives and display outputs, plus
+analog board-selection inputs. Native fan PWM integration is in development.
+Its stop path must establish a defined pin state while retaining ownership;
+electrical fan-off remains a physical qualification requirement. ADC sampling
+and the other routed PWM functions remain outstanding.
 
 
 ## Observed host and device state

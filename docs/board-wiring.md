@@ -152,3 +152,40 @@ Reconcile these circuits with the [hardware matrix](hardware.md) and actual
 population as their drivers are implemented. Shared pin functions require
 explicit ownership; a header label does not make every alternate function
 available simultaneously.
+
+## PWM outputs and analog inputs have specific board uses
+
+The V1.2 schematic routes PWM0 channel 5 through PD5 to the Q2 fan switch.
+The fan connector receives 5 V through R88; the PD5 signal bank uses BLDO1.
+The kernel fan node's `dc1sw2` supply annotation does not describe that fan
+power circuit. A connected fan has not been observed. Stopping PWM does not
+by itself establish that Q2 is off; the final pin state and electrical response
+require qualification.
+
+The status LED uses PL7, whose alternate function is S_PWM0 channel 5.
+Sheet 5's nearby `PWM0-7` label conflicts with the pin assignment on sheet 9
+and the kernel pin configuration. The display connector exposes PWM1 channel 7
+on PJ25 at pin 17. That output requires a display or other suitable accessory.
+
+The general-purpose analog-to-digital converter (GPADC) has these schematic
+connections:
+
+| Channel | Board connection |
+| --- | --- |
+| GPADC0 | Boot-selection resistor network |
+| GPADC1 | DDR-parameter selection divider |
+| GPADC2 | Board-identification divider |
+| GPADC3 | USB upgrade and COMB1 selection divider |
+| GPADC4 | LCD selection input, display connector pin 21 |
+| GPADC5–6 | Marked unconnected |
+| GPADC7 | No route shown; the manual describes seven GPADC pads despite eight kernel channel entries |
+
+The separate low-resolution converter input LRADC0 has a 10 kΩ pull-up to
+AVCC through R23. The schematic does not show the five-key resistor ladder
+described by the kernel configuration. The PMIC's own GPADC pin is unconnected.
+AVCC uses CLDO3; actual voltage and fitted selection resistors remain unverified.
+These selection inputs are candidates for read-only board monitoring. Their
+routing does not authorize external signal injection or changes to boot straps.
+
+The source hashes, header PWM alternatives and circuit references are preserved
+in `~/.cache/sunstoneos/evidence/pwm-adc-topology-20261018/audit.json`.

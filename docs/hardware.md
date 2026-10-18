@@ -205,6 +205,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Focused host checks and native compilation pass. SPI4 route activation refuses
   its unproven package signal mapping. Board admission, physical peers, DMA,
   advanced modes and SPIF remain outstanding.
+- PWM and ADC: **planned**, with [board routing identified](board-wiring.md#pwm-outputs-and-analog-inputs-have-specific-board-uses).
+  Native fan PWM integration is in development for PD5/PWM0 channel 5.
+  The status LED, header alternatives and display backlight output remain in scope.
+  GPADC0–3 serve board selection dividers; GPADC4 reaches the display connector.
+  The remaining GPADC channels have no documented usable connection. LRADC0 has
+  a pull-up but no documented key ladder. Analog sampling, additional PWM modes
+  and physical qualification remain outstanding; fitted components and voltages
+  require confirmation.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
