@@ -1,0 +1,20 @@
+--- platform.c
++++ single-core-platform.c
+@@ -66,7 +66,7 @@
+     // Identity-map peripheral space as Device-nGnRnE, and the 128 MiB RAM
+     // region as normal, inner-shareable, write-back memory. Boot code/data
+     // share a mapping here; separate permissions belong to the full VM layer.
+-    level1[0] = (1UL << 54) | (1UL << 53) | (1UL << 10) | 1;
++    level1[0] = (1UL << 54) | (1UL << 53) | (1UL << 10) | (2UL << 8) | 1;
+     level1[1] = (uintptr_t)level2 | 3;
+     for (unsigned i = 0; i < 64; ++i)
+         level2[i] = (0x40000000UL + i * 0x200000UL) | (1UL << 10) |
+@@ -74,7 +74,7 @@
+     // Result writes must reach DRAM for the cache-disabled EL3 monitor and ROM.
+     // Map this 2 MiB block as normal non-cacheable memory (attribute index 2).
+     level2[(RESULT_BASE - 0x40000000UL) / 0x200000UL] =
+-        RESULT_BASE | (1UL << 10) | (3UL << 8) | (2UL << 2) | 1;
++        (RESULT_BASE & ~0x1fffffUL) | (1UL << 10) | (3UL << 8) | (2UL << 2) | 1;
+     configASSERT(a733_memory_boot_uncached(level2));
+     uint64_t mair = 0x44ff00;
+     uint64_t tcr = (2UL << 32) | (1UL << 23) | (3UL << 12) |

@@ -1,0 +1,11 @@
+--- apps/board/session.c
++++ board-session.c
+@@ -12,7 +12,7 @@
+ static struct {
+     union { uint8_t bytes[4096];struct a733_board_session prefix; } data;
+     unsigned attempted,ready;
+-} sealed;
++} sealed __attribute__((section(".monitor_state")));
+ int board_session_prepare(const struct a733_smp_contract *c)
+ {
+     if(sealed.attempted)return 0;

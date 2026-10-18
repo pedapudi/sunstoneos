@@ -117,7 +117,9 @@ class Machine(base.Machine):
    assert self.field('result')!=2,(self.field('stage'),self.field('reason'))
   raise AssertionError('Read did not complete')
 def payload(first,blocks):return bytes(((((first+i//512)*13+i%512)*37+11)%256) for i in range(blocks*512))
-def run(image,session,out):
+def run(image,session,out,cases=None):
+ selected=set(cases) if cases else None
+ if selected:assert selected<=set(['two-clients-repeat', 'ranges-identity', 'max-ticket-exhaustion', 'queued-cancel-retains-active', 'removal-permanent', 'usb-partial-cancel-terminal', 'usb-retention-overrides-rejection', 'usb-fragmentation-ack-reuse', 'usb-disconnect-retains', 'unread-deadline', 'byte-addressed-read'])
  out.mkdir(parents=True,exist_ok=True);raw=session.read_bytes();prep=module('storage_read_service_prepare',ROOT/'apps/storage-read/prepare.py');prep.embedded_reference(image.read_bytes(),raw)
  e=base.Image(image);e.sizes={};e.symbol_sizes={}
  with image.open('rb') as f:
@@ -148,7 +150,7 @@ def run(image,session,out):
  def record(name,m,extra=None):
   results[name]=dict(passed=True,commands=m.commands,mmio_accesses=len(m.trace),**(extra or {}))
   (out/(name+'-trace.json')).write_text(json.dumps(m.trace)+'\n');(out/'result.json').write_text(json.dumps(dict(passed=True,cases=results,physical_access=False,scope='Actual linked two-client application, service, MMC/native/core and copied USB paths; shared providers, scheduling/time, card/MMIO and transport completion modeled. Initial native setup checkpoint reused.'),indent=2)+'\n')
- if 'two-clients-repeat' not in results:
+ if 'two-clients-repeat' not in results and (selected is None or 'two-clients-repeat' in selected):
   # Actual native consumer overlaps USB. One unread result stays immutable while
   # the other client performs its second acknowledged read through public API.
   m=initial.clone(pages);r,ticket=m.submit(2,19,2,1);assert r==1
@@ -167,7 +169,7 @@ def run(image,session,out):
   m.complete(0);last=m.frame();(out/'last-frame.bin').write_bytes(last)
   assert last[288:]==payload(33554432-8,8);assert m.invoke(2,'storage_read_ack',decoder.decode(last,raw)['ticket'])==1
   (out/'native-frame.bin').write_bytes(frame);record('two-clients-repeat',m,dict(native_completed_reads=2))
- if 'ranges-identity' not in results:
+ if 'ranges-identity' not in results and (selected is None or 'ranges-identity' in selected):
   # Refusals and copied input identity cause no controller access.
   m=initial.clone(pages);before=len(m.trace)
   for first,blocks,rid in [(0,0,1),(0,9,1),(33554432,1,1),(33554431,2,1),((1<<64)-1,8,1),(0,1,0)]:assert m.submit(2,first,blocks,rid)[0]==-1
@@ -181,13 +183,13 @@ def run(image,session,out):
   r,new=m.submit(2,25,1,2);assert r==1 and new>t
   assert m.invoke(2,'storage_read_cancel',t)==0xffffffff and not m.field('cancel')
   record('ranges-identity',m)
- if 'max-ticket-exhaustion' not in results:
+ if 'max-ticket-exhaustion' not in results and (selected is None or 'max-ticket-exhaustion' in selected):
   m=initial.clone(pages);m.write(m.base+m.layout['next_ticket'],2**64-2,8)
   r,t=m.submit(2,1,1,1);assert r==1 and t==2**64-1;m.complete(0)
   assert decoder.decode(m.frame(),raw)['ticket']==t and m.invoke(2,'storage_read_ack',t)==1
   before=len(m.trace);assert m.submit(2,1,1,2)[0]==-1 and len(m.trace)==before
   record('max-ticket-exhaustion',m)
- if 'queued-cancel-retains-active' not in results:
+ if 'queued-cancel-retains-active' not in results and (selected is None or 'queued-cancel-retains-active' in selected):
   # Queued cancellation revokes both and never returns another active borrower.
   m=initial.clone(pages);_,active=m.submit(2,2,8,1);_,queued=m.submit(3,14,1,1)
   for _ in range(40):
@@ -198,12 +200,12 @@ def run(image,session,out):
   assert m.submit(2,0,1,2)[0]==-2 and m.read(m.core+m.c['borrowed'],8)==m.base+m.layout['borrowed']
   m.present=False;m.owner();assert len(m.trace)==before
   record('queued-cancel-retains-active',m)
- if 'removal-permanent' not in results:
+ if 'removal-permanent' not in results and (selected is None or 'removal-permanent' in selected):
   # Observed idle removal is permanent, including after the detect pin returns.
   m=initial.clone(pages);m.present=False;m.owner();assert m.field('result')==2
   before=len(m.trace);m.present=True;assert m.submit(2,0,1,1)[0]==-2;m.owner();assert len(m.trace)==before
   record('removal-permanent',m)
- if 'usb-partial-cancel-terminal' not in results:
+ if 'usb-partial-cancel-terminal' not in results and (selected is None or 'usb-partial-cancel-terminal' in selected):
   # Partial USB transfer owns its copied response until matching callbacks.
   m=initial.clone(pages);_,t=m.submit(2,4,2,1);m.complete(0);m.max_tx=64;m.usb_step(b'\0')
   assert len(m.tx)==1 and len(m.tx[0])==64 and m.submit(2,5,1,2)[0]==0
@@ -215,7 +217,7 @@ def run(image,session,out):
   for part in (packet[:1],packet[1:7],packet[7:]):m.usb_step(part)
   assert decoder.decode(m.tx[-1],raw)['status']==2
   record('usb-partial-cancel-terminal',m)
- if 'usb-retention-overrides-rejection' not in results:
+ if 'usb-retention-overrides-rejection' not in results and (selected is None or 'usb-retention-overrides-rejection' in selected):
   # Submission can be refused before a concurrent revocation. RETAINED still
   # wins when the later serialized copy observes the terminal lifetime.
   m=initial.clone(pages);m.api_busy=True;packet=decoder.read_request(5,1,1)
@@ -223,7 +225,7 @@ def run(image,session,out):
   m.api_busy=False;m.invoke(2,'storage_read_revoke',1);m.usb_step()
   assert decoder.decode(m.tx[-1],raw)['status']==2
   record('usb-retention-overrides-rejection',m)
- if 'usb-fragmentation-ack-reuse' not in results:
+ if 'usb-fragmentation-ack-reuse' not in results and (selected is None or 'usb-fragmentation-ack-reuse' in selected):
   # Full USB result consumes only its own exact completed ticket after callback.
   m=initial.clone(pages);packet=decoder.read_request(31,1,1)
   for part in (packet[:1],packet[1:6],packet[6:]):m.usb_step(part)
@@ -234,17 +236,17 @@ def run(image,session,out):
   m.invoke(2,'tud_vendor_tx_cb',0,len(body));assert m.state_of(0)==1;m.usb_step();assert m.state_of(0)==3
   m.usb_step(decoder.read_request(32,1,2));m.usb_step();assert m.state_of(0)==0
   record('usb-fragmentation-ack-reuse',m)
- if 'usb-disconnect-retains' not in results:
+ if 'usb-disconnect-retains' not in results and (selected is None or 'usb-disconnect-retains' in selected):
   # Disconnect cannot turn an unresolved transfer into a new session's storage.
   m=initial.clone(pages);m.submit(2,9,1,1);m.complete(0);m.max_tx=64;m.usb_step(b'\0');m.invoke(2,'tud_umount_cb');m.owner()
   before=len(m.tx);m.invoke(2,'tud_mount_cb');m.usb_step();assert len(m.tx)==before and m.submit(2,0,1,2)[0]==-2
   record('usb-disconnect-retains',m)
- if 'unread-deadline' not in results:
+ if 'unread-deadline' not in results and (selected is None or 'unread-deadline' in selected):
   # Deadline cuts off unread success and any queued/active other client.
   m=initial.clone(pages);_,t=m.submit(2,8,1,1);m.complete(0);sl=e.layouts['storage_read_slot'];m.time=m.read(m.slot(0)+sl['deadline'],8)
   assert m.invoke(2,'storage_read_output_ready')==0;m.owner();assert decoder.decode(m.frame(),raw)['status']==2
   record('unread-deadline',m)
- if 'byte-addressed-read' not in results:
+ if 'byte-addressed-read' not in results and (selected is None or 'byte-addressed-read' in selected):
   # Exercise actual SDSC identification and byte arguments, not a fabricated
   # later READY core. Its one extra CMD16 is part of this new addressing case.
   m=Machine(e,raw,True);m.establish();assert m.submit(2,5,2,1)[0]==1;m.complete(0)
@@ -254,4 +256,5 @@ def run(image,session,out):
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','session','output'):p.add_argument('--'+n,type=Path,required=True)
- a=p.parse_args();run(a.image,a.session,a.output)
+ p.add_argument('--case',action='append',choices=['two-clients-repeat', 'ranges-identity', 'max-ticket-exhaustion', 'queued-cancel-retains-active', 'removal-permanent', 'usb-partial-cancel-terminal', 'usb-retention-overrides-rejection', 'usb-fragmentation-ack-reuse', 'usb-disconnect-retains', 'unread-deadline', 'byte-addressed-read'])
+ a=p.parse_args();run(a.image,a.session,a.output,a.case)

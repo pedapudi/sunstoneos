@@ -61,6 +61,36 @@ def embedded_reference(image,session):
     off=first-int(parts[0]['p_vaddr']);require(parts[0].data()[off:off+32]==session[48:80],'Template and const SD0 build ID differ.')
     return None
 
+def image_manifest_check(manifest,image):
+    """Bind a supported execution profile to the actual immutable ELF startup."""
+    import io
+    from elftools.elf.elffile import ELFFile
+    profiles={'sunstone-a733-storage-read':'storage-read-supervised-v2',
+              'sunstone-a733-storage-read-single-core':'storage-read-single-core-supervised-v2'}
+    target=manifest.get('target')
+    require(target in profiles and manifest.get('execution_profile')==profiles[target] and
+            manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),
+            'Tested STORAGE_READ image manifest required.')
+    elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+    require(table is not None,'SD0 image symbols absent.')
+    symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
+    marker=symbols.get('storage_read_single_core_geometry')
+    if target=='sunstone-a733-storage-read':
+        require(marker is None,'Single-core SD0 image requires its own execution profile.')
+        return
+    require(marker is not None and marker[1]==32 and
+            symbols.get('sd_single_core_entry',(0,))[0]==int(elf.header['e_entry']) and
+            not any(symbols.get(name,(0,))[0] for name in
+                ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset')),
+            'Single-core SD0 startup differs.')
+    first,size=marker
+    parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
+           int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
+    require(len(parts)==1,'Single-core SD0 geometry must be immutable/file-backed.')
+    offset=first-int(parts[0]['p_vaddr'])
+    require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373353444331,1,880,60),
+            'Single-core SD0 geometry differs.')
+
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
@@ -136,7 +166,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-storage-read' and mf.get('execution_profile')=='storage-read-supervised-v2' and mf.get('final_elf')==ih,'Tested STORAGE_READ image manifest required.')
+    image_manifest_check(mf,snapshots['image.elf'])
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -169,7 +199,7 @@ def validate_bundle(bundle):
         require(hashlib.sha256(data[name]).hexdigest()==h,'SD0 input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'STORAGE_READ image changed.')
     manifest=json.loads(data['image-input-manifest.json'])
-    require(manifest.get('target')=='sunstone-a733-storage-read' and manifest.get('execution_profile')=='storage-read-supervised-v2' and manifest.get('final_elf')==p['image_sha256'],'STORAGE_READ image manifest differs.')
+    image_manifest_check(manifest,data['image.elf'])
     sizes={name:len(value) for name,value in data.items()}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'STORAGE_READ protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'STORAGE_READ initial report backing changed.')

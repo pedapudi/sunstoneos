@@ -109,6 +109,39 @@ and read commands, with no media write, erase, trim or regulator change. A power
 cycle is a recovery action after a retained failure, rather than a requirement
 solely to assert cold card state before the first eligible attempt.
 
+## An independent boot-CPU image retains the same service
+
+`sunstone-a733-storage-read-single-core.elf` runs the same MMC owner, native
+application client, USB client and shared providers on the boot CPU. Its
+standalone CMake entry is `apps/storage-read-single-core`. It uses the physically
+established AArch64 SRE FreeRTOS port, EL1 vectors, timer and MMU construction.
+The application-specific EL3 entry configures only the boot CPU's GIC interface;
+it launches no secondary CPU. Before GIC and provider setup, admission checks
+all seven secondary CPUs against the existing OFF status/control/mode baseline.
+EL1 preparation consumes its retained result. External authority must exclude every
+other CPU power/reset writer for the complete admitted lifetime.
+
+EL3 validates the existing contract and seals the complete session before
+provider construction. The copied contract and both session snapshots occupy a
+separate section that survives EL1 BSS clearing. Runtime preparation checks the
+actual boot CPU, privilege, enabled caches/MMU, admitted startup deadline and
+SD0 translation. Device mappings are outer-shareable; the private PIO buffer
+remains cacheable and inner-shareable. The diagnostic log shares the correctly
+aligned non-cacheable result block.
+
+The secure timer expires at the existing admitted session deadline. Expiry,
+exceptions and fatal exits halt with all controller, provider, buffer and lock
+ownership retained. They perform no reset or resource release. Recovery requires
+whole-board power removal, including all attached power sources. This startup
+policy needs coordinator review and physical qualification on the selected
+board before execution.
+
+The image has its own immutable startup marker and manifest profile,
+`storage-read-single-core-supervised-v2`. The common preparer verifies the actual
+ELF entry, read-only marker and service geometry. The existing host still requires
+both native reads and every requested USB range. This image supports independent
+peripheral qualification; all-core FreeRTOS support remains required.
+
 ## Two copied client slots share one controller buffer
 
 Image startup binds the actual USB task and native application task to two

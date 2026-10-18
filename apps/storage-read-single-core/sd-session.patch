@@ -1,0 +1,11 @@
+--- apps/storage-read/snapshot.c
++++ sd-session.c
+@@ -7,7 +7,7 @@
+ static struct {
+     struct storage_read_session session;
+     unsigned attempted,ready;
+-} admitted;
++} admitted __attribute__((section(".monitor_state")));
+ int storage_read_session_prepare(const struct a733_smp_contract *contract)
+ {
+     if(admitted.attempted)return 0;
