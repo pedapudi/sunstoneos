@@ -11,10 +11,14 @@ set(crypto_build "${CMAKE_CURRENT_BINARY_DIR}/crypto-application")
 file(MAKE_DIRECTORY "${crypto_build}")
 get_target_property(crypto_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM crypto_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
+ "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/board/usb0.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/board/admission.c" "${board_build}/build-id.c")
 # Keep normal source inclusion, actual boot and provider source identities.
-foreach(source IN ITEMS apps/crypto/main.c apps/crypto/native.c apps/crypto/run.c apps/crypto/vectors.c apps/crypto/usb0.c apps/crypto/admission.c)
+apply_build_patch("${crypto_build}/boot.c" "${board_build}/boot-supervised.c"
+ "${SUNSTONE_SOURCE_ROOT}/apps/crypto/boot.patch")
+list(APPEND crypto_sources "${crypto_build}/boot.c")
+foreach(source IN ITEMS apps/crypto/main.c apps/crypto/native.c apps/crypto/run.c apps/crypto/vectors.c apps/crypto/usb0.c apps/crypto/admission.c apps/crypto/snapshot.c)
  list(APPEND crypto_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 add_executable(sunstone-a733-crypto EXCLUDE_FROM_ALL ${crypto_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
@@ -35,6 +39,7 @@ if(crypto_links)
 endif()
 file(GLOB crypto_headers "${SUNSTONE_SOURCE_ROOT}/apps/crypto/*.h")
 set(crypto_inputs ${crypto_sources} ${crypto_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/apps/crypto/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/apps/crypto/inputs.inc" "${SUNSTONE_SOURCE_ROOT}/apps/crypto/reference.inc" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES crypto_inputs)
 set(crypto_identity "fixed-native-crypto1;supervised60;SHA256-AES128-ECB;exact-private-copy;retained;${CMAKE_C_COMPILER_VERSION}")

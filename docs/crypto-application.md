@@ -89,3 +89,41 @@ The package model also compiles the ARM launcher and exercises the real host
 entry point, access/discovery selectors and PyUSB lookup against local fixtures.
 Its authority mock prevents deployment through the unmodified validator. No CE
 hardware operation or cold-start qualification was performed.
+
+## Retained admission and terminal USB failure
+
+A crypto-local boot patch now seals the entire 824-byte session during primary
+EL3 admission. It rehashes the copied bytes against the private admitted
+contract, validates the complete session and publishes the retained copy before
+provider construction. A failed attempt cannot be retried, and failed coherence
+publication leaves the snapshot unavailable. The fixed USB0-only image replaces
+the unnecessary live board identity read with this hook; shared boot sources
+remain unchanged.
+
+Provider setup and application startup both compare the sealed board prefix
+with the board's admitted prefix. Startup copies only the sealed extension.
+A disagreement refuses provider or CE construction, and later mutations at the
+live session address cannot replace admitted CE owner, authority or evidence.
+The fixed SHA/AES inputs, reference bytes and arithmetic paths are unchanged.
+
+Every crypto USB terminal stop now calls `board_fail` before parking. Shared
+liveness and the existing read-only crypto output gate therefore close before
+any further queued transmission. The owner task observes failure and follows
+its existing retained-session path; no healthy CE operation or resource release
+is introduced. This correction does not establish physical CE admission.
+
+The focused correction passed its sanitizer seal fixture and six linked
+consumer/revocation cases. The instruction checks model cache publication,
+CE construction, USB provider observations and scheduler boundaries. They execute
+the actual sealed-session checks, board failure/liveness and output gate, without
+running SHA/AES operations. The target links only its crypto boot object, whose
+seal hook runs before cached setup. Evidence is preserved at
+`~/.cache/sunstoneos/evidence/crypto-sealing-20261018/`.
+
+The first external batch script stopped before configuration because it retained
+a JPEG-only fixture variable. That script and diagnosis are preserved. Its
+successful compile/import and sanitizer results were reused; only configuration,
+the affected native link and remaining instruction cases resumed. The fixed
+vectors, CE clients and prior arithmetic/reference evidence were unchanged and
+were not replayed. The corrected image supersedes the earlier mutable-session
+handoff; physical admission remains separately blocked.

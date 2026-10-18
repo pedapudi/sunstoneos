@@ -10,7 +10,7 @@
 #define BOARD_USB0_PID 0xefe5
 #endif
 static unsigned polling;
-static _Noreturn void stop(void){for(;;)vTaskDelay(1);}
+static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskDelay(1);}
 void a733_usb_prepare(void)
 {for(;;){int r=a733_native_usb_health(&providers.shared);if(r<0||!board_live(NULL))stop();if(r==1)return;vTaskDelay(1);}}
 void a733_usb_poll_enable(bool enable){if(!board_live(NULL))stop();polling=enable;}
