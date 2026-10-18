@@ -93,6 +93,7 @@ enum a733_radio_entropy_result a733_radio_entropy_retain(struct a733_radio_entro
 {
     if(!identity(s)||xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING||
         xTaskGetCurrentTaskHandle()!=s->config.owner)return A733_RADIO_ENTROPY_INVALID;
+    fault(s); /* Copied consumers close even if owner metadata is contended. */
     if(!lock(&s->busy))return A733_RADIO_ENTROPY_BUSY;
     return finish(s,retain(s));
 }
