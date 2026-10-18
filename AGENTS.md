@@ -102,6 +102,10 @@ handoff, or final response does not invalidate successful test evidence.
 - Review ownership and hardware risks early. Check fixture compatibility before
   a long batch, and resume only affected steps after a fixture repair. Review
   changed behavior and unresolved findings without repeating accepted reviews.
+- Build valid fixture records from the actual producers and preserved artifact
+  identities. Do not leave placeholder hashes or build IDs in nominal cases.
+  Resolve native hooks by their defining compilation unit when local symbol
+  names repeat; reject ambiguous matches during setup, before runtime cases.
 - Use the existing queue, evidence records and dashboard. Group physical cases
   only when their resource ownership and recovery conditions permit safe reuse.
   A retained or failed session still requires its prescribed recovery.
