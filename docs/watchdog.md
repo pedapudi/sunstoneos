@@ -21,8 +21,9 @@ refuses an already enabled watchdog. Callers must zero-initialize the context
 and provide exclusive ownership.
 
 Arming saves the previous configuration and writes the bootloader's FEL request
-value to RTC register `0x07090108`. It selects system reset and the reset-output
-setting used by the A733 bootloader to avoid resetting the power controller.
+value to RTC register `0x07090108`. It selects system reset and the reset-pulse
+duration setting used by the A733 bootloader. The manual defines that setting
+as pulse duration; it does not establish power-controller or redirect retention.
 The driver checks the reset configuration before enabling the timer. A failed
 configuration readback restores saved state without starting the watchdog.
 Disarming disables the watchdog before restoring its configuration and RTC flag.

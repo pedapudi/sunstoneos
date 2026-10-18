@@ -30,8 +30,8 @@ int a733_watchdog_arm(struct a733_watchdog *watchdog, unsigned seconds)
         mmio_write(FEL_FLAG, watchdog->fel_flag);
         return 0;
     }
-    // The A733 bootloader uses this reset pulse setting to avoid resetting
-    // the power controller. It still resets the SoC, including DDR control.
+    // Match the A733 bootloader's reset pulse duration. This setting does not
+    // establish power-controller or redirect retention; reinitialize DDR.
     mmio_write(WDT + 0x18, KEY | 2);
     mmio_write(WDT + 0x10, KEY | (watchdog->configuration & ~3U) | 1);
     watchdog->armed = 1; // The saved state must now be restored on failure.
