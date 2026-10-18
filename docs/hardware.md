@@ -266,8 +266,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   paired geometry/fragment queues and copies output only after timeline, pixel
   and guard validation. Source comparisons and four native submission/failure
   cases pass. Six affected central targets link with the render implementation.
-  Successful GPU output, general drawing, repeated submission, lease disposal
-  for reopen and physical execution remain outstanding.
+  The [native GPU application](gpu-application.md) connects real firmware,
+  providers, IRQ routing, fixed rendering and copied USB output. Its central
+  image links; focused checks verify retention when isolation is unavailable
+  and prevention of device access after application failure. Successful GPU
+  output, general drawing, repeated submission, lease disposal for reopen and
+  physical execution remain outstanding.
   The [native lifecycle backend](gpu-backend.md) now has instruction-model
   evidence for identity admission, restricted MMIO, memory/GIC composition,
   retained faults, and actual queue event reception. A proven physical memory

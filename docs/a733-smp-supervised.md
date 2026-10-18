@@ -67,7 +67,7 @@ admission. The admission schema is `a733-smp-supervised-entry-v1` and contains:
 
 Preparation creates a distinct supervised bundle. Launch requires the existing
 queue claim and flock, exact software evidence, reconnect permissions and fresh
-A733 ROM identification. Queue prerequisites are `supervised-entry-admission`
+A733 ROM identification. Queue prerequisites are `supervised-ram-recovery`
 and `supervised-observer-software`. The latter records the tested image and
 launcher bytes, current host implementations and focused check evidence.
 

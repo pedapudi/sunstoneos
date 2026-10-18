@@ -70,9 +70,13 @@ Fresh physical entry admission remains incomplete.
 The [native camera application](camera-application.md) connects actual providers,
 OV5640 capture, retained full-frame copies and USB0 output. Its native build and
 nine focused application checks pass, including central integration. The camera
-module and physical launch conditions remain unqualified. A Sol 6.1 worker is
-finishing fixed GPU application integration after Astra source review. Root owns
-central integration and physical tests; workers have no board access.
+module and physical launch conditions remain unqualified. The
+[native GPU application](gpu-application.md) also integrates actual providers,
+firmware, fixed rendering and copied USB output. Its central build and focused
+retention/revocation checks pass. Missing physical isolation prevents shutdown
+or reuse; a successful fixed render retains resources for the boot. Successful
+GPU output and physical operation remain untested. All three application workers
+have completed their local changes; inspect live assignments before new work.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
@@ -131,7 +135,12 @@ snapshot found all seven secondary cores inactive by the startup driver's
 criteria, inherited USB0 clocks/reset state, and a disabled watchdog. Its record
 is `supervised-entry-state-20261017-193112/result.json`. These observations do not
 by themselves establish auxiliary-core/DMA exclusion or every cached-entry
-condition. Resolve the remaining source-backed entry conditions before launch.
+condition. The follow-up `supervised-master-state-20261017-193555/` records
+E902 clock gates disabled, DMA0/1 reset asserted and clocks gated, and MBUS gates
+`0x4`. Its `ce/` record shows the crypto engine enabled; `ce-idle/` records zero
+secure/nonsecure interrupt, task-status, trigger and error fields. No control was
+changed. The draft physical-entry assessment is under
+`smp-supervised-20261017/physical-entry/`; review it before admitting launch.
 The prior `003:064` instance answered ROM requests. Its
 [physical ROM capture](watchdog.md) differs from the published dump and supplies
 the board-specific reset reference. SRAM workspace restoration passed there.
@@ -182,7 +191,11 @@ artifacts in `central-snapshot/`; `central-integration.json` references matching
 external inputs already preserved by the worker. Camera and supervised observer
 central records are under `camera-application-20261017/` and
 `smp-supervised-20261017/`. All 105 camera and 30 observer repository dependencies
-match their worker snapshots; runtime cases were not repeated. Storage native
+match their worker snapshots; runtime cases were not repeated. GPU application
+central artifacts are under `gpu-application-20261017/`; all 150 actual repository
+dependencies match its worker snapshot. Its optional isolation and revocation
+fields change the backend ABI; older images retain their original scoped evidence.
+Storage native
 checks and input reconciliation are under `storage-update-20261017/`, including
 `native-handoff.json` and `native-root-reconcile.json`. Complete maintenance image
 evidence and central source reconciliation are under `storage-maintenance-20261017/`.
@@ -235,10 +248,10 @@ times audio duration; 0.01 times is a stretch target for bounded investigation.
 Startup and live end-of-speech latency are separate measurements. Existing
 recordings and model identities remain the reference.
 
-1. Finish fresh physical entry admission for the tested supervised all-core
-   observer. DDR and secondary-core inactivity evidence are available. Resolve
-   auxiliary-core/DMA ownership and reset/firmware provenance, then prepare one
-   bounded attempt with manual reconnection after USB capture or failure. Preserve storage,
+1. Review the drafted fresh physical-entry assessment for the tested supervised
+   all-core observer. DDR, secondary-core, auxiliary-core/DMA and CE-idle evidence
+   are available. Confirm the reset/firmware provenance assessment, then prepare
+   one bounded attempt with manual reconnection after USB capture or failure. Preserve storage,
    honor actual admission requirements and stop at the first transport failure.
    The failed UFS probe, intentional watchdog expiry and unattended fault tests
    remain deferred. USB power-control investigation is closed; no cable move or
@@ -247,9 +260,9 @@ recordings and model identities remain the reference.
    Its physical use requires card/range ownership, protected backups and actual
    controller, memory and supply admission. No prepared bundle grants those
    conditions by itself.
-3. Integrate the completed fixed GPU application when its preserved evidence
-   arrives. Native camera application linkage is complete; actual camera memory,
-   module and boot admission remain required before physical capture. Retained buffers permit neither invented drain
+3. Establish real power, memory and recovery admission for the integrated GPU
+   and camera applications. Actual module wiring remains required before camera
+   capture; successful GPU output remains to be observed. Retained buffers permit neither invented drain
    nor resource reuse. The larger memory profile supplies capacity; physical
    exclusion, coherence and device mappings remain required.
 4. Qualify all-core startup, interrupts, scheduler results and coherent memory

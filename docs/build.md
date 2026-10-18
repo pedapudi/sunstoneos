@@ -104,3 +104,8 @@ The separate `a733-smp-supervised` target runs the all-core observer with the
 watchdog disabled and manual recovery. Both are available through the central
 build. Their component documents describe distinct physical admission requirements:
 [camera](camera-application.md) and [supervised observer](a733-smp-supervised.md).
+
+The `sunstone-a733-gpu-render` target is enabled when `SUNSTONE_GPU_FIRMWARE`
+points to the pinned firmware described by the [GPU application](gpu-application.md).
+It connects fixed rendering and copied USB output; physical admission remains
+separate from compilation.

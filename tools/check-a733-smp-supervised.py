@@ -25,7 +25,7 @@ CONTRACT = base.CONTRACT
 REQUEST_MAGIC = 0x4153373353554c33
 MESSAGE_MAGIC, FRAME_MAGIC = 0x53534f53, 0x415337334f425331
 PRODUCT, SERIAL = 'sunstoneos cached SMP observer', 'sunstoneos-a733-smp-observe'
-PREREQUISITES = {'supervised-entry-admission', 'supervised-observer-software'}
+PREREQUISITES = {'supervised-ram-recovery', 'supervised-observer-software'}
 WINDOW_TICKS = 20 * 24000000
 CONTRACT_MAGIC = 0x4153373353554333
 
@@ -225,7 +225,7 @@ def claimed(database,test_id,owner,bundle,admission):
         require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,
                 'Supervised queue prerequisites differ.')
         refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        require(refs['supervised-entry-admission']==admission.resolve(), 'Reviewed admission differs.')
+        require(refs['supervised-ram-recovery']==admission.resolve(), 'Reviewed admission differs.')
         validate_software(json.loads(refs['supervised-observer-software'].read_text()),bundle)
         require({(bundle/n).resolve() for n in ('prepared.json','image.elf','launch.bin')}<=
                 {artifact(v) for v in submission['artifacts']}, 'Queue does not cover exact image.')

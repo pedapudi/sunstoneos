@@ -4,8 +4,9 @@ The native application composes real firmware, reserved GPU memory, the native
 power backend, the privileged GPU service and USB observation. It submits one
 64 × 64 RGBA8 clear per boot. Physical rendering, interrupt delivery, inherited
 PLL/rail ownership, the larger RAM reservations and watchdog recovery remain
-unqualified. The executable must not run on the board until those prerequisites
-have physical evidence.
+unqualified. Physical entry requires qualified power, memory and recovery
+conditions. Successful rendering and interrupt delivery are outcomes to establish
+on the board.
 
 One native USB provider owns the shared locks, GPU resource manager, rail ledger
 and PMIC provider. The GPU platform borrows DCDC4 through that same provider.
@@ -100,3 +101,9 @@ environment providing ELF support. Successful component cases were not replayed.
 Physical watchdog work remains deferred. Physical isolation and resource disposal
 remain required for shutdown/reuse. General draws, textures, formats, repeated
 submission and compute qualification remain separate hardware requirements.
+
+The central `sunstone-a733-gpu-render` target also compiles and links. Its 150
+repository dependencies match the reviewed worker snapshot. Central artifacts,
+generated sources, firmware bytes and actual compiler dependency files are under
+`central-snapshot/`, with the image identity in `central-integration.json` beside
+the original batch. No runtime case was repeated for central integration.
