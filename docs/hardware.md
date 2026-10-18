@@ -61,6 +61,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   NPU/GPU buffers under the eight-core boot barrier and matching EL3/EL1 mappings.
   Emulator checks pass for translation on every core and retained construction.
   Native application binding and physical exclusion/coherence remain required.
+  The [larger native profile](device-memory-capacity.md) reserves 768 MiB of
+  write-back memory and 16 MiB of uncached memory, with privileged mappings and
+  bounded validation before publishing either pool. Its native publication and
+  refusal checks pass. Physical range ownership and device reachability remain
+  unqualified; external pools still need application-specific mapping access.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.

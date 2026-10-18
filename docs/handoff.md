@@ -38,7 +38,8 @@ software behavior; physical operation remains unqualified.
 | [Eight-core diagnostic and launcher](a733-smp.md) | Scheduler image links; bounded watchdog launch, clean FEL refusal and immutable upload checks pass | Physical independent recovery, observable scheduler results and full image execution |
 | [USB observer and launcher](a733-smp-observe-host.md) | Bounded cached diagnostic frames, durable host capture and exact offline bundle; focused host/instruction checks pass | Physical recovery, entry admission, USB timing and scheduler results |
 | [Larger device-memory launcher](a733-device-launch.md) | Version-2 reservation binding, file-only uploads and bounded native launch pass focused host/instruction checks on the actual runtime ELF | Physical recovery, DRAM/entry/exclusion qualification and live device results |
-| [Device memory reservations](cached-device-reservations.md) | Linker-owned pools, actual DMA lifetime and GPU/NPU preparation under the cached eight-core barrier; host/instruction/linker checks pass | Complete native application binding, additional capacity, physical exclusion and external drain |
+| [Device memory reservations](cached-device-reservations.md) | Linker-owned pools, actual DMA lifetime and GPU/NPU preparation under the cached eight-core barrier; host/instruction/linker checks pass | Complete native application binding, physical exclusion and external drain |
+| [Larger device memory](device-memory-capacity.md) | Native image reserves 768 MiB write-back and 16 MiB uncached memory; allocator, native publication/refusal and affected consumer compilation pass | Physical range ownership/coherence and individual application/device mappings |
 | [DMA startup](dma-startup.md) | Shared clock/lock/counter ownership and deferred service activation; two-core model passes | Actual handoff authority and physical transfer/drain |
 | [Native DMA session](dma-pool-session.md) | Actual startup/service and permanent pool ownership; two-core copy/fault composition, complete native link and focused exception-route checks pass | Physical handoff, USB result observation and physical transfer/drain |
 | [System IOMMU](iommu.md) | Both-bank table construction, cold installation and fault observation; source/host checks pass | Exclusion and drain of every affected master; native mapping |
@@ -103,12 +104,13 @@ integrated. Radio [verified firmware loading](radio-firmware.md) and
 | HDMI worker | Controller/TV0 composition integrated; native power, clock and PMIC binding in progress |
 | PCIe worker | Initial native root-port preparation integrated; physical link, endpoint operations, interrupts and DMA remain |
 | USB host worker | Exposed USB2/DWC3/xHCI and Type-C integration; schematic marks USB1 data pins unconnected |
-| Device memory worker | Larger native reservations for concurrent graphics, camera, video and mimus |
+| Device memory worker | Larger native image integrated; physical ownership and application/device mappings remain |
 | GPU worker | Native free-list and hardware render-target resource binding toward actual graphics workloads |
 | Independent reviewers | Changed runtime ownership, deadlines and retained failures before focused execution |
 
 Parallel work has resumed after the earlier usage limit. HDMI native binding,
-expanded memory integration and its version-2 launcher have assigned workers.
+DMA USB observation, GPU graphics resources and native storage updates have
+assigned workers. Larger memory reservations and their launcher are integrated.
 Inspect live agent status before resuming or duplicating an assignment. PCIe's passed composed
 batch and native sources are integrated. Its 197 recorded inputs and 17 artifacts
 match the saved evidence. Dependency scans confirm that central header changes
@@ -134,6 +136,14 @@ The larger device-memory launcher is integrated with its focused software
 evidence. It accepts the exact runtime layout and excludes both reserved pools
 from uploads. It creates no physical memory or recovery authority, and ROM
 return alone does not establish scheduler or device results.
+The larger runtime passes full-pool publication, interior translation refusal
+and deadline refusal in the native fixture. A corrected uncached-translation
+check accepts matching effective shareability 2 or 3, as the existing uncached
+adapter does; write-back memory still requires 3. The launcher accepts the
+corrected image and manifest without repeating its instruction cases.
+Central configuration includes the new target. The compact observer boot hook
+was reconciled with the conditional source additions; its compact source remains
+identical after preprocessing those additions, and its sealed bundle is intact.
 
 GPU isolation research found no source-defined A733 acknowledgement that proves
 completion of writes already accepted beyond the GPU. The [research record](gpu-isolation.md)
@@ -297,8 +307,9 @@ recordings and model identities remain the reference.
    constructors now run under the cached eight-core boot barrier with matching
    CPU mappings. The native application must provide immutable model/firmware
    inputs and complete platform admission. The initial
-   pools cannot also fit a 600 KiB NV16 frame in remaining write-back space;
-   broader concurrent workloads require further reservations and qualified DRAM.
+   compact pools cannot also fit a 600 KiB NV16 frame in remaining write-back space.
+   The integrated larger profile supplies capacity; broader workloads still need
+   qualified DRAM and concrete engine, framebuffer and application mappings.
    Physical startup
    authority, exclusive internal SRAM ownership and numerical output remain open.
    Corrected inherited-clock guards require forced-on control,
