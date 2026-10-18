@@ -71,6 +71,10 @@ tool shares the observer's lock, queue and transport handling; 25 focused cases
 pass against the integrated sources. Evidence is preserved under
 `board-supervised-20261017/central/` and
 `board-supervised-host-20261017/batch1/`.
+The shared tool now also accepts an NPU result field. An exact source comparison
+confirms that this selector addition leaves observer and board behavior unchanged.
+Updated software records are under the latter directory's
+`integration/npu-selector/`; the original results are preserved without replay.
 The separate
 [supervised all-core observer](a733-smp-supervised.md) requires the watchdog to
 remain disabled. Its native build and focused startup, admission and host checks
@@ -99,6 +103,9 @@ software cases pass. Evidence is under `hdmi-application-20261017/`; framebuffer
 routing and physical output remain outstanding. Active NPU work connects
 supervised startup and enabled-clock retuning. Cold clock provisioning and an
 unsuitable supply still require a separate implementation and physical evidence.
+Separate workers own the NPU packaging/capture path and supervised GPU admission.
+Both reuse existing device implementations and require focused software review
+before execution. Physical access remains exclusive to the coordinator.
 
 The GPU central integration compiles and links six affected targets against the
 actual graphics/reservation adapters and fixed render service. Empty fixture
