@@ -131,3 +131,13 @@ build records 165 linked objects and 420 input dependencies, including five
 assembly sources. Missing or empty coverage is refused. The original successful
 checks are unchanged; the recovered bytes and records are stored in the
 `dependency-recovery` directory alongside their original evidence.
+
+The focused host batch passes 17 cases using the retained C-produced identity,
+profile, native image and ARM launcher. It covers bounded pending capture,
+terminal faults, malformed or stale identities, expired transfers, durable-save
+failure, queue/source identity changes, frozen input copies and shared completion
+routing. The new Bluetooth launcher wrapper also passes its session, SID,
+workload and absent-watchdog checks with the unchanged supervisor explicitly
+modeled. No physical transport or earlier protocol suite is replayed. Inputs
+are copied and hashed before compilation and execution; raw results reside in
+`bluetooth-native-20261017/host-capture` under the evidence cache.
