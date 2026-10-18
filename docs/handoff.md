@@ -46,6 +46,12 @@ and maintenance watchdog supervision. These paths have no physical qualification
 Implementation and debugging use Sol 6.1 with medium reasoning; Astra reviews
 substantive correctness risks. The coordinator alone operates the board.
 
+The ADC and reusable RTC implementations are integrated. The next combined
+thermal/ADC monitor and reusable fan/LED work have design proposals only.
+Their implementation workers stopped at the account usage limit before starting
+those extensions. Preserve the frozen prior worktrees and evidence; resume from
+the proposals after capacity is available. No physical test is running.
+
 - Startup diagnosis: table construction, cache publication and CPU/DSU planning
   passed physically. The observed identity is supported and needs no workaround
   writes. EL1 walk blocking, exact control restoration and interrupt-controller
@@ -146,17 +152,19 @@ host cases pass. All 175 compiled repository inputs match integration under
 was reused. Physical acquisition, accuracy, interrupt delivery and recovery
 remain unqualified. Automatic thermal policy remains required.
 
-The [native RTC application](rtc-application.md) integrates coherent reads,
-a non-waking alarm, explicit cold-start source/calendar initialization and one
-owner-task calendar update. The runtime setter yields during hardware waits,
-retains partial failures and publishes the verified coherent calendar pair.
-Its affected image and focused runtime/cancellation/rollover/host checks pass
-under `rtc-runtime-native-20261018/`. All owned files match integration; four
-compiled-input differences are accepted additive clock and PMIC support unused
-by this RTC path. No additional build or old-case replay was needed.
-Repeated read/set/alarm composition and concurrent clients remain required,
-as do wake, calibration, reset-cause reporting and physical retention. The board
-revision, physical timing, UTC accuracy and native USB remain unqualified.
+The [native RTC application](rtc-application.md) now supplies repeated coherent
+read, calendar-set and non-waking alarm operations through one owner and two
+registered native clients. A static FreeRTOS queue serializes requests, and
+client-bound generations prevent stale or cross-client cancellation and copies.
+Verified alarm completion permits reuse; uncertain failures retain resources and
+refuse further operations. Five cases using the actual FreeRTOS POSIX scheduler,
+plus native binding/provider, launcher and host checks pass under
+`rtc-service-native-20261018/`. All 23 owned files match integration. Of 182 compiled
+repository inputs, four differ only by unused additive CLDO3 and PWM pin support.
+The frozen image and successful checks were reused without rebuilding or replay.
+Physical timing, UTC accuracy and native USB remain unqualified. Source switching,
+wider client registration, wake, calibration, reset-cause reporting and applicable
+retention modes remain required.
 
 The [native PCIe application](pcie-application.md) now connects the root-port
 driver and shared providers to x1 Gen1 link observation, read-only endpoint
@@ -385,7 +393,7 @@ recordings and model identities remain the reference.
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
    audio, display, codecs, PCIe, SPI, routed PWM/ADC and power transitions.
-   Complete runtime RTC access and the remaining RTC modes. OV5640 is the first camera;
+   Complete the remaining RTC modes and physical service qualification. OV5640 is the first camera;
    no MIPI camera or display is connected, and the DSI panel is undecided.
    No microphone is available. Recorded audio remains the mimus fixture.
 6. Qualify unchanged-model mimus with paced input and all cores. After every

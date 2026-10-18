@@ -110,20 +110,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reset-policy programming/restoration with the timer disabled. Timer enabling,
   expiry, and reset retention remain unqualified.
 - RTC and watchdog: **implemented** [native RTC operations](rtc-application.md)
-  include coherent reads, a non-waking alarm with deferred interrupt handling,
-  explicit cold-start crystal/calendar initialization and one authenticated
-  calendar update from the running owner task. Runtime waits yield without holding
-  the shared register mutex. Results distinguish cancellation before a write,
-  verified completion after late cancellation and retained partial failure.
-  Successful reports publish the same coherent calendar pair used for verification.
-  Focused driver, native instruction and host checks pass, including midnight
-  rollover and refusal of further I/O after ownership or deadline loss. Evidence
-  and source reconciliation are under `rtc-runtime-native-20261018/`; earlier
-  cold-start and alarm evidence remains valid for its frozen inputs.
-  Repeated read/set/alarm composition, concurrent clients, wake, calibration,
-  reset-cause reporting and applicable retention modes remain required.
-  The fitted board revision, physical operation, UTC accuracy and native USB
-  serialization remain unqualified. Independent watchdog evidence is recorded above.
+  include coherent reads, non-waking alarms, cold-start crystal/calendar
+  initialization and reusable calendar setting. One owner serializes two registered
+  native clients through a static FreeRTOS queue. Reads can proceed during an
+  alarm; calendar changes and another alarm return busy until it finishes.
+  Client-bound request generations prevent stale or cross-client cancellation
+  and result access. Clean alarm completion permits another operation; uncertain
+  failures retain resources and refuse subsequent requests.
+  Five cases using the actual FreeRTOS POSIX scheduler, native binding/provider
+  checks, launcher and host checks pass under `rtc-service-native-20261018/`.
+  Integration reconciles all 182 compiled repository inputs, with unused additive
+  CLDO3 decoding and PWM pin support recorded separately. Prior finite RTC evidence
+  remains valid for its frozen inputs. Source switching, wider runtime client
+  registration, wake, calibration, reset-cause reporting and applicable retention
+  modes remain required. The fitted board revision, physical operation, UTC accuracy
+  and native USB serialization remain unqualified. Independent watchdog evidence
+  is recorded above.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
