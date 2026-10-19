@@ -2,6 +2,26 @@
 #define SUNSTONE_A733_DEVICE_MEMORY_LAYOUT_H
 #include <stdint.h>
 #include <stddef.h>
+/* The large NPU graph uses existing identity-mapped image RAM. This fixed
+ * exception grants no external-memory, cache, device or physical authority. */
+#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if !defined(SUNSTONE_NPU_SINGLE_CORE) || !defined(SUNSTONE_NPU_RUNTIME_INPUT) || \
+    !defined(SUNSTONE_NPU_INTERRUPT) || !defined(SUNSTONE_NPU_SUPERVISED) || \
+    defined(SUNSTONE_NPU_FINITE_RETURN) || defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+#error Large NPU graphs require the retained single-core IRQ runtime memory profile
+#endif
+#define A733_NPU_GRAPH_POOL_START UINT64_C(0x41600000)
+#define A733_NPU_GRAPH_POOL_END UINT64_C(0x41a00000)
+#define A733_LOCAL_DEVICE_POOL_BYTES UINT32_C(4194304)
+/* Geometry only. Both EL3 table preparation and the EL1 allocator use this
+ * predicate; their state, mapping and ownership checks remain separate. */
+static inline int a733_device_memory_local_pool_valid(uintptr_t start, uintptr_t end)
+{
+    return start == A733_NPU_GRAPH_POOL_START && end == A733_NPU_GRAPH_POOL_END;
+}
+#else
+#define A733_LOCAL_DEVICE_POOL_BYTES UINT32_C(2097152)
+#endif
 #define A733_DEVICE_MEMORY_LAYOUT 1u
 #define A733_DEVICE_WB_START UINT64_C(0x48000000)
 #define A733_DEVICE_WB_END UINT64_C(0x78000000)

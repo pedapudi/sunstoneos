@@ -1,9 +1,7 @@
 #include "a733_cached_memory.h"
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
-#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
 #include "a733_device_memory_layout.h"
-#endif
 #define TABLE __attribute__((section(".bss.a733_cached_tables"),aligned(4096)))
 #define BIT(n) (UINT64_C(1) << (n))
 uint64_t a733_cached_el3_l1[512] TABLE, a733_cached_el3_l2[512] TABLE;
@@ -30,8 +28,11 @@ int a733_cached_memory_prepare(void)
         (uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > 0x42000000 ||
         wb != layout.wb_start || we != layout.wb_end || nc != layout.nc_start || ne != layout.nc_end) return 0;
 #else
+#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+    if (!a733_device_memory_local_pool_valid(wb, we)) return 0;
+#endif
     if ((uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > wb || we < wb ||
-        (we != wb && ((wb | we) & 4095 || we - wb > 2097152 || we > 0x41f00000)) ||
+        (we != wb && ((wb | we) & 4095 || we - wb > A733_LOCAL_DEVICE_POOL_BYTES || we > 0x41f00000)) ||
         (ne != nc && (nc != 0x41c00000 || ne != 0x41e00000 || we > nc))) return 0;
 #endif
     if (a733_cpu_coherence_tables(a733_cached_el3_l1, a733_cached_el3_l2,

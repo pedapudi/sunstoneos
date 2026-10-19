@@ -12,7 +12,7 @@ The generation changes whenever an allocation slot is reused.
 
 ## The linker fixes the complete pool extent
 
-Set the linker symbol `__device_pool_size` to a multiple of 4 KiB, at most 2 MiB.
+The default profile accepts `__device_pool_size` in multiples of 4 KiB, at most 2 MiB.
 For example, `-Wl,--defsym=__device_pool_size=65536` reserves 64 KiB.
 The default reserves no bytes and preserves existing allocated sections and
 load-segment extents. The linker refuses partial pages, excessive pool capacity
@@ -38,6 +38,18 @@ the retained result block at `0x42000000`, mimus models at `0x43000000` and
 The pool does not use the reported 12 GiB capacity to infer more available RAM.
 Its image layout still needs physical qualification after independent recovery.
 
+The large NPU graph profile has a fixed exception: its write-back pool occupies
+`0x41600000..0x41a00000`, entirely within existing image mappings. Both EL3 table
+preparation and the EL1 allocator require that exact interval. Selecting
+`SUNSTONE_NPU_LARGE_GRAPH` also requires the retained single-core IRQ runtime;
+finite return and the extended-memory profile are incompatible. Existing mapping,
+heap exclusion and optional uncached-pool checks still apply.
+
+The shared checks are implemented and compile for AArch64. Default-profile
+executable object sections match the earlier NPU image's objects byte for byte.
+The graph application's final linker placement and actual allocator path still
+require validation. Evidence: `npu-large-memory-20261019/compile-results-fixed.json`.
+
 Link ownership describes this image's allocations. It does not prove that a
 remote processor or inherited firmware has stopped accessing the same RAM.
 All such users must be excluded before native device use. The platform must
@@ -48,7 +60,9 @@ isolate allocations from arbitrary privileged writes or all ordinary task access
 ## Allocations retain full pages through device ownership
 
 The [pool implementation](../runtime/device_memory_pool.c) tracks at most
-32 live allocations across 512 pages. These are bounded software capacities.
+32 live allocations. The default image pool contains at most 512 pages; the
+allocator can represent 196,608 pages, or 768 MiB, for separately admitted larger
+profiles. These are software capacities, not physical RAM qualification.
 It rounds requested sizes up to whole pages and returns CPU address, physical
 address and complete byte extent. It searches reusable free extents without
 moving existing allocations.
@@ -69,8 +83,8 @@ adds a separate optional uncached linker block with attributes established befor
 MMU/cache enable. Both pools remain disjoint inside the existing image reservation.
 [NPU convolution](npu-reserved.md) binds one complete session to the write-back pool.
 IOMMU tables, camera frames and video buffers still need concrete consumer
-bindings and device-address policies. The cached multicore image has a
-separate linker layout and does not use this reservation yet.
+bindings and device-address policies. Cached multicore builds use their own
+linker geometry, with separate admission for extended device-memory reservations.
 
 ## DMA completion controls return to CPU ownership
 
