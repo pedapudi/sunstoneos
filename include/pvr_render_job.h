@@ -13,4 +13,7 @@ struct pvr_render_job_image {
 int pvr_render_job_build(const struct pvr_render_program_image *,
     uint32_t hwrt, uint32_t geometry_ufo, uint32_t fragment_ufo,
     struct pvr_render_job_image *);
+int pvr_render_job_build_frame(const struct pvr_render_program_image *,
+    uint32_t hwrt,uint32_t geometry_ufo,uint32_t fragment_ufo,uint32_t sequence,
+    struct pvr_render_job_image *);
 #endif

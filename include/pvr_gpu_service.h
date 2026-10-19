@@ -130,18 +130,26 @@ struct pvr_gpu_service_reply {
     uint32_t graphics_phase;
     uint32_t render_phase, render_error, render_checked;
     uint32_t render_first_pixel, render_pixel_count, render_pixels[64];
+    uint32_t render_sequence;
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
     uint64_t ticket;
     unsigned client;
-    uint32_t render_first_pixel, compute_first_word, compute_sequence;
+    uint32_t render_first_pixel, compute_first_word, compute_sequence, render_sequence;
 };
 /* Scoped copied triangle upload. epoch must match the caller's OPEN reply.
  * The complete input is copied before enqueue; no caller pointer reaches the
- * worker. One accepted draw per session; use the existing paged render read. */
+ * worker. This compatibility entry submits only frame one. */
 int pvr_gpu_service_draw(struct pvr_gpu_service *,uint64_t epoch,const void *vertices,
     size_t bytes,uint32_t count,uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
+/* Accept another frame only after acquired previous completion and copied output.
+ * Acceptance acknowledges replacement of previous_frame; refusal preserves it. */
+int pvr_gpu_service_draw_next(struct pvr_gpu_service *,uint64_t epoch,uint32_t previous_frame,
+    const void *vertices,size_t bytes,uint32_t count,uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
+/* Nonzero exact frame; unlike the legacy read, zero never selects a wildcard. */
+int pvr_gpu_service_render_read_sequence(struct pvr_gpu_service *,uint32_t frame,uint32_t first_pixel,
+    TickType_t wait,uint64_t *ticket);
 struct pvr_gpu_service_client {
     TaskHandle_t task;
     uint64_t next_ticket, pending;

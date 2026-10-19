@@ -100,7 +100,8 @@ static void runtime_exchange(void)
         else if(result==1)count=total-first<page?total-first:page;
     }
 #ifdef SUNSTONE_GPU_RUNTIME_DRAW
-    else if(op==2&&runtime_reserved&&runtime_length<=PVR_RENDER_DRAW_BYTES&&first==0&&expected==0&&sequence==0&&result!=2&&
+    else if(op==2&&runtime_reserved&&runtime_length<=PVR_RENDER_DRAW_BYTES&&first==0&&expected==sequence&&
+        sequence<PVR_RENDER_DRAW_MAX_FRAMES&&(sequence?result==1:result!=2)&&
         pvr_render_draw_vertices_valid(app.runtime_input,runtime_length,runtime_length/32)&&
         !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
 #else

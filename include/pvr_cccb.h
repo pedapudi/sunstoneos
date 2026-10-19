@@ -105,12 +105,14 @@ struct pvr_cccb_pair {
     uint32_t phase, status;
     unsigned char kick[PVR_CCB_COMMAND_BYTES];
 };
-/* Fresh zero pair; IDLE, never previously submitted client rings. Admission is
- * atomic without I/O. Each cleanup list is already selected by the producer;
+/* Fresh zero pair, or a previously accepted pair with its original IDLE rings.
+ * Reuse preserves cursors/serials; caller separately acquires GPU completion.
+ * Admission is atomic without I/O. Each cleanup list is selected by the producer;
  * partial-render fragment kicks must omit cleanup records per firmware ABI. */
 int pvr_cccb_pair_begin(struct pvr_cccb_pair *, struct pvr_cccb *, struct pvr_cccb *,
     const struct pvr_cccb_command *, unsigned, const struct pvr_cccb_command *, unsigned,
     const uint32_t *, unsigned, const uint32_t *, unsigned, uint64_t deadline);
+int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *);
 /* One bounded client step or one combined submit/collect. Return 1 accepted,
  * 0 pending, -1 fault. Acceptance does not establish either GPU timeline. */
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *);

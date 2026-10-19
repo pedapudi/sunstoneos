@@ -218,14 +218,28 @@ static int pair_fault(struct pvr_cccb_pair *p)
     pvr_cccb_abort(p->geometry); pvr_cccb_abort(p->fragment);
     return -1;
 }
+int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *p)
+{
+    if(!range(p,sizeof(*p)) || p->phase!=3 || p->status!=1 || !p->geometry || !p->fragment)return 0;
+    const struct pvr_cccb *g=p->geometry,*f=p->fragment;
+    return range(g,sizeof(*g)) && range(f,sizeof(*f)) && g!=f &&
+        g->phase==PVR_CCCB_IDLE && f->phase==PVR_CCCB_IDLE && g->status==1 && f->status==1 &&
+        g->paired==1 && f->paired==1 && g->serial && g->serial==f->serial && g->serial<UINT64_MAX &&
+        g->queue==f->queue && g->queue && g->queue->phase==PVR_CCB_ACTIVE &&
+        p->epoch==g->epoch && g->epoch==f->epoch && g->epoch==g->queue->epoch &&
+        g->context==f->context && g->ops.now==f->ops.now &&
+        g->firmware_context<=UINT32_MAX-152 && g->firmware_context+152==f->firmware_context;
+}
 int pvr_cccb_pair_begin(struct pvr_cccb_pair *p, struct pvr_cccb *g, struct pvr_cccb *f,
     const struct pvr_cccb_command *gc, unsigned gn, const struct pvr_cccb_command *fc, unsigned fn,
     const uint32_t *gr, unsigned grn, const uint32_t *fr, unsigned frn, uint64_t deadline)
 {
     if (!range(p, sizeof(*p)) || !range(g, sizeof(*g)) || !range(f, sizeof(*f)) ||
         !disjoint(p, sizeof(*p), g, sizeof(*g)) || !disjoint(p, sizeof(*p), f, sizeof(*f)) ||
-        !disjoint(g, sizeof(*g), f, sizeof(*f)) || p->phase || g->serial || f->serial ||
-        g->paired || f->paired || g->queue != f->queue || g->epoch != f->epoch ||
+        !disjoint(g, sizeof(*g), f, sizeof(*f)) ||
+        !((!p->phase && !g->serial && !f->serial && !g->paired && !f->paired) ||
+          (p->geometry==g && p->fragment==f && pvr_cccb_pair_reusable(p))) ||
+        g->queue != f->queue || g->epoch != f->epoch ||
         g->ops.now != f->ops.now || g->context != f->context ||
         g->firmware_context > UINT32_MAX - 152 || g->firmware_context + 152 != f->firmware_context ||
         !begin_valid(g, gc, gn, gr, grn, deadline) || !begin_valid(f, fc, fn, fr, frn, deadline) ||

@@ -24,32 +24,58 @@ only background. This profile has no indices, instancing, depth/stencil,
 blending, textures or multisampling. Broader shader and graphics support remains
 required work.
 
-`pvr_gpu_service_draw(service, epoch, vertices, bytes, count, timeout, wait,
-ticket)` copies the complete input before enqueue. The epoch comes from the
+`pvr_gpu_service_draw_next(service, epoch, previous_frame, vertices, bytes,
+count, timeout, wait, ticket)` copies the complete input before enqueue.
+The epoch comes from the
 caller's OPEN reply. One scoped staging slot binds the copy to its client and
 ticket; queue refusal and consumed rejection release that slot. The privileged
 worker checks the current owner, epoch, native mappings and READY state again
-before accepting a draw. Invalid input does not change device backing.
+before accepting the first draw. Further draws require the matching completed
+previous frame. Invalid input does not change device backing or revoke prior
+copied output. The original `pvr_gpu_service_draw()` submits only frame one.
 
 The graphics owner constructs and publishes all program, interpolation,
 fragment-metadata, scissor and primitive state before OPEN. Runtime submission
 copies the vertices into its private page and updates the draw count. It
-publishes both changed pages through their EL1 mappings before the combined
-kick. Input and commands remain immutable for the submitted lifetime. Both
+poisons the output and restores its guards for each frame. It publishes every
+changed page through its EL1 mapping before the combined kick. Input and
+commands remain immutable for the submitted lifetime. Both
 acquired completion timelines precede output invalidation, guard checks and
 pixel copies. Guard checks protect the copied extent; they do not independently
 prove rasterization. Uncertain completion retains all owners.
 
-One draw is accepted per session. Existing `pvr_gpu_service_render_read()`
-returns 64 copied pixels per page after completion. CLOSE follows the normal
-reviewed shutdown path. Repeated draws and context disposal remain unsupported.
+Frames use increasing nonzero sequence numbers. Before overwriting input or
+output, the worker acquires both previous timelines and requires complete
+output copying. Accepting the next frame revokes service reads of the previous
+frame. `pvr_gpu_service_render_read_sequence()` returns 64 copied pixels only
+for the requested current frame after completion; stale reads return no pixels.
+Already returned copies belong to their callers. The legacy untagged read
+remains available. CLOSE follows the final completed frame and normal shutdown.
+
+The same geometry and fragment contexts retain their two 2 KiB command rings,
+read/write cursors and monotonic serials. They are formatted only before the
+first submission. A new paired submission requires the original accepted pair
+and both successful IDLE rings. Frame n sets both completion updates and the
+fragment dependency to n, and its geometry partial-render reference to n−1.
+The two existing render-target data records alternate between frames. Both job
+pointers and both cleanup references select the same record. CPU code preserves
+firmware-owned render-target state and cleanup counters. FIRST/LAST geometry
+flags and the background program clear each frame, including empty tiles.
+
+The maximum frame sequence is `UINT32_MAX/2`. With freshly constructed cleanup
+records, this conservatively bounds two cleanup references per complete frame
+below 32-bit wrap. Ticket and ring-serial wrap are also refused. A timeout or
+uncertain kick retains the context and allocations; it does not enable reuse.
+Context disposal and release remain unsupported.
 
 Build `apps/gpu-render` with `SUNSTONE_GPU_RUNTIME_DRAW=ON`,
 `SUNSTONE_GPU_SUPERVISED=ON` and `SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`,
 then select `sunstone-a733-gpu-draw-single-core`. The executable contains the
 trusted shader pair; caller-selected vertices do not change its bytes.
-`apps/gpu-render/draw.py` supplies `vertices()`, `sequence()` and `capture()`.
-The latter uses a coordinator-owned, identity-validated, locked device handle;
+`apps/gpu-render/draw.py` supplies `vertices()`, `frames()` and
+`capture_frames()`. The host copies every frame before submitting the next.
+The single-frame `sequence()` and `capture()` functions remain available.
+Capture uses a coordinator-owned, identity-validated, locked device handle;
 it does not discover or launch hardware. The private version-3 mailbox has
 SUBMIT, READ and CLOSE operations. Existing compute version-2 framing remains
 unchanged. Session and per-request deadlines bound partial uploads and work.
@@ -90,6 +116,18 @@ default jobs flush device caches before completion. CPU publication and acquired
 completion remain necessary. Physical qualification requires a known scene,
 copied background and interior colors, guard integrity and healthy shutdown;
 exact floating-point edge coverage is not assumed by software evidence.
+
+Repeated-frame evidence is retained in
+`~/.cache/sunstoneos/evidence/gpu-repeated-draw-20261019/`. Twelve changing
+frames exercise both retained ring wraps, alternating render-target records,
+new timelines, fresh output poisoning and sequence-tagged pixel copies before
+healthy CLOSE. Additional cases refuse stale frames, missing completion,
+substituted context and exhausted frame/ticket/serial counters while preserving
+prior output. Second-frame guard damage and an uncertain kick retain owners.
+The linked native application, fragmented USB framing and host consumer process
+twelve frames on one ELF. Pinned firmware-structure comparisons cover timeline
+values and render-target addresses. Compiler and shader evidence above is reused.
+GPU writes, firmware replies and transport effects remain modeled.
 
 ## Fixed clear profile
 
@@ -158,8 +196,8 @@ Each worker step has bounded memory access and observes the shared absolute
 request deadline before and after callbacks. An uncertain kick, queue fault,
 clock regression, missing completion, invalid pixel or damaged guard retains
 both ring owners and all native parents. Terminal faults prohibit further device
-access. This implementation admits one fixed render job per boot. Safe repeated
-submission and verified context disposal remain required.
+access. This profile admits one fixed clear per boot. Repeated fixed-clear
+submission and verified context disposal remain unsupported.
 
 ## Compiler and firmware references
 

@@ -15,7 +15,8 @@ enum pvr_render_service_error { PVR_RENDER_SERVICE_NO_ERROR, PVR_RENDER_SERVICE_
     PVR_RENDER_SERVICE_RESULT, PVR_RENDER_SERVICE_MEMORY, PVR_RENDER_SERVICE_RESET };
 /* Embedded in the actual native graphics owner. No arbitrary provider binds
  * this object. Every request is serialized by the privileged GPU service.
- * One fixed job per boot; fault or completion retains all native parents. */
+ * Fixed clear runs once; draw frames reuse only completed retained contexts.
+ * Fault or completion retains all native parents. */
 struct pvr_render_service {
     struct a733_gpu_graphics_memory *owner;
     struct pvr_cccb geometry, fragment;
@@ -23,10 +24,10 @@ struct pvr_render_service {
     struct pvr_render_job_image image;
     struct pvr_render_program_image programs;
     uint64_t epoch, deadline, last_now;
-    uint32_t phase, error, checked;
+    uint32_t phase, error, checked, sequence;
     atomic_uint draw_state; /* 0 free, 1 copying, 2 queued; scoped producer storage. */
     uint64_t draw_ticket,draw_epoch;
-    uint32_t draw_client,draw_count,draw_bytes,draw_accepted;
+    uint32_t draw_client,draw_count,draw_bytes,draw_accepted,draw_previous;
     unsigned char draw_copy[PVR_RENDER_DRAW_BYTES];
     /* Copied output becomes readable only at COMPLETE, after both timelines,
      * coherent reads, every pixel/guard and the final deadline observation. */
@@ -36,6 +37,8 @@ int pvr_render_service_begin(struct pvr_render_service *, uint64_t deadline);
 /* Worker only: validate the complete copied input before touching backing.
  * Return 1 accepted,0 invalid,-1 retained memory/submission failure. */
 int pvr_render_service_draw(struct pvr_render_service *,const void *,size_t,uint32_t,uint64_t deadline);
+int pvr_render_service_draw_next(struct pvr_render_service *,uint32_t previous,
+    const void *,size_t,uint32_t,uint64_t deadline);
 int pvr_render_service_poll(struct pvr_render_service *);
 void pvr_render_service_abort(struct pvr_render_service *, unsigned error);
 #endif

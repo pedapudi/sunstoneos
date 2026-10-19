@@ -7,10 +7,10 @@
 #include <string.h>
 static void put(unsigned char *p, uint64_t v, unsigned n)
 { for(unsigned i=0;i<n;i++) p[i]=(unsigned char)(v>>(i*8)); }
-int pvr_render_job_build(const struct pvr_render_program_image *p,
-    uint32_t hwrt, uint32_t gufo, uint32_t fufo, struct pvr_render_job_image *out)
+int pvr_render_job_build_frame(const struct pvr_render_program_image *p,
+    uint32_t hwrt,uint32_t gufo,uint32_t fufo,uint32_t sequence,struct pvr_render_job_image *out)
 {
-    if (!p || !out || (uintptr_t)p>UINTPTR_MAX-sizeof(*p) ||
+    if (!sequence || sequence>UINT32_MAX/2u || !p || !out || (uintptr_t)p>UINTPTR_MAX-sizeof(*p) ||
         (uintptr_t)out>UINTPTR_MAX-sizeof(*out) ||
         !((uintptr_t)p+sizeof(*p)<=(uintptr_t)out || (uintptr_t)out+sizeof(*out)<=(uintptr_t)p) ||
         (hwrt&63) || hwrt<0xc0000000u || hwrt>0xc0fffe80u ||
@@ -24,7 +24,7 @@ int pvr_render_job_build(const struct pvr_render_program_image *p,
     put(r.geometry+44,0x202,4); /* W clamp, fixed-point format one. */
     put(r.geometry+48,1u<<17,4); /* Complete on terminate; single layer stride zero. */
     put(r.geometry+80,11,4); /* FIRST, LAST, SINGLE_CORE. */
-    put(r.geometry+84,gufo,4); /* Partial-render reference remains zero. */
+    put(r.geometry+84,gufo,4);put(r.geometry+88,sequence-1,4);
     put(r.fragment+16,p->pixel_output,4);
     put(r.fragment+52,0x3f800000,4); /* Default depth one, no depth attachment. */
     put(r.fragment+56,0x300,4); /* Background tag and mask. */
@@ -39,8 +39,11 @@ int pvr_render_job_build(const struct pvr_render_program_image *p,
     }
     put(r.fragment+360,PVR_RENDER_BORDER_ADDRESS>>2,8);
     put(r.fragment+464,(1u<<3)|(1u<<26),4); /* MC1; prevent compute overlap. */
-    put(r.geometry_update,gufo,4);put(r.geometry_update+4,1,4);
-    put(r.fragment_fence,gufo,4);put(r.fragment_fence+4,1,4);
-    put(r.fragment_update,fufo,4);put(r.fragment_update+4,1,4);
+    put(r.geometry_update,gufo,4);put(r.geometry_update+4,sequence,4);
+    put(r.fragment_fence,gufo,4);put(r.fragment_fence+4,sequence,4);
+    put(r.fragment_update,fufo,4);put(r.fragment_update+4,sequence,4);
     *out=r;return 1;
 }
+int pvr_render_job_build(const struct pvr_render_program_image *p,
+    uint32_t hwrt,uint32_t gufo,uint32_t fufo,struct pvr_render_job_image *out)
+{ return pvr_render_job_build_frame(p,hwrt,gufo,fufo,1,out); }

@@ -99,20 +99,36 @@ int pvr_render_service_begin(struct pvr_render_service *s,uint64_t deadline)
         failed(s,PVR_RENDER_SERVICE_QUEUE);return 0;
     }
     s->phase=PVR_RENDER_SERVICE_FORMAT_GEOMETRY;
+    s->sequence=1;
     if(!now(s,&clock) || clock>=deadline){failed(s,PVR_RENDER_SERVICE_CLOCK);return 0;}
     return 1;
 }
-int pvr_render_service_draw(struct pvr_render_service *s,const void *vertices,size_t bytes,uint32_t count,uint64_t deadline)
+int pvr_render_service_draw_next(struct pvr_render_service *s,uint32_t previous,
+    const void *vertices,size_t bytes,uint32_t count,uint64_t deadline)
 {
-    if(!s || !s->owner || s->owner->draw!=1 || s->phase!=PVR_RENDER_SERVICE_READY ||
-        s->draw_accepted || !pvr_render_draw_vertices_valid(vertices,bytes,count))return 0;
+    if(!s || !s->owner || s->owner->draw!=1 || previous!=s->sequence || previous>=PVR_RENDER_DRAW_MAX_FRAMES ||
+        (previous ? (s->phase!=PVR_RENDER_SERVICE_COMPLETE || s->checked!=PVR_RENDER_OUTPUT_BYTES ||
+            s->pair.geometry!=&s->geometry || s->pair.fragment!=&s->fragment ||
+            s->geometry.queue!=&s->owner->service->queue || s->fragment.queue!=&s->owner->service->queue ||
+            s->geometry.context!=s || s->fragment.context!=s ||
+            s->geometry.firmware_context!=A733_GPU_RENDER_FW || s->fragment.firmware_context!=A733_GPU_RENDER_FW+152 ||
+            !pvr_cccb_pair_reusable(&s->pair) || s->geometry.serial!=previous) :
+            (s->phase!=PVR_RENDER_SERVICE_READY || s->draw_accepted)) ||
+        !pvr_render_draw_vertices_valid(vertices,bytes,count))return 0;
     s->epoch=s->owner->service->epoch;
     uint64_t clock;
     if(!admitted(s) || !now(s,&clock) || deadline<=clock ||
         pvr_compute_service_admit_mode(s->owner->service->config.compute)!=1)return 0;
     uintptr_t timelines=a733_gpu_graphics_memory_render_shared(s->owner)+1408;
-    if(!mapped(timelines,8,0x44) || __atomic_load_n((uint32_t *)timelines,__ATOMIC_ACQUIRE) ||
-        __atomic_load_n((uint32_t *)(timelines+4),__ATOMIC_ACQUIRE))return 0;
+    if(!mapped(timelines,8,0x44))return 0;
+    uint32_t fragment=__atomic_load_n((uint32_t *)(timelines+4),__ATOMIC_ACQUIRE);
+    uint32_t geometry=__atomic_load_n((uint32_t *)timelines,__ATOMIC_ACQUIRE);
+    if(fragment!=previous || geometry!=previous)return 0;
+    uint32_t sequence=previous+1;
+    struct pvr_render_job_image image;
+    uint32_t hwrt=s->owner->target.data_firmware[(sequence-1)&1];
+    if(!pvr_render_job_build_frame(&s->programs,hwrt,A733_GPU_RENDER_FW+1408,A733_GPU_RENDER_FW+1412,sequence,&image))return 0;
+    uint64_t scissor=PVR_RENDER_DRAW_SCISSOR;memcpy(image.fragment+112,&scissor,8);
     uintptr_t payload=s->owner->payload_extent.cpu+s->owner->render.payload_bytes;
     uintptr_t input=payload+PVR_RENDER_PROGRAM_BYTES+4096u;
     uintptr_t commands=payload+8192+0xf000;
@@ -123,11 +139,28 @@ int pvr_render_service_draw(struct pvr_render_service *s,const void *vertices,si
      * this input page and the VDM count; publish both through their EL1 mapping. */
     if(!aarch64_device_cache(AARCH64_CACHE_CLEAN,input,4096) ||
         !aarch64_device_cache(AARCH64_CACHE_CLEAN,commands,4096))return failed(s,PVR_RENDER_SERVICE_MEMORY);
+    uintptr_t output=payload+8192+PVR_RENDER_OUTPUT_OFFSET;
+    for(unsigned page=0;page<5;++page) {
+        if(!now(s,&clock) || clock>=deadline)return failed(s,PVR_RENDER_SERVICE_CLOCK);
+        uintptr_t at=output+page*4096u;
+        if(!mapped(at,4096,0xff))return failed(s,PVR_RENDER_SERVICE_MEMORY);
+        for(unsigned i=0;i<4096;i+=4) {
+            unsigned offset=page*4096u+i;
+            uint32_t value=offset<64 || offset>=PVR_RENDER_OUTPUT_BYTES-64?PVR_RENDER_GUARD:PVR_RENDER_POISON;
+            memcpy((void *)(at+i),&value,4);
+        }
+        if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,at,4096))return failed(s,PVR_RENDER_SERVICE_MEMORY);
+    }
     __asm__ volatile("dsb sy":::"memory");
     s->draw_accepted=1;
-    if(!pvr_render_service_begin(s,deadline))return failed(s,PVR_RENDER_SERVICE_ADMISSION);
+    s->image=image;s->checked=0;
+    if(!previous) {
+        if(!pvr_render_service_begin(s,deadline))return failed(s,PVR_RENDER_SERVICE_ADMISSION);
+    } else {s->sequence=sequence;s->deadline=deadline;s->phase=PVR_RENDER_SERVICE_SUBMIT;}
     return 1;
 }
+int pvr_render_service_draw(struct pvr_render_service *s,const void *v,size_t bytes,uint32_t count,uint64_t deadline)
+{ return pvr_render_service_draw_next(s,0,v,bytes,count,deadline); }
 int pvr_render_service_poll(struct pvr_render_service *s)
 {
     if(!s || s->phase==PVR_RENDER_SERVICE_FAILED)return -1;
@@ -145,15 +178,15 @@ int pvr_render_service_poll(struct pvr_render_service *s)
         break;
     }
     case PVR_RENDER_SERVICE_SUBMIT:
-        if(!s->pair.phase) {
+        if(!s->pair.phase || (s->pair.phase==3 && s->geometry.serial<s->sequence)) {
             struct pvr_cccb_command geom[]={
-                {PVR_CCB_MAGIC|PVR_CCCB_TASK|201,112,1,1,s->image.geometry},
+                {PVR_CCB_MAGIC|PVR_CCCB_TASK|201,112,s->sequence,s->sequence,s->image.geometry},
                 {PVR_CCB_MAGIC|213,8,0,0,s->image.geometry_update}};
             struct pvr_cccb_command frag[]={
                 {PVR_CCB_MAGIC|215,8,0,0,s->image.fragment_fence},
-                {PVR_CCB_MAGIC|PVR_CCCB_TASK|203,480,1,1,s->image.fragment},
+                {PVR_CCB_MAGIC|PVR_CCCB_TASK|203,480,s->sequence,s->sequence,s->image.fragment},
                 {PVR_CCB_MAGIC|213,8,0,0,s->image.fragment_update}};
-            uint32_t cleanup=s->owner->target.data_firmware[0]+320;
+            uint32_t cleanup=s->owner->target.data_firmware[(s->sequence-1)&1]+320;
             if(!pvr_cccb_pair_begin(&s->pair,&s->geometry,&s->fragment,geom,2,frag,3,&cleanup,1,&cleanup,1,s->deadline))
                 return failed(s,PVR_RENDER_SERVICE_QUEUE);
         } else {
@@ -169,8 +202,8 @@ int pvr_render_service_poll(struct pvr_render_service *s)
          * The acquire orders the subsequent prerequisite timeline read. */
         uint32_t b=__atomic_load_n((uint32_t *)(shared+4),__ATOMIC_ACQUIRE);
         uint32_t a=__atomic_load_n((uint32_t *)shared,__ATOMIC_ACQUIRE);
-        if(a>1 || b>1 || (b && !a))return failed(s,PVR_RENDER_SERVICE_TIMELINE);
-        if(a==1 && b==1){s->phase=PVR_RENDER_SERVICE_INVALIDATE;s->checked=0;}
+        if(a>s->sequence || b>s->sequence || b>a)return failed(s,PVR_RENDER_SERVICE_TIMELINE);
+        if(a==s->sequence && b==s->sequence){s->phase=PVR_RENDER_SERVICE_INVALIDATE;s->checked=0;}
         break;
     }
     case PVR_RENDER_SERVICE_INVALIDATE: {

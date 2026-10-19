@@ -111,7 +111,7 @@ static void runtime_draw(void)
         }
         if(app.runtime_operation==3)return;
         uint64_t ticket;struct pvr_gpu_service_reply r;
-        int sent=pvr_gpu_service_draw(&app.service,app.last.epoch,app.runtime_input,app.runtime_bytes,
+        int sent=pvr_gpu_service_draw_next(&app.service,app.last.epoch,app.runtime_expected,app.runtime_input,app.runtime_bytes,
             app.runtime_bytes/sizeof(struct pvr_render_vertex),1000000,1,&ticket);
         if(sent) {
             while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
@@ -119,16 +119,18 @@ static void runtime_draw(void)
             sent=r.result==PVR_GPU_SERVICE_OK;
         }
         if(sent) {
-            atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
+            uint32_t frame=r.render_sequence;
+            if(frame!=app.runtime_expected+1)retained();
+            atomic_store_explicit(&app.runtime_sequence,frame,memory_order_release);
             while(r.render_phase!=PVR_RENDER_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
             for(unsigned first=0;first<4096;first+=64) {
-                if(!pvr_gpu_service_render_read(&app.service,first,1,&ticket))retained();
+                if(!pvr_gpu_service_render_read_sequence(&app.service,frame,first,1,&ticket))retained();
                 while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
-                if(r.result!=PVR_GPU_SERVICE_OK || r.render_first_pixel!=first || r.render_pixel_count!=64)retained();
+                if(r.result!=PVR_GPU_SERVICE_OK || r.render_sequence!=frame || r.render_first_pixel!=first || r.render_pixel_count!=64)retained();
                 memcpy(app.pixels+first,r.render_pixels,256);
             }
         }
-        atomic_store_explicit(&app.result,sent?1:4,memory_order_release);
+        atomic_store_explicit(&app.result,sent || atomic_load_explicit(&app.runtime_sequence,memory_order_acquire)?1:4,memory_order_release);
         atomic_store_explicit(&app.runtime_state,0,memory_order_release);
     }
 }
