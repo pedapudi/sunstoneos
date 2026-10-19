@@ -14,7 +14,9 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        !present(s->qualification,32)||!present(s->wiring,32)||!present(s->memory,32)||
        !present(s->recovery,32)||memcmp(s->qualification,s->recovery,32)||
        s->reserved0||s->reserved_workload||s->workload>
-#ifdef SUNSTONE_BOARD_SUPERVISED
+#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB2_DUAL)
+       4
+#elif defined(SUNSTONE_BOARD_SUPERVISED)
        3
 #else
        1

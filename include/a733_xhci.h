@@ -9,7 +9,8 @@
 #define A733_XHCI_RING_TRBS 16u
 #define A733_XHCI_EVENT_TRBS 32u
 #define A733_XHCI_ENDPOINTS 3u
-#define A733_XHCI_DEVICES 2u
+#define A733_XHCI_DEVICES 3u
+#define A733_XHCI_DMA_ENDPOINTS 7u
 
 enum a733_xhci_result { A733_XHCI_PENDING,A733_XHCI_READY,A733_XHCI_BUSY,
     A733_XHCI_INVALID,A733_XHCI_RETAINED };
@@ -40,7 +41,7 @@ struct a733_xhci_endpoint {
     unsigned number,address,packet,index,cycle,opened,configured,pending;
     unsigned kind,direction,length,aborted,transfer_type,interval; /* pending:0 idle,1 queued,2 on ring. */
 };
-/* One root device and one child behind an admitted HS hub. Each retains its
+/* One root device and up to two children behind an admitted HS hub retain
  * own EP0, contexts and data rings; command/event rings remain controller-owned. */
 struct a733_xhci_device {
     uint8_t *input,*device;
@@ -71,7 +72,7 @@ struct a733_xhci {
     unsigned phase,failed,announced,removed,operational,runtime,doorbell;
     unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
     unsigned command_index,command_cycle,event_index,event_cycle,command_kind,command_device,default_device;
-    unsigned port_reset,connected;
+    unsigned port_reset,connected,extra_endpoint_owner;
     unsigned slot_type,publication,notifying,port_power_control;
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;
@@ -83,7 +84,7 @@ struct a733_xhci {
  * lease; init validates it and permanently transfers the parent to DEVICE.
  * Capability limits are observed before populating any hardware context.
  * Initial support uses standard USB2 protocol speed IDs, one direct high-speed
- * device, directly attached FS/LS HID, or one HS hub and one downstream leaf.
+ * device, directly attached FS/LS HID, or one HS hub with the admitted leaves.
  * Streams, deeper hubs and isochronous endpoints remain unsupported.
  * Callbacks are bounded and non-reentrant; notice may enqueue a notification
  * but must not call any core API. All scalar offsets are relative to xHCI.

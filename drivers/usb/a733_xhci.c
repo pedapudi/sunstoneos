@@ -89,18 +89,25 @@ static int layout(struct a733_xhci *x)
     x->erst=p+12288;x->erst_pa=base+12288;
     x->scratch=p+12352;
     put64(x->erst,x->event_pa);put32(x->erst+8,A733_XHCI_EVENT_TRBS);
-    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+81920+4096*i);}
+    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+98304+4096*i);}
     x->command_cycle=x->event_cycle=1;
-    /* Six private endpoint rings/bounce pages, two input/output context pairs
-     * and eight scratch pages occupy112KiB, within the retained128KiB parent. */
+    /* Three context pairs, seven ring/bounce pairs and eight scratch pages
+     * occupy exactly128KiB. EP0+one data credit belong to each device. The
+     * seventh credit is reserved for the sole admitted MSC second bulk pipe. */
+    _Static_assert(16384+3*8192==40960,"context pages");
+    _Static_assert(40960+7*4096==69632,"ring pages");
+    _Static_assert(69632+7*4096==98304,"bounce pages");
+    _Static_assert(98304+8*4096==A733_XHCI_MEMORY_BYTES,"retained parent extent");
+    _Static_assert(A733_XHCI_RING_TRBS*sizeof(struct a733_xhci_trb)<=4096,"ring extent");
+    _Static_assert(A733_XHCI_TRANSFER_BYTES<=4096,"bounce extent");
     for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
         struct a733_xhci_device *d=&x->devices[j];
         d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
         d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
-        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
-            unsigned n=j*A733_XHCI_ENDPOINTS+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
-            e->ring=(void *)(p+32768+4096*n);e->ring_pa=base+32768+4096*n;
-            e->bounce=p+57344+4096*n;e->bounce_pa=base+57344+4096*n;e->cycle=1;
+        for(unsigned i=0;i<2;++i){
+            unsigned n=j*2+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
+            e->ring=(void *)(p+40960+4096*n);e->ring_pa=base+40960+4096*n;
+            e->bounce=p+69632+4096*n;e->bounce_pa=base+69632+4096*n;e->cycle=1;
         }
     }
     return barrier(x);
@@ -389,7 +396,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
     case P_ERST_BASE:if(!wr64(x,x->runtime+0x30,x->erst_pa))goto failed;x->phase=P_ERDP;break;
     case P_ERDP:if(!wr64(x,x->runtime+0x38,x->event_pa))goto failed;x->phase=P_IMAN;break;
     case P_IMAN:if(!wr(x,x->runtime+0x20,1))goto failed;x->phase=P_CONFIG;break;
-    case P_CONFIG:if(!wr(x,x->operational+0x38,x->cap_slots<2?1:2))goto failed;x->phase=P_RUN;break;
+    case P_CONFIG:if(!wr(x,x->operational+0x38,x->cap_slots<A733_XHCI_DEVICES?x->cap_slots:A733_XHCI_DEVICES))goto failed;x->phase=P_RUN;break;
     case P_RUN:if(!wr(x,x->operational,1))goto failed;x->phase=P_RUNNING;break;
     case P_RUNNING:
         if(!rd(x,x->operational+4,&v)||(v&(BIT(2)|BIT(12))))goto failed;if(v&1)break;x->phase=P_POWER;break;
@@ -436,10 +443,20 @@ int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_numbe
 {
     if(!owner(x)||x->failed||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>3||
        deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
-    struct a733_xhci_device *hub=&x->devices[0],*d=&x->devices[1];
+    struct a733_xhci_device *hub=&x->devices[0];
     if(hub->address!=parent||!hub->hub_configured||port_number>hub->hub_ports||hub->speed!=3||!hub->zero_retired)return 0;
-    if(d->port_ready)return x->default_device==1&&!d->zero_retired&&d->parent==hub->slot&&d->parent_port==port_number&&d->speed==speed;
-    d->parent=hub->slot;d->parent_port=port_number;d->speed=speed;d->deadline=deadline;d->port_ready=1;x->default_device=1;return 1;
+    for(unsigned j=1;j<A733_XHCI_DEVICES&&j<x->cap_slots;++j){
+        struct a733_xhci_device *d=&x->devices[j];
+        if(d->port_ready){
+            if(d->parent_port!=port_number)continue;
+            return x->default_device==j&&!d->zero_retired&&d->parent==hub->slot&&d->speed==speed;
+        }
+        /* TinyUSB serializes default-address enumeration. A live predecessor
+         * must retire address0 before another child can claim that identity. */
+        if(!x->devices[x->default_device].zero_retired)return 0;
+        d->parent=hub->slot;d->parent_port=port_number;d->speed=speed;d->deadline=deadline;d->port_ready=1;x->default_device=j;return 1;
+    }
+    return 0;
 }
 int a733_xhci_mark_hub(struct a733_xhci *x,unsigned address)
 {
@@ -491,7 +508,16 @@ int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned typ
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened) {
-        e=&d->endpoints[i];e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
+        e=&d->endpoints[i];
+        if(i==2){
+            unsigned owner=(unsigned)(d-x->devices)+1;
+            if(x->extra_endpoint_owner)return 0;
+            x->extra_endpoint_owner=owner;
+            uint8_t *p=(void *)x->extent.cpu;uint64_t base=x->extent.physical;
+            e->ring=(void *)(p+65536);e->ring_pa=base+65536;
+            e->bounce=p+94208;e->bounce_pa=base+94208;e->cycle=1;
+        }
+        e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
     return 0;
 }
@@ -507,7 +533,7 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;
-    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened){
+    for(unsigned i=1;i<2;++i)if(!d->endpoints[i].opened){
         e=&d->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
         e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;return 1;
     }

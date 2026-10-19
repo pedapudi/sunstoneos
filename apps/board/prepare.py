@@ -71,7 +71,7 @@ def session_check(raw,usb_reference_modes=(1,2)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
     require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
-    workload=struct.unpack_from('<I',raw,400)[0];require(workload<=3,'Unsupported fixed workload.')
+    workload=struct.unpack_from('<I',raw,400)[0];require(workload<=4 and (workload!=4 or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
     return workload
 
 def profile_spans(data,session,payload_spans=None):
@@ -166,6 +166,7 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     execution_profile=image_manifest_check(manifest,image_data)
     admission=json.loads(admission_data);evidence_cache=validate_admission(admission,image_hash,template_hash,execution_profile=execution_profile)
     raw=bytearray(template_data);workload=session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))
+    require(workload!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
     require(not workload&1 or admission.get('radio_ddr') is not None,'Radio profile/firmware DDR reservation missing.')
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -222,6 +223,7 @@ def validate_bundle(bundle):
     execution_profile=image_manifest_check(manifest,(bundle/'image.elf').read_bytes())
     require(p.get('execution_profile','board-supervised-v2')==execution_profile,'Board execution profile changed.')
     validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True,execution_profile)
+    require(p['workload']!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
     require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
     raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
     derived=bytearray((bundle/'session-template.bin').read_bytes())

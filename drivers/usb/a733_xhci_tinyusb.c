@@ -4,6 +4,10 @@
 #include "host/hcd.h"
 #include <string.h>
 static struct a733_usb2_native *host;
+static void mounted_update(void)
+{
+    host->mounted=host->dual_leaf?(host->msc_mounted&&host->hid_mounted):(host->msc_mounted||host->hid_mounted);
+}
 static uint32_t le32(const uint8_t *p)
 {return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static int owner(void)
@@ -149,9 +153,16 @@ static int control_response(const struct a733_xhci_notice *e)
             if(bytes!=4||!port||port>hub->ports||status&~0x1f1fu||changes&~31u||
                status&(8u|4u|2048u)||changes&8u||!(status&256u)||
                (status&1536u)==1536u)return 0;
-            if(status&1){if(hub->selected_port&&hub->selected_port!=port)return 0;hub->selected_port=port;}
-            else if(hub->selected_port==port)return 0;
-            if(hub->selected_port==port&&n->mounted&&(!(status&2)||(changes&2)))return 0;
+            if(status&1){
+                if(!(hub->connected_mask&(1u<<port))){
+                    unsigned mask=hub->connected_mask;
+                    if(mask&&(!n->dual_leaf||(mask&(mask-1))))return 0;
+                    hub->connected_mask|=1u<<port;hub->selected_port=port;
+                }
+            }else if(hub->connected_mask&(1u<<port))return 0;
+            for(unsigned j=1;j<A733_XHCI_DEVICES;++j)
+                if(n->core.devices[j].parent_port==port&&n->core.devices[j].zero_retired&&
+                   (!(status&2)||(changes&2)))return 0;
             return 1;
         }
     }
@@ -199,15 +210,20 @@ static int control_response(const struct a733_xhci_notice *e)
                !le16(p+25)||le16(p+25)>256||p[27]!=7||p[28]!=5||
                ep&~0x8fu||!(ep&128)||!(ep&15)||p[30]!=3||!packet||
                packet>(device->speed==2?8u:64u)||!interval||interval>(device->speed==3?16u:255u))return 0;
-            desc->kind=n->kind=A733_USB2_DEVICE_HID;n->hid.endpoint=ep;n->hid.packet=packet;n->hid.interval=interval;
+            if(n->hid_seen||(n->msc_seen&&!n->dual_leaf))return 0;
+            n->hid_seen=1;n->hid_address=e->address;
+            desc->kind=A733_USB2_DEVICE_HID;n->kind=n->msc_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_HID;n->hid.endpoint=ep;n->hid.packet=packet;n->hid.interval=interval;
             n->hid.subclass=p[15];n->hid.protocol=p[16];n->hid.descriptor_bytes=le16(p+25);return 1;
         }
         if(device->speed!=3||p[13]!=2||p[14]!=8||p[15]!=6||p[16]!=0x50)return 0;
         unsigned dirs=0,seen=0;
         for(unsigned at=18;at<32;at+=7){unsigned ep=p[at+2];
             if(p[at]!=7||p[at+1]!=5||(ep&0x70)||!(ep&15)||p[at+3]!=2||le16(p+at+4)!=512)return 0;
+            if(ep&128)n->msc_in=ep;else n->msc_out=ep;
             unsigned bit=1u<<((ep&15)+((ep&128)?16:0));if(seen&bit)return 0;seen|=bit;dirs|=(ep&128)?2:1;}
-        if(dirs!=3)return 0;desc->kind=n->kind=A733_USB2_DEVICE_MSC;return 1;
+        if(dirs!=3||n->msc_seen||(n->hid_seen&&!n->dual_leaf))return 0;
+        n->msc_seen=1;n->address=e->address;desc->kind=A733_USB2_DEVICE_MSC;
+        n->kind=n->hid_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC;return 1;
     }
     if(s[3]==3){
         if(p[0]<2||(p[0]&1)||(!s[2]&&p[0]<4))return 0;
@@ -233,11 +249,11 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
                    !h->status_buffer||event->result||event->bytes!=1||
                    (h->status_buffer[0]&~((2u<<h->ports)-1))){lost();return;}
                 h->status_requested=0;h->status_buffer=NULL;
-            }else if(n->kind==A733_USB2_DEVICE_HID){
+            }else if(n->hid_seen&&event->address==n->hid_address){
                 if(!n->hid.pending||n->hid.event_seen||event->endpoint!=n->hid.endpoint||
-                   event->address!=n->address||event->result||event->bytes>n->hid.requested){lost();return;}
+                   event->address!=n->hid_address||event->result||event->bytes>n->hid.requested){lost();return;}
                 n->hid.event_seen=1;n->hid.event_bytes=event->bytes;
-            }else if(!bot_complete(event)){lost();return;}
+            }else if(!n->msc_seen||event->address!=n->address||!bot_complete(event)){lost();return;}
         }else if(!control_response(event)){lost();return;}
         hcd_event_xfer_complete((uint8_t)event->address,(uint8_t)event->endpoint,event->bytes,
             event->result==0?XFER_RESULT_SUCCESS:event->result==1?XFER_RESULT_STALLED:XFER_RESULT_FAILED,false);
@@ -275,7 +291,7 @@ bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
     if(!address&&host->hub.present&&host->core.devices[0].zero_retired){
         tuh_bus_info_t bus;
         if(!tuh_bus_info_get(0,&bus)||bus.rhport||bus.hub_addr!=host->hub.address||
-           bus.hub_port!=host->hub.selected_port||!bus.hub_port||
+           !bus.hub_port||bus.hub_port>7||!(host->hub.connected_mask&(1u<<bus.hub_port))||
            !a733_xhci_bind_child(&host->core,bus.hub_addr,bus.hub_port,
              bus.speed==TUSB_SPEED_HIGH?3:bus.speed==TUSB_SPEED_LOW?2:bus.speed==TUSB_SPEED_FULL?1:0,d)){lost();return false;}
     }
@@ -283,7 +299,7 @@ bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
         if(host->hub.present&&address==host->hub.address)
             return e->bEndpointAddress==host->hub.endpoint&&tu_unaligned_read16(&e->wMaxPacketSize)==host->hub.packet&&
               e->bInterval==host->hub.interval&&a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hub.packet,e->bInterval,d);
-        return host->kind==A733_USB2_DEVICE_HID&&e->bEndpointAddress==host->hid.endpoint&&
+        return host->hid_seen&&address==host->hid_address&&e->bEndpointAddress==host->hid.endpoint&&
           tu_unaligned_read16(&e->wMaxPacketSize)==host->hid.packet&&e->bInterval==host->hid.interval&&
           a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hid.packet,e->bInterval,d);
     }
@@ -339,10 +355,10 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
             hub->status_requested=hub->status_deferred=1;hub->status_buffer=buffer;hub->status_bytes=bytes;
             return true;
         }
-        if(host->kind==A733_USB2_DEVICE_HID){
+        if(host->hid_seen&&address==host->hid_address){
             if(!host->hid.pending||host->hid.pending_buffer||ep!=host->hid.endpoint||bytes!=host->hid.packet||!buffer){lost();return false;}
             host->hid.pending_buffer=buffer;host->hid.requested=bytes;
-        }else if(!bot_submit(ep,buffer,bytes)){lost();return false;}
+        }else if(!host->msc_seen||address!=host->address||!bot_submit(ep,buffer,bytes)){lost();return false;}
     }
     int ok=a733_xhci_transfer(&host->core,address,ep,buffer,bytes,d);
     if(!ok&&(ep&15))lost();
@@ -358,10 +374,10 @@ bool hcd_dcache_invalidate(const void *p,uint32_t z){(void)p;(void)z;return owne
 bool hcd_dcache_clean_invalidate(const void *p,uint32_t z){(void)p;(void)z;return owner();}
 void tuh_msc_mount_cb(uint8_t address)
 {
-    if(!owner()||host->kind!=A733_USB2_DEVICE_MSC||host->mounted||host->bot_phase||host->bot_stage){lost();return;}
+    if(!owner()||!host->msc_seen||address!=host->address||host->msc_mounted||host->bot_phase||host->bot_stage){lost();return;}
     host->blocks=tuh_msc_get_block_count(address,0);host->block_bytes=tuh_msc_get_block_size(address,0);
     if(!host->blocks||host->block_bytes!=512||host->bot_status){lost();return;}
-    host->address=address;host->mounted=1;
+    host->address=address;host->msc_mounted=1;mounted_update();
 }
 void tuh_msc_umount_cb(uint8_t address){(void)address;lost();}
 static bool read_complete(uint8_t address,const tuh_msc_complete_data_t *d)
@@ -373,7 +389,7 @@ static bool read_complete(uint8_t address,const tuh_msc_complete_data_t *d)
 }
 int a733_usb2_read_sector(struct a733_usb2_native *n,uint32_t lba,uint64_t d)
 {
-    uint64_t now;if(n!=host||!clock_now(&now)||!n->mounted||n->kind!=A733_USB2_DEVICE_MSC||n->read_pending||n->read_complete||
+    uint64_t now;if(n!=host||!clock_now(&now)||!n->msc_mounted||n->read_pending||n->read_complete||
         n->read_failed||lba>=n->blocks||d<=now||d>n->platform.config.lifetime_deadline)return 0;
     if(n->core.ops.live(n->core.context,n->core.generation,d)!=1)return 0;
     n->read_deadline=d;n->read_pending=1;
@@ -393,11 +409,11 @@ int a733_usb2_read_result(struct a733_usb2_native *n,uint8_t out[512])
 void tuh_hid_mount_cb(uint8_t address,uint8_t instance,const uint8_t *descriptor,uint16_t bytes)
 {
     uint64_t now;
-    if(!owner()||host->kind!=A733_USB2_DEVICE_HID||host->mounted||instance||
+    if(!owner()||!host->hid_seen||address!=host->hid_address||host->hid_mounted||instance||
        !a733_xhci_device_speed(&host->core,address)||!descriptor||bytes!=host->hid.descriptor_bytes||
        !bytes||bytes>sizeof(host->hid.descriptor)||!clock_now(&now)||
        host->core.ops.live(host->core.context,host->core.generation,host->platform.config.deadline)!=1){lost();return;}
-    memcpy(host->hid.descriptor,descriptor,bytes);host->address=address;host->mounted=1;
+    memcpy(host->hid.descriptor,descriptor,bytes);if(!host->dual_leaf)host->address=address;host->hid_mounted=1;mounted_update();
 }
 void tuh_hid_umount_cb(uint8_t address,uint8_t instance)
 {(void)address;(void)instance;lost();}
@@ -407,7 +423,7 @@ void tuh_hid_report_received_cb(uint8_t address,uint8_t instance,const uint8_t *
     uint64_t now;struct a733_usb2_hid *h=&host->hid;
     /* Pinned TinyUSB ignores result in hidh_xfer_cb. Only the HCD's validated
      * successful event may reach this callback, including actual short/ZLP. */
-    if(!owner()||host->kind!=A733_USB2_DEVICE_HID||address!=host->address||instance||
+    if(!owner()||!host->hid_mounted||address!=host->hid_address||instance||
        !h->pending||h->complete||!h->event_seen||report!=h->pending_buffer||
        bytes!=h->event_bytes||bytes>sizeof(h->copied)||h->sequence==UINT64_MAX||
        !clock_now(&now)||now>=h->deadline||
@@ -420,24 +436,24 @@ enum a733_usb2_device_kind a733_usb2_device_kind(struct a733_usb2_native *n)
 int a733_usb2_hid_receive(struct a733_usb2_native *n,uint64_t d)
 {
     uint64_t now;
-    if(n!=host||!clock_now(&now)||!n->mounted||n->kind!=A733_USB2_DEVICE_HID||
+    if(n!=host||!clock_now(&now)||!n->hid_mounted||
        n->hid.pending||n->hid.complete||d<=now||d>n->platform.config.lifetime_deadline)return 0;
     if(n->core.ops.live(n->core.context,n->core.generation,d)!=1)return 0;
     n->hid.deadline=d;n->hid.pending=1;n->hid.event_seen=0;n->hid.event_bytes=0;
-    if(!tuh_hid_receive_report((uint8_t)n->address,0)){lost();return 0;}return 1;
+    if(!tuh_hid_receive_report((uint8_t)n->hid_address,0)){lost();return 0;}return 1;
 }
 int a733_usb2_hid_result(struct a733_usb2_native *n,struct a733_usb2_hid_report *out)
 {
     uint64_t now;
-    if(n!=host||!clock_now(&now)||n->kind!=A733_USB2_DEVICE_HID)return -1;
+    if(n!=host||!clock_now(&now)||!n->hid_mounted)return -1;
     if(!n->hid.pending||!n->hid.complete)return 0;
     if(now>=n->hid.deadline){lost();return -1;}
     if(!out||!a733_usb2_platform_outside(&n->platform,out,sizeof(*out)))return -1;
     int live=n->core.ops.live(n->core.context,n->core.generation,n->hid.deadline);
     if(live<0){lost();return -1;}if(!live)return 0;
     struct a733_usb2_hid_report value={.generation=n->core.generation,.sequence=n->hid.sequence,
-      .bytes=n->hid.event_bytes,.address=(uint8_t)n->address,.interface=0,.protocol=(uint8_t)n->hid.protocol,
-      .endpoint=(uint8_t)n->hid.endpoint,.speed=(uint8_t)a733_xhci_device_speed(&n->core,n->address)};
+      .bytes=n->hid.event_bytes,.address=(uint8_t)n->hid_address,.interface=0,.protocol=(uint8_t)n->hid.protocol,
+      .endpoint=(uint8_t)n->hid.endpoint,.speed=(uint8_t)a733_xhci_device_speed(&n->core,n->hid_address)};
     memcpy(value.data,n->hid.copied,value.bytes);
     if(!clock_now(&now)||now>=n->hid.deadline||
        n->core.ops.live(n->core.context,n->core.generation,n->hid.deadline)!=1){lost();return -1;}

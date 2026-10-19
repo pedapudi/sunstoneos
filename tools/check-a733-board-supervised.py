@@ -56,14 +56,14 @@ def capture(exchange, session, profile, evidence, record, save, deadline,
             record['board_result'] = 'observed-failure'
             save()
             return result
-        host_done = result['usb_state'] == (1 if workload < 2 else 3)
+        host_done = result['usb_state'] == (1 if workload < 2 or workload == 4 else 3)
         radio_done = result['radio_state'] == (2 if workload & 1 else 0)
         if host_done and radio_done:
             if sector is not None:
                 sector_path = evidence / 'sector.bin'
                 supervisor.durable_frame(sector_path, sector)
                 record['copied_sector'] = {'path': sector_path.name, 'sha256': digest(sector_path)}
-            if result.get('kind')=='hid-input':
+            if result.get('kind') in ('hid-input','storage-and-hid'):
                 hid_path=evidence/'hid-input.json'
                 supervisor.durable_frame(hid_path,(json.dumps(result,sort_keys=True)+'\n').encode())
                 record['copied_hid_input']={'path':hid_path.name,'sha256':digest(hid_path)}
@@ -91,7 +91,7 @@ def capture_device(device, same, deadline, session, profile, evidence, record, s
         same()
         remaining = int((deadline - time.monotonic()) * 1000)
         require(remaining > 0, 'Board capture deadline expired after write.')
-        return bytes(device.read(0x81, 584, timeout=min(timeout, remaining)))
+        return bytes(device.read(0x81, 1160, timeout=min(timeout, remaining)))
     return capture(exchange, session, profile, evidence, record, save, deadline)
 
 

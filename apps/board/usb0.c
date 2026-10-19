@@ -36,9 +36,9 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 
 /* One zero-byte request. Header: six LEu32 fields(magic,version,USB state,
  * USB bytes,radio state,verified radio bytes), LEu64 epoch/generation, then
- * profile SHA256. Only USB state1 carries512 copied bytes after the72-byte
- * header. Radio state2 follows full comparison and successful TCP CLOSE. */
-static uint8_t response[584];
+ * profile SHA256. Only USB state1 carries a copied payload:512 bytes for a
+ * single result or1088 for combined workload4 after the72-byte header. Radio state2 follows full comparison and successful TCP CLOSE. */
+static uint8_t response[1160];
 static unsigned response_bytes,response_sent,response_transferred;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 void tud_mount_cb(void){}
@@ -59,7 +59,9 @@ static void exchange(void)
     unsigned result=atomic_load_explicit(&board.result,memory_order_acquire);
     put32(response,0x52414f42);
     /* Acquiring result publishes immutable host kind and copied backing. */
-    put32(response+4,result==1&&board.host.kind==A733_USB2_DEVICE_HID?2:1);put32(response+8,result);put32(response+12,result==1?512:0);
+    unsigned dual=board.session.workload==4;
+    unsigned payload=dual?1088:512;
+    put32(response+4,result==1?(dual?3:board.host.kind==A733_USB2_DEVICE_HID?2:1):1);put32(response+8,result);put32(response+12,result==1?payload:0);
     unsigned radio=atomic_load_explicit(&board.radio_result,memory_order_acquire);
     if(a733_board_radio_workload(board.session.workload)&&(atomic_load_explicit(&board.watchdog_state,memory_order_acquire)&4))radio=3;
     put32(response+16,radio);
@@ -67,8 +69,8 @@ static void exchange(void)
     put32(response+24,(uint32_t)board.session.epoch);put32(response+28,(uint32_t)(board.session.epoch>>32));
     put32(response+32,(uint32_t)board.session.generation);put32(response+36,(uint32_t)(board.session.generation>>32));
     memcpy(response+40,board.session.radio_profile_digest,32);
-    if(result==1)memcpy(response+72,board.sector,512);
-    response_sent=response_transferred=0;response_bytes=result==1?584:72;
+    if(result==1)memcpy(response+72,dual?board.dual_result:board.sector,payload);
+    response_sent=response_transferred=0;response_bytes=result==1?72+payload:72;
 }
 void board_usb0_task(void *unused)
 {

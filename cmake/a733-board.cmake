@@ -78,7 +78,7 @@ set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
 get_target_property(board_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET a733-board-usb2-host PROPERTY COMPILE_OPTIONS "${board_options}")
-target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
+target_compile_definitions(a733-board-usb2-host PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1>" SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
 target_compile_options(a733-board-usb2-host PRIVATE -include "${board_root}/apps/board/host-symbols.h")
 target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/usb/host"
   "${board_root}/apps/board" "${board_root}/platform/a733-smp-cached"
@@ -137,7 +137,7 @@ else()
   set(board_contract_magic 0x41533733424f4331ULL)
   set(board_result_magic 0x41533733424f5231ULL)
 endif()
-target_compile_definitions(sunstone-a733-board PRIVATE SUNSTONE_SECURE_MONITOR=1
+target_compile_definitions(sunstone-a733-board PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1>" SUNSTONE_SECURE_MONITOR=1
   SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_USB=1
   A733_SMP_CONTRACT_MAGIC=${board_contract_magic} A733_SMP_RESULT_MAGIC=${board_result_magic})
 target_link_options(sunstone-a733-board PRIVATE -nostdlib -static -Wl,--gc-sections

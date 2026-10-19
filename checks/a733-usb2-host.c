@@ -25,6 +25,9 @@ static const uint8_t hid_descriptor[]={5,1,9,6,0xa1,1,5,7,0x19,0xe0,0x29,0xe7,0x
 static unsigned irq_model,irq_begins,irq_releases,irq_advances,irq_race;
 static uint64_t irq_last_erdp;
 static unsigned hub_mode,hub_protocol=1,hub_ports=3,hub_port=2,hub_bitmap,hub_reset,hub_changes=1,hub_bad,wire_device,hub_after_fault,hub_fault_case,hub_changed_port,wrong_leaf_slot;
+static unsigned dual_mode,dual_reverse,dual_duplicate,dual_changes[8],dual_reset[8];
+static int is_hid(unsigned j){return dual_mode?j&&(dual_duplicate||j==(dual_reverse?2u:1u)):hid_mode;}
+static unsigned speed_for(unsigned j){return dual_mode?(is_hid(j)?device_speed:3):hub_mode&&!j?3:device_speed;}
 static uint8_t request[8],cbw[31];
 static int gpu_read(void *v,uintptr_t a,uint32_t *out){*out=*pmic_model_word(v,a);return 1;}
 static int gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t d)
@@ -125,15 +128,22 @@ static void control_data(uint8_t *p,unsigned count)
         }else if(request[0]==0x80){assert(request[1]==0&&count==2);p[0]=hub_bad==2?0:1;}
         else if(request[0]==0xa0){assert(request[1]==0&&count==4);p[0]=hub_bad==3?1:hub_after_fault==3?2:0;}
         else{
-            assert(request[0]==0xa3&&request[1]==0&&count==4&&request[4]==(hub_changed_port?hub_changed_port:hub_port));
-            unsigned status=1|256|(hub_reset?2:0)|(device_speed==3?1024:device_speed==2?512:0);
-            if(hub_bad==5)status|=0x8000;
-            if(hub_after_fault==1)status&=~1u;
-            p[0]=(uint8_t)status;p[1]=(uint8_t)(status>>8);p[2]=(uint8_t)hub_changes;
+            assert(request[0]==0xa3&&request[1]==0&&count==4);
+            unsigned port=request[4];
+            if(dual_mode){
+                assert(port==2||port==3);unsigned speed=speed_for(port-1);
+                unsigned status=1|256|(dual_reset[port]?2:0)|(speed==3?1024:speed==2?512:0);
+                p[0]=(uint8_t)status;p[1]=(uint8_t)(status>>8);p[2]=(uint8_t)dual_changes[port];
+            }else{
+                assert(port==(hub_changed_port?hub_changed_port:hub_port));
+                unsigned status=1|256|(hub_reset?2:0)|(device_speed==3?1024:device_speed==2?512:0);
+                if(hub_bad==5)status|=0x8000;if(hub_after_fault==1)status&=~1u;
+                p[0]=(uint8_t)status;p[1]=(uint8_t)(status>>8);p[2]=(uint8_t)hub_changes;
+            }
         }
         return;
     }
-    if(hid_mode){
+    if(is_hid(wire_device)){
         uint8_t device[]={18,1,0,2,0,0,0,(uint8_t)device_packet,0x34,0x12,0x78,0x56,0,1,0,0,0,1};
         uint8_t config[]={9,2,34,0,1,1,0,0x80,50,9,4,0,0,1,3,1,1,0,
           9,0x21,0x11,1,0,1,0x22,sizeof(hid_descriptor),0,7,5,0x81,3,(uint8_t)hid_packet,0,(uint8_t)hid_interval};
@@ -142,7 +152,7 @@ static void control_data(uint8_t *p,unsigned count)
         if(bad_hid_config==3){config[25]=1;config[26]=1;}
         if(bad_hid_config==4)config[29]=1;
         if(request[3]==1){assert(count<=sizeof(device));memcpy(p,device,count);
-            if(count==18)assert((get32(n.core.devices[hub_mode?1:0].device+n.core.context_bytes+4)>>16)==device_packet&&!n.core.devices[hub_mode?1:0].evaluate_pending);}
+            if(count==18)assert((get32(n.core.devices[wire_device].device+n.core.context_bytes+4)>>16)==device_packet&&!n.core.devices[wire_device].evaluate_pending);}
         else if(request[3]==2){assert(count<=sizeof(config));memcpy(p,config,count);}
         else if(request[3]==0x22){assert(request[0]==0x81&&count==sizeof(hid_descriptor));memcpy(p,hid_descriptor,count);}
         else{assert(request[3]==3&&count<=4);const uint8_t string[]={4,3,9,4};memcpy(p,string,count);}
@@ -158,21 +168,21 @@ static void wire(void)
     struct a733_xhci *x=&n.core;
     if(x->command_kind&&x->command_pointer!=last_command){
         unsigned j=x->command_device-1;assert(j<A733_XHCI_DEVICES);
-        struct a733_xhci_device *d=&x->devices[j];unsigned speed=hub_mode&&!j?3:device_speed;
+        struct a733_xhci_device *d=&x->devices[j];unsigned speed=speed_for(j);
         last_command=x->command_pointer;++commands;
         if(x->command_kind==11){
             assert((get32(d->input+x->context_bytes)&(15u<<20))==(speed<<20));
             if(hub_mode&&j){
                 assert(x->devices[0].hub_configured);
-                assert((get32(d->input+x->context_bytes)&0xfffffu)==hub_port);
+                assert((get32(d->input+x->context_bytes)&0xfffffu)==d->parent_port);
                 assert((get32(d->input+x->context_bytes+4)>>16&255)==1);
-                assert(get32(d->input+x->context_bytes+8)==(speed==3?0:1u|(hub_port<<8)));
+                assert(get32(d->input+x->context_bytes+8)==(speed==3?0:1u|(d->parent_port<<8)));
                 assert(!!(get32(d->input+x->context_bytes)&(1u<<25))==(speed!=3&&hub_protocol==2));
             }
             memcpy(d->device,d->input+x->context_bytes,2*x->context_bytes);
             unsigned state=d->pending_address?2:1;put32(d->device+12,(state<<27)|(state==2?7+j:0));
         }else if(x->command_kind==13){
-            assert(hid_mode&&speed==1&&get32(d->input+4)==2);
+            assert(is_hid(j)&&speed==1&&get32(d->input+4)==2);
             assert((get32(d->input+2*x->context_bytes+4)>>16)==device_packet);
             memcpy(d->device+x->context_bytes,d->input+2*x->context_bytes,x->context_bytes);++evaluates;
         }else if(x->command_kind==12){
@@ -182,7 +192,7 @@ static void wire(void)
                 assert((get32(d->input+x->context_bytes+4)>>24)==hub_ports);
                 assert(((get32(d->input+x->context_bytes+8)>>16)&3)==2);
                 assert(!!(get32(d->input+x->context_bytes)&(1u<<25))==(hub_protocol==2));
-            }else if(hid_mode){
+            }else if(is_hid(j)){
                 struct a733_xhci_endpoint *e=&d->endpoints[1];const uint8_t *context=d->input+(e->number+1)*x->context_bytes;
                 unsigned interval=speed==3?hid_interval-1:3;unsigned value=hid_interval;
                 if(speed!=3)while(value>1){++interval;value>>=1;}
@@ -199,6 +209,7 @@ static void wire(void)
         struct a733_xhci_device *d=&x->devices[j];struct a733_xhci_endpoint *e=&d->endpoints[i];
         if(e->pending!=2||!e->pending_trb||e->pending_trb==last_transfer[j][i])continue;
         if(hub_mode&&!j&&i){
+            if(dual_mode)hub_bitmap=(dual_changes[2]?1u<<2:0)|(dual_changes[3]?1u<<3:0);
             if(!hub_bitmap)continue;
             assert(m.now>=n.hub.power_good_deadline&&d->hub_configured&&e->length==1);
             e->bounce[0]=(uint8_t)hub_bitmap;hub_bitmap=0;
@@ -209,15 +220,21 @@ static void wire(void)
                 memcpy(request,d->setup,8);
                 if(hub_mode&&!j&&request[0]==0x23){
                     unsigned value=request[2],port=request[4];
-                    if(request[1]==3&&value==4){assert(port==hub_port);hub_reset=1;hub_changes|=16;}
-                    if(request[1]==1&&value>=16&&value<=20)hub_changes&=~(1u<<(value-16));
+                    if(dual_mode){
+                        assert(port==2||port==3||value==8);
+                        if(request[1]==3&&value==4){dual_reset[port]=1;dual_changes[port]|=16;}
+                        if(request[1]==1&&value>=16&&value<=20)dual_changes[port]&=~(1u<<(value-16));
+                    }else{
+                        if(request[1]==3&&value==4){assert(port==hub_port);hub_reset=1;hub_changes|=16;}
+                        if(request[1]==1&&value>=16&&value<=20)hub_changes&=~(1u<<(value-16));
+                    }
                 }
             }else if(e->kind==3&&e->direction){
                 wire_device=j;control_data(e->bounce,e->length);
                 if(short_descriptor&&request[1]==6&&request[3]==1)residual=1;
             }
         }else if(hub_mode&&!j){ /* already prepared owned hub status byte */ }
-        else if(hid_mode){
+        else if(is_hid(j)){
             assert(e->direction&&e->address==0x81&&e->length==hid_packet);
             for(unsigned k=0;k<report_bytes;++k)e->bounce[k]=(uint8_t)(hid_reports*17+k+1);
             residual=e->length-report_bytes;++hid_reports;
@@ -272,7 +289,7 @@ static void start_core(void)
     assert(device_memory_pool_init(&n.private_pool,(uintptr_t)dma,0x79000000,sizeof(dma)));
     assert(device_memory_acquire(&n.private_pool,99,sizeof(dma),&n.memory,&e));
     const struct a733_xhci_ops ops={cn,current,live,rr,ww,w64,barrier,out,a733_usb2_host_notice};
-    registers[0]=0x01100040;registers[1]=(1u<<24)|(1u<<8)|(hub_mode?2:1);
+    registers[0]=0x01100040;registers[1]=(1u<<24)|(1u<<8)|(dual_mode?3:hub_mode?2:1);
     registers[4]=(0x20u<<16)|1|4|8;registers[5]=0x2000;registers[6]=0x1000;
     registers[0x80/4]=0x02000002;registers[0x84/4]=0x20425355;registers[0x88/4]=0x101;
     registers[0x44/4]=1;registers[0x48/4]=1;registers[0x440/4]=1;
@@ -339,7 +356,46 @@ int main(int argc,char **argv)
         if(strstr(mode,"descriptor"))bad_hid_config=3;
         if(strstr(mode,"direction"))bad_hid_config=4;
     }
+    if(!strncmp(mode,"dual-",5)){
+        dual_mode=hub_mode=n.dual_leaf=1;dual_reverse=strstr(mode,"msc-first")!=NULL;dual_duplicate=strstr(mode,"duplicate")!=NULL;
+        hub_bitmap=(1u<<2)|(1u<<3);dual_changes[2]=dual_changes[3]=1;
+        device_speed=strstr(mode,"-ls")?2:strstr(mode,"-hs")?3:1;
+        device_packet=device_speed==3?64:device_speed==1?32:8;hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
+    }
     start_core();
+    if(dual_mode){
+        for(unsigned i=0;i<20000&&!n.mounted&&!n.failed;++i)poll();
+        if(dual_duplicate){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS duplicate leaf class retains whole session");return 0;}
+        if(!n.mounted||n.failed)fprintf(stderr,"dual mount failed %u %u msc%u hid%u kind%u connected%x default%u cmds%u now%llu\n",n.mounted,n.failed,n.msc_mounted,n.hid_mounted,n.kind,n.hub.connected_mask,n.core.default_device,commands,(unsigned long long)m.now);
+        assert(n.mounted&&!n.failed&&n.kind==A733_USB2_DEVICE_DUAL&&n.msc_mounted&&n.hid_mounted&&n.address!=n.hid_address);
+        assert(n.address==(dual_reverse?1u:2u)&&n.hid_address==(dual_reverse?2u:1u));
+        /* Every permanently published ring/bounce page is disjoint and within
+         * the exact retained parent, including the one extra bulk credit. */
+        uint64_t pages[14];unsigned count=0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j)for(unsigned k=0;k<A733_XHCI_ENDPOINTS;++k){
+            struct a733_xhci_endpoint *e=&n.core.devices[j].endpoints[k];if(!e->opened)continue;
+            uint64_t v[]={e->ring_pa,e->bounce_pa};for(unsigned z=0;z<2;++z){assert(v[z]>=0x7900a000&&v[z]+4096<=0x79018000&&!(v[z]&4095));for(unsigned q=0;q<count;++q)assert(pages[q]!=v[z]);pages[count++]=v[z];}
+        }assert(count==14&&n.core.extra_endpoint_owner==(dual_reverse?2u:3u));
+        uint8_t sector[512];struct a733_usb2_hid_report report;memset(sector,0x5a,sizeof(sector));memset(&report,0x5a,sizeof(report));
+        assert(a733_usb2_read_sector(&n,0,m.now+5000000)&&a733_usb2_hid_receive(&n,m.now+5000000));
+        if(strstr(mode,"wrong-slot"))wrong_leaf_slot=1;
+        if(strstr(mode,"stall"))failed_hid_event=1;
+        if(strstr(mode,"detach"))a733_typec_revoke(&role);
+        unsigned fault=wrong_leaf_slot||failed_hid_event||strstr(mode,"detach")!=NULL;
+        FILE *reports=argc>2?fopen(argv[2],"wb"):NULL;if(argc>2)assert(reports);
+        for(unsigned i=0;i<4&&!n.failed;++i){
+            if(i){report_bytes=i==1?3:i==2?0:8;assert(a733_usb2_hid_receive(&n,m.now+5000000));}
+            for(unsigned k=0;k<20000&&!n.hid.complete&&!n.failed;++k)poll();
+            if(n.failed)break;assert(a733_usb2_hid_result(&n,&report)==1&&report.address==n.hid_address&&report.sequence==i+1&&report.bytes==report_bytes);
+            if(reports)assert(fwrite(&report,1,sizeof(report),reports)==sizeof(report));
+        }
+        if(reports)assert(!fclose(reports));
+        if(fault){assert(n.failed&&n.core.failed&&a733_usb2_read_result(&n,sector)<0);for(unsigned i=0;i<512;++i)assert(sector[i]==0x5a);puts("PASS dual leaf fault retains every slot and forbids sector copy");return 0;}
+        for(unsigned i=0;i<20000&&!n.read_complete&&!n.failed;++i)poll();
+        assert(!n.failed&&a733_usb2_read_result(&n,sector)==1);for(unsigned i=0;i<512;++i)assert(sector[i]==(uint8_t)(i*17+3));
+        if(argc>2){char path[4096];assert(snprintf(path,sizeof(path),"%s.sector",argv[2])<(int)sizeof(path));FILE *f=fopen(path,"wb");assert(f&&fwrite(sector,1,512,f)==512&&!fclose(f));}
+        printf("PASS dual leaf order%u HID speed%u and MSC independent credits and copied completions\n",dual_reverse,device_speed);return 0;
+    }
     if(hub_bad){
         for(unsigned i=0;i<20000&&!n.failed;++i)poll();
         assert(n.failed&&n.core.failed&&!n.mounted&&(hub_bad==8?n.core.devices[1].slot!=0:!n.core.devices[1].slot));

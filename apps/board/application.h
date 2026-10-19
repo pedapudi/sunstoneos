@@ -44,7 +44,10 @@ struct board_application {
     atomic_uint fatal,result,watchdog_state,radio_result,radio_bytes;
     atomic_uint_fast64_t live_until;
     uint8_t sector[512];
+    uint8_t dual_result[1088];
 };
+_Static_assert(64+512==576 && 576+512==sizeof(((struct board_application *)0)->dual_result),
+    "combined header and disjoint copied output extents");
 struct board_provider {
     struct a733_native_usb shared;
     struct board_radio_ce_provider ce;

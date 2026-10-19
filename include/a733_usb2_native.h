@@ -5,7 +5,7 @@
 #include "a733_xhci.h"
 struct a733_platform_locks;
 #define A733_USB2_HID_REPORT_BYTES 64u
-enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB };
+enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB,A733_USB2_DEVICE_DUAL };
 /* Raw completed interrupt input, not a desktop keyboard/mouse event. Zero or
  * short reports retain their actual lengths; no boot-report semantics inferred. */
 struct a733_usb2_hid_report {
@@ -28,7 +28,7 @@ struct a733_usb2_descriptor {
 struct a733_usb2_hub {
     unsigned present,address,protocol,endpoint,packet,interval,ports,ttt,power_good_2ms;
     unsigned mark_pending,mark_address,configure_pending;
-    unsigned device_power,local_power,alt_selected,powered_mask,selected_port;
+    unsigned device_power,local_power,alt_selected,powered_mask,selected_port,connected_mask;
     unsigned status_deferred,status_requested,status_bytes;
     uint64_t power_good_deadline;
     uint8_t *status_buffer;
@@ -50,6 +50,7 @@ struct a733_usb2_native {
     struct a733_usb2_hid hid;
     struct a733_usb2_hub hub;
     struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
+    unsigned dual_leaf,msc_seen,hid_seen,msc_mounted,hid_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;

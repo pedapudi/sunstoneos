@@ -11,22 +11,24 @@ def decode(frame, session, profile=None):
     if len(frame)<72:
         raise ValueError('short frame')
     magic,version,usb_state,usb_bytes,radio_state,radio_bytes,epoch,generation=struct.unpack_from('<IIIIIIQQ',frame)
-    if magic!=0x52414f42 or version not in (1,2) or usb_state>3 or radio_state>3:
+    if magic!=0x52414f42 or version not in (1,2,3) or usb_state>3 or radio_state>3:
         raise ValueError('invalid frame header')
     if (epoch,generation)!=struct.unpack_from('<QQ',session,24):
         raise ValueError('session identity mismatch')
-    if usb_bytes!=(512 if usb_state==1 else 0) or len(frame)!=72+usb_bytes:
+    if usb_bytes!=((1088 if version==3 else 512) if usb_state==1 else 0) or len(frame)!=72+usb_bytes:
         raise ValueError('invalid copied sector extent')
     digest=session[368:400]
     workload=struct.unpack_from('<I',session,400)[0]
+    if workload==4 and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
+        raise ValueError('Combined workload requires supervised session')
     if frame[40:72]!=digest:
         raise ValueError('radio profile identity mismatch')
     if usb_state==3:
-        if workload<2 or struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
+        if workload not in (2,3) or struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
             raise ValueError('disabled host is not admitted')
-    elif workload>=2:
+    elif workload in (2,3):
         raise ValueError('disabled host reported activity')
-    if workload in (0,2):
+    if workload in (0,2,4):
         if profile is not None or radio_state or radio_bytes:
             raise ValueError('unexpected radio result')
     elif workload in (1,3):
@@ -46,11 +48,30 @@ def decode(frame, session, profile=None):
     result=dict(usb_state=usb_state,radio_state=radio_state,verified_radio_bytes=radio_bytes,
                 kind='storage-sector' if usb_state==1 else 'pending-or-failed',
                 sector=frame[72:] if usb_state==1 else None)
+    if workload==4 and usb_state==1 and version!=3:raise ValueError('Combined workload requires combined result')
+    if version==3:
+        if workload!=4 or usb_state!=1:raise ValueError('Combined result is not admitted')
+        result.update(decode_dual(frame[72:]))
     if version==2:
         if usb_state!=1:raise ValueError('HID version requires a completed copied batch')
         result.update(decode_hid(frame[72:]))
         result['kind']='hid-input';result['sector']=None
     return result
+
+def decode_dual(raw):
+    if len(raw)!=1088 or struct.unpack_from('<4I',raw)!=(0x4c415544,1,1088,2):
+        raise ValueError('Invalid combined result header')
+    generation=struct.unpack_from('<Q',raw,16)[0]
+    address,speed,interface,epin,epout=raw[24:29]
+    lba,sector_offset,sector_bytes,hid_offset,hid_bytes=struct.unpack_from('<5I',raw,32)
+    # Check the complete extent before creating either caller-facing slice.
+    if not generation or not 1<=address<=127 or speed!=3 or interface or epin&~0x8f or not epin&128 or not epin&15 or epout&~15 or not epout or any(raw[29:32]) or any(raw[52:64]) or (lba,sector_offset,sector_bytes,hid_offset,hid_bytes)!=(0,64,512,576,512) or sector_offset+sector_bytes!=hid_offset or hid_offset+hid_bytes!=len(raw):
+        raise ValueError('Invalid combined storage identity or extents')
+    hid=decode_hid(raw[hid_offset:hid_offset+hid_bytes])
+    if hid['hid_generation']!=generation or hid['device_address']==address:
+        raise ValueError('Combined leaf identity mismatch')
+    return dict(kind='storage-and-hid',sector=raw[sector_offset:sector_offset+sector_bytes],
+                msc_address=address,msc_speed='high',msc_interface=interface,msc_in=epin,msc_out=epout,lba=lba,**hid)
 
 def decode_hid(raw):
     if len(raw)!=512 or struct.unpack_from('<3I',raw)!=(0x52444948,1,4):raise ValueError('Invalid copied HID batch')
@@ -80,7 +101,7 @@ def main():
         if sector is None:raise ValueError('sector is not complete')
         with a.sector_output.open('xb') as output:output.write(sector)
     if a.hid_output:
-        if result['kind']!='hid-input':raise ValueError('HID input is not complete')
+        if result['kind'] not in ('hid-input','storage-and-hid'):raise ValueError('HID input is not complete')
         import json
         with a.hid_output.open('x') as output:json.dump(result,output,indent=2);output.write('\n')
     print(result)

@@ -30,10 +30,10 @@ PMIC, power-domain and Type-C providers before writing private state. Providers
 and their private backing remain at fixed addresses. Their native adapters must
 share the actual register mutex, counter and resource managers supplied by boot.
 One designated FreeRTOS task owns the host stack and all application calls.
-Two typed device records keep independent input/output contexts, EP0 stages,
+Three typed device records keep independent input/output contexts, EP0 stages,
 address metadata and endpoint rings. One command ring and event ring remain
-controller-owned. Six endpoint ring/bounce page pairs, two context pairs and up
-to eight scratch pages occupy 112 KiB of the retained 128 KiB reservation.
+controller-owned. Seven endpoint ring/bounce page pairs, three context pairs and
+up to eight scratch pages occupy the complete retained 128 KiB reservation.
 
 The platform acquires exclusive USB2 ownership, bit 66 in the shared clock
 registry. It also holds OSC, REF, PERI0, FABRIC, SERDES_COMMON and
@@ -191,8 +191,9 @@ The native path links the pinned TinyUSB hub driver. It admits one directly
 attached high-speed USB2 hub with one to seven ports and one downstream device:
 a low-, full- or high-speed HID interface, or the existing high-speed MSC profile.
 The single application device and hub use separate TinyUSB address ranges:
-with `CFG_TUH_DEVICE_MAX=1` and `CFG_TUH_HUB=1`, the leaf uses logical address 1
-and the hub uses address 2. Physical xHCI slots are bound from actual Enable Slot
+with `CFG_TUH_DEVICE_MAX=2` and `CFG_TUH_HUB=1`, leaves use logical addresses 1
+and 2 and the hub uses address 3. The original frozen single-leaf image used
+`CFG_TUH_DEVICE_MAX=1` and hub address 2. Physical xHCI slots are bound from actual Enable Slot
 completions and are never inferred from those logical addresses.
 
 A high-speed hub uses a transaction translator (TT) for low/full-speed traffic.
@@ -203,9 +204,9 @@ multi-TT layout. Both alternates must declare the same endpoint, packet size and
 interval. The nine-byte class hub descriptor declares one to seven ports, bounded
 power/overcurrent modes and the source-defined transaction-translator think time.
 The port limit matches the pinned driver's one-byte status-change transfer.
-Nested hubs, another connected leaf, richer configurations and additional hub
-interfaces close the entire session. Multiple concurrent application devices
-remain required work.
+Nested hubs, richer configurations and additional hub interfaces close the
+entire session. Existing single-result sessions still refuse another connected
+leaf. The separate combined workload below admits two distinct leaf classes.
 
 The hub must declare self power, report current self-powered status through the
 standard device GET_STATUS, and report a present local supply with no overcurrent
@@ -316,6 +317,68 @@ the current native board consumer and serializer. Evidence is retained under
 Physical GIC delivery, interrupt latency, DMA ordering and electrical behavior
 remain unqualified. No hardware or desktop input access is part of these checks.
 
+## One HID and one mass-storage device operate together
+
+Supervised board workload 4 admits one self-powered high-speed hub with exactly
+one HID leaf and one high-speed MSC leaf. HID may operate at low, full or high
+speed. Both enumeration orders are supported. Existing workloads 0–3 keep their
+single-result behavior. The board target alone defines `SUNSTONE_BOARD_USB2_DUAL`;
+derived applications retain their previous admission limit. The session remains
+592 bytes with unchanged offsets and reserved fields. Workload 4 omits radio and
+requires the image manifest's `usb2_combined` capability.
+
+Each child permanently binds its actual slot, logical address, hub port and
+observed speed. Default-address enumeration remains serialized by TinyUSB's
+control queue. A second HID, second MSC, third leaf, removal, bad slot or failed
+completion revokes the whole session. Enumeration does not reuse a retired slot
+or parent memory. One owner runs the actual TinyUSB hub, HID and MSC classes;
+HID and BOT retain separate pending buffers, deadlines and completion credits.
+
+The fixed DMA layout uses 4096-byte pages. Offsets 0–16383 contain DCBAA,
+command/event rings, ERST and scratch pointers. Three input/output context pairs
+occupy offsets 16384–40959. Seven ring pages occupy 40960–69631 and seven bounce
+pages occupy 69632–98303. Eight scratch pages occupy 98304–131071. An input
+context requires at most 33 × 64 = 2112 bytes; an output context requires at most
+2048 bytes. Each device initially owns EP0 and one data credit. Only the sole MSC
+second bulk endpoint may permanently claim the seventh pair. This also preserves
+direct MSC support without moving any published pointer.
+
+The native client issues one read-only LUN0/LBA0 sector request and four raw HID
+input requests. It copies completed bytes into separate private extents and
+publishes success once both are complete and the attachment authority is fresh.
+A partial result never publishes success. Published backing is immutable; the
+owner continues monitoring faults and the finite session deadline.
+
+Combined success uses outer board frame version 3 with the unchanged 72-byte
+header and a 1088-byte payload. Pending/failure frames retain version 1 without
+payload. Versions 1 and 2 retain their existing storage and HID meanings. The
+payload starts with a 64-byte little-endian header:
+
+| Offset | Field |
+| --- | --- |
+| 0–15 | `0x4c415544`, version 1, total bytes 1088, leaf count 2; four u32 values |
+| 16–23 | Type-C attachment generation, u64 |
+| 24–28 | MSC address, speed ID 3, interface 0, bulk IN endpoint, bulk OUT endpoint |
+| 29–31 | Zero |
+| 32–51 | LBA 0, sector offset 64, sector length 512, HID offset 576, HID length 512; five u32 values |
+| 52–63 | Zero |
+| 64–575 | Copied sector |
+| 576–1087 | Existing HIDR four-report envelope, including HID identity |
+
+The host checks the entire layout before slicing either result. The MSC and HID
+addresses must differ and both payloads must share the attachment generation.
+Capture saves both `sector.bin` and `hid-input.json`; no desktop input events are
+produced. Numerical data correctness and physical power, DMA, interrupt and hub
+operation remain unqualified. Neither board has populated eMMC or UFS.
+
+Focused evidence is under
+`~/.cache/sunstoneos/evidence/usb-host-dual-leaf-20261019/`. It covers both
+leaf discovery orders, HID speeds, separate credits, duplicate class refusal,
+wrong-slot/stall/revocation failure, IRQ completion and the actual linked native
+client, serializer and host decoder. Kernel/provider/electrical boundaries remain
+modeled. Earlier frozen images remain authoritative for their original source
+and layout; this image does not replace their evidence.
+
 ## HID capture has an explicit transport discriminator
 
 The existing USB0 transport retains its 72-byte header and 512-byte successful
@@ -345,7 +408,8 @@ a HID result; `--hid-output` writes its decoded records.
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
-refuses low/full-speed mass storage, deeper or bus-powered hubs, multiple leaves,
+refuses low/full-speed mass storage, deeper or bus-powered hubs, more than two
+leaves or two leaves of the same class,
 interrupt OUT, high-bandwidth periodic
 transfers, isochronous endpoints, SuperSpeed, nonstandard speed-ID tables, more than eight
 scratchpads and richer mass-storage configurations. Endpoint-stall recovery is

@@ -25,9 +25,10 @@
 #error Invalid supervised board startup interval
 #endif
 /* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
- * odd selections include radio. This is a fixed staged application choice. */
+ * odd selections include radio. Supervised4 requires both USB leaf classes
+ * without radio and is admitted only by the board target capability. */
 static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}
-static inline int a733_board_host_workload(unsigned workload){return workload<2;}
+static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4;}
 /* Immutable little-endian image-owned input. No pointer or storage grant is
  * accepted. Evidence hashes identify externally qualified, reviewed facts;
  * producing this record does not itself establish those facts. */
