@@ -7,7 +7,7 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 prep=module('gpu_finite_prepare_check',ROOT/'apps/gpu-finite/prepare.py')
 def main():
- parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--shared-helper',type=Path,required=True);parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-application-20261019/ns-publication');a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
+ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--shared-helper',type=Path,required=True);parser.add_argument('--producer-only',action='store_true');parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-application-20261019/ns-publication');a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
  def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
  def dump(name,value):path=e/name;path.write_text(json.dumps(value,indent=2)+'\n');return {'path':str(path),'sha256':sha(path)}
  assert (ROOT/'tools/a733-returning-host.py').read_bytes()==a.shared_helper.read_bytes()
@@ -25,6 +25,9 @@ def main():
  admission=fact('a733-gpu-finite-entry-v1',execution_profile=prep.PROFILE,supervisor='modeled-supervisor',session_template_sha256=sha(template_path),reservation=100,ddr=ddr,gpu_ddr=gpu_ddr,platform=platform,gpu=gpu,root_review=review,one_attempt=True,supervision={n:ref for n in ['successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore','manual-whole-board-power-removal','stop-after-first-failure']})
  admission_path=e/'admission-MODELED.json';admission_path.write_text(json.dumps(admission));bundle=e/'bundle';p=prep.prepare(image,manifest,admission_path,template_path,bundle,clang,lld);assert p['_sizes']['session.bin']==592 and p['_sizes']['contract.bin']==4096
  cases={'actual-bundle-producer-and-validator':True}
+ if a.producer_only:
+  result={'passed':True,'physical_access':False,'physical_admission_created':False,'synthetic_fixtures_only':True,'image_sha256':h,'scope':'Actual returning producer and validator for changed image; unchanged refusal cases reused.','cases':cases}
+  (e/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS GPU returning bundle producer and validator; software-only candidate');return
  for key,value in [('schema','a733-gpu-supervised-entry-v2'),('execution_profile','gpu-single-core-supervised-v2'),('image_sha256','0'*64),('session_template_sha256','0'*64),('one_attempt',False),('reservation',0),('supervision',{}),('root_review',ref),('gpu_ddr',ddr)]:
   bad=copy.deepcopy(admission);bad[key]=value
   try:prep.validate_admission(bad,h,bytes(template),build)

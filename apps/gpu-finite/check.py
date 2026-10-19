@@ -72,7 +72,7 @@ class Machine(close.Machine):
         super().hook(cpu,address,size,unused)
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--cases',nargs='+');a=p.parse_args();imagepath=a.evidence/'build/adapter.elf';image=close.transport.layout.Image(imagepath);cases=[]
-    if a.cases:
+    if a.cases and (a.evidence/'client-result.json').exists():
         prior=json.loads((a.evidence/'client-result.json').read_text());assert prior['elf_sha256']==hashlib.sha256(imagepath.read_bytes()).hexdigest();cases=[x for x in prior['cases'] if x['name'] not in a.cases]
     for variant in ['stopped','close-fault','retained-token','pmic-timeout','pmic-borrow','held-lock','pending-irq','mapping-fault']:
         if a.cases and variant not in a.cases:continue
@@ -83,5 +83,5 @@ def main():
         assert not m.field('usb_observed')
         cases.append({'name':variant,'passed':True,'exit':m.exit,'suspended_workers':m.suspended,'operations':m.operations,'log':m.report,'pending_reads':m.pending_reads})
     result={'passed':True,'elf_sha256':hashlib.sha256(imagepath.read_bytes()).hexdigest(),'cases':cases,'physical_access':False,'scope':'Actual linked GPU client and finite completion guard/report. Service replies, PMIC checkpoint scheduling, locks, GIC state and mappings modeled. No firmware execution, arithmetic or ROM-return evidence.'}
-    (a.evidence/'client-result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS finite GPU client: matched CLOSE, provider parking, retained failures and no USB gate; eight modeled cases')
+    (a.evidence/'client-result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS finite GPU client:',len(cases),'selected modeled cases')
 if __name__=='__main__':main()
