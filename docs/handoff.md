@@ -165,6 +165,20 @@ functions and modes beyond these bounded applications.
 
 ## Continuation and evidence reuse
 
+Current implementation owners are finishing these offline changes:
+
+- UART DMA: `uart-dma-proposal` implements paired receive/transmit transfers.
+  Root static session, privilege and layout review passes for the preserved
+  candidate under `uart-dma-20261019/root/`. Transfer checks and final integration
+  remain pending; reconcile any final image changes against that review.
+- H.264: `h264-high-assess` implements High-profile decoding with bounded
+  reference pictures and reordered output. Final checks and integration remain
+  pending under `h264-high-20261019/`.
+- Combined Mimus runtime: `runtime-integration-proposal` adds keyboard-controlled
+  recorded recognition to the existing concurrent storage application. Reuse
+  model parity and dual-leaf USB evidence; validate the changed input and ownership
+  behavior. Shared CPU startup remains the primary agent's responsibility.
+
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and
    startup untouched unless a concrete dependency requires coordination. Update
