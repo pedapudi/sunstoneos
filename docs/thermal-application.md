@@ -176,3 +176,15 @@ corrections `[2044,2048,2050,2050,2044]`. One focused sanitized check uses the
 actual decoder and these physical inputs; no earlier cases were repeated.
 Evidence: `thermal-clock-reference-20261018/physical-candidate-adopt-116/calibration-116/`.
 These are factory calibration data, not current sensor readings.
+
+## Finite polling can return through the demonstrated small platform
+
+The [returning thermal client](../apps/thermal-returning/README.md) implements
+five-channel calibrated observations with the existing driver and common
+clock/mutex providers. It gathers two fresh sets, performs configured disable
+and reports through the RAM log before normal platform return. It retains
+clocks, leases and controller configuration; configured disable does not prove
+analog drain or restore peripheral state. Physical acquisition remains untested.
+The coordinator must establish current board, supply, security and ownership
+facts independently. This path needs neither native USB takeover nor multicore
+startup. The existing interrupt-capable application remains separate.

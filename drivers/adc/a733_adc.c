@@ -2,6 +2,7 @@
 /* Copyright(c) 2020 - 2023 Allwinner Technology Co.,Ltd. All rights reserved. */
 /* Copyright (C) 2019 frank@allwinnertech.com */
 #include "a733_adc.h"
+#include "a733_clock_reference.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define ADC UINT32_C(0x02521000)
@@ -46,22 +47,25 @@ static int update(struct a733_adc *p,uintptr_t a,uint32_t mask,uint32_t value)
     if (old==next) return 1;
     return timely(p) && p->ops.write(p->cookie,a,next)==1 && timely(p) && rd(p,a,&actual) && actual==next;
 }
-static int clocks(struct a733_adc *p,int enabled)
+static int clocks(struct a733_adc *p,int enabled,uint32_t *cold_source)
 {
-    uint32_t v,ref;
-    if (!rd(p,UINT32_C(0x07090160),&v) || (v&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
-        !rd(p,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u) return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if (n<80 || n>116 || n!=m || !bits(p,CCU+0x518,0x0300001f,p->config.apb1)) return 0;
+    uint32_t v,ref,oscillator;
+    if (!rd(p,UINT32_C(0x07090160),&oscillator) || !rd(p,CCU,&ref) ||
+        !a733_clock_ref24_valid(oscillator,ref) ||
+        !bits(p,CCU+0x518,0x0300001f,p->config.apb1)) return 0;
+    unsigned direct24=a733_clock_dcxo_hz(oscillator)==24000000;
+    if (cold_source) *cold_source=direct24?BIT(24):0;
     if (p->config.apb1>>24==3) {
-        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&(BIT(24)|BIT(1))) ||
+        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&BIT(1)) ||
             !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0) ||
             !bits(p,CCU+0x1908,0x0a000a00,0x0a000a00) || !bits(p,CCU+0x1988,0x0a000000,0x0a000000)) return 0;
-        n=((v>>8)&255)+1;
+        unsigned n=((v>>8)&255)+1;
         if (n<53 || n>105 || 24u*n!=600u*(((v>>20)&7)+1)*2) return 0;
     }
     if (!enabled && p->config.configure_adc_clock) return bits(p,CCU+0xfc0,BIT(31),0);
-    return bits(p,CCU+0xfc0,0x8700001f,0x81000000) &&
+    if (!rd(p,CCU+0xfc0,&v)) return 0;
+    v&=UINT32_C(0x8700001f);
+    return (v==UINT32_C(0x80000000) || (direct24&&v==UINT32_C(0x81000000))) &&
         (!enabled || bits(p,CCU+0xfc4,0x10001,0x10001));
 }
 static int masked(struct a733_adc *p)
@@ -73,9 +77,9 @@ static int clear_observed(struct a733_adc *p,uintptr_t a,uint32_t value)
 {return !value||(timely(p)&&p->ops.write(p->cookie,a,value)==1&&timely(p));}
 static int startup(struct a733_adc *p)
 {
- uint32_t status;
- if(!clocks(p,0)||!masked(p))return 0;
- if(p->config.configure_adc_clock&&(!update(p,CCU+0xfc0,0x0700001f,0x01000000)||!update(p,CCU+0xfc0,BIT(31),BIT(31))))return 0;
+ uint32_t status,cold_source;
+ if(!clocks(p,0,&cold_source)||!masked(p))return 0;
+ if(p->config.configure_adc_clock&&(!update(p,CCU+0xfc0,0x0700001f,cold_source)||!update(p,CCU+0xfc0,BIT(31),BIT(31))))return 0;
  if(!update(p,CCU+0xfc4,BIT(16),BIT(16))||!update(p,CCU+0xfc4,1,1))return 0;
  /* Adopt only an inactive, non-DMA controller. Never erase inherited activity. */
  if(!bits(p,ADC+4,BIT(16)|BIT(17),0)||!bits(p,ADC+4,BIT(23),BIT(23))||
@@ -90,7 +94,7 @@ static int startup(struct a733_adc *p)
  if(!update(p,ADC,UINT32_MAX,0x5dbf095f)||!update(p,ADC+0xd0,1,1)||
  !update(p,ADC+4,0x000f0000,0x00080000)||!update(p,ADC+8,0x007f007f,MASK)||
  !update(p,ADC+0x28,127,MASK)||!update(p,ADC+4,BIT(16),BIT(16)))return 0;
- return clocks(p,1);
+ return clocks(p,1,NULL);
 }
 static enum a733_adc_result finish(struct a733_adc *p,enum a733_adc_result r)
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
@@ -157,7 +161,7 @@ enum a733_adc_result a733_adc_read(struct a733_adc *p,uint64_t deadline,struct a
  if(p->ops.current(p->cookie)!=1||p->stage!=ACTIVE||!deadline)return fault(p);p->deadline=deadline;
  enum a733_adc_result r=lock(p);if(r!=A733_ADC_READY)return r;
  uint32_t status;
- if(!clocks(p,1)||!bits(p,ADC,UINT32_MAX,0x5dbf095f)||!bits(p,ADC+0xd0,1,1)||!bits(p,ADC+4,0x008f0000,0x00890000)||!bits(p,ADC+8,0x007f007f,MASK)||
+ if(!clocks(p,1,NULL)||!bits(p,ADC,UINT32_MAX,0x5dbf095f)||!bits(p,ADC+0xd0,1,1)||!bits(p,ADC+4,0x008f0000,0x00890000)||!bits(p,ADC+8,0x007f007f,MASK)||
  !bits(p,ADC+0x28,127,MASK)||!bits(p,ADC+0x0c,0x00070010,0)||!bits(p,ADC+0x10,0x00037f00,0)||
  !bits(p,ADC+0x20,127,0)||!bits(p,ADC+0x24,127,0)||!bits(p,ADC+0x30,127,0)||!bits(p,ADC+0x34,127,0)||!bits(p,ADC+0xdc,1,0)||!bits(p,ADC+0xfc,1,1)||
  !rd(p,ADC+0x38,&status)||(status&~MASK))return fault(p);
@@ -180,7 +184,7 @@ enum a733_adc_result a733_adc_stop(struct a733_adc *p,uint64_t deadline)
  p->deadline=deadline;
  enum a733_adc_result r=lock(p);
  if (r!=A733_ADC_READY) return r;
- if (!clocks(p,1) || !bits(p,ADC+0x0c,0x00070010,0) ||
+ if (!clocks(p,1,NULL) || !bits(p,ADC+0x0c,0x00070010,0) ||
      !bits(p,ADC+0x10,0x00037f00,0) ||
      !update(p,ADC+0x28,127,0) || !update(p,ADC+4,BIT(16),0) ||
      !update(p,ADC+8,0x007f007f,0) ||

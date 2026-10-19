@@ -159,3 +159,21 @@ Existing thermal parent/GIC/shared-provider evidence and the accepted high-bit
 clock-registry case are reused. These results establish no physical sampling,
 voltage accuracy, interrupt delivery, strap interpretation or recovery behavior.
 The bundle identifies no physical port and cannot authorize a device attempt.
+
+## A finite returning client preserves the same electrical prerequisites
+
+The separate [returning ADC client](../apps/thermal-returning/README.md) uses
+the demonstrated small FreeRTOS platform, actual CLDO3 reservation and PMIC
+snapshot, production ADC driver and common clock/mutex providers. It gathers
+two fresh four-channel sets and performs configured disable before returning
+through the RAM log. ADC interrupt delivery stays masked; expected pending
+IRQ70 remains owned and is reported. Clocks, CLDO3, PMIC/pin reservations and
+controller configuration remain retained. No analog-drain, restoration or
+physical conversion result is claimed by the software checks.
+
+ADC clock validation now uses the same normalized-reference decoder and mux
+policy as thermal: SYS24 supports 24, 26 and 19.2 MHz oscillators; direct DCXO
+requires 24 MHz. Cold setup preserves the direct 24 MHz path and selects SYS24
+for the other admitted oscillators. PERI0 bit 24 remains reserved. A focused
+sanitized check exercises actual registry and driver start/read/stop with these
+profiles. This correction does not relax electrical or controller admission.

@@ -68,7 +68,7 @@ int main(int argc,char **argv)
   assert(a733_adc_read(&f.driver,100000,&second)==A733_ADC_AGAIN&&!memcmp(&second,&saved,sizeof(second)));++cases;
  }
  {struct fixture f;initialize(&f,0);f.authorized=0;assert(a733_adc_poll(&f.driver)==A733_ADC_PENDING&&!f.writes);f.authorized=1;assert(start(&f)==A733_ADC_READY);++cases;}
- const struct {uintptr_t a;uint32_t v;} refusals[]={{0x02521004,0x00810000},{0x0252100c,0x41f00},{0x02521010,0x100},{0x025210fc,0},{0x025210dc,1},{0x07090160,0},{0x02002fc0,0x80000000},{0x03400108,64}};
+ const struct {uintptr_t a;uint32_t v;} refusals[]={{0x02521004,0x00810000},{0x0252100c,0x41f00},{0x02521010,0x100},{0x025210fc,0},{0x025210dc,1},{0x07090160,0},{0x02002fc0,0x82000000},{0x03400108,64}};
  for(unsigned i=0;i<sizeof(refusals)/sizeof(*refusals);++i){struct fixture f;initialize(&f,0);*cell(&f,refusals[i].a)=refusals[i].v;assert(start(&f)==A733_ADC_RETAINED&&f.driver.fault&&f.retained);unsigned io=f.reads+f.writes;assert(a733_adc_poll(&f.driver)==A733_ADC_RETAINED&&io==f.reads+f.writes);++cases;}
  {struct fixture f;initialize(&f,0);assert(start(&f)==A733_ADC_READY);sample(&f,5);f.reassert=1;struct a733_adc_sample s;
   assert(a733_adc_read(&f.driver,100000,&s)==A733_ADC_SAMPLE&&s.valid==5&&f.last_ack==5&&s.code[0]==0);

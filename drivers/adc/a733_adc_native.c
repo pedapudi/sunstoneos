@@ -73,7 +73,7 @@ static int write_register(void *cookie,uintptr_t a,uint32_t value)
 {
  struct a733_adc_native *n=cookie;if(!allowed(n))return 0;uint32_t mask;
  switch(a){
- case 0x02002fc0:mask=0x8700001f;if((value&mask)!=0x81000000&&(value&mask)!=0x01000000)return 0;break;
+ case 0x02002fc0:mask=0x8700001f;if((value&mask)!=0x81000000&&(value&mask)!=0x01000000&&(value&mask)!=0x80000000&&(value&mask)!=0)return 0;break;
  case 0x02002fc4:mask=0x10001;break;
  case 0x02521000:if(value!=0x5dbf095f)return 0;mask=UINT32_MAX;break;
  case 0x02521004:mask=0x000f0000;if((value&mask)!=0x80000&&(value&mask)!=0x90000)return 0;break;
