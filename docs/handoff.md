@@ -61,14 +61,15 @@ Evidence: `uart-native-20261018/frozen/manifest.json` and `integration.json`.
 Physical loopback, electrical admission, recovery and inherited multicore startup
 remain outstanding.
 
-The UART interrupt extension is being completed in the `uart-irq` worktree.
-Root commits `e1e3f5d` and `cdf99a4` supply its private IRQ36 route, dispatch hook
-and linked checks. All eleven root checks pass on image
-`7d112182035d38de6c8e448f9107e55f24adead928e5f69abad820165d33c4b5`.
-Evidence and the GIC errata assessment are under `uart-irq-20261019/root/`.
-The worker is finishing host validation and the frozen handoff. Integrate the
-two root commits together with its service commit; they are not yet in bringup.
-Physical delivery and UART operation remain unqualified.
+UART2 interrupt service is integrated. The handler masks the owned source and
+notifies its owner task; the task services receive/transmit causes before rearming.
+Success requires both receive and transmit interrupt evidence and completed
+drain. Focused sanitizer and host checks, eleven linked routing/dispatch checks,
+and source review pass. Integration matches all 423 compiled inputs and 202
+preserved repository sources. Evidence: `uart-irq-20261019/frozen/manifest.json`,
+`root/review.json` and `root-integration.json`. Accepted checks were reused.
+Physical delivery, serial operation and inherited multicore startup remain
+unqualified. DMA and broader serial modes remain required work.
 
 Simultaneous I2S capture/playback is integrated with separate DMA channels and
 period catalogues, shared clock/pin lifetime and failure propagation to both
@@ -1056,12 +1057,13 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Extend UART interrupt service and repeated I2S streaming in separate
-   `uart-irq` and `i2s-cyclic` worktrees. Workers must first identify the pinned
-   source sequence and ownership requirements. UART work excludes DMA; I2S work
-   owns any coordinated audio/DMA changes. Preserve bounded buffers, completion
-   before reuse and retained uncertainty. CPU/startup changes remain root-owned.
-   H.264, JPEG and crypto runtime input delivery is integrated.
+1. Complete repeated I2S streaming in `i2s-cyclic`, including copied-period
+   ownership, USB completion before acknowledgment, cancellation and retained
+   backlog. Develop native USB host interrupt transfers and copied HID reports
+   in `usb-host-interrupt`, beginning with the pinned xHCI/TinyUSB requirements.
+   Coordinate shared-provider edits before implementation. CPU/startup changes
+   remain root-owned. UART interrupt service and H.264, JPEG and crypto runtime
+   input delivery are integrated.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a

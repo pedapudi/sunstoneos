@@ -405,11 +405,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   routes cover all nine controllers. The [native Bluetooth application](bluetooth-native.md)
   integrates the polled UART1 binding. The [finite UART2 application](uart-application.md)
   connects actual header pin/clock ownership, FIFO exchange, bounded drain and
-  release to copied USB results. Selected sanitizer, session and host checks
-  pass, and the native image links. Evidence: `uart-native-20261018/`.
+  release to copied USB results. Interrupt service now masks the owned source,
+  notifies the owner task and rearms after bounded receive/transmit service.
+  Selected sanitizer, session, host and linked routing checks pass, and the
+  native image links. Evidence: `uart-native-20261018/` and
+  `uart-irq-20261019/root-integration.json`.
   It requires a passive PB0/PB1 loopback and electrical admission; inherited
-  multicore startup remains physically unqualified. Physical serial operation, platform IRQ
-  service, DMA and advanced modes remain outstanding.
+  multicore startup remains physically unqualified. Physical serial and interrupt
+  operation, DMA and advanced modes remain outstanding.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,
