@@ -1,0 +1,30 @@
+--- boot-supervised.c
++++ host-irq-boot.c
+@@ -17,6 +17,10 @@
+ }
+ static uint32_t read32(uintptr_t a) {barrier();uint32_t v=*(volatile uint32_t *)a;barrier();return v;}
+ static void write32(uintptr_t a,uint32_t v) {barrier();*(volatile uint32_t *)a=v;barrier();}
++#ifndef SUNSTONE_BOARD_USB2_IRQ
++#error The private host interrupt boot requires its matching application.
++#endif
++#include "host_irq_route.h"
+ _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
+ {
+     __asm__ volatile("msr daifset, #15":::"memory");
+@@ -91,6 +95,8 @@
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+         a733_smp_stop(3,0x308);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
++    /* Reject inherited source activity before disabling shared SPI enables. */
++    if(!board_host_irq_admit())a733_smp_stop(3,0x30d);
+     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
+     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
+     if(ctlr&(1u<<6))a733_smp_stop(2,2);
+@@ -99,6 +105,7 @@
+     for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
+     wait_clear(0x03400000,1u<<31);
+     write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
++    if(!board_host_irq_route())a733_smp_stop(3,0x30e);
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));

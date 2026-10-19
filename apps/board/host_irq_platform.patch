@@ -1,0 +1,15 @@
+--- platform.c
++++ host-irq-platform.c
+@@ -134,6 +134,12 @@
+ {
+     unsigned c=core();
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
++#ifndef SUNSTONE_BOARD_USB2_IRQ
++#error The private host interrupt dispatcher requires its matching application.
++#endif
++    extern void board_host_irq(void);
++    if(interrupt==187 && !c){board_host_irq();return;}
++    /* An unexpected CPU/source follows the existing retained exception path. */
+     if(interrupt==30 && !c) {
+         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+     } else if(interrupt==0 && c<8) {
