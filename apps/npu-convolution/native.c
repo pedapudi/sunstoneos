@@ -334,8 +334,8 @@ int a733_npu_application_init(TaskHandle_t client)
        !preparation_admitted() || !a733_npu_application_observer_admit() ||
        !image(&app,sizeof(app),1) || !image(b,sizeof(*b),0) ||
        (!a733_npu_application_model_bytes || a733_npu_application_model_bytes>NPU_CONVOLUTION_MODEL_CAPACITY) ||
-       (!a733_npu_application_input_bytes || a733_npu_application_input_bytes>NPU_CONVOLUTION_IO_CAPACITY) ||
-       (!a733_npu_application_reference_bytes || a733_npu_application_reference_bytes>NPU_CONVOLUTION_IO_CAPACITY) ||
+       (!a733_npu_application_input_bytes || a733_npu_application_input_bytes>NPU_CONVOLUTION_INPUT_CAPACITY) ||
+       (!a733_npu_application_reference_bytes || a733_npu_application_reference_bytes>NPU_CONVOLUTION_OUTPUT_CAPACITY) ||
        !image(a733_npu_application_model,a733_npu_application_model_bytes,0) ||
        !image(a733_npu_application_input,a733_npu_application_input_bytes,0) ||
        !image(a733_npu_application_reference,a733_npu_application_reference_bytes,0) ||

@@ -58,17 +58,17 @@ static void client(void *unused)
    if(!bounded()||!atomic_compare_exchange_strong_explicit(&npu_runtime.state,&expected,NR_CLOSED,memory_order_release,memory_order_relaxed))goto failed;
    vTaskSuspend(NULL);goto failed;
   }
-  if(npu_runtime.jobs>=UINT_MAX-1||!request(c,NPU_SERVICE_SUBMIT,npu_runtime.input,npu_runtime.bytes,&reply))goto failed;
+  if(npu_runtime.jobs>=UINT_MAX-1||!request(c,NPU_SERVICE_SUBMIT,NPU_RUNTIME_INPUT,npu_runtime.bytes,&reply))goto failed;
   uint64_t job=reply.job_ticket;if(!job)goto failed;
   while(reply.state!=A733_NPU_DONE){
    if(reply.state!=A733_NPU_RUNNING||reply.job_ticket!=job)goto failed;
    vTaskDelay(1);if(!request(c,NPU_SERVICE_STATUS,NULL,0,&reply))goto failed;
   }
-  if(reply.job_ticket!=job||!bounded()||!npu_convolution_output(c,npu_runtime.output,a733_npu_application_reference_bytes))goto failed;
+  if(reply.job_ticket!=job||!bounded()||!npu_convolution_output(c,NPU_RUNTIME_OUTPUT,a733_npu_application_reference_bytes))goto failed;
   if(!request(c,NPU_SERVICE_REAP,NULL,0,&reply)||reply.state!=A733_NPU_READY||!bounded())goto failed;
   npu_runtime.job=job;++npu_runtime.jobs;npu_runtime.irq_count=npu_service_irq_completions(&c->service);
   if(npu_runtime.irq_count!=npu_runtime.jobs+1)goto failed;
-  a733_observe_digest(npu_runtime.output,a733_npu_application_reference_bytes,npu_runtime.output_digest);
+  a733_observe_digest(NPU_RUNTIME_OUTPUT,a733_npu_application_reference_bytes,npu_runtime.output_digest);
   npu_runtime.end=a733_smp_counter();expected=NR_RUNNING;
   if(!bounded()||!atomic_compare_exchange_strong_explicit(&npu_runtime.state,&expected,NR_DONE,memory_order_release,memory_order_relaxed))goto failed;
  }

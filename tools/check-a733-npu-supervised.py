@@ -55,8 +55,8 @@ def capture_device(device,same,deadline,prepared,evidence,record,save):
     return capture(exchange,prepared,challenge,evidence,record,save,deadline)
 
 
-def source_files(runtime=False):
-    return ([('npu-runtime-host.py',ROOT/'apps/npu-runtime/host.py')] if runtime else [])+[('npu-host-tool.py',Path(__file__)),('npu-preparation.py',Path(preparation.__file__)),
+def source_files(runtime=False,large=False):
+    return ([('npu-runtime-host.py',ROOT/('apps/npu-runtime-large/host.py' if large else 'apps/npu-runtime/host.py'))] if runtime else [])+[('npu-host-tool.py',Path(__file__)),('npu-preparation.py',Path(preparation.__file__)),
         ('npu-protocol.py',Path(protocol.__file__)),('npu-artifacts.py',ROOT/'apps/npu-convolution/artifacts.py'),
         ('npu-catalogue.json',ROOT/'tools/npu-models.json'),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
@@ -69,7 +69,7 @@ def validate_software(value,bundle,prepared):
         artifact(value[key])
         require(value[key]['sha256']==hashlib.sha256(prepared['_frozen'][name]).hexdigest(),
             'NPU software covers different frozen executable bytes.')
-    sources=dict(source_files(prepared.get('execution_profile')=='npu-runtime-single-core-supervised-v1'));sources.update({'supervised-host-tool.py':Path(supervisor.__file__),
+    sources=dict(source_files(prepared.get('execution_profile') in ('npu-runtime-single-core-supervised-v1','npu-runtime-large-single-core-supervised-v1'),prepared.get('execution_profile')=='npu-runtime-large-single-core-supervised-v1'));sources.update({'supervised-host-tool.py':Path(supervisor.__file__),
         'base-host-tool.py':Path(supervisor.base.__file__),'observer-host-tool.py':Path(supervisor.observer.__file__)})
     require(set(value.get('sources',{}))==set(sources),'Incomplete software source identities.')
     for name,path in sources.items():require(digest(artifact(value['sources'][name]))==digest(path),'Software source differs: '+name)
@@ -111,9 +111,10 @@ def main(argv=None):
     def validate_entry(identity,port):
         preparation.validate_admission(admission,raw,bytes.fromhex(prepared['build_id']),prepared['session_layout'],prepared['image_sha256'],cache,True)
         record=json.loads(admission);require(record['identity']==identity and record['port']==port,'NPU admission covers another live instance.')
-    runtime=prepared.get('execution_profile')=='npu-runtime-single-core-supervised-v1'
+    large=prepared.get('execution_profile')=='npu-runtime-large-single-core-supervised-v1'
+    runtime=large or prepared.get('execution_profile')=='npu-runtime-single-core-supervised-v1'
     if runtime:
-        host=module('npu_runtime_host',ROOT/'apps/npu-runtime/host.py')
+        host=module('npu_runtime_host',ROOT/('apps/npu-runtime-large/host.py' if large else 'apps/npu-runtime/host.py'))
         require(args.input,'Runtime profile requires same-shape input files.')
         inputs=[p.read_bytes() for p in args.input];oracles=[p.read_bytes() for p in args.oracle]
         model=next(v for v in protocol.CATALOGUE if v['name']==prepared['model_name'])
@@ -121,8 +122,8 @@ def main(argv=None):
     else:require(not args.input and not args.oracle,'Runtime inputs require runtime image.')
     return supervisor.run_session(args,bundle,prepared,lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
         lambda device,same,deadline,record,save:(host.capture_device(device,same,deadline,prepared,args.evidence,record,save,inputs,oracles,model,durable=supervisor.durable_frame) if runtime else capture_device(device,same,deadline,prepared,args.evidence,record,save)),
-        product=('sunstoneos NPU runtime input' if runtime else protocol.PRODUCT),serial=('sunstoneos-a733-npu-runtime' if runtime else protocol.SERIAL),bcd_device=(0x0104 if runtime else 0x0103),capture_seconds=19,result_key='npu_result',
-        source_files=source_files(runtime),description='Supervised NPU convolution; retain all resources until manual whole-board power removal')
+        product=('sunstoneos NPU large graph input' if large else 'sunstoneos NPU runtime input' if runtime else protocol.PRODUCT),serial=('sunstoneos-a733-npu-large' if large else 'sunstoneos-a733-npu-runtime' if runtime else protocol.SERIAL),bcd_device=(0x0105 if large else 0x0104 if runtime else 0x0103),capture_seconds=19,result_key='npu_result',
+        source_files=source_files(runtime,large),description='Supervised NPU convolution; retain all resources until manual whole-board power removal')
 
 if __name__=='__main__':
     try:sys.exit(main())

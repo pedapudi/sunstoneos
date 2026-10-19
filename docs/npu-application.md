@@ -601,3 +601,7 @@ route and interrupt service sources are unchanged. The original finite returning
 profiles keep their two-fixture client and ROM-return behavior. Runtime input
 ownership, wire fields and focused evidence are documented with the application.
 No physical inference or interrupt qualification is established by these checks.
+
+The separate [fixed FP32 relative-attention shift profile](npu-relative-shift.md)
+adds authenticated SH/NT execution, an external working pool and chunked live
+input/output in a retained single-core IRQ application.

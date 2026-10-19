@@ -10,10 +10,12 @@ EXPECTED = tuple((name, CATALOGUE[0][name]['bytes'], CATALOGUE[0][name]['sha256'
                  for name in ('model','input','reference'))
 
 
-def prepare(model, input_path, reference, output):
+def prepare(model, input_path, reference, output, execution_family=None):
     model_sha = hashlib.sha256(model.read_bytes()).hexdigest()
     selected = next((v for v in CATALOGUE if v['model']['sha256'] == model_sha), None)
     if selected is None: raise ValueError('Model is absent from reviewed build-time catalogue')
+    if execution_family is not None and selected.get('family','nn')!=execution_family:
+        raise ValueError('Compiled model execution family differs from selected application')
     expected = tuple((name, selected[name]['bytes'], selected[name]['sha256']) for name in ('model','input','reference'))
     lines = ['#include "a733_npu_application.h"']
     identities = {}
@@ -36,5 +38,6 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('model', 'input', 'reference', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
+    p.add_argument('--execution-family',choices=('nn','sh-nt'))
     a = p.parse_args()
-    prepare(a.model, a.input, a.reference, a.output)
+    prepare(a.model, a.input, a.reference, a.output, a.execution_family)

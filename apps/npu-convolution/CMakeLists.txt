@@ -99,7 +99,13 @@ foreach(input MODEL INPUT REFERENCE)
     message(FATAL_ERROR "Supply the pinned A733_NPU_${input} artifact")
   endif()
 endforeach()
+if(A733_NPU_LARGE_GRAPH)
+  set(npu_execution_family sh-nt)
+else()
+  set(npu_execution_family nn)
+endif()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${a733_root}/apps/npu-convolution/artifacts.py"
+  --execution-family "${npu_execution_family}"
   --model "${A733_NPU_MODEL}" --input "${A733_NPU_INPUT}" --reference "${A733_NPU_REFERENCE}"
   --output "${npu_build}/artifacts.c" RESULT_VARIABLE artifact_status)
 if(NOT artifact_status EQUAL 0)

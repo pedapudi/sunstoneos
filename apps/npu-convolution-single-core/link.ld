@@ -40,9 +40,19 @@ SECTIONS {
     .exception_stack (NOLOAD) : ALIGN(16) {
         . += 32768; __exception_stack_top = .;
     } > RAM
+    .npu_graph_input (DEFINED(__npu_large_graph) ? 0x41400000 : .) (NOLOAD) : {
+        __npu_graph_input_start = .; KEEP(*(.npu_graph_input)) __npu_graph_input_end = .;
+    } > RAM
+    .npu_graph_output (DEFINED(__npu_large_graph) ? 0x41480000 : .) (NOLOAD) : {
+        __npu_graph_output_start = .; KEEP(*(.npu_graph_output)) __npu_graph_output_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__npu_large_graph) ||
+        (__exception_stack_top <= 0x41400000 && __npu_graph_input_start == 0x41400000 &&
+         __npu_graph_input_end == 0x41480000 && __npu_graph_output_start == 0x41480000 &&
+         __npu_graph_output_end == 0x414c0000), "large graph staging overlaps ordinary state")
     __heap_end = .;
     /* An absent pool preserves the previous image extent and section layout. */
-    .device_pool (NOLOAD) : {
+    .device_pool (DEFINED(__npu_large_graph) ? 0x41600000 : .) (NOLOAD) : {
         . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;
         __device_pool_start = .;
         . += DEFINED(__device_pool_size) ? __device_pool_size : 0;
@@ -50,7 +60,10 @@ SECTIONS {
     } > RAM
     ASSERT(!DEFINED(__device_pool_size) || (__device_pool_size % 4096) == 0,
            "device pool must contain complete pages")
-    ASSERT(!DEFINED(__device_pool_size) || __device_pool_size <= 2097152,
+    ASSERT(!DEFINED(__device_pool_size) ||
+           (!DEFINED(__npu_large_graph) && __device_pool_size <= 2097152) ||
+           (DEFINED(__npu_large_graph) && __device_pool_size == 4194304 &&
+            __device_pool_start == 0x41600000 && __device_pool_end == 0x41a00000),
            "device pool exceeds allocation registry capacity")
     ASSERT(__device_pool_start == __device_pool_end || __device_pool_end <= 0x41f00000,
            "device pool exceeds image RAM reservation")

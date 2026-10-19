@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(a733_npu_single_core LANGUAGES C ASM)
+option(A733_NPU_LARGE_GRAPH "Fixed retained SH/NT large graph" OFF)
 set(A733_NPU_SUPERVISED ON CACHE BOOL "Supervised retained NPU" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../npu-convolution" "${CMAKE_CURRENT_BINARY_DIR}/npu-base")
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/a733-npu-single-core.cmake")

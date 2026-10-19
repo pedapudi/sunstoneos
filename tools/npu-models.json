@@ -196,6 +196,60 @@
       "descriptor_patches": 8,
       "state_patches": 2,
       "command_body_bytes": 104
+    },
+    {
+      "name": "relative-shift128",
+      "family": "sh-nt",
+      "model": {
+        "bytes": 3976,
+        "sha256": "327b9dbcaa3cf1b387a7f21e9bd4fef132237e55bb7108b6483a42c54462de69"
+      },
+      "input": {
+        "bytes": 522240,
+        "sha256": "4fda84d289d36d9376337a26ad3ca74b6fcbbd3c31b9b0e26b2ee9236afed750"
+      },
+      "reference": {
+        "bytes": 262144,
+        "sha256": "90d9c1030d4d5fe5c7a8108f592f614e8928134f530123664089e587844f0ad3"
+      },
+      "input_tensor": [
+        3,
+        255,
+        128,
+        4,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "output_tensor": [
+        3,
+        128,
+        128,
+        4,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "vip_sram_bytes": 524288,
+      "coeff_bytes": 0,
+      "nn_operations": 3,
+      "descriptor_patches": 6,
+      "state_patches": 6,
+      "command_body_bytes": 656,
+      "pool_bytes": 1047808,
+      "ppu_bytes": 512,
+      "shader_operations": 1,
+      "nt_operations": 3
     }
   ]
 }

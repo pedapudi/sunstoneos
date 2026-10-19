@@ -95,10 +95,20 @@ def image_manifest_check(manifest,raw,session=None):
     if runtime:
         require(target=='a733-npu-convolution-single-core','Runtime requires single-core image.')
         section=elf.get_section(runtime['st_shndx']);offset=runtime['st_value']-section['sh_addr']
-        require(not section['sh_flags']&1 and runtime['st_size']==32 and struct.unpack('<4Q',section.data()[offset:offset+32])==(0x415337334e505232,1,64,512),'Runtime geometry differs.')
-        profile='npu-runtime-single-core-supervised-v1'
+        require(not section['sh_flags']&1,'Runtime geometry is writable.')
+        geometry=section.data()[offset:offset+runtime['st_size']]
+        if runtime['st_size']==48:
+            require(struct.unpack('<6Q',geometry)==(0x415337334e504c32,2,64,512,522240,262144),
+                'Large runtime geometry differs.')
+            require(selected_model(raw).get('family')=='sh-nt','Large runtime model family differs.')
+            profile='npu-runtime-large-single-core-supervised-v1'
+        else:
+            require(runtime['st_size']==32 and struct.unpack('<4Q',geometry)==(0x415337334e505232,1,64,512),
+                'Runtime geometry differs.')
+            require(selected_model(raw).get('family','nn')=='nn','Small runtime model family differs.')
+            profile='npu-runtime-single-core-supervised-v1'
     if target=='a733-npu-convolution-single-core':
-        require(manifest.get('execution_profile')==profile and manifest.get('workload')==('runtime-input-irq' if runtime else 'trusted-convolution-repeat'),
+        require(manifest.get('execution_profile')==profile and manifest.get('workload')==('runtime-large-sh-nt-irq' if profile=='npu-runtime-large-single-core-supervised-v1' else 'runtime-input-irq' if runtime else 'trusted-convolution-repeat'),
             'Single-core NPU manifest profile differs.')
     else:
         require(manifest.get('execution_profile',profile)==profile,'All-core NPU profile differs.')

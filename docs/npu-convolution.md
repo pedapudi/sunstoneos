@@ -223,3 +223,7 @@ through this API. Its USB task owns one mailbox; the designated NPU client owns
 all service calls, REAP and terminal CLOSE. The compiled-model catalogue and
 memory/publication policy remain unchanged. Runtime input delivery does not add
 model upload, shape switching or broader operator support.
+
+The separate [fixed FP32 relative-attention shift profile](npu-relative-shift.md)
+adds authenticated SH/NT execution, an external working pool and chunked live
+input/output in a retained single-core IRQ application.
