@@ -1556,9 +1556,17 @@ Accepted sources, bundle, checkpoint and results are preserved under
 `all-core-task-workload-20261019/frozen/`. The original result files are
 `background/software.json` and `background/wrong-rounds.json` in the same evidence
 directory. Timing, interrupt delivery and coherent memory remain modeled; these
-counters are not physical performance measurements. Host report validation and
-physical qualification remain outstanding. No hardware launch is admitted while
-manual recovery is unavailable.
+counters are not physical performance measurements.
+
+The host validates the frozen patch inventory, worker stack and exception state,
+all arrival epochs, copied worker results and restored timer priorities. Thirteen
+focused cases pass with the actual runner and modeled FEL transport. They also
+cover saved-RAM restoration, transport-failure retention and rejection of changed
+instruction evidence. Host sources and results are preserved under `host-frozen/`
+in the same directory, with root review in `host-root-review.json`. The native
+instruction workload was reused without repeating it. Physical qualification
+remains outstanding. No hardware launch is admitted while manual recovery is
+unavailable.
 
 ## All eight CPUs complete the production barrier and atomic increments
 

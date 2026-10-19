@@ -13,7 +13,8 @@ HOST_SOURCES=local.HOST_SOURCES+('tools/secondary-cache-host.py',)
 MODEL_SOURCES=('checks/secondary-cache-probe.py',)+local.MODEL_SOURCES
 
 
-def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False,first_task=False):
+def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False,first_task=False,task_workload=False):
+    require(not task_workload or first_task, "Task workload requires task report.")
     require(not first_task or pre_scheduler, "First task requires all-core report.")
     observed_sctlr=0x30d41805 if first_task else 0x30d01805
     result=local.decode(raw,nonce,cached=True,coherent=coherent,interrupts=interrupts,pre_scheduler=pre_scheduler)
@@ -25,7 +26,11 @@ def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=Fa
         offset=0x2000+core*256
         el3=struct.unpack_from('<20Q',raw,offset)
         el1=struct.unpack_from('<32Q',raw,0x2800+core*256)
-        require(not any(raw[offset+160:offset+256]),'EL3 report padding changed.')
+        if task_workload:
+            before, after = struct.unpack_from('<2Q', raw, offset+160)
+            require(before == after and not before & ~0xf8f8f8f8,
+                    'Secure timer priority was not restored.')
+        require(not any(raw[offset+(176 if task_workload else 160):offset+256]),'EL3 report padding changed.')
         if not initialized['initialized']:
             require(not any(el3+el1),'Refused local initialization entered cached execution.')
             cores.append({'core':core,'cached_entry_completed':False,'refused_before_cache':True})

@@ -39,8 +39,11 @@ cleanup, memory publication and matched shutdown. A damaged completed-round
 count retains the session before cleanup. That refusal check reuses the saved
 completed-workload checkpoint without repeating the worker execution. Sources,
 image and results are preserved in `all-core-task-workload-20261019/frozen/`.
-Timing and cache coherence remain modeled. Host validation for this extended
-report and physical qualification are outstanding; no launch is admitted.
+Timing and cache coherence remain modeled. Host validation now passes thirteen
+focused cases, including copied workload results, arrival epochs, task contexts,
+timer-priority restoration, saved-RAM restoration and failure retention.
+Evidence: `host-frozen/` and `host-root-review.json` in the same directory.
+Physical qualification remains outstanding; no launch is admitted.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;

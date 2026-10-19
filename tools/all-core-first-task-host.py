@@ -35,22 +35,30 @@ def task_context(core, task_switch=False):
     return tcb, (stack+4096-8) & ~15
 
 
-def decode(raw, nonce, manifest, task_switch=False):
+def decode(raw, nonce, manifest, task_switch=False, task_workload=False):
+    task_switch = task_switch or task_workload
     hooks = manifest['hooks']
-    result = base.decode(raw, nonce, hooks['el1_smc_return'], first_task=True)
+    result = base.decode(raw, nonce, hooks['el1_smc_return'], first_task=True, task_workload=task_workload)
     epoch, deadline = result['epoch'], result['startup_deadline']
     entries = []
     for core in range(8):
         tcb, stack = task_context(core, task_switch)
+        if task_workload: stack -= 64  # Frozen worker prologue, retained at post-loop branch.
         record = struct.unpack_from('<8Q', raw, 0x3200+core*64)
-        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0, tcb, core if task_switch else 0, 0x30d41805),
+        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0x60000000 if task_workload else 0, tcb, core if task_switch else 0, 0x30d41805),
                 'First-task context, publication or SCTLR differs.')
         saved = struct.unpack_from('<32Q', raw, 0x3a00+core*256)
         require(saved[:8] == (hooks['el1_observe_checkpoint']+4, 0x4124b000+core*32768,
                 core, epoch, deadline, deadline, 0x03460000+core*0x20000, 0x4100a000) and
                 not any(saved[8:]), 'Saved returning context differs.')
         entries.append({'core': core, 'tcb': tcb, 'task_sp': stack, 'task_spsr': record[4]})
-    require(not any(raw[0x3400:0x3a00]), 'Completion-page padding changed.')
+    if task_workload:
+        require(struct.unpack_from('<8Q', raw, 0x3600) == (epoch,)*8,
+                'Worker arrival epochs differ.')
+        require(not any(raw[0x3400:0x3600]) and not any(raw[0x3640:0x3a00]),
+                'Workload completion-page padding changed.')
+    else:
+        require(not any(raw[0x3400:0x3a00]), 'Completion-page padding changed.')
     require(struct.unpack_from('<19I', raw, 0x4200) == tuple([1]*8+[256, 0]+[1]*8+[1]),
             'Production pre-scheduler state differs.')
     # The remainder contains real task/kernel state, so it must not be zeroed
@@ -68,12 +76,14 @@ probe = SimpleNamespace(NATIVE=base.probe.NATIVE, REPORT=base.probe.REPORT, deco
 initial_report = base.initial_report
 
 
-def load(build, image, manifest, task_switch=False):
+def load(build, image, manifest, task_switch=False, task_workload=False):
+    task_switch = task_switch or task_workload
     frozen, dram = base.cache.local.identity.load(build, image, manifest,
-                                                  first_task=True, task_switch=task_switch)
+                                                  first_task=True, task_switch=task_switch,
+                                                  task_workload=task_workload)
     require(manifest.get('first_task') == {
         'physical_eligible': False, 'writable_interval': [0x41200000, 0x41291000],
-        'cache_lines_per_core': 9280, 'task_bodies': False, 'timer_and_sgi_workload': False,
+        'cache_lines_per_core': 9280, 'task_bodies': task_workload, 'timer_and_sgi_workload': task_workload,
         'pending': 'Instruction execution, return validation and source review required before physical use.'},
         'First-task scope changed.')
     with image.open('rb') as stream:

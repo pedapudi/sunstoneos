@@ -25,8 +25,8 @@ def expected_memory(epoch):
     return bytes(page+state)
 
 
-def decode(raw, nonce, smc_return, first_task=False):
-    result = cache.decode(raw, nonce, smc_return, pre_scheduler=True, first_task=first_task)
+def decode(raw, nonce, smc_return, first_task=False, task_workload=False):
+    result = cache.decode(raw, nonce, smc_return, pre_scheduler=True, first_task=first_task, task_workload=task_workload)
     require(result['cached_entry_completed'], 'Every secondary must finish cached execution.')
     observed_sctlr = 0x30d41805 if first_task else 0x30d01805
     clean_lines = 9280 if first_task else 192
@@ -43,8 +43,12 @@ def decode(raw, nonce, smc_return, first_task=False):
             el3[4:8] == tuple(result['el3_before']) and not el3[4] & 0x02001005,
             'Primary cache adoption inherited different controls.')
     require(el3[9:14] == (el3[4] | 0x1005, 0x80823019, 0x421f2000, 0x44ff00, el3[8] & ~0x200) and
-            el3[14:19] == el3[4:9] and not any(raw[0x20a0:0x2100]),
+            el3[14:19] == el3[4:9] and not any(raw[0x20b0 if task_workload else 0x20a0:0x2100]),
             'Primary EL3 cache restoration or padding differs.')
+    if task_workload:
+        before, after = struct.unpack_from('<2Q', raw, 0x20a0)
+        require(before == after and not before & ~0xf8f8f8f8,
+                'Primary Secure timer priority was not restored.')
     el1 = struct.unpack_from('<32Q', raw, 0x2800)
     require(el1[:3] == (3, *binding) and el1[4:6] == tuple(result['el1_after']) and
             0x42000000 <= el1[3] < 0x421f0000 and not el1[3] & 15,
