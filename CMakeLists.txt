@@ -188,6 +188,11 @@ if(SUNSTONE_BLUETOOTH_APPLICATION)
   include(cmake/a733-bluetooth.cmake)
 endif()
 
+option(SUNSTONE_MIMUS_BOARD_APPLICATION "Build supervised recorded recognition with USB storage" OFF)
+if(SUNSTONE_MIMUS_BOARD_APPLICATION)
+  include(cmake/a733-mimus-board.cmake)
+endif()
+
 option(SUNSTONE_A733_CRYPTO "Build supervised native CE SHA/AES diagnostic" OFF)
 if(SUNSTONE_A733_CRYPTO)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-crypto.cmake")
