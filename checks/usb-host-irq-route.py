@@ -25,7 +25,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--case', action='append', choices=CASES)
+    # Dual-leaf routing requires a capable image; keep legacy default cases.
+    p.add_argument('--case', action='append', choices=CASES+['route-dual'])
     args = p.parse_args()
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
     with args.image.open('rb') as f:
@@ -89,7 +90,8 @@ def main():
         expiry = 5 if case in ('expired', 'dispatch-expired') else 1000
         cpu.mem_write(syms['admission']+deadline, expiry.to_bytes(8, 'little'))
         cpu.mem_write(syms['diagnostic_deadline'], expiry.to_bytes(8, 'little'))
-        cpu.mem_write(SESSION+workload, (2 if case == 'nonhost' else 0).to_bytes(4, 'little'))
+        selected_workload = 2 if case == 'nonhost' else 4 if case == 'route-dual' else 0
+        cpu.mem_write(SESSION+workload, selected_workload.to_bytes(4, 'little'))
         def read(uc, access, address, size, value, unused):
             reads.append(address)
             assert case != 'nonhost', 'Non-host session accessed the GIC'
@@ -141,14 +143,14 @@ def main():
             assert cpu.reg_read(UC_ARM64_REG_PC) == STOP, 'Instruction budget exhausted'
             if case == 'dispatch':
                 assert calls == ['host-handler'] and not writes
-            elif case in ('route', 'ignored-priority', 'ignored-route'):
+            elif case in ('route', 'route-dual', 'ignored-priority', 'ignored-route'):
                 assert [(a, v) for a, s, v in writes] == list(EXPECTED.items()), writes
                 assert [s for a, s, v in writes] == [4, 4, 4, 4, 8]
-                assert cpu.reg_read(UC_ARM64_REG_X0) == (case == 'route')
+                assert cpu.reg_read(UC_ARM64_REG_X0) == (case in ('route', 'route-dual'))
             else:
                 assert not writes
                 assert cpu.reg_read(UC_ARM64_REG_X0) == (case == 'nonhost')
-        result = {'case': case, 'passed': True, 'image_sha256': digest, 'writes': writes,
+        result = {'case': case, 'passed': True, 'image_sha256': digest, 'workload': selected_workload, 'writes': writes,
                   'terminal': terminal, 'physical_access': False,
                   'scope': 'Linked EL3 route and dispatch; validated-session provider, GIC registers and ISR body modeled. No scheduling, interrupt-delivery or recovery qualification.'}
         (args.output/(case+'.json')).write_text(json.dumps(result, indent=2)+'\n')
