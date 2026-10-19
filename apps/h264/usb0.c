@@ -36,7 +36,8 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 
 /* One zero-valued byte requests a coherent private result. Header128bytes:
  * LE32 magic/version/status/bytes, LE64 epoch/generation, fixture/reference/
- * copied-payload SHA256. Only status1 appends2304 verified copied Y/Cb/Cr bytes.
+ * copied-payload SHA256. Reference hash0 means no qualification oracle.
+ * Only status1 appends2304 owned copied Y/Cb/Cr bytes.
  * Device buffers remain DEVICE-owned; status2 carries no payload. */
 static uint8_t h264_response[128+A733_H264_OUTPUT_BYTES];
 static unsigned h264_response_bytes,h264_response_sent,h264_response_transferred;
@@ -50,12 +51,29 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {if(interface||bytes>h264_response_sent-h264_response_transferred)stop();h264_response_transferred+=bytes;
  if(h264_response_transferred==h264_response_bytes&&h264_response_sent==h264_response_bytes)h264_response_bytes=0;}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
+static int upload_now(void *unused,uint64_t *now)
+{(void)unused;return board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,now)==1&&board_live(NULL)?1:-1;}
 static void h264_exchange(void)
 {
     if(h264_response_bytes){unsigned n=tud_vendor_write(h264_response+h264_response_sent,h264_response_bytes-h264_response_sent);
         h264_response_sent+=n;tud_vendor_flush();return;}
     if(!tud_vendor_available())return;
-    uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
+    uint8_t incoming[512];
+    size_t n;
+    if(h264.supplied.header_used&&!a733_h264_input_ready(&h264.supplied)){
+        n=a733_h264_input_remaining(&h264.supplied);
+        if(!n)stop();
+        if(n>sizeof(incoming))n=sizeof(incoming);
+        if(n>tud_vendor_available())n=tud_vendor_available();
+    }else n=1;
+    if(tud_vendor_read(incoming,n)!=n)stop();
+    if(n!=1||incoming[0]||
+       (h264.supplied.header_used&&!a733_h264_input_ready(&h264.supplied))){
+        if(!board_live(NULL)||
+           a733_h264_input_feed(&h264.supplied,&h264.session,upload_now,NULL,
+               board.session.deadline_us-10000,incoming,n)<0||!board_live(NULL))stop();
+        return;
+    }
     unsigned result=atomic_load_explicit(&h264.result,memory_order_acquire);
     put32(h264_response,0x34363248);put32(h264_response+4,1);put32(h264_response+8,result);
     put32(h264_response+12,result==1?A733_H264_OUTPUT_BYTES:0);

@@ -11,6 +11,8 @@ struct a733_h264_session {
     struct a733_board_session board;
     uint64_t magic,version,bytes,owner,authority,pck_client;
     uint8_t initial[32],memory[32],electrical[32],supervision[32];
+    /* Nonzero uploaded AnnexB digest; optional qualification-oracle digest.
+     * An all-zero reference selects normal copied-output mode. */
     uint8_t fixture[32],reference[32];
     uint32_t module,module_hz;
     uint32_t iommu_gates[2];

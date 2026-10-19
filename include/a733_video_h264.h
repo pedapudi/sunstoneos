@@ -46,8 +46,8 @@ struct a733_h264_ops {
     int (*prepare)(void *, uint64_t, const struct a733_h264_job *, uint64_t);
     int (*read)(void *, uint64_t, uint32_t, uint32_t *, uint64_t);
     int (*write)(void *, uint64_t, uint32_t, uint32_t, uint64_t);
-    /* Verify a private copied result against the independent pixel oracle,
-     * fault/status/guard checks and live lifetime. Retain all DMA ownership;
+    /* Verify owned private copied bytes; an optional qualification oracle,
+     * fault/status/guard checks and live lifetime govern publication. Retain DMA;
      * successful CPU copying does not establish producer or transaction drain.
      * acquire/prepare/copied return1 complete,0 pending,-1 failure.
      * read/write return exactly1 after ordered access, otherwise failure.

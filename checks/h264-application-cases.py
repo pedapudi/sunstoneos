@@ -7,7 +7,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 
-def setup(image,out,session_optional=False):
+def setup(image,out,session_optional=False,fixture_optional=False):
     """Validate fixture prerequisites without executing native instructions."""
     errors=[];symbols={};symbol_candidates={};copy_entries=set();segments=[];layouts={};reference=b'';session=b''
     try:
@@ -50,7 +50,7 @@ def setup(image,out,session_optional=False):
     for structure,names in members.items():
         for name in names:
             if name not in layouts.get(structure,{}):errors.append('Missing DWARF member: '+structure+'.'+name)
-    for name in ('reference.yuv','session.bin','slice.bin'):
+    for name in (() if fixture_optional else ('reference.yuv','session.bin','slice.bin')):
         if name=='session.bin' and session_optional and not (out/name).exists():continue
         try:data=(out/name).read_bytes()
         except OSError as error:errors.append(str(error));continue
@@ -88,6 +88,7 @@ def run(image,out,source,compiler,linker,steps,steps_path):
         assert result.returncode and 'H.264 cannot inherit an armed board target' in result.stderr
         passed('armed-parent-refused')
     layout=layouts['h264_application'];io=layouts['a733_iommu'];fault=layouts['a733_iommu_fault']
+    supplied=layouts['a733_h264_input']
     (out/'h264-layouts.json').write_text(json.dumps(layouts,indent=2)+'\n')
     for variant in ['verified','pixel-mismatch','physical-guard','scratch-tail','iommu-fault','writeback-busy','post-copy-fault','post-copy-busy']:
         label='native-copy-'+variant
@@ -102,6 +103,9 @@ def run(image,out,source,compiler,linker,steps,steps_path):
         prefixes=[4096,4096,4096,4096,4096,16384]
         for field,address in zip(('input','luma','chroma'),data_addresses):cpu.mem_write(base+layout[field],struct.pack('<Q',address))
         cpu.mem_write(base+layout['buffers'],struct.pack('<6Q',*data_addresses))
+        cpu.mem_write(base+layout['supplied']+supplied['oracle'],reference)
+        cpu.mem_write(base+layout['supplied']+supplied['oracle_bytes'],struct.pack('<Q',2304))
+        cpu.mem_write(base+layout['supplied']+supplied['committed'],struct.pack('<I',1))
         for address,capacity,prefix in zip(allocation_bases,capacities,prefixes):
             cpu.mem_write(address,bytes([0xa5])*(capacity+prefix+4096))
         for row in range(32):cpu.mem_write(0x50005000+row*64,reference[row*48:row*48+48])
@@ -176,6 +180,7 @@ def run(image,out,source,compiler,linker,steps,steps_path):
     if steps.get('native-usb-revocation',{}).get('exit')!=0:
         cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);cpu.mem_map(0x40000000,0x4000000);cpu.mem_map(0x50000000,0x1000000)
         for address,data in segments:cpu.mem_write(address,data)
+        cpu.mem_write(symbols['h264']+layouts['h264_application']['supplied']+layouts['a733_h264_input']['committed'],struct.pack('<I',1))
         parked=[];failures=[]
         def usb_failure(machine,address,size,unused):
             def returned(value):
@@ -225,6 +230,8 @@ def run(image,out,source,compiler,linker,steps,steps_path):
         template[800:832]=hashlib.sha256(reference).digest()
         raw=bytearray(template);raw[48:80]=identity
         (bundle/'session-template.bin').write_bytes(template);(bundle/'session.bin').write_bytes(raw)
+        (bundle/'input.h264').write_bytes((out/'slice.bin').read_bytes())
+        (bundle/'oracle.yuv').write_bytes(reference)
         (bundle/'admission.json').write_text('{}\n')
         (bundle/'image-input-manifest.json').write_text(json.dumps({'target':'sunstone-a733-h264','execution_profile':'h264-supervised-v1','final_elf':hashlib.sha256(image.read_bytes()).hexdigest()}))
         uploads=[]

@@ -14,12 +14,18 @@ decode macroblock payloads. A malformed payload can therefore pass header
 admission and fail in the engine. Device errors, data requests, busy completion
 and deadlines retain every allocation and lease.
 
-The diagnostic application accepts 48-by-32 pictures and copies 2,304 planar
-Y, Cb and Cr bytes. Its input stream and independent pixel reference are
-immutable compiled inputs selected with `SUNSTONE_H264_FIXTURE` and
-`SUNSTONE_H264_REFERENCE`. Each image admits their hashes through its sealed
-session. Changing the stream or reference requires linking another image;
-the application does not yet accept live stream uploads.
+The application accepts an uploaded 48-by-32 picture and copies 2,304 planar
+Y, Cb and Cr bytes. The firmware contains no clip or pixel reference. A new
+clip requires a new admitted session and prepared bundle, while the same ELF
+can be reused. Each session binds a nonzero stream digest. Its optional pixel
+reference is a qualification oracle; an all-zero reference digest selects
+normal decoder output. Normal output checks ownership, completion and copied
+byte integrity without asserting numerical conformance.
+
+The upload owns one job for the retained decoder lifetime. A completed or
+failed job cannot accept another clip, reclaim buffers or release its leases.
+Runtime ingestion removes the need to rebuild firmware for each clip; repeated
+decoding within one session remains unsupported.
 
 Supported headers use one slice beginning at macroblock zero, picture-order
 count type 0 or 2, at most one reference-frame declaration and no frame-number
@@ -106,6 +112,42 @@ Output luma has a 64-byte stride and 32 rows. Each chroma plane has a 32-byte
 stride, 16 rows and a 512-byte allocation. The private output removes row
 padding and contains 1,536 Y bytes followed by 384 Cb and 384 Cr bytes.
 
+## Runtime upload publishes immutable owned input before provider access
+
+The private USB vendor endpoint uses the project's bounded asset pattern:
+receive declared bytes into owned storage, validate them, then commit once.
+The upload header is 32 bytes, with little-endian fields:
+
+| Offset | Field | Accepted value |
+| --- | --- | --- |
+| 0 | Magic, 32 bits | `0x55363248` (`H26U`) |
+| 4 | Version, 32 bits | 1 |
+| 8 | Annex B length, 32 bits | 1 through 4,096 |
+| 12 | Oracle length, 32 bits | 0 for normal output; 2,304 for qualification |
+| 16 | Epoch, 64 bits | Current sealed session epoch |
+| 24 | Generation, 64 bits | Current sealed session generation |
+
+The body contains the stream followed by the optional oracle. USB reads stop
+at header, stream and oracle boundaries, with at most 512 bytes per iteration.
+Fragmentation and coalescing do not change those lengths. Every fragment checks
+the same session generation, authority, input digests and deadline. Partial
+input remains unpublished until completion or the supervised deadline.
+
+The producer hashes the copied stream and optional oracle, parses the stream
+and enforces the application's 48-by-32 bounds. A fresh clock check after that
+validation rejects an expired commit. Release/acquire publication transfers
+read access to the decoder task; the task cannot acquire VE resources before
+publication. Writes and duplicate uploads after commit fail without modifying
+the published bytes and revoke board liveness. The CPU stream and any oracle
+remain owned until the prescribed whole-board power removal.
+
+[The bundle producer](../apps/h264/prepare.py) takes `--input` and optional
+`--reference`. The session template must contain their digests; a missing
+reference requires a zero reference digest. Bundle version 2 seals these files
+alongside the image, launcher and session. Input bytes travel through the
+application endpoint after enumeration, outside the ROM image-upload spans.
+The host capture tool derives the upload from the frozen bundle.
+
 ## Completion permits a verified private copy without reclaiming DMA
 
 After acquisition, the executor parses the retained immutable CPU stream and reads the
@@ -136,10 +178,13 @@ Errors take precedence over completion. A completion flag with any applicable
 pipeline, transform, bitstream-DMA or writeback-busy bit remains pending.
 The executor disables codec interrupt enables and acknowledges only observed
 low status bits. It then requires fault scans for both masters, intact guards,
-quiet H.264 status and equality with every independent oracle sample. A second
+quiet H.264 status and, in qualification mode, equality with every independent
+oracle sample. A second
 scan and status/guard check precede the final private-copy digest.
 
-The terminal state is COPIED. It permits access to the immutable private result
+The terminal state is COPIED. In normal mode this reports completed, owned
+output with a digest; it does not assert a pixel oracle match. It permits access
+to the immutable private result
 while all mappings, buffers, clocks, power and interrupt reservations remain
 held. Completion flags, canaries, fault scans and CPU barriers do not establish
 accepted-transaction drain. Failure and success both require the prescribed
@@ -157,10 +202,10 @@ A zero-valued USB request byte returns a 128-byte header. It contains the H.264
 magic/version, status, byte count, session epoch/generation and input/reference/
 private-output hashes. Only successful copied status appends the 2,304 planar
 bytes. Pending and failure carry no pixel bytes or private-output digest.
-The host command requires `--reference` with the independent 2,304-byte pixel
-file; its digest must match the admitted session before launch. The host
-retains raw frames, verifies the complete copied output and checks its deadline
-before publishing the durable result.
+The host retains raw frames, verifies the copied byte count, session identities
+and payload digest, and checks its deadline before publishing the durable
+result. Qualification mode also compares every copied pixel with the sealed
+oracle. `oracle_verified` is false for normal output.
 USB health, assertion and invalid-request failures revoke board liveness before
 parking, preventing subsequent decoder operations while retaining its resources.
 
@@ -174,14 +219,22 @@ minimum/maximum driver geometry. FFmpeg header traces independently establish
 their syntax values and pixel references. ASan/UBSan checks damaged and truncated
 inputs; the native executor's register model checks the planned fields.
 
-The frozen images, linked dependency closures, pixel references, encoder and
-header traces are under
-`~/.cache/sunstoneos/evidence/h264-stream-20261018`.
-The PCM integration image is `pcm-integration/build/sunstone-a733-h264.elf`;
-the predicted 48-by-32 image is `prediction-build/sunstone-a733-h264.elf`.
-The preserved primary-source and fixed pixel/register evidence remains under
-`h264-native-20261017` and `h264-native-20261018`. Host FFmpeg/libx264 binary
-identities and execution boundaries are recorded in
+The runtime-upload image, linked dependency closure, normal/qualification
+bundles and focused checks are under
+`~/.cache/sunstoneos/evidence/h264-input-20261018`.
+The image is `build/sunstone-a733-h264.elf`. Native instruction checks cover
+fragmented and coalesced upload, partial input withholding provider access,
+late commit and duplicate upload refusal, copied output and the actual USB
+serializer in both modes. Device pixel writes are injected in those checks;
+normal-mode comparisons establish copied bytes and metadata, not codec accuracy.
+ASan/UBSan input checks consume upload headers emitted by the actual host
+producer and test session, length, mode, digest and deadline refusal.
+
+The unchanged parser and register-planning evidence remains under
+`h264-stream-20261018`; its four libx264 streams and FFmpeg header/pixel
+references are reused. The primary-source and fixed pixel/register evidence
+remains under `h264-native-20261017` and `h264-native-20261018`. Host FFmpeg/libx264
+identities and execution boundaries remain in
 [the source manifest](../apps/h264/sources.json).
 
 Hardware registers, DMA results, initial physical authority and USB transport

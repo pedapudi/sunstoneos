@@ -21,7 +21,7 @@ def main():
     prepare = capture.preparation
     raw = bytearray((out/'session.bin').read_bytes())
     raw[768:800] = hashlib.sha256((out/'slice.bin').read_bytes()).digest()
-    raw[800:832] = hashlib.sha256(capture.REFERENCE).digest()
+    raw[800:832] = hashlib.sha256((out/'reference.yuv').read_bytes()).digest()
     frame = (out/'native-frame.bin').read_bytes()
     pending = bytearray(frame[:128]); struct.pack_into('<2I', pending, 8, 0, 0); pending[96:128] = bytes(32)
     evidence = out/'host'; evidence.mkdir(exist_ok=False)
@@ -40,13 +40,13 @@ def main():
             return bytes(value)
         try:
             result = capture.capture(exchange, bytes(raw), folder, record, save, 5,
-                                     now=lambda: clock[0], pause=lambda seconds: None)
+                                     now=lambda: clock[0], pause=lambda seconds: None,reference=(out/'reference.yuv').read_bytes())
         except (ValueError, RuntimeError):
             assert name != 'nominal' and record['h264_result'] == 'unobserved'
             assert (folder/'h264-002.bin').exists()  # Refused raw bytes remain durable.
         else:
             assert name == 'nominal' and result['copied_verified']
-            assert (folder/'output.yu12').read_bytes() == capture.REFERENCE
+            assert (folder/'output.yu12').read_bytes() == (out/'reference.yuv').read_bytes()
     # Only the older common board authority is modeled here. Actual H.264 fact
     # decoding, target binding, six ranges and immutable evidence hashes run.
     schemas = {

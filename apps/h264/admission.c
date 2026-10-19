@@ -13,7 +13,7 @@ int a733_h264_session_valid(const struct a733_h264_session *s)
         !(s->module&UINT32_C(0x80000000))&&s->supply_uv==800000&&s->supply_rail==A733_RAIL_DCDC2&&
         s->iommu_gates[0]==0x10007&&s->iommu_gates[1]==0x10007&&
         present(s->initial,32)&&present(s->memory,32)&&present(s->electrical,32)&&
-        present(s->supervision,32)&&present(s->fixture,32)&&present(s->reference,32);
+        present(s->supervision,32)&&present(s->fixture,32);
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {

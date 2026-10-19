@@ -1,12 +1,14 @@
 #ifndef SUNSTONE_H264_PRIVATE_H
 #define SUNSTONE_H264_PRIVATE_H
 #include "a733_h264_application.h"
+#include "a733_h264_input.h"
 #include "a733_video_platform.h"
 #include "a733_iommu.h"
 #include "device_memory_pool.h"
 #include "../board/application.h"
 struct h264_application {
     struct a733_h264_session session;
+    struct a733_h264_input supplied;
     struct a733_h264_platform platform;
     struct a733_h264_run run;
     struct a733_iommu iommu;
@@ -32,7 +34,6 @@ struct h264_application {
     uint8_t payload[A733_H264_OUTPUT_BYTES],digest[32];
 };
 extern struct h264_application h264;
-extern const uint8_t h264_fixture[],h264_fixture_end[],h264_reference[],h264_reference_end[];
 void h264_task(void *);
 void board_usb0_task(void *);
 #endif

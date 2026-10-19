@@ -14,7 +14,7 @@ def module(name,path):
 board=module('h264_board_prepare',ROOT/'apps/board/prepare.py')
 base=board.base
 require=base.require
-SCHEMA='a733-h264-supervised-bundle-v1'
+SCHEMA='a733-h264-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373348324331
 REQUEST_MAGIC=0x4153373348324c31
 
@@ -24,10 +24,23 @@ def session_check(raw):
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373348324131,1,856),'Invalid H.264 session extension.')
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid H.264 owner.')
-    require(all(any(raw[o:o+32]) for o in (640,672,704,736,768,800)),'Missing H.264 physical or fixture evidence.')
+    require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)),'Missing H.264 physical or fixture evidence.')
     module,hz,g0,g1,uv,rail=struct.unpack_from('<6I',raw,832)
     require(not module&~0x0700001f and (module>>24)<=1 and 0<hz<=720000000 and
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited H.264 clock/rail state.')
+
+def upload_bytes(session,stream,reference=None):
+    """Produce one bounded upload from immutable per-session inputs."""
+    session_check(session)
+    require(0<len(stream)<=4096 and hashlib.sha256(stream).digest()==session[768:800],
+            'AnnexB upload does not match the sealed session digest/limit.')
+    oracle=any(session[800:832])
+    require(oracle==(reference is not None),'Qualification oracle mode differs.')
+    if oracle:
+        require(len(reference)==2304 and hashlib.sha256(reference).digest()==session[800:832],
+                'Independent pixel oracle differs from the sealed session.')
+    return struct.pack('<4I2Q',0x55363248,1,len(stream),2304 if oracle else 0,
+        *struct.unpack_from('<2Q',session,24))+stream+(reference or b'')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
@@ -78,9 +91,12 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                 'H.264 six-span, two-master, guarded memory authority differs.')
     return cache
 
-def prepare(image,manifest,admission,template,output,clang,lld):
+def prepare(image,manifest,admission,template,output,clang,lld,stream,reference=None):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots['input.h264']=Path(stream).read_bytes()
+    if reference is not None:snapshots['oracle.yuv']=Path(reference).read_bytes()
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    upload_bytes(raw,snapshots['input.h264'],snapshots.get('oracle.yuv'))
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
     require(mf.get('target')=='sunstone-a733-h264' and mf.get('execution_profile')=='h264-supervised-v1' and mf.get('final_elf')==ih,'Tested H.264 image manifest required.')
@@ -108,7 +124,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong H.264 bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.h264'}
     require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed H.264 authority or transport input.')
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'H.264 bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'H.264 image changed.')
@@ -118,6 +134,8 @@ def validate_bundle(bundle):
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'H.264 protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'H.264 initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
+    reference=(out/'oracle.yuv').read_bytes() if 'oracle.yuv' in p['files'] else None
+    upload=upload_bytes(raw,(out/'input.h264').read_bytes(),reference)
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'H.264 build identity changed.')
@@ -129,10 +147,13 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'H.264 ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'H.264 upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'H.264 launch contract changed.')
+    p['_upload']=upload;p['_reference']=reference
     p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
 
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
-    a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)
+    parser.add_argument('--input',type=Path,required=True)
+    parser.add_argument('--reference',type=Path,help='Optional independent qualification oracle')
+    a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.input,a.reference)

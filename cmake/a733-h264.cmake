@@ -7,18 +7,6 @@ get_target_property(h264_parent_definitions sunstone-a733-board COMPILE_DEFINITI
 if(NOT "SUNSTONE_BOARD_SUPERVISED=1" IN_LIST h264_parent_definitions)
  message(FATAL_ERROR "H.264 cannot inherit an armed board target or generated boot")
 endif()
-set(SUNSTONE_H264_FIXTURE "" CACHE FILEPATH "Bounded AnnexB48x32 Baseline IDR stream (1..4096 bytes)")
-set(SUNSTONE_H264_REFERENCE "" CACHE FILEPATH "Independent full-range YUV420p2304-byte reference")
-if(NOT SUNSTONE_H264_FIXTURE OR NOT SUNSTONE_H264_REFERENCE)
- message(FATAL_ERROR "H.264 requires bounded stream and independent reference")
-endif()
-file(SIZE "${SUNSTONE_H264_FIXTURE}" h264_fixture_bytes)
-file(SIZE "${SUNSTONE_H264_REFERENCE}" h264_reference_bytes)
-file(SHA256 "${SUNSTONE_H264_FIXTURE}" h264_fixture_hash)
-file(SHA256 "${SUNSTONE_H264_REFERENCE}" h264_reference_hash)
-if(h264_fixture_bytes LESS 1 OR h264_fixture_bytes GREATER 4096 OR NOT h264_reference_bytes EQUAL 2304)
- message(FATAL_ERROR "H.264 stream/reference exceeds bounded48x32 application geometry")
-endif()
 set(h264_build "${CMAKE_CURRENT_BINARY_DIR}/h264-application")
 file(MAKE_DIRECTORY "${h264_build}")
 get_target_property(h264_sources sunstone-a733-board SOURCES)
@@ -30,13 +18,11 @@ list(REMOVE_ITEM h264_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 apply_build_patch("${h264_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch")
 list(APPEND h264_sources "${h264_build}/boot.c")
-foreach(source IN ITEMS apps/h264/main.c apps/h264/native.c apps/h264/usb0.c apps/h264/admission.c apps/h264/snapshot.c
+foreach(source IN ITEMS apps/h264/main.c apps/h264/input.c apps/h264/native.c apps/h264/usb0.c apps/h264/admission.c apps/h264/snapshot.c
  drivers/video/a733_video_h264.c drivers/video/a733_video_platform.c
  drivers/iommu/a733_iommu.c)
  list(APPEND h264_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
-file(WRITE "${h264_build}/fixture.S" ".section .rodata.h264,\"a\"\n.global h264_fixture,h264_fixture_end,h264_reference,h264_reference_end\nh264_fixture:\n.incbin \"${SUNSTONE_H264_FIXTURE}\"\nh264_fixture_end:\nh264_reference:\n.incbin \"${SUNSTONE_H264_REFERENCE}\"\nh264_reference_end:\n")
-list(APPEND h264_sources "${h264_build}/fixture.S")
 add_executable(sunstone-a733-h264 EXCLUDE_FROM_ALL ${h264_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
 # The inherited board source list contains real radio dependencies. Preserve its
 # normal compile/link properties; garbage collection removes inactive services.
@@ -59,9 +45,9 @@ set(h264_inputs ${h264_sources} ${h264_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/include/a733_video_h264.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_video_platform.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/sources.json"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch"
- "${SUNSTONE_H264_FIXTURE}" "${SUNSTONE_H264_REFERENCE}")
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_input.h")
 list(REMOVE_DUPLICATES h264_inputs)
-set(h264_identity "bounded-native-h2641;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
+set(h264_identity "uploaded-native-h2641;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS h264_inputs)
  file(SHA256 "${input}" h264_hash)
  string(APPEND h264_identity "${h264_hash}")
