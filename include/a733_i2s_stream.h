@@ -47,7 +47,8 @@ struct a733_i2s_stream_slot {
  * its generation sequence. Parent allocations remain reserved for lifetime.
  * Failure retains every resource; there is no automatic reset/retry. */
 struct a733_i2s_stream {
-    struct a733_i2s_stream *self;
+    struct a733_i2s_stream *self, *peer;
+    unsigned duplex;
     struct a733_i2s_stream_profile profile;
     struct a733_i2s_plan plan;
     struct a733_dma_controller *dma;
@@ -61,6 +62,12 @@ struct a733_i2s_stream {
 enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,
     const struct a733_i2s_stream_profile *, const struct a733_dma_transfer *,
     struct a733_dma_controller *, unsigned channel, uint64_t deadline_us);
+/* The serialized service joins exactly one opposite direction. The first open
+ * acquires both data pins; the second shares that live binding. Both catalogues
+ * and stream objects remain immutable and allocated until both closes finish. */
+enum a733_i2s_status a733_i2s_stream_duplex_open(struct a733_i2s_stream *,
+    const struct a733_i2s_stream_profile *,const struct a733_dma_transfer *,
+    struct a733_dma_controller *,unsigned,uint64_t,struct a733_i2s_stream *);
 enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *, uint64_t period_timeout_ticks);
 enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *);
 enum a733_i2s_status a733_i2s_stream_cancel(struct a733_i2s_stream *);

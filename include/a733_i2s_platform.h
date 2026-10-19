@@ -62,7 +62,7 @@ int a733_audio_parent_ready(const struct a733_audio_parent *);
 struct a733_i2s_platform {
     struct a733_audio_parent *parent;
     struct a733_pins *pins;
-    struct a733_pin_request requests[4];
+    struct a733_pin_request requests[5];
     size_t count;
     uint64_t owner, deadline, wait_since;
     struct a733_audio_token local;
@@ -100,5 +100,8 @@ struct a733_i2s_operations a733_i2s_platform_operations(void);
 int a733_i2s_platform_stream_init(struct a733_i2s_platform *,struct a733_audio_parent *,
     struct a733_pins *,struct a733_audio_leases *,uint64_t owner,
     const struct a733_pin_request *,size_t,enum a733_i2s_direction);
+int a733_i2s_platform_duplex_init(struct a733_i2s_platform *,struct a733_audio_parent *,
+    struct a733_pins *,struct a733_audio_leases *,uint64_t,
+    const struct a733_pin_request *,size_t);
 struct a733_i2s_stream_operations a733_i2s_platform_stream_operations(void);
 #endif

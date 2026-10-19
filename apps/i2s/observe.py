@@ -11,16 +11,25 @@ def decode(frame,session,operation,offset=0,count=0,pcm_bytes=16384):
         raise ValueError('Invalid admitted I2S session size')
     if operation not in (0,1,2) or not 0<=offset<=pcm_bytes or not 0<=count<=min(4096,pcm_bytes-offset) or (operation!=1 and (offset or count)):
         raise ValueError('Invalid I2S request shape')
-    if len(frame)<72:raise ValueError('Short I2S response')
+    duplex=len(session)>=216 and struct.unpack_from('<I',session,208)[0]==2
+    base=96 if duplex else 72
+    if len(frame)<base:raise ValueError('Short I2S response')
     magic,version,state,actual,size,total,epoch,generation=struct.unpack_from('<6I2Q',frame)
-    if (magic,version,total,epoch,generation)!=(0x53493241,1,pcm_bytes,*struct.unpack_from('<2Q',session,24)):
+    if (magic,version,total,epoch,generation)!=(0x53493241,2 if duplex else 1,pcm_bytes,*struct.unpack_from('<2Q',session,24)):
         raise ValueError('I2S response identity mismatch')
     if frame[40:72]!=hashlib.sha256(session).digest() or actual!=offset or state not in (0,1,2,3):
         raise ValueError('I2S response session, offset or state mismatch')
     expected=count if operation==1 and state==2 else 0
-    if size!=expected or len(frame)!=72+size or (operation==2 and state!=3):
+    if size!=expected or len(frame)!=base+size or (operation==2 and state!=3):
         raise ValueError('I2S response extent or cancellation mismatch')
-    return {'state':state,'offset':actual,'bytes':size,'payload':frame[72:]}
+    completed={}
+    if duplex:
+        values=struct.unpack_from('<6I',frame,72)
+        if values!=((16384,16384,4,4,3,0) if state==2 else (0,0,0,0,0,0)):
+            raise ValueError('Incomplete I2S duplex transfer counts or drain status')
+        if state==2:completed={'capture_bytes':values[0],'playback_bytes':values[1],
+            'capture_periods':values[2],'playback_periods':values[3],'drained_directions':values[4]}
+    return {'state':state,'offset':actual,'bytes':size,'payload':frame[base:],**completed}
 
 def decode_transcript(frame,session,offset=0,count=0,samples=None):
     if len(session)!=640 or struct.unpack_from('<3Q',session)!=(0x4153373341555331,2,640) or not 0<=count<=4096:

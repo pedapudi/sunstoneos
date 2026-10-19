@@ -31,3 +31,21 @@ target_link_options(i2s-stream-model PRIVATE -nostdlib -static -Wl,--gc-sections
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/i2s-stream-model.map")
 set_target_properties(i2s-stream-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+# Same producer/provider composition with two disjoint, simultaneously live jobs.
+get_target_property(i2s_duplex_sources i2s-stream-model SOURCES)
+add_executable(i2s-duplex-model EXCLUDE_FROM_ALL ${i2s_duplex_sources})
+foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
+  get_target_property(i2s_duplex_property i2s-stream-model ${property})
+  set_property(TARGET i2s-duplex-model PROPERTY ${property} "${i2s_duplex_property}")
+endforeach()
+get_target_property(i2s_duplex_definitions i2s-stream-model COMPILE_DEFINITIONS)
+target_compile_definitions(i2s-duplex-model PRIVATE ${i2s_duplex_definitions} I2S_CHECK_DUPLEX=1)
+set_target_properties(i2s-duplex-model PROPERTIES SUFFIX ".elf")
+
+add_executable(i2s-duplex-retention-model EXCLUDE_FROM_ALL ${i2s_duplex_sources})
+foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS)
+  get_target_property(i2s_duplex_property i2s-stream-model ${property})
+  set_property(TARGET i2s-duplex-retention-model PROPERTY ${property} "${i2s_duplex_property}")
+endforeach()
+target_compile_definitions(i2s-duplex-retention-model PRIVATE ${i2s_duplex_definitions} I2S_CHECK_DUPLEX=2)
+set_target_properties(i2s-duplex-retention-model PROPERTIES SUFFIX ".elf")

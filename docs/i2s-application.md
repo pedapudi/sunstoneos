@@ -2,16 +2,18 @@
 
 The dedicated `sunstone-a733-i2s` image connects the existing I2S0 stream service
 to actual DMA0 startup, native clock and pin providers, linker-owned memory and
-USB0 observation. One launch selects receive or transmit at 16 kHz with one
-16-bit PCM channel and two 32-bit wire slots. No microphone or playback device
-is physically qualified. Full-duplex operation, cyclic DMA and final-wire drain
-remain required capabilities outside this profile.
+USB0 observation. One launch selects receive, transmit, or simultaneous receive and transmit at
+16 kHz with one 16-bit PCM channel and two 32-bit wire slots. No microphone or
+playback device is physically qualified. Cyclic DMA and final-wire drain remain
+required capabilities outside this profile.
 
 Primary preparation reserves one descriptor page and four disjoint period pages
 from the existing singleton memory pool. Each period carries 4,096 payload bytes.
 The native DMA policy admits only these exact pages, registered descriptor slots
-and the selected I2S0 FIFO direction. Other allocations and the opposite FIFO
-receive no authority. The existing RAM-copy constructor keeps its original API
+and the selected I2S0 FIFO direction. Duplex mode reserves a separate descriptor
+page and four period pages for each direction, using DMA channels 0 and 1. The
+native policy admits each bank only for its direction's exact memory role and
+FIFO route. The existing RAM-copy constructor keeps its original API
 and admission requirements.
 
 The protected session binds shared provider settings, DMA prior-drain and remote
@@ -203,3 +205,38 @@ that later live changes cannot reach the first provider. Publication includes
 all session bytes and the readiness receipt. Cache publication, the counter and
 provider entry are modeled. One native link includes the unchanged recognizer;
 no audio, DMA, inference or model result was executed again.
+
+## Simultaneous capture and playback
+
+Session direction 2 selects duplex operation. Its DMA service channel mask and
+CPU route mask must include channels 0 and 1. The inherited pin array records
+PB5, PB6, PB8 and PB7 in that order. The protected session keeps its existing
+552-byte layout; the fourth pin configuration occupies previously padded bytes.
+Transcription retains its receive-only admission.
+
+The client commits the recorded PCM to the playback catalogue, starts both
+directions and alternates copied period requests. Success requires 16,384
+captured bytes and 16,384 bytes actually consumed by transmit DMA, with four
+completed periods per direction. It then cancels both directions and observes
+each terminal CANCELED result with its buffer hold intact. Output publication
+occurs only after those counts and both drain observations. The copied output
+contains captured PCM; the transmit completion counts describe the recorded
+playback memory consumed by DMA.
+
+Duplex USB responses use version 2 and a 96-byte header. After the existing
+72-byte identity header, six little-endian 32-bit values report capture bytes,
+playback bytes, capture periods, playback periods, drained-direction mask and a
+reserved zero. Successful responses require `(16384, 16384, 4, 4, 3, 0)`;
+other states expose zero completion metadata. The host validates these fields
+before accepting output. Single-direction responses retain version 1 and the
+72-byte header.
+
+The native duplex build, focused client and USB checks, two-catalogue native
+constructor, producer-bound packaging and host copy checks pass. The host cases
+use frames emitted by the compiled USB producer with the linked image's actual
+session layout, build identity and recorded PCM digest. Missing transmit counts,
+incomplete drain metadata and truncated headers are refused. Focused Astra
+review found no unresolved correctness defects. Exact sources, dependencies,
+images and results are preserved under
+`~/.cache/sunstoneos/evidence/i2s-duplex-20261018/`. No physical launch is queued;
+external audio devices and physical duplex continuity remain unqualified.

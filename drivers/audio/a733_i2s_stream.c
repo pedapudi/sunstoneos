@@ -13,7 +13,11 @@ static unsigned errors(const struct a733_i2s_stream *s) {return tx(s)?0x60:6;}
 static unsigned flush(const struct a733_i2s_stream *s) {return 1u<<(tx(s)?25:24);}
 static unsigned drq(const struct a733_i2s_stream *s) {return tx(s)?128:8;}
 static enum a733_i2s_status fault(struct a733_i2s_stream *s)
-{return s->status=A733_I2S_RECOVERY;}
+{
+    s->status=A733_I2S_RECOVERY;
+    if(s->peer)s->peer->status=A733_I2S_RECOVERY;
+    return s->status;
+}
 static int valid(const struct a733_i2s_stream *s)
 {return s && s->self==s && s->status!=A733_I2S_RECOVERY;}
 static int now(struct a733_i2s_stream *s)
@@ -39,6 +43,20 @@ static int wr(struct a733_i2s_stream *s,unsigned a,uint32_t v)
 {return now(s) && IO(s).write(COOKIE(s),A733_I2S0_BASE+a,v) && now(s);}
 static int checked(struct a733_i2s_stream *s,unsigned a,uint32_t v)
 {uint32_t got;return wr(s,a,v) && rd(s,a,&got) && got==v;}
+/* Only the serialized worker changes CTL/ICTL; preserve the peer's enable and
+ * request bits at every start, handoff, cancellation and drain boundary. */
+static int requests(struct a733_i2s_stream *s,unsigned enabled)
+{
+    uint32_t v;if(!rd(s,ICTL,&v))return 0;
+    return checked(s,ICTL,(v&~drq(s))|(enabled?drq(s):0));
+}
+static int control(struct a733_i2s_stream *s,unsigned bits)
+{
+    uint32_t v;if(!rd(s,CTL,&v))return 0;
+    unsigned own=tx(s)?4u:2u,other=tx(s)?2u:4u;
+    v=(v&~(own|1u))|(bits&own)|((bits&1u)||(v&other)?1u:0u);
+    return checked(s,CTL,v);
+}
 static int mapping(const struct a733_dma_mapping *m)
 {
     return m->cpu && m->bytes && !((uintptr_t)m->cpu&63) && !(m->bus&63) && !(m->bytes&63) &&
@@ -85,28 +103,36 @@ static enum a733_i2s_status configure(struct a733_i2s_stream *s)
         if(a733_dma_claim(s->dma,s->channel)!=A733_DMA_CONTROL_OK)return fault(s);
         s->dma_held=1;
     }
+    if(s->peer) {
+        /* Common framing and both directions' maps were fixed before START. */
+        if(!s->peer->dma_held)return fault(s);
+        s->deadline=0;return s->status=A733_I2S_READY;
+    }
     uint32_t ctl,ic,fc;
     if(!rd(s,CTL,&ctl) || (ctl&7) || !rd(s,ICTL,&ic) || ic || !rd(s,FCTL,&fc) ||
         (fc&((1u<<31)|(3u<<24))))return fault(s);
-    uint32_t cfg=tx(s)?s->profile.format.channels-1:s->plan.chcfg;
+    uint32_t cfg=s->duplex?(s->plan.chcfg|(s->profile.format.channels-1)):
+        tx(s)?s->profile.format.channels-1:s->plan.chcfg;
     if(!checked(s,CTL,s->plan.ctl) || !checked(s,FMT0,s->plan.fmt0) || !checked(s,FMT1,0) ||
         !checked(s,CLK,s->plan.clkdiv) || !checked(s,CHCFG,cfg))return fault(s);
-    if(tx(s)) {
+    if(tx(s) || s->duplex) {
         /* DOUT0 slots 0/1 map to contiguous FIFO channels 0/1. */
         unsigned channels=s->profile.format.channels;
         if(!checked(s,TXSEL,(1u<<20)|((channels-1)<<16)|((1u<<channels)-1)) ||
             !checked(s,TXMAP0,0) || !checked(s,TXMAP1,channels==2?0x10:0))return fault(s);
-    } else if(!checked(s,RXSEL,s->plan.rxchsel) || !checked(s,RXMAP0,0) ||
-        !checked(s,RXMAP1,0) || !checked(s,RXMAP2,0) || !checked(s,RXMAP3,s->plan.rxmap3))return fault(s);
+    }
+    if((!tx(s) || s->duplex) && (!checked(s,RXSEL,s->plan.rxchsel) || !checked(s,RXMAP0,0) ||
+        !checked(s,RXMAP1,0) || !checked(s,RXMAP2,0) || !checked(s,RXMAP3,s->plan.rxmap3)))return fault(s);
     /* Trigger levels: RX >= 8 entries; TX empty space >= 64 entries. TXIM=1, RXOM=1.
      * Both 16-bit and 32-bit sample words use the source-defined packing. */
     if(!checked(s,FCTL,(fc&~UINT32_C(0x7f3f7))|(64u<<12)|(7u<<4)|5u) ||
         !now(s))return fault(s);
     s->deadline=0;return s->status=A733_I2S_READY;
 }
-enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *s,
+static enum a733_i2s_status open_stream(struct a733_i2s_stream *s,
     const struct a733_i2s_stream_profile *p,const struct a733_dma_transfer *t,
-    struct a733_dma_controller *dma,unsigned channel,uint64_t deadline)
+    struct a733_dma_controller *dma,unsigned channel,uint64_t deadline,
+    unsigned duplex,struct a733_i2s_stream *peer)
 {
     if(!s || s->self || !a733_i2s_stream_valid(p,t) || !dma || !dma->initialized ||
         dma->base!=0x04601000u || channel>=A733_DMA_CHANNELS || !deadline)return A733_I2S_INVALID;
@@ -114,10 +140,19 @@ enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *s,
     if(p->direction==A733_I2S_TRANSMIT) {
         plan.pb_mask=(plan.pb_mask&~(1u<<8))|(1u<<7);plan.ctl|=1u<<8;
     }
+    if(duplex){plan.pb_mask|=(1u<<7)|(1u<<8);plan.ctl|=1u<<8;}
+    if(peer && (!duplex || !valid(peer) || !peer->duplex || peer->peer ||
+        peer->status!=A733_I2S_READY || peer->dma!=dma || peer->channel==channel ||
+        peer->profile.direction==p->direction || peer->profile.cookie!=p->cookie ||
+        memcmp(&peer->profile.format,&p->format,sizeof(p->format))))return A733_I2S_CONFLICT;
     uint64_t n;if(!p->operations.io.now_us(p->cookie,&n) || n>=deadline)return A733_I2S_CONFLICT;
     *s=(struct a733_i2s_stream){.self=s,.profile=*p,.plan=plan,.dma=dma,.catalogue=t,
-        .deadline=deadline,.time=n,.channel=channel,.count=(unsigned)t->count,
+        .deadline=deadline,.time=n,.channel=channel,.count=(unsigned)t->count,.duplex=duplex,
         .status=A733_I2S_OPENING,.current=A733_I2S_STREAM_PERIODS};
+    if(peer){
+        s->peer=peer;peer->peer=s;s->platform_held=1;s->stage=CONFIGURE;
+        return s->status;
+    }
     enum a733_i2s_resource_result r=IO(s).acquire(COOKIE(s),&s->plan,deadline);
     if(r==A733_I2S_RESOURCE_BUSY) { *s=(struct a733_i2s_stream){0};return A733_I2S_CONFLICT; }
     s->platform_held=1;
@@ -126,10 +161,18 @@ enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *s,
     else if(r!=A733_I2S_RESOURCE_PENDING)return fault(s);
     return s->status;
 }
-static int requests_off(struct a733_i2s_stream *s) {return checked(s,ICTL,0);}
+enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *s,
+    const struct a733_i2s_stream_profile *p,const struct a733_dma_transfer *t,
+    struct a733_dma_controller *dma,unsigned channel,uint64_t deadline)
+{return open_stream(s,p,t,dma,channel,deadline,0,NULL);}
+enum a733_i2s_status a733_i2s_stream_duplex_open(struct a733_i2s_stream *s,
+    const struct a733_i2s_stream_profile *p,const struct a733_dma_transfer *t,
+    struct a733_dma_controller *dma,unsigned channel,uint64_t deadline,struct a733_i2s_stream *peer)
+{return open_stream(s,p,t,dma,channel,deadline,1,peer);}
+static int requests_off(struct a733_i2s_stream *s) {return requests(s,0);}
 static enum a733_i2s_status stop(struct a733_i2s_stream *s,enum a733_i2s_status outcome)
 {
-    if(!requests_off(s) || !checked(s,CTL,s->plan.ctl|1))return fault(s);
+    if(!requests_off(s) || !control(s,1))return fault(s);
     s->outcome=outcome;s->stage=STOP;s->status=A733_I2S_STOPPING;
     if(a733_dma_owns(s->dma,&s->active)) {
         enum a733_dma_control_status d=a733_dma_cancel(s->dma,s->channel);
@@ -153,8 +196,8 @@ static enum a733_i2s_status arm(struct a733_i2s_stream *s)
         return stop(s,A733_I2S_FAILED);
     }
     if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
-    if(!checked(s,ICTL,drq(s)))return fault(s);
-    if(!tx(s) && !checked(s,CTL,s->plan.ctl|1|2))return fault(s);
+    if(!requests(s,1))return fault(s);
+    if(!tx(s) && !control(s,1|2))return fault(s);
     if(!now(s))return fault(s);
     if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
     s->bridge_deadline=0;s->stage=ACTIVE;s->status=A733_I2S_ACTIVE;return s->status;
@@ -162,11 +205,13 @@ static enum a733_i2s_status arm(struct a733_i2s_stream *s)
 enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *s,uint64_t timeout)
 {
     if(!valid(s) || s->status!=A733_I2S_READY || !timeout || timeout>INT64_MAX)return A733_I2S_INVALID;
+    if(s->duplex && (!s->peer || (s->peer->status!=A733_I2S_READY &&
+        s->peer->status!=A733_I2S_ACTIVE && s->peer->status!=A733_I2S_PREPARING)))return A733_I2S_CONFLICT;
     if(tx(s) && (s->slots[0].state!=QUEUED || s->slots[1].state!=QUEUED))return A733_I2S_CONFLICT;
     int h=health(s);if(h<0)return fault(s);if(!h)return A733_I2S_CONFLICT;
     s->timeout=timeout;s->outcome=A733_I2S_FAILED;s->priming=tx(s);
     uint32_t fc;
-    if(!checked(s,CTL,s->plan.ctl|1) || !rd(s,FCTL,&fc) || !wr(s,FCTL,fc|flush(s)) ||
+    if(!control(s,1) || !rd(s,FCTL,&fc) || !wr(s,FCTL,fc|flush(s)) ||
         !checked(s,tx(s)?TXCNT:RXCNT,0) || !wr(s,ISTA,errors(s)))return fault(s);
     s->stage=FLUSH;s->status=A733_I2S_PREPARING;
     /* Keep this deadline until the self-clearing FIFO operation completes. */
@@ -209,7 +254,9 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         if(!now(s) || r==A733_I2S_RESOURCE_RETAINED)return fault(s);
         if(r==A733_I2S_RESOURCE_PENDING || r==A733_I2S_RESOURCE_BUSY)return s->status;
         if(r!=A733_I2S_RESOURCE_READY)return fault(s);
-        s->platform_held=0;s->status=A733_I2S_CLOSED;return s->status;
+        s->platform_held=0;
+        if(s->peer){s->peer->platform_held=0;s->peer->peer=NULL;s->peer=NULL;}
+        s->status=A733_I2S_CLOSED;return s->status;
     }
     if(s->status!=A733_I2S_PREPARING && s->status!=A733_I2S_ACTIVE && s->status!=A733_I2S_STOPPING)
         return s->status;
@@ -226,7 +273,7 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
             if(d==A733_DMA_STOPPING){s->deadline=0;return s->status;}
             if(d!=A733_DMA_COMPLETE && d!=A733_DMA_CANCELED && d!=A733_DMA_FAILED)return fault(s);
         }
-        if(!checked(s,CTL,s->plan.ctl))return fault(s);
+        if(!control(s,0))return fault(s);
         if(s->current<s->count)s->slots[s->current].state=FREE;
         s->current=A733_I2S_STREAM_PERIODS;s->deadline=0;return s->status=s->outcome;
     }
@@ -235,7 +282,7 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         if(!rd(s,ISTA,&status) || !rd(s,FSTA,&fs))return fault(s);
         if(status&errors(s))return stop(s,A733_I2S_FAILED);
         if(s->priming && ((fs>>16)&255)<128) {
-            if(!checked(s,CTL,s->plan.ctl|1|4))return fault(s);
+            if(!control(s,1|4))return fault(s);
             s->priming=0;
         }
         struct a733_dma_channel *channel=&s->dma->channels[s->channel];
@@ -328,8 +375,12 @@ enum a733_i2s_status a733_i2s_stream_close(struct a733_i2s_stream *s,uint64_t de
     if(!valid(s) || (s->status!=A733_I2S_READY && s->status!=A733_I2S_COMPLETE))return A733_I2S_INVALID;
     for(unsigned i=0;i<s->count;++i)if(s->slots[i].state!=FREE)return A733_I2S_CONFLICT;
     s->deadline=deadline;int h=health(s);if(h<0)return fault(s);if(!h)return A733_I2S_CONFLICT;
-    if(!requests_off(s) || !checked(s,CTL,s->plan.ctl))return fault(s);
+    if(!requests_off(s) || !control(s,0))return fault(s);
     if(a733_dma_release(s->dma,s->channel)!=A733_DMA_CONTROL_OK)return fault(s);
     s->dma_held=0;if(!now(s))return fault(s);
+    if(s->peer && s->peer->status!=A733_I2S_CLOSED){
+        /* The peer still owns the shared local clock/pin binding. */
+        s->deadline=0;return s->status=A733_I2S_CLOSED;
+    }
     s->status=A733_I2S_CLOSING;return a733_i2s_stream_poll(s);
 }

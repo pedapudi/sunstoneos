@@ -115,7 +115,18 @@ static enum dma_service_result stream_execute(struct dma_service *s,
     struct dma_service_channel *c=&s->channels[j->channel];
     enum a733_i2s_status result=A733_I2S_READY;
     if(r->operation==DMA_SERVICE_OPEN) {
-        if(c->phase!=DMA_SERVICE_CLOSED)return DMA_SERVICE_BUSY;
+        if(c->phase!=DMA_SERVICE_CLOSED || c->stream.platform_held || c->stream.peer)return DMA_SERVICE_BUSY;
+        struct a733_i2s_stream *peer=NULL;
+        if(j->stream.duplex)for(unsigned i=0;i<s->job_count;++i) {
+            if(i==r->job || s->jobs[i].kind!=DMA_SERVICE_I2S_STREAM ||
+                !dma_service_i2s_stream_pair(&j->stream,&s->jobs[i].stream))continue;
+            struct dma_service_channel *other=&s->channels[s->jobs[i].channel];
+            if(other->stream.platform_held){
+                if(other->owner!=m->client)return DMA_SERVICE_DENIED;
+                if(other->phase!=DMA_SERVICE_READY || other->stream.peer)return DMA_SERVICE_BUSY;
+                peer=&other->stream;
+            }
+        }
         for(unsigned i=0;i<A733_DMA_CHANNELS;++i)if(s->channels[i].holds_buffers &&
             conflict(&j->transfer,&s->jobs[s->channels[i].job].transfer,1))return DMA_SERVICE_BUSY;
         /* Full catalogue ownership precedes all platform callbacks and client fill. */
@@ -124,8 +135,11 @@ static enum dma_service_result stream_execute(struct dma_service *s,
          * must still invalidate stale tickets from earlier sessions. */
         uint64_t generation=c->stream.generation;
         memset(&c->stream,0,sizeof(c->stream));
-        result=dma_service_i2s_stream_open(&c->stream,&j->stream,&j->transfer,
-            &s->controller,j->channel,r->timeout);
+        result=j->stream.duplex?
+            dma_service_i2s_stream_duplex_open(&c->stream,&j->stream,&j->transfer,
+                &s->controller,j->channel,r->timeout,peer):
+            dma_service_i2s_stream_open(&c->stream,&j->stream,&j->transfer,
+                &s->controller,j->channel,r->timeout);
         c->stream.generation=generation;
         if(result==A733_I2S_CONFLICT || result==A733_I2S_INVALID) {
             c->holds_buffers=0;closed(c);return result==A733_I2S_CONFLICT?DMA_SERVICE_BUSY:DMA_SERVICE_INVALID;
@@ -173,6 +187,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
     if (!(s->clients[m->client].jobs & (UINT32_C(1)<<r->job))) return DMA_SERVICE_DENIED;
     struct dma_service_private_job *j=&s->jobs[r->job];
     struct dma_service_channel *c=&s->channels[j->channel];
+    if(c->stream.self==&c->stream && c->stream.status==A733_I2S_RECOVERY)stream_state(c);
     int timed=r->operation == DMA_SERVICE_SUBMIT ||
         (j->kind != DMA_SERVICE_RAM && (r->operation == DMA_SERVICE_OPEN || r->operation == DMA_SERVICE_CLOSE));
     if (timed ? !duration(r->timeout) : r->timeout != 0) return DMA_SERVICE_INVALID;
@@ -273,6 +288,7 @@ static void worker(void *argument)
         unsigned active=0;
         for (unsigned i=0;i<A733_DMA_CHANNELS;++i) {
             struct dma_service_channel *c=&s->channels[i];
+            if(c->stream.self==&c->stream && c->stream.status==A733_I2S_RECOVERY)stream_state(c);
             if (!progressing(c->phase)) continue;
             if (s->jobs[c->profile].kind == DMA_SERVICE_I2S_STREAM) {
                 (void)a733_i2s_stream_poll(&c->stream);stream_state(c);
@@ -324,7 +340,7 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
             sizeof(*s) <= g->bytes-((uintptr_t)s-g->cpu)) covered=1;
     }
     if (!covered) return 0;
-    unsigned i2s_channel=A733_DMA_CHANNELS;
+    unsigned i2s_channel=A733_DMA_CHANNELS,i2s_count=0,duplex_count=0;
     for (unsigned i=0;i<count;++i) {
         if (!job_valid(&jobs[i],s,channels)) return 0;
         const struct a733_dma_transfer *t=&jobs[i].transfer;
@@ -337,9 +353,21 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
             }
         }
         if (jobs[i].kind == DMA_SERVICE_I2S || jobs[i].kind == DMA_SERVICE_I2S_STREAM) {
-            if (i2s_channel != A733_DMA_CHANNELS && i2s_channel != jobs[i].channel) return 0;
-            i2s_channel=jobs[i].channel;
+            ++i2s_count;
+            if(jobs[i].stream && jobs[i].stream->duplex){
+                if(jobs[i].stream->duplex!=1)return 0;
+                ++duplex_count;
+            } else if(i2s_channel!=A733_DMA_CHANNELS && i2s_channel!=jobs[i].channel)return 0;
+            if(!jobs[i].stream || !jobs[i].stream->duplex)i2s_channel=jobs[i].channel;
         }
+    }
+    if(duplex_count){
+        if(duplex_count!=2 || i2s_count!=2)return 0;
+        const struct dma_service_job *pair[2];unsigned n=0;
+        for(unsigned i=0;i<count;++i)if(jobs[i].kind==DMA_SERVICE_I2S_STREAM && jobs[i].stream->duplex)pair[n++]=&jobs[i];
+        if(pair[0]->channel==pair[1]->channel ||
+           !dma_service_i2s_stream_pair(pair[0]->stream,pair[1]->stream) ||
+           conflict(&pair[0]->transfer,&pair[1]->transfer,1))return 0;
     }
     if (a733_dma_controller_init(&s->controller,ops,cookie,base,channels,drain) != A733_DMA_CONTROL_OK) return 0;
     for (unsigned i=0;i<count;++i) {

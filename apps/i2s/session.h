@@ -26,7 +26,7 @@ struct i2s_session {
  uint32_t direction,audio_cold;
  struct a733_native_usb_config shared;
  struct a733_dma_handoff dma;
- struct a733_pin_config inherited[3];
+ struct a733_pin_config inherited[4]; /* BCLK, LRCK, selected data; duplex: RX then TX. */
 #ifdef SUNSTONE_I2S_TRANSCRIBE
  _Alignas(8) uint32_t capture_samples;uint32_t reserved;
  struct i2s_models models;

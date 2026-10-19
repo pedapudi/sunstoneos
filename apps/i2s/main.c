@@ -79,17 +79,28 @@ void a733_smp_diagnostic_start(void)
  struct a733_audio_operations backend={.enter=enter,.leave=leave,.now_us=now,.read=read_reg,.write=write_reg};
  if(!a733_audio_leases_init(&app.leases,&app.shared.clocks,s->dma.allowed.owner,&backend,&app)||
     !a733_audio_parent_init(&app.parent,&app.leases.operations,&app.leases,s->audio_cold,app.deadline))platform_panic("I2S audio",6);
+ unsigned duplex=s->direction==2;
  struct a733_pin_request pins[]={{5,s->inherited[0],{3,0,0}},{6,s->inherited[1],{3,0,0}},
-  {s->direction?7u:8u,s->inherited[2],{3,0,0}}};
- if(!a733_i2s_platform_stream_init(&app.binding,&app.parent,&app.shared.pins,&app.leases,
-    s->dma.allowed.owner,pins,3,(enum a733_i2s_direction)s->direction))platform_panic("I2S pins",7);
- app.stream.stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},
-  a733_i2s_platform_stream_operations(),&app.binding,(enum a733_i2s_direction)s->direction,10000};
+  {duplex?8u:s->direction?7u:8u,s->inherited[2],{3,0,0}},{7,s->inherited[3],{3,0,0}}};
+ int bound=duplex?a733_i2s_platform_duplex_init(&app.binding,&app.parent,&app.shared.pins,&app.leases,
+    s->dma.allowed.owner,pins,4):
+    a733_i2s_platform_stream_init(&app.binding,&app.parent,&app.shared.pins,&app.leases,
+    s->dma.allowed.owner,pins,3,(enum a733_i2s_direction)s->direction);
+ if(!bound)platform_panic("I2S pins",7);
+ for(unsigned j=0;j<(duplex?2u:1u);++j){
+  app.stream[j].stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},
+   a733_i2s_platform_stream_operations(),&app.binding,
+   duplex?(j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE):(enum a733_i2s_direction)s->direction,10000};
+  app.stream[j].duplex=duplex;
+ }
  struct a733_dma_pool_config config={&s->dma,&app.shared.counter,&app.shared.clocks,&app.shared.locks,
   240000,4096,5,1,dma_fatal,&app};
- if(!a733_dma_pool_session_stream_supervised_init(&app.dma,&config,&app.stream,I2S_PERIODS,I2S_PERIOD_BYTES)||
-    !dma_service_bind(&app.dma.service,0,app.handles[2],1))platform_panic("I2S native pool",8);
- for(unsigned i=0;i<I2S_PERIODS;++i)app.period_memory[i]=app.dma.stream_mappings[i].cpu;
+ if(!a733_dma_pool_session_stream_supervised_init(&app.dma,&config,app.stream,I2S_PERIODS,I2S_PERIOD_BYTES)||
+    !dma_service_bind(&app.dma.service,0,app.handles[2],duplex?3:1))platform_panic("I2S native pool",8);
+ for(unsigned i=0;i<I2S_PERIODS;++i){
+  app.period_memory[i]=app.dma.stream_mappings[i].cpu;
+  if(duplex)app.playback_memory[i]=app.dma.duplex_mappings[i].cpu;
+ }
 #ifdef SUNSTONE_I2S_TRANSCRIBE
  if(!i2s_recognition_start(&s->models))platform_panic("I2S recognition",10);
 #endif

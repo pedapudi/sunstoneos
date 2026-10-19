@@ -46,8 +46,8 @@ static int parent(const struct a733_dma_pool_session *s)
     return r->owner==owned_record.owner && r->generation==owned_record.generation &&
         r->first==owned_record.first && r->pages==owned_record.pages &&
         r->state==DEVICE_MEMORY_DEVICE && s->count && s->count<=DMA_SERVICE_JOBS &&
-        owned_extent.bytes==(size_t)(s->periods?s->periods+1:s->count*3)*DEVICE_MEMORY_PAGE &&
-        (!s->periods || (s->count==1 && s->periods>=2 && s->periods<=A733_I2S_STREAM_PERIODS));
+        owned_extent.bytes==(size_t)(s->periods?s->count*(s->periods+1):s->count*3)*DEVICE_MEMORY_PAGE &&
+        (!s->periods || ((s->count==1 || s->count==2) && s->periods>=2 && s->periods<=A733_I2S_STREAM_PERIODS));
 }
 static int exact_mapping(struct a733_dma_pool_session *s,const struct a733_dma_mapping *m)
 {
@@ -56,11 +56,15 @@ static int exact_mapping(struct a733_dma_pool_session *s,const struct a733_dma_m
     size_t off=(uintptr_t)m->cpu-owned_extent.cpu;
     if(s->periods){
         if(off>=owned_extent.bytes || m->bus!=owned_extent.physical+off)return 0;
+        unsigned bank=(unsigned)(off/((s->periods+1)*4096));
+        off%=((s->periods+1)*4096);
+        enum a733_dma_access role=s->count==2?(bank?A733_DMA_READ:A733_DMA_WRITE):
+            s->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ;
         if(m->access==A733_DMA_DESCRIPTORS){
             if(!((off==0 && m->bytes==4096) ||
                  (off%64==0 && off/64<s->periods && m->bytes==64)))return 0;
         }else if(off<4096 || off%4096 || m->bytes!=4096 ||
-                 m->access!=(s->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ))return 0;
+                 m->access!=role)return 0;
         return a733_dma_native_operations.validate_mapping(&s->native,m);
     }
     if(m->bytes!=DEVICE_MEMORY_PAGE || off>=owned_extent.bytes || off%DEVICE_MEMORY_PAGE ||
@@ -95,7 +99,8 @@ static void cache(void *cookie,enum a733_dma_cache operation,void *cpu,size_t by
     if((uintptr_t)cpu<owned_extent.cpu) fail(s);
     size_t off=(uintptr_t)cpu-owned_extent.cpu;
     int page=bytes==4096 && off%4096==0;
-    int descriptor=s->periods && bytes==64 && off%64==0 && off/64<s->periods;
+    size_t local=s->periods?off%((s->periods+1)*4096):off;
+    int descriptor=s->periods && bytes==64 && local%64==0 && local/64<s->periods;
     if(off>=owned_extent.bytes || (!page&&!descriptor) || bytes>owned_extent.bytes-off) fail(s);
     a733_dma_native_operations.cache(&s->native,operation,cpu,bytes);
 }
@@ -197,7 +202,10 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
         if(!image(stream,sizeof(*stream),0) || !stream->stream.cookie ||
            !image(stream->stream.cookie,sizeof(struct a733_i2s_platform),1) ||
            periods<2 || periods>A733_I2S_STREAM_PERIODS || !period_bytes || period_bytes>4096 ||
-           !channels || (channels&(channels-1)) ||
+           !channels || (stream->duplex?
+             (!image(stream,2*sizeof(*stream),0) || stream[0].stream.direction!=A733_I2S_RECEIVE ||
+              !dma_service_i2s_stream_pair(&stream[0],&stream[1]) || __builtin_popcount(channels)!=2):
+             (channels&(channels-1))) ||
            !a733_i2s_plan(&stream->stream.format,&plan) || period_bytes%plan.frame_bytes ||
            period_bytes%(plan.dma_width*8) ||
            (unsigned)stream->stream.direction>A733_I2S_TRANSMIT)return 0;
@@ -206,38 +214,51 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
     for(unsigned ch=0;ch<A733_DMA_CHANNELS;++ch)
         if(c->handoff->service_channels&(1u<<ch)) ++s->count;
     s->copy_bytes=c->copy_bytes;
-    if(!device_memory_acquire(pool,c->handoff->allowed.owner,(size_t)(periods?periods+1:s->count*3)*4096,
+    if(!device_memory_acquire(pool,c->handoff->allowed.owner,(size_t)(periods?s->count*(periods+1):s->count*3)*4096,
                               &s->lease,&s->extent)) return 0;
     instance=s;owned_pool=pool;owned_lease=s->lease;owned_extent=s->extent;
     s->pool=pool;s->admitted=1;
     struct device_memory_allocation *record=device_memory_lookup(pool,s->lease);
     record->state=DEVICE_MEMORY_DEVICE;owned_record=*record;
     if(stream){
-        enum a733_dma_access role=s->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ;
+        struct dma_memory_window windows[4];struct dma_fifo_port ports[2];
         unsigned width=stream->stream.format.container_bits/8;
-        uintptr_t port=s->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO;
-        struct dma_memory_window windows[]={
-            {s->extent.cpu,s->extent.physical,4096,DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)},
-            {s->extent.cpu+4096,s->extent.physical+4096,(size_t)periods*4096,DMA_MEMORY_ROLE(role)}};
-        struct dma_fifo_port fifo={port,A733_I2S0_DMA_REQUEST,1u<<width,1u<<8,
-            s->direction==A733_I2S_RECEIVE?A733_DMA_READ:A733_DMA_WRITE};
-        if(!a733_dma_native_init(&s->native,c->handoff->controller,c->handoff->controller,
-            windows,2,&fifo,1,c->fatal,c->fatal_cookie))goto failed;
-        unsigned channel=0;while(!(c->handoff->service_channels&(1u<<channel)))++channel;
-        for(unsigned i=0;i<periods;++i){
-            uintptr_t cpu=s->extent.cpu+(i+1)*4096;
-            uint64_t physical=s->extent.physical+(i+1)*4096;
-            s->stream_mappings[i]=(struct a733_dma_mapping){(void *)cpu,physical,4096,role};
-            struct a733_dma_endpoint ram={physical,0,width,8},device={port,3,width,8};
-            s->segments[i]=(struct a733_dma_segment){s->direction==A733_I2S_RECEIVE?device:ram,
-                s->direction==A733_I2S_RECEIVE?ram:device,period_bytes};
-            if(!exact_mapping(s,&s->stream_mappings[i]))goto failed;
+        for(unsigned j=0;j<s->count;++j){
+            enum a733_i2s_direction direction=stream[j].stream.direction;
+            enum a733_dma_access role=direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ;
+            uintptr_t base=s->extent.cpu+j*(periods+1)*4096;
+            uint64_t physical=s->extent.physical+j*(periods+1)*4096;
+            uintptr_t port=direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO;
+            windows[2*j]=(struct dma_memory_window){base,physical,4096,DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)};
+            windows[2*j+1]=(struct dma_memory_window){base+4096,physical+4096,(size_t)periods*4096,DMA_MEMORY_ROLE(role)};
+            ports[j]=(struct dma_fifo_port){port,3,1u<<width,1u<<8,
+                direction==A733_I2S_RECEIVE?A733_DMA_READ:A733_DMA_WRITE};
         }
-        s->jobs[0]=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=channel,.stream=stream,
-            .transfer={{(void *)s->extent.cpu,s->extent.physical,4096,A733_DMA_DESCRIPTORS},
-                       s->segments,periods,s->stream_mappings,periods}};
-        if(!exact_mapping(s,&s->jobs[0].transfer.descriptors) ||
-           !a733_i2s_stream_valid(&stream->stream,&s->jobs[0].transfer))goto failed;
+        if(!a733_dma_native_init(&s->native,c->handoff->controller,c->handoff->controller,
+            windows,2*s->count,ports,s->count,c->fatal,c->fatal_cookie))goto failed;
+        unsigned channel=0;
+        for(unsigned j=0;j<s->count;++j){
+            enum a733_i2s_direction direction=stream[j].stream.direction;
+            enum a733_dma_access role=direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ;
+            uintptr_t base=s->extent.cpu+j*(periods+1)*4096;
+            uint64_t physical=s->extent.physical+j*(periods+1)*4096;
+            uintptr_t port=direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO;
+            struct a733_dma_mapping *maps=j?s->duplex_mappings:s->stream_mappings;
+            struct a733_dma_segment *segments=&s->segments[j*A733_I2S_STREAM_PERIODS];
+            while(!(c->handoff->service_channels&(1u<<channel)))++channel;
+            for(unsigned i=0;i<periods;++i){
+                uintptr_t cpu=base+(i+1)*4096;uint64_t bus=physical+(i+1)*4096;
+                maps[i]=(struct a733_dma_mapping){(void *)cpu,bus,4096,role};
+                struct a733_dma_endpoint ram={bus,0,width,8},device={port,3,width,8};
+                segments[i]=(struct a733_dma_segment){direction==A733_I2S_RECEIVE?device:ram,
+                    direction==A733_I2S_RECEIVE?ram:device,period_bytes};
+                if(!exact_mapping(s,&maps[i]))goto failed;
+            }
+            s->jobs[j]=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=channel++,.stream=&stream[j],
+                .transfer={{(void *)base,physical,4096,A733_DMA_DESCRIPTORS},segments,periods,maps,periods}};
+            if(!exact_mapping(s,&s->jobs[j].transfer.descriptors) ||
+               !a733_i2s_stream_valid(&stream[j].stream,&s->jobs[j].transfer))goto failed;
+        }
     }else{
     size_t bank=(size_t)s->count*4096;
     struct dma_memory_window windows[3];

@@ -12,6 +12,9 @@ import struct
 import subprocess
 import sys
 import types
+import unicorn
+from unicorn import arm64_const as regs
+from elftools.elf.elffile import ELFFile
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 def load(path):
@@ -23,6 +26,8 @@ class Clock:
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for n in ('image','manifest','evidence','clang','lld','objcopy'):p.add_argument('--'+n,type=Path,required=True)
+    p.add_argument("--duplex-only",action="store_true")
+    p.add_argument("--native-output-fixture",type=Path)
     a=p.parse_args();out=a.evidence;out.mkdir(parents=True,exist_ok=True)
     host=load(ROOT/'tools/check-a733-i2s-supervised.py');prep=host.preparation;sup=host.supervisor
     paths=[Path(__file__),Path(host.__file__),Path(prep.__file__),Path(host.decoder.__file__),Path(sup.__file__),Path(sup.base.__file__),Path(sup.observer.__file__),ROOT/'checks/a733-smp-supervised-launch.py',ROOT/'platform/a733-smp-supervised/launch.c',ROOT/'platform/a733-smp-observe/launch.S',ROOT/'platform/a733-smp-observe/launch.ld',ROOT/'platform/a733-smp-cached/boot.h',a.image,a.manifest,a.clang,a.lld,a.objcopy]
@@ -46,6 +51,8 @@ def main():
     def put(name,value):
         f=layout['fields'][name];b=value if isinstance(value,bytes) else value.to_bytes(f['size'],'little');assert len(b)==f['size'];raw[f['offset']:f['offset']+f['size']]=b
     for n,v in {'magic':0x4153373341555331,'version':1,'bytes':layout['size'],'epoch':31,'generation':37,'lease':41,'shared.identity':37,'shared.pmic.identity':37,'shared.pmic.owner':4,'shared.usb.owner':5,'shared.usb.handoff':37,'dma.allowed.owner':6,'dma.allowed.handoff':41,'dma.evidence':41,'dma.established':0x5f,'dma.owned_channels':0xffff,'dma.service_channels':1,'dma.controller':0x04601000}.items():put(n,v)
+    if a.duplex_only:
+        for n,v in {'direction':2,'dma.service_channels':3,'dma.allowed.desired_cpu':3,'dma.allowed.route_change_mask':3}.items():put(n,v)
     put('image',identity);put('pcm',hashlib.sha256(pcm).digest())
     def write(name,value):
         data=value if isinstance(value,bytes) else json.dumps(value,sort_keys=True).encode();path=(setup/name).resolve();path.write_bytes(data);return {'path':str(path),'sha256':prep.sha(data)}
@@ -54,7 +61,7 @@ def main():
     ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
     conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}
     platform=write('platform.json',{**common,'schema':'a733-smp-observer-platform-v1','conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
-    profile={'epoch':31,'generation':37,'lease':41,'direction':0,'audio_cold':0}
+    profile={'epoch':31,'generation':37,'lease':41,'direction':2 if a.duplex_only else 0,'audio_cold':0}
     hashes={n+'_sha256':prep.sha(prep.field(raw,layout,n)) for n in ('shared','dma','inherited')}
     recovery=write('recovery.json',{**common,**profile,**hashes,'schema':'a733-i2s-initial-entry-v1','conditions':dict.fromkeys(prep.CONDITIONS,proof),'one_attempt':True,'whole_board_power_removal':True,'no_resource_reuse_before_power_removal':True})
     admission=write('admission.json',{**common,**profile,**hashes,'schema':'a733-i2s-supervised-entry-v1','ddr':ddr,'platform':platform,'recovery':recovery})
@@ -74,6 +81,46 @@ def main():
         assert value['segments'][-1]=={'name':'session.bin','address':0x41f00000}
         return {'image_sha256':value['image_sha256'],'launcher_sha256':value['launcher_sha256'],'fixture_not_physical':True}
     case('exact-package',package);prepared=prep.validate_bundle(bundle)
+    if a.duplex_only:
+        def duplex_capture(d):
+            assert a.native_output_fixture,'Actual compiled USB producer required'
+            with a.native_output_fixture.open('rb') as stream:
+                elf=ELFFile(stream)
+                segments=[(int(p['p_vaddr']),bytes(p.data()),int(p['p_memsz'])) for p in elf.iter_segments() if p['p_type']=='PT_LOAD']
+                symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            def produced(offset):
+                uc=unicorn.Uc(unicorn.UC_ARCH_ARM64,unicorn.UC_MODE_ARM);pages=set()
+                for address,data,size in segments:
+                    for page in range(address&~4095,(address+size+4095)&~4095,4096):
+                        if page not in pages:uc.mem_map(page,4096);pages.add(page)
+                    uc.mem_write(address,data)
+                uc.mem_map(0x41f00000,4096);uc.mem_write(0x41f00000,session)
+                uc.mem_map(0x50000000,0x10000);uc.reg_write(regs.UC_ARM64_REG_SP,0x5000f000)
+                uc.reg_write(regs.UC_ARM64_REG_X0,3+offset//4096)
+                uc.hook_add(unicorn.UC_HOOK_INTR,lambda machine,*_:machine.emu_stop())
+                uc.emu_start(symbols['i2s_check_run'],0,count=3000000)
+                assert int.from_bytes(uc.mem_read(symbols['i2s_check_result'],4),'little')==1
+                wire=bytes(uc.mem_read(symbols['wire'],4192))
+                (d/f'producer-offset-{offset}.bin').write_bytes(wire);return wire
+            frames={offset:produced(offset) for offset in (0,4096,8192,12288)}
+            def frame(packet,timeout):
+                (op,offset,count)=struct.unpack('<3I',packet)
+                if op==1:return frames[offset]
+                # STATUS shares the native completion metadata, without payload.
+                value=bytearray(frames[0][:96]);struct.pack_into('<I',value,16,0);return bytes(value)
+            record={};clock=Clock()
+            host.capture(frame,session,d,record,lambda:None,150,pcm=pcm,direction=2,now=clock.now,pause=clock.pause)
+            assert record['i2s_result']=='observed-success'
+            assert record['copied_i2s_output']['duplex_completion']==dict(capture_bytes=16384,playback_bytes=16384,capture_periods=4,playback_periods=4,drained_directions=3)
+            nominal=frame(struct.pack('<3I',0,0,0),100)
+            for offset,value in ((76,0),(84,3),(88,1),(92,1)):
+                broken=bytearray(nominal);struct.pack_into('<I',broken,offset,value)
+                refused(lambda:host.decoder.decode(bytes(broken),session,0))
+            refused(lambda:host.decoder.decode(nominal[:72],session,0))
+            return {'duplex_counts':'both transfers and drains required','physical':False}
+        case('duplex-copy-and-incomplete-count-refusal',duplex_capture)
+        print('PASS producer-bound duplex package and copied completion counts; no physical access.')
+        return
     def launcher(d):
         original=(ROOT/'checks/a733-smp-supervised-launch.py').read_text();start=original.index('    if args.frequency_only:');end=original.index('    result =',start)
         text=original[:start]+"    cases=[check('I2S sixty-second publication',12),check('wrong session size',3,mutation=(CONTRACT+184,1)),check('wrong session digest',3,mutation=(CONTRACT+192,0)),check('armed watchdog refuses',0,initial={MODE:0x41})]\n"+original[end:]

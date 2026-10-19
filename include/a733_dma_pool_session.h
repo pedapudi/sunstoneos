@@ -35,6 +35,7 @@ struct a733_dma_pool_session {
     struct a733_dma_segment segments[DMA_SERVICE_JOBS];
     struct a733_dma_mapping mappings[DMA_SERVICE_JOBS][2];
     struct a733_dma_mapping stream_mappings[A733_I2S_STREAM_PERIODS];
+    struct a733_dma_mapping duplex_mappings[A733_I2S_STREAM_PERIODS];
     unsigned periods,period_bytes;
     enum a733_i2s_direction direction;
     unsigned count, copy_bytes, admitted;
@@ -66,6 +67,9 @@ int a733_dma_pool_session_init(struct a733_dma_pool_session *,
  * DMA channel, 2..8 period pages plus one descriptor page. The profile/cookie
  * must be protected image memory; direction admits only its exact FIFO route.
  * Period payloads are whole frames, at most4096 bytes, 8-access aligned.
+ * For duplex, pass two compatible profiles with duplex=1, RX first and TX
+ * second, and select exactly two channels. Each direction has its own descriptor
+ * page and period pages. stream_mappings is RX; duplex_mappings is TX.
  * Parent and every allocation remain DEVICE for the image lifetime. */
 int a733_dma_pool_session_stream_init(struct a733_dma_pool_session *,
     const struct a733_dma_pool_config *,const struct dma_service_i2s_stream_profile *,

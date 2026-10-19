@@ -2,10 +2,9 @@
 
 The stream driver keeps the I2S clock and selected receiver or transmitter active
 between finite DMA transfers. FIFO storage carries samples while software drains
-one DMA transfer and arms the next. The implementation supports receive or
-transmit on I2S0, with two to eight equal periods. It does not yet support
-simultaneous receive and transmit, cyclic DMA, or graceful final-wire drain.
-Those remain required audio capabilities.
+one DMA transfer and arms the next. The implementation supports receive,
+transmit, or simultaneous receive and transmit on I2S0, with two to eight equal periods per direction. Cyclic DMA and
+graceful final-wire drain remain required audio capabilities.
 
 The native profile uses the existing 24.576 MHz audio parent and 16 kHz framing
 with two 32-bit wire slots. The format can select one or two channels and 16-bit
@@ -24,9 +23,12 @@ and FIFO routes; access to the complete shared allocator pool is insufficient.
 
 Stream OPEN reserves the entire catalogue against every overlapping job,
 including DMA readers. Playback periods are writable by the application between
-GET and PUT, so ordinary read-only DMA sharing cannot apply to them. Stream
-profiles for I2S0 use the same service instance and fixed DMA channel as finite
-capture. The worker dispatches that channel exclusively through the stream core.
+GET and PUT, so ordinary read-only DMA sharing cannot apply to them.
+Single-direction profiles use the same service instance and fixed DMA channel
+as finite capture. A duplex service admits one compatible receive/transmit pair
+on distinct DMA channels, with disjoint descriptor and payload allocations.
+Both profiles use the same format, callbacks and platform binding. The worker
+dispatches each channel exclusively through the stream core.
 It never polls the DMA controller independently of the I2S producer.
 
 Applications receive copied replies from the service queue. PERIOD_GET grants
@@ -83,7 +85,14 @@ manager. It authenticates exact token owner, generation and scopes for the
 reference parent, stable audio output and local I2S controller. It checks the
 pin lease against the manager before admitting operations. Opening and closing
 perform the corresponding checks for resources already acquired or still held.
-A busy observer permits no device access and preserves the original deadline.
+A duplex open acquires PB5, PB6, PB7 and PB8 together. The second direction
+joins that binding before either direction starts. Direction updates preserve
+the peer's CTL enable and ICTL request bits. Closing either direction releases
+its drained DMA channel while the shared binding stays held until the other
+direction closes. The closed stream object cannot reopen during that interval.
+Uncertain failure marks both streams for recovery and prohibits subsequent
+device access, including an idle peer. A busy observer permits no device access
+and preserves the original deadline.
 Expired or uncertain authority retains the session.
 
 The platform uses PB5 for BCLK and PB6 for LRCK. Capture uses PB8 function 3,
@@ -129,3 +138,12 @@ The private CMake fragment adds the new service dependencies to the existing
 DMA service and startup targets. Those targets require recompilation because
 private service storage has grown; their established scenarios do not require
 another execution solely for that layout change.
+
+The duplex compositions in `checks/i2s-stream.c` use the same real providers and
+modeled FIFO/DMA registers. They account for five completed periods in each
+direction, ring reuse, incompatible pair refusal, catalogue overlap refusal,
+independent DRQ control, delayed cancellation drain, both close orders and
+failure retention with an idle or active peer. Results and exact inputs are
+preserved under `~/.cache/sunstoneos/evidence/i2s-duplex-20261018/`. These checks
+establish software behavior; physical audio timing and operation remain
+unqualified.

@@ -10,13 +10,15 @@ struct i2s_application {
  struct a733_audio_leases leases;
  struct a733_audio_parent parent;
  struct a733_i2s_platform binding;
- struct dma_service_i2s_stream_profile stream;
+ struct dma_service_i2s_stream_profile stream[2];
  StaticTask_t tasks[3];StackType_t stacks[3][2048];TaskHandle_t handles[3];
  atomic_uint fatal,result,cancel,audio_ready;
  uint64_t deadline,pending,held_period;
- void *period_memory[I2S_PERIODS];
+ void *period_memory[I2S_PERIODS],*playback_memory[I2S_PERIODS];
  struct dma_service_reply reply;
  unsigned stage,periods,primed,stopping;
+ unsigned job,duplex_stage,duplex_opened,duplex_direction,playback_periods,playback_bytes,duplex_drained;
+ uint64_t playback_held;
  unsigned output_bytes;
 #ifdef SUNSTONE_I2S_TRANSCRIBE
  uint8_t output[I2S_CAPTURE_MAX_BYTES];

@@ -61,11 +61,14 @@ def capture(exchange,session,evidence,record,save,deadline,*,pcm,direction,captu
         if not ready:ready=True;continue
         output.extend(value['payload']);offset+=count
         if offset==total:
-            require(direction in (0,1) and (direction==0 or bytes(output)==pcm),'I2S consumed TX memory differs from admitted PCM.')
+            require(direction in (0,1,2) and (direction!=1 or bytes(output)==pcm),'I2S consumed TX memory differs from admitted PCM.')
             target=evidence/'pcm-s16le-16000-mono.bin';supervisor.durable_frame(target,output)
             info={'path':target.name,'bytes':len(output),'sha256':digest(target),'format':'S16_LE','rate_hz':16000,'channels':1,
-                  'direction':'capture' if direction==0 else 'playback','observation':'captured-periods' if direction==0 else 'dma-memory-consumed',
+                  'direction':('capture','playback','duplex')[direction],'observation':'dma-memory-consumed' if direction==1 else 'captured-periods',
                   'wire_drain_established':False,'acoustic_result_established':False}
+            if direction==2:
+                info['duplex_completion']={k:value[k] for k in ('capture_bytes','playback_bytes',
+                    'capture_periods','playback_periods','drained_directions')}
             supervisor.save_json(evidence/'pcm.json',info)
             require(now()<deadline,'I2S durable output exceeded deadline.')
             record['copied_i2s_output']=info
@@ -122,7 +125,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direc
     def exchange(packet,timeout):
         same();require(time.monotonic()<deadline,'I2S deadline before write.')
         require(device.write(0x02,packet,timeout=timeout)==12,'Incomplete I2S request.')
-        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 72;extent=base+4096;part=0;header=False
+        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 96 if direction==2 else 72;extent=base+4096;part=0;header=False
         while len(frame)<extent:
             same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'I2S deadline during response.')
             raw=bytes(device.read(0x81,extent-len(frame),timeout=min(timeout,remaining)))

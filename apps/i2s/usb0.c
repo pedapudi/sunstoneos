@@ -77,15 +77,24 @@ static void exchange(void)
  if(op==2)atomic_store_explicit(&app.cancel,1,memory_order_release);
  unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
  if(atomic_load_explicit(&app.cancel,memory_order_acquire))result=3;
+ unsigned duplex=app.admitted.direction==2,base=duplex?96:72;
  unsigned count=0;if(op==1&&result==2&&bytes){
-  if(i2s_output(offset,response+72,bytes))count=bytes;else result=3;
+  if(i2s_output(offset,response+base,bytes))count=bytes;else result=3;
  }
- put32(response,0x53493241);put32(response+4,1);put32(response+8,result);put32(response+12,offset);
+ put32(response,0x53493241);put32(response+4,duplex?2:1);put32(response+8,result);put32(response+12,offset);
  put32(response+16,count);put32(response+20,i2s_output_bytes());
  put32(response+24,(uint32_t)app.admitted.epoch);put32(response+28,(uint32_t)(app.admitted.epoch>>32));
  put32(response+32,(uint32_t)app.admitted.generation);put32(response+36,(uint32_t)(app.admitted.generation>>32));
  storage_digest_bytes(&app.admitted,sizeof(app.admitted),response+40);
- response_sent=response_transferred=0;response_bytes=72+count;
+ if(duplex){
+  memset(response+72,0,24);
+  if(result==2){
+   put32(response+72,app.output_bytes);put32(response+76,app.playback_bytes);
+   put32(response+80,app.periods);put32(response+84,app.playback_periods);
+   put32(response+88,app.duplex_drained);
+  }
+ }
+ response_sent=response_transferred=0;response_bytes=base+count;
 }
 void i2s_usb0_task(void *unused)
 {

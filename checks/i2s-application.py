@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--freertos', type=Path, required=True)
     parser.add_argument('--tinyusb', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--duplex-only',action='store_true',help='Run changed duplex client and two-catalogue constructor cases only')
     parser.add_argument('--wav',type=Path,required=True)
     parser.add_argument('--qemu',type=Path,required=True)
     a = parser.parse_args()
@@ -108,6 +109,11 @@ def main():
            ('native',['checks/i2s-application-native.c','drivers/audio/a733_audio_leases.c',
                       'drivers/audio/a733_i2s_platform.c','drivers/audio/a733_i2s_platform_native.c',
                       'drivers/clock/a733_clock_leases.c'],['native-parent-and-adapter'])]
+    if a.duplex_only:
+        cases=[('client',['checks/i2s-application-client.c','apps/i2s/client.c'],
+            [None]*5+['duplex-client-completions','duplex-missing-tx-retention','duplex-cancel-both']),
+            ('output',['checks/i2s-application-output.c','apps/i2s/client.c','drivers/storage/storage_digest.c'],
+            [None]*3+['duplex-usb-completion-counts'])]
     for label,names,labels in cases:
         executable=out/(label+'.elf')
         run(label+'-build',flags+[source/name for name in names]+[source/'runtime/memory.c',
@@ -119,6 +125,7 @@ def main():
                       for p in elf.iter_segments() if p['p_type']=='PT_LOAD']
             symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
         for mode,case in enumerate(labels):
+            if case is None:continue
             if steps.get(case,{}).get('exit')==0:continue
             uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM);pages=set()
             for address,data,size in segments:
@@ -171,7 +178,7 @@ target_compile_definitions(pool-core PUBLIC INCLUDE_xTaskGetSchedulerState=1
 target_compile_options(pool-core PUBLIC -march=armv8-a -mstrict-align -ffreestanding -fno-builtin
  -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections
  -fdata-sections -O2 -g -Wall -Wextra -Werror)
-foreach(direction 0 1)
+foreach(direction {"2" if a.duplex_only else "0 1"})
  add_executable(i2s-pool-${{direction}} "{source}/checks/i2s-application-pool.c")
  target_link_libraries(i2s-pool-${{direction}} PRIVATE pool-core)
  target_compile_definitions(i2s-pool-${{direction}} PRIVATE I2S_CHECK_TX=${{direction}})
@@ -183,8 +190,8 @@ endforeach()
     run('pool-configure',['cmake','-S',project,'-B',pool_build,f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',
         f'-DFREERTOS_DIR={out}/dependencies/freertos',f'-DTINYUSB_DIR={out}/dependencies/tinyusb',
         f'-DSUNSTONE_LLD={linker}'])
-    run('pool-build',['cmake','--build',pool_build,'--target','i2s-pool-0','i2s-pool-1','-j4'])
-    for direction in (0,1):
+    run('pool-build',['cmake','--build',pool_build,'--target']+(['i2s-pool-2'] if a.duplex_only else ['i2s-pool-0','i2s-pool-1'])+['-j4'])
+    for direction in ((2,) if a.duplex_only else (0,1)):
         run('native-pool-'+str(direction),[a.qemu,'-machine','virt,gic-version=3',
             '-cpu','cortex-a53','-smp','2','-m','128M','-nographic','-monitor','none',
             '-semihosting-config','enable=on,target=native','-kernel',pool_build/f'i2s-pool-{direction}.elf'])
