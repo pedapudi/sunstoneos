@@ -20,6 +20,9 @@ const uint64_t gpu_runtime_input_marker[2]={UINT64_C(0x475055494e503032),2};
 #ifdef SUNSTONE_GPU_RUNTIME_DRAW
 const uint64_t gpu_runtime_draw_marker[2]={UINT64_C(0x4750554452415731),PVR_RENDER_DRAW_PROFILE};
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+const uint64_t gpu_runtime_texture_marker[2]={UINT64_C(0x4750555458543031),PVR_RENDER_TEXTURE_PROFILE};
+#endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
 const uint64_t gpu_program_application_marker[2]={UINT64_C(0x4750555052473031),1};
 #endif
@@ -101,7 +104,7 @@ static void runtime_inputs(void)
     }
 }
 #endif
-#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+#if defined(SUNSTONE_GPU_RUNTIME_DRAW) && !defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
 static void runtime_draw(void)
 {
     for(;;) {
@@ -152,9 +155,17 @@ static void client(void *unused)
 #ifdef SUNSTONE_GPU_FINITE_RETURN
     platform_puts("GPU_STAGE=OPEN\n");
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    /* Initial global list has 1024 pages, with separate allocate/zero/publish
+     * steps and tick waits. Its OPEN budget must cover that bounded setup. */
+    struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,15000000);
+#else
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
+#endif
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
-#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+#if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
+    gpu_application_texture_client();
+#elif defined(SUNSTONE_GPU_RUNTIME_DRAW)
     runtime_draw();
 #elif defined(SUNSTONE_GPU_COMPUTE_APPLICATION)
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
@@ -209,6 +220,9 @@ static void client(void *unused)
     while(r.phase!=PVR_GPU_SERVICE_STOPPED){
         vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);
     }
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    gpu_application_texture_closed();
+#endif
 #ifdef SUNSTONE_GPU_FINITE_RETURN
     gpu_finite_complete();
 #endif
@@ -233,6 +247,9 @@ void gpu_application_irq(void)
 }
 void a733_smp_diagnostic_start(void)
 {
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    __asm__ volatile("" :: "r"(gpu_runtime_texture_marker) : "memory");
+#endif
 #ifdef SUNSTONE_GPU_RUNTIME_DRAW
     __asm__ volatile("" :: "r"(gpu_runtime_draw_marker) : "memory");
 #endif
@@ -310,7 +327,13 @@ void a733_smp_diagnostic_start(void)
     if(a733_pmic_identity(&app.shared.pmic,&lifetime)!=A733_PMIC_READY||
        !a733_gpu_platform_bind_pmic(&app.power,&app.shared.gpu_native,&app.shared.pmic,&lifetime,9))platform_panic("GPU supply",7);
 #ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    uint32_t width,height;
+    if(!gpu_application_texture_geometry(&width,&height))platform_panic("GPU texture session",7);
+    const struct a733_gpu_graphics_profile profile={{width,height,16384},1024,1024,25,5000000};
+#else
     const struct a733_gpu_graphics_profile profile={{64,64,32},28,4,25,1000000};
+#endif
 #endif
     static const struct a733_gpu_backend_external external={.revoked=&app.fatal};
     if(!a733_gpu_reserved_prepare(&app.firmware,9,gpu_firmware,(size_t)(gpu_firmware_end-gpu_firmware),400000000)||
@@ -320,7 +343,9 @@ void a733_smp_diagnostic_start(void)
        !a733_gpu_compute_reserved_prepare(&app.compute,&app.firmware,&app.service,10)||
 #endif
 #ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
-#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+#if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
+       !a733_gpu_graphics_memory_prepare_texture(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||
+#elif defined(SUNSTONE_GPU_RUNTIME_DRAW)
        !a733_gpu_graphics_memory_prepare_draw(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||
 #else
        !a733_gpu_graphics_memory_prepare_clear(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||

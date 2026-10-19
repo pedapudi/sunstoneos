@@ -10,6 +10,7 @@ struct pvr_compute_service;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
+struct pvr_render_texture_request;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
@@ -21,7 +22,7 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
-    PVR_GPU_SERVICE_DRAW };
+    PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -131,6 +132,8 @@ struct pvr_gpu_service_reply {
     uint32_t render_phase, render_error, render_checked;
     uint32_t render_first_pixel, render_pixel_count, render_pixels[64];
     uint32_t render_sequence;
+    uint64_t texture_generation;
+    uint32_t texture_received;
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
@@ -143,6 +146,14 @@ struct pvr_gpu_service_message {
  * worker. This compatibility entry submits only frame one. */
 int pvr_gpu_service_draw(struct pvr_gpu_service *,uint64_t epoch,const void *vertices,
     size_t bytes,uint32_t count,uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
+/* Scoped copied texture operation. WRITE copies at most 64 KiB before enqueue.
+ * READ publishes a copied slot; only its client may borrow it after collect,
+ * and RELEASE is required after the consumer has stopped accessing it. */
+int pvr_gpu_service_texture(struct pvr_gpu_service *,uint64_t epoch,
+    const struct pvr_render_texture_request *,const void *data,uint64_t timeout_us,
+    TickType_t wait,uint64_t *ticket);
+int pvr_gpu_service_texture_output(struct pvr_gpu_service *,uint64_t ticket,
+    const void **data,uint32_t *bytes);
 /* Accept another frame only after acquired previous completion and copied output.
  * Acceptance acknowledges replacement of previous_frame; refusal preserves it. */
 int pvr_gpu_service_draw_next(struct pvr_gpu_service *,uint64_t epoch,uint32_t previous_frame,

@@ -9,7 +9,7 @@
  }
  SECTIONS {
      .text : {
-@@ -25,6 +27,20 @@
+@@ -25,6 +27,23 @@
          . += 16384; __monitor_stack_top = .;
      } > MONITOR
      .platform_log 0x42020000 (NOLOAD) : { . += 0x4000; } > MONITOR
@@ -19,6 +19,9 @@
 +    .gpu_retained (NOLOAD) : ALIGN(16) {
 +        __gpu_retained_start = .;
 +        *(.gpu_runtime_retained)
++        . = ALIGN(8); __gpu_texture_copy_start = .;
++        *(.gpu_texture_session_retained)
++        __gpu_texture_copy_end = .;
 +        . = ALIGN(8); __gpu_program_copy_start = .;
 +        *(.gpu_program_session_retained)
 +        __gpu_program_copy_end = .;
@@ -30,7 +33,7 @@
      .bss (NOLOAD) : ALIGN(4096) {
          __bss_start = .; *(.bss*) *(COMMON)
          . = ALIGN(16); __bss_end = .;
-@@ -33,34 +49,21 @@
+@@ -33,34 +52,24 @@
          . += 32768; __exception_stack_top = .;
      } > RAM
      __heap_end = .;
@@ -70,13 +73,16 @@
 +        __uncached_pool_start = .; . += LENGTH(DEVICE_NC); __uncached_pool_end = .;
 +    } > DEVICE_NC
 +    .gpu_session 0x41f00000 (NOLOAD) : { . += DEFINED(__gpu_session_bytes) ? __gpu_session_bytes : 4096; } > RAM
-+    ASSERT(__bss_end <= 0x41f00000, "GPU EL1 allocations overlap uploaded session")
++    ASSERT(__heap_end <= 0x41f00000, "GPU EL1 allocations overlap uploaded session")
 +    ASSERT(__monitor_stack_top <= 0x42020000, "GPU monitor overlaps platform log")
 +    ASSERT(__tables_end <= 0x42200000, "GPU tables exceed reservation")
 +    ASSERT(__gpu_retained_end > __gpu_retained_start, "GPU retained state absent")
 +    ASSERT(!DEFINED(__gpu_session_bytes) || (__gpu_program_copy_end - __gpu_program_copy_start == 8944 &&
 +           __gpu_program_copy_end <= __bss_start && SIZEOF(.gpu_session) >= 8944),
 +           "GPU program session must survive BSS clearing and fit uploaded reservation")
++    ASSERT(!DEFINED(__gpu_texture_session_bytes) || (__gpu_texture_copy_end - __gpu_texture_copy_start == 632 &&
++           __gpu_texture_copy_end <= __bss_start && SIZEOF(.gpu_session) >= 632),
++           "GPU texture session must survive BSS clearing and fit uploaded reservation")
 +    ASSERT(ADDR(.gpu_session) + SIZEOF(.gpu_session) <= 0x42000000, "GPU upload exceeds RAM")
      /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
  }

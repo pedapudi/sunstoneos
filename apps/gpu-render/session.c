@@ -3,7 +3,16 @@
 #include "a733_storage_digest.h"
 #include <stddef.h>
 static unsigned session_sealed;
-#ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
+#if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
+static struct gpu_texture_session texture_session __attribute__((section(".gpu_texture_session_retained")));
+#define sealed_session texture_session.base
+#define session_storage texture_session
+int gpu_application_texture_geometry(uint32_t *width,uint32_t *height)
+{
+    if(!session_sealed || !width || !height)return 0;
+    *width=(uint32_t)texture_session.width;*height=(uint32_t)texture_session.height;return 1;
+}
+#elif defined(SUNSTONE_GPU_PROGRAM_APPLICATION)
 static struct gpu_program_session program_session __attribute__((section(".gpu_program_session_retained")));
 #define sealed_session program_session.base
 #define session_storage program_session
@@ -25,6 +34,11 @@ int gpu_application_seal_session(const struct a733_smp_contract *c)
     const uint8_t *bound=gpu_application_contract_digest(c);
     if(!bound)return 0;
     for(unsigned i=0;i<32;++i)if(digest[i]!=bound[i])return 0;
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    if(texture_session.magic!=UINT64_C(0x4153373347545831) || texture_session.version!=1 ||
+        texture_session.bytes!=sizeof(texture_session) || !texture_session.width || !texture_session.height ||
+        texture_session.width>PVR_RENDER_TEXTURE_MAX_WIDTH || texture_session.height>PVR_RENDER_TEXTURE_MAX_HEIGHT)return 0;
+#endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
     if(program_session.magic!=UINT64_C(0x4153373347505031)||program_session.version!=1||
        program_session.bytes!=sizeof(program_session)||program_session.package_bytes!=sizeof(program_session.package)||

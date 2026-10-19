@@ -58,6 +58,11 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
     return cache
 
 def session_check(raw):
+    if len(raw)==632:
+        magic,version,size,width,height=struct.unpack_from('<5Q',raw,592)
+        require((magic,version,size)==(0x4153373347545831,1,632) and 0<width<=1920 and 0<height<=1080,
+                'Invalid GPU texture session envelope.')
+        raw=raw[:592]
     if len(raw)==8944:
         require(struct.unpack_from('<4Q',raw,592)==(0x4153373347505031,1,8944,8288),
                 'Invalid GPU program envelope.')
@@ -117,14 +122,15 @@ def image_manifest_check(manifest,image,session=None):
     from elftools.elf.elffile import ELFFile
     profiles={'sunstone-a733-gpu-render':'gpu-supervised-v2',
               'sunstone-a733-gpu-compute-single-core':'gpu-single-core-supervised-v2',
-              'sunstone-a733-gpu-draw-single-core':'gpu-single-core-supervised-v2'}
+              'sunstone-a733-gpu-draw-single-core':'gpu-single-core-supervised-v2',
+              'sunstone-a733-gpu-texture-single-core':'gpu-single-core-supervised-v2'}
     target=manifest.get('target')
     require(target in profiles and manifest.get('execution_profile')==profiles[target] and
             manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),'Supervised GPU manifest required.')
     if session is not None:
         session_check(session)
         mode=struct.unpack_from('<I',session,532)[0]
-        require(mode in (1,2) and (mode==1 or target in ('sunstone-a733-gpu-compute-single-core','sunstone-a733-gpu-draw-single-core')),
+        require(mode in (1,2) and (mode==1 or target in ('sunstone-a733-gpu-compute-single-core','sunstone-a733-gpu-draw-single-core','sunstone-a733-gpu-texture-single-core')),
                 'ROM USB0 takeover requires the single-core GPU image.')
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'GPU image symbols absent.')
@@ -135,7 +141,7 @@ def image_manifest_check(manifest,image,session=None):
                 'Single-core GPU image requires its own execution profile.')
         return
     workload=manifest.get('workload')
-    require(workload in ('fixed-arithmetic-repeat','shared-usb-pending','trusted-compiled-program','copied-triangle-draw') and marker is not None and marker[1]==32 and
+    require(workload in ('fixed-arithmetic-repeat','shared-usb-pending','trusted-compiled-program','copied-triangle-draw','copied-indexed-texture-draw') and marker is not None and marker[1]==32 and
             symbols.get('sd_single_core_entry',(0,))[0]==int(elf.header['e_entry']) and
             not any(symbols.get(name,(0,))[0] for name in
                 ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset')),
@@ -151,7 +157,7 @@ def image_manifest_check(manifest,image,session=None):
     program=symbols.get('gpu_program_application_marker')
     runtime=symbols.get('gpu_runtime_input_marker')
     draw=symbols.get('gpu_runtime_draw_marker')
-    require((target=='sunstone-a733-gpu-draw-single-core')==(workload=='copied-triangle-draw')==(draw is not None),
+    require((target in ('sunstone-a733-gpu-draw-single-core','sunstone-a733-gpu-texture-single-core'))==(workload in ('copied-triangle-draw','copied-indexed-texture-draw'))==(draw is not None),
             'GPU copied-draw profile differs.')
     if draw is not None:
         first,size=draw
@@ -161,6 +167,19 @@ def image_manifest_check(manifest,image,session=None):
         offset=first-int(parts[0]['p_vaddr'])
         require(parts[0].data()[offset:offset+size]==struct.pack('<2Q',0x4750554452415731,1),
                 'GPU draw marker differs.')
+    texture=symbols.get('gpu_runtime_texture_marker')
+    require((target=='sunstone-a733-gpu-texture-single-core')==(workload=='copied-indexed-texture-draw')==(texture is not None),
+            'GPU indexed texture profile differs.')
+    if session is not None:
+        require((len(session)==632)==(texture is not None),'GPU texture session/image mismatch.')
+    if texture is not None:
+        first,size=texture
+        parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
+               int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
+        require(size==16 and len(parts)==1,'GPU texture marker must be immutable/file-backed.')
+        offset=first-int(parts[0]['p_vaddr'])
+        require(parts[0].data()[offset:offset+size]==struct.pack('<2Q',0x4750555458543031,2),
+                'GPU texture marker differs.')
     require(manifest.get('runtime_input',False) is (runtime is not None), 'GPU runtime-input profile differs.')
     if runtime is not None:
         require(workload=='trusted-compiled-program' and runtime[1]==16,'GPU runtime input requires a program image.')

@@ -7,6 +7,10 @@ if(NOT TARGET sunstone-a733-storage-maintenance)
 endif()
 option(SUNSTONE_GPU_COMPUTE_APPLICATION "Run repeated native numerical GPU jobs" OFF)
 option(SUNSTONE_GPU_RUNTIME_DRAW "Accept one copied native triangle-list draw" OFF)
+option(SUNSTONE_GPU_RUNTIME_TEXTURE "Accept copied indexed geometry and texture with streamed output" OFF)
+if(SUNSTONE_GPU_RUNTIME_TEXTURE)
+  set(SUNSTONE_GPU_RUNTIME_DRAW ON)
+endif()
 if(SUNSTONE_GPU_RUNTIME_DRAW AND SUNSTONE_GPU_COMPUTE_APPLICATION)
   message(FATAL_ERROR "Runtime draw and compute are separate application modes")
 endif()
@@ -51,6 +55,7 @@ apply_build_patch("${gpu_app_build}/link.ld" "${gpu_app_root}/platform/a733-smp-
 file(WRITE "${gpu_app_build}/firmware.S" ".section .rodata.gpu_firmware,\"a\"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n.incbin \"${SUNSTONE_GPU_FIRMWARE}\"\n.global gpu_firmware_end\ngpu_firmware_end:\n")
 set(gpu_app_extra
   apps/gpu-render/main.c apps/gpu-render/admission.c apps/gpu-render/session.c apps/gpu-render/usb.c
+  apps/gpu-render/texture.c
   platform/a733/device_memory_layout.c platform/a733/memory_reservations.c platform/a733/memory_uncached.c
   runtime/device_memory_pool.c platform/a733/gpu_reserved.c platform/a733/gpu_compute_reserved.c
   platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c platform/a733/gpu_backend.c
@@ -58,7 +63,7 @@ set(gpu_app_extra
   drivers/gpu/gicv3_spi.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
   drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
   drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c drivers/gpu/pvr_render_target.c
-  drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
+  drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
   drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
   drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c drivers/gpu/pvr_gpu_control.c
   drivers/gpu/pvr_gpu_stop.c drivers/gpu/pvr_free_list.c drivers/gpu/pvr_gpu_events.c
@@ -81,6 +86,10 @@ endif()
 if(SUNSTONE_GPU_RUNTIME_DRAW)
   target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_GPU_RUNTIME_DRAW=1)
   set(gpu_app_workload "copied-triangle-draw")
+endif()
+if(SUNSTONE_GPU_RUNTIME_TEXTURE)
+  target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_GPU_RUNTIME_TEXTURE=1)
+  set(gpu_app_workload "copied-indexed-texture-draw")
 endif()
 target_include_directories(sunstone-a733-gpu-render BEFORE PRIVATE "${gpu_app_root}/apps/gpu-render")
 target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_SECURE_MONITOR=1

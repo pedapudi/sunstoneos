@@ -4,9 +4,11 @@
 #include "pvr_render_target.h"
 #include "pvr_render_service.h"
 
-#define A733_GPU_GRAPHICS_TABLE_PAGES 16u
+/* Maximum texture profile: root + three directories + fifteen leaf tables.
+ * Every constructor still derives and checks the complete actual VM plan. */
+#define A733_GPU_GRAPHICS_TABLE_PAGES 19u
 #define A733_GPU_GRAPHICS_MAPS (PVR_RENDER_REGIONS + 2u)
-#define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 5u)
+#define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 7u)
 #define A733_GPU_RENDER_FW UINT32_C(0xc0a00000)
 enum a733_gpu_graphics_phase { A733_GPU_GRAPHICS_NEW, A733_GPU_GRAPHICS_ACQUIRED,
     A733_GPU_GRAPHICS_BOUND, A733_GPU_GRAPHICS_DATA, A733_GPU_GRAPHICS_TABLES,
@@ -66,6 +68,9 @@ int a733_gpu_graphics_memory_prepare_clear(struct a733_gpu_graphics_memory *,
 /* Same render ownership with one bounded copied triangle-list submission.
  * Adds one GPU-read-only vertex page; existing clear construction is unchanged. */
 int a733_gpu_graphics_memory_prepare_draw(struct a733_gpu_graphics_memory *,
+    struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
+    struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
+int a733_gpu_graphics_memory_prepare_texture(struct a733_gpu_graphics_memory *,
     struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
     struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
 /* Called before service preparation writes. Validates the combined native

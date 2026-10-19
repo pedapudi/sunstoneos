@@ -25,7 +25,17 @@ struct gpu_application {
      * owned until completion/rejection; USB output copies stop while pending. */
     atomic_uint runtime_state, runtime_sequence, runtime_closed;
     uint32_t runtime_operation, runtime_expected, runtime_bytes;
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    unsigned char runtime_input[PVR_RENDER_TEXTURE_CHUNK];
+    struct pvr_render_texture_request texture_request;
+    atomic_uint texture_tx_state;
+    uint8_t texture_header[64];
+    const uint8_t *texture_tx_data;
+    uint32_t texture_tx_bytes,texture_tx_header;
+    uint64_t texture_generation;
+#else
     unsigned char runtime_input[PVR_COMPUTE_PACKAGE_INPUT];
+#endif
 #endif
     struct pvr_gpu_service_reply last;
     uint32_t pixels[4096];
@@ -36,4 +46,10 @@ const struct a733_board_session *gpu_application_session(void);
 int gpu_application_live(void *);
 void gpu_application_fail(void *);
 void gpu_application_usb(void *);
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+void gpu_application_texture_client(void);
+void gpu_application_texture_closed(void);
+void gpu_application_texture_usb(void);
+void gpu_application_texture_tx(uint32_t);
+#endif
 #endif

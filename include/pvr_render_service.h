@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_PVR_RENDER_SERVICE_H
 #define SUNSTONE_PVR_RENDER_SERVICE_H
 #include "pvr_render_job.h"
-#include "pvr_render_draw.h"
+#include "pvr_render_texture.h"
 #include <stdatomic.h>
 struct a733_gpu_graphics_memory;
 struct pvr_gpu_service;
@@ -9,7 +9,8 @@ enum pvr_render_service_phase { PVR_RENDER_SERVICE_NEW, PVR_RENDER_SERVICE_BOUND
     PVR_RENDER_SERVICE_READY, PVR_RENDER_SERVICE_FORMAT_GEOMETRY,
     PVR_RENDER_SERVICE_FORMAT_FRAGMENT, PVR_RENDER_SERVICE_SUBMIT,
     PVR_RENDER_SERVICE_TIMELINES, PVR_RENDER_SERVICE_INVALIDATE,
-    PVR_RENDER_SERVICE_OUTPUT, PVR_RENDER_SERVICE_COMPLETE, PVR_RENDER_SERVICE_FAILED };
+    PVR_RENDER_SERVICE_OUTPUT, PVR_RENDER_SERVICE_COMPLETE, PVR_RENDER_SERVICE_FAILED,
+    PVR_RENDER_SERVICE_TEXTURE_PREPARE };
 enum pvr_render_service_error { PVR_RENDER_SERVICE_NO_ERROR, PVR_RENDER_SERVICE_ADMISSION,
     PVR_RENDER_SERVICE_CLOCK, PVR_RENDER_SERVICE_QUEUE, PVR_RENDER_SERVICE_TIMELINE,
     PVR_RENDER_SERVICE_RESULT, PVR_RENDER_SERVICE_MEMORY, PVR_RENDER_SERVICE_RESET };
@@ -32,6 +33,14 @@ struct pvr_render_service {
     /* Copied output becomes readable only at COMPLETE, after both timelines,
      * coherent reads, every pixel/guard and the final deadline observation. */
     uint32_t pixels[PVR_RENDER_WIDTH*PVR_RENDER_HEIGHT];
+    atomic_uint texture_state,texture_output_state;
+    struct pvr_render_texture_request texture_request;
+    struct pvr_render_texture_input texture_input;
+    uint64_t texture_ticket,texture_epoch,texture_generation,texture_draft_deadline;
+    uint64_t texture_output_ticket;
+    uint32_t texture_client,texture_output_client,texture_output_frame;
+    uint32_t texture_received,texture_total,texture_previous,texture_cursor;
+    uint32_t texture_draft,texture_preparing,texture_output_offset,texture_output_bytes;
 };
 int pvr_render_service_begin(struct pvr_render_service *, uint64_t deadline);
 /* Worker only: validate the complete copied input before touching backing.
@@ -41,4 +50,5 @@ int pvr_render_service_draw_next(struct pvr_render_service *,uint32_t previous,
     const void *,size_t,uint32_t,uint64_t deadline);
 int pvr_render_service_poll(struct pvr_render_service *);
 void pvr_render_service_abort(struct pvr_render_service *, unsigned error);
+int pvr_render_service_texture_request(struct pvr_render_service *,uint64_t deadline);
 #endif

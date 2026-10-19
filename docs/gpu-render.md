@@ -1,12 +1,144 @@
 # Native offscreen rendering
 
+The optional indexed-texture application accepts caller-supplied vertices,
+uint16 indices and RGBA8 texels, then streams a copied framebuffer up to
+1920 × 1080 pixels. It retains the graphics context between frames. The
+triangle-color application below keeps its separate 64 × 64 profile. Physical
+GPU execution remains unqualified.
+
+## Indexed textured frames
+
+Build `apps/gpu-render` with `SUNSTONE_GPU_RUNTIME_TEXTURE=ON`,
+`SUNSTONE_GPU_SUPERVISED=ON` and `SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`.
+Select `sunstone-a733-gpu-texture-single-core`. A GPU-only session envelope
+appends five uint64 values to the 592-byte board prefix: magic
+`0x4153373347545831`, version 1, envelope length 632, framebuffer width and
+height. The coordinator authenticates all 632 bytes before launch. The retained
+copy has a link-time size and placement assertion outside the zero-initialized BSS region.
+Framebuffer dimensions remain fixed for the session and its firmware render
+target records. The executable bytes do not change with selected input or
+session dimensions.
+
+Profile 2 uses resident trusted vertex and fragment shaders. Each vertex has
+float4 clip position followed by float2 normalized texture coordinates, with a
+24-byte stride. Positions have finite x/y in [-1, 1], z equal to zero and w equal
+to one; texture coordinates have finite components in [0, 1]. The vertex shader
+passes position and texture coordinates; the fragment shader uses explicit
+level-zero sampling and packs the result into RGBA8. Texture coordinates use
+nonperspective interpolation. The sampler uses nearest filtering and
+clamp-to-edge addressing, with one mip level, layer and sample.
+
+The vertex allocation covers all 65,536 uint16 index values. The 128 KiB index
+allocation admits up to 65,535 indices in complete triangle lists. Every index
+must name a supplied vertex; restart, instancing and base vertex are disabled.
+Textures and framebuffers each admit widths 1 through 1920 and heights 1 through
+1080. Linear row strides round width up to two pixels. Returned rows include
+this padding; consumers use the reported width and stride. These are initial
+allocation policies, not hardware limits.
+
+`pvr_gpu_service_texture()` copies one scoped request and up to 64 KiB before
+enqueue. BEGIN binds a private draft to the session owner, previous frame,
+generation, texture shape and geometry counts. WRITE appends copied chunks at
+the next contiguous byte offset. The canonical input contains vertex bytes,
+index bytes and padded texture bytes in that order. A replacement BEGIN starts
+a new generation. Generation and ticket wrap are refused.
+
+SUBMIT requires the complete draft. The privileged worker validates its shape,
+all vertices and all indices, then checks native ownership, the original paired
+queues, the previous frame and both acquired completion timelines. Only accepted
+submission revokes prior copied output. It initializes and publishes active
+input, descriptors, draw count and guarded output before the combined kick.
+Input and commands remain immutable through completion. Invalid drafts preserve
+the prior frame; uncertain submission retains every allocation and context.
+
+The existing graphics owner leases these allocations from the admitted write-back (WB) pool.
+Texture and geometry mappings are GPU-read-only; guarded output is writable.
+Upload drafts, copied output and transfer slots occupy CPU-only portions of the
+lease, absent from GPU mappings. At maximum geometry, the complete graphics VM
+needs 19 table pages: one root, three directories and fifteen leaf tables.
+Construction still derives and checks the complete actual mapping plan.
+Extended-memory ownership remains an external launch prerequisite; selecting
+this image does not establish physical DDR or GPU authority.
+
+Preparation and cache publication advance in batches of at most sixteen pages.
+Both acquired timelines precede output invalidation, guard checks and a complete
+CPU snapshot. Invalidation also advances by at most sixteen pages per step;
+snapshot copies advance by at most 64 KiB. Texture OPEN has a 15-second budget
+because initial free-list setup has separate allocate, zero and publish steps
+for 1,024 global pages. Submission has a five-second budget. Upload drafts and
+frame streams each have a 30-second limit; partial requests and client transfer
+waits have one-second limits. The inherited 60-second session deadline
+bounds all operations. Timeout retains uncertain device ownership.
+
+READ copies a bounded snapshot chunk into one scoped download slot.
+`pvr_gpu_service_texture_output()` lends that copy to the requesting client
+after its reply is collected. RELEASE must match its ticket, client, frame and
+offset. Replacement and CLOSE refuse a borrowed slot. The application releases
+each slot only after the final TinyUSB transfer callback, including automatic
+zero-length packets used to terminate packet-aligned transfers.
+
+The private version-4 USB protocol has 64-byte requests and response headers.
+It carries epoch, frame, generation, byte offset and input dimensions. One
+READ_FRAME operation returns a header followed by the complete framebuffer
+through 64 KiB copied slots; a 1080p result requires 127 such slots. The host
+requests 65 bytes for each 64-byte header so full-speed headers, including final
+CLOSE, consume their terminating zero-length packet. The existing version-3
+triangle protocol remains unchanged.
+
+`apps/gpu-render/texture.py` provides session-envelope construction,
+`input_bytes()`, `frames()` and `capture_frames()`. Capture consumes the
+coordinator's identity-validated, locked, already running USB handle. It does
+not discover, open, launch or reset a device. Host input and output selection
+require no firmware rebuild. CLOSE uses the existing normal GPU shutdown.
+
+## Compiler contract and evidence
+
+The producer uses Mesa revision
+`86c7176d2dd0065555521bf8c61f208bf53c75d6`. It reuses the actual PCO allocators,
+descriptor allocation and vertex-primary programmable data sequencer (PDS)
+generator. The combined descriptor
+is 80 bytes, including image metadata, sampler metadata and gather words.
+Fragment metadata occupies shared register 0; descriptor registers occupy
+[4, 24). Mesa also reserves spill-address registers even when no spill occurs.
+Those reservations do not represent scratch use.
+
+The compiled vertex shader has 72 instruction bytes, six inputs, six outputs,
+three shared-register reservations and zero temporaries. The fragment shader
+has 200 instruction bytes, 32 temporaries, eight coefficient registers and 27
+shared registers. Both include 32 bytes of unified shader core (USC) prefetch padding. Neither uses
+scratch, spilled temporaries, barriers or atomics. Native construction preserves
+the emitted bytes. Resource units in native state come from this metadata. These are
+trusted resident programs; hashes, allocation bounds and output guards do not
+independently verify arbitrary executable shader behavior.
+
+Pinned source anchors include `pvr_common.h:198–225` for descriptor layout,
+`pvr_arch_tex_state.c:139–255` for linear image state,
+`pvr_arch_sampler.c:127–230` for sampler state,
+`pvr_arch_pipeline.c:2470–2670` for descriptor allocation,
+`pvr_arch_cmd_buffer.c:9084–9180` for indexed vertex data master (VDM) commands and
+`pvr_arch_job_common.c:173–175` for pixel backend (PBE) row stride. The default pinned Linux/FW
+job-coherency contract remains required in both directions; CPU cache cleaning
+alone does not invalidate GPU caches.
+
+Offline evidence is preserved under
+`~/.cache/sunstoneos/evidence/gpu-textured-render-20261019/`. It separates pinned
+compiler/reference comparison, actual native FreeRTOS service checks and the
+linked application/host checks through TinyUSB's FIFO completion path. The
+service checks model only unchanged architectural admission and GPU/firmware
+effects. The application checks model service replies, GPU results and USB
+endpoint hardware. These checks establish no physical rasterization claim.
+
+Arbitrary shaders, perspective and depth/stencil rendering, blending, other
+topologies/index modes, mipmaps, other texture formats/filtering, arrays/cubes,
+multisampling, display presentation and context disposal remain required work.
+
+## Copied triangle submission
+
 The optional triangle application accepts a copied, caller-selected triangle
 list through `pvr_gpu_service_draw()`. Real vertex and fragment shaders, vertex
 fetch programs, primitive state and draw commands feed the existing paired
 geometry and fragment queues. The application returns a copied 64 × 64 RGBA8
 framebuffer. Physical GPU rasterization remains unqualified.
-
-## Copied triangle submission
 
 The draw profile admits 3 through 126 vertices, in groups of three. Each
 `pvr_render_vertex` contains four binary32 clip-position components followed by
@@ -255,8 +387,8 @@ that require autonomous watchdog recovery still need that recovery qualified.
 Physical cleanup and drain must precede resource reclamation. No physical request
 is submitted by these host checks.
 
-Full graphics still requires general draw commands, vertex and fragment shader
-production, textures, more render formats and sizes, synchronization across
-workloads, repeated submission and an application graphics API. Compute remains
-an independent required capability. Performance work follows functional hardware
+The bounded draw profiles above do not complete graphics support. General
+shader selection, the remaining texture and render modes, synchronization across
+workloads, display presentation and context disposal remain required. Compute
+remains an independent capability. Performance work follows functional hardware
 qualification.

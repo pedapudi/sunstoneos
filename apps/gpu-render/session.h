@@ -3,7 +3,15 @@
 #include "boot.h"
 #include "a733_board_application.h"
 #include "pvr_compute_package.h"
-#ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
+#if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
+#include "pvr_render_texture.h"
+struct gpu_texture_session {
+    struct a733_board_session base;
+    uint64_t magic,version,bytes,width,height;
+};
+#define GPU_APPLICATION_SESSION_BYTES sizeof(struct gpu_texture_session)
+int gpu_application_texture_geometry(uint32_t *,uint32_t *);
+#elif defined(SUNSTONE_GPU_PROGRAM_APPLICATION)
 struct gpu_program_session {
     struct a733_board_session base;
     uint64_t magic,version,bytes,package_bytes;

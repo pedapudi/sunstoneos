@@ -42,7 +42,11 @@ void tud_suspend_cb(bool wake){(void)wake;}
 void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 {(void)buffer;(void)bytes;if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
-{if(interface||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;
+{
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+ if(interface)stop();gpu_application_texture_tx(bytes);return;
+#endif
+ if(interface||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;
  if(response_transferred==response_bytes&&response_sent==response_bytes){
     if(response_pending&&response_bytes&&gpu_application_live(NULL))
         atomic_store_explicit(&app.usb_observed,1,memory_order_release);
@@ -134,6 +138,9 @@ static void runtime_exchange(void)
 #endif
 static void exchange(void)
 {
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+    gpu_application_texture_usb();return;
+#endif
     if(response_bytes){unsigned n=tud_vendor_write(response+response_sent,response_bytes-response_sent);
         response_sent+=n;tud_vendor_flush();return;}
 #if defined(SUNSTONE_GPU_RUNTIME_INPUT) || defined(SUNSTONE_GPU_RUNTIME_DRAW)
