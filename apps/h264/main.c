@@ -18,8 +18,11 @@ int board_application_start(void)
     h264.session=*source;
     uint8_t hash[32];
     if(!a733_h264_session_valid(&h264.session)||memcmp(h264.session.board.image,a733_smp_build_id,32)||
-       h264_fixture_end-h264_fixture!=2320||h264_reference_end-h264_reference!=2304)return 0;
-    storage_digest_bytes(h264_fixture,2320,hash);
+       h264_fixture_end<=h264_fixture||h264_fixture_end-h264_fixture>A733_H264_INPUT_BYTES||h264_reference_end-h264_reference!=2304)return 0;
+    storage_digest_bytes(h264_fixture,(size_t)(h264_fixture_end-h264_fixture),hash);
+    struct a733_h264_picture picture;
+    if(!a733_h264_parse(h264_fixture,(size_t)(h264_fixture_end-h264_fixture),&picture)||
+       picture.width!=48||picture.height!=32)return 0;
     if(memcmp(hash,h264.session.fixture,32))return 0;
     storage_digest_bytes(h264_reference,2304,hash);
     if(memcmp(hash,h264.session.reference,32))return 0;

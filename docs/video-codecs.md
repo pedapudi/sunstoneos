@@ -235,7 +235,7 @@ are capability claims, not SunstoneOS qualification results.
 | H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | `libawh265.so`; native unsupported |
 | VP9 decode | Profiles 0/2, level 6.1, 8192 by 8192 at 24 fps | `libawvp9HwAL.so`; native unsupported |
 | AVS2 decode | 8192 by 4608 at 24 fps | `libawavs2.so`; native unsupported |
-| H.264 decode | Baseline/Main/High, level 5.1, 4096 by 2304 at 30 fps | `libawh264.so`; native unsupported |
+| H.264 decode | Baseline/Main/High, level 5.1, 4096 by 2304 at 30 fps | [Bounded native Baseline IDR path](h264-native.md); physical decoding and wider modes unqualified |
 | H.263, MPEG-4 SP/ASP level 5, XVID, Sorenson decode | 1080p at 60 fps | MPEG-4 family libraries present; per-format paths need derivation |
 | MPEG-1/2 decode | 1080p at 60 fps | `libawmpeg2.so`; native unsupported |
 | VP8 decode | 1080p at 60 fps | `libawvp8.so`; native unsupported |

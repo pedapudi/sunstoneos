@@ -1,4 +1,4 @@
-# Same supervised board provider composition with one fixed native H.264 task.
+# Same supervised board provider composition with one bounded native H.264 task.
 set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
 if(NOT TARGET sunstone-a733-board)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-board.cmake")
@@ -7,19 +7,17 @@ get_target_property(h264_parent_definitions sunstone-a733-board COMPILE_DEFINITI
 if(NOT "SUNSTONE_BOARD_SUPERVISED=1" IN_LIST h264_parent_definitions)
  message(FATAL_ERROR "H.264 cannot inherit an armed board target or generated boot")
 endif()
-set(SUNSTONE_H264_FIXTURE "" CACHE FILEPATH "Pinned2320-byte48x32 Baseline IDR I_PCM")
+set(SUNSTONE_H264_FIXTURE "" CACHE FILEPATH "Bounded AnnexB48x32 Baseline IDR stream (1..4096 bytes)")
 set(SUNSTONE_H264_REFERENCE "" CACHE FILEPATH "Independent full-range YUV420p2304-byte reference")
 if(NOT SUNSTONE_H264_FIXTURE OR NOT SUNSTONE_H264_REFERENCE)
- message(FATAL_ERROR "H.264 requires exact fixed fixture and independent reference")
+ message(FATAL_ERROR "H.264 requires bounded stream and independent reference")
 endif()
 file(SIZE "${SUNSTONE_H264_FIXTURE}" h264_fixture_bytes)
 file(SIZE "${SUNSTONE_H264_REFERENCE}" h264_reference_bytes)
 file(SHA256 "${SUNSTONE_H264_FIXTURE}" h264_fixture_hash)
 file(SHA256 "${SUNSTONE_H264_REFERENCE}" h264_reference_hash)
-if(NOT h264_fixture_bytes EQUAL 2320 OR NOT h264_reference_bytes EQUAL 2304 OR
- NOT h264_reference_hash STREQUAL "4398156e0c9291091780d378ff220793691a3dd38eabf483f9e2e9400d6af72e" OR
- NOT h264_fixture_hash STREQUAL "7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69")
- message(FATAL_ERROR "H.264 fixed fixture/reference geometry mismatch")
+if(h264_fixture_bytes LESS 1 OR h264_fixture_bytes GREATER 4096 OR NOT h264_reference_bytes EQUAL 2304)
+ message(FATAL_ERROR "H.264 stream/reference exceeds bounded48x32 application geometry")
 endif()
 set(h264_build "${CMAKE_CURRENT_BINARY_DIR}/h264-application")
 file(MAKE_DIRECTORY "${h264_build}")
@@ -63,7 +61,7 @@ set(h264_inputs ${h264_sources} ${h264_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch"
  "${SUNSTONE_H264_FIXTURE}" "${SUNSTONE_H264_REFERENCE}")
 list(REMOVE_DUPLICATES h264_inputs)
-set(h264_identity "fixed-native-h2641;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
+set(h264_identity "bounded-native-h2641;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS h264_inputs)
  file(SHA256 "${input}" h264_hash)
  string(APPEND h264_identity "${h264_hash}")

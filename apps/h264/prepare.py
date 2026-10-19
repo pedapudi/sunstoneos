@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline preparation of one supervised fixed H.264 application session."""
+"""Offline preparation of one supervised bounded H.264 application session."""
 import hashlib
 import importlib.util
 import json
@@ -25,9 +25,6 @@ def session_check(raw):
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid H.264 owner.')
     require(all(any(raw[o:o+32]) for o in (640,672,704,736,768,800)),'Missing H.264 physical or fixture evidence.')
-    require(raw[768:800].hex()=='7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69' and
-            raw[800:832].hex()=='4398156e0c9291091780d378ff220793691a3dd38eabf483f9e2e9400d6af72e',
-            'H.264 exact slice or independent pixel oracle differs.')
     module,hz,g0,g1,uv,rail=struct.unpack_from('<6I',raw,832)
     require(not module&~0x0700001f and (module>>24)<=1 and 0<hz<=720000000 and
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited H.264 clock/rail state.')

@@ -1,32 +1,43 @@
-# One finite H.264 hardware decode path
+# Bounded native H.264 IDR decoding
 
-The native application implements one fixed H.264 operation: a 48-by-32,
-progressive, 8-bit 4:2:0 Baseline IDR picture with one slice and six I_PCM
-macroblocks, which carry pixel samples directly. Deblocking is disabled.
-The nonconstant samples exercise bitstream
-consumption, macroblock placement and planar DMA output. This operation does
-not cover prediction, transform coefficients, interframe references, CABAC,
-multiple slices, cropping, scaling or the wider Baseline/Main/High families.
+The native driver implements a bounded Annex B H.264 mode. It parses one
+sequence parameter set (SPS), one picture parameter set (PPS) and one IDR
+intra slice, then programs the video engine (VE) from those fields. The mode
+supports progressive, macroblock-aligned Baseline 8-bit 4:2:0 pictures from
+16 through 64 pixels wide and 16 through 32 pixels high. Input is limited to
+4,096 bytes. Access-unit delimiters and supplemental enhancement information
+may precede the slice; supplemental metadata does not alter decoded samples.
 
-The complete Annex B stream is 2,343 bytes. An independent FFmpeg decoder
-reconstructed all 2,304 original Y, Cb and Cr samples. Native execution accepts
-only the 2,320-byte IDR network abstraction layer (NAL) unit, without its start
-code or parameter-set NALs. The register parameters correspond to the fixed
-sequence and picture parameter sets (SPS/PPS) and slice header; the
-application does not parse arbitrary H.264 input.
+The engine executes CAVLC entropy decoding, intra prediction, inverse transforms,
+deblocking and output writes. The CPU validates headers and bounds; it does not
+decode macroblock payloads. A malformed payload can therefore pass header
+admission and fail in the engine. Device errors, data requests, busy completion
+and deadlines retain every allocation and lease.
 
-| Artifact | SHA256 |
-| --- | --- |
-| Complete stream | `086a771d3323a5c5c0ad4615b2fd91a400b8022bcb180ff66e2b4986e4224ae9` |
-| Native slice input | `7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69` |
-| Independent planar output | `4398156e0c9291091780d378ff220793691a3dd38eabf483f9e2e9400d6af72e` |
+The diagnostic application accepts 48-by-32 pictures and copies 2,304 planar
+Y, Cb and Cr bytes. Its input stream and independent pixel reference are
+immutable compiled inputs selected with `SUNSTONE_H264_FIXTURE` and
+`SUNSTONE_H264_REFERENCE`. Each image admits their hashes through its sealed
+session. Changing the stream or reference requires linking another image;
+the application does not yet accept live stream uploads.
+
+Supported headers use one slice beginning at macroblock zero, picture-order
+count type 0 or 2, at most one reference-frame declaration and no frame-number
+gaps. CABAC, picture-order count type 1, multiple pictures or slices, interframe
+prediction, field pictures, cropping, slice groups, redundant slices, long-term
+reference storage, PPS extensions, scaling matrices and HRD scheduling are
+unsupported. Header validation cannot establish complete picture coverage.
+The wider Baseline/Main/High families and the board's advertised codec limits
+remain required work.
 
 ## Open-source control and A733 instructions establish the operation
 
 The executor adapts the GPL-2.0-or-later H.264 control in
 [Linux Cedrus](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c).
-The pinned H6-CedarC H.264 sources provide additional field and allocation
-semantics under their LGPL version 2 notice. The source manifest is
+The parser adapts the syntax order in H6-CedarC `H264DecodeSps`,
+`H264DecodePps` and `H264DecodeSliceHeader`, replacing hardware bit-reader
+callbacks with bounded software reads. Those sources provide field and
+allocation semantics under their LGPL version 2 notice. The source manifest is
 [apps/h264/sources.json](../apps/h264/sources.json); it records per-file hashes,
 revisions, source URLs and the preserved license files.
 
@@ -47,7 +58,10 @@ secondary output. The vendor scaling helper is not used.
 The metadata audit follows producer code as well as register consumers. In
 particular, the VLD base field contains an encoded address rather than a raw
 physical address. Motion-vector fields are 1,024 bytes apart for this picture.
-The full audit and producer disassembly remain with the raw evidence.
+The full audit and producer disassembly remain with the raw evidence. Frame
+SRAM picture-order fields remain zero for this standalone I-picture mode; the
+parsed picture-order count has no reference or output-reordering consumer.
+Actual frame-order fields need implementation before those consumers are added.
 
 ## Existing providers retain the decoder and every DMA buffer
 
@@ -94,7 +108,7 @@ padding and contains 1,536 Y bytes followed by 384 Cb and 384 Cr bytes.
 
 ## Completion permits a verified private copy without reclaiming DMA
 
-After acquisition, the executor verifies the complete slice hash and reads the
+After acquisition, the executor parses the retained immutable CPU stream and reads the
 supported compound identity before preparing mappings or codec registers. It
 requires the selected H.264 mode, disabled framebuffer compression (AFBC)
 mode fields, clear video control unit (VCU) enable
@@ -102,16 +116,21 @@ and reset controls, clear LBC enable and no stale status or active H.264 pipelin
 The top timeout-enable field must also remain clear, matching shared preparation.
 Unknown identities and unsupported state retain ownership and refuse decode.
 
-Programming sets the fixed picture and plane geometry, scratch pointers and
+Programming derives SPS/PPS, quantization and deblocking fields from the parsed
+headers and sets the bounded plane geometry, scratch pointers and
 frame-SRAM slot zero. It writes zero to SDROT control and programs no
 secondary-output addresses or scaling triggers.
 The VLD end is inclusive and covers the 4,096-byte padded input allocation.
-Only the 2,320-byte slice contributes to the programmed bit length.
+Only the encoded slice NAL contributes to the programmed bit length. The native
+provider copies that slice from the immutable stream into the padded input
+allocation at byte zero, preserving emulation-prevention bytes.
 
 The executor follows Cedrus's offset-zero sequence: initialize software decode
-with trigger 7, flush the 24 header bits including the NAL header, poll VLD
-busy, then trigger slice decode with 8. Cedrus documents failures from using a
-nonzero VLD offset directly, so that shortcut is excluded.
+with trigger 7, flush the parsed header bits including the NAL header in
+chunks of at most 32, poll VLD busy after each chunk, then trigger slice decode
+with 8. The pinned [Cedrus `cedrus_skip_bits` comment](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c#L322)
+documents intermittent corruption with nonzero VLD offsets. The separate slice
+copy preserves the offset-zero path for complete Annex B inputs.
 
 Errors take precedence over completion. A completion flag with any applicable
 pipeline, transform, bitstream-DMA or writeback-busy bit remains pending.
@@ -138,29 +157,35 @@ A zero-valued USB request byte returns a 128-byte header. It contains the H.264
 magic/version, status, byte count, session epoch/generation and input/reference/
 private-output hashes. Only successful copied status appends the 2,304 planar
 bytes. Pending and failure carry no pixel bytes or private-output digest.
-The host retains raw frames, verifies the complete copied output and checks
-its deadline before publishing the durable result.
+The host command requires `--reference` with the independent 2,304-byte pixel
+file; its digest must match the admitted session before launch. The host
+retains raw frames, verifies the complete copied output and checks its deadline
+before publishing the durable result.
 USB health, assertion and invalid-request failures revoke board liveness before
 parking, preventing subsequent decoder operations while retaining its resources.
 
-Focused host validation passed using one linked native image. The checks cover
-full-session sealing and refusal, executor/provider sequencing, guarded native
-copying, pixel comparison, hashing, fault and busy refusal, the native USB
-serializer and shared revocation, launcher admission and durable host capture.
+Focused host validation covers full-session sealing, executor/provider
+sequencing, guarded native copying, pixel comparison, hashing, fault and busy
+refusal, the native USB serializer, launcher admission and durable host capture.
+The complete PCM stream preserves the earlier independent FFmpeg pixel oracle
+and selected A733 library register trace. Four libx264 streams exercise predicted
+intra macroblocks, residual transforms, nonzero deblocking offsets and the
+minimum/maximum driver geometry. FFmpeg header traces independently establish
+their syntax values and pixel references. ASan/UBSan checks damaged and truncated
+inputs; the native executor's register model checks the planned fields.
+
+The frozen images, linked dependency closures, pixel references, encoder and
+header traces are under
+`~/.cache/sunstoneos/evidence/h264-stream-20261018`.
+The PCM integration image is `pcm-integration/build/sunstone-a733-h264.elf`;
+the predicted 48-by-32 image is `prediction-build/sunstone-a733-h264.elf`.
+The preserved primary-source and fixed pixel/register evidence remains under
+`h264-native-20261017` and `h264-native-20261018`. Host FFmpeg/libx264 binary
+identities and execution boundaries are recorded in
+[the source manifest](../apps/h264/sources.json).
+
 Hardware registers, DMA results, initial physical authority and USB transport
-remain modeled boundaries in those checks.
-
-The frozen image and compiled dependency closure are under
-`~/.cache/sunstoneos/evidence/h264-native-20261018`.
-The ELF SHA256 is
-`3cf76267d42f5dff600677a940d45d34af14557daabb66ad733dd8587432a5c4`.
-The embedded build ID is
-`51fecb35477e907c53e522770bd380d1c6cb94457133e4a192ae0471afe0ab9a`.
-The evidence preserves failed setup and fixture attempts, their input snapshots
-and the reviewed corrections. Successful admission, executor and native cases
-were reused when later packaging inputs changed. The independent FFmpeg output
-and selected vendor instruction traces remain in the earlier evidence directory
-`~/.cache/sunstoneos/evidence/h264-native-20261017`.
-
-Physical H.264 decoding, identity, DMA confinement, pixel conformance and
-supervised timing remain unqualified. The coordinator owns any board attempt.
+remain modeled boundaries. Physical H.264 decoding, identity, DMA confinement,
+pixel conformance and supervised timing remain unqualified. Both boards are
+unavailable for recovery, so no physical attempt is authorized by this evidence.
+The coordinator owns any later board attempt.

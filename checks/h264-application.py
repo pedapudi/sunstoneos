@@ -59,11 +59,12 @@ def main():
             if not destination.exists():shutil.copytree(getattr(a, name),destination,ignore=shutil.ignore_patterns('.git','__pycache__'))
         # Existing source-authentication code also verifies the pinned archives.
         for src in (a.tcp.parent/'FreeRTOS-Plus-TCP-b86ad086.tar.gz', a.rsn.parent/(a.rsn.name+'.tar.gz')):
-            shutil.copy2(src, out/'dependencies'/src.name)
-        for source, target in [('slice.bin', 'slice.bin'), ('expected.yuv', 'reference.yuv'), ('result.json', 'oracle-result.json')]:
+            destination=out/'dependencies'/src.name
+            if src.resolve()!=destination.resolve():shutil.copy2(src,destination)
+        for source, target in [('input.h264', 'slice.bin'), ('expected.yuv', 'reference.yuv'), ('result.json', 'oracle-result.json')]:
             shutil.copy2(a.fixture_evidence/source, out/target)
         shutil.copy2(a.reference_trace, out/'reference-trace.json')
-        assert sha(out/'slice.bin') == '7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69'
+        assert sha(out/'slice.bin') == json.loads((out/'oracle-result.json').read_text())['files']['input.h264']['sha256']
         assert sha(out/'reference.yuv') == '4398156e0c9291091780d378ff220793691a3dd38eabf483f9e2e9400d6af72e'
         save(out/'input-hashes.json', {str(x.relative_to(out)): sha(x) for directory in (out/'source', out/'dependencies') for x in directory.rglob('*') if x.is_file()})
     else:

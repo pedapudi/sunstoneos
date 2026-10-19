@@ -58,7 +58,8 @@ def setup(image,out,session_optional=False):
             reference=data
             if len(data)!=2304 or hashlib.sha256(data).hexdigest()!='4398156e0c9291091780d378ff220793691a3dd38eabf483f9e2e9400d6af72e':errors.append('Independent H.264 reference differs')
         elif name=='slice.bin':
-            if len(data)!=2320 or hashlib.sha256(data).hexdigest()!='7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69':errors.append('Fixed2320-byte slice differs')
+            oracle=json.loads((out/'oracle-result.json').read_text())
+            if not 0<len(data)<=4096 or hashlib.sha256(data).hexdigest()!=oracle['files']['input.h264']['sha256']:errors.append('AnnexB input differs from independent oracle')
         else:
             session=data
             if len(data)!=856:errors.append('Session must be856bytes')

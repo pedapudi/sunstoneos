@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define A733_H264_INPUT_BYTES 4096u
+/* Historical PCM fixture length, not a stream admission bound. */
 #define A733_H264_SLICE_BYTES 2320u
 #define A733_H264_OUTPUT_BYTES 2304u
 #define A733_H264_PICTURE_INFO_BYTES 0x20800u
@@ -16,16 +18,31 @@ enum a733_h264_buffer { A733_H264_INPUT, A733_H264_Y, A733_H264_C,
 struct a733_h264_span { uint64_t iova, bytes; };
 struct a733_h264_job {
     const uint8_t *input;
+    size_t input_bytes;
     struct a733_h264_span buffers[A733_H264_BUFFERS];
 };
-/* One exact Baseline progressive48x32 IDR/I_PCM fixture. No general H.264
- * parser, DPB, scaling, secondary output, LBC, AFBC or VCU operation.
+/* Bounded one-picture AnnexB mode: one SPS, one PPS and one IDR I slice.
+ * Baseline8-bit4:2:0, progressive macroblock-aligned16..64 by16..32,
+ * CAVLC, POC0/2, no FMO, cropping, HRD, DPB or secondary outputs.
+ * Macroblock prediction, residual transforms and entropy decoding run on VE.
+ * Header validation does not establish that slice data forms a complete picture.
  * Provider acquisition freezes the CPU alias and reserves masters6/7, IRQ81,
  * clocks/reset/power and every physical alias before any device programming.
  */
+struct a733_h264_picture {
+    uint32_t width, height, slice_offset, slice_bytes, header_bits;
+    uint32_t sps, pps, shs, shs2, qp;
+};
+/* No MMIO. Failure leaves the output untouched. Bounds apply before every read.
+ * Adapted syntax/field order from pinned CedarC H264DecodeSps/Pps/SliceHeader;
+ * bounded byte reader replaces its hardware GetBits callbacks. */
+int a733_h264_parse(const uint8_t *, size_t, struct a733_h264_picture *);
 struct a733_h264_ops {
     int (*now_us)(void *, uint64_t *);
     int (*acquire)(void *, const struct a733_h264_job *, uint64_t, uint64_t *);
+    /* Publish the parsed slice NAL, including its NAL header, at byte0 of
+     * INPUT DMA span, zero-pad its remaining extent and retain both CPU stream
+     * and DMA copy. Cedrus requires VLD_OFFSET0 to avoid offset corruption. */
     int (*prepare)(void *, uint64_t, const struct a733_h264_job *, uint64_t);
     int (*read)(void *, uint64_t, uint32_t, uint32_t *, uint64_t);
     int (*write)(void *, uint64_t, uint32_t, uint32_t, uint64_t);
@@ -48,12 +65,14 @@ struct a733_h264_run {
     void *context;
     uint64_t token, deadline, last_now, version;
     uint32_t identity_high, status, format;
-    unsigned index;
+    unsigned index, flushed, flush_bits;
+    struct a733_h264_picture picture;
     enum a733_h264_state state;
 };
 /* Fresh zeroed storage, single privileged serialized caller, no reentry.
- * Complete input hash is checked after acquisition. Inclusive VLD end is the
- * padded4096-byte span, not the2320-byte bitstream. Minimum scratch extents
+ * Stream headers are parsed after acquisition. Inclusive VLD end is the
+ * padded4096-byte span; slice length is parsed and VLD offset remains zero.
+ * Minimum scratch extents
  * are source-derived; they do not prove physical burst bounds. All spans
  * below4GiB, page-aligned and disjoint; neighbor base aligned16KiB.
  * Terminal failure/success never authorizes unmapping, reset, reuse or release.

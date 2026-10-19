@@ -51,10 +51,10 @@ static int h264_authority(void *v,const struct a733_video_platform_config *c,
     if(v!=&h264||!token)return -1;
     if(*token&&*token!=h264.session.authority)return -1;*token=h264.session.authority;
     if(!board_live(NULL)||d!=h264_deadline()||memcmp(c,&h264.config,sizeof(*c))||
-       j->input!=h264.input)return -1;
+       j->input!=h264_fixture||j->input_bytes!=(size_t)(h264_fixture_end-h264_fixture))return -1;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i)if(j->buffers[i].iova!=h264.job.buffers[i].iova||
         j->buffers[i].bytes!=h264.job.buffers[i].bytes)return -1;
-    uint8_t hash[32];storage_digest_bytes(j->input,A733_H264_SLICE_BYTES,hash);
+    uint8_t hash[32];storage_digest_bytes(j->input,j->input_bytes,hash);
     if(memcmp(hash,h264.session.fixture,32))return -1;
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!h264_device(p))return -1;
     for(uintptr_t p=0x01c0e000;p<0x01c0f000;p+=4096)if(!h264_device(p))return -1;
@@ -124,9 +124,12 @@ static int h264_allocate(void)
             memset(h264.buffers[i-1],0,used[i-1]);}
     }
     h264.input=h264.buffers[A733_H264_INPUT];h264.luma=h264.buffers[A733_H264_Y];h264.chroma=h264.buffers[A733_H264_C];
-    memcpy(h264.input,h264_fixture,A733_H264_SLICE_BYTES);
+    struct a733_h264_picture picture;
+    if(!a733_h264_parse(h264_fixture,(size_t)(h264_fixture_end-h264_fixture),&picture)||
+       picture.width!=48||picture.height!=32)return 0;
+    memcpy(h264.input,h264_fixture+picture.slice_offset,picture.slice_bytes);
     static const uint32_t iova[]={0x10001000,0x10010000,0x10014000,0x10020000,0x10044000,0x10048000};
-    struct a733_iommu_span spans[A733_H264_BUFFERS];h264.job.input=h264.input;
+    struct a733_iommu_span spans[A733_H264_BUFFERS];h264.job.input=h264_fixture;h264.job.input_bytes=(size_t)(h264_fixture_end-h264_fixture);
     for(unsigned i=0;i<A733_H264_BUFFERS;++i){
         h264.job.buffers[i]=(struct a733_h264_span){iova[i],capacity[i]};
         spans[i]=(struct a733_iommu_span){iova[i],(uintptr_t)h264.buffers[i],capacity[i],

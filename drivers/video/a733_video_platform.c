@@ -406,7 +406,7 @@ int a733_h264_platform_init(struct a733_h264_platform *p,const struct a733_video
 }
 static int h264_same_job(const struct a733_h264_job *a,const struct a733_h264_job *b)
 {
-    if(a->input!=b->input)return 0;
+    if(a->input!=b->input||a->input_bytes!=b->input_bytes)return 0;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i)if(a->buffers[i].iova!=b->buffers[i].iova||
         a->buffers[i].bytes!=b->buffers[i].bytes)return 0;
     return 1;

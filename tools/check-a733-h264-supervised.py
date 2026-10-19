@@ -19,14 +19,13 @@ require,digest=supervisor.require,supervisor.digest
 PREREQUISITES={'supervised-ram-recovery','h264-supervised-software'}
 fixture=module('h264_capture_fixture',ROOT/'apps/h264/fixture.py')
 REFERENCE=fixture.construct()[2]
-FIXTURE_SHA256='7021224278372ceb05be72796579c4b412e6f7758280d855a5d07f1225649d69'
 PRODUCT='sunstoneos native H.264'
 SERIAL='sunstoneos-a733-h264'
 
 
-def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
+def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE):
     preparation.session_check(session)
-    require(session[768:800].hex()==FIXTURE_SHA256 and session[800:832]==hashlib.sha256(REFERENCE).digest(),
+    require(len(reference)==2304 and session[800:832]==hashlib.sha256(reference).digest(),
         'H.264 diagnostic fixture/reference differs.')
     record.update(h264_retention='whole-board-power-removal',h264_result='unobserved');save()
     for sequence in range(1,2401):
@@ -35,7 +34,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         path=evidence/f'h264-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest()}
         record.setdefault('h264_frames',[]).append(entry);save()
-        result=decoder.decode(frame,session,REFERENCE);entry.update(result)
+        result=decoder.decode(frame,session,reference);entry.update(result)
         require(now()<deadline,'H.264 response arrived after capture deadline.')
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
@@ -52,13 +51,13 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('H.264 exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save):
+def capture_device(device,same,deadline,session,evidence,record,save,reference=REFERENCE):
     def exchange(packet,timeout):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete H.264 request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'H.264 capture deadline expired after write.')
         return bytes(device.read(0x81,2432,timeout=min(timeout,remaining)))
-    return capture(exchange,session,evidence,record,save,deadline)
+    return capture(exchange,session,evidence,record,save,deadline,reference=reference)
 
 
 def source_files():
@@ -142,18 +141,22 @@ def claimed(database,test_id,owner,bundle,prepared):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--reference',type=Path,required=True,help='Independent48x32 YUV420p pixel reference, bound by session digest')
     parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release H.264 resources.')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
+    reference=args.reference.read_bytes()
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
+    require(len(reference)==2304 and hashlib.sha256(reference).digest()==session[800:832],
+        'Independent pixel reference differs from the admitted image/session.')
     evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):
         preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True)
         require(admission['identity']==identity and admission['port']==port,'H.264 entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='h264_result',
         source_files=source_files(),description='Supervised native H.264; retain every resource until whole-board power removal')
 
