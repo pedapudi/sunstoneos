@@ -20,6 +20,13 @@ struct gpu_application {
     StackType_t stacks[3][4096];
     TaskHandle_t handles[3];
     atomic_uint fatal,result,usb_observed,preparation_failed;
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+    /* USB writes only while idle, client consumes after acquire. The slot stays
+     * owned until completion/rejection; USB output copies stop while pending. */
+    atomic_uint runtime_state, runtime_sequence, runtime_closed;
+    uint32_t runtime_operation, runtime_expected, runtime_bytes;
+    unsigned char runtime_input[PVR_COMPUTE_PACKAGE_INPUT];
+#endif
     struct pvr_gpu_service_reply last;
     uint32_t pixels[4096];
     uint32_t compute_words[2][PVR_COMPUTE_JOB_WORDS], compute_sequence[2];

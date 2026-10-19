@@ -14,6 +14,9 @@ struct gpu_application app;
 #ifdef SUNSTONE_GPU_TRANSPORT_ONLY
 const uint64_t gpu_transport_only_marker[2]={UINT64_C(0x4750555553423031),1};
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+const uint64_t gpu_runtime_input_marker[2]={UINT64_C(0x475055494e503032),2};
+#endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
 const uint64_t gpu_program_application_marker[2]={UINT64_C(0x4750555052473031),1};
 #endif
@@ -57,6 +60,44 @@ static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op,ui
     if(reply.result!=PVR_GPU_SERVICE_OK){retained();}
     return reply;
 }
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+static void runtime_inputs(void)
+{
+    atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
+    atomic_store_explicit(&app.result,1,memory_order_release);
+    for(;;) {
+        while(atomic_load_explicit(&app.runtime_state,memory_order_acquire)!=1) {
+            if(!gpu_application_live(NULL))retained();
+            (void)request(PVR_GPU_SERVICE_STATUS,0);vTaskDelay(1);
+        }
+        if(app.runtime_operation==3)break;
+        uint64_t ticket;struct pvr_gpu_service_reply r;
+        if(!pvr_gpu_service_compute_input(&app.service,app.runtime_expected,app.runtime_input,
+            app.runtime_bytes,1000000,1,&ticket)) {
+            atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+            atomic_store_explicit(&app.result,1,memory_order_release);continue;
+        }
+        while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+        if(r.result==PVR_GPU_SERVICE_FAULT)retained();
+        if(r.result==PVR_GPU_SERVICE_OK) {
+            uint32_t sequence=r.compute_sequence;
+            atomic_store_explicit(&app.runtime_sequence,sequence,memory_order_release);
+            while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+            unsigned total=gpu_application_package()->output_bytes/4;
+            for(unsigned first=0;first<total;first+=32) {
+                if(!pvr_gpu_service_compute_read_sequence(&app.service,sequence,first,1,&ticket))retained();
+                while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+                unsigned n=total-first<32?total-first:32;
+                if(r.result!=PVR_GPU_SERVICE_OK||r.compute_sequence!=sequence||r.compute_first_word!=first||
+                   r.compute_word_count!=n||r.compute_total_words!=total)retained();
+                memcpy(app.pixels+first,r.compute_words,n*4);
+            }
+        }
+        atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+        atomic_store_explicit(&app.result,1,memory_order_release);
+    }
+}
+#endif
 static void client(void *unused)
 {
     (void)unused;
@@ -118,6 +159,9 @@ static void client(void *unused)
         memcpy(app.pixels+first,r.render_pixels,sizeof(r.render_pixels));
     }
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+    runtime_inputs();
+#endif
     if(!gpu_application_live(NULL)){retained();}
 #ifdef SUNSTONE_GPU_FINITE_RETURN
     platform_puts("GPU_STAGE=CLOSE\n");
@@ -128,6 +172,10 @@ static void client(void *unused)
     }
 #ifdef SUNSTONE_GPU_FINITE_RETURN
     gpu_finite_complete();
+#endif
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+    atomic_store_explicit(&app.runtime_closed,1,memory_order_release);
+    atomic_store_explicit(&app.runtime_state,0,memory_order_release);
 #endif
     atomic_store_explicit(&app.result,1,memory_order_release);
     /* Copied output and reserved parents stay owned for host capture. CLOSE
@@ -148,6 +196,9 @@ void a733_smp_diagnostic_start(void)
 {
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
     __asm__ volatile("" :: "r"(gpu_program_application_marker) : "memory");
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+    __asm__ volatile("" :: "r"(gpu_runtime_input_marker) : "memory");
+#endif
 #endif
     if(!a733_smp_device_preparation_admitted()||!a733_device_memory_ready())platform_panic("GPU memory admission",1);
     const struct a733_board_session *sealed=gpu_application_session();

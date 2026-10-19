@@ -10,8 +10,9 @@ The interface reuses `OPEN`, `COMPUTE`, `STATUS`, `COMPUTE_OUTPUT` and `CLOSE`.
 `pvr_gpu_service_compute_read` requests an output word offset and returns at most
 32 acquired words with the submission sequence and total extent. Session ownership
 also governs output access. Reset, cancellation and other faults revoke output
-and retain resources. A session fixes its program and input before OPEN; changing
-them requires another session. Same-session input replacement remains required work.
+and retain resources. A session fixes its program, input layout and geometry before OPEN. The optional
+runtime-input mode replaces copied data after acquired completion in that same
+session. Selecting another program still requires another session.
 
 ## Trusted compiler profile
 
@@ -151,6 +152,95 @@ USB instance and epoch. It returns copied output to a new file. It never launche
 or resets a board. Physical launch requires the existing independent GPU memory,
 entry, recovery and ownership evidence; the host helpers do not establish it.
 
+## Runtime input in one session
+
+Build with both `SUNSTONE_GPU_PROGRAM_APPLICATION=ON` and
+`SUNSTONE_GPU_RUNTIME_INPUT=ON` to keep the native owner task available after
+its first result. The image manifest sets `runtime_input: true`; preparation checks
+an immutable protocol marker against that field. The sealed program, geometry,
+input length, element count, mappings and private allocations stay fixed.
+Runtime input is ordinary copied data and requires no firmware rebuild or
+session-envelope change. This optional mode leaves the fixed returning
+application's two-job protocol intact.
+
+A registered native task calls `pvr_gpu_service_compute_input` with the sequence
+being replaced, a CPU-owned source, its length and finite queue/operation bounds.
+The call copies the complete input before queue acceptance. It reserves one
+4 KiB slot in the compute component; queued messages contain only client,
+ticket and sequence. The caller may reuse its source when the call returns.
+A normal collected reply reports worker admission. A busy slot or failed queue
+send refuses the call and releases its reservation. Ticket and sequence wrap
+are refused.
+
+The worker requires session ownership, completed compute, an idle client ring,
+matching epochs and serials, and the acquired native timeline for the supplied
+sequence. It repeats native resource admission at consumption. Length and count
+must match the sealed package. Refusals preserve the previous data and output.
+After admission it checks the CPU mapping, copies input into the existing
+GPU read-only allocation and publishes the complete page through the existing
+EL1 cache operation. The next submission advances the timeline sequence and
+revokes the previous result. Executable, PDS/CDM and translation bytes remain
+immutable. Graphics and compute stay serialized.
+
+`pvr_gpu_service_compute_read_sequence` requests at most 32 copied output words
+for one nonzero sequence. A stale sequence returns no words, including while a
+replacement runs. The original read API retains its compatibility behavior.
+Device backing cannot be overwritten until acquired completion; output replies
+own their copied bytes. A queued input slot is released once after consumption
+or rejection. Faults retain GPU ownership and backing.
+
+Device-cache visibility uses the pinned Linux firmware contract independently
+of CPU cache maintenance. The board driver at commit
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` documents default
+[per-job device memory-cache flushing for coherency](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/include/pvr_drm.h#L515-L527).
+Its [queue submission](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c#L698-L705)
+places the compute task before its timeline UPDATE. Its completion code uses
+that timeline to signal the job's done fence. The native queue uses the same
+CDM task and UPDATE order. Its compute flags select serialization and one core;
+its zero firmware configuration flags match the pinned initializer. That
+initializer disables overlap only below 4 KiB; the A733 SLC is 16 KiB. No custom cache policy replaces those defaults.
+
+The acquired previous UPDATE therefore establishes completion under that device
+cache contract before CPU input replacement or output poisoning. The next
+acquired UPDATE precedes CPU output invalidation, guard verification and copying.
+Input and output CPU publication use the existing whole-page EL1 operations.
+CPU cache cleaning does not itself invalidate GPU caches. The internal MCU/USC
+cache operations remain an opaque firmware dependency governed by the published
+contract; software models do not qualify that behavior on hardware. Exact source
+hashes and default-configuration anchors reside in the runtime evidence record.
+
+The GPU application's USB task receives one bounded frame into its private
+mailbox. Only its registered owner task invokes the GPU service. The USB task
+cannot overwrite a posted input; it discards a busy upload without changing it.
+A partial frame has a one-second deadline and never reaches the service. Each
+GPU operation has a one-second bound, and the existing sealed session deadline
+still bounds the complete application lifetime. Output becomes readable only
+after the owner copies every acquired page. The USB response buffer stays
+owned until actual transmission completion.
+
+The runtime request is eight little-endian 32-bit words: magic `0x49525047`,
+version two, operation, expected sequence, epoch low, epoch high, first output
+word and input byte length. Operations are READ=1, SUBMIT=2 and CLOSE=3.
+SUBMIT appends the declared input bytes, at most 4,096. READ and CLOSE append
+no payload. READ offsets are multiples of 32 within the declared result.
+The existing 40-byte program reply header uses version two and carries the
+actual sequence. Status zero means pending, one means copied output, two means
+retained failure, three means completed shutdown and four means refusal.
+Only status one includes words. CLOSE waits for the reviewed provider shutdown
+before status three; it retains the USB session and copied host results.
+
+The host [runtime consumer](../apps/gpu-program/runtime.py) accepts an exchange
+callback or an already validated, locked device handle from the existing board
+coordinator. It reads sequence one, uploads caller-supplied data, reads sequence
+two and requests CLOSE. Its deadline includes writes and reads. It does not
+open or launch a device. The same native API permits further input replacements
+until sequence exhaustion or session expiry.
+
+Runtime data is not executable admission evidence. Source review must establish
+that admitted kernels safely interpret every allowed data value and the declared
+layout. Hashes, input bounds and count checks cannot validate arbitrary USC
+behavior; isolation depends on the actual mapped permissions.
+
 ## Selected evidence
 
 Evidence resides in
@@ -182,3 +272,19 @@ Its previous NEW-only check rejected a second COMPUTE. The real reservation
 callback now passes completed admission and rejects changed owner, epoch,
 timeline and serial. The historical frozen two-job returning image retains that
 old defect; a corrected image requires qualification before physical use.
+
+Runtime-input evidence resides in
+`~/.cache/sunstoneos/evidence/gpu-runtime-input-20261019/`. Native FreeRTOS case
+13 covers changed affine input at 33 elements, queue saturation, queued owner
+revocation, nonowner requests, length/count/sequence refusal, caller buffer reuse,
+wrap refusal, sequence-matched copied output and healthy CLOSE. Its GPU writes
+and hardware callbacks are modeled. The unchanged actual native reservation
+callback retains its separate completed-owner/timeline evidence.
+
+The linked application check runs the actual owner task, mailbox, USB parser and
+transmission callback with the host consumer. It covers two different inputs in
+one session with seven-byte receives and 23-byte writes, different sequence-one
+and sequence-two results, stale output refusal and completed shutdown. Service
+replies, scheduling, USB completion and GPU arithmetic are modeled. Focused
+correctness review found no remaining substantive issue. These checks establish
+software behavior; physical GPU execution remains unqualified.

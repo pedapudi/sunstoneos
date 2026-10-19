@@ -165,3 +165,12 @@ Case 7 passed before a timeout-fixture correction and remains preserved under
 `composition/`. The stale timeline faults at the component deadline before the
 job-local timeout check. These checks model firmware and numerical GPU writes;
 they do not execute the USC program on a physical GPU.
+
+The [trusted program application](gpu-compiled-programs.md#runtime-input-in-one-session)
+also exposes bounded same-session input replacement. Its scoped copied staging
+slot carries a client/ticket-bound request to this worker; generic queue messages
+do not contain input pages. Worker-side completion and native resource admission
+precede input overwrite and EL1 cache publication. The program and geometry stay
+immutable. Exact-sequence copied reads reject output from another submission.
+Focused runtime-input case 13 covers the changed path and healthy shutdown;
+unchanged compiler, dispatch and physical checks are reused.

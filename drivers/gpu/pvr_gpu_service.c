@@ -446,7 +446,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
-    if ((unsigned)r->operation > PVR_GPU_SERVICE_COMPUTE_CANCEL ||
+    if ((unsigned)r->operation > PVR_GPU_SERVICE_COMPUTE_INPUT ||
         ((r->operation == PVR_GPU_SERVICE_STATUS || r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT ||
           r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT || r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) ? r->timeout_us != 0 :
          (!r->timeout_us || r->timeout_us > INT64_MAX))) return PVR_GPU_SERVICE_INVALID;
@@ -473,7 +473,20 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     }
     if (r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT) {
         if (!s->config.compute || m->compute_first_word >= pvr_compute_job_result_words(s->config.compute->config->job)) return PVR_GPU_SERVICE_INVALID;
+        if(m->compute_sequence && m->compute_sequence!=s->config.compute->job.sequence)
+            return PVR_GPU_SERVICE_INVALID;
         return s->config.compute->phase == PVR_COMPUTE_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
+    }
+    if(r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT) {
+        if(s->config.render&&s->config.render->phase!=PVR_RENDER_SERVICE_READY&&
+           s->config.render->phase!=PVR_RENDER_SERVICE_COMPLETE)return PVR_GPU_SERVICE_BUSY;
+        struct pvr_compute_service *c=s->config.compute;
+        if(!c||atomic_load_explicit(&c->input_state,memory_order_acquire)!=2||
+           c->input_ticket!=m->ticket||c->input_client!=m->client)return PVR_GPU_SERVICE_INVALID;
+        if(!deadline(s,r->timeout_us))return PVR_GPU_SERVICE_FAULT;
+        int accepted=pvr_compute_service_replace(c,m->compute_sequence,c->input_copy,c->input_bytes,s->deadline);
+        if(accepted<0){fail(s,PVR_GPU_SERVICE_COMPUTATION);return PVR_GPU_SERVICE_FAULT;}
+        return accepted?PVR_GPU_SERVICE_OK:PVR_GPU_SERVICE_INVALID;
     }
     if (r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) {
         if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
@@ -537,6 +550,12 @@ static void worker(void *argument)
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
         reply.result = execute(s, &message);
+        if(message.request.operation==PVR_GPU_SERVICE_COMPUTE_INPUT) {
+            struct pvr_compute_service *c=s->config.compute;
+            if(c&&atomic_load_explicit(&c->input_state,memory_order_acquire)==2&&
+               c->input_ticket==message.ticket&&c->input_client==message.client)
+                atomic_store_explicit(&c->input_state,0,memory_order_release);
+        }
         reply.phase = s->phase; reply.error = s->error; reply.epoch = s->epoch;
         reply.owns_session = s->owner == message.client;
         reply.start_error = s->start.error; reply.control_error = s->control.error;
@@ -621,7 +640,7 @@ static struct pvr_gpu_service_client *caller(struct pvr_gpu_service *s, unsigned
 int pvr_gpu_service_send(struct pvr_gpu_service *s, const struct pvr_gpu_service_request *r,
                          TickType_t wait, uint64_t *ticket)
 {
-    if (!r || !ticket || wait == portMAX_DELAY) return 0;
+    if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT) return 0;
     unsigned slot; struct pvr_gpu_service_client *c = caller(s, &slot);
     if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
     struct pvr_gpu_service_message message = {.request=*r, .ticket=c->next_ticket+1, .client=slot};
@@ -653,15 +672,46 @@ int pvr_gpu_service_render_read(struct pvr_gpu_service *s,uint32_t first_pixel,
     c->next_ticket=message.ticket;*ticket=message.ticket;return 1;
 }
 
-int pvr_gpu_service_compute_read(struct pvr_gpu_service *s,uint32_t first,
+static int compute_read(struct pvr_gpu_service *s,uint32_t sequence,uint32_t first,
     TickType_t wait,uint64_t *ticket)
 {
     if(!ticket||wait==portMAX_DELAY||first>=PVR_COMPUTE_PACKAGE_OUTPUT/4)return 0;
     unsigned slot;struct pvr_gpu_service_client *c=caller(s,&slot);
     if(!c||c->pending||c->next_ticket==UINT64_MAX)return 0;
     struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_COMPUTE_OUTPUT,0},
-        .ticket=c->next_ticket+1,.client=slot,.compute_first_word=first};
+        .ticket=c->next_ticket+1,.client=slot,.compute_first_word=first,.compute_sequence=sequence};
     c->pending=m.ticket;
     if(xQueueSend(s->requests,&m,wait)!=pdTRUE){c->pending=0;return 0;}
     c->next_ticket=m.ticket;*ticket=m.ticket;return 1;
+}
+
+int pvr_gpu_service_compute_read_sequence(struct pvr_gpu_service *s,uint32_t sequence,uint32_t first,
+    TickType_t wait,uint64_t *ticket)
+{ return sequence&&compute_read(s,sequence,first,wait,ticket); }
+int pvr_gpu_service_compute_read(struct pvr_gpu_service *s,uint32_t first,
+    TickType_t wait,uint64_t *ticket)
+{ return compute_read(s,0,first,wait,ticket); }
+int pvr_gpu_service_compute_input(struct pvr_gpu_service *s,uint32_t sequence,
+    const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket)
+{
+    if(!ticket||!sequence||!span(input,bytes)||bytes>PVR_COMPUTE_PACKAGE_INPUT||
+       !timeout||timeout>INT64_MAX||wait==portMAX_DELAY)return 0;
+    unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
+    if(!client||client->pending||client->next_ticket==UINT64_MAX||!s->config.compute)return 0;
+    struct pvr_compute_service *c=s->config.compute;
+    const struct pvr_compute_package *p=c->config->job->package;
+    if(!p||bytes!=p->input_bytes||!separate(input,bytes,c,sizeof(*c)))return 0;
+    unsigned empty=0;
+    if(!atomic_compare_exchange_strong_explicit(&c->input_state,&empty,1,
+        memory_order_acquire,memory_order_relaxed))return 0;
+    struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_COMPUTE_INPUT,timeout},
+        .ticket=client->next_ticket+1,.client=slot,.compute_sequence=sequence};
+    memcpy(c->input_copy,input,bytes);c->input_bytes=(uint32_t)bytes;
+    c->input_ticket=m.ticket;c->input_client=slot;
+    client->pending=m.ticket;
+    atomic_store_explicit(&c->input_state,2,memory_order_release);
+    if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
+        client->pending=0;atomic_store_explicit(&c->input_state,0,memory_order_release);return 0;
+    }
+    client->next_ticket=m.ticket;*ticket=m.ticket;return 1;
 }

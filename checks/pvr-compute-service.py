@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 13)), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 14)), default=[1, 2, 3])
     parser.add_argument('--package',type=Path)
     parser.add_argument('--expected',type=Path)
     parser.add_argument('--build-only', action='store_true')

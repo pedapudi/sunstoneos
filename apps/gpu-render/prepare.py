@@ -148,6 +148,17 @@ def image_manifest_check(manifest,image,session=None):
             'Single-core GPU geometry differs.')
     transport=symbols.get('gpu_transport_only_marker')
     program=symbols.get('gpu_program_application_marker')
+    runtime=symbols.get('gpu_runtime_input_marker')
+    require(manifest.get('runtime_input',False) is (runtime is not None), 'GPU runtime-input profile differs.')
+    if runtime is not None:
+        require(workload=='trusted-compiled-program' and runtime[1]==16,'GPU runtime input requires a program image.')
+        first,size=runtime
+        parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
+               int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
+        require(len(parts)==1,'GPU runtime-input marker must be immutable/file-backed.')
+        offset=first-int(parts[0]['p_vaddr'])
+        require(parts[0].data()[offset:offset+size]==struct.pack('<2Q',0x475055494e503032,2),
+                'GPU runtime-input marker differs.')
     require((workload=='trusted-compiled-program')==(program is not None), 'GPU program profile differs.')
     if session is not None:
         require((len(session)==8944)==(workload=='trusted-compiled-program'), 'GPU session profile differs.')

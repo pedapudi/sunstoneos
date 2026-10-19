@@ -242,7 +242,7 @@ int pvr_compute_job_init(struct pvr_compute_job *j,const struct pvr_compute_job_
     if(value.last_now<t->queue->last_now)value.last_now=t->queue->last_now;
     *j=value;return 1;
 }
-int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
+int pvr_compute_job_can_repeat(const struct pvr_compute_job *j,uint64_t deadline)
 {
     if(!range(j,sizeof(*j))||(uintptr_t)j%_Alignof(struct pvr_compute_job)||
        j->phase!=PVR_JOB_COMPLETE||j->sequence==UINT32_MAX||j->serial==UINT64_MAX||
@@ -250,6 +250,11 @@ int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
        j->transport->serial!=j->serial||j->transport->epoch!=j->epoch||
        j->transport->queue->epoch!=j->epoch||deadline<=j->last_now||
        deadline<=j->transport->last_now||deadline<=j->transport->queue->last_now)return 0;
+    return 1;
+}
+int pvr_compute_job_repeat(struct pvr_compute_job *j,uint64_t deadline)
+{
+    if(!pvr_compute_job_can_repeat(j,deadline))return 0;
     ++j->sequence;++j->serial;j->deadline=deadline;j->phase=PVR_JOB_PUBLISH;
     memset(j->results,0,sizeof(j->results));put32(j->update,4,j->sequence);return 1;
 }

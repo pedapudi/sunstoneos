@@ -48,10 +48,85 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
         atomic_store_explicit(&app.usb_observed,1,memory_order_release);
     response_bytes=0;response_pending=0;}}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+/* Version2 request: magic/version/op/expected-sequence/epoch-lo/epoch-hi/
+ * first-word/input-bytes, then bounded input bytes for SUBMIT. A partial frame
+ * owns the mailbox but never reaches the service. */
+static uint8_t runtime_header[32];
+static unsigned runtime_header_bytes,runtime_received,runtime_length,runtime_reserved;
+static uint64_t runtime_deadline;
+static uint32_t get32(const uint8_t *p)
+{return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
+static void runtime_exchange(void)
+{
+    if(!runtime_header_bytes)runtime_deadline=a733_smp_counter()/24+1000000;
+    if(a733_smp_counter()/24>=runtime_deadline)stop();
+    if(runtime_header_bytes<32) {
+        unsigned available=tud_vendor_available(),n=32-runtime_header_bytes;
+        if(n>available)n=available;
+        runtime_header_bytes+=tud_vendor_read(runtime_header+runtime_header_bytes,n);
+        if(runtime_header_bytes<32)return;
+        runtime_length=get32(runtime_header+28);
+        if(runtime_length>PVR_COMPUTE_PACKAGE_INPUT)stop();
+        if(runtime_length) {
+            unsigned idle=0;
+            runtime_reserved=atomic_compare_exchange_strong_explicit(&app.runtime_state,&idle,2,
+                memory_order_acquire,memory_order_relaxed);
+        }
+    }
+    if(runtime_received<runtime_length) {
+        unsigned n=runtime_length-runtime_received,available=tud_vendor_available();
+        if(n>available)n=available;
+        uint8_t discard[64];
+        if(!runtime_reserved&&n>sizeof(discard))n=sizeof(discard);
+        runtime_received+=tud_vendor_read(runtime_reserved?app.runtime_input+runtime_received:discard,n);
+        if(runtime_received<runtime_length)return;
+    }
+    unsigned op=get32(runtime_header+8),expected=get32(runtime_header+12),first=get32(runtime_header+24);
+    unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
+    unsigned sequence=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
+    unsigned total=gpu_application_package()->output_bytes/4,count=0,posted=0;
+    uint64_t epoch=(uint64_t)get32(runtime_header+16)|(uint64_t)get32(runtime_header+20)<<32;
+    int valid=get32(runtime_header)==0x49525047&&get32(runtime_header+4)==2&&epoch==app.session.epoch;
+    if(!gpu_application_live(NULL))result=2;
+    else if(!valid)result=4;
+    else if(op==1&&!runtime_length&&first<total&&!(first&31)) {
+        if(expected!=sequence&&!(result==0&&expected==sequence+1))result=4;
+        else if(result==1)count=total-first<32?total-first:32;
+    } else if(op==2&&runtime_reserved&&runtime_length==gpu_application_package()->input_bytes&&
+              get32(app.runtime_input)==gpu_application_package()->count&&first==0&&
+              result==1&&sequence&&sequence!=UINT32_MAX&&expected==sequence&&
+              !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
+        app.runtime_operation=2;app.runtime_expected=expected;app.runtime_bytes=runtime_length;
+        atomic_store_explicit(&app.result,0,memory_order_release);
+        atomic_store_explicit(&app.runtime_state,1,memory_order_release);
+        runtime_reserved=0;result=0;posted=1;
+    } else if(op==3&&!runtime_length&&!first&&result==1&&expected==sequence&&
+              !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)&&
+              !atomic_load_explicit(&app.runtime_state,memory_order_acquire)) {
+        app.runtime_operation=3;
+        atomic_store_explicit(&app.result,0,memory_order_release);
+        atomic_store_explicit(&app.runtime_state,1,memory_order_release);result=0;posted=1;
+    } else result=4;
+    if(runtime_reserved)atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+    if(!posted&&atomic_load_explicit(&app.runtime_closed,memory_order_acquire)&&result!=4&&result!=2){result=3;count=0;}
+    put32(response,0x50555047);put32(response+4,2);put32(response+8,result);put32(response+12,first/32);
+    put32(response+16,count);put32(response+20,total);put32(response+24,sequence);
+    put32(response+28,(uint32_t)app.session.epoch);put32(response+32,(uint32_t)(app.session.epoch>>32));
+    put32(response+36,count?total:0);
+    for(unsigned i=0;i<count;++i)put32(response+40+4*i,app.pixels[first+i]);
+    response_pending=result==0;response_sent=response_transferred=0;response_bytes=40+count*4;
+    runtime_header_bytes=runtime_received=runtime_length=runtime_reserved=0;
+}
+#endif
 static void exchange(void)
 {
     if(response_bytes){unsigned n=tud_vendor_write(response+response_sent,response_bytes-response_sent);
         response_sent+=n;tud_vendor_flush();return;}
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+    if(!tud_vendor_available()&&!runtime_header_bytes)return;
+    runtime_exchange();return;
+#else
     if(!tud_vendor_available())return;
     uint8_t request[4];if(tud_vendor_available()!=4||tud_vendor_read(request,4)!=4)stop();
     unsigned first=(unsigned)request[0]|(unsigned)request[1]<<8|(unsigned)request[2]<<16|(unsigned)request[3]<<24;
@@ -95,6 +170,7 @@ static void exchange(void)
     put32(response+36,result==1?4096:0);
     if(result==1)for(unsigned i=0;i<64;++i)put32(response+40+4*i,app.pixels[first*64+i]);
     response_sent=response_transferred=0;response_bytes=result==1?296:40;
+#endif
 #endif
 }
 void gpu_application_usb(void *unused)

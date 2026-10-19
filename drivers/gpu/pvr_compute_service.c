@@ -335,6 +335,36 @@ int pvr_compute_service_begin(struct pvr_compute_service *s,uint64_t deadline)
         return fail(s,PVR_COMPUTE_SERVICE_QUEUE);
     s->phase=PVR_COMPUTE_SERVICE_FORMAT;return 1;
 }
+int pvr_compute_service_replace(struct pvr_compute_service *s,uint32_t sequence,
+    const void *input,size_t bytes,uint64_t deadline)
+{
+    if(!s||!input||s->phase!=PVR_COMPUTE_SERVICE_COMPLETE||
+       s->service->phase!=PVR_GPU_SERVICE_READY||s->epoch!=s->service->epoch||
+       !s->config->job->package||bytes!=s->config->job->package->input_bytes||
+       bytes<4||bytes>PVR_COMPUTE_PACKAGE_INPUT||sequence!=s->job.sequence||
+       !pvr_compute_job_can_repeat(&s->job,deadline))return 0;
+    const unsigned char *data=input;
+    uint32_t count=(uint32_t)data[0]|(uint32_t)data[1]<<8|(uint32_t)data[2]<<16|(uint32_t)data[3]<<24;
+    if(count!=s->config->job->package->count)return 0;
+    s->deadline=deadline;
+    /* Admission reads the actual native owner/epoch/serial and acquired NC
+     * timeline. Recheck at consumption, before modifying any device backing. */
+    if(pvr_compute_service_admit_mode(s)!=1)return -1;
+    if(s->config->job->admit(s->config->job->admission_context,s->config->job)!=1)
+        return fail(s,PVR_COMPUTE_SERVICE_ADMISSION),-1;
+    uint32_t completed;
+    if(!read_fence(s,&completed)||completed!=sequence||!timely(s))
+        return fail(s,PVR_COMPUTE_SERVICE_ADMISSION),-1;
+    const struct pvr_mips_buffer *b=&s->config->buffers[PVR_JOB_INPUT];
+    if(!mapped(b,0,0xff))return fail(s,PVR_COMPUTE_SERVICE_MAPPING),-1;
+    memcpy(b->storage.cpu,input,bytes);
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,(uintptr_t)b->storage.cpu,PAGE))
+        return fail(s,PVR_COMPUTE_SERVICE_PUBLICATION),-1;
+    __asm__ volatile("dsb sy":::"memory");
+    if(!timely(s)||!pvr_compute_job_repeat(&s->job,deadline))
+        return fail(s,PVR_COMPUTE_SERVICE_JOB),-1;
+    s->phase=PVR_COMPUTE_SERVICE_RUNNING;return 1;
+}
 int pvr_compute_service_poll(struct pvr_compute_service *s)
 {
     if(!s||s->phase==PVR_COMPUTE_SERVICE_FAILED)return -1;

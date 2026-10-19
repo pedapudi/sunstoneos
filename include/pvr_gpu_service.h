@@ -19,7 +19,7 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
-    PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL };
+    PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -133,7 +133,7 @@ struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
     uint64_t ticket;
     unsigned client;
-    uint32_t render_first_pixel, compute_first_word;
+    uint32_t render_first_pixel, compute_first_word, compute_sequence;
 };
 struct pvr_gpu_service_client {
     TaskHandle_t task;
@@ -221,4 +221,13 @@ int pvr_gpu_service_render_read(struct pvr_gpu_service *, uint32_t first_pixel,
 /* Copied owner-only output slice; at most 32 words, after acquired completion. */
 int pvr_gpu_service_compute_read(struct pvr_gpu_service *,uint32_t first_word,
     TickType_t wait,uint64_t *ticket);
+/* Copy a complete same-shape input before queue acceptance. Only one staged
+ * request exists per compute component. Caller may reuse input after return.
+ * A successful enqueue returns a normal ticket; reply reports worker admission.
+ * sequence names the acquired result being replaced; no wrap is supported. */
+int pvr_gpu_service_compute_input(struct pvr_gpu_service *, uint32_t sequence,
+    const void *input, size_t bytes, uint64_t timeout_us, TickType_t wait, uint64_t *ticket);
+/* Exact sequence read; stale requests never copy a newer result. */
+int pvr_gpu_service_compute_read_sequence(struct pvr_gpu_service *, uint32_t sequence,
+    uint32_t first_word, TickType_t wait, uint64_t *ticket);
 #endif

@@ -105,6 +105,7 @@ int pvr_compute_job_init(struct pvr_compute_job *,
  * epoch and all immutable inputs. Refuse timeline/serial wrap. publish must
  * verify the old timeline before poisoning/publishing output for this sequence.
  * Refusal preserves state; acceptance invalidates the prior copied result. */
+int pvr_compute_job_can_repeat(const struct pvr_compute_job *, uint64_t absolute_deadline);
 int pvr_compute_job_repeat(struct pvr_compute_job *, uint64_t absolute_deadline);
 int pvr_compute_job_poll(struct pvr_compute_job *);
 int pvr_compute_job_abort(struct pvr_compute_job *);

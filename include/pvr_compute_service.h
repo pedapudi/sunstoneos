@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_PVR_COMPUTE_SERVICE_H
 #define SUNSTONE_PVR_COMPUTE_SERVICE_H
 #include "pvr_compute_job.h"
+#include <stdatomic.h>
 #include "pvr_mips.h"
 #include "a733_gpu_vm_memory.h"
 
@@ -53,6 +54,12 @@ struct pvr_compute_service {
     struct pvr_mips_object objects[PVR_COMPUTE_SERVICE_OBJECTS];
     uint64_t deadline, last_now, epoch;
     uint32_t phase, error, buffer, page;
+    /* One copied request, never GPU mapped. Ticket/client bind its queue lifetime.
+     * 0=empty, 1=caller copying, 2=worker-owned queued bytes. */
+    atomic_uint input_state;
+    uint64_t input_ticket;
+    uint32_t input_client, input_bytes;
+    unsigned char input_copy[PVR_COMPUTE_PACKAGE_INPUT];
 };
 /* Before scheduler startup and firmware publication, at EL1 with enabled MMU
  * and cache. Bind to a zero/uninitialized service. Refusal preserves outputs.
@@ -73,6 +80,10 @@ int pvr_compute_service_bind(struct pvr_compute_service *, struct pvr_gpu_servic
 int pvr_compute_service_admit_mode(struct pvr_compute_service *);
 int pvr_compute_service_prepare(struct pvr_compute_service *, uint64_t deadline);
 int pvr_compute_service_begin(struct pvr_compute_service *, uint64_t deadline);
+/* Worker-only replacement: 0 refuses without writes, -1 retains a fault,
+ * 1 accepts after acquired completion and EL1 input publication. */
+int pvr_compute_service_replace(struct pvr_compute_service *, uint32_t sequence,
+    const void *, size_t bytes, uint64_t deadline);
 int pvr_compute_service_poll(struct pvr_compute_service *);
 /* No I/O: poison retained state when service/control/reset fails. */
 void pvr_compute_service_abort(struct pvr_compute_service *, unsigned error);
