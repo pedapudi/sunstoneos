@@ -21,6 +21,7 @@ list(REMOVE_ITEM uart_sources "${storage_build}/platform.c")
 apply_build_patch("${uart_build}/platform.c" "${storage_build}/platform.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/platform.patch")
 list(APPEND uart_sources "${uart_build}/boot.c" "${uart_build}/platform.c"
+ "${SUNSTONE_SOURCE_ROOT}/drivers/gpu/gicv3_spi.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart_platform.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart_platform_native.c")
@@ -45,12 +46,13 @@ if(uart_links)
 endif()
 file(GLOB uart_headers "${SUNSTONE_SOURCE_ROOT}/apps/uart/*.h")
 set(uart_inputs ${uart_sources} ${uart_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/include/gicv3_spi.h"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_uart.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_uart_platform.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_uart_platform_native.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/platform.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES uart_inputs)
-set(uart_identity "native-uart2;supervised60;pb0-pb1-passive-loopback;8n1-115200;IRQ36;closed;${CMAKE_C_COMPILER_VERSION}")
+set(uart_identity "native-uart2-deferred-irq;supervised60;pb0-pb1-passive-loopback;8n1-115200;IRQ36;closed;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS uart_inputs)
  file(SHA256 "${input}" uart_hash)
  string(APPEND uart_identity "${uart_hash}")

@@ -5,7 +5,7 @@ transmit, automatic RTS/CTS flow control, line-error reporting and interrupt
 service. Host checks and an AArch64 compile pass. Physical serial operation,
 Bluetooth HCI transport and platform resource binding remain unqualified on hardware.
 The [platform binding](uart-platform.md) implements real clock/pin ownership,
-local gate/reset control and a native adapter for task-polled operation.
+local gate/reset control and a native adapter for polling or deferred IRQ service.
 This document is for driver and platform developers.
 
 ## Controller profiles follow the manual
@@ -53,7 +53,9 @@ The forced-configuration selection remains enabled as in the published driver.
 cause: received data, receive timeout, line status, transmitter empty or modem
 status. Each call moves at most its specified budget of receive bytes and the
 same budget of transmit bytes; the maximum budget is 256.
-The caller owns pending buffers and advances them by the returned counts.
+`tx_irq` arms THRE without transmitting, so a native application can start TX
+from an actual interrupt notification. The caller owns pending buffers and
+advances them by the returned counts.
 The controller stores no buffer pointers and has no internal transmit queue.
 
 Transmit counts indicate bytes accepted into the FIFO within the deadline.

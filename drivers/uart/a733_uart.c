@@ -200,6 +200,16 @@ int a733_uart_exchange(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn
                        const uint8_t *tx, size_t tn, unsigned budget, uint64_t deadline,
                        struct a733_uart_result *r)
 { return service(u, rx, rn, tx, tn, budget, deadline, r, 0); }
+int a733_uart_tx_irq(struct a733_uart *u,unsigned enabled,uint64_t deadline)
+{
+    if (!u || enabled>1 || !deadline) return -1;
+    if (u->state==A733_UART_FAULT) return u->state;
+    if (u->state!=A733_UART_READY) return -1;
+    u->deadline=deadline;
+    uint32_t ier=(u->ier&~2u)|(enabled?2u:0u);
+    if (!write_reg(u,IER,ier)) return u->state;
+    u->ier=ier;return u->state;
+}
 int a733_uart_interrupt(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
                         const uint8_t *tx, size_t tn, unsigned budget, uint64_t deadline,
                         struct a733_uart_result *r)

@@ -12,6 +12,7 @@ static struct a733_pins pins;
 static uint32_t ccu[0x2000/4],rccu[0x340/4],gic[0x10000/4],pio[0x600/4],rpio[0x410/4];
 static uint64_t now_us;
 static uint32_t oscillator;
+static unsigned deferred_irq;
 static unsigned held,lock_retained,reads,writes;
 struct fixture {
     struct a733_uart_platform binding;
@@ -19,7 +20,7 @@ struct fixture {
     unsigned port,admitted,correct_task,admission_unknown,admission_reentry;
     unsigned gic_wait,halt_stuck,shift_busy,rx_count;
     uint8_t rx,tx;
-    unsigned sent,fail_write,expire_write,fail_read;
+    unsigned sent,fail_write,expire_write,fail_read,cause,line_error;
 };
 static struct fixture first,second;
 static uint32_t *reg(uintptr_t a)
@@ -74,10 +75,10 @@ static int read32(void *cookie,uintptr_t a,uint32_t *v)
         assert(f->binding.clock.id && f->binding.pin_lease.id && (*reg(bus(f->port))&local_mask(f->port))==local_mask(f->port));
         unsigned off=a-base;
         if (off==0 && !(f->uart[3]&0x80)) {assert(f->rx_count);*v=f->rx;--f->rx_count;}
-        else if (off==0x14) *v=(f->shift_busy ? 0x20 : 0x60)|(f->rx_count ? 1 : 0);
+        else if (off==0x14) *v=(f->shift_busy ? 0x20 : 0x60)|(f->rx_count ? 1 : 0)|f->line_error;
         else if (off==0x7c) *v=6|(f->shift_busy ? 1 : 0)|(f->rx_count ? 8 : 0);
         else if (off==0xa4 && !f->halt_stuck) {*v=f->uart[off/4]&~4u;f->uart[off/4]=*v;}
-        else if (off==8) *v=1;
+        else if (off==8) *v=f->cause;
         else *v=f->uart[off/4];
         return 1;
     }
@@ -121,17 +122,17 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
 }
 static void initialize_fixture(struct fixture *f,enum a733_uart_route route,unsigned flow,uint64_t owner)
 {
-    memset(f,0,sizeof(*f));f->admitted=f->correct_task=1;
+    memset(f,0,sizeof(*f));f->admitted=f->correct_task=1;f->cause=1;
     struct a733_uart_route_plan p; assert(a733_uart_route_plan(route,&p));f->port=p.port;
     struct a733_uart_platform_config c={.owner=owner,.handoff=owner+100,.startup_deadline_us=1000,
-        .route=route,.format={p.port,8,2,0,flow,24000000,1500000,0}};
+        .route=route,.deferred_irq=deferred_irq,.format={p.port,8,2,0,flow,24000000,1500000,0}};
     for (unsigned i=0;i<4;++i) {c.expected[i]=(struct a733_pin_config){15,0,0};c.desired[i]=(struct a733_pin_config){p.function,0,1};}
     struct a733_uart_platform_ops ops={time_read,current,authorize,lock_enter,lock_leave,lock_keep,read32,write32};
     assert(a733_uart_platform_init(&f->binding,&c,&ops,f,&clocks,&pins));
 }
 static void setup(void)
 {
-    held=lock_retained=reads=writes=0;now_us=0;oscillator=BIT(28)|BIT(1);
+    held=lock_retained=reads=writes=0;now_us=0;deferred_irq=0;oscillator=BIT(28)|BIT(1);
     memset(&clocks,0,sizeof(clocks));memset(&pins,0,sizeof(pins));
     memset(ccu,0,sizeof(ccu));memset(rccu,0,sizeof(rccu));memset(gic,0,sizeof(gic));
     memset(pio,0,sizeof(pio));memset(rpio,0,sizeof(rpio));
@@ -288,4 +289,5 @@ int main(void)
         assert(!a733_uart_platform_native_address(p.port,RCCU+0x10,1));
     }
     puts("UART platform: actual registry/pins/controller composition, route exclusion, parent stability, masked GIC, complete drain/release and retained failures passed");
+    return 0;
 }

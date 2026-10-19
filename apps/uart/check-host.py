@@ -15,9 +15,9 @@ def run(bundle,output):
   except ValueError:pass
   else:raise AssertionError('Unsupported route/extent admitted')
  def frame(status,payload=b''):
-  header=struct.pack('<4I',0x31545255,1,status,len(payload))+session[24:40]+hashlib.sha256(session).digest()
+  header=struct.pack('<4I',0x31545255,2,status,len(payload))+session[24:40]+hashlib.sha256(session).digest()
   return header+(hashlib.sha256(payload).digest() if payload else bytes(32))+bytes(32)+payload
- payload=struct.pack('<Q6I',100,115384,32,32,0,2,3)+session[800:832]*2+bytes(32)
+ payload=struct.pack('<Q6I',100,115384,32,32,0,2,3)+session[800:832]*2+bytes(32)+struct.pack('<4I',2,1,1,0)
  success=frame(1,payload);pending=frame(0)
  assert host.decoder.decode(success,session)['resources_released']
  bad=bytearray(payload);bad[64]^=1
@@ -28,11 +28,20 @@ def run(bundle,output):
   try:host.decoder.decode(malformed,session)
   except ValueError:pass
   else:raise AssertionError('Malformed result accepted')
+ for counts in ((0,0,0,0),(1,1,0,0),(3,1,1,0)):
+  bad=payload[:128]+struct.pack('<4I',*counts)
+  try:host.decoder.decode(frame(1,bad),session)
+  except ValueError:pass
+  else:raise AssertionError('Missing or inconsistent IRQ completion accepted')
+ old=bytearray(success);struct.pack_into('<I',old,4,1)
+ try:host.decoder.decode(old,session)
+ except ValueError:pass
+ else:raise AssertionError('Polling response accepted as IRQ completion')
  output.mkdir(parents=True,exist_ok=False);record={};frames=iter([pending,success]);calls=[]
  def exchange(packet,timeout):calls.append((packet,timeout));return next(frames)
  result=host.capture(exchange,session,output,record,lambda:None,10,now=lambda:1,pause=lambda n:None)
  assert result['status']==1 and len(calls)==2 and (output/'output.bin').read_bytes()==payload
- assert record['copied_uart_output']['bytes']==128 and record['uart_result']=='observed-success'
+ assert record['copied_uart_output']['bytes']==144 and record['uart_result']=='observed-success'
  failures=output/'transport-failure';failures.mkdir();count=0
  def failed_exchange(packet,timeout):
   nonlocal count;count+=1;raise OSError('Modeled first transport failure')

@@ -11,7 +11,8 @@
 #define CLOSED A733_UART_PLATFORM_CLOSED
 #define RETAINED A733_UART_PLATFORM_RETAINED
 #define INVALID A733_UART_PLATFORM_INVALID
-/* The GIC source stays masked in this task-polled binding. */
+/* Default polling mode stays masked. Deferred mode has an external mask-only
+ * ISR; actual controller service remains exclusively in the owner task. */
 enum { S_CLOCK, S_ADMIT, S_BASELINE, S_GIC_WAIT, S_PINS, S_GATE,
        S_RESET_HOLD, S_CONFIGURE, S_CONFIGURING, S_READY, S_STOP_ADMIT,
        S_STOP_MASK, S_STOP_GIC_WAIT, S_DRAIN, S_DRAINING, S_RESET,
@@ -178,7 +179,7 @@ int a733_uart_platform_init(struct a733_uart_platform *s,
         !o->enter || !o->leave || !o->retain || !o->read || !o->write || !registry || !registry->initialized ||
         !pins || !pins->initialized || !c->owner || !c->handoff || !c->startup_deadline_us ||
         !a733_uart_route_plan(c->route,&route) || c->format.port!=route.port ||
-        c->format.clock_hz!=24000000 || (c->format.auto_flow && !route.flow) ||
+        c->deferred_irq>1 || c->format.clock_hz!=24000000 || (c->format.auto_flow && !route.flow) ||
         a733_uart_plan(&c->format,&plan)!=1 || !separate(s,sizeof(*s),c,sizeof(*c)) ||
         !separate(s,sizeof(*s),o,sizeof(*o)) || !separate(s,sizeof(*s),registry,sizeof(*registry)) ||
         !separate(s,sizeof(*s),pins,sizeof(*pins))) return 0;
@@ -354,6 +355,19 @@ enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform
      * boundary; protocol partial-frame/command deadlines remain unchanged. */
     s->uart.deadline=deadline;
     return finish(s,READY);
+}
+enum a733_uart_platform_result a733_uart_platform_irq_sync(struct a733_uart_platform *s,uint64_t deadline)
+{
+    if (!s || !s->initialized || s->config.deferred_irq!=1) return INVALID;
+    enum a733_uart_platform_result r=a733_uart_platform_live(s,deadline);
+    if (r!=READY) return r;
+    unsigned expected=0;
+    if (!atomic_compare_exchange_strong_explicit(&s->busy,&expected,1,memory_order_acquire,memory_order_relaxed)) return BUSY;
+    int held=lock(s);
+    if (held<0) return finish(s,fault(s));
+    if (!held) return finish(s,BUSY);
+    int complete=masked(s);
+    return finish(s,complete<0 ? fault(s) : complete ? READY : PENDING);
 }
 enum a733_uart_platform_result a733_uart_platform_close(struct a733_uart_platform *s,unsigned quiet,uint64_t deadline)
 {

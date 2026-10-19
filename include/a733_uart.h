@@ -77,6 +77,9 @@ int a733_uart_poll(struct a733_uart *);
 int a733_uart_exchange(struct a733_uart *, struct a733_uart_byte *, size_t,
                        const uint8_t *, size_t, unsigned budget,
                        uint64_t deadline, struct a733_uart_result *);
+/* Arm/disarm THRE without transmitting. READY and exclusive task ownership
+ * required; used to start an interrupt-driven transfer without FIFO polling. */
+int a733_uart_tx_irq(struct a733_uart *,unsigned enabled,uint64_t deadline);
 int a733_uart_interrupt(struct a733_uart *, struct a733_uart_byte *, size_t,
                         const uint8_t *, size_t, unsigned budget,
                         uint64_t deadline, struct a733_uart_result *);

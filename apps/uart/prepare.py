@@ -19,7 +19,7 @@ CONTRACT_MAGIC=0x4153373355414331
 REQUEST_MAGIC=0x4153373355414c31
 
 FACTS={
- 'initial':['board_v12_header_uart2_pins11_13_verified','passive_pb0_pb1_loopback_only','no_external_transmitter','controller_cold_no_inherited_dma_handlers','uart0_spi2_i2s_alternate_routes_excluded','remote_secure_console_writers_excluded','irq36_owned_masked'],
+ 'initial':['board_v12_header_uart2_pins11_13_verified','passive_pb0_pb1_loopback_only','no_external_transmitter','controller_cold_no_inherited_dma_handlers','uart0_spi2_i2s_alternate_routes_excluded','remote_secure_console_writers_excluded','irq36_owned_routed_group1ns_level_boot_cpu_priority_d8'],
  'electrical':['pb_bank_voltage_stable','passive_wire_no_external_supply','common_ground_signal_wiring_verified','device_mappings_security_verified'],
  'clocks':['stable_sysclk24m_ref_osc_apb_uart','uart2_gate_off_reset_asserted','no_autonomous_clock_reset_writers'],
  'supervision':['independent_watchdog_recovery_reviewed','whole_board_power_removal','no_reuse','one_attempt']}

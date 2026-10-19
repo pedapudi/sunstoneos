@@ -37,7 +37,7 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 
 /* One zero-valued byte requests a coherent private result. Header of 128 bytes:
  * LE32 magic/version/status/bytes, LE64 epoch/generation, session/payload SHA256
- * and 32 reserved zero bytes. Only status 1 appends 128 copied observation bytes.
+ * and 32 reserved zero bytes. Only status 1 appends 144 copied observation bytes.
  * No application buffer or DMA ownership is transferred; status 2 has no payload. */
 static uint8_t uart_response[128+UART_OUTPUT_BYTES];
 static unsigned uart_response_bytes,uart_response_sent,uart_response_transferred;
@@ -59,7 +59,7 @@ static void uart_exchange(void)
     uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
     unsigned result=atomic_load_explicit(&uart.result,memory_order_acquire);
     if(result==1&&!uart_output_ready())result=2;
-    put32(uart_response,0x31545255);put32(uart_response+4,1);put32(uart_response+8,result);
+    put32(uart_response,0x31545255);put32(uart_response+4,2);put32(uart_response+8,result);
     put32(uart_response+12,result==1?UART_OUTPUT_BYTES:0);
     put32(uart_response+16,(uint32_t)board.session.epoch);put32(uart_response+20,(uint32_t)(board.session.epoch>>32));
     put32(uart_response+24,(uint32_t)board.session.generation);put32(uart_response+28,(uint32_t)(board.session.generation>>32));

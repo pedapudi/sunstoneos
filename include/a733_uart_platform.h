@@ -26,6 +26,10 @@ struct a733_uart_platform_config {
     uint64_t owner,handoff,startup_deadline_us;
     enum a733_uart_route route;
     struct a733_uart_format format;
+    /* 1: application owns a mask-only ISR and deferred owner-task IIR service.
+     * External root-owned route setup must precede initialization. Default 0
+     * keeps the polling/always-masked contract used by Bluetooth. */
+    unsigned deferred_irq;
     /* TX, RX, optional RTS, CTS. Function is selected by route; the desired
      * pull/drive values require platform approval. Expected functions may be
      * GPIO input, disabled, or that same UART route. No inherited output. */
@@ -81,10 +85,17 @@ enum a733_uart_platform_result a733_uart_platform_poll(struct a733_uart_platform
 enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platform *);
 /* One owner task may borrow the actual UART for existing task-polled protocol
  * workers after READY. Their guards call live before service. No interrupt
- * handler may access it; this binding keeps the GIC source masked throughout.
+ * handler may access it. With deferred_irq=0 the GIC source stays masked.
+ * With deferred_irq=1, an exclusive external ISR masks and publishes pending;
+ * the owner calls irq_sync before task-context IIR service or close.
  * The pointer and generation remain borrowed until close or external recovery.
  * Direct begin/drain/reinitialization through the borrowed pointer is forbidden. */
 struct a733_uart *a733_uart_platform_controller(struct a733_uart_platform *);
+/* Task-only disabled/inactive/RWP completion proof for deferred IRQ mode.
+ * Application must mask the owned source first and exclude rearm until service
+ * finishes. PENDING means propagation or handler completion is still pending.
+ * READY permits only owner-task controller service; never call from an ISR. */
+enum a733_uart_platform_result a733_uart_platform_irq_sync(struct a733_uart_platform *,uint64_t deadline);
 enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform *,uint64_t deadline);
 /* A successful live guard also installs its admitted next-operation bound on
  * the READY core clock callback. Higher protocol operation deadlines do not

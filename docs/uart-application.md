@@ -2,8 +2,8 @@
 
 The UART2 application implements one finite transmit and receive operation on
 header pins 11 and 13, connected by a passive wire between PB0/TX and PB1/RX.
-It uses the existing native UART controller, clock registry, pin manager and
-FreeRTOS task adapter. The implementation and modeled checks pass; physical
+It uses the existing native UART controller, clock registry, pin manager,
+FreeRTOS task adapter and deferred interrupt service. The implementation and modeled checks pass; physical
 serial operation remains unqualified.
 
 The application serves platform developers. Its private build entry is
@@ -29,20 +29,32 @@ and PB1. The real platform binding reserves UART2 and its APB_UART/reference
 ancestry, authenticates the designated EL1 task and physical admission, masks
 interrupt 36, acquires both pins and configures the controller.
 
-The task polls FIFO status with a budget of 32 bytes per call. Its fixed
+The task services one UART interrupt cause with a budget of 32 bytes per call.
+Its fixed
 operation deadline is 250 milliseconds through ten seconds from the board
 session start. Each operational callback checks the board lifetime and shared
 clock health before register access. Reads, writes and time observations also
 check health after the callback returns. The independent board lifetime bounds
 later observation of a completed result.
 
+A mask-only ISR handles UART2 INTID 36 through the existing FreeRTOS
+dispatcher. It masks the owned source and publishes atomic pending metadata.
+The designated task waits for completed disable propagation and an inactive
+handler before reading IIR and servicing RX or TX. It arms THRE without writing
+the FIFO, so the first transmit requires an actual interrupt notification.
+There is no FIFO polling fallback. After service, the task rearms the source
+under the same kernel critical section used by the ISR. A newly published
+notification defers rearm without discarding work. At most 128 notifications
+are admitted; exceeding that bound retains resources.
+
 The passive wire has no independent transmitter. After all requested bytes
 have returned without line errors and match the copied request, the task stops
 submissions and requests close. The platform authenticates STOP admission,
 checks FIFO and shift-register drain, asserts reset, removes the gate, restores
 the pins and releases the clock token. Only completed close permits success.
-The UART interrupt remains masked throughout; this path does not qualify an
-interrupt-driven application.
+Close stops IRQ rearm and again requires completed masking and handler
+synchronization before drain. The software checks exercise this IRQ path;
+physical interrupt delivery remains unqualified.
 
 Uncertain access, lost authority, absent or incorrect echo, line errors and
 incomplete drain retain every unreleased UART resource. The task never repeats
@@ -53,17 +65,20 @@ storage for diagnosis.
 
 ## USB capture returns owned copies
 
-The application copies its final observation into 128 private bytes: observation
+The application copies its final observation into 144 private bytes: observation
 time, actual baud, completed transmit and receive counts, aggregate line errors,
-port, closed status, 32 request bytes, 32 received bytes and 32 per-byte status
-values. A SHA-256 digest binds that payload to a 128-byte USB response header.
+port and closed status. It also includes 32 request bytes, 32 received bytes,
+32 per-byte status values, and notification, TX, RX and other interrupt-cause counts.
+Success requires at least one TX and one RX interrupt service and an exact
+match between notification and serviced-cause totals. A SHA-256 digest binds
+that payload to a 128-byte USB response header with wire version 2.
 The header also binds the session digest, epoch and generation.
 
 [The preparation tool](../apps/uart/prepare.py) seals the existing supervised
 board inputs and builds the existing SRAM launcher with UART session geometry.
 [The capture tool](../apps/uart/capture.py) uses the existing supervised host
 transport. It preserves each frame before decoding, accepts success only with
-matching identities, exact counts, correct echo, zero line errors and closed
+matching identities, exact byte and IRQ counts, correct echo, zero line errors and closed
 status, and stops after the first transport failure. The native USB PID remains
 `1f3a:efe8`, with UART-specific product and serial strings.
 
@@ -74,29 +89,36 @@ their admitted fields do not establish actual board or electrical authority.
 
 ## Offline evidence and remaining qualification
 
-Evidence is under `~/.cache/sunstoneos/evidence/uart-native-20261018/`.
+Evidence for deferred IRQ service is under
+`~/.cache/sunstoneos/evidence/uart-irq-20261019/`.
 The linked native ELF SHA-256 is
-`15fb2b6eedfbe33e454ecf225f21b586cc72cc5c6be73a77626c63eb8c1ecf19`.
-The linked-object dependency record covers 165 objects and 419 compiled inputs.
-The existing snapshot tool preserves those inputs, native artifacts and selected
-check outputs under `frozen/`.
+`7d112182035d38de6c8e448f9107e55f24adead928e5f69abad820165d33c4b5`.
+The existing snapshot tool preserves compiled dependencies, native artifacts
+and selected check outputs under `frozen/`.
 
-The selected checks cover:
+The added checks cover:
 
-- Actual platform, clock, pin and FIFO composition under AddressSanitizer and
-  UndefinedBehaviorSanitizer, including normalized 19.2 and 26 MHz oscillator
-  profiles and refusal of a non-24 MHz direct S_UART source.
-- The finite application with the actual FIFO driver: copied completion after
-  close, absent and corrupt echo, line errors, uncertain write without retry,
-  and retained close failure.
-- Actual native application callbacks with board failure during a write and
-  clock failure during a read, blocking further MMIO while preserving metadata
-  retention.
-- Actual session and contract validators, full digest refusals, copied-session
-  lifetime and publication refusal, plus production launcher preparation,
-  bounded-result decoding, durable capture and first-transport-failure stop.
-- Native linking against the inherited board composition. Focused Astra review
-  confirmed the per-access lifetime checks and asynchronous STOP admission.
+- Actual platform/clock/pin synchronization under AddressSanitizer and
+  UndefinedBehaviorSanitizer: GIC disabled, inactive and RWP observations,
+  THRE arm without TX, IIR TX/RX-timeout/overrun service and retained failures.
+- The actual ISR, deferred task and FIFO driver with modeled delivery: no
+  polling fallback, active-handler/RWP deferral, exact copied IRQ counts,
+  corrupt/absent echo, line errors, uncertain TX, bounded interrupt storms
+  and retained close/rearm failure.
+- The rearm race found during focused Astra review: an IRQ published between
+  the task's pending check and rearm defers service without false failure.
+  The correction passed its focused sanitizer case and review to closure.
+- Production preparation and durable host capture for wire version 2, rejecting
+  polling responses, absent TX/RX IRQs and inconsistent notification totals.
+- Native linking and root-owned instruction checks of the fixed IRQ route and
+  dispatcher. Every one of the eleven selected cases passes. Those records
+  are under `root/linked-check/`; they model execution rather than physical delivery.
+
+Prior polling, session-copy, native callback lifetime, clock-reference and
+pin/controller evidence remains valid for unchanged behavior under
+`uart-native-20261018/`. The selected IRQ checks do not repeat those workloads.
+The default Bluetooth binding retains polling mode. Embedding consumers must
+rebuild against the changed platform configuration header.
 
 The checks model device and USB observations. They do not establish electrical
 compatibility, physical baud, drain timing, interrupt operation, multicore
@@ -105,7 +127,9 @@ hardware, USB or queue operation was performed for this work.
 
 Physical qualification requires the passive PB0/PB1 connection, verified header
 routing and stable bank voltage, exclusion of UART0/SPI2/I2S and remote writers,
-a cold UART2 controller, an admitted clock profile, identity Device mappings,
-qualified inherited startup and a reviewed independent recovery procedure.
+a cold UART2 controller, an admitted clock profile and identity Device mappings.
+Qualification also requires exclusive Group1NS level IRQ36 routed to the boot
+CPU at configured priority, qualified inherited startup and a reviewed
+independent recovery procedure.
 These conditions remain accessory- and board-dependent; no launch-admitted
 physical bundle is claimed.

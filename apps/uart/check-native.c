@@ -4,6 +4,7 @@
 #define SUNSTONE_A733_SMP_BOOT_H
 #include "uart_session.h"
 #include "a733_uart_platform_native.h"
+#include "gicv3_spi.h"
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -15,8 +16,8 @@ struct uart_application {
  struct uart_session session;struct a733_uart_platform platform;
  struct a733_uart_platform_native native;struct a733_uart_platform_config config;
  struct a733_uart_platform_ops operations;void *handle;
- atomic_uint result,failed;unsigned stage;size_t sent,received;uint64_t deadline;
- uint8_t tx[32],rx[32],status[32],payload[128],digest[32],session_digest[32];
+ struct gicv3_spi irq;atomic_uint result,failed,pending,irq_fault,notifications;unsigned masked,armed,tx_irqs,rx_irqs,other_irqs;unsigned stage;size_t sent,received;uint64_t deadline;
+ uint8_t tx[32],rx[32],status[32],payload[144],digest[32],session_digest[32];
 };
 static unsigned healthy,raw_writes,raw_reads,lose_on_write,lose_clock_on_read;
 static int board_live(void *v){(void)v;return healthy;}

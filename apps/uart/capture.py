@@ -37,7 +37,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==1:
             output=evidence/'output.bin';supervisor.durable_frame(output,frame[128:])
             require(now()<deadline,'UART output became durable after capture deadline.')
-            record['copied_uart_output']={'path':output.name,'bytes':128,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_uart_output']={'path':output.name,'bytes':144,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
         record['uart_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -52,7 +52,7 @@ def capture_device(device,same,deadline,session,evidence,record,save):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete UART request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'UART capture deadline expired after write.')
-        return bytes(device.read(0x81,256,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,272,timeout=min(timeout,remaining)))
     return capture(exchange,session,evidence,record,save,deadline)
 
 
@@ -96,7 +96,7 @@ def software_sources():
 
 def validate_software(value,prepared):
     require(value.get('schema')=='a733-uart-supervised-software-v1' and value.get('physical_access') is False and
-            all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','native_composition')),
+            all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','native_composition','irq_service')),
             'UART software evidence is incomplete.')
     for key,name in [('image','image.elf'),('launcher','launch.bin')]:
         _,data=reference_bytes(value[key])

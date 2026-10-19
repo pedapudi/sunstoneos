@@ -3,7 +3,7 @@
 #include "a733_board_application.h"
 #define A733_UART_SESSION_MAGIC UINT64_C(0x4153373355414131)
 #define A733_UART_CONTRACT_MAGIC UINT64_C(0x4153373355414331)
-#define UART_OUTPUT_BYTES 128u
+#define UART_OUTPUT_BYTES 144u
 struct uart_session {
  struct a733_board_session board;
  uint64_t magic,version,bytes,owner,authority,operation_timeout_us;

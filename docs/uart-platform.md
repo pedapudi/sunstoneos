@@ -2,7 +2,7 @@
 
 The UART platform binding acquires real clock and pin leases, controls the local
 clock gate and reset, masks the selected GIC interrupt, and configures the native
-UART controller. It provides task-polled serial service for one designated
+UART controller. It provides polled or deferred interrupt service for one designated
 FreeRTOS task. The host composition and native compilation establish software
 behavior; physical serial operation remains unqualified.
 
@@ -87,7 +87,7 @@ This conservative software interval is not a claimed hardware minimum.
 After reset deassertion, the existing UART controller performs bounded divisor,
 FIFO and flow-control configuration.
 
-The GIC interrupt stays masked throughout this implementation. Main UART INTIDs
+Default polling mode keeps the GIC interrupt masked. Main UART INTIDs
 are 34–40; S_UART INTIDs are 233–234. Native writes affect only the selected
 interrupt bit. No interrupt handler may service the borrowed UART.
 The exclusive controller lease also covers its interrupt authority, while
@@ -99,6 +99,20 @@ That call verifies the actual clock token and pin ownership, then checks pin
 manager health under the common register mutex. Pin ownership remains queryable
 after a manager fault, but failed manager health refuses live service.
 A borrowed controller cannot be restarted, reconfigured or drained directly.
+
+Deferred IRQ mode requires `config.deferred_irq=1` and an application-owned
+mask-only ISR. Root-owned boot code configures the interrupt group, route,
+priority and level before application startup. The ISR masks only its owned
+SPI and publishes pending metadata. It never accesses the controller or any
+clock/pin provider. Existing FreeRTOS vectors own acknowledge, EOI and deactivation.
+
+Before each task-context `a733_uart_interrupt` call, `irq_sync` validates live
+ownership and checks completed GIC disable propagation, a disabled source and
+an inactive interrupt under the common register mutex. Pending propagation or
+an active handler returns PENDING. The application must exclude rearm until
+service completes. All controller callbacks retain their actual owner-task,
+privilege and per-access lifetime checks. Default polling mode refuses this API.
+The exclusive UART clock token protects interrupt ownership for both modes.
 
 Close requires stopped submissions, a quiescent peer and authenticated handler
 exclusion. It masks and synchronizes the GIC source again, then drains the UART.
@@ -157,11 +171,19 @@ The runtime check passed once; native compiler setup corrections did not repeat 
 Existing UART format/FIFO/interrupt, pin-manager and I2S evidence remains valid;
 this binding does not rerun those component workloads.
 
-The [finite header application](uart-application.md) integrates UART2 with a
-passive PB0/PB1 loopback, copied USB output and complete UART teardown.
+The focused [deferred IRQ check](../checks/a733-uart-irq-platform.c) reuses the
+accepted provider fixture and runs only the added branches. It covers disabled,
+active and RWP observations, THRE arming without FIFO transmission, actual IIR
+TX/RX-timeout/overrun service and retained uncertain interrupt-enable writes.
+The application evidence is under `uart-irq-20261019/`; prior polling component
+evidence remains applicable to unchanged behavior.
+
+The [finite header application](uart-application.md) integrates UART2 with
+deferred IRQ service, a passive PB0/PB1 loopback, copied USB output and complete
+UART teardown.
 The [native Bluetooth application](bluetooth-native.md) integrates this polled
 UART binding with module bootstrap and H4 transport. Physical admission and
-serial peer tests remain required. Interrupt-driven platform service, alternate
+serial peer tests remain required. Alternate
 parent profiles, DMA, RS-485, IrDA, nine-bit modes, runtime format changes and
 suspend/resume also remain required. Modeled GIC observations do not qualify
 physical interrupt behavior or reset timing.

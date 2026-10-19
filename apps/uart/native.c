@@ -54,9 +54,11 @@ int uart_construct(void)
  if(!board_live(NULL)||board.session.deadline_us<=10000||!uart.handle||!mappings())return 0;
  uint64_t start=board.session.session_start_ticks/24;
  if(start>UINT64_MAX-uart.session.operation_timeout_us||start+uart.session.operation_timeout_us>=board.session.deadline_us-10000)return 0;
- atomic_init(&uart.failed,0);atomic_init(&uart.result,0);uart.deadline=start+uart.session.operation_timeout_us;
+ atomic_init(&uart.failed,0);atomic_init(&uart.result,0);
+ atomic_init(&uart.pending,0);atomic_init(&uart.irq_fault,0);atomic_init(&uart.notifications,0);
+ uart.irq=(struct gicv3_spi){0x03400000,36};uart.masked=1;uart.deadline=start+uart.session.operation_timeout_us;
  uart.config=(struct a733_uart_platform_config){.owner=uart.session.owner,.handoff=uart.session.authority,
- .startup_deadline_us=uart.deadline,.route=A733_UART2_PB,.format={2,8,2,0,0,24000000,115200,2000}};
+ .startup_deadline_us=uart.deadline,.route=A733_UART2_PB,.deferred_irq=1,.format={2,8,2,0,0,24000000,115200,2000}};
  for(unsigned i=0;i<2;++i){
   uart.config.expected[i]=(struct a733_pin_config){uart.session.expected[i][0],uart.session.expected[i][1],uart.session.expected[i][2]};
   uart.config.desired[i]=(struct a733_pin_config){uart.session.desired[i][0],uart.session.desired[i][1],uart.session.desired[i][2]};}
