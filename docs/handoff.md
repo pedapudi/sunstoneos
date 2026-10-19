@@ -452,10 +452,11 @@ historical evidence; they do not authorize a new session.
 
 1. Continue GPU triangle drawing, USB SuperSpeed storage and VGA H.264 stream
    implementation. Repeated Bluetooth capture and recognition are integrated
-   offline; physical operation and session timing remain unqualified. Assess the
-   NPU execution paths needed by unchanged mimus operators. Bounded GPU workgroup
-   grids, the fixed two-stage
-   NPU graph, GPU/NPU live input and USB hub modes for one device or combined
+   offline; physical operation and session timing remain unqualified. Implement
+   the approved mSBC profile and native NPU shader/neural-transpose large-tensor
+   graph path. The NPU work adds functional operator and external-memory coverage;
+   it does not replace or optimize mimus. Bounded GPU workgroup grids, the fixed
+   two-stage NPU graph, GPU/NPU live input and USB hub modes for one device or combined
    HID/storage are integrated offline. The H.264 native-read source correction
    still needs a newly audited full image.
    Preserve each image's complete frozen inputs and accepted audit scope.

@@ -1033,6 +1033,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   translation, cache maintenance, MMIO, deadlines, and retained failure.
   The [FreeRTOS service](npu-service.md) passes a two-core ownership check with
   EL0 clients and a preemptible EL1 worker.
+  The pinned board feature database for target `0x1000003b`, revision `0x9202`,
+  reports eight neural-network cores, zero tensor-processor (TP) cores and neural
+  transpose support. An independent query of the configured compiler SDK reports
+  zero TP/TP-lite cores and one shader core. These published/configured target
+  records do not establish physical chip identity. Generic NBG tensor-processor
+  records describe a file-format capability; they do not require a TP engine on
+  this product. Native shader (SH), neural-transpose (NT) execution and external
+  intermediate memory remain required functional coverage. Evidence:
+  `npu-tp-proposal-20261019/target-feature-corroboration.json`,
+  `sdk-feature-query.json` and the source anchors in `frozen/manifest.json`.
   The [model inspector](npu.md) passes a reference comparison and malformed-file
   checks. The [address encoder](nbg-relocation.md) passes host bounds checks and
   comparison with SDK relocation instructions. The [host loader reconstruction](nbg-loader-trace.md)
