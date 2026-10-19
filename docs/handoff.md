@@ -1,18 +1,19 @@
 # Current work
 
-The returning first-task diagnostic is implemented and passes instruction checks.
-Actual FreeRTOS task construction and initial context restoration reach the idle
-task on every CPU. Each CPU records its task context, joins the completion barrier
-and cleans all 9,280 lines in the complete owned writable interval before return.
-Invalid task arguments and failed EL3 restoration retain the session. Evidence:
-`all-core-first-task-20261018/`. Nine host cases now pass, including actual
-runner return/retention behavior and rejection of incorrect task contexts, saved frames and owned-memory bounds.
-Final root review and physical execution remain outstanding; no task body runs.
-The builder patches the exact previously demonstrated ELF, including the EL0 WFE
-permission correction. It suppresses timer/SGI generation and intercepts the first
-task instruction, so it does not establish workload scheduling.
-The additional `all-writer-cleanup.json` check passes with writes prohibited from
-every CPU and exception level after cleaning begins, including EL3 restoration.
+All eight CPUs physically reach their first FreeRTOS task context and return
+safely. The returning diagnostic executes actual task construction and initial
+context restoration, then records the idle-task pointer, stack, argument and
+exception state on each core. All cores finish before cleaning the complete
+145-page writable interval, or 9,280 cache lines per CPU. CPU0 restores its
+controls; all seven secondaries acknowledge shutdown and reach independently
+observed OFF. Saved DRAM restoration and responsive ROM return pass. Evidence:
+`all-core-first-task-20261018/physical-010/runtime/session.json`.
+
+The instruction checks, nine host cases and root review also pass. Task bodies,
+timer interrupts and application SGIs are excluded from this diagnostic. Bounded
+task execution and switching are next; sustained multicore scheduling remains
+unqualified. The existing production barrier and 256 atomic increments also
+pass in this physical attempt. Reuse these results without repeating the launch.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -44,9 +45,13 @@ FEL version responds and session access persists. The prior outer coordinator,
 wrapper and retained runner are stopped; their failed queue claim is closed and
 the halt is cleared. Evidence:
 `usb-returning-20261018/root-physical-056/recovery-064.json`.
-Cold DDR initialization and fresh platform admission are required before native
-DRAM execution. Previous056 electrical, clock and memory observations do not
-transfer across the power cycle. Board one remains available on `3-1`.
+Fresh DDR initialization now passes with two matching 4 KiB RAM pages. The
+returning SRAM survey also passes every launcher prerequisite and restores its
+scratch memory. Evidence: `second-board-cold-064-20261018/`. This establishes
+initialization and sampled RAM access; complete capacity and stability remain
+unqualified. Device-specific electrical and ownership admission is still needed.
+Previous056 electrical, clock and memory observations do not transfer across the
+power cycle. Board one remains available on `3-1`.
 
 The preceding bounded USB attempt returned responsive ROM as `003:063`, but
 native preparation failed with step 5, PMIC stage 4 and USB stage 19. All four
@@ -66,32 +71,25 @@ image completes the eight-core workload and observes permitted waits on every
 core. Evidence: `scheduler-el0-access-20261018/`; details and Arm source are in
 the [reference audit](a733-multicore-reference-audit.md#el0-lock-waits-require-permission-to-execute-wfe).
 This is a source-backed correction, not a physical failure diagnosis. No board
-operation accompanied it. The next physical diagnostic must observe task entry
-and preserve the established return path before another complete-image launch.
+operation accompanied it. Physical first-task entry now passes with the established return path. Task
+switching and sustained workloads remain separate qualification requirements.
 The original task-entry trace is preserved under
 `scheduler-el0-access-20261018/first-task-entry.json`. Its observed stores covered
 88 pages. The returning diagnostic covers the complete linker-owned normal
 writable interval `0x41200000..0x41291000` (145 pages), including task creation
 and context restoration. Monitor and table reservations are outside that interval.
 
-The first board last returned responsive on port `3-1` as `003:010`, identity
-`[7,2878,1096969,0,0]`. All eight CPUs completed the frozen production
-`a733_smp_pre_scheduler` barrier and 256 lock-protected increments. Each core
-cleaned all 192 cache lines in its two shared pages and final stack page.
-The copied physical pages match the expected completed state. CPU0 restored
-its controls and awake interrupt configuration; every secondary restored its
-local state and reached independently observed OFF. Saved DRAM restored before
-responsive ROM return. The runner exited and its queue claim closed as passed.
-Evidence: `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/session.json`.
-No reconnect is needed. Task selection and full eight-core scheduling remain
-unqualified. The user reports a 5 V / 3 A port; recovery removes all power sources.
+The first board last returned responsive on port `3-1` as `003:067`, identity
+`[7,3800,1097026,0,0]`. Its first-task runner exited and its queue claim closed as
+passed. No reconnect is needed. The user reports a 5 V / 3 A supply; recovery
+removes all power sources.
 
-DDR continuity begins at `reconnect-20261018-120/` and includes the returning
-CPU0 EL3/EL1/interrupt/context intervals, current008 SRAM preparation and this
-all-core return. Refresh current010 launcher state before another native test;
-do not retrain DDR. The CPU0 production IRQ handler previously passed register
-restoration and owned-page cleaning under
-`primary-context-probe-20261018/physical-005/runtime/session.json`.
+DDR continuity begins at `reconnect-20261018-120/` and extends through the
+recorded CPU intervals and ROM instances 121 → 002 → 005 → 008 → 010 → 067.
+Refresh current067 launcher state before another native test; do not retrain DDR.
+Current010 preparation is preserved under `all-core-first-task-20261018/warm-010/`.
+The CPU0 production IRQ handler previously passed register restoration and
+owned-page cleaning under `primary-context-probe-20261018/physical-005/runtime/`.
 
 The all-core diagnostic's corrected image and three instruction/seven host cases
 are preserved under `all-core-pre-scheduler-20261018/entry-corrected/`.
@@ -121,7 +119,7 @@ Second-board DDR continuity is cold126 → register capture127 → PMIC009 → R
 under `usb-returning-20261018/warm-056/` and `fabric-056/`. USB selector zero
 and reset-held DMA0 pass under `entry-056/`; no DMA aperture was accessed.
 The subsequent USB attempt returned a failure report. Power removal ended
-that lifetime; current064 needs new cold admission.
+that lifetime; current064 has the independent DDR and survey evidence above.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:

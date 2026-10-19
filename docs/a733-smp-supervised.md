@@ -1443,9 +1443,9 @@ path without task selection. Complete scheduling, broader runtime memory use
 and concurrent device workloads remain outstanding.
 
 
-## First-task restoration passes the returning instruction check
+## All eight CPUs reach their first task context and return safely
 
-The offline first-task profile runs the frozen native task construction and
+The returning first-task profile runs the frozen native task construction and
 FreeRTOS context-restoration code on all eight CPUs. Each CPU initially enters
 its idle task, matching the kernel's initial task assignment. An SVC at that
 boundary records the task pointer, argument, stack and exception state before
@@ -1479,11 +1479,23 @@ after the first cache-clean operation. It passes through EL3 restoration and
 secondary shutdown, covering a broader writer set than the original EL1 checks.
 That result is preserved as `all-core-first-task-20261018/all-writer-cleanup.json`.
 
-This profile remains explicitly ineligible for physical execution. Host report
-validation, final root review and a frozen board proposal are still required.
-Modeled register, MMIO and coherent-memory effects do not prove physical task
-entry, cache visibility or full scheduling. The preceding physical barrier
-result remains the last demonstrated all-core execution boundary.
+Nine host cases pass for report validation, memory restoration, failure retention
+and rejection of changed or invalid inputs. Root review then admitted one
+physical attempt using the frozen native image and a fresh board-specific
+proposal. The producer manifest alone does not grant physical authority.
+
+The physical attempt passes all eight context records, the 256 production
+increments and 9,280 cleaned cache lines per CPU. CPU0 restores its controls and
+local interrupt state. All seven secondaries acknowledge shutdown and reach
+independently observed OFF. The host restores saved DRAM and confirms responsive
+ROM return as `003:067`; the runner exits and the queue claim closes as passed.
+Evidence: `all-core-first-task-20261018/physical-010/runtime/session.json`;
+source and cleanup review: `all-core-first-task-20261018/root-review.json`.
+
+This establishes initial task-context entry on the physical board. Task bodies,
+task switching, timer-driven preemption and sustained eight-core workloads
+remain unqualified. The next diagnostic must preserve the established return
+procedure while extending execution into task bodies and scheduling.
 
 ## All eight CPUs complete the production barrier and atomic increments
 

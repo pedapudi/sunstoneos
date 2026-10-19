@@ -124,6 +124,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   secondary restores local state and reaches observed OFF. Exact physical page
   contents, saved DRAM restoration and responsive ROM return pass under
   `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/`.
+  All eight CPUs physically execute FreeRTOS task construction and initial
+  context restoration through idle-task entry. Task pointers, arguments, stacks
+  and exception state match. Every core cleans the complete 145-page writable
+  interval before CPU0 restoration and acknowledged, independently observed
+  secondary shutdown. Saved DRAM restoration and responsive ROM return pass.
+  Evidence: `all-core-first-task-20261018/physical-010/runtime/session.json`.
+  This diagnostic stops before task bodies; task switching and sustained
+  eight-core scheduling remain unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
