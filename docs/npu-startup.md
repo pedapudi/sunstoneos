@@ -190,3 +190,28 @@ the third verifies that it was released. Each mode checks retained leases,
 refused service activation, and absence of later device callbacks. Evidence is
 under `~/.cache/sunstoneos/evidence/npu-startup-retention-20261016/`. The earlier
 success and invalid-rail results remain applicable and were not rerun.
+
+## Local shutdown preserves startup authority
+
+`a733_npu_startup_stop_poll` runs only on the original privileged bootstrap,
+after the convolution client collects a successful controller CLOSE reply.
+It preserves the startup binding's live PMIC-consumer, PLL-binding and
+transferred-clock-token checks. Each poll uses the original absolute deadline,
+register mutex and retained-resource failure path. Its bounded local shutdown
+preserves shared SRAM, the ON power domain, PLL and rail leases.
+
+The pinned VIPLite driver treats END followed by all-module idle
+(`0x7fffffff`) as completion before leaving RUN state in `vip_drv_pm.c`.
+Its wait-link stop also writes END and waits for that same idle mask in
+`vip_drv_hardware.c`. The native controller adds a clear event check, interrupt
+and MMU disable with readback, a barrier and a final idle check before CLOSED.
+The local gate/reset sequence follows `npu_clk_uninit` in the pinned Allwinner
+platform driver: module off, bus off, then AHB, AXI and core reset asserted.
+This supplies the source-backed normal completion and stop contract. Gating or
+reset cannot substitute for a failed CLOSE, deadline or completion check.
+
+The source revision remains
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, under
+`bsp/drivers/npu/aw_nna_vip/vip2`. Physical engine behavior and inference return
+remain unqualified. Resources and private memory remain retained through ROM
+restoration; normal shutdown introduces no fault recovery or automatic retry.

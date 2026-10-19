@@ -51,6 +51,9 @@ extern atomic_uint a733_npu_application_failed;
 int a733_npu_application_init(TaskHandle_t client);
 struct npu_convolution *a733_npu_application_client(void);
 unsigned a733_npu_application_ready(void);
+/* Finite adapter only: original bootstrap publishes after matched CLOSE and
+ * successful local gate/reset stop. Allocations and shared leases stay owned. */
+unsigned a733_npu_application_stopped(void);
 /* Bounded acquire reads; latches any shared clock/registry/lock failure. */
 unsigned a733_npu_application_health(void);
 void a733_npu_application_fail(unsigned);

@@ -144,7 +144,7 @@ static void check_client_run(void *unused)
         platform_puts("PASS convolution startup guard: actual startup/platform delegation reaches bounded partial acquisition; mutation stops further resource callbacks and retains admitted token\n");
         platform_exit(0);
     }
-    if(check_activation_mutation) {
+    if(check_activation_mutation==1) {
         configASSERT(atomic_load(&convolution.failed) && !check_prepared_calls);
         configASSERT(!atomic_load(&check_accesses) && !atomic_load(&check_publishes));
         configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
@@ -169,8 +169,10 @@ static void check_client_run(void *unused)
     configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==0xa5);
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_REAP,NULL,0,0,0,&ignored));
+    configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
     atomic_store(&check_allow,1);reply=check_wait(A733_NPU_DONE);
     configASSERT(reply.job_ticket==ticket && atomic_load(&check_finishes)==2);
+    configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
     configASSERT(!memcmp(output,fixture_output,sizeof(output)));
     configASSERT(check_request(NPU_SERVICE_REAP,NULL).state==A733_NPU_READY);
@@ -180,6 +182,28 @@ static void check_client_run(void *unused)
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==0x5a);
     check_request(NPU_SERVICE_REAP,NULL);
+    if(check_activation_mutation>=3) {
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,1,0,&ignored));
+        if(check_activation_mutation==4)check_registers[0x388/4]^=2;
+        reply=check_request(NPU_SERVICE_CLOSE,NULL);
+        if(check_activation_mutation==3) {
+            configASSERT(reply.result==NPU_SERVICE_OK && reply.state==A733_NPU_CLOSED &&
+                !reply.owns_session && !reply.job_ticket && atomic_load(&convolution.closed));
+            configASSERT(!convolution.ready && !atomic_load(&convolution.failed));
+            configASSERT(!check_registers[0x14/4] && !check_registers[0x388/4]);
+        } else configASSERT(reply.result==NPU_SERVICE_FAULT && reply.owns_session &&
+            !atomic_load(&convolution.closed) && atomic_load(&convolution.failed));
+        unsigned accesses=atomic_load(&check_accesses);
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_OPEN,NULL,0,5000000,0,&ignored));
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_STATUS,NULL,0,0,0,&ignored));
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
+        configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
+        configASSERT(npu_convolution_stop_poll(&convolution)==A733_NPU_PLATFORM_RETAINED);
+        vTaskDelay(2);configASSERT(atomic_load(&check_accesses)==accesses);
+        platform_puts(check_activation_mutation==3?"PASS convolution terminal CLOSE: matched CLOSED reply, no job/session, IRQ/MMU disabled; further admission refused\n":
+            "PASS convolution CLOSE fault: exact MMU mismatch retains ownership, no closed publication or later access\n");
+        platform_exit(0);
+    }
     unsigned publications=atomic_load(&check_publishes),accesses=atomic_load(&check_accesses);
     check_small[1][255]^=1; /* Accidental coefficient mutation after activation. */
     reply=check_request(NPU_SERVICE_SUBMIT,input);
@@ -204,9 +228,9 @@ static void check_bootstrap_run(void *unused)
         configASSERT(npu_service_activate(&convolution.service)==NPU_SERVICE_FAULT);
         xTaskNotifyGive(check_client);vTaskSuspend(NULL);configASSERT(0);
     }
-    if(check_activation_mutation)check_commands[0][524287]^=1;
+    if(check_activation_mutation==1)check_commands[0][524287]^=1;
     configASSERT(npu_service_activate(&convolution.service)==
-        (check_activation_mutation ? NPU_SERVICE_FAULT : NPU_SERVICE_OK));
+        (check_activation_mutation==1 ? NPU_SERVICE_FAULT : NPU_SERVICE_OK));
     xTaskNotifyGive(check_client);vTaskSuspend(NULL);configASSERT(0);
 }
 BaseType_t npu_convolution_task_privileged(TaskFunction_t entry,void *argument)
@@ -218,6 +242,8 @@ static unsigned check_mode(void)
     char command[128]={0};uintptr_t params[2]={(uintptr_t)command,sizeof(command)};
     register uintptr_t op __asm__("x0")=0x15,args __asm__("x1")=(uintptr_t)params;
     __asm__ volatile("hlt #0xf000":"+r"(op):"r"(args):"memory");configASSERT(!op);
+    for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"close-fault",11))return 4;
+    for(unsigned i=0;i+5<sizeof(command);++i)if(!memcmp(command+i,"close",5))return 3;
     for(unsigned i=0;i+7<sizeof(command);++i)if(!memcmp(command+i,"startup",7))return 2;
     for(unsigned i=0;i+8<sizeof(command);++i)if(!memcmp(command+i,"mutation",8))return 1;
     return 0;

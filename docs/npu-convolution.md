@@ -108,8 +108,22 @@ that request before sending another or accessing output. DONE follows the
 controller's event, full-idle and cache-finish checks. REAP removes access to the
 previous result; all allocations remain reserved through the diagnostic session.
 
+After the last REAP, the client may send terminal CLOSE with zero timeout.
+A copied successful reply must report CLOSED, no fault, no cancellation and no
+session or job ownership. Publication uses release ordering; the original
+bootstrap observes it with acquire ordering before local shutdown. Further
+requests and reopening are refused. Allocation and shared-resource ownership
+retain platform lifetime.
+
+The original bootstrap can then poll `npu_convolution_stop_poll`. It authenticates
+the immutable registration and delegates through the startup binding's live PMIC,
+PLL and clock-token checks. Local shutdown gates the module and bus before
+asserting AHB, AXI and core reset. It preserves SRAM reset, shared clock leaves,
+the PLL, supply and ON domain. This API does not release allocations or establish
+that a particular monitor restores RAM safely.
+
 Faults retain ownership and stop progress. The wrapper provides no cancellation,
-close, release, reset or automatic retry. Task abandonment retains everything.
+resource release, fault reset or automatic retry. Task abandonment retains everything.
 Callers must keep contexts and task handles alive and must not bypass the wrapper
 through its private service or startup objects. Current shared task mappings do
 not enforce this contract against malicious privileged or unprivileged code.

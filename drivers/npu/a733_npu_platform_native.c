@@ -53,9 +53,9 @@ int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value
     }
     uint32_t old=load(address);
     if ((old^value)&~mask) return 0;
-    if (address==CCU+0xb04 && (old&~value&mask)) return 0;
+
     if (address==CCU+0xb00) {
-        if ((old&0x80000000) && value!=old) return 0;
+        if ((old&0x80000000) && value!=old && value!=(old&~UINT32_C(0x80000000))) return 0;
         if ((value&0x07000000) || ((value&31)!=0 && (value&31)!=1 && (value&31)!=3)) return 0;
     }
     if (address>=PCK && address<PCK+0x1000) {

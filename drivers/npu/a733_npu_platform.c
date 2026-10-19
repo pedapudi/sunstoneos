@@ -141,7 +141,7 @@ static int equal(const struct a733_npu_platform_resources *a,const struct a733_n
 enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p)
 {
     if (!p || !p->initialized) return RETAINED;
-    if (p->failed) return RETAINED;
+    if (p->failed || p->stopping) return RETAINED;
     if (p->stage==COMPLETE) return READY;
     if (!timely(p)) return fault(p);
     if (p->stage==ACQUIRE) {
@@ -191,4 +191,35 @@ enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *p
     return p->stage==COMPLETE ? READY : PENDING;
 }
 int a733_npu_platform_ready(const struct a733_npu_platform *p)
-{return p && p->initialized && !p->failed && p->stage==COMPLETE;}
+{return p && p->initialized && !p->failed && p->stage==COMPLETE && !p->stopping;}
+
+/* Local subset of npu_clk_uninit in the pinned Allwinner VIPLite platform.
+ * Critical shared leaves and the ON SRAM domain retain their owners. */
+enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platform *p)
+{
+    if(!p || !p->initialized || p->failed || p->stage!=COMPLETE)return RETAINED;
+    if(p->stopped)return READY;
+    p->stopping=1;
+    if(!timely(p))return fault(p);
+    int locked=p->ops.enter(p->cookie,p->config.deadline_us);
+    if(!locked)return timely(p)?BUSY:fault(p);
+    if(locked!=1)return fault(p);
+    static const struct step stop[]={
+        {CCU+0xb00,BIT(31),0}, {CCU+0xb04,1,0},
+        {CCU+0xb04,BIT(18),0}, {CCU+0xb04,BIT(17),0}, {CCU+0xb04,BIT(16),0}
+    };
+    int ok=timely(p) && parents_stable(p) && check(p,PCK,15,8) &&
+        check(p,PCK+8,15,8) && check(p,CCU+0xb04,BIT(19),BIT(19));
+    if(ok && p->stop_step<sizeof(stop)/sizeof(*stop)) {
+        const struct step *s=&stop[p->stop_step];
+        ok=update(p,s->address,s->mask,s->value);
+        if(ok)++p->stop_step;
+    } else if(ok) {
+        ok=check(p,CCU+0xb00,BIT(31),0) && check(p,CCU+0xb04,0xf0001,BIT(19));
+        if(ok)p->stopped=1;
+    }
+    if(!ok || !timely(p))(void)fault(p);
+    int released=p->ops.leave(p->cookie);
+    if(p->failed || released!=1 || !timely(p))return fault(p);
+    return p->stopped?READY:PENDING;
+}

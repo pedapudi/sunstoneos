@@ -349,10 +349,10 @@ int a733_npu_startup_supply_sample(struct a733_npu_startup *b)
     if(r<0 || !timely(b,0)){fault(b);return -1;}
     return r;
 }
-enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
+static enum a733_npu_platform_result platform_poll(struct a733_npu_startup *b,int stop)
 {
     if(!task_owner(b))return RETAINED;
-    if(!a733_npu_platform_ready(&b->platform) && !timely(b,0))return fault(b);
+    if((stop || !a733_npu_platform_ready(&b->platform)) && !timely(b,0))return fault(b);
     if(b->shared->native.pmic) {
         if(b->pmic.self!=&b->pmic || b->pmic.config.provider!=b->shared->native.pmic ||
             b->shared->native.pmic_manager!=&b->shared->manager ||
@@ -369,7 +369,7 @@ enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
         if(health==A733_CLOCK_BUSY)return BUSY;
         if(health!=A733_CLOCK_OK)return fault(b);
     }
-    enum a733_npu_platform_result r=a733_npu_platform_poll(&b->platform);
+    enum a733_npu_platform_result r=stop?a733_npu_platform_stop_poll(&b->platform):a733_npu_platform_poll(&b->platform);
     if(r==RETAINED)(void)fault(b);
     if(r==READY && b->pmic.self) {
         int health=a733_pmic_consumer_health(&b->pmic);
@@ -378,6 +378,10 @@ enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
     }
     return r;
 }
+enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *b)
+{return platform_poll(b,0);}
+enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *b)
+{return platform_poll(b,1);}
 int a733_npu_startup_ready(const struct a733_npu_startup *b)
 {return b && b->initialized && !b->failed && pll_integrity(b) && a733_npu_platform_ready(&b->platform);}
 static int backend_equal(const struct a733_npu_ops *a,const struct a733_npu_ops *b)

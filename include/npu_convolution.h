@@ -46,7 +46,7 @@ struct npu_convolution {
     struct npu_service_reply observed;
     uint64_t pending, job;
     enum npu_service_operation pending_operation;
-    atomic_uint failed;
+    atomic_uint failed, closed;
     unsigned prepared, bound, opened, ready, output_ready;
 };
 
@@ -91,10 +91,15 @@ int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
  * bypass this wrapper through the embedded startup object. */
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
-/* Single designated client task, finite queue waits. Only OPEN, STATUS, SUBMIT
- * and REAP are exposed. SUBMIT copies exactly the selected input_bytes and always selects
+/* Single designated client task, finite queue waits. Only OPEN, STATUS, SUBMIT,
+ * REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
  * command 1. Other operations require NULL/zero input. OPEN/SUBMIT require
- * finite positive microsecond deadlines; STATUS/REAP use zero timeout.
+ * finite positive microsecond deadlines; STATUS/REAP/CLOSE use zero timeout.
+ *
+ * CLOSE requires READY after every job has been reaped. Its copied reply must
+ * report CLOSED with no session/job ownership. It permanently stops admission;
+ * reopening the context is unsupported. Allocations and platform leases remain
+ * owned. CLOSE alone does not restore local clocks/resets.
  *
  * Only copied replies establish READY/DONE; there are no reads of worker-owned
  * controller state. One pending request at a time. Failed collect preserves its
@@ -112,4 +117,9 @@ int npu_convolution_collect(struct npu_convolution *,uint64_t ticket,
  * explicit REAP. Refusal preserves output. Reap clears access to that result;
  * all allocations nevertheless remain reserved for the complete session. */
 int npu_convolution_output(struct npu_convolution *,void *,size_t bytes);
+/* Original EL1 bootstrap task only, after the client collected successful CLOSE.
+ * Poll local module/bus gate and reset shutdown under the original authority.
+ * READY denotes a stopped local engine, not released memory, restored PLLs,
+ * powered-off domain, or ROM-return qualification. Faults retain all resources. */
+enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *);
 #endif

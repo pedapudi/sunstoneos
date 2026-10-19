@@ -44,7 +44,7 @@ static struct {
     StaticTask_t task[2];
     StackType_t stack[2][4096] __attribute__((aligned(16)));
     TaskHandle_t pmic_task,bootstrap_task,client;
-    atomic_uint ready,worker_admitted;
+    atomic_uint ready,worker_admitted,stopped;
     unsigned used,creating;
 } app;
 atomic_uint a733_npu_application_failed;
@@ -201,7 +201,24 @@ static void bootstrap(void *argument)
             enum npu_service_result a=npu_service_activate(&app.reserved.convolution.service);
             if(a==NPU_SERVICE_OK) {
                 atomic_store_explicit(&app.ready,1,memory_order_release);
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+                for(;;) {
+                    if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
+                       now>=app.handoff.allowed.deadline_us)break;
+                    if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
+                        enum a733_npu_platform_result stopped=npu_convolution_stop_poll(&app.reserved.convolution);
+                        if(stopped==A733_NPU_PLATFORM_RETAINED)break;
+                        if(stopped==A733_NPU_PLATFORM_READY) {
+                            atomic_store_explicit(&app.stopped,1,memory_order_release);
+                            vTaskSuspend(NULL);fatal(NULL);
+                        }
+                    }
+                    vTaskDelay(1);
+                }
+                break;
+#else
                 vTaskSuspend(NULL);fatal(NULL);
+#endif
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
@@ -211,6 +228,8 @@ static void bootstrap(void *argument)
 }
 unsigned a733_npu_application_ready(void)
 {return atomic_load_explicit(&app.ready,memory_order_acquire) && live();}
+unsigned a733_npu_application_stopped(void)
+{return atomic_load_explicit(&app.stopped,memory_order_acquire) && live();}
 struct npu_convolution *a733_npu_application_client(void)
 {
     return app.used && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&

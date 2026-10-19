@@ -495,3 +495,52 @@ All 123 compiler inputs from repository source match integration; the frozen
 closure also records generated and external inputs. Unchanged startup, model,
 clock and host tests were reused. Physical reporting and inference remain untested
 with this image. A new launch must bind its actual image and board lifetime.
+
+## Returning supply observation and inference integration
+
+The [finite supply observer](../apps/npu-returning/README.md) runs production
+PMIC startup and two DCDC2 snapshots using the accepted returning FreeRTOS
+objects. It requires enabled, stable 800 mV configuration for a supported
+result and completes request cleanup before return. Its six linked checks
+pass under `npu-supply-returning-20261018`; physical DCDC2 observation remains
+outstanding. It performs no NPU access, DMA, PLL or domain programming.
+
+The convolution wrapper now supports terminal CLOSE and bootstrap-owned local
+shutdown. Two real FreeRTOS emulator cases cover successful CLOSE and a retained
+MMU-mismatch fault. A sanitizer fixture checks local stop order, preserved
+shared state, every failed write, deadline and authority-related register
+refusals. Ten instruction cases check the native adapter's allowed local writes
+and rejected SRAM, shared-bit, live-divider, domain and PLL changes. These tests
+model NPU hardware and establish neither numerical inference nor physical return.
+Evidence resides under `npu-close-returning-20261018`.
+
+The finite client/device adapter is implemented behind
+`SUNSTONE_NPU_FINITE_RETURN`. It preserves the existing session validator and
+service path, waits for terminal CLOSE and bootstrap-owned local shutdown,
+then reports copied output and returns. Four linked client cases cover matched
+outputs, numerical mismatch, CLOSE failure and an uncompleted stop. Their service
+and bootstrap replies are modeled. The full development ELF under
+`npu-finite-adapter-20261018` links this adapter with the existing full single-core
+monitor and is explicitly ineligible for physical execution.
+
+A complete returning convolution still needs the returning monitor to retain
+the authenticated session and cover final cache cleaning and RAM restoration.
+Its failure path must retain potentially active device memory; expiry alone
+cannot admit RAM restoration. The NPU reservation needs
+265 contiguous 4 KiB pages: two 512 KiB command regions, four 4 KiB buffers and
+20 KiB of tables. The complete 2 MiB parent pool must use identity-mapped,
+inner-shareable normal write-back memory; the native adapter checks memory
+attributes `0xff`, shareability 3 and 64-byte cache ownership. The NPU register
+page at `0x03600000` must use Device memory. The model copy, service records,
+requests, task stacks and copied outputs must remain outside that pool.
+
+The existing small returning platform maps `0x40000000..0x48000000` with the
+required normal attributes except for its non-cacheable result block at
+`0x42000000`. The linker constrains the optional device pool below `0x41f00000`.
+The monitor must clean the final linked writable application and pool extent,
+retain its own tables/state and preserve the validated session across BSS
+clearing. The small supply observer does not establish those full-image
+properties. Successful CLOSE followed by local gate/reset stop is the engine
+stop prerequisite; a separate unspecified external-drain qualification is not
+required by the pinned normal teardown path. Shared resource leases and the
+allocation remain owned through the confirmed ROM return.

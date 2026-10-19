@@ -117,6 +117,10 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *,TaskHandle_t);
  * 1 sampled 800 mV, 0 pending/contention, -1 retained. No PLL/local MMIO. */
 int a733_npu_startup_supply_sample(struct a733_npu_startup *);
 enum a733_npu_platform_result a733_npu_startup_poll(struct a733_npu_startup *);
+/* Original bootstrap, after matched successful controller CLOSE. Preserves the
+ * same live PMIC, PLL and resource authority checks during local shutdown.
+ * Keep leases, source provider and allocations alive through subsequent return. */
+enum a733_npu_platform_result a733_npu_startup_stop_poll(struct a733_npu_startup *);
 int a733_npu_startup_ready(const struct a733_npu_startup *);
 /* npu_service_activation.prepared: read-only metadata/health observation,
  * exact backend/image/command comparison, task authority and all live tokens.

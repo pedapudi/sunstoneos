@@ -56,7 +56,7 @@ struct a733_npu_platform {
     uint64_t last_now, settle_until;
     a733_clock_mask_t shared;
     uint32_t parent_hz, divisor, selected_mhz[3];
-    unsigned initialized, stage, step, failed, wrote, adopt_on;
+    unsigned initialized, stage, step, failed, wrote, adopt_on, stop_step, stopping, stopped;
 };
 /* Pure validation; refusal preserves output. Unsupported fabric parents and
  * fractional rates are refused. Parent leases are separate from FABRIC. */
@@ -81,8 +81,16 @@ int a733_npu_platform_adopt_on(struct a733_npu_platform *);
  * resources and observed retain identities even after a malformed callback.
  * READY proves configured startup state only. It does not authorize the NPU
  * service or prove command semantics, execution, bus drain, or safe teardown.
- * There is no release/reset/retry API; external recovery must prove quiescence.
+ * No resource-release, power-off or fault-reset API is provided.
  */
 enum a733_npu_platform_result a733_npu_platform_poll(struct a733_npu_platform *);
 int a733_npu_platform_ready(const struct a733_npu_platform *);
+/* Successful controller CLOSE is a mandatory caller prerequisite. Serialize on
+ * the original bootstrap authority and deadline, retaining every shared lease.
+ * Each poll gates module then bus and asserts AHB, AXI, core resets, preserving
+ * shared SRAM reset, PLL, fabric, supply and ON domain. Full controller IDLE,
+ * matched END completion and CLOSE must precede these writes; gating/reset
+ * cannot establish completion after uncertainty. READY is idempotent stopped
+ * local state, never permission to release memory or shared resources. */
+enum a733_npu_platform_result a733_npu_platform_stop_poll(struct a733_npu_platform *);
 #endif

@@ -21,7 +21,9 @@ if(NPU_CONVOLUTION_FIXTURES)
     drivers/npu/npu_service.c drivers/npu/a733_npu_controller.c
     drivers/power/a733_pmic_consumer.c drivers/power/a733_pmic.c
     drivers/power/a733_rail_leases.c drivers/pinctrl/a733_pins.c drivers/pinctrl/a733_pin_tables.c
-    drivers/gpu/a733_gpu_resources.c
+    drivers/gpu/a733_gpu_resources.c $<TARGET_OBJECTS:npu-startup-native-io>
+    platform/a733/counter_clock.c
+    drivers/npu/a733_npu_platform_native.c
     drivers/npu/a733_npu_memory.c drivers/npu/a733_npu_mmu.c
     drivers/npu/nbg_model.c drivers/npu/nbg_assembly.c drivers/npu/nbg_checksum.c drivers/npu/nbg_relocation.c
     "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"

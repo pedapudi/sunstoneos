@@ -33,19 +33,26 @@ static struct npu_service_reply request(struct npu_convolution *c,enum npu_servi
         if(npu_convolution_collect(c,ticket,&reply,5))break;
         /* A finite collect timeout preserves this exact outstanding ticket. */
     }
-    if(atomic_load_explicit(&c->failed,memory_order_acquire) || reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT ||
-       !reply.owns_session || reply.canceled)retained(8);
+    if(atomic_load_explicit(&c->failed,memory_order_acquire) || reply.result!=NPU_SERVICE_OK ||
+       reply.fault!=A733_NPU_NO_FAULT || reply.canceled ||
+       (operation==NPU_SERVICE_CLOSE ? (reply.owns_session || reply.job_ticket || reply.state!=A733_NPU_CLOSED) : !reply.owns_session))retained(8);
     return reply;
 }
 static void client(void *unused)
 {
     (void)unused;
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    platform_puts("NPU_STAGE=WAIT_STARTUP\n");
+#endif
     while(!a733_npu_application_ready()) {
         if(!live())retained(9);
         vTaskDelay(1);
     }
     struct npu_convolution *c=a733_npu_application_client();
     if(!c)retained(10);
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    platform_puts("NPU_STAGE=OPEN\n");
+#endif
     struct npu_service_reply reply=request(c,NPU_SERVICE_OPEN,NULL,0,1000000);
     while(reply.state!=A733_NPU_READY) {
         if(reply.state!=A733_NPU_BOOTING)retained(11);
@@ -54,6 +61,9 @@ static void client(void *unused)
     a733_npu_application_result.start=a733_smp_counter();
     unsigned mismatch=0;uint64_t previous=0,job=0;
     for(unsigned iteration=0;iteration<2;++iteration) {
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    platform_puts("NPU_STAGE=SUBMIT job=");platform_hex(iteration+1);platform_puts("\n");
+#endif
     memset(a733_npu_application_result.output,0,sizeof(a733_npu_application_result.output));
     reply=request(c,NPU_SERVICE_SUBMIT,a733_npu_application_input,a733_npu_application_input_bytes,1000000);
     job=reply.job_ticket;
@@ -73,11 +83,31 @@ static void client(void *unused)
             a733_npu_application_result.first_digest);
     }
     }
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    platform_puts("NPU_STAGE=CLOSE\n");
+    reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
+    platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");
+    while(!a733_npu_application_stopped()) {
+        if(!live())retained(18);
+        vTaskDelay(1);
+    }
+#endif
     a733_npu_application_result.previous_job=previous;
     a733_npu_application_result.jobs=2;
     a733_npu_application_result.job=job;
     a733_npu_application_result.end=a733_smp_counter();
     atomic_store_explicit(&a733_npu_application_result.complete,mismatch ? 2 : 1,memory_order_release);
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    platform_puts("NPU_STAGE=STOPPED\nNPU_FIRST_DIGEST=\n");
+    for(unsigned i=0;i<32;++i){platform_hex(a733_npu_application_result.first_digest[i]);platform_puts("\n");}
+    platform_puts("NPU_SECOND_OUTPUT=\n");
+    for(unsigned i=0;i<a733_npu_application_reference_bytes;++i){platform_hex(a733_npu_application_result.output[i]);platform_puts("\n");}
+    platform_puts(mismatch?"FAIL NPU numerical comparison\n":"PASS NPU two matched jobs, copied output, REAP, CLOSE and local stop\n");
+    if(!live() || !a733_npu_application_stopped())retained(19);
+    /* The returning platform must keep all reservations and restore RAM only
+     * after this successful stop; a retained failure never takes this path. */
+    platform_exit(mismatch?1:0);
+#endif
     /* Results, requests, service, tasks and the full parent stay alive. */
     vTaskSuspend(NULL);retained(16);
 }
@@ -99,6 +129,8 @@ void a733_smp_diagnostic_start(void)
 #endif
     );
     configASSERT(task && a733_npu_application_init(task));
+#ifndef SUNSTONE_NPU_FINITE_RETURN
     a733_observe_service_start();
+#endif
     vTaskStartScheduler();platform_panic("scheduler returned",0);
 }

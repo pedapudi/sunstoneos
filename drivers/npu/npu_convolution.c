@@ -296,7 +296,7 @@ static int client(const struct npu_convolution *c)
 int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op,
     const void *input,size_t bytes,uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
-    if(!client(c) || !good(c) || c->pending || !ticket || private_overlap(c,(uintptr_t)ticket,sizeof(*ticket)) ||
+    if(!client(c) || !good(c) || atomic_load_explicit(&c->closed,memory_order_acquire) || c->pending || !ticket || private_overlap(c,(uintptr_t)ticket,sizeof(*ticket)) ||
        wait==portMAX_DELAY || (op!=NPU_SERVICE_SUBMIT && (input || bytes)))return 0;
     struct npu_service_request r={op,0,timeout};
     switch(op) {
@@ -313,6 +313,9 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         break;
     case NPU_SERVICE_REAP:
         if(!c->output_ready || !c->job || timeout)return 0;
+        break;
+    case NPU_SERVICE_CLOSE:
+        if(!c->opened || !c->ready || c->job || c->output_ready || timeout)return 0;
         break;
     default:return 0;
     }
@@ -331,7 +334,14 @@ int npu_convolution_collect(struct npu_convolution *c,uint64_t ticket,
     struct npu_service_reply reply;
     if(!npu_service_collect(&c->service,ticket,&reply,wait))return 0;
     enum npu_service_operation op=c->pending_operation;c->pending=0;c->observed=reply;
-    if(reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT || !reply.owns_session ||
+    if(op==NPU_SERVICE_CLOSE) {
+        if(reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT ||
+           reply.state!=A733_NPU_CLOSED || reply.owns_session || reply.canceled || reply.job_ticket)fault(c);
+        else {
+            c->ready=0;
+            atomic_store_explicit(&c->closed,1,memory_order_release);
+        }
+    } else if(reply.result!=NPU_SERVICE_OK || reply.fault!=A733_NPU_NO_FAULT || !reply.owns_session ||
        reply.canceled || (c->job && reply.job_ticket!=c->job))fault(c);
     else if(op==NPU_SERVICE_REAP) {
         if(reply.state!=A733_NPU_READY)fault(c);
@@ -346,4 +356,23 @@ int npu_convolution_output(struct npu_convolution *c,void *out,size_t bytes)
     if(!client(c) || !good(c) || c->pending || !c->output_ready || !c->job ||
        bytes!=c->output_bytes || private_overlap(c,(uintptr_t)out,bytes))return 0;
     memcpy(out,(void *)c->buffers[NPU_CONVOLUTION_OUTPUT].cpu,bytes);return 1;
+}
+
+/* The copied successful CLOSE reply publishes the worker's completed stop.
+ * Only the original bootstrap can use its platform callbacks and shared locks. */
+enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *c)
+{
+    if(!c || !c->bound || !c->startup || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+       xTaskGetCurrentTaskHandle()!=c->startup->task)return A733_NPU_PLATFORM_RETAINED;
+    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
+    if(level!=4 || !atomic_load_explicit(&c->closed,memory_order_acquire))return A733_NPU_PLATFORM_RETAINED;
+    const struct a733_npu_handoff *h=&c->startup->handoff;
+    const struct npu_service *s=&c->service;
+    if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
+       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c)) {
+        fault(c);return A733_NPU_PLATFORM_RETAINED;
+    }
+    enum a733_npu_platform_result result=a733_npu_startup_stop_poll(c->startup);
+    if(result==A733_NPU_PLATFORM_RETAINED)fault(c);
+    return result;
 }
