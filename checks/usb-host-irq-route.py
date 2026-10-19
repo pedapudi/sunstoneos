@@ -25,8 +25,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    # Dual-leaf routing requires a capable image; keep legacy default cases.
-    p.add_argument('--case', action='append', choices=CASES+['route-dual'])
+    # Additional workload selectors require capable images; keep legacy defaults.
+    p.add_argument('--case', action='append', choices=CASES+['route-dual', 'route-ss'])
     args = p.parse_args()
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
     with args.image.open('rb') as f:
@@ -90,7 +90,7 @@ def main():
         expiry = 5 if case in ('expired', 'dispatch-expired') else 1000
         cpu.mem_write(syms['admission']+deadline, expiry.to_bytes(8, 'little'))
         cpu.mem_write(syms['diagnostic_deadline'], expiry.to_bytes(8, 'little'))
-        selected_workload = 2 if case == 'nonhost' else 4 if case == 'route-dual' else 0
+        selected_workload = {'nonhost': 2, 'route-dual': 4, 'route-ss': 6}.get(case, 0)
         cpu.mem_write(SESSION+workload, selected_workload.to_bytes(4, 'little'))
         def read(uc, access, address, size, value, unused):
             reads.append(address)
@@ -143,10 +143,10 @@ def main():
             assert cpu.reg_read(UC_ARM64_REG_PC) == STOP, 'Instruction budget exhausted'
             if case == 'dispatch':
                 assert calls == ['host-handler'] and not writes
-            elif case in ('route', 'route-dual', 'ignored-priority', 'ignored-route'):
+            elif case in ('route', 'route-dual', 'route-ss', 'ignored-priority', 'ignored-route'):
                 assert [(a, v) for a, s, v in writes] == list(EXPECTED.items()), writes
                 assert [s for a, s, v in writes] == [4, 4, 4, 4, 8]
-                assert cpu.reg_read(UC_ARM64_REG_X0) == (case in ('route', 'route-dual'))
+                assert cpu.reg_read(UC_ARM64_REG_X0) == (case in ('route', 'route-dual', 'route-ss'))
             else:
                 assert not writes
                 assert cpu.reg_read(UC_ARM64_REG_X0) == (case == 'nonhost')
