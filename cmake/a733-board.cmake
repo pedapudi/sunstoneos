@@ -61,7 +61,8 @@ endforeach()
 # touch one another's stack state or owner-dependent time implementation.
 set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
   "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/host/usbh.c"
-  "${TINYUSB_DIR}/src/class/msc/msc_host.c")
+  "${TINYUSB_DIR}/src/class/msc/msc_host.c"
+  "${TINYUSB_DIR}/src/class/hid/hid_host.c")
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
 get_target_property(board_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET a733-board-usb2-host PROPERTY COMPILE_OPTIONS "${board_options}")

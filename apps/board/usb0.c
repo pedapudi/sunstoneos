@@ -57,7 +57,9 @@ static void exchange(void)
     if(!tud_vendor_available())return;
     uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
     unsigned result=atomic_load_explicit(&board.result,memory_order_acquire);
-    put32(response,0x52414f42);put32(response+4,1);put32(response+8,result);put32(response+12,result==1?512:0);
+    put32(response,0x52414f42);
+    /* Acquiring result publishes immutable host kind and copied backing. */
+    put32(response+4,result==1&&board.host.kind==A733_USB2_DEVICE_HID?2:1);put32(response+8,result);put32(response+12,result==1?512:0);
     unsigned radio=atomic_load_explicit(&board.radio_result,memory_order_acquire);
     if(a733_board_radio_workload(board.session.workload)&&(atomic_load_explicit(&board.watchdog_state,memory_order_acquire)&4))radio=3;
     put32(response+16,radio);

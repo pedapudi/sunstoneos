@@ -4,6 +4,23 @@
 #include "a733_usb2_platform.h"
 #include "a733_xhci.h"
 struct a733_platform_locks;
+#define A733_USB2_HID_REPORT_BYTES 64u
+enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID };
+/* Raw completed interrupt input, not a desktop keyboard/mouse event. Zero or
+ * short reports retain their actual lengths; no boot-report semantics inferred. */
+struct a733_usb2_hid_report {
+    uint64_t generation,sequence;
+    uint32_t bytes;
+    uint8_t address,interface,protocol,endpoint,speed,reserved[7];
+    uint8_t data[A733_USB2_HID_REPORT_BYTES];
+};
+struct a733_usb2_hid {
+    unsigned endpoint,packet,interval,subclass,protocol,descriptor_bytes;
+    unsigned pending,complete,event_seen,event_bytes,requested;
+    uint64_t deadline,sequence;
+    uint8_t *pending_buffer;
+    uint8_t descriptor[256],copied[A733_USB2_HID_REPORT_BYTES];
+};
 struct a733_usb2_native {
     struct a733_usb2_native *self;
     struct a733_platform_locks *locks;
@@ -17,6 +34,8 @@ struct a733_usb2_native {
     struct device_memory_lease parent,memory;
     struct device_memory_extent backing;
     uint64_t last_now,read_deadline;
+    enum a733_usb2_device_kind kind;
+    struct a733_usb2_hid hid;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed,address_zero_closed;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;
@@ -42,7 +61,7 @@ int a733_usb2_native_init(struct a733_usb2_native *,const struct a733_usb2_platf
     int (*admit)(void *,const struct a733_usb2_platform_config *),void *);
 /* Designated task, finite lifetime. One core event/state and a bounded TinyUSB
  * queue drain per poll. Type-C power shutdown runs on independent tasks.
- * READY means the actual MSC device completed enumeration/capacity, not a read.
+ * READY means MSC enumeration/capacity or HID configuration completed; no data result is implied.
  */
 enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *);
 /* Read one logical512-byte sector from LUN0. Driver-owned backing persists;
@@ -50,6 +69,12 @@ enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *);
  * data plus command status and a fresh live attachment observation. */
 int a733_usb2_read_sector(struct a733_usb2_native *,uint32_t lba,uint64_t deadline);
 int a733_usb2_read_result(struct a733_usb2_native *,uint8_t out[512]);
+/* Same actual owner task. One interrupt IN request at a time; caller storage
+ * never reaches DMA. Result copies the exact completed raw bytes only after
+ * a fresh live attachment/deadline check. No automatic rearm or report parser. */
+enum a733_usb2_device_kind a733_usb2_device_kind(struct a733_usb2_native *);
+int a733_usb2_hid_receive(struct a733_usb2_native *,uint64_t deadline);
+int a733_usb2_hid_result(struct a733_usb2_native *,struct a733_usb2_hid_report *);
 void a733_usb2_native_lost(struct a733_usb2_native *);
 /* Internal TinyUSB composition; singleton static stack, one task and one host.
  * These entry points also permit the actual HCD/MSC stack in the host fixture. */

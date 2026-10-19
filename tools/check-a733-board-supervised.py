@@ -63,6 +63,10 @@ def capture(exchange, session, profile, evidence, record, save, deadline,
                 sector_path = evidence / 'sector.bin'
                 supervisor.durable_frame(sector_path, sector)
                 record['copied_sector'] = {'path': sector_path.name, 'sha256': digest(sector_path)}
+            if result.get('kind')=='hid-input':
+                hid_path=evidence/'hid-input.json'
+                supervisor.durable_frame(hid_path,(json.dumps(result,sort_keys=True)+'\n').encode())
+                record['copied_hid_input']={'path':hid_path.name,'sha256':digest(hid_path)}
             record['board_result'] = 'observed-success'
             record['durable_result'] = entry.copy()
             record['workload'] = workload

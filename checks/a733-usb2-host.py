@@ -28,6 +28,7 @@ def main():
     p.add_argument('--twi', type=Path, required=True)
     p.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     p.add_argument('--port', type=Path, required=True)
+    p.add_argument('--cases',nargs='+',help='Only selected affected composition cases')
     p.add_argument('--resume', action='store_true', help='Only missing steps; refuses changed frozen inputs')
     a = p.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -55,7 +56,7 @@ def main():
         'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c',
         'runtime/device_memory_pool.c']]
     units += [a.typec/'drivers/usb/a733_typec.c', a.twi/'drivers/i2c/a733_twi.c']
-    units += [tiny/u for u in ['tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c']]
+    units += [tiny/u for u in ['tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c','class/hid/hid_host.c']]
     native = [root/u for u in ['drivers/usb/a733_usb2_platform.c','drivers/usb/a733_usb2_native.c',
         'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c']]
     paths = set(units+native+[Path(__file__).resolve(),root/'checks/a733-pmic.c',core_source,core_header,
@@ -145,8 +146,9 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
                 libraries[word] = hashlib.sha256(Path(word).read_bytes()).hexdigest()
     (out/'loaded-libraries.json').write_text(json.dumps({'ldd': loaded, 'sha256': libraries}, indent=2)+'\n')
     cases=['admission','read','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach']
+    cases=a.cases or cases
     for case in cases:
-        run(case,[out/'composed',case])
+        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case in ('hid-fs','hid-ls','hid-hs') else [])])
     native_flags=[compiler,'--target=aarch64-none-elf','-march=armv8-a','-mstrict-align','-mgeneral-regs-only',
         '-std=gnu11','-O2','-g','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin',
         '-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1','-DINCLUDE_xSemaphoreGetMutexHolder=1']

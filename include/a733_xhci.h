@@ -37,9 +37,9 @@ struct a733_xhci_endpoint {
     uint8_t *bounce,*caller;
     uint64_t ring_pa,bounce_pa,pending_trb,deadline;
     unsigned number,address,packet,index,cycle,opened,configured,pending;
-    unsigned kind,direction,length,aborted; /* pending:0 idle,1 queued,2 on ring. */
+    unsigned kind,direction,length,aborted,transfer_type,interval; /* pending:0 idle,1 queued,2 on ring. */
 };
-/* One direct high-speed device, EP0 and two bulk endpoints. Only the owning
+/* One direct USB2 device, EP0 and two bulk or interrupt endpoints. Only the owning
  * task calls this API. The private NC parent and every object stay at their
  * original addresses; no reinitialization or memory release exists.
  * Control stages use independent actual Setup/Data/Status TD completions.
@@ -56,7 +56,7 @@ struct a733_xhci {
     uint64_t command_pa,event_pa,input_pa,device_pa,dcbaa_pa,erst_pa;
     uint64_t generation,deadline,lifetime_deadline,last_now,command_deadline,command_pointer;
     unsigned phase,failed,announced,removed,operational,runtime,doorbell;
-    unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps;
+    unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
     unsigned command_index,command_cycle,event_index,event_cycle,command_kind,slot;
     unsigned pending_address,address,port_reset,port_ready,connected,control_stage,control_length,control_in;
     unsigned configure_needed,configure_pending,evaluate_pending,ep0_packet,address_status,stop_endpoint;
@@ -71,8 +71,8 @@ struct a733_xhci {
  * lease; init validates it and permanently transfers the parent to DEVICE.
  * Capability limits are observed before populating any hardware context.
  * Initial support uses standard USB2 protocol speed IDs, one direct high-speed
- * device and no streams, hubs,
- * interrupts or isochronous endpoints. Unsupported modes remain staged work.
+ * device or directly attached FS/LS HID, with no streams, hubs or
+ * isochronous endpoints. Unsupported modes remain staged work.
  * Callbacks are bounded and non-reentrant; notice may enqueue a notification
  * but must not call any core API. All scalar offsets are relative to xHCI.
  */
@@ -87,6 +87,10 @@ int a733_xhci_reset_port(struct a733_xhci *,uint64_t deadline);
 int a733_xhci_port_connected(const struct a733_xhci *);
 int a733_xhci_open(struct a733_xhci *,unsigned address,unsigned endpoint,
     unsigned transfer_type,unsigned packet,uint64_t deadline);
+/* Interrupt bInterval is the raw USB descriptor value. Only single-transaction
+ * interrupt IN packets are admitted, <=8 bytes LS and <=64 bytes FS/HS. */
+int a733_xhci_open_interrupt(struct a733_xhci *,unsigned address,unsigned endpoint,
+    unsigned packet,unsigned interval,uint64_t deadline);
 int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_t deadline);
 int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
     uint8_t *,unsigned bytes,uint64_t deadline);

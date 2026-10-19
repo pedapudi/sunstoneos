@@ -17,6 +17,11 @@ static uint32_t registers[0x8000/4];
 static unsigned reg_fault,lose_on_lock,platform_writes,commands,transfers,events,event_cycle=1;
 static unsigned bad_status,hold_bulk,short_data,bad_config,short_descriptor;
 static uint64_t last_command,last_transfer[3];
+static unsigned hid_mode,device_speed=3,device_packet=64,hid_packet=8,hid_interval=10;
+static unsigned hid_reports,report_bytes=8,bad_hid_config,failed_hid_event,wrong_hid_pointer,evaluates;
+static const uint8_t hid_descriptor[]={5,1,9,6,0xa1,1,5,7,0x19,0xe0,0x29,0xe7,0x15,0,0x25,1,
+ 0x75,1,0x95,8,0x81,2,0x95,1,0x75,8,0x81,1,0x95,6,0x75,8,0x15,0,0x25,0x65,
+ 5,7,0x19,0,0x29,0x65,0x81,0,0xc0};
 static uint8_t request[8],cbw[31];
 static int gpu_read(void *v,uintptr_t a,uint32_t *out){*out=*pmic_model_word(v,a);return 1;}
 static int gpu_update(void *v,uintptr_t a,uint32_t required,uint32_t set,uint64_t d)
@@ -92,6 +97,21 @@ static void event(unsigned type,uint64_t pointer,unsigned code,unsigned remainin
 static void control_data(uint8_t *p,unsigned count)
 {
     memset(p,0,count);
+    if(hid_mode){
+        uint8_t device[]={18,1,0,2,0,0,0,(uint8_t)device_packet,0x34,0x12,0x78,0x56,0,1,0,0,0,1};
+        uint8_t config[]={9,2,34,0,1,1,0,0x80,50,9,4,0,0,1,3,1,1,0,
+          9,0x21,0x11,1,0,1,0x22,sizeof(hid_descriptor),0,7,5,0x81,3,(uint8_t)hid_packet,0,(uint8_t)hid_interval};
+        if(bad_hid_config==1)config[33]=0;
+        if(bad_hid_config==2)config[32]=8;
+        if(bad_hid_config==3){config[25]=1;config[26]=1;}
+        if(bad_hid_config==4)config[29]=1;
+        if(request[3]==1){assert(count<=sizeof(device));memcpy(p,device,count);
+            if(count==18)assert((get32(n.core.device+n.core.context_bytes+4)>>16)==device_packet&&!n.core.evaluate_pending);}
+        else if(request[3]==2){assert(count<=sizeof(config));memcpy(p,config,count);}
+        else if(request[3]==0x22){assert(request[0]==0x81&&count==sizeof(hid_descriptor));memcpy(p,hid_descriptor,count);}
+        else{assert(request[3]==3&&count<=4);const uint8_t string[]={4,3,9,4};memcpy(p,string,count);}
+        return;
+    }
     static const uint8_t device[]={18,1,0,2,0,0,0,64,0x34,0x12,0x78,0x56,0,1,0,0,0,1};
     static const uint8_t config[]={9,2,32,0,1,1,0,0x80,50,9,4,0,0,2,8,6,0x50,0,7,5,0x81,2,0,2,0,7,5,2,2,0,2,0};
     if(request[1]==6){static const uint8_t string[]={4,3,9,4};const uint8_t *src=request[3]==1?device:request[3]==2?config:string;unsigned z=request[3]==1?sizeof(device):request[3]==2?sizeof(config):sizeof(string);assert(count<=z);memcpy(p,src,count);if(bad_config&&request[3]==2&&count==32){p[2]=255;p[3]=255;}}
@@ -103,7 +123,21 @@ static void wire(void)
     if(x->command_kind&&x->command_pointer!=last_command){
         last_command=x->command_pointer;++commands;
         if(x->command_kind==11){memcpy(x->device,x->input+x->context_bytes,2*x->context_bytes);unsigned state=x->pending_address?2:1;put32(x->device+12,(state<<27)|(state==2?7:0));}
-        else if(x->command_kind==12){assert((get32(x->input+x->context_bytes)&(15u<<20))==(3u<<20));memcpy(x->device,x->input+x->context_bytes,x->context_bytes);put32(x->device+12,(3u<<27)|7);}
+        else if(x->command_kind==13){
+            assert(hid_mode&&device_speed==1&&get32(x->input+4)==2);
+            assert((get32(x->input+2*x->context_bytes+4)>>16)==device_packet);
+            memcpy(x->device+x->context_bytes,x->input+2*x->context_bytes,x->context_bytes);++evaluates;
+        }
+        else if(x->command_kind==12){assert((get32(x->input+x->context_bytes)&(15u<<20))==(device_speed<<20));
+            if(hid_mode){
+                struct a733_xhci_endpoint *e=&x->endpoints[1];const uint8_t *context=x->input+(e->number+1)*x->context_bytes;
+                unsigned interval=device_speed==3?hid_interval-1:3;unsigned value=hid_interval;
+                if(device_speed!=3)while(value>1){++interval;value>>=1;}
+                assert(get32(context)==interval<<16);
+                assert(get32(context+4)==((hid_packet<<16)|(7u<<3)|(3u<<1)));
+                assert(get32(context+16)==((hid_packet<<16)|hid_packet));
+            }
+            memcpy(x->device,x->input+x->context_bytes,x->context_bytes);put32(x->device+12,(3u<<27)|7);}
         event(33,x->command_pointer,1,0,0,1);return;
     }
     for(unsigned i=0;i<3;++i){struct a733_xhci_endpoint *e=&x->endpoints[i];
@@ -111,6 +145,12 @@ static void wire(void)
         if(i&&hold_bulk)return;
         last_transfer[i]=e->pending_trb;++transfers;unsigned residual=0;
         if(!i){if(e->kind==2)memcpy(request,x->setup,8);else if(e->kind==3&&e->direction){control_data(e->bounce,e->length);if(short_descriptor&&request[1]==6&&request[3]==1)residual=1;}}
+        else if(hid_mode){
+            assert(e->direction&&e->address==0x81&&e->length==hid_packet);
+            for(unsigned j=0;j<report_bytes;++j)e->bounce[j]=(uint8_t)(hid_reports*17+j+1);
+            residual=e->length-report_bytes;++hid_reports;
+            event(32,e->pending_trb+(wrong_hid_pointer?16:0),failed_hid_event?6:residual?13:1,residual,e->number,x->slot);return;
+        }
         else if(!e->direction){assert(e->length==31);memcpy(cbw,e->bounce,31);}
         else if(e->length==13){memset(e->bounce,0,13);put32(e->bounce,0x53425355);put32(e->bounce+4,get32(cbw+4)+(bad_status?1:0));}
         else if(cbw[15]==0x25){assert(e->length==8);const uint8_t capacity[]={0,0,0,127,0,0,2,0};memcpy(e->bounce,capacity,8);}
@@ -126,7 +166,7 @@ static int ww(void *v,uint32_t off,uint32_t value)
 {
     (void)v;assert(off<0x8000&&!(off&3));registers[off/4]=value;
     if(off==0x40){if(value&2){registers[off/4]=0;registers[0x44/4]=1;}else if(value&1)registers[0x44/4]=0;}
-    if(off==0x440){registers[off/4]=1|(1u<<9);if(value&(1u<<4))registers[off/4]|=2|(3u<<10);}
+    if(off==0x440){registers[off/4]=1|(1u<<9);if(value&(1u<<4))registers[off/4]|=2|(device_speed<<10);}
     return 1;
 }
 static int w64(void *v,uint32_t off,uint64_t value){assert(!(off&7));return ww(v,off,(uint32_t)value)&&ww(v,off+4,(uint32_t)(value>>32));}
@@ -159,7 +199,49 @@ int main(int argc,char **argv)
     prepare();assert(platform_writes&&*pmic_model_word(&m,0x02003364)==0x81000003);
     uint32_t reference[2];usb2_source_reference(reference);
     assert(*pmic_model_word(&m,0x06a0c12c)==reference[0]&&*pmic_model_word(&m,0x06a0c630)==reference[1]);
+    if(!strncmp(mode,"hid-",4)){
+        hid_mode=1;device_speed=strstr(mode,"-ls")?2:strstr(mode,"-hs")?3:1;
+        device_packet=device_speed==3?64:device_speed==1?32:8;
+        hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
+        if(strstr(mode,"interval"))bad_hid_config=1;
+        if(strstr(mode,"bandwidth"))bad_hid_config=2;
+        if(strstr(mode,"descriptor"))bad_hid_config=3;
+        if(strstr(mode,"direction"))bad_hid_config=4;
+    }
     start_core();
+    if(hid_mode){
+        for(unsigned i=0;i<10000&&!n.mounted&&!n.failed;++i)poll();
+        if(bad_hid_config){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS HID descriptor refusal before TinyUSB parser");return 0;}
+        assert(n.mounted&&!n.failed&&n.kind==A733_USB2_DEVICE_HID&&n.core.speed==device_speed);
+        assert(evaluates==(device_speed==1?1u:0u)&&!memcmp(n.hid.descriptor,hid_descriptor,sizeof(hid_descriptor)));
+        struct a733_usb2_hid_report result;memset(&result,0x5a,sizeof(result));
+        assert(a733_usb2_hid_receive(&n,m.now+5000000));
+        if(strstr(mode,"stall"))failed_hid_event=1;
+        if(strstr(mode,"pointer"))wrong_hid_pointer=1;
+        if(strstr(mode,"detach"))a733_typec_revoke(&role);
+        if(strstr(mode,"timeout")){hold_bulk=1;m.now+=5000001;}
+        if(strstr(mode,"cancel")){hold_bulk=1;for(unsigned i=0;i<10;++i)assert(poll()>=0);assert(a733_xhci_abort(&n.core,n.address,0x81));}
+        unsigned failure=failed_hid_event||wrong_hid_pointer||strstr(mode,"detach")||strstr(mode,"timeout")||strstr(mode,"cancel");
+        for(unsigned i=0;i<10000&&!n.hid.complete&&!n.failed;++i)poll();
+        if(failure){assert(n.failed&&n.core.failed&&!n.hid.complete&&a733_usb2_hid_result(&n,&result)<0);
+            for(unsigned j=0;j<sizeof(result);++j)assert(((const uint8_t *)&result)[j]==0x5a);
+            enum device_memory_state state;struct device_memory_extent extent;
+            assert(device_memory_describe(&n.private_pool,n.memory,&extent,&state)&&state==DEVICE_MEMORY_RETAINED);
+            puts("PASS failed HID completion retains DMA without class result/caller copy");return 0;}
+        FILE *reports=NULL;if(argc>2){reports=fopen(argv[2],"wb");assert(reports);}
+        for(unsigned i=0;i<4;++i){
+            if(i){report_bytes=i==1?3:i==2?0:8;assert(a733_usb2_hid_receive(&n,m.now+5000000));
+                for(unsigned j=0;j<10000&&!n.hid.complete&&!n.failed;++j)poll();}
+            assert(n.hid.complete&&!n.failed&&a733_usb2_hid_result(&n,&result)==1);
+            assert(result.bytes==report_bytes&&result.sequence==i+1&&result.generation==71&&result.address==1&&
+              result.interface==0&&result.endpoint==0x81&&result.protocol==1&&result.speed==device_speed);
+            for(unsigned j=0;j<result.bytes;++j)assert(result.data[j]==(uint8_t)(i*17+j+1));
+            for(unsigned j=result.bytes;j<64;++j)assert(!result.data[j]);
+            if(reports)assert(fwrite(&result,1,sizeof(result),reports)==sizeof(result));
+        }
+        if(reports)assert(!fclose(reports));
+        printf("PASS speed%u HID TinyUSB parser/callbacks, interrupt context/interval, FS Evaluate Context, four copied reports with exact short/ZLP lengths\n",device_speed);return 0;
+    }
     if(!strcmp(mode,"bad-config")||!strcmp(mode,"short-descriptor")){
         bad_config=!strcmp(mode,"bad-config");short_descriptor=!strcmp(mode,"short-descriptor");
         for(unsigned i=0;i<10000&&!n.failed;++i)poll();

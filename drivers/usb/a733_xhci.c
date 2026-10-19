@@ -9,7 +9,7 @@
 #define MAX_OFFSET UINT32_C(0x8000)
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
-enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12 };
+enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13 };
 enum { T_NORMAL=1,T_SETUP=2,T_DATA=3,T_STATUS=4,T_ADDRESS_STATUS=5 };
 enum { CONTROL_IDLE,CONTROL_SETUP,CONTROL_DATA,CONTROL_STATUS };
 static uint32_t get32(const void *v)
@@ -121,16 +121,18 @@ static int command(struct a733_xhci *x,unsigned kind,uint32_t flags)
 static void ep_context(struct a733_xhci *x,struct a733_xhci_endpoint *e)
 {
     uint8_t *p=x->input+(e->number+1)*x->context_bytes;
-    unsigned type=e->number==1?4:e->direction?6:2;
+    unsigned type=e->number==1?4:e->transfer_type==3?7:e->direction?6:2;
+    if(e->transfer_type==3)put32(p,e->interval<<16);
     put32(p+4,(e->packet<<16)|(type<<3)|(3u<<1));
-    put64(p+8,(e->ring_pa+16*e->index)|e->cycle);put32(p+16,e->number==1?8:4096);
+    put64(p+8,(e->ring_pa+16*e->index)|e->cycle);
+    put32(p+16,e->number==1?8:e->transfer_type==3?(e->packet<<16)|e->packet:4096);
 }
 static void address_context(struct a733_xhci *x)
 {
     memset(x->input,0,33*x->context_bytes);put32(x->input+4,3);
     uint8_t *slot=x->input+x->context_bytes;
-    put32(slot,(1u<<27)|(3u<<20));put32(slot+4,x->usb2_port<<16);
-    x->endpoints[0].number=1;x->endpoints[0].packet=64;ep_context(x,&x->endpoints[0]);
+    put32(slot,(1u<<27)|(x->speed<<20));put32(slot+4,x->usb2_port<<16);
+    x->endpoints[0].number=1;x->endpoints[0].packet=x->speed==3?64:8;ep_context(x,&x->endpoints[0]);
 }
 static int configure(struct a733_xhci *x)
 {
@@ -214,6 +216,11 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
         x->hardware_address=assigned;x->address_status=1;x->control_stage=CONTROL_STATUS;
         x->endpoints[0].pending=0;notify(x,A733_XHCI_TRANSFER,0,0,8,0);return 1;
     }
+    if(kind==C_EVALUATE){
+        if(!x->evaluate_pending||slot_state!=2||
+           (get32(x->device+x->context_bytes+4)>>16)!=x->endpoints[0].packet)return 0;
+        x->evaluate_pending=0;return 1;
+    }
     if(kind==C_CONFIGURE) {
         if(slot_state!=3)return 0;
         for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(x->command_mask&BIT(x->endpoints[i].number))x->endpoints[i].configured=1;
@@ -255,9 +262,11 @@ static int port(struct a733_xhci *x)
     }
     if(x->port_reset==2) {
         if(v&BIT(4))return 1;
-        if(!(v&BIT(1))||((v>>10)&15)!=3||(v&UINT32_C(0x1e0)))return 0;
+        unsigned speed=(v>>10)&15;
+        if(!(v&BIT(1))||speed<1||speed>3||(v&UINT32_C(0x1e0)))return 0;
+        if(x->speed&&x->speed!=speed)return 0;x->speed=speed;
         x->port_reset=3;x->port_ready=1;
-    }
+    }else if(x->port_reset==3&&((v>>10)&15)!=x->speed)return 0;
     return 1;
 }
 static int capabilities(struct a733_xhci *x)
@@ -364,6 +373,11 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->endpoints[0].pending==1&&x->pending_address&&!x->address_status) {
             address_context(x);if(!command(x,C_ADDRESS,x->slot<<24))goto failed;x->endpoints[0].pending=2;break;
         }
+        if(x->evaluate_pending){
+            memset(x->input,0,33*x->context_bytes);put32(x->input+4,BIT(1));
+            ep_context(x,&x->endpoints[0]);
+            if(!command(x,C_EVALUATE,x->slot<<24))goto failed;break;
+        }
         for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(x->endpoints[i].opened&&!x->endpoints[i].configured) {
             if(!x->address||!configure(x))goto failed;goto done;
         }
@@ -388,14 +402,35 @@ int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned typ
 {
     if(!owner(x)||x->failed||!x->connected||address!=x->address||ep&~0x8fu||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
     if(!(ep&15)) {
-        if(type||ep||((packet!=8||address)&&(packet!=64))||x->endpoints[0].pending)return 0;
-        x->endpoints[0].opened=1;x->endpoints[0].packet=64;x->endpoints[0].number=1;return 1;
+        if(type||ep||x->endpoints[0].pending||x->evaluate_pending||
+           (x->speed==2&&packet!=8)||(x->speed==3&&packet!=8&&packet!=64)||
+           (x->speed==1&&packet!=8&&packet!=16&&packet!=32&&packet!=64))return 0;
+        unsigned actual=x->speed==3?64:packet;
+        if(address&&actual!=x->endpoints[0].packet)x->evaluate_pending=1;
+        x->endpoints[0].opened=1;x->endpoints[0].packet=actual;x->endpoints[0].number=1;return 1;
     }
-    if(!address||type!=2||packet!=512)return 0;
+    if(!address||type!=2||packet!=512||x->speed!=3)return 0;
     struct a733_xhci_endpoint *e=endpoint(x,ep);
-    if(e)return e->packet==packet&&!e->aborted;
+    if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!x->endpoints[i].opened) {
-        e=&x->endpoints[i];e->opened=1;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
+        e=&x->endpoints[i];e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
+    }
+    return 0;
+}
+int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
+    unsigned packet,unsigned interval,uint64_t deadline)
+{
+    if(!owner(x)||x->failed||!x->connected||!address||address!=x->address||
+       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(x->speed==2?8u:64u)||
+       !interval||interval>(x->speed==3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+    unsigned encoded;
+    if(x->speed==3)encoded=interval-1;
+    else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
+    struct a733_xhci_endpoint *e=endpoint(x,ep);
+    if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;
+    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!x->endpoints[i].opened){
+        e=&x->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
+        e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;return 1;
     }
     return 0;
 }
