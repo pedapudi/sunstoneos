@@ -1,6 +1,6 @@
 # Finite GPU client and device adapter
 
-The separate [returning single-core composition](RETURN.md) adds an application-local EL1 publication shim and EL3 return monitor around this device adapter. Its image and selective handoff evidence are distinct from the development adapter described below. Physical eligibility still requires coordinator architectural and admission review.
+The separate [returning single-core composition](RETURN.md) adds an application-local EL1 publication shim and EL3 return monitor around this device adapter. Its image and selective handoff evidence are distinct from the development adapter described below. Physical eligibility still requires coordinator architectural and admission review. The [returned-RAM host adapter](HOST.md) defines immutable preparation, report validation and chunked restoration for that reviewed lifetime.
 
 This adapter runs the existing repeated fixed-compute client through normal CLOSE, parks its providers, reports the copied results and calls `platform_exit(0)`. It is intended for maintainers composing the common returning FreeRTOS platform. The supplied ELF is development-only and physically ineligible: it retains the earlier full single-core monitor/runtime objects, which do not implement the required return. Physical GPU firmware execution, computation, shutdown and ROM return remain unqualified.
 
