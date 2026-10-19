@@ -432,7 +432,7 @@ static int h264_read(void *v,uint64_t t,uint32_t off,uint32_t *x,uint64_t d)
     struct a733_h264_platform *p=v;struct a733_video_platform *c=&p->common;
     if(c->failed||!c->checked||t!=c->token||d!=c->deadline||!x)return fail(c);
     if(off!=0xf0&&off!=0xe0&&off!=0xe4&&(!c->prepared||
-       (off!=0&&off!=0x1c&&off!=0xb0&&off!=0xec&&off!=0x228&&off!=0x5c&&off!=0x804)))return fail(c);
+       (off!=0&&off!=0x1c&&off!=0xb0&&off!=0xec&&off!=0x228&&off!=0x22c&&off!=0x5c&&off!=0x804)))return fail(c);
     if(lock(c)!=1)return fail(c);
     if(rd(c,VE+off,x)!=1)return -1;
     return unlock(c);

@@ -34,12 +34,14 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 {(void)language;static uint16_t out[64];static const char *const text[]={"","sunstoneos","sunstoneos native H.264","sunstoneos-a733-h264","Capture"};
  if(!i){out[0]=0x0304;out[1]=0x0409;return out;}if(i>=5)return NULL;size_t n=strlen(text[i]);out[0]=(uint16_t)(0x0300|2*n+2);for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;}
 
-/* One zero-valued byte requests a coherent private result. Header128bytes:
- * LE32 magic/version/status/bytes, LE64 epoch/generation, fixture/reference/
- * copied-payload SHA256. Reference hash0 means no qualification oracle.
+/* Zero followed by a LE32 picture index requests a coherent private result.
+ * Header160bytes: LE32 magic/version/status/bytes, LE64 epoch/generation,
+ * fixture/reference/copied-payload SHA256, then index/count/frame_num/POC/
+ * width/height/slice_type/terminal. Reference hash0 means no qualification oracle.
  * Only status1 appends2304 owned copied Y/Cb/Cr bytes.
  * Device buffers remain DEVICE-owned; status2 carries no payload. */
-static uint8_t h264_response[128+A733_H264_OUTPUT_BYTES];
+static uint8_t h264_response[160+A733_H264_OUTPUT_BYTES],h264_query[5];
+static unsigned h264_query_used;
 static unsigned h264_response_bytes,h264_response_sent,h264_response_transferred;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 void tud_mount_cb(void){}
@@ -60,29 +62,46 @@ static void h264_exchange(void)
     if(!tud_vendor_available())return;
     uint8_t incoming[512];
     size_t n;
-    if(h264.supplied.header_used&&!a733_h264_input_ready(&h264.supplied)){
+    if(h264_query_used){
+        n=5-h264_query_used;if(n>tud_vendor_available())n=tud_vendor_available();
+    }else if(h264.supplied.header_used&&!a733_h264_input_ready(&h264.supplied)){
         n=a733_h264_input_remaining(&h264.supplied);
         if(!n)stop();
         if(n>sizeof(incoming))n=sizeof(incoming);
         if(n>tud_vendor_available())n=tud_vendor_available();
     }else n=1;
     if(tud_vendor_read(incoming,n)!=n)stop();
-    if(n!=1||incoming[0]||
+    if(h264_query_used){
+        memcpy(h264_query+h264_query_used,incoming,n);h264_query_used+=n;
+        if(h264_query_used!=5)return;
+    }else if(n!=1||incoming[0]||
        (h264.supplied.header_used&&!a733_h264_input_ready(&h264.supplied))){
         if(!board_live(NULL)||
            a733_h264_input_feed(&h264.supplied,&h264.session,upload_now,NULL,
                board.session.deadline_us-10000,incoming,n)<0||!board_live(NULL))stop();
         return;
-    }
-    unsigned result=atomic_load_explicit(&h264.result,memory_order_acquire);
-    put32(h264_response,0x34363248);put32(h264_response+4,1);put32(h264_response+8,result);
+    }else{h264_query[0]=0;h264_query_used=1;return;}
+    unsigned picture=(unsigned)h264_query[1]|((unsigned)h264_query[2]<<8)|
+        ((unsigned)h264_query[3]<<16)|((unsigned)h264_query[4]<<24);
+    h264_query_used=0;
+    unsigned count=a733_h264_input_ready(&h264.supplied)?h264.supplied.sequence.count:0;
+    if(picture>=A733_H264_PICTURES||(count&&picture>=count))stop();
+    unsigned terminal=atomic_load_explicit(&h264.result,memory_order_acquire);
+    unsigned completed=atomic_load_explicit(&h264.completed,memory_order_acquire);
+    unsigned result=picture<completed?1:terminal==2?2:0;
+    put32(h264_response,0x34363248);put32(h264_response+4,2);put32(h264_response+8,result);
     put32(h264_response+12,result==1?A733_H264_OUTPUT_BYTES:0);
     put32(h264_response+16,(uint32_t)board.session.epoch);put32(h264_response+20,(uint32_t)(board.session.epoch>>32));
     put32(h264_response+24,(uint32_t)board.session.generation);put32(h264_response+28,(uint32_t)(board.session.generation>>32));
     memcpy(h264_response+32,h264.session.fixture,32);memcpy(h264_response+64,h264.session.reference,32);
-    if(result==1){memcpy(h264_response+96,h264.digest,32);memcpy(h264_response+128,h264.payload,A733_H264_OUTPUT_BYTES);}
+    if(result==1){memcpy(h264_response+96,h264.digest[picture],32);memcpy(h264_response+160,h264.payload[picture],A733_H264_OUTPUT_BYTES);}
     else memset(h264_response+96,0,32);
-    h264_response_sent=h264_response_transferred=0;h264_response_bytes=result==1?sizeof(h264_response):128;
+    put32(h264_response+128,picture);put32(h264_response+132,count);
+    const struct a733_h264_picture *p=count?&h264.supplied.sequence.pictures[picture]:NULL;
+    put32(h264_response+136,p?p->frame_num:0);put32(h264_response+140,p?p->poc:0);
+    put32(h264_response+144,p?p->width:0);put32(h264_response+148,p?p->height:0);
+    put32(h264_response+152,p?p->slice_type:0);put32(h264_response+156,terminal);
+    h264_response_sent=h264_response_transferred=0;h264_response_bytes=result==1?sizeof(h264_response):160;
 }
 void board_usb0_task(void *unused)
 {

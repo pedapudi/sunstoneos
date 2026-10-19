@@ -4,17 +4,18 @@
 #include "a733_video_h264.h"
 #include <stdatomic.h>
 /* One upload per retained decoder lifetime. Header32bytes, little endian:
- * magic H26U, version1, AnnexB byte count, oracle byte count(0or2304),
+ * magic H26U, version2, AnnexB byte count, oracle byte count(0or2304or4608),
  * session epoch64, generation64. Body is stream then optional pixel oracle.
  * Every fragment is bound to the same admitted session and live deadline.
  * Completion hashes and parses owned bytes before release publication.
  * No operation permits reuse, mutation or reset after publication. */
 #define A733_H264_UPLOAD_MAGIC UINT32_C(0x55363248)
 struct a733_h264_input {
-    uint8_t header[32], stream[A733_H264_INPUT_BYTES], oracle[A733_H264_OUTPUT_BYTES];
+    uint8_t header[32], stream[A733_H264_INPUT_BYTES], oracle[A733_H264_OUTPUT_BYTES*A733_H264_PICTURES];
     uint8_t stream_hash[32], oracle_hash[32];
     uint64_t epoch,generation,authority,deadline,last_now;
     size_t header_used,stream_bytes,oracle_bytes,received;
+    struct a733_h264_sequence sequence;
     unsigned failed;
     atomic_uint committed;
 };

@@ -30,8 +30,8 @@ struct h264_application {
     struct a733_h264_job job;
     uint32_t *table;
     unsigned stage,copy_step;
-    atomic_uint result;
-    uint8_t payload[A733_H264_OUTPUT_BYTES],digest[32];
+    atomic_uint result,completed;
+    uint8_t payload[A733_H264_PICTURES][A733_H264_OUTPUT_BYTES],digest[A733_H264_PICTURES][32];
 };
 extern struct h264_application h264;
 void h264_task(void *);

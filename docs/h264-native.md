@@ -1,244 +1,276 @@
-# Bounded native H.264 IDR decoding
+# Bounded native H.264 IDR and P decoding
 
-The native driver implements a bounded Annex B H.264 mode. It parses one
-sequence parameter set (SPS), one picture parameter set (PPS) and one IDR
-intra slice, then programs the video engine (VE) from those fields. The mode
-supports progressive, macroblock-aligned Baseline 8-bit 4:2:0 pictures from
-16 through 64 pixels wide and 16 through 32 pixels high. Input is limited to
-4,096 bytes. Access-unit delimiters and supplemental enhancement information
-may precede the slice; supplemental metadata does not alter decoded samples.
+The native driver implements a bounded Annex B H.264 sequence: one IDR intra
+picture followed by an optional P picture that references the decoded IDR.
+It parses all sequence parameter set (SPS), picture parameter set (PPS) and
+slice headers before the first device write. The video engine (VE) executes
+CAVLC entropy decoding, intra/inter prediction, inverse transforms, deblocking
+and output writes. The CPU validates headers and bounds; it does not decode
+macroblock payloads. Malformed payloads can pass header admission and fail in
+the engine.
 
-The engine executes CAVLC entropy decoding, intra prediction, inverse transforms,
-deblocking and output writes. The CPU validates headers and bounds; it does not
-decode macroblock payloads. A malformed payload can therefore pass header
-admission and fail in the engine. Device errors, data requests, busy completion
-and deadlines retain every allocation and lease.
+The driver supports progressive, macroblock-aligned Baseline 8-bit 4:2:0
+pictures from 16 through 64 pixels wide and 16 through 32 pixels high. A clip
+has at most 8,192 bytes, with at most 4,096 bytes in each NAL unit. It contains
+one SPS and PPS, one slice per picture starting at macroblock zero, and at
+most two pictures. Access-unit delimiters and supplemental enhancement
+information may precede slices; supplemental metadata does not change samples.
 
-The application accepts an uploaded 48-by-32 picture and copies 2,304 planar
-Y, Cb and Cr bytes. The firmware contains no clip or pixel reference. A new
-clip requires a new admitted session and prepared bundle, while the same ELF
-can be reused. Each session binds a nonzero stream digest. Its optional pixel
-reference is a qualification oracle; an all-zero reference digest selects
-normal decoder output. Normal output checks ownership, completion and copied
-byte integrity without asserting numerical conformance.
+The two-picture mode requires picture-order count (POC) type 2, frame numbers
+0 then 1, POCs 0 then 2, one short-term reference and default reference list 0.
+The P slice may override the active-reference count only to one. Weighted
+prediction, reference-list modification, adaptive reference marking and frame
+number gaps are rejected. A single IDR also accepts the existing POC type 0
+mode. CABAC, B pictures, fields, multiple slices, cropping, slice groups,
+redundant slices, long-term references, PPS extensions, scaling matrices and
+HRD scheduling are unsupported. Header checks do not establish complete
+macroblock coverage; completion also requires the decoded macroblock count.
+The broader Baseline/Main/High families, longer clips, multiple references and
+advertised codec size limits remain required work.
 
-The upload owns one job for the retained decoder lifetime. A completed or
-failed job cannot accept another clip, reclaim buffers or release its leases.
-Runtime ingestion removes the need to rebuild firmware for each clip; repeated
-decoding within one session remains unsupported.
+The application accepts runtime clips whose pictures are all 48 by 32 pixels.
+It copies 2,304 planar Y, Cb and Cr bytes per picture into separate immutable
+private outputs. The firmware contains no clip or pixel reference. Each sealed
+session binds a nonzero stream digest. An optional independent pixel reference
+is a qualification oracle; a zero reference digest selects normal output.
+Normal output checks ownership, completion, metadata and copied byte integrity
+without asserting numerical conformance.
 
-Supported headers use one slice beginning at macroblock zero, picture-order
-count type 0 or 2, at most one reference-frame declaration and no frame-number
-gaps. CABAC, picture-order count type 1, multiple pictures or slices, interframe
-prediction, field pictures, cropping, slice groups, redundant slices, long-term
-reference storage, PPS extensions, scaling matrices and HRD scheduling are
-unsupported. Header validation cannot establish complete picture coverage.
-The wider Baseline/Main/High families and the board's advertised codec limits
-remain required work.
+One upload owns the decoder for its retained lifetime. The same ELF can accept
+a different clip in a new admitted session without rebuilding firmware. A
+completed or failed session cannot accept another clip, reclaim its buffers or
+release its leases. Decoding the second picture uses retained resources;
+repeated clips within one session remain unsupported.
 
-## Open-source control and A733 instructions establish the operation
+## Pinned sources establish control and reference fields
 
 The executor adapts the GPL-2.0-or-later H.264 control in
 [Linux Cedrus](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c).
 The parser adapts the syntax order in H6-CedarC `H264DecodeSps`,
-`H264DecodePps` and `H264DecodeSliceHeader`, replacing hardware bit-reader
-callbacks with bounded software reads. Those sources provide field and
-allocation semantics under their LGPL version 2 notice. The source manifest is
-[apps/h264/sources.json](../apps/h264/sources.json); it records per-file hashes,
-revisions, source URLs and the preserved license files.
+`H264DecodePps` and `H264DecodeSliceHeader`, replacing hardware bit readers
+with bounded software reads. Those sources provide field and allocation
+semantics under their LGPL version 2 notice.
+[The source manifest](../apps/h264/sources.json) records per-file hashes,
+revisions, source URLs, host-only oracle dependencies and preserved licenses.
 
-The A733/T736 CedarC package supplies an architecture-specific register
-reference. Its package and library provenance are described in
-[video-codecs.md](video-codecs.md). The relevant `libawh264.so` has SHA256
+The A733/T736 CedarC package supplies an architecture-specific instruction
+reference, described in [video-codecs.md](video-codecs.md). Its `libawh264.so`
+has SHA256
 `c977fe936a0bf1418f0a452c9769158b3ad2c8ff32aa972c1db4e21630f7fcc3`.
-Selected original AArch64 instructions ran on the host with inert register
+Selected original AArch64 instructions execute on the host with inert register
 storage and bounded service substitutions. These libraries are neither linked
 into the FreeRTOS image nor loaded by the native application.
 
-The instruction comparison establishes H.264 group offset `0x200` for the
-three previously admitted compound identities. It also checks selected SPS,
-PPS, slice, bitstream, scratch and frame-SRAM fields. The actual primary-only
-branch of `H264ConfigureFrameInfoRegister` programs planar YU12 without enabling
-secondary output. The vendor scaling helper is not used.
+The instruction checks establish H.264 group offset `0x200` for the three
+admitted compound identities and selected SPS, PPS, slice, bitstream, scratch
+and frame-SRAM fields. The original `H264InitPoc` produces POCs 0 and 2 for the
+admitted frame numbers. Frame-SRAM slots 0 and 1 contain those actual POCs,
+progressive-frame flags and distinct Y, C and motion-vector addresses. Default
+reference list 0 selects retained slot 0. The primary-only
+`H264ConfigureFrameInfoRegister` branch programs planar YU12; secondary output
+and the vendor scaling helper are unused. The encoded VLD base is not a raw
+physical address. Motion-vector top and bottom fields are 1,024 bytes apart.
 
-The metadata audit follows producer code as well as register consumers. In
-particular, the VLD base field contains an encoded address rather than a raw
-physical address. Motion-vector fields are 1,024 bytes apart for this picture.
-The full audit and producer disassembly remain with the raw evidence. Frame
-SRAM picture-order fields remain zero for this standalone I-picture mode; the
-parsed picture-order count has no reference or output-reordering consumer.
-Actual frame-order fields need implementation before those consumers are added.
+Picture-info and neighbor scratch belong to the retained decoder context.
+[Cedrus context allocation](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c#L526)
+and the pinned CedarC `h264_dec.c` framebuffer-allocation code (lines 1355–1384)
+preserve this
+storage across pictures; `h264_hal.c` (lines 1158–1177) programs the context
+addresses for each
+picture. Both pictures therefore use the same initialized scratch allocations.
+The CPU neither clears nor relocates them between IDR and P decoding. Distinct
+input, Y, C and motion-vector slots retain the producer picture's reference
+state while the P picture executes.
 
-## Existing providers retain the decoder and every DMA buffer
+## Providers retain the decoder and all DMA storage
 
 The application reuses the video platform, shared clock and power leases,
-decoder IOMMU, uncached memory pool and native USB providers. A typed H.264
-adapter shares cold acquisition and reset sequencing with the existing video
-provider. The JPEG public layout and its codec-zero preparation path remain
-unchanged. H.264 selects codec one and permits a separate register subset.
+decoder IOMMU, uncached pool and native USB providers. A typed H.264 adapter
+shares cold acquisition and reset sequencing with the existing video provider.
+H.264 selects codec one and a separate register subset. The JPEG public layout
+and codec-zero preparation path remain unchanged.
 
-The privileged session reserves decoder masters 6 and 7, interrupt 81 and all six
-buffer extents. Admission requires reviewed initial transaction and page-walk
-isolation, electrical state, uncached physical ownership, alias exclusions and
-manual whole-board power removal. Idle register values do not establish those
-facts. The application does not manufacture admission records.
+The privileged session reserves decoder masters 6 and 7, interrupt 81 and all
+six buffer extents. Admission requires reviewed initial transaction and
+page-walk isolation, electrical state, uncached ownership, alias exclusions,
+retained context/reference mappings and manual whole-board power removal.
+Idle register values do not establish those facts. The application does not
+manufacture admission records. Primary EL3 snapshots the authenticated full
+session before application access; the application requires its board prefix
+to match the providers' admitted session. Later upload changes cannot alter
+ownership, clock selection or evidence identities.
 
-Primary EL3 copies the full session once and verifies its digest against the
-immutable boot contract before publishing that snapshot to the other CPUs.
-The application consumes the snapshot and requires its board prefix to match
-the board providers' admitted session. Later changes to the uploaded session
-cannot change decoder ownership, clock selection or evidence identities.
-
-The I/O virtual addresses (IOVAs) presented by the decoder are fixed:
+The decoder's I/O virtual address (IOVA) mappings remain static throughout both
+pictures:
 
 | IOVA range, exclusive end | Mapped capacity | Device access |
 | --- | --- | --- |
-| `0x10001000..0x10002000` | 4,096-byte padded input | Read |
-| `0x10010000..0x10011000` | 4,096-byte luma allocation | Write |
-| `0x10014000..0x10015000` | 4,096-byte chroma allocation | Write |
-| `0x10020000..0x10041000` | 139,264-byte picture-info allocation | Read/write |
-| `0x10044000..0x10045000` | 4,096-byte motion-vector allocation | Read/write |
-| `0x10048000..0x10054000` | 49,152-byte neighbor allocation | Read/write |
+| `0x10001000..0x10003000` | Two 4,096-byte padded input slots | Read |
+| `0x10010000..0x10012000` | Two 4,096-byte luma slots | Read/write |
+| `0x10014000..0x10016000` | Two 4,096-byte chroma slots | Read/write |
+| `0x10020000..0x10041000` | 139,264-byte context picture-info storage | Read/write |
+| `0x10068000..0x1006a000` | Two 4,096-byte motion-vector slots | Read/write |
+| `0x10070000..0x1007c000` | 49,152-byte context neighbor storage | Read/write |
 
-The picture-info minimum is 135,168 bytes; its remaining mapped tail retains
-canaries. Motion-vector data uses two 1,024-byte fields. The neighbor allocation
-has a 16 KiB aligned CPU and IOVA base. Every allocation has an unmapped guard
-page on each side; its physical prefix is 16 KiB for the neighbor buffer and
-4 KiB otherwise. Guard bytes and unused tails retain canaries. The 32 KiB IOMMU
-table is a separate allocation. These source-derived capacities do not qualify
-hardware burst bounds or physical IOMMU confinement.
+Luma and chroma mappings permit the P picture's reference reads. No mapping,
+lease or context scratch is reset, unmapped or reused between pictures.
+Picture-info requires 135,168 bytes; its remaining tail retains canaries.
+Each motion-vector slot uses two 1,024-byte fields. Neighbor storage has a
+16 KiB aligned CPU and IOVA base. Every allocation has unmapped guard pages;
+the physical prefix is 16 KiB for neighbor storage and 4 KiB otherwise.
+Guards and unused slot tails retain canaries. The separate IOMMU table occupies
+32 KiB. These capacities do not qualify physical burst bounds or confinement.
 
-Output luma has a 64-byte stride and 32 rows. Each chroma plane has a 32-byte
-stride, 16 rows and a 512-byte allocation. The private output removes row
-padding and contains 1,536 Y bytes followed by 384 Cb and 384 Cr bytes.
+Device luma has a 64-byte stride and 32 rows. Each chroma plane has a 32-byte
+stride, 16 rows and a 512-byte allocation. Each private output removes padding:
+1,536 Y bytes, then 384 Cb bytes and 384 Cr bytes. Copying a later picture or
+retaining a failure cannot modify an already published private output.
 
-## Runtime upload publishes immutable owned input before provider access
+## Runtime upload validates the complete clip before provider access
 
-The private USB vendor endpoint uses the project's bounded asset pattern:
-receive declared bytes into owned storage, validate them, then commit once.
-The upload header is 32 bytes, with little-endian fields:
+The private USB endpoint follows the bounded asset pattern: receive declared
+bytes into owned RAM, authenticate and parse them, then commit once. The
+32-byte little-endian upload header contains:
 
 | Offset | Field | Accepted value |
 | --- | --- | --- |
 | 0 | Magic, 32 bits | `0x55363248` (`H26U`) |
-| 4 | Version, 32 bits | 1 |
-| 8 | Annex B length, 32 bits | 1 through 4,096 |
-| 12 | Oracle length, 32 bits | 0 for normal output; 2,304 for qualification |
+| 4 | Version, 32 bits | 2 |
+| 8 | Annex B length, 32 bits | 1 through 8,192 |
+| 12 | Oracle length, 32 bits | 0, or 2,304 times the parsed picture count |
 | 16 | Epoch, 64 bits | Current sealed session epoch |
 | 24 | Generation, 64 bits | Current sealed session generation |
 
-The body contains the stream followed by the optional oracle. USB reads stop
-at header, stream and oracle boundaries, with at most 512 bytes per iteration.
-Fragmentation and coalescing do not change those lengths. Every fragment checks
-the same session generation, authority, input digests and deadline. Partial
+The body contains the complete stream followed by the optional oracle. USB
+reads stop at header, stream and oracle boundaries, with at most 512 bytes per
+iteration. Fragmentation and coalescing do not change lengths. Every fragment
+checks generation, authority, input digests and deadline. Partial or truncated
 input remains unpublished until completion or the supervised deadline.
 
-The producer hashes the copied stream and optional oracle, parses the stream
-and enforces the application's 48-by-32 bounds. A fresh clock check after that
-validation rejects an expired commit. Release/acquire publication transfers
-read access to the decoder task; the task cannot acquire VE resources before
-publication. Writes and duplicate uploads after commit fail without modifying
-the published bytes and revoke board liveness. The CPU stream and any oracle
-remain owned until the prescribed whole-board power removal.
+The producer hashes the copied bytes, parses every picture and enforces common
+48-by-32 geometry and oracle length. A fresh clock check rejects late commits.
+Release/acquire publication transfers read access to the decoder task; VE
+resources cannot be acquired before publication. Duplicate commits and writes
+after commit fail without changing published bytes and revoke board liveness.
+The CPU clip, parsed sequence and optional oracle remain owned until power
+removal. The native provider copies each slice NAL, including emulation
+prevention bytes, to byte zero of its separate padded device input slot.
 
 [The bundle producer](../apps/h264/prepare.py) takes `--input` and optional
-`--reference`. The session template must contain their digests; a missing
-reference requires a zero reference digest. Bundle version 2 seals these files
-alongside the image, launcher and session. Input bytes travel through the
-application endpoint after enumeration, outside the ROM image-upload spans.
-The host capture tool derives the upload from the frozen bundle.
+`--reference`. The session template must contain their digests; absent reference
+requires a zero digest. Bundle version 3 seals these files with image, launcher
+and session. Input travels through the application endpoint after enumeration,
+outside ROM image-upload spans. Host capture derives the upload from that bundle.
 
-## Completion permits a verified private copy without reclaiming DMA
+## Completion gates sequential programming and immutable output
 
-After acquisition, the executor parses the retained immutable CPU stream and reads the
-supported compound identity before preparing mappings or codec registers. It
-requires the selected H.264 mode, disabled framebuffer compression (AFBC)
-mode fields, clear video control unit (VCU) enable
-and reset controls, clear LBC enable and no stale status or active H.264 pipeline.
-The top timeout-enable field must also remain clear, matching shared preparation.
-Unknown identities and unsupported state retain ownership and refuse decode.
+Before mappings or codec programming, the executor parses the immutable clip. It checks the supported compound identity, H.264 mode, disabled framebuffer
+compression, clear video control unit enable/reset, clear LBC and timeout enable,
+and no stale status or active H.264 pipeline. Unsupported state retains
+ownership and refuses decode.
 
-Programming derives SPS/PPS, quantization and deblocking fields from the parsed
-headers and sets the bounded plane geometry, scratch pointers and
-frame-SRAM slot zero. It writes zero to SDROT control and programs no
-secondary-output addresses or scaling triggers.
-The VLD end is inclusive and covers the 4,096-byte padded input allocation.
-Only the encoded slice NAL contributes to the programmed bit length. The native
-provider copies that slice from the immutable stream into the padded input
-allocation at byte zero, preserving emulation-prevention bytes.
+Programming derives syntax, quantization and deblocking fields from parsed
+headers. It selects the picture's frame-SRAM slot, POC, input and output/MV
+addresses while preserving the shared scratch bases. SDROT control is zero;
+secondary-output addresses and scaling triggers are absent. The VLD end is
+inclusive over the picture's 4,096-byte padded slot, while its bit length covers
+only the slice NAL.
 
-The executor follows Cedrus's offset-zero sequence: initialize software decode
-with trigger 7, flush the parsed header bits including the NAL header in
-chunks of at most 32, poll VLD busy after each chunk, then trigger slice decode
-with 8. The pinned [Cedrus `cedrus_skip_bits` comment](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c#L322)
-documents intermittent corruption with nonzero VLD offsets. The separate slice
-copy preserves the offset-zero path for complete Annex B inputs.
+The executor initializes software decode with trigger 7, flushes parsed header
+bits including the NAL header in chunks of at most 32, polls VLD busy after each
+chunk and triggers slice decode with 8. The pinned
+[Cedrus `cedrus_skip_bits` comment](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c#L322)
+documents intermittent corruption with nonzero VLD offsets. Separate offset-zero
+slice copies preserve that source-backed path for complete Annex B clips.
 
-Errors take precedence over completion. A completion flag with any applicable
-pipeline, transform, bitstream-DMA or writeback-busy bit remains pending.
-The executor disables codec interrupt enables and acknowledges only observed
-low status bits. It then requires fault scans for both masters, intact guards,
-quiet H.264 status and, in qualification mode, equality with every independent
-oracle sample. A second
-scan and status/guard check precede the final private-copy digest.
+Errors take precedence over completion. Completion with pipeline, transform,
+bitstream-DMA or writeback busy remains pending. The decoded macroblock count
+at group offset `0x2c` must equal the full picture's macroblock count. The
+executor disables codec interrupt enables and acknowledges only observed low
+status bits. Copying requires fault scans for both masters, quiet status and
+intact guards. Qualification mode additionally compares every sample with its
+picture's independent oracle. A second scan and status/guard check precede the
+private digest. The task publishes that picture only after the executor's
+post-callback deadline and liveness checks pass.
 
-The terminal state is COPIED. In normal mode this reports completed, owned
-output with a digest; it does not assert a pixel oracle match. It permits access
-to the immutable private result
-while all mappings, buffers, clocks, power and interrupt reservations remain
-held. Completion flags, canaries, fault scans and CPU barriers do not establish
-accepted-transaction drain. Failure and success both require the prescribed
-whole-board power removal before reuse.
+Only then may the next picture be programmed. The existing provider lease,
+IOMMU mappings, reference slots and context scratch remain held. This follows
+[Cedrus normal job completion](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_hw.c)
+and the A733 decoder's busy/status/macroblock checks. It establishes a bounded
+source-backed next-picture control path. Physical producer-reference visibility
+and accepted-transaction drain on this board remain unqualified. Flags, canaries, fault
+scans and CPU barriers do not prove either property. No allocation reclamation
+is authorized. Success and failure require whole-board power removal before
+reuse; failure of the P picture preserves the completed private IDR output.
 
-## Supervision and copied USB output bound one attempt
+## Indexed USB output and focused evidence
 
-The image uses the existing 60-second supervised board lifetime with the
-existing 10 ms application margin. Every external executor operation has
-monotonic deadline checks before and after it. Timeout, backward time, an
-unexpected callback result or a device error produces retained failure.
-Linking and host modeling do not qualify operation within that physical window.
+A query is five bytes: zero followed by a little-endian 32-bit picture index.
+The response has a 160-byte version 2 header. Its first 128 bytes contain the
+magic/version, per-picture status, byte count, epoch/generation and
+input/reference/private-output digests. Eight 32-bit fields follow:
 
-A zero-valued USB request byte returns a 128-byte header. It contains the H.264
-magic/version, status, byte count, session epoch/generation and input/reference/
-private-output hashes. Only successful copied status appends the 2,304 planar
-bytes. Pending and failure carry no pixel bytes or private-output digest.
-The host retains raw frames, verifies the copied byte count, session identities
-and payload digest, and checks its deadline before publishing the durable
-result. Qualification mode also compares every copied pixel with the sealed
-oracle. `oracle_verified` is false for normal output.
-USB health, assertion and invalid-request failures revoke board liveness before
-parking, preventing subsequent decoder operations while retaining its resources.
+| Offset | Field |
+| --- | --- |
+| 128 | Requested picture index |
+| 132 | Committed picture count, or zero before upload |
+| 136 | Frame number |
+| 140 | Picture-order count |
+| 144 | Width |
+| 148 | Height |
+| 152 | Slice type: 2 for I, 0 for P |
+| 156 | Clip terminal state: 0 pending, 1 copied, 2 failed |
 
-Focused host validation covers full-session sealing, executor/provider
-sequencing, guarded native copying, pixel comparison, hashing, fault and busy
-refusal, the native USB serializer, launcher admission and durable host capture.
-The complete PCM stream preserves the earlier independent FFmpeg pixel oracle
-and selected A733 library register trace. Four libx264 streams exercise predicted
-intra macroblocks, residual transforms, nonzero deblocking offsets and the
-minimum/maximum driver geometry. FFmpeg header traces independently establish
-their syntax values and pixel references. ASan/UBSan checks damaged and truncated
-inputs; the native executor's register model checks the planned fields.
+Copied per-picture status is 1 and appends 2,304 bytes; pending is 0 and failure
+is 2, with no payload or output digest. A completed IDR remains status 1 even
+if the clip later fails. Host capture verifies identities, geometry, byte count
+and digest, then persists each output independently before querying the next.
+It writes a joined clip only if all pictures succeed. Qualification mode also
+compares each payload with the sealed oracle; normal mode reports
+`oracle_verified` false. USB health, assertion and invalid-request failures
+revoke board liveness and retain resources.
 
-The runtime-upload image, linked dependency closure, normal/qualification
-bundles and focused checks are under
-`~/.cache/sunstoneos/evidence/h264-input-20261018`.
-The image is `build/sunstone-a733-h264.elf`. Native instruction checks cover
-fragmented and coalesced upload, partial input withholding provider access,
-late commit and duplicate upload refusal, copied output and the actual USB
-serializer in both modes. Device pixel writes are injected in those checks;
-normal-mode comparisons establish copied bytes and metadata, not codec accuracy.
-ASan/UBSan input checks consume upload headers emitted by the actual host
-producer and test session, length, mode, digest and deadline refusal.
+The image retains the existing 60-second supervised lifetime and 10 ms margin.
+Every external executor operation checks a monotonic deadline before and after
+it. Timeout, backward time, unexpected callback results and device errors retain
+failure. Host modeling does not qualify the physical timing window.
 
-The unchanged parser and register-planning evidence remains under
-`h264-stream-20261018`; its four libx264 streams and FFmpeg header/pixel
-references are reused. The primary-source and fixed pixel/register evidence
-remains under `h264-native-20261017` and `h264-native-20261018`. Host FFmpeg/libx264
-identities and execution boundaries remain in
-[the source manifest](../apps/h264/sources.json).
+Focused evidence is under
+`~/.cache/sunstoneos/evidence/h264-interframes-20261019`:
 
-Hardware registers, DMA results, initial physical authority and USB transport
-remain modeled boundaries. Physical H.264 decoding, identity, DMA confinement,
-pixel conformance and supervised timing remain unqualified. Both boards are
-unavailable for recovery, so no physical attempt is authorized by this evidence.
-The coordinator owns any later board attempt.
+- `input.h264` is an actual two-picture libx264 stream with inter-predicted P
+  macroblocks; `reference.yuv` is the independent FFmpeg pixel oracle.
+  `headers.log`, `oracle-result.json` and `a733-reference-trace.json` compare
+  parsed syntax/register fields with FFmpeg and pinned A733 POC/reference helpers.
+- `checks/h264-sequence.c` composes the actual controller and video provider.
+  It covers two-picture completion, engine failure, incomplete macroblock count
+  and copy refusal while preserving the first output. The bounded parser checks
+  use ASan/UBSan and reject changed frame numbers, list modification, adaptive
+  marking and a third picture without publishing partial results.
+- `native-context/result.json` records the corrected persistent-scratch image's
+  composed native upload, actual allocator, IOMMU construction/validation,
+  controller, guarded copy and indexed serializer. MMIO, power/admission callbacks,
+  USB transport and device pixel writes are modeled. It checks normal output,
+  qualification output and retained IDR on P failure; injected pixels do not
+  establish codec accuracy. `native-shared` records the final shared-header build. The final-image producer
+  identity check and bundles are in `producer-final-comments`; the allocated bytes differ
+  from the `host-context` image only in 32 build-identity bytes.
+- `host-context/result.json` records actual bundle production and indexed durable
+  capture against native-produced frames. Physical admission/transport and
+  launcher construction are modeled. The linked dependency inventory and frozen
+  evidence identify which ELF each check used.
+
+The unchanged single-IDR parser cases and their four libx264/FFmpeg references
+remain under `h264-stream-20261018`; upload/session refusal evidence remains under
+`h264-input-20261018`. The primary-source pixel/register evidence remains under
+`h264-native-20261017` and `h264-native-20261018`. These accepted checks are reused
+where their source and behavior are unaffected.
+
+Physical H.264 execution, inter-picture reference visibility, pixel conformance,
+initial authority, DMA confinement and supervised timing remain unqualified.
+The missing prerequisite for claims about safe reuse is evidence that completed
+producer writes are visible to subsequent reference reads and that accepted
+transactions have drained before reclamation. This implementation retains all
+resources rather than claiming that reclamation is safe. Both boards are
+unavailable for recovery; no physical attempt is authorized by this evidence.
+The coordinator owns any later supervised board attempt.

@@ -50,7 +50,7 @@ set(h264_inputs ${h264_sources} ${h264_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_input.h")
 list(REMOVE_DUPLICATES h264_inputs)
-set(h264_identity "uploaded-native-h2641;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
+set(h264_identity "uploaded-native-h264-sequence2;supervised60;48x32;YU12;exact-private-copy;NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS h264_inputs)
  file(SHA256 "${input}" h264_hash)
  string(APPEND h264_identity "${h264_hash}")

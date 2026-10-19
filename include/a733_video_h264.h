@@ -4,7 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define A733_H264_INPUT_BYTES 4096u
+#define A733_H264_INPUT_BYTES 8192u
+#define A733_H264_PICTURES 2u
+#define A733_H264_SLOT_BYTES 4096u
 /* Historical PCM fixture length, not a stream admission bound. */
 #define A733_H264_SLICE_BYTES 2320u
 #define A733_H264_OUTPUT_BYTES 2304u
@@ -21,9 +23,10 @@ struct a733_h264_job {
     size_t input_bytes;
     struct a733_h264_span buffers[A733_H264_BUFFERS];
 };
-/* Bounded one-picture AnnexB mode: one SPS, one PPS and one IDR I slice.
+/* Bounded AnnexB mode: one SPS/PPS, one IDR I and optionally one P slice.
  * Baseline8-bit4:2:0, progressive macroblock-aligned16..64 by16..32,
- * CAVLC, POC0/2, no FMO, cropping, HRD, DPB or secondary outputs.
+ * CAVLC, IDR POC0/2, IDR+P POC2 and one retained short-term reference.
+ * No FMO, cropping, HRD, weighted P, list changes, MMCO or secondary outputs.
  * Macroblock prediction, residual transforms and entropy decoding run on VE.
  * Header validation does not establish that slice data forms a complete picture.
  * Provider acquisition freezes the CPU alias and reserves masters6/7, IRQ81,
@@ -32,7 +35,13 @@ struct a733_h264_job {
 struct a733_h264_picture {
     uint32_t width, height, slice_offset, slice_bytes, header_bits;
     uint32_t sps, pps, shs, shs2, qp;
+    uint32_t frame_num, poc, slice_type;
 };
+struct a733_h264_sequence {
+    uint32_t count;
+    struct a733_h264_picture pictures[A733_H264_PICTURES];
+};
+int a733_h264_parse_sequence(const uint8_t *,size_t,struct a733_h264_sequence *);
 /* No MMIO. Failure leaves the output untouched. Bounds apply before every read.
  * Adapted syntax/field order from pinned CedarC H264DecodeSps/Pps/SliceHeader;
  * bounded byte reader replaces its hardware GetBits callbacks. */
@@ -40,9 +49,10 @@ int a733_h264_parse(const uint8_t *, size_t, struct a733_h264_picture *);
 struct a733_h264_ops {
     int (*now_us)(void *, uint64_t *);
     int (*acquire)(void *, const struct a733_h264_job *, uint64_t, uint64_t *);
-    /* Publish the parsed slice NAL, including its NAL header, at byte0 of
-     * INPUT DMA span, zero-pad its remaining extent and retain both CPU stream
-     * and DMA copy. Cedrus requires VLD_OFFSET0 to avoid offset corruption. */
+    /* Publish each encoded slice at its4096-byte INPUT slot, preserve NAL/EPB
+     * bytes and zero-pad the slot. Retain immutable CPU stream and DMA copies.
+     * Pictures own separate output/MV slots; shared context scratch persists.
+     * Cedrus requires VLD_OFFSET0 to avoid offset corruption. */
     int (*prepare)(void *, uint64_t, const struct a733_h264_job *, uint64_t);
     int (*read)(void *, uint64_t, uint32_t, uint32_t *, uint64_t);
     int (*write)(void *, uint64_t, uint32_t, uint32_t, uint64_t);
@@ -58,20 +68,21 @@ enum a733_h264_state { A733_H264_NEW, A733_H264_ACQUIRE, A733_H264_HASH,
     A733_H264_IDENTIFY, A733_H264_PREPARE, A733_H264_CHECK,
     A733_H264_PROGRAM, A733_H264_INIT, A733_H264_FLUSH, A733_H264_HEADER_WAIT,
     A733_H264_TRIGGER, A733_H264_WAIT, A733_H264_DISABLE, A733_H264_ACK,
-    A733_H264_COPY, A733_H264_COPIED, A733_H264_FAULT };
+    A733_H264_COPY, A733_H264_MB_COUNT, A733_H264_COPIED, A733_H264_FAULT };
 struct a733_h264_run {
     struct a733_h264_ops ops;
     struct a733_h264_job job;
     void *context;
     uint64_t token, deadline, last_now, version;
     uint32_t identity_high, status, format;
-    unsigned index, flushed, flush_bits;
+    unsigned index, flushed, flush_bits, picture_index;
+    struct a733_h264_sequence sequence;
     struct a733_h264_picture picture;
     enum a733_h264_state state;
 };
 /* Fresh zeroed storage, single privileged serialized caller, no reentry.
  * Stream headers are parsed after acquisition. Inclusive VLD end is the
- * padded4096-byte span; slice length is parsed and VLD offset remains zero.
+ * padded4096-byte slot; slice length is parsed and VLD offset remains zero.
  * Minimum scratch extents
  * are source-derived; they do not prove physical burst bounds. All spans
  * below4GiB, page-aligned and disjoint; neighbor base aligned16KiB.

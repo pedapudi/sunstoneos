@@ -14,7 +14,7 @@ def module(name,path):
 board=module('h264_board_prepare',ROOT/'apps/board/prepare.py')
 base=board.base
 require=base.require
-SCHEMA='a733-h264-supervised-bundle-v2'
+SCHEMA='a733-h264-supervised-bundle-v3'
 CONTRACT_MAGIC=0x4153373348324331
 REQUEST_MAGIC=0x4153373348324c31
 
@@ -32,14 +32,14 @@ def session_check(raw):
 def upload_bytes(session,stream,reference=None):
     """Produce one bounded upload from immutable per-session inputs."""
     session_check(session)
-    require(0<len(stream)<=4096 and hashlib.sha256(stream).digest()==session[768:800],
+    require(0<len(stream)<=8192 and hashlib.sha256(stream).digest()==session[768:800],
             'AnnexB upload does not match the sealed session digest/limit.')
     oracle=any(session[800:832])
     require(oracle==(reference is not None),'Qualification oracle mode differs.')
     if oracle:
-        require(len(reference)==2304 and hashlib.sha256(reference).digest()==session[800:832],
+        require(len(reference) in (2304,4608) and hashlib.sha256(reference).digest()==session[800:832],
                 'Independent pixel oracle differs from the sealed session.')
-    return struct.pack('<4I2Q',0x55363248,1,len(stream),2304 if oracle else 0,
+    return struct.pack('<4I2Q',0x55363248,2,len(stream),len(reference) if oracle else 0,
         *struct.unpack_from('<2Q',session,24))+stream+(reference or b'')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
@@ -84,9 +84,9 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse','one_attempt']}[key]
         require(all(fact.get(k) is True for k in required),'Required H.264 physical fact absent.')
         if key=='memory':
-            require(fact.get('iova_spans')==[[0x10001000,4096,'r'],[0x10010000,4096,'w'],
-                [0x10014000,4096,'w'],[0x10020000,0x21000,'rw'],[0x10044000,4096,'rw'],
-                [0x10048000,0xc000,'rw']] and fact.get('decoder_masters')==[6,7] and
+            require(fact.get('iova_spans')==[[0x10001000,8192,'r'],[0x10010000,8192,'rw'],
+                [0x10014000,8192,'rw'],[0x10020000,0x21000,'rw'],[0x10068000,8192,'rw'],
+                [0x10070000,0xc000,'rw']] and fact.get('decoder_masters')==[6,7] and
                 fact.get('guard_pages_unmapped') is True and fact.get('source_extents_reviewed') is True,
                 'H.264 six-span, two-master, guarded memory authority differs.')
     return cache

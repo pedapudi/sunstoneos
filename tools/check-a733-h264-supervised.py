@@ -24,23 +24,29 @@ SERIAL='sunstoneos-a733-h264'
 def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=None):
     preparation.session_check(session)
     require(any(session[800:832])==(reference is not None) and
-        (reference is None or (len(reference)==2304 and session[800:832]==hashlib.sha256(reference).digest())),
+        (reference is None or (len(reference) in (2304,4608) and session[800:832]==hashlib.sha256(reference).digest())),
         'H.264 qualification oracle differs.')
     record.update(h264_retention='whole-board-power-removal',h264_result='unobserved');save()
+    picture=0;copied=[]
     for sequence in range(1,2401):
         require(now()<deadline,'H.264 capture deadline expired.')
-        frame=exchange(bytes(1),min(500,max(1,int((deadline-now())*1000))))
+        frame=exchange(bytes(1)+struct.pack('<I',picture),min(500,max(1,int((deadline-now())*1000))))
         path=evidence/f'h264-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest()}
         record.setdefault('h264_frames',[]).append(entry);save()
-        result=decoder.decode(frame,session,reference);entry.update(result)
+        result=decoder.decode(frame,session,reference,picture);entry.update(result)
         require(now()<deadline,'H.264 response arrived after capture deadline.')
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
         if result['status']==1:
-            output=evidence/'output.yu12';supervisor.durable_frame(output,frame[128:])
+            output=evidence/f'output-{picture:03}.yu12';supervisor.durable_frame(output,frame[160:])
+            copied.append(frame[160:])
             require(now()<deadline,'H.264 output became durable after capture deadline.')
-            record['copied_h264_output']={'path':output.name,'bytes':2304,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_h264_output']={'path':output.name,'bytes':2304,'sha256':hashlib.sha256(frame[160:]).hexdigest()}
+            record.setdefault('copied_h264_pictures',[]).append({**record['copied_h264_output'],'picture_index':picture})
+            if picture+1<result['picture_count']:
+                picture+=1;save();continue
+            supervisor.durable_frame(evidence/'output.yu12',b''.join(copied))
         record['h264_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -59,10 +65,10 @@ def capture_device(device,same,deadline,session,evidence,record,save,upload,refe
         require(device.write(0x02,chunk,timeout=min(500,remaining))==len(chunk),
                 'Incomplete H.264 upload fragment.')
     def exchange(packet,timeout):
-        same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete H.264 request.')
+        same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete H.264 request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'H.264 capture deadline expired after write.')
-        return bytes(device.read(0x81,2432,timeout=min(timeout,remaining)))
+        return bytes(device.read(0x81,2464,timeout=min(timeout,remaining)))
     return capture(exchange,session,evidence,record,save,deadline,reference=reference)
 
 

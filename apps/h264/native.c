@@ -74,7 +74,9 @@ static int h264_memory(void *v,uint64_t token,const struct a733_h264_job *j,uint
     }
     return a733_iommu_poll(&h264.iommu);
 }
-static const uint32_t capacity[]={4096,4096,4096,0x21000,4096,0xc000};
+static const uint32_t slot_capacity[]={4096,4096,4096,0x21000,4096,0xc000};
+static const uint32_t capacity[]={8192,8192,8192,0x21000,8192,0xc000};
+static const unsigned slots[]={2,2,2,1,2,1};
 static const uint32_t used[]={4096,2048,1024,A733_H264_PICTURE_INFO_BYTES,2048,0xc000};
 static const uint32_t prefix[]={4096,4096,4096,4096,4096,16384};
 static int h264_guards(void)
@@ -85,13 +87,19 @@ static int h264_guards(void)
         const volatile uint8_t *p=(const void *)e.cpu;
         if(e.bytes!=prefix[a]+capacity[a]+4096||e.cpu+prefix[a]!=(uintptr_t)h264.buffers[a])return 0;
         for(unsigned i=0;i<prefix[a];++i)if(p[i]!=0xa5)return 0;
-        for(unsigned i=prefix[a]+used[a];i<e.bytes;++i)if(p[i]!=0xa5)return 0;
+        for(unsigned slot=0;slot<slots[a];++slot)
+            for(unsigned i=prefix[a]+slot*slot_capacity[a]+used[a];
+                i<prefix[a]+(slot+1)*slot_capacity[a];++i)if(p[i]!=0xa5)return 0;
+        for(unsigned i=prefix[a]+capacity[a];i<e.bytes;++i)if(p[i]!=0xa5)return 0;
     }
     return 1;
 }
 static int h264_copied(void *v,uint64_t token,uint64_t d)
 {
     if(v!=&h264||token!=h264.session.authority||d!=h264_deadline()||!board_live(NULL))return -1;
+    unsigned picture=h264.run.picture_index;
+    if(picture>=h264.supplied.sequence.count||picture!=atomic_load_explicit(&h264.completed,memory_order_acquire))return -1;
+    uint8_t *payload=h264.payload[picture];
     if(!h264.copy_step){if(a733_iommu_scan(&h264.iommu,d)!=1)return -1;h264.copy_step=1;}
     int r=a733_iommu_poll(&h264.iommu);if(r!=1)return r;
     if(h264.iommu.fault.scanned_masters!=0xc0||!h264_guards())return -1;
@@ -99,16 +107,18 @@ static int h264_copied(void *v,uint64_t token,uint64_t d)
         uint32_t final_status;
         if(h264_load(0x01c0e228,&final_status)!=1||
            (final_status&(A733_H264_BUSY_MASK|0xe))||!h264_guards())return -1;
-        storage_digest_bytes(h264.payload,2304,h264.digest);return 1;
+        storage_digest_bytes(payload,2304,h264.digest[picture]);
+        h264.copy_step=0;
+        return 1;
     }
     uint32_t status;
     if(h264_load(0x01c0e228,&status)!=1||(status&(A733_H264_BUSY_MASK|0xe)))return -1;
     __asm__ volatile("dsb sy":::"memory");
-    for(unsigned row=0;row<32;++row)for(unsigned col=0;col<48;++col)h264.payload[row*48+col]=((volatile uint8_t *)h264.luma)[row*64+col];
+    for(unsigned row=0;row<32;++row)for(unsigned col=0;col<48;++col)payload[row*48+col]=((volatile uint8_t *)(h264.luma+picture*4096))[row*64+col];
     for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<16;++row)for(unsigned col=0;col<24;++col)
-        h264.payload[1536+plane*384+row*24+col]=((volatile uint8_t *)h264.chroma)[plane*512+row*32+col];
+        payload[1536+plane*384+row*24+col]=((volatile uint8_t *)(h264.chroma+picture*4096))[plane*512+row*32+col];
     __asm__ volatile("dsb sy":::"memory");
-    if(!h264_guards()||(h264.supplied.oracle_bytes&&memcmp(h264.payload,h264.supplied.oracle,2304))||!board_live(NULL))return -1;
+    if(!h264_guards()||(h264.supplied.oracle_bytes&&memcmp(payload,h264.supplied.oracle+picture*2304,2304))||!board_live(NULL))return -1;
     if(a733_iommu_scan(&h264.iommu,d)!=1)return -1;
     h264.copy_step=2;return 0;
 }
@@ -122,19 +132,21 @@ static int h264_allocate(void)
         if(!device_memory_acquire_aligned(h264.pool,h264.session.owner,bytes,alignment,&h264.leases[i],&e))return 0;
         if(i==0)h264.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,e.bytes);h264.buffers[i-1]=(void *)(e.cpu+prefix[i-1]);
-            memset(h264.buffers[i-1],0,used[i-1]);}
+            for(unsigned slot=0;slot<slots[i-1];++slot)
+                memset(h264.buffers[i-1]+slot*slot_capacity[i-1],0,used[i-1]);}
     }
     h264.input=h264.buffers[A733_H264_INPUT];h264.luma=h264.buffers[A733_H264_Y];h264.chroma=h264.buffers[A733_H264_C];
-    struct a733_h264_picture picture;
-    if(!a733_h264_parse(h264.supplied.stream,h264.supplied.stream_bytes,&picture)||
-       picture.width!=48||picture.height!=32)return 0;
-    memcpy(h264.input,h264.supplied.stream+picture.slice_offset,picture.slice_bytes);
-    static const uint32_t iova[]={0x10001000,0x10010000,0x10014000,0x10020000,0x10044000,0x10048000};
+    const struct a733_h264_sequence *sequence=&h264.supplied.sequence;
+    for(unsigned slot=0;slot<sequence->count;++slot){
+        const struct a733_h264_picture *p=&sequence->pictures[slot];
+        memcpy(h264.input+slot*4096,h264.supplied.stream+p->slice_offset,p->slice_bytes);
+    }
+    static const uint32_t iova[]={0x10001000,0x10010000,0x10014000,0x10020000,0x10068000,0x10070000};
     struct a733_iommu_span spans[A733_H264_BUFFERS];h264.job.input=h264.supplied.stream;h264.job.input_bytes=h264.supplied.stream_bytes;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i){
         h264.job.buffers[i]=(struct a733_h264_span){iova[i],capacity[i]};
         spans[i]=(struct a733_iommu_span){iova[i],(uintptr_t)h264.buffers[i],capacity[i],
-            i==A733_H264_INPUT?A733_IOMMU_READ:i<=A733_H264_C?A733_IOMMU_WRITE:A733_IOMMU_READ|A733_IOMMU_WRITE};
+            i==A733_H264_INPUT?A733_IOMMU_READ:A733_IOMMU_READ|A733_IOMMU_WRITE};
     }
     if(a733_iommu_build(&h264.tables,h264.table,(uintptr_t)h264.table,spans,A733_H264_BUFFERS)!=1)return 0;
     __asm__ volatile("dsb sy":::"memory");
@@ -188,6 +200,11 @@ void h264_task(void *unused)
         if(a733_h264_input_ready(&h264.supplied)&&
            atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&h264.result,memory_order_acquire)){
             int r=h264.stage?a733_h264_poll(&h264.run):h264_setup();
+            if(r>=0&&h264.stage&&h264.run.picture_index>
+               atomic_load_explicit(&h264.completed,memory_order_acquire)){
+                if(!board_live(NULL))r=-1;
+                else atomic_store_explicit(&h264.completed,h264.run.picture_index,memory_order_release);
+            }
             if(r<0)atomic_store_explicit(&h264.result,2,memory_order_release);
             else if(!h264.stage&&r==1)h264.stage=1;
             else if(h264.stage&&r==1&&h264.run.state==A733_H264_COPIED)atomic_store_explicit(&h264.result,1,memory_order_release);

@@ -37,26 +37,29 @@ int a733_h264_input_feed(struct a733_h264_input *p,const struct a733_h264_sessio
         memcpy(p->header+p->header_used,bytes,n);p->header_used+=n;
         if(p->header_used!=32)return 0;
         p->stream_bytes=le32(p->header+8);p->oracle_bytes=le32(p->header+12);
-        if(le32(p->header)!=A733_H264_UPLOAD_MAGIC||le32(p->header+4)!=1||
+        if(le32(p->header)!=A733_H264_UPLOAD_MAGIC||le32(p->header+4)!=2||
            !p->stream_bytes||p->stream_bytes>A733_H264_INPUT_BYTES||
-           (p->oracle_bytes!=0&&p->oracle_bytes!=A733_H264_OUTPUT_BYTES)||
+           (p->oracle_bytes!=0&&p->oracle_bytes!=A733_H264_OUTPUT_BYTES&&
+            p->oracle_bytes!=A733_H264_OUTPUT_BYTES*A733_H264_PICTURES)||
            (present(p->oracle_hash)!=(p->oracle_bytes!=0))||
            le64(p->header+16)!=p->epoch||le64(p->header+24)!=p->generation)return reject(p);
         return 0;
     }
     if(p->received<p->stream_bytes)memcpy(p->stream+p->received,bytes,n);
-    else memcpy(p->oracle+p->received-p->stream_bytes,bytes,n);
+    else memcpy(p->oracle+(p->received-p->stream_bytes),bytes,n);
     p->received+=n;
     if(p->received!=p->stream_bytes+p->oracle_bytes)return 0;
-    uint8_t digest[32];struct a733_h264_picture picture;
+    uint8_t digest[32];struct a733_h264_sequence sequence;
     storage_digest_bytes(p->stream,p->stream_bytes,digest);
-    if(memcmp(digest,p->stream_hash,32)||!a733_h264_parse(p->stream,p->stream_bytes,&picture)||
-       picture.width!=48||picture.height!=32)return reject(p);
+    if(memcmp(digest,p->stream_hash,32)||!a733_h264_parse_sequence(p->stream,p->stream_bytes,&sequence)||
+       sequence.pictures[0].width!=48||sequence.pictures[0].height!=32||
+       (p->oracle_bytes&&p->oracle_bytes!=sequence.count*A733_H264_OUTPUT_BYTES))return reject(p);
     if(p->oracle_bytes){storage_digest_bytes(p->oracle,p->oracle_bytes,digest);
         if(memcmp(digest,p->oracle_hash,32))return reject(p);}
     /* Hashing/parsing can consume the remaining window. Check fresh time
      * before publication, while no decoder consumer can observe the bytes. */
     if(clock(context,&now)!=1||now<p->last_now||now>=deadline)return reject(p);
     p->last_now=now;
+    p->sequence=sequence;
     atomic_store_explicit(&p->committed,1,memory_order_release);return 1;
 }

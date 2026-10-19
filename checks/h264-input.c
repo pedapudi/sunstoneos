@@ -27,7 +27,7 @@ int main(int argc,char **argv)
 {
     assert(argc==3);struct a733_h264_session s;
     assert(read_file(argv[1],&s,sizeof(s))==sizeof(s));
-    uint8_t wire[32+4096+2304];size_t bytes=read_file(argv[2],wire,sizeof(wire));assert(bytes>32);
+    uint8_t wire[32+A733_H264_INPUT_BYTES+A733_H264_OUTPUT_BYTES*A733_H264_PICTURES];size_t bytes=read_file(argv[2],wire,sizeof(wire));assert(bytes>32);
     for(size_t chunk=1;chunk<=512;chunk=chunk==1?17:chunk==17?512:513){
         struct a733_h264_input input={0};
         assert(feed(&input,&s,wire,bytes,chunk)==1);
@@ -35,7 +35,7 @@ int main(int argc,char **argv)
         assert(input.stream_bytes+input.oracle_bytes+32==bytes);
         assert(!memcmp(input.stream,wire+32,input.stream_bytes));
         assert(!input.oracle_bytes||!memcmp(input.oracle,wire+32+input.stream_bytes,input.oracle_bytes));
-        uint8_t saved[4096];memcpy(saved,input.stream,sizeof(saved));
+        uint8_t saved[A733_H264_INPUT_BYTES];memcpy(saved,input.stream,sizeof(saved));
         assert(feed_at(&input,&s,10000,100000,wire,1)==-1);
         assert(a733_h264_input_ready(&input)&&!memcmp(saved,input.stream,sizeof(saved)));
     }
@@ -45,7 +45,7 @@ int main(int argc,char **argv)
         struct a733_h264_session changed=s;
         if(variant==0)damaged[0]^=1;
         if(variant==1)damaged[8]=damaged[9]=damaged[10]=damaged[11]=0;
-        if(variant==2)damaged[9]=0x20; /* >4096 */
+        if(variant==2)damaged[10]=1; /* >8192 */
         if(variant==3)damaged[12]=1; /* Oracle length must be0or2304. */
         if(variant==4)damaged[16]^=1;
         if(variant==5)damaged[24]^=1;

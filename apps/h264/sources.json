@@ -67,14 +67,15 @@
     "sha256": "e5ef99781196d09be6fe3e7837a6a4a89e43af4fa473e5f98c1223620aad4503"
   },
   "native-adaptation": {
-    "execution": "FreeRTOS CPU parses bounded AnnexB SPS/PPS/slice headers and plans registers; VE executes CAVLC, intra prediction, inverse transforms, deblocking and writeback.",
+    "execution": "FreeRTOS CPU parses bounded AnnexB SPS/PPS and IDR+P headers, plans retained reference slots and registers; VE executes CAVLC, intra/inter prediction, inverse transforms, deblocking and writeback.",
     "parser_source": "h264_nalu.c:H264DecodeSps,H264DecodePps,H264DecodeSliceHeader",
     "parser_adaptation": "Restricted syntax/field order with bounded software bit reads replacing CedarC GetBits callbacks; no CedarC runtime library linked.",
-    "register_source": "cedrus_h264.c:cedrus_set_params,cedrus_skip_bits; A733 library instruction trace corroborates field positions.",
-    "license": "CedarC GNU LGPL version2 notices retained in adaptation; Cedrus GPL-2.0-or-later."
+    "register_source": "cedrus_h264.c:cedrus_set_params,cedrus_write_frame_list,_cedrus_write_ref_list,cedrus_skip_bits; CedarC H264ConfigureRefFrameRegister/H264ConfigureRefListRegister and A733 instructions corroborate field positions.",
+    "license": "CedarC GNU LGPL version2 notices retained in adaptation; Cedrus GPL-2.0-or-later.",
+    "lifetime": "Two independent input/output/MV DMA slots plus retained shared decoder-context scratch, static NC IOMMU mappings and no reclamation. Cedrus IRQ completion and CedarC full macroblock completion support sequential frame programming; physical A733 producer/reference visibility and fabric drain remain unqualified."
   },
   "host-oracle": {
-    "execution": "Host only. libx264 encodes predicted Baseline IDR cases; FFmpeg decodes independent YUV420p references and traces parsed syntax. Neither is linked or loaded on FreeRTOS.",
+    "execution": "Host only. libx264 encodes Baseline IDR and IDR+P clips with predicted macroblocks; FFmpeg decodes independent YUV420p references and traces parsed syntax. Neither is linked or loaded on FreeRTOS.",
     "version": "ffmpeg version 8.0.1-3ubuntu2 Copyright (c) 2000-2025 the FFmpeg developers",
     "files": {
       "/usr/bin/ffmpeg": "bdf6aabffdba7411edff8d36c389d695257fcdf823d196020176e117612862f6",
@@ -87,5 +88,10 @@
       "https://www.videolan.org/developers/x264.html"
     ],
     "license_status": "Host FFmpeg build is GPL with libx264 enabled; retain installed package notices. Host binaries remain outside tracked source."
+  },
+  "cedrus_hw.c": {
+    "url": "https://raw.githubusercontent.com/torvalds/linux/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_hw.c",
+    "revision": "70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56",
+    "sha256": "6703d41d3a9d6f780cb62f3e4bf40871e7103ab27c503c15eafa4098d0e42734"
   }
 }
