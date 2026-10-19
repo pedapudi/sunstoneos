@@ -525,14 +525,20 @@ failure, an uncompleted stop, failed task quiescence and lost final quiescence.
 Their service, bootstrap and quiescence replies are modeled. Nineteen native
 instruction cases execute the actual worker/bootstrap suspension, PMIC checkpoint,
 slot/borrow/mutex checks and interrupt observations, with scheduler and hardware
-boundaries modeled. The full development ELF under
-`npu-finite-quiescence-20261018` links this adapter with the existing full single-core
-monitor and is explicitly ineligible for physical execution.
+boundaries modeled. The [NPU-local returning image](../apps/npu-finite/README.md) now composes that
+adapter with retained session authentication, owned cache publication, bounded
+interrupt cleanup and the accepted forced-FEL reset tail. Its manifest uses
+`npu-finite-return-v1`. New linked instruction checks cover the added boundaries;
+actual EL3 sealing, EL1 BSS clearing and mapped memory are checked separately.
+The selected SRE task constructor produces EL1t with PSTATE 4.
 
-A complete returning convolution still needs the returning monitor to retain
-the authenticated session and cover final cache cleaning and RAM restoration.
-Its failure path must retain potentially active device memory; expiry alone
-cannot admit RAM restoration. The NPU reservation needs
+Root architecture/reset review, an NPU-specific returned-RAM host wrapper and
+fresh physical admission remain required before execution. The earlier admission
+profile retains resources until power removal and cannot be silently relabeled
+as normal returning retirement. Failure paths continue to retain potentially
+active device memory. Physical inference and ROM return remain unqualified.
+
+The NPU reservation needs
 265 contiguous 4 KiB pages: two 512 KiB command regions, four 4 KiB buffers and
 20 KiB of tables. The complete 2 MiB parent pool must use identity-mapped,
 inner-shareable normal write-back memory; the native adapter checks memory

@@ -7,6 +7,7 @@ import argparse
 parser=argparse.ArgumentParser(description="Actual NPU single-core admission and startup; hardware responses remain modeled.")
 for name in ('image','session','output'):parser.add_argument('--'+name,type=Path,required=True)
 parser.add_argument('--usb-terminal-only',action='store_true')
+parser.add_argument('--retention-only',action='store_true')
 parser.add_argument('--state',type=Path)
 parser.add_argument('--resume',action='store_true')
 args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=args.resume)
@@ -146,6 +147,10 @@ for va,attr,share in [(0x02002000,0,2),(0x03600000,0,2),(0x04100000,0,2),(sealed
  assert struct.unpack('<QII',m.cpu.mem_read(0x43010000,16))==(va,attr,share)
 for va in (0x42000000,0x42005000,e.address('a733_cached_el1_l1')):assert m.call('aarch64_device_translate',va,1,0x43010000)==0
 passed('descriptor-walk-enforces-device-wb-and-protected-monitor-mappings')
+if args.retention_only:
+ (out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':results,'scope':'New complete-image retention/layout composition only: actual EL3 validation/seal, retained session/runtime, EL1 BSS clear and descriptor checks. Existing software-only fixture adapted to new build identity; CPU/GIC/counter effects modeled. No task/device/quiescence replay or physical admission.'},indent=2)+'\n')
+ print('PASS NPU retained-session composition',len(results));raise SystemExit(0)
+
 m.stop_at=e.address('vTaskStartScheduler');m.call('a733_smp_diagnostic_start');assert not m.parked;passed('actual-static-task-and-provider-construction')
 # Continue from actual construction into the USB provider with modeled task,
 # counter and ROM hardware state. No NPU inference or peripheral probe runs.
