@@ -169,3 +169,10 @@ It does not establish calibration accuracy, sensor acquisition or interrupts.
 The payload reuses fourteen accepted monitor/platform/FreeRTOS objects; only its
 three-read task was compiled. Its focused model checks exact read order, raw
 logging and normal exit. Earlier controller and host checks were reused.
+
+The existing calibration decoder accepts the observed encoding. It reports a
+factory reference of 25.8 °C, sensor codes `[2401,2406,2408,2408,2401]` and
+corrections `[2044,2048,2050,2050,2044]`. One focused sanitized check uses the
+actual decoder and these physical inputs; no earlier cases were repeated.
+Evidence: `thermal-clock-reference-20261018/physical-candidate-adopt-116/calibration-116/`.
+These are factory calibration data, not current sensor readings.

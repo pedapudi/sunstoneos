@@ -46,11 +46,12 @@ successfully and is absent; exec session `22934` is terminal and its queue claim
 closed as passed. No reconnect is needed for this board.
 
 This establishes calibration-shadow accessibility in the thermal driver's
-security state. Calibration decoding, physical temperature acquisition and
-interrupts remain separate requirements. Earlier PMIC reads established enabled
+security state. The existing decoder accepts these words: the encoded factory reference is
+25.8 °C. This is not a current temperature measurement. Physical temperature
+acquisition and interrupts remain outstanding. Earlier PMIC reads established enabled
 DCDC2 programmed to 800 mV and CLDO3 programmed to 1.8 V; they did not measure
-analog stability. The thermal candidate is being updated from the preserved
-`physical-candidate-adopt-112/` inputs to the actual return. Preserve DDR
+analog stability. The unchanged thermal image is prepared under
+`thermal-clock-reference-20261018/physical-candidate-adopt-116/`. Preserve DDR
 continuity; refresh warm launcher state only for the selected next operation.
 
 The SID probe reused fourteen accepted monitor/platform/FreeRTOS objects and
