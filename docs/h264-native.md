@@ -266,6 +266,16 @@ remain under `h264-stream-20261018`; upload/session refusal evidence remains und
 `h264-native-20261017` and `h264-native-20261018`. These accepted checks are reused
 where their source and behavior are unaffected.
 
+The lower native VE read policy admits the decoded-macroblock counter at
+`0x01c0e22c`. `checks/h264-native-access.py` executes the actual native read
+function with inert MMIO and checks this read plus neighboring/null refusal.
+Its focused evidence is under `h264-native-access-20261019/final`. Earlier
+controller/native sequence models substituted the load callback and bypassed
+this lower whitelist. Their accepted image would refuse before reading the
+counter, retaining failure without publishing that picture. Those results
+remain evidence for their stated modeled paths; the whitelist correction has
+no physical qualification.
+
 Physical H.264 execution, inter-picture reference visibility, pixel conformance,
 initial authority, DMA confinement and supervised timing remain unqualified.
 The missing prerequisite for claims about safe reuse is evidence that completed
