@@ -103,7 +103,16 @@ completed-package counter does not explicitly order destination writes and
 cursor updates. Cyclic RX/duplex physical admission additionally requires
 `cyclic-rx-completion-and-reuse-ordering-established`; no qualifying record
 exists. Physical continuity, DMA drain, cache visibility and wire-level drain
-remain unqualified. TX live refills and broader audio modes remain required.
+remain unqualified. Runtime PCM direction 6 now accepts successive copied
+16 kHz mono S16LE periods through finite TX leases; immutable cyclic replay
+remains a separate mode. Actual provider composition consumes eight distinct
+periods. Nine standalone client/USB cases and eight host cases pass; the full
+native image is linked, not executed. Root verifies 170 inputs, 70 objects,
+131 sources, 314 artifacts and four tools against revision `0151af7` under
+`i2s-runtime-pcm-20261019/root-integration.json`, within `closure.json` scopes.
+The host supplies a requested prefix plus four guard periods, then CANCEL;
+guards may be truncated. No graceful wire drain or complete-file playback is
+established. Broader routed audio and physical qualification remain required.
 
 Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
@@ -174,6 +183,20 @@ images remain valid with their own frozen inputs; these audits do not establish
 matching inputs at future revisions or require catch-up rebuilds. Physical
 interrupt delivery, enumeration, report timing/content, VBUS cutoff, DMA drain
 and detach/reuse remain unqualified.
+A bounded USB hub path now supports one self-powered high-speed USB2 hub with
+one to seven ports and one downstream low/full/high-speed HID or high-speed
+MSC device. It uses the actual TinyUSB hub class, separate slots/control rings
+and hub/transaction-translator contexts before child access. The existing CPU0
+IRQ profile is reused without CPU/GIC/PHY changes. Component, native owner and
+copied host checks pass with modeled hardware under `usb-host-hub-20261019/`.
+Root verifies 414 inputs and 162 objects against revision `3f94f90` under
+`dma-reconcile/root-integration.json`. The reconciled ELF SHA-256 is
+`54c13a7125ab0af070acdd15f23fb0c0e4049a85bd7f19baaa18e0c960ab4e09`.
+All load segments match the accepted candidate apart from build identity;
+accepted cases were reused. Later headers do not invalidate its frozen inputs.
+Hub signaling, external supply behavior,
+DMA ordering and detach/reuse remain physically unqualified. Type-C VBUS cutoff
+does not remove an independently powered hub's supply.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -210,6 +233,21 @@ verifies all 184 compiled inputs, 144 sources, 1,026 artifacts and four tools
 under `npu-interrupt-service-20261019/root-integration.json`. Physical interrupt
 delivery, inference, numerical output, shutdown and ROM return remain unqualified.
 
+The retained single-core NPU runtime application now accepts repeated live
+inputs for one selected model through SUBMIT and sequence-bound READ requests.
+The owner uses the existing input publication, matched completion, copied output
+and REAP path. Complete output transmission precedes mailbox reuse. CLOSE
+requires the IRQ-stop receipt and local gate/reset shutdown; OS/USB remain live
+and this profile does not return to ROM. Linked USB/mailbox/client and host
+checks pass with service replies and output modeled. Evidence:
+`npu-runtime-input-20261019/`. Its reconciled ELF SHA-256 is
+`063f8fce5cc975255d2f7a80c170aec5d1a28e2d9ae06fb7f9b30377857f9381`.
+Root verifies 186 compiled inputs, 74 objects, 297 sources and 329 artifacts
+against revision `5954081` under `dma-reconcile/root-integration.json`.
+Load-segment equivalence apart from build identity supports reuse of accepted
+checks. Later shared-header changes do not invalidate this frozen candidate.
+The fixed returning profiles remain separate.
+
 The corrected GPU returning composition is integrated. It publishes private and
 device data through Nonsecure EL1 mappings before SMC, then completes final stack
 cleanup before reset. Root source review and 25 selective modeled cases pass;
@@ -223,7 +261,7 @@ unqualified for both accelerators. Existing device checks were reused.
 Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
 Caller-selected GPU compute programs are integrated. A sealed session fixes a
-trusted host-compiled program and copied input; the same executable supports
+trusted host-compiled program and initial copied input; the same executable supports
 both checked array kernels. Bounded multi-dispatch now supports up to 31 direct
 dispatches, each containing one 32-lane workgroup, and at most 992 elements
 within the package's input/output bounds. One final firmware timeline covers
@@ -233,6 +271,20 @@ pass with device writes modeled; focused review is closed. Evidence is under
 and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor difference
 adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor source and object
 remain authoritative; no active GPU monitor or structure change is present.
+Optional GPU runtime input now copies same-shape data into the existing input
+allocation after acquired preceding completion. Program, geometry and mappings
+remain fixed. Exact-sequence READ returns copied output; healthy CLOSE retires
+the GPU while retaining USB reporting. Native service and linked mailbox/parser/
+host checks pass with hardware effects and device output modeled. Device-cache
+ordering depends on the pinned firmware's documented per-job coherency contract;
+CPU cache maintenance alone does not establish GPU-cache visibility. Evidence:
+`gpu-runtime-input-20261019/`. Its reconciled ELF SHA-256 is
+`d6b6fad18e634fc5d5cffdc791214511ccab3436b80a281f1fe464fccc460892`.
+Root verifies 215 compiled inputs, 85 objects, 172 sources and 14 artifacts
+against revision `5954081` under `dma-header-integration/root-integration.json`.
+Load-segment equivalence apart from build identity supports reuse of accepted
+checks. Later shared-header changes do not invalidate this frozen candidate.
+Fixed returning artifacts remain separate.
 The native reservation callback now permits another submission after acquired
 completion, checking owner, epoch, serial and the actual firmware timeline.
 Focused checks exercise that callback and reject stale ownership/completion.
@@ -246,7 +298,7 @@ verifying all 88 objects, 218 frozen inputs and eight unchanged linked return
 functions. Physical admission remains false. The historical two-job image
 contains the previous NEW-only check and is superseded for repeated submission;
 its publication and host evidence retain their narrower scope. Physical
-computation remains unqualified. General dispatch geometry, same-session input
+computation remains unqualified. General dispatch geometry, shape/program
 replacement, graphics and concurrency remain required.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document the Nonsecure publication requirement. Root retains
@@ -322,10 +374,11 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Develop same-session GPU and NPU live input, USB hub support and bounded
-   H.264 IDR/P-frame sequences; these extensions remain in progress. Fixed I2S
-   cyclic TX and checked-copy RX/duplex are integrated, with physical RX admission
-   blocked by the documented completion/reuse ordering gap. Preserve copied-slot
+1. Continue bounded H.264 IDR/P-frame sequences; this extension remains in
+   progress. GPU/NPU live input and the bounded USB hub path are integrated
+   offline; preserve each image's complete frozen inputs and accepted audit scope.
+   I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
+   with physical RX admission blocked by the documented completion/reuse ordering gap. Preserve copied-slot
    acknowledgment and cancellation-backlog rules. Reuse accepted images with
    their complete frozen source closures, including SD and UART images that
    predate the latest shared USB layout. Preserve the accepted fixed-workload GPU

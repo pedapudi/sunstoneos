@@ -575,8 +575,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   so cyclic RX/duplex physical
   admission requires `cyclic-rx-completion-and-reuse-ordering-established`.
   No qualifying record exists; CPU-cache review alone does not establish it.
-  Physical continuity, DMA drain, cache visibility, wire-level drain, TX live
-  refills, Bluetooth PCM and broader routed audio functions remain outstanding.
+  Runtime PCM direction 6 now accepts successive copied 16 kHz mono S16LE
+  periods through finite TX leases. Actual provider composition consumes eight
+  distinct periods; nine standalone client/USB cases and eight host cases pass.
+  The native image is linked, not executed. Root verifies 170 inputs, 70 objects,
+  131 sources, 314 artifacts and four tools against revision `0151af7` under
+  `i2s-runtime-pcm-20261019/root-integration.json`, within `closure.json` scopes.
+  The host sends a requested prefix and four guard periods before CANCEL; guard
+  playback may be truncated. No graceful wire drain or complete-file playback
+  is established. Physical continuity, DMA drain, cache visibility, Bluetooth
+  PCM and broader routed audio functions remain outstanding.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
@@ -725,9 +733,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor source
   difference adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor
   source/object identities remain authoritative without active GPU monitor or
-  structure changes. General dispatch geometry, same-session input replacement,
-  graphics, concurrency, physical computation and mimus acceleration remain
-  required. The accepted fixed-workload returning profile is preserved.
+  structure changes. Optional [runtime input](gpu-compiled-programs.md#runtime-input-in-one-session)
+  now replaces copied same-shape input after acquired prior completion, with
+  exact-sequence copied READ and healthy device CLOSE. Program/geometry/mappings
+  stay fixed. Native service and linked owner/mailbox/parser/host checks pass
+  with device writes and selected service replies modeled. Device-cache ordering
+  relies on the pinned firmware's documented per-job coherency contract; CPU
+  maintenance alone does not establish GPU-cache visibility. Evidence:
+  `gpu-runtime-input-20261019/`. Root verifies 215 compiled inputs, 85 objects,
+  172 sources and 14 artifacts against revision `5954081` under
+  `dma-header-integration/root-integration.json`. Load-segment equivalence apart
+  from build identity supports reuse of accepted checks; later shared-header
+  changes do not invalidate this frozen candidate.
+  General dispatch geometry, shape/program replacement, graphics, concurrency,
+  physical computation and mimus acceleration remain required. The accepted
+  fixed-workload returning profile is preserved separately.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The
@@ -948,6 +968,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass; eighteen root routing/dispatch/monitor instruction cases also pass.
   Integration matches all 184 compiled inputs and verifies 144 sources, 1,026
   artifacts and four tools under `npu-interrupt-service-20261019/root-integration.json`.
+  The [retained runtime application](../apps/npu-runtime/README.md) now accepts
+  repeated copied inputs for the same selected model. SUBMIT, request-bound READ,
+  copied output and REAP preserve mailbox ownership through full USB delivery.
+  Healthy CLOSE requires source-off/IRQ stop and local gate/reset shutdown;
+  OS/USB remain live, with no ROM-return claim. Linked USB/mailbox/client, lifetime
+  and host checks pass with service replies and output modeled under
+  `npu-runtime-input-20261019/`. Root verifies 186 compiled inputs, 74 objects,
+  297 sources and 329 artifacts against revision `5954081` under
+  `dma-reconcile/root-integration.json`. Load-segment equivalence apart from build
+  identity supports reuse of accepted checks; later shared-header changes do not
+  invalidate this frozen candidate.
   Physical interrupt delivery, inference, numerical output, shutdown and ROM
   return remain unqualified. The integrated device quiescence path suspends
   workers, parks PMIC outside active ownership, verifies interrupt inactivity
@@ -1170,9 +1201,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   All selected consumers use the changed xHCI layouts consistently. Earlier SD,
   UART and other images retain their own frozen input/layout authority; their
   audits do not establish matches at future revisions or require catch-up builds.
+  A bounded hub path now uses the actual TinyUSB hub class and xHCI hub/TT
+  contexts for one self-powered high-speed USB2 hub with one to seven ports and
+  one downstream low/full/high-speed HID or high-speed MSC device. Separate
+  slots/control rings precede child access. Component, native owner and copied
+  host checks pass with modeled hardware under `usb-host-hub-20261019/`.
+  Root verifies 414 inputs and 162 objects against revision `3f94f90` under
+  `dma-reconcile/root-integration.json`; all load segments match the accepted
+  candidate apart from build identity, so accepted cases were reused.
+  Its frozen inputs remain authoritative across later shared-header changes.
+  Existing CPU0 IRQ service is reused without
+  CPU/GIC/PHY changes. Type-C VBUS cutoff does not remove external hub power.
   Full startup, physical power/switch qualification, actual
   transfers and report timing, DMA drain, CPU interrupt delivery, repeated
-  attachment, safe detach/reuse, hubs, isochronous transfers, SuperSpeed, role
+  attachment, safe detach/reuse, deeper hubs/multiple leaves, isochronous transfers,
+  SuperSpeed, role
   swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
