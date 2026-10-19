@@ -228,8 +228,10 @@ historical evidence; they do not authorize a new session.
    Coordinate shared-provider edits before implementation. CPU/startup changes
    remain root-owned. UART interrupt service and H.264, JPEG and crypto runtime
    input delivery are integrated.
-   Review the separate GPU compiled-program proposal in `gpu-program-submission`
-   before implementation; preserve the frozen fixed-workload image.
+   Implement the approved trusted GPU compiled-program profile in
+   `gpu-program-submission`, using pinned Mesa metadata, copied input/output and
+   the existing native service. Preserve the frozen fixed-workload image.
+   Broader workgroup geometry, graphics and concurrency remain required.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a

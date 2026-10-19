@@ -55,7 +55,7 @@ an older driver under `bsp/modules/gpu/img-bxm/`. The older driver's
 `linux/rogue_km/build/linux/sunxi_linux/Makefile` selects **36.56.104.183**.
 Its generated configuration selects the corresponding core header.
 This is the board software's target; the attached GPU's identity still needs
-confirmation from its registers after watchdog recovery is qualified.
+confirmation from its registers after platform preparation and recovery admission.
 
 [Mesa's PowerVR documentation](https://docs.mesa3d.org/drivers/powervr.html),
 inspected 2026-10-16, lists BXM-4-64 revision 36.56.104.183 under active
