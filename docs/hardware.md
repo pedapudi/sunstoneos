@@ -1094,17 +1094,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
-  The [native H.264 application](h264-native.md) uses parsed Baseline IDR headers
-  and derived register plans, including prediction and transform-coded content.
-  Four independent x264/FFmpeg comparisons, parser sanitizer checks and native
-  admission, executor, guarded-copy and USB checks pass. Evidence:
-  `h264-stream-20261018/`. The driver accepts 16–64 by 16–32 pictures; the
-  application accepts a supplied 48-by-32 stream with an optional pixel reference
-  through one firmware image. Upload, immutable input publication, native copied
-  output, session admission and host checks pass under `h264-input-20261018/`.
-  One frame of at most 4096 input bytes is supported per retained session.
-  Repeated decoding, physical H.264 pixel conformance, interframe references,
-  multiple slices and wider profiles remain outstanding.
+  The [native H.264 application](h264-native.md) now accepts an uploaded IDR
+  optionally followed by one P picture, with an 8 KiB clip and 4 KiB per NAL unit.
+  The application requires 48-by-32 progressive Baseline pictures; the driver
+  retains its 16–64 by 16–32 bounds. Two-picture operation uses picture-order
+  count type 2 and one default short-term reference. Picture-info/neighbor scratch
+  persists in the decoder context, while input/output/motion-vector slots remain
+  distinct. Up to two indexed immutable copied outputs preserve completed IDR
+  data if the P picture fails. Controller/provider, parser, independent syntax
+  and host checks pass with device effects modeled under
+  `h264-interframes-20261019/`. Root verifies 425 frozen inputs, 166 objects,
+  194 sources, 786 artifacts and seven tools in `root-integration.json`.
+  Six later USB hub dependencies differ from the integration tree; the internally
+  consistent frozen candidate is not current-tree rebuild evidence. Unchanged
+  parser/upload checks were reused. Physical reference visibility, pixels,
+  confinement and drain remain unqualified; no resources are reclaimed. Longer
+  clips, repeated clips, multiple references/slices and wider profiles remain
+  outstanding.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.

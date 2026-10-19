@@ -137,17 +137,23 @@ EXT_CSD and copied reads. Admission/capture checks and source review pass under
 no physical qualification target. Its single-core image retains resources
 permanently and has no qualified ROM return.
 
-H.264 header parsing and register planning now accept bounded Baseline IDR streams
-with prediction and residual coding. Four independent x264/FFmpeg comparisons,
-parser sanitizer checks and native application checks pass. The driver accepts
-16–64 by 16–32 pictures. The application now accepts a supplied 48-by-32 stream
-without rebuilding firmware, with an optional independent pixel reference.
-Upload, session admission, copied output and host capture checks pass under
-`h264-input-20261018/`; root integration matches the frozen image and 422 compiled
-inputs apart from one documented comment-only header change. Each retained
-session supports one frame of at most 4096 input bytes. Broader formats, repeated
-decoding and physical pixel/confinement/drain qualification remain outstanding.
-Parser evidence under `h264-stream-20261018/final-frozen/` was reused.
+The native H.264 application now accepts one uploaded IDR picture, optionally
+followed by one P picture, within an 8 KiB clip and 4 KiB per NAL unit. Pictures
+are 48 by 32 pixels in progressive Baseline format. The two-picture profile uses
+picture-order count type 2 and one default short-term reference. Decoder-context
+picture-info/neighbor scratch persists across pictures; input, output and
+motion-vector slots remain distinct. Up to two indexed immutable copied outputs
+are available, preserving the IDR result if P decoding fails. Controller/provider,
+parser, independent syntax and host checks pass with device effects modeled.
+Root verifies 425 frozen inputs, 166 objects, 194 sources, 786 artifacts and seven
+tools under `h264-interframes-20261019/root-integration.json`. Its ELF SHA-256 is
+`862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`.
+Six later USB hub dependencies differ from the integration tree; the frozen
+candidate retains consistent inputs/layouts and supplies no current-tree rebuild
+evidence. Earlier unaffected parser/upload checks were reused. Physical
+reference visibility, pixels, confinement and drain remain unqualified; all
+resources remain retained. Longer clips, repeated clips and wider profiles
+remain required.
 
 JPEG now accepts a supplied baseline YCbCr420 image and returns copied pixels
 with parsed dimensions. Complete input authentication precedes decoder resource
@@ -374,11 +380,14 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue bounded H.264 IDR/P-frame sequences; this extension remains in
-   progress. GPU/NPU live input and the bounded USB hub path are integrated
-   offline; preserve each image's complete frozen inputs and accepted audit scope.
+1. Continue GPU grid dispatch, USB support for two downstream devices and
+   repeated Bluetooth capture implementation. Prepare the NPU multioperator
+   proposal; these extensions remain in progress. Bounded H.264 IDR/P sequences,
+   GPU/NPU live input and the single-leaf USB hub path are integrated offline.
+   Preserve each image's complete frozen inputs and accepted audit scope.
    I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
-   with physical RX admission blocked by the documented completion/reuse ordering gap. Preserve copied-slot
+   with physical RX admission blocked by the documented completion/reuse ordering
+   gap. Preserve copied-slot
    acknowledgment and cancellation-backlog rules. Reuse accepted images with
    their complete frozen source closures, including SD and UART images that
    predate the latest shared USB layout. Preserve the accepted fixed-workload GPU
