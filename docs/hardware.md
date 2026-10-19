@@ -517,6 +517,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   platform power-off and releases buffers only after verified OFF. Application
   success requires STOPPED. Focused checks and Astra review pass under
   `gpu-returning-integration-20261018/`; physical shutdown remains untested.
+  The finite GPU adapter is integrated with eight passing linked cases and
+  Astra review. Its worker/PMIC quiescence and retained object placement are
+  checked; shared monitor/session/memory integration remains outstanding.
+  Evidence: `gpu-finite-adapter-20261018/layout-correction/`.
   Its startup, packaging and USB profile checks pass; all 175 frozen
   source inputs match integration. The first physical single-core attempt produced
   no native USB result; its refusal-report read timed out. GPU initialization and
@@ -834,7 +838,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Terminal CLOSE and authenticated local gate/reset shutdown now pass focused
   checks and Astra review. A finite inference adapter is implemented, but its
   retained session and complete memory-cleanup extent still need integration
-  into the returning platform. The separate DCDC2 observation image has six
+  into the returning platform. The integrated device quiescence path suspends
+  workers, parks PMIC outside active ownership, verifies interrupt inactivity
+  and enters a task critical section before exit. Six client and nineteen
+  quiescence cases pass with Astra review; all 172 compiler inputs match.
+  Evidence: `npu-finite-quiescence-20261018/`. The separate DCDC2 observation image has six
   passing linked cases and 40 matching compiled inputs under
   `npu-supply-returning-20261018/`. Physical inference and shutdown remain open.
   **Implemented** offline [page-table construction](npu-mmu.md), with host
@@ -994,7 +1002,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and twenty-three host cases under `usb-returning-20261018/`. It requires a
   complete 40-byte response, parks PMIC activity, quiesces USB and returns through
   the matched ROM initialization path. All 65 newly compiled inputs match
-  integration. This composition still requires its own physical validation.
+  integration. Its physical attempt returned responsive ROM with native status
+  1 during USB preparation, before any host exchange. All four PMIC supply
+  snapshots matched, but the original platform failure stage was overwritten.
+  USB writes and shutdown state remain unresolved; the runner retains ownership
+  pending physical recovery. No transport failure occurred. Evidence:
+  `usb-returning-20261018/physical/runtime/`. This does not qualify the native
+  USB composition or authorize an unchanged retry.
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through

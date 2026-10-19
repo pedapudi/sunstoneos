@@ -5,8 +5,8 @@ Actual FreeRTOS task construction and initial context restoration reach the idle
 task on every CPU. Each CPU records its task context, joins the completion barrier
 and cleans all 9,280 lines in the complete owned writable interval before return.
 Invalid task arguments and failed EL3 restoration retain the session. Evidence:
-`all-core-first-task-20261018/`. Nine host cases now pass, including actual runner return/retention behavior and
-rejection of incorrect task contexts, saved frames and owned-memory bounds.
+`all-core-first-task-20261018/`. Nine host cases now pass, including actual
+runner return/retention behavior and rejection of incorrect task contexts, saved frames and owned-memory bounds.
 Final root review and physical execution remain outstanding; no task body runs.
 The builder patches the exact previously demonstrated ELF, including the EL0 WFE
 permission correction. It suppresses timer/SGI generation and intercepts the first
@@ -21,11 +21,14 @@ compiled-input comparisons reuse those results without repeating them. Evidence:
 `usb-returning-20261018/integration.json`,
 `npu-supply-returning-20261018/integration.json` and
 `gpu-returning-integration-20261018/frozen/integration.json`.
-None has new physical execution evidence. The NPU finite inference adapter still
-needs shared retained-session and memory-cleanup integration; the GPU finite adapter is also integrated. Both device adapters stop their
-workers and park PMIC outside active requests before the final task critical
-section. Shared monitor, timer, memory and retained-session integration remains. USB observation/return is the next
-shared peripheral test candidate. Thermal and ADC retain configuration and leases;
+GPU and NPU finite adapters are integrated. Both stop their workers and park
+PMIC outside active requests before the final task critical section. Shared
+monitor, timer, memory and retained-session integration remains. All 172 NPU
+compiler inputs match. The 89 new GPU compiler inputs match; two inherited
+monitor/runtime sources have additional inactive branches, so the accepted GPU
+objects and their frozen inputs remain authoritative. Evidence:
+`npu-finite-quiescence-20261018/integration.json` and
+`gpu-finite-adapter-20261018/layout-correction/integration.json`. Thermal and ADC retain configuration and leases;
 ADC additionally requires electrical admission for the fitted input dividers.
 Separate RTC source initialization and external-source alarm applications are
 also integrated. Twelve source cases and seventeen alarm cases pass, with
@@ -34,6 +37,24 @@ also integrated. Twelve source cases and seventeen alarm cases pass, with
 `rtc-alarm-returning-20261018/integration.json`. Source initialization needs its
 own physical admission before alarm testing. Alarm success additionally requires
 verified Secure interrupt-state restoration; a completion message is insufficient.
+
+The second board requires recovery after the bounded USB attempt. It returned
+responsive ROM as `003:063`, but native USB preparation failed with step 5,
+PMIC stage 4 and USB stage 19. All four PMIC supply snapshots matched and were
+reaped. The platform fault overwrites its original stage, so USB writes cannot
+be excluded from this report. No host exchange occurred. Source diagnosis and
+first-fault instrumentation are in progress; no unchanged retry is permitted.
+Evidence: `usb-returning-20261018/physical/runtime/session.json`.
+
+The runner remains live holding the port `3-3` lock and queue claim
+`df4a206a916528fce522e7a1ba3579927b8af565e92cd6af8d8c41b693454dc2`.
+Coordinator PID 1262160 waits on wrapper 1262383, which waits on retained runner
+1262389. Verify these exact processes after explicit board recovery. Stop the
+outer coordinator and wrapper before the retained runner, so they cannot begin
+post-return RAM restoration against the recovered instance. Then verify all have
+stopped before resolving the old claim. Saved RAM is under
+`usb-returning-20261018/root-physical-056/`; restoration has not run. The user has
+been asked to reconnect only board two. Board one remains available on `3-1`.
 
 The scheduler privilege audit identified an EL0 lock-wait defect. FreeRTOS's
 contended recursive lock executes WFE, but cached startup left SCTLR_EL1.nTWE
@@ -79,7 +100,8 @@ Earlier builds without that entry correction are not eligible for execution.
 Reuse the accepted physical barrier result; the next CPU work is task selection
 and scheduler startup, including ownership and cleaning of their larger write set.
 
-The second board last returned responsive on port `3-3` as `003:056`, identity
+The preceding successful second-board result returned on port `3-3` as
+`003:056`, identity
 `[7,3661,1097015,0,0]`, after successful read-only RTC progression. Source control
 was `0x401c`, status zero, prescaler `0x0f`, calibration configuration
 `0x7a000000` and oscillator control `0x983fb0f7`: normal RC mode with RC enabled.
@@ -88,7 +110,8 @@ advancement. Outcome zero, the progression marker, monitor status zero and
 responsive ROM return passed. The kernel runner did not restore prior DRAM
 contents; this result does not establish memory restoration. No RTC register was
 written. The runner exited and its claim closed as passed. Evidence:
-`rtc-rc-readonly-20261018/physical/observation.json`. No reconnect is needed.
+`rtc-rc-readonly-20261018/physical/observation.json`. The subsequent USB failure
+requires the recovery recorded above.
 Read progression is established; accuracy, absolute time, alarms and retention
 remain open. The integrated source and alarm applications await physical admission.
 
@@ -96,7 +119,8 @@ Second-board DDR continuity is cold126 → register capture127 → PMIC009 → R
 → RTC056. Current056 launcher/cache preparation and fourteen CCU reads pass
 under `usb-returning-20261018/warm-056/` and `fabric-056/`. USB selector zero
 and reset-held DMA0 pass under `entry-056/`; no DMA aperture was accessed.
-Do not retrain DDR. The bounded USB package awaits final root admission.
+The subsequent USB attempt returned a failure report; do not reuse that
+powered lifetime until the recovery recorded above is resolved.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:
