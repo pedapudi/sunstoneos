@@ -1,142 +1,84 @@
-# GPU memory isolation still requires a physical drain guarantee
+# Healthy GPU shutdown uses the pinned firmware and platform sequence
 
-The native GPU backend has no qualified implementation that blocks new GPU
-memory requests and drains previously issued transactions. The pinned sources
-provide firmware shutdown, GPU idle checks, clock/reset control, and power-domain
-acknowledgements. They do not establish how A733 acknowledges completion of GPU
-transactions already accepted outside the GPU. The external isolation provider
-therefore remains mandatory; power OFF cannot substitute for its contract.
+The native backend implements the normal shutdown contract from the pinned GPU
+and A733 platform sources. It closes submission, obtains fresh forced-idle and
+power-off acknowledgements, checks their independent firmware states, polls GPU
+idle conditions, asserts reset with readback, and completes platform power-off.
+Successful completion permits firmware-memory reclaim. Software checks cover
+this composition; physical firmware startup, computation and shutdown remain
+unqualified.
 
-Source investigation found a separate error in the provider boundary. A nonzero
-failure return could be treated as success after partial power teardown. The
-backend now requires a return value of exactly one before reclaiming firmware
-memory. This correction is implemented and instruction-model checked. It does
-not implement physical isolation.
+This contract applies to a healthy device with intact firmware control and
+owned backing. Failed commands, uncertain DMA, transport loss or deadline expiry
+retain backing and outstanding ownership. They require independent recovery.
+A power-domain OFF sample alone cannot establish the complete shutdown sequence.
 
-## Available evidence stops short of interconnect completion
+## Firmware state distinguishes acceptance from a denied transition
 
-The existing [shutdown controller](gpu-stop.md) closes submission, obtains separate
-forced-idle and power-off firmware acknowledgements, retires normal queue/control
-access, polls GPU idle state, and asserts soft reset. Its source plan remains
-unchanged. The relevant observations are:
+Each power command starts by clearing the shared synchronization word. Native
+completion requires that word to become one. The native memory adapter then
+acquires the firmware system-data power state at byte offset eight. Forced idle
+requires state two; power-off requires state zero, meaning idle and ready for
+full power-down. A synchronization acknowledgement can also acknowledge denial,
+so an inconsistent state latches failure before register teardown.
 
-| Mechanism | Established source meaning | Missing guarantee for buffer reuse |
-| --- | --- | --- |
-| GPU BIF/MMU status | Pending translation/request fields and external read status are polled to zero | Completion of every external read and write across the A733 fabric |
-| GPU system-level cache status | `SLC_STATUS1` contains read counts; `SLC_IDLE` reports internal idle blocks | The point at which an earlier write can no longer reach backing memory |
-| MIPS firmware-wrapper idle | The firmware processor reports idle before reset | Coverage of requests that have left that wrapper |
-| GPU soft/external reset | GPU logic enters the selected reset state | Ordering and disposition of transactions already accepted by another block |
-| GPU MBUS clock gate | The GPU memory-bus clock can be disabled | Request exclusion plus an acknowledged drain while downstream clocks remain usable |
-| GPU_TOP power status | The power controller reports the selected domain state | Which GPU/interconnect interfaces participated in its handshake |
+The existing stop controller keeps event and command-return service available
+through both handshakes. It retires that service before the reference BIF/MMU,
+external-read, system-level cache and firmware-wrapper idle polls. Soft reset
+and its readback follow those observations. Reset-cleared counters cannot
+substitute for the preceding idle checks.
 
-The GPU register definitions name MMU pause controls in `BIF_CTRL` at `0x12a8`
-and a paused status in `BIF_MMU_STATUS` at `0x12d0`. The inspected shutdown paths
-do not use them as a platform isolation sequence. Their names alone do not prove
-coverage of direct firmware accesses, cache writeback, or every GPU master.
-Programming those bits without that contract would add an unverified path.
+## Platform power-off advances without blocking the service worker
 
-The board NSI driver identifies the GPU as master 6 at the interconnect base
-`0x02020000`. Its exposed controls select priority, input/output quality of
-service, bandwidth limits, and measurement counters. The master-specific device
-also references GPU_TOP for runtime power management. No inspected function
-provides a GPU request-block acknowledgement followed by outstanding-transaction
-drain. Disabling a measurement counter or bandwidth limiter would not establish
-those conditions.
+The stop completion stage admits platform teardown once. Its optional polling
+callback performs one bounded native power-off step per worker advance. Pending
+completion yields to the worker. The same absolute CLOSE deadline covers both
+firmware handshakes, idle/reset and platform teardown.
 
-The A733 manual identifies GPU MBUS gate bit 16 at clock-controller offset
-`0x5e0`. It describes clock gating, without defining an external transaction-drain
-acknowledgement. Shared memory-bus, NSI, and DDR resets or clock changes also affect
-other masters and cannot be used as an unowned GPU isolation operation.
+The native backend requires platform OFF, resource token zero and no delegated
+lease before invalidating cached firmware backing and returning its adapter to
+OFFLINE. Every callback failure, invalid result, clock regression or expired
+deadline latches failure and prevents subsequent stop callbacks. Bookkeeping
+preserves a resource release that already completed, even when a later clock
+check fails. Reserved allocation parents and copied application output remain
+owned for the application lifetime. Compute/free-list services cannot reopen.
 
-## Power-controller architecture requires A733 integration details
+An optional synchronous platform override remains supported. Its result must be
+one and its completed platform state must satisfy the same ownership checks.
+No additional NSI request-block API is required by either pinned normal GPU
+shutdown path. This source comparison establishes the intended healthy sequence;
+it does not qualify arbitrary failed-device recovery or physical operation.
 
-The [Arm PCK-600 reference manual](https://documentation-service.arm.com/static/61fa619e2dd99944d0514955)
-explains that the Power Policy Unit coordinates device quiescence and power-state
-changes. Its device interface can use one P-Channel or several Q-Channels.
-Routing, interface configuration, and some state mappings depend on the SoC
-integration. A quiescence response describes the connected device's contract;
-it does not identify the A733 GPU's complete memory path.
+## Pinned sources define the healthy sequence
 
-The manual lists power status, device-interface status, and identification
-registers. These could help identify a physical implementation after independent
-recovery is qualified. Reading them cannot establish which bridges or queues
-participate in GPU_TOP shutdown. The pinned board power driver requests state
-zero and polls domain status; it provides no additional A733 wiring guarantee.
+The board-source revision is `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`.
+Relevant cached inputs retain their original license notices:
 
-The missing primary evidence must establish all of these points:
+- `bsp/drivers/gpu/imagination/pvr_power.c`, lines 94–111 and 353–376,
+  supplies forced-idle/off synchronization followed by platform power-off.
+- `bsp/drivers/gpu/imagination/pvr_fw_startstop.c`, lines 205–322,
+  supplies the local idle checks and reset sequence.
+- `bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rgxpower.c`,
+  lines 414–436 and 1613–1628, checks the independent OFF and forced-idle
+  firmware states after acknowledgement.
+- `pvr_rogue_fwif.h` defines the system-data state at offset eight and the
+  OFF/forced-idle values. `bsp/drivers/pm_domain/pck600_domains.c` supplies
+  the A733 domain request/status sequence.
 
-- Which interface blocks new GPU requests, including firmware and cache traffic.
-- Which acknowledgement covers accepted reads, write data, responses, and any
-  buffered writes that could still reach memory.
-- Which clocks and resets must remain active until that acknowledgement arrives.
-- How GPU_TOP's P-/Q-Channel and isolation controls connect to the GPU and NSI
-  path, or which independently documented per-master sequence supplies the guarantee.
-- How the platform preserves unrelated masters and keeps the completed isolation
-  valid until buffers are reused or the next controlled power lifecycle begins.
+## Focused software evidence preserves failure ownership
 
-A GPU-local idle sample can be one prerequisite. The callback needs the complete
-sequence and its completion semantics before it can authorize memory reuse.
+Evidence is under `~/.cache/sunstoneos/evidence/gpu-returning-integration-20261018/`.
+The sanitizer stop fixture uses the actual pinned firmware feature record and
+passes 120 retained-failure cases, including asynchronous pending, timeout and
+invalid completion results. The native instruction fixture executes the real
+backend and memory accessors with modeled mappings and power operations. It
+checks both firmware states, denied transitions, invalid acknowledgements,
+pending teardown, begin/poll failures, expiry and completed-release retention.
 
-## The next integration must preserve lifetime and scheduling
-
-The current backend calls the isolation provider after soft reset and requires
-platform OFF with its token released before reclaiming firmware memory. If the
-physical protocol requires pre-reset observations, shutdown must add that stage
-before reset. Reset-cleared counters cannot replace evidence collected while
-transactions were still observable.
-
-The native power binding already provides bounded off-begin/off-poll operations.
-The current external isolation callback is synchronous. Production integration
-needs a worker-driven asynchronous isolation operation that retains the absolute
-CLOSE deadline across request blocking, drain acknowledgement, and power-off.
-It must not spin through power polls inside that callback.
-
-During the operation, the service must keep submission closed, interrupts masked
-where required, and all firmware, workload, queue, and page-table backing pinned.
-It must retain the GPU resource token and common clock leases until the proven
-sequence permits their release. Every shared-register mutation must use the
-existing platform register lock and preserve other masters' fields.
-
-A timeout, uncertain I/O result, or unexpected status must retain memory and stop
-further callbacks. Resource bookkeeping must reflect any release that already
-completed; retaining memory does not undo a provider's partial power teardown.
-Only an exact successful provider result, completed power-off, valid ownership
-state, and an unexpired deadline permit the backend's existing reclaim step.
-
-No placeholder isolation driver or header is supplied. Existing interfaces keep
-the missing physical guarantee explicit. Independent watchdog/ROM recovery and
-an integrated test image are prerequisites for coordinator-only qualification;
-this investigation creates no board-test request.
-
-## Source identities and focused validation
-
-The board sources use revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`:
-
-- `bsp/drivers/gpu/imagination/pvr_fw_startstop.c` and `pvr_rogue_cr_defs.h`
-  define the existing shutdown polls and register fields.
-- `bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/devices/rogue/rgxstartstop.c`
-  and `services/server/devices/rgxpower.c` supply the additional GPU shutdown reference.
-- `bsp/drivers/pm_domain/pck600_domains.c` supplies domain requests and status polling.
-- `bsp/drivers/bus/sunxi-nsi.c`, `sunxi-nsi.h`, and `sunxi-nsi-bw.c`, together with
-  `bsp/include/sunxi-nsi.h`, supply the available interconnect controls.
-- `arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi` identifies NSI addresses,
-  GPU master 6, and its GPU_TOP relationship.
-
-The A733 User Manual V1.00 is the existing pinned primary hardware reference.
-Its SHA-256 is
-`cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`.
-The downloaded Arm manual is document `101150_0005_01_en`, issue 01, revision r0p5.
-It describes the architecture; it does not identify the instantiated A733 revision.
-All downloaded software sources retain their original license notices in the cache.
-
-The focused native check supplies provider results minus one, two, and one after
-modeled power teardown. Only one permits reclaim. The other results preserve
-published firmware backing, latch an isolation error, and prevent another provider
-call. The fixture models the provider and does not claim physical block/drain.
-Existing shutdown, power, mode, and completion checks were not repeated.
-
-Evidence resides in `~/.cache/sunstoneos/evidence/gpu-isolation-20261016/`.
-It contains the exact executed inputs, native ELF, command log, source manifests,
-source-lock proposals, and the result. The narrow entry is
-`checks/a733-gpu-isolation.c`; `checks/a733-gpu-isolation.py` reuses the existing
-native instruction/translation model and selects only that entry.
+The actual linked compute client check supplies modeled service replies. It
+requires owned output copying before CLOSE and STOPPED before success, while
+pending and failed shutdown cannot publish success. It supplies no GPU output
+or physical power evidence. The frozen candidate reuses accepted startup and
+unchanged objects; its artifact record identifies every rebuilt dependency.
+Initial RAM/master exclusion, supported settled supply/clock settings, native
+firmware execution and physical orderly shutdown remain board prerequisites.

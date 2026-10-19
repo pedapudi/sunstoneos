@@ -6,11 +6,11 @@ delivery. It checks physical identity after power-on and before any firmware
 register write. Instruction-model checks pass; physical GPU boot and execution
 remain unqualified.
 
-The backend requires an external implementation that proves GPU memory traffic
-is blocked and outstanding traffic has drained. It also requires that provider
-to finish platform power-off and release its resource token before returning.
-No such physical isolation implementation is supplied here. Power-off alone
-does not satisfy this requirement.
+Healthy CLOSE uses firmware idle/off acknowledgements and states, local idle/reset
+checks, and bounded native platform power-off before firmware-memory reclaim.
+The [shutdown contract](gpu-isolation.md) distinguishes that sequence from
+failed-device recovery. Any uncertain outcome retains backing and outstanding
+ownership until independent recovery.
 
 ## Binding verifies mappings without peripheral access
 
@@ -88,24 +88,20 @@ sections. They perform no task-mutex wait. The backend's error field is atomic
 because interrupt masking can run on another core. Firmware register and memory
 callbacks remain serialized by the single privileged service worker.
 
-## Reclaim requires the external isolation proof
+## Reclaim follows complete orderly shutdown
 
-The shutdown callback invokes the mandatory external provider with the power
-platform and absolute CLOSE deadline. Success must establish blocked and drained
-GPU traffic, platform `OFF`, no delegated lease, and a released resource token.
-The provider must also leave a state from which subsequent power-on is safe.
+After fresh firmware idle/off acknowledgements, the backend acquires the
+independent firmware state and requires forced idle or OFF as appropriate.
+The stop controller completes its pre-reset idle checks and reset readback.
+Native teardown then starts once and advances one platform off-poll per worker
+step under the original CLOSE deadline. Pending power-off keeps backing pinned.
 
-The backend verifies the reported platform state and deadline before invoking
-native memory reclaim. That reclaim invalidates cached firmware backing and
-returns the memory adapter to its offline state. A failed provider or retained
-token prevents reclaim. After successful isolation and reclaim, another OPEN
-uses fresh preparation, power admission, and identity checks.
-
-The current service isolation callback is synchronous. The provider must finish
-within its deadline; this backend supplies no polling or spin loop around it.
-Production shutdown may require an optional asynchronous service interface so
-block/drain and electrical power-off can advance separately. That interface and
-the physical isolation sequence remain outstanding.
+Only platform OFF with no token or delegated lease permits firmware-memory
+reclaim. A failure or expired deadline prevents further callbacks. An already
+completed token release remains recorded even when a later clock check fails.
+The optional synchronous override must return one and satisfy those same final
+state checks. Compute/free-list allocation parents remain owned, preventing
+another OPEN. Physical orderly shutdown remains unqualified.
 
 ## Focused evidence covers register and callback composition
 
@@ -139,6 +135,6 @@ board qualification image.
 
 Physical use still requires qualified independent recovery, inherited clock/rail
 and I2C settings, reserved RAM and pinned mappings, a verified firmware hash,
-configured interrupt routing, and the proven isolation provider. A coordinator
+configured interrupt routing, and the complete orderly shutdown sequence. A coordinator
 must integrate these prerequisites before submitting a bounded firmware-boot
 qualification request. No physical request has been submitted for this backend.

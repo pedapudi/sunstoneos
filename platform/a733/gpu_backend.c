@@ -321,16 +321,26 @@ static int compat(void *context, uint32_t off, void *out, size_t bytes)
 static int sync_read(void *context, uint32_t *out)
 {
     struct a733_gpu_backend *b = context;
-    return active(b) && (output(b, out, sizeof(*out)) || fail(b, A733_GPU_BACKEND_ACCESS)) &&
-        memory_result(b, a733_gpu_memory_sync_read(b->memory, out));
+    if (!active(b) || !(output(b,out,sizeof(*out)) || fail(b,A733_GPU_BACKEND_ACCESS))) return 0;
+    uint32_t ack;
+    if (!memory_result(b,a733_gpu_memory_sync_read(b->memory,&ack))) return 0;
+    /* The firmware can acknowledge a denied power transition. The board
+     * driver independently requires POW_OFF before hardware teardown. */
+    if (ack) {
+        unsigned phase=b->service->stop.phase;
+        uint32_t state;
+        if (ack!=1 || (phase!=PVR_GPU_STOP_WAIT_IDLE && phase!=PVR_GPU_STOP_WAIT_OFF))
+            return fail(b,A733_GPU_BACKEND_STATE);
+        if (!memory_result(b,a733_gpu_memory_power_state(b->memory,&state))) return 0;
+        if (state!=(phase==PVR_GPU_STOP_WAIT_IDLE ? 2u : 0u))
+            return fail(b,A733_GPU_BACKEND_STATE);
+    }
+    *out=ack; return 1;
 }
 static int sync_write(void *context, uint32_t value)
 {
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
-    /* First stop mutation: refuse before firmware shutdown or reset when the
-     * platform cannot eventually isolate and preserve transaction lifetime. */
-    if (!b->external.isolate) return fail(b, A733_GPU_BACKEND_ISOLATION);
     return memory_result(b, a733_gpu_memory_sync_write(b->memory, value));
 }
 static int event(void *context, const unsigned char command[PVR_CCB_COMMAND_BYTES])
@@ -344,12 +354,33 @@ static int isolate(void *context)
     if (!active(b)) return 0;
     uint64_t deadline = b->service->stop.deadline;
     if (b->service->stop.phase != PVR_GPU_STOP_ISOLATE || !before(b, deadline) ||
-        !b->external.isolate ||
-        b->external.isolate(b->external.context, b->power, deadline) != 1 ||
-        b->power->phase != A733_GPU_PLATFORM_OFF || b->power->token || b->power->delegated || !before(b, deadline))
+        (b->external.isolate ?
+         b->external.isolate(b->external.context, b->power, deadline) != 1 :
+         !a733_gpu_platform_off_begin(b->power, deadline)))
+        return fail(b, A733_GPU_BACKEND_ISOLATION);
+    if (!b->external.isolate) return 1;
+    if (b->power->phase != A733_GPU_PLATFORM_OFF || b->power->token || b->power->delegated || !before(b, deadline))
         return fail(b, A733_GPU_BACKEND_ISOLATION);
     if (!memory_result(b, a733_gpu_memory_reclaim(b->memory)) || !before(b, deadline)) return 0;
     b->phase = A733_GPU_BACKEND_ISOLATED; return 1;
+}
+static int isolate_poll(void *context)
+{
+    struct a733_gpu_backend *b = context;
+    if (!healthy(b)) return -1;
+    uint64_t deadline=b->service->stop.deadline;
+    if (b->phase!=A733_GPU_BACKEND_ACTIVE || b->service->stop.phase!=PVR_GPU_STOP_ISOLATE ||
+        !b->service->stop.isolation_started || !before(b,deadline))
+        return fail(b,A733_GPU_BACKEND_ISOLATION), -1;
+    int result=a733_gpu_platform_off_poll(b->power);
+    if (result!=0 && result!=1) return fail(b,A733_GPU_BACKEND_ISOLATION), -1;
+    if (!before(b,deadline)) return -1;
+    if (!result) return 0;
+    if (b->power->phase!=A733_GPU_PLATFORM_OFF || b->power->token || b->power->delegated)
+        return fail(b,A733_GPU_BACKEND_ISOLATION), -1;
+    if (!memory_result(b,a733_gpu_memory_reclaim(b->memory)) || !before(b,deadline)) return -1;
+    b->phase=A733_GPU_BACKEND_ISOLATED;
+    return 1;
 }
 static int irq_mask(void *context)
 {
@@ -443,7 +474,7 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->queue = (struct pvr_ccb_ops){queue_read, queue_write, barrier, kick};
     c->start = (struct pvr_gpu_start_ops){now, start_read, start_write, started, publish};
     c->control = (struct pvr_gpu_control_ops){now, control_read, control_write, compat, event};
-    c->stop = (struct pvr_gpu_stop_ops){now, stop_read, stop_write, sync_write, sync_read, isolate};
+    c->stop = (struct pvr_gpu_stop_ops){now, stop_read, stop_write, sync_write, sync_read, isolate, external->isolate ? NULL : isolate_poll};
     c->irq = (struct pvr_gpu_service_irq_ops){irq_mask, irq_rearm};
     c->power = (struct pvr_gpu_service_enable_ops){power_begin, power_poll};
     if (c->free_lists.count) c->free_lists.ops = (struct pvr_free_list_ops){free_allocate, free_page,

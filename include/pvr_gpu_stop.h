@@ -18,11 +18,11 @@ enum pvr_gpu_stop_error { PVR_GPU_STOP_NO_ERROR, PVR_GPU_STOP_IO,
  * before returning; readbacks fence preceding writes. sync_write publishes
  * one 32-bit power-sync word, including cache maintenance/barriers. sync_read
  * acquires that word without overwriting firmware writes.
- * isolate returns success only after the platform has blocked new GPU memory
- * transactions AND drained outstanding transactions. It must include whatever
- * SoC reset/interconnect/power sequencing establishes those conditions. Sending
- * a reset request alone is insufficient. Its physical implementation must be
- * qualified before STOPPED can authorize resource reuse on the board.
+ * isolate completes platform teardown after firmware shutdown, idle checks
+ * and reset/readback. The native backend verifies fresh forced-idle/OFF state
+ * alongside each ACK, then powers down before reclaim. These callbacks provide
+ * healthy orderly stop, not recovery from failed or uncertain DMA. A standalone
+ * reset or power-OFF observation cannot replace the preceding sequence.
  */
 struct pvr_gpu_stop_ops {
     int (*now)(void *, uint64_t *);
@@ -31,6 +31,11 @@ struct pvr_gpu_stop_ops {
     int (*sync_write)(void *, uint32_t);
     int (*sync_read)(void *, uint32_t *);
     int (*isolate)(void *);
+    /* Optional asynchronous completion. With this callback, isolate begins
+     * teardown once and returns exactly 1 on admission. Each poll returns 0
+     * while pending, exactly 1 after completion, or -1 on failure. The original
+     * absolute deadline bounds both callbacks; no internal wait is permitted. */
+    int (*isolate_poll)(void *);
 };
 struct pvr_gpu_stop_step { uint32_t kind, offset, width; uint64_t mask, value; };
 struct pvr_gpu_stop {
@@ -39,7 +44,7 @@ struct pvr_gpu_stop {
     void *context;
     uint64_t deadline, last_now;
     uint32_t phase, error, index, count;
-    uint32_t acknowledgement[2], command_status[2], isolation_observed;
+    uint32_t acknowledgement[2], command_status[2], isolation_observed, isolation_started;
     struct pvr_ccb_token tokens[2];
     struct pvr_gpu_stop_step steps[PVR_GPU_STOP_MAX_STEPS];
 };
@@ -65,7 +70,7 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *, struct pvr_gpu_control *,
  * STOPPED means the complete protocol and isolation callback succeeded. It
  * does not establish successful completion of cancelled GPU jobs, output-cache
  * visibility, or physical qualification. The owner decides job disposition and
- * resource release only with a qualified isolation implementation.
+ * resource release only after the complete orderly shutdown contract.
  */
 enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *);
 #endif

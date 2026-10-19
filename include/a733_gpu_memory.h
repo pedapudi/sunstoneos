@@ -42,9 +42,12 @@ int a733_gpu_memory_started(void *, uint32_t *);
 int a733_gpu_memory_compat(void *, uint32_t, void *, size_t);
 int a733_gpu_memory_sync_write(void *, uint32_t);
 int a733_gpu_memory_sync_read(void *, uint32_t *);
+/* Acquire firmware system-data power state; zero means ready for power-down. */
+int a733_gpu_memory_power_state(void *, uint32_t *);
 
-/* Call only AFTER independently verified isolation blocks new GPU traffic and
- * drains outstanding accesses. This function does not establish that condition.
+/* Call only AFTER the complete healthy firmware/local-idle/reset/platform-OFF
+ * sequence establishes orderly shutdown. Failed/uncertain DMA requires separate
+ * physical recovery. This function does not establish either condition.
  * Invalidate cached firmware backing and return to OFFLINE for re-preparation.
  * A failed instance cannot be reclaimed through this API. Never access cached
  * firmware backing while PUBLISHED. Shared resources stay uncached throughout.

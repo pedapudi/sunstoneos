@@ -84,9 +84,13 @@ static void client(void *unused)
     }
 #endif
     if(!gpu_application_live(NULL)){retained();}
+    r=request(PVR_GPU_SERVICE_CLOSE,1000000);
+    while(r.phase!=PVR_GPU_SERVICE_STOPPED){
+        vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);
+    }
     atomic_store_explicit(&app.result,1,memory_order_release);
-    /* Every native owner and power lease stays live. Continue copied status
-     * checks so a later service fault revokes the published result. */
+    /* Copied output and reserved parents stay owned for host capture. CLOSE
+     * returned the GPU power token; USB/PMIC retain their own live session. */
     for(;;){vTaskDelay(1);(void)request(PVR_GPU_SERVICE_STATUS,0);}
 }
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context)

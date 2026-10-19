@@ -56,9 +56,10 @@ failure preserves any token whose release has not completed.
 A successful release followed by a failed clock check leaves the platform
 failed with token zero, reflecting the completed release. Shared gates and the
 always-on rail remain enabled. Electrical power-off and resource accounting do
-not prove outstanding GPU memory transactions have drained. These functions
-cannot implement the firmware shutdown controller's memory-isolation callback
-or authorize buffer reuse.
+not establish firmware quiescence by themselves. The native backend invokes
+these functions only after the complete firmware/local-idle/reset sequence in
+[the healthy shutdown contract](gpu-isolation.md). Failed or uncertain GPU work
+still requires independent recovery.
 
 ## All platform participants share the same mutexes
 

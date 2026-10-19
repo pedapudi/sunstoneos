@@ -17,7 +17,7 @@ static unsigned provider_calls, provider_mode, free_context;
 volatile unsigned mapping_mode, observe, power_enabled, identity_confirmed, late_identity;
 volatile unsigned expected_access, expected_offset, expected_width, mmio_count;
 volatile uint64_t expected_value;
-static unsigned power_polls, clock_regression;
+static unsigned power_polls, clock_regression, off_mode;
 static uint64_t operation_deadline;
 #define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
 
@@ -39,6 +39,24 @@ int a733_gpu_platform_poll(void *context)
     }
     power.phase = A733_GPU_PLATFORM_ON; power.token = 1; power.delegated = 1;
     power_enabled = 1; return 1;
+}
+int a733_gpu_platform_off_begin(struct a733_gpu_platform *p, uint64_t deadline)
+{
+    ++provider_calls;
+    if (p!=&power || deadline!=operation_deadline || p->phase!=A733_GPU_PLATFORM_ON) return 0;
+    p->phase=A733_GPU_PLATFORM_STOPPING; power_polls=0;
+    return off_mode==1 ? 0 : 1;
+}
+int a733_gpu_platform_off_poll(struct a733_gpu_platform *p)
+{
+    ++provider_calls;
+    if (p!=&power || p->phase!=A733_GPU_PLATFORM_STOPPING) return -1;
+    if (off_mode==2) return -1;
+    if (++power_polls==1) return 0;
+    p->phase=A733_GPU_PLATFORM_OFF; p->token=p->delegated=0;
+    if(off_mode==3)p->last_now=operation_deadline-1;
+    power_enabled=identity_confirmed=0;
+    return 1;
 }
 static int isolated(void *context, struct a733_gpu_platform *p, uint64_t deadline)
 {
@@ -62,7 +80,7 @@ static int setup(void)
 {
     observe = 0; mapping_mode = power_enabled = identity_confirmed = late_identity = 0;
     expected_access = expected_offset = expected_width = mmio_count = 0;
-    provider_calls = provider_mode = clock_regression = 0;
+    provider_calls = provider_mode = clock_regression = off_mode = 0;
     memset(&backend, 0, sizeof(backend)); memset(&service, 0, sizeof(service));
     memset(&config, 0, sizeof(config)); memset(&memory, 0, sizeof(memory));
     memset(&power, 0, sizeof(power)); memset(&manager, 0, sizeof(manager));
@@ -180,6 +198,7 @@ unsigned backend_check(void)
     const unsigned char command[88] = {7}; CHECK(config.control.event(&backend, command));
     CHECK(config.stop.sync_write(&backend, 0));
     *(uint32_t *)region(PVR_FW_POWER_SYNC) = 1;
+    service.stop.phase=PVR_GPU_STOP_WAIT_OFF;
     CHECK(config.stop.sync_read(&backend, &value) && value == 1);
     CHECK(!accesses(stop_trace_0, sizeof(stop_trace_0) / sizeof(*stop_trace_0), 1));
     CHECK(!accesses(stop_trace_1, sizeof(stop_trace_1) / sizeof(*stop_trace_1), 1));

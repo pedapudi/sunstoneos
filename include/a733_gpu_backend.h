@@ -12,13 +12,11 @@
 #define A733_GPU_INTID 95u
 
 struct a733_gpu_backend_external {
-    /* Optional proven platform implementation: block new GPU memory traffic,
-     * drain outstanding traffic, and leave power OFF with its resource token
-     * released before returning 1. Use the supplied CLOSE deadline. Retain
-     * everything on failure. A power OFF operation alone does not satisfy this
-     * contract. The provider must also establish safe subsequent power-on.
-     * NULL allows fixed execution with lifetime retention. CLOSE then fails
-     * isolation before power-off/reclaim; no buffer becomes reusable. */
+    /* Optional synchronous platform override for healthy orderly shutdown.
+     * Complete platform OFF and release its token before returning exactly 1.
+     * The default uses bounded native off-begin/off-poll after firmware OFF,
+     * BIF/SLC/wrapper idle checks and reset/readback. Neither path recovers a
+     * failed GPU or permits reclaim after uncertain/late completion. */
     int (*isolate)(void *, struct a733_gpu_platform *, uint64_t deadline);
     int (*event)(void *, const unsigned char[PVR_CCB_COMMAND_BYTES]);
     void *context;
@@ -69,9 +67,10 @@ struct a733_gpu_backend {
  *
  * Caller independently configures SPI 63 / INTID 95 disabled, level-high, with
  * a qualified route/group/API-safe priority. DVFS interrupt 96 is separate.
- * Recovery, pinned firmware hash, reservation ownership and the physical
- * isolation implementation are mandatory for shutdown/reuse. Without isolation,
- * every allocation and lease remains pinned for the boot, including success. */
+ * Pinned firmware, reservation ownership, supported initial isolation and
+ * independently reviewed recovery are required before physical use. Healthy
+ * CLOSE uses the source-backed orderly shutdown contract; any uncertainty
+ * retains allocations and outstanding leases until independent recovery. */
 int a733_gpu_backend_bind(struct a733_gpu_backend *, struct pvr_gpu_service *,
     struct pvr_gpu_service_config *, struct a733_gpu_memory *, struct a733_gpu_platform *,
     const struct a733_gpu_backend_external *);

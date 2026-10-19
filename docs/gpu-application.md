@@ -42,12 +42,14 @@ pixel/guard validation. The application collects all 64 copied output slices
 before publishing success. CPU code never fills device output with expected
 pixels. A queued submission or a firmware acknowledgement cannot publish output.
 
-All GPU memory, firmware objects, command rings and power leases remain held for
-the boot, including successful rendering. There is no implemented physical GPU
-transaction isolation provider. The native backend accepts its absence for this
-fixed lifetime. A CLOSE fails at the first stop mutation, before firmware shutdown, reset,
-power-off or reclaim. Missing isolation cannot report successful shutdown or reusable memory.
-No retry, resource release or automatic restart follows uncertainty.
+After copying every required output, the client sends CLOSE and waits for
+STOPPED before publishing success. The native backend checks fresh firmware
+idle/off acknowledgements and states, local idle/reset, and bounded platform
+power-off before reclaiming firmware memory. [The shutdown contract](gpu-isolation.md)
+applies to healthy execution. A failed or uncertain shutdown retains backing and
+outstanding leases without retry. Reserved allocation parents and copied output
+remain owned for USB capture; shared USB and PMIC services retain their lifetime.
+Physical GPU shutdown and ROM return remain unqualified.
 
 ## Build and observe
 
@@ -84,10 +86,9 @@ confirmed the real GPU and USB providers, pinned firmware, render workload and
 interrupt dispatch, together with the exact large pool extents. Storage workers,
 USB2, radio and Type-C code are absent from the linked image.
 
-The focused native instruction-model check passes refusal at the first stop
-mutation when isolation is absent. It also passes revocation before a later
-kick, power poll or stop mutation. Both cases preserve published memory and
-power ownership without another device access. Observer header checks pass
+The focused native instruction-model check covers asynchronous orderly power-off
+and retained begin/poll failures. It also covers revocation before a later kick,
+power poll or stop mutation. Failure cases preserve published memory and outstanding power ownership. Observer header checks pass
 valid-state decoding and refusal of mismatched identity, epoch and validated
 extent. These results establish software composition and retention behavior.
 
@@ -149,12 +150,15 @@ serial `sunstoneos-a733-gpu`. The observer checks that identity before copying
 pixels. Other applications can use the same permitted PID; the PID alone does
 not select a GPU image.
 
-Success, failure, lost transport and elapsed observation time all retain GPU
-backing, power leases and ownership until complete whole-board power removal.
+Successful CLOSE releases the GPU power token after orderly shutdown. Reserved
+backing and the shared USB/PMIC lifetime remain held for capture. Failure, lost
+transport and elapsed observation time retain backing and outstanding leases
+until complete whole-board power removal.
 A USB reconnection alone does not establish that the SoC or GPU supply lost
 power. The coordinator must wait for explicit recovery and must not reuse these
 resources, restore their backing or resume a failed session after a timeout.
-There is no automatic retry, shutdown or resource release in supervised mode.
+Supervised mode performs one orderly CLOSE after copied output. It has no
+automatic retry or failed-device recovery.
 Physical watchdog work remains deferred; this mode supplies no claim of
 independent fault recovery.
 
@@ -243,8 +247,7 @@ failure response without first publishing a pending response.
 
 The preparation-failure latch does not revoke the shared lifetime. Its scope is
 the software construction chain; shared initialization, PMIC polling, transport
-faults and expiry keep their fatal behavior. Every outcome retains the resources
-until whole-board power removal. This reporting behavior does not identify the
+faults and expiry keep their fatal behavior. Every preparation failure retains its resources until whole-board power removal. This reporting behavior does not identify the
 stage reached by any earlier physical attempt.
 
 Shared provider, power, clock, or transport faults still revoke the application
@@ -260,8 +263,10 @@ python3 apps/gpu-render/observe.py --compute --bus BUS --address ADDRESS \
 The observer reads an already-running admitted image. Supervised preparation,
 actual memory/power admission and coordinator board ownership remain required.
 A bounded physical attempt must establish two advancing timelines
-and correct copied numerical outputs while retaining all GPU resources afterward.
-No successful cancellation or resource-release claim follows from this image.
+and correct copied numerical outputs, followed by orderly CLOSE. Allocation
+parents and copied output remain owned; a failure retains outstanding leases.
+The client requires orderly CLOSE after copied outputs. Physical cancellation,
+shutdown and resource release remain unqualified.
 
 The affected compute image builds under
 `~/.cache/sunstoneos/evidence/gpu-completion-20261018/native/`.
@@ -314,10 +319,9 @@ for the selected target and final image:
 | Initial GPU exclusion | Verify disabled local clock `0x02002b20[31]` and asserted external reset with bus gate disabled at `0x02002b24[16,0]`. Establish complete earlier power removal and no later GPU activity. These register reads cannot prove an inherited transaction drain. |
 | Platform ownership | Establish shared CCU/PCK/PMIC exclusion, exclusion of other GPU masters, and Device mappings for GPU/GIC. Resource tokens and session digests bind records but cannot establish those physical facts. |
 
-The absent [runtime drain guarantee](gpu-isolation.md) does not require a
-shutdown experiment for this fixed lifetime. Entry still requires actual
-initial isolation. Every outcome retains all GPU backing and leases until
-complete whole-board power removal.
+The [healthy shutdown contract](gpu-isolation.md) supports normal CLOSE. Entry
+still requires actual initial isolation. Failed or uncertain execution retains
+GPU backing and outstanding leases until independent physical recovery.
 
 Once those conditions and the selected image's CPU startup dependency are established,
 the bounded coordinator procedure is:
@@ -346,7 +350,7 @@ the bounded coordinator procedure is:
    the durable `compute.bin` contains both verified 128-byte results. Inspect
    the saved raw replies for advancing sequence identities. On pending-budget
    expiry, malformed output or transport failure, stop communication. Success
-   also retains resources and the physical lock. Confirm full power removal
+   retains reserved backing, shared providers and the physical lock. Confirm full power removal
    through the existing recovery workflow before permitting any resource reuse.
 
 No actual GPU entry record is supplied by the host checks. Initial memory and
@@ -418,8 +422,8 @@ this ELF and its own manifest. This target needs primary-CPU startup, local
 interrupts and the stated seven-CPU OFF baseline. It does not depend on secondary
 scheduling or all-core coherence. Actual DDR exclusion, supported settled GPU
 power, initial GPU isolation, ROM USB takeover authority, and successful numerical
-execution remain unqualified. Every outcome retains the complete lifetime until
-confirmed whole-board power removal.
+execution and orderly shutdown remain unqualified. The shared provider lifetime
+and reserved backing remain held until confirmed whole-board power removal.
 
 ## First physical compute attempt produced no native result
 
@@ -469,3 +473,38 @@ TWI writes and returned with status zero and automatic USB access. Evidence:
 These observations do not establish the complete PMIC startup or identify the
 earlier GPU failure stage. Root continues shared startup diagnosis before any
 full accelerator retry.
+
+## Orderly CLOSE candidate
+
+The compute client copies both results before CLOSE and requires STOPPED before
+publishing success. Native CLOSE now uses the source-backed healthy shutdown
+sequence in [the shutdown contract](gpu-isolation.md), including independent
+firmware state checks and asynchronous platform power-off. This changes the
+candidate's successful behavior; preserved earlier images retain their earlier
+lifetime behavior.
+
+Frozen software evidence is under
+`~/.cache/sunstoneos/evidence/gpu-returning-integration-20261018/`.
+The final linked candidate has SHA-256
+`9297d32944c7ed3620229230a164393415aa0f704c39f33f9207373f75a43e97`.
+Twelve affected objects were rebuilt; the other 72 retain their accepted object
+and source identities. In particular, the retained monitor/runtime objects use
+their earlier frozen source, rather than the current checkout's startup files.
+The initial fresh CMake configuration refused the shared storage patch hash;
+recorded compile commands and actual dependency files supplied the affected
+rebuild without changing shared startup.
+
+The stop sanitizer fixture passes 120 retained-failure cases. Native instruction
+checks cover actual backend/memory accessors with modeled power operations.
+The actual linked compute client passes successful, pending and failed CLOSE
+reply cases. Those client results bind the earlier executable recorded in
+`client/result.json`; the final rebuild changes header documentation and source
+provenance records only. Native load bytes are unchanged across its separate
+header-documentation refresh. No successful behavioral check was replayed for
+that refresh.
+
+The candidate supplies no physical GPU execution, orderly shutdown or ROM-return
+evidence. A finite returning GPU application still requires the USB owner's
+return path and qualified healthy GPU stop. Shared startup diagnosis must precede
+another full launch. Existing RAM/master exclusion, supported power/clock,
+transport ownership and recovery prerequisites remain required.

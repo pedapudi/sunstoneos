@@ -26,8 +26,8 @@ The [implementation](../drivers/gpu/pvr_gpu_stop.c) follows these steps:
    or interrupt access through those components.
 5. Check the reference hardware idle conditions, clear thread associations,
    assert the selected soft-reset mask, and read back reset to fence the write.
-6. Ask the platform to block new GPU memory transactions and drain outstanding
-   transactions. Report STOPPED only after that callback succeeds before the deadline.
+6. Complete platform power-off through one admission callback and optional
+   bounded polling. Report STOPPED only after completion before the deadline.
 
 Both power commands are 88 bytes with unused bytes cleared. They select power
 command type 107, forced-idle request type 2 or power-off request type 1, and
@@ -61,12 +61,12 @@ leaves the controller at that step until the deadline. Writes complete before
 their callbacks return. The final reset readback fences the write; it is not
 interpreted as proof of interconnect isolation.
 
-The mandatory platform callback must establish both conditions: no new GPU memory
-transactions can begin, and no outstanding transaction can reach buffers afterward.
-Its implementation may require SoC reset, interconnect, clock, and power-domain
-operations. Sending a reset request alone does not satisfy the contract. The
-physical implementation and those conditions must be qualified before STOPPED
-can authorize resource reuse on the board.
+The native backend independently checks firmware forced-idle/OFF state after
+each acknowledgement, then completes A733 platform power-off after these local
+checks. [The healthy shutdown contract](gpu-isolation.md) follows the pinned
+normal power sequence. A failed device cannot use this path as DMA recovery.
+The optional asynchronous completion callback yields while pending under the
+original deadline; admission occurs once and only result one completes it.
 
 The controller itself frees no memory. The owner separately handles interrupted
 jobs, result visibility, diagnostics, and resource release. Successful shutdown

@@ -165,7 +165,7 @@ void kernel_main(void)
     c->queue = (struct pvr_ccb_ops){read_queue, write_queue, barrier, write32};
     c->start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, sync_read, unavailable};
     c->control = (struct pvr_gpu_control_ops){now, read32, write32, compat, NULL};
-    c->stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, unavailable};
+    c->stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, unavailable,NULL};
     c->enable = refuse_power; c->compute_mode = unavailable;
     configASSERT(pvr_gpu_service_init(&service, c, 3, 1));
     TaskHandle_t task = xTaskCreateStaticAffinitySet(client, "graphics-check", 4096, NULL, 2,

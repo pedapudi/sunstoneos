@@ -11,6 +11,9 @@ static struct {
     unsigned calls, fail_at, sync, clears, sent, no_ack, no_return, status;
     unsigned hold_register, register_reads, isolation, late_isolation, fenced, reset;
     unsigned events_count;
+    int isolation_result;
+    unsigned isolation_polls, isolation_pending;
+    int poll_result;
     struct event events[32];
 } m;
 static struct pvr_ccb q;
@@ -87,16 +90,23 @@ static int isolate(void *ctx)
     assert(ctx==&m && m.fenced && m.sent==2 && s.acknowledgement[0] && s.acknowledgement[1]);
     if(!operation())return 0; ++m.isolation;
     if(m.late_isolation)m.now=s.deadline;
-    return 1;
+    return m.isolation_result;
 }
-static const struct pvr_gpu_stop_ops ops={now,read_reg,write_reg,sync_write,sync_read,isolate};
+static int isolation_poll(void *ctx)
+{
+    assert(ctx==&m && m.isolation==1);
+    if(!operation())return -1;
+    ++m.isolation_polls;
+    return m.isolation_polls<=m.isolation_pending ? 0 : m.poll_result;
+}
+static const struct pvr_gpu_stop_ops ops={now,read_reg,write_reg,sync_write,sync_read,isolate,NULL};
 static void prepare(const void *fw)
 {
     memset(&m,0,sizeof(m)); memset(&q,0,sizeof(q)); memset(&c,0,sizeof(c)); memset(&s,0,sizeof(s));
     assert(pvr_ccb_init(&q,&qops,&m,21)==PVR_CCB_OK);
     assert(pvr_ccb_start(&q,m.now)==PVR_CCB_OK);
     c.ops=cops; c.context=&m; c.queue=&q; c.phase=PVR_GPU_CONTROL_READY; c.last_now=m.now;
-    m.status=1; m.sync=0xfeed; m.calls=0;
+    m.status=1; m.sync=0xfeed; m.calls=0; m.isolation_result=1;
     assert(pvr_gpu_stop_init(&s,&c,fw,image_bytes,&ops,&m,10000));
 }
 static enum pvr_gpu_stop_result run(void)
@@ -183,6 +193,27 @@ int main(int argc,char **argv)
     }
     prepare(image); m.late_isolation=1;
     assert(run()==PVR_GPU_STOP_FAULT && s.isolation_observed && m.isolation==1); stopped(PVR_GPU_STOP_TIMEOUT);
+    /* Negative errors and unexpected positive values cannot establish drain. */
+    const int isolation_failures[]={-1,2};
+    for(unsigned i=0;i<sizeof(isolation_failures)/sizeof(isolation_failures[0]);++i) {
+        prepare(image); m.isolation_result=isolation_failures[i];
+        assert(run()==PVR_GPU_STOP_FAULT && !s.isolation_observed && m.isolation==1);
+        stopped(PVR_GPU_STOP_IO);
+    }
+    prepare(image); s.ops.isolate_poll=isolation_poll; m.isolation_pending=2; m.poll_result=1;
+    assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && m.isolation_polls==3);
+    calls=m.calls; assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_OK && calls==m.calls);
+    const int poll_failures[]={-1,2};
+    for(unsigned i=0;i<sizeof(poll_failures)/sizeof(poll_failures[0]);++i) {
+        prepare(image);s.ops.isolate_poll=isolation_poll;m.poll_result=poll_failures[i];
+        assert(run()==PVR_GPU_STOP_FAULT && m.isolation==1 && m.isolation_polls==1);
+        assert(!s.isolation_observed);stopped(PVR_GPU_STOP_IO);
+    }
+    prepare(image);s.ops.isolate_poll=isolation_poll;m.isolation_pending=100;
+    while(!m.isolation_polls)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline;calls=m.calls;
+    assert(run()==PVR_GPU_STOP_FAULT && m.calls==calls+1 && m.isolation==1 && m.isolation_polls==1);
+    stopped(PVR_GPU_STOP_TIMEOUT);
     /* A power acknowledgement is independent of the queue return-slot flag. */
     prepare(image); m.no_return=1; assert(run()==PVR_GPU_STOP_OK);
     uint32_t value=0; calls=m.calls;

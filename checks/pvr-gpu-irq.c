@@ -144,7 +144,7 @@ void kernel_main(void)
     config.queue = (struct pvr_ccb_ops){read_mem, write_mem, barrier, kick};
     config.start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, started, publish};
     config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
-    config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate};
+    config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate,NULL};
     config.enable = enable; config.context = &config;
     unsigned byte = 0, page = 0;
     for (unsigned i = 0; i < 22; ++i) {

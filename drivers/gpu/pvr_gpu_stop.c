@@ -125,7 +125,16 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         break;
     }
     case PVR_GPU_STOP_ISOLATE:
-        if (!s->ops.isolate(s->context)) return fail(s,PVR_GPU_STOP_IO);
+        if (!s->isolation_started) {
+            if (s->ops.isolate(s->context) != 1) return fail(s,PVR_GPU_STOP_IO);
+            s->isolation_started=1;
+            if (s->ops.isolate_poll) return PVR_GPU_STOP_AGAIN;
+        }
+        if (s->ops.isolate_poll) {
+            int result=s->ops.isolate_poll(s->context);
+            if (result==0) return PVR_GPU_STOP_AGAIN;
+            if (result!=1) return fail(s,PVR_GPU_STOP_IO);
+        }
         s->isolation_observed=1;
         if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
         s->phase=PVR_GPU_STOP_STOPPED; return PVR_GPU_STOP_OK;

@@ -201,3 +201,12 @@ int a733_gpu_memory_sync_read(void *ctx, uint32_t *out)
     uint32_t v = *(volatile uint32_t *)address(m, PVR_FW_POWER_SYNC, 0);
     __asm__ volatile("dsb sy" ::: "memory"); *out = v; return 1;
 }
+
+int a733_gpu_memory_power_state(void *ctx, uint32_t *out)
+{
+    struct a733_gpu_memory *m = ctx;
+    if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
+        !shared(m, PVR_FW_SYSTEM_DATA, 8, 4)) return fail(m);
+    uint32_t v = *(volatile uint32_t *)address(m, PVR_FW_SYSTEM_DATA, 8);
+    __asm__ volatile("dsb sy" ::: "memory"); *out = v; return 1;
+}
