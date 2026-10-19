@@ -182,15 +182,17 @@ static int rom_baseline(struct a733_usb_platform *p)
 }
 static int rom_pio(struct a733_usb_platform *p)
 {
-    /* PCTL/DEVCTL: no host session/request/mode. VEND0 bus selection
-     * is fixed to one on newer hardware even for PIO (pinned USBC_SelectBus). */
-    if (!bits(p,USB+0x40,BIT(8)|BIT(9)|BIT(10),0)) return 0;
+    /* Packed PCTL/DEVCTL: require B-device, no HOSTREQ/HOSTMODE.
+     * DEVCTL.SESSION is valid device-session state, not DMA activity. The
+     * matched ROM tests BDEVICE/VBUS without requiring SESSION clear.
+     * VEND0 bus selection is allowed for PIO (pinned USBC_SelectBus). */
+    if (!bits(p,USB+0x40,BIT(9)|BIT(10)|BIT(15),BIT(15))) return 0;
     for (unsigned i=0;i<16;++i) if (!bits(p,USB+0x540+i*16,BIT(31),0)) return 0;
     return 1;
 }
 static int core_detached(struct a733_usb_platform *p)
 {
-    if (!bits(p,USB+0x40,BIT(6)|BIT(8)|BIT(9),0) ||
+    if (!bits(p,USB+0x40,BIT(6)|BIT(9)|BIT(10),0) ||
         !bits(p,USB+0x48,UINT32_MAX,0) || !bits(p,USB+0x50,255,0) ||
         !bits(p,USB+0x500,65535,0) || !bits(p,USB+0x400,15,0)) return 0;
     for (unsigned i=0;i<16;++i) if (!bits(p,USB+0x540+i*16,BIT(31),0)) return 0;

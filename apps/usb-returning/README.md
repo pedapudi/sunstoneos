@@ -26,6 +26,23 @@ The existing patched TinyUSB implementation is reused byte-for-byte from `gpu-tr
 
 The first supervised image returned to ROM as `003:063` with monitor status 1 before TinyUSB initialization. Its log reported USB preparation step 5, PMIC stage 4 and USB platform stage 19. Step 5 follows matching and reaping all four PMIC supply snapshots; PMIC stage 4 is READY. Platform stage 19 is FAULTED, which overwrote the original failing stage. The old report cannot establish which platform predicate failed or whether takeover MMIO occurred. Its SMC64 exception and return address identify an explicit `platform_exit(1)` call. The recorded FAR is not a failed MMIO address for that SMC. Evidence is `~/.cache/sunstoneos/evidence/usb-returning-20261018/physical/runtime/`.
 
+The diagnostic image with first-fault reporting returned as `003:071` with
+status1. It recorded a value mismatch in ROM_CHECK at `USB0+0x40`: mask`0x700`,
+expected0, observed`0x00029940`, with zero USB platform write attempts or
+completions. PMIC readiness and all four supply snapshots had passed. This
+word contains DEVCTL`0x99`: B-device and valid VBUS with SESSION set, while
+HOSTREQ and HOSTMODE are clear. The pinned BSP field definitions and matched
+ROM's BDEVICE/VBUS predicate support this inherited device state. SESSION is
+not a DMA-active flag. The ROM takeover now requires BDEVICE and rejects
+HOSTREQ/HOSTMODE while allowing SESSION. Detached-core and final client
+checks also allow SESSION and reject both host controls. All sixteen internal
+DMA checks, PIO-history requirements, retained ownership and bounded cleanup
+remain in force. The failed predicate preceded the DMA loop, so that attempt
+did not observe those sixteen channels or qualify later takeover/cleanup.
+PMIC and pin activity is separate from the zero USB platform write count.
+Evidence is `~/.cache/sunstoneos/evidence/usb-first-fault-20261018/physical-064/runtime/`.
+
+
 The current provider preserves the first failed condition before entering FAULTED. The error log copies its original stage, check kind, address, mask, expected value, observation-valid flag, existing observed value, callback result and write counters. It performs no diagnostic MMIO. `USB_FAULT_WROTE` is the legacy attempted-write flag. `USB_FAULT_WRITES_ATTEMPTED` counts write callbacks attempted; `USB_FAULT_WRITES_COMPLETED` counts successful callbacks. Neither proves engine completion or bus drain. A time failure reports the last good time, the existing callback's sample and the deadline; the sample is valid only when its callback result is 1.
 
 The numeric `USB_FAULT_KIND` identifies the following conditions:

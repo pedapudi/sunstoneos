@@ -11,7 +11,7 @@ from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();e=a.evidence.resolve()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',action='append',help='Run only named affected cases');a=p.parse_args();e=a.evidence.resolve()
 r=Path(__file__).resolve().parents[2]
 layout=module('layout',e/'layout-helper.py');image=layout.Image(e/'build/probe.elf')
 # Preserve the real earlier session producer's fields, rather than inventing
@@ -24,7 +24,10 @@ config['pmic_expected']=[list(raw[sl['pmic_pins']+i*3:sl['pmic_pins']+(i+1)*3]) 
 prepare=module('prepare',r/'apps/usb-returning/prepare.py');payload=prepare.input_bytes(config,1)
 (e/'fixture-config.json').write_text(json.dumps(config,indent=2)+'\n');(e/'fixture-input.bin').write_bytes(payload)
 (e/'fixture-provenance.json').write_text(json.dumps({'source':str(source),'source_sha256':hashlib.sha256(raw).hexdigest(),'layout_elf_sha256':hashlib.sha256((transport/'image.elf').read_bytes()).hexdigest(),'producer_sha256':hashlib.sha256((r/'apps/usb-returning/prepare.py').read_bytes()).hexdigest(),'input_sha256':hashlib.sha256(payload).hexdigest(),'physical_authority':False},indent=2)+'\n')
-variants=['complete','partial-callbacks','no-host','pending-before-mask','pending-stuck','active-dma','active-irq','held-mutex','pmic-held','write-ineffective','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric']
+variants=['complete','partial-callbacks','no-host','pending-before-mask','pending-stuck','active-dma','active-irq','held-mutex','pmic-held','write-ineffective','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric','device-session','session-host-request','session-host-mode','session-dma']
+if a.case:
+    assert set(a.case)<=set(variants),a.case
+    variants=a.case
 cases=[]
 for variant in variants:
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x06000000);u.mem_map(0x40000000,0x04000000)
@@ -37,6 +40,10 @@ for variant in variants:
     state={'time':1000000,'exit':None,'tasks':[],'pending':0,'tx':bytearray(),'writes':[],'delays':[],'inited':False,'mutexes':0,'constructors':False}
     regs={0x03400114:0,0x03400214:0,0x03400314:0,0x04100040:64,0x04100048:0x00020003,0x04100050:255,0x04100500:0,0x04100400:0xf070}
     for i in range(16):regs[0x04100540+i*16]=0
+    if variant=='device-session' or variant.startswith('session-'):regs[0x04100040]=0x00029940
+    if variant=='session-host-request':regs[0x04100040]|=1<<9
+    if variant=='session-host-mode':regs[0x04100040]|=1<<10
+    if variant=='session-dma':regs[0x04100540]=1<<31
     def put(address,value,size=4):u.mem_write(address,int(value).to_bytes(size,'little'))
     def get(address,size=4):return int.from_bytes(u.mem_read(address,size),'little')
     def field(name,value=None):
@@ -117,17 +124,17 @@ for variant in variants:
     u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000)
     u.emu_start(image.address('kernel_main'),0,count=10000000)
     length=get(0x42000018,8);log=bytes(u.mem_read(0x42000100,length)).decode()
-    success=variant in ('complete','partial-callbacks','no-host','pending-before-mask')
+    success=variant in ('complete','partial-callbacks','no-host','pending-before-mask','device-session')
     assert state['exit']==(0 if success else 1),(variant,log,state)
     if success:
         assert 'COMPLETE native USB bounded observation' in log and 'USB_QUIESCED=0x0000000000000001' in log
         assert 'USB_OBSERVATION_OUTCOME=0x'+('0000000000000001' if variant=='no-host' else '0000000000000000') in log
-        assert state['writes']==[[0x04100048,0],[0x04100050,0],[0x04100500,0],[0x04100400,0xf000],[0x04100040,0]],state['writes']
+        assert state['writes']==[[0x04100048,0],[0x04100050,0],[0x04100500,0],[0x04100400,0xf000],[0x04100040,0x00029900 if variant=='device-session' else 0]],state['writes']
         assert state['delays'][-1]==150
         if variant!='no-host':assert len(state['tx'])==40 and struct.unpack('<5Q',state['tx'])[:3]==(0x3154455253425355,1,1)
     else:assert 'COMPLETE native USB bounded observation' not in log
     if variant not in ('invalid-input','invalid-fabric'):assert state['constructors']
-    if variant in ('active-dma','active-irq','held-mutex','pmic-held','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric'):assert not state['writes'],(variant,state['writes'])
+    if variant in ('active-dma','active-irq','held-mutex','pmic-held','wrong-request','callback-overrun','provider-fault','invalid-input','invalid-fabric','session-host-request','session-host-mode','session-dma'):assert not state['writes'],(variant,state['writes'])
     (e/(variant+'.log')).write_text(log)
     cases.append({'name':variant,'passed':True,'exit':state['exit'],'actual_constructors_accepted':state['constructors'],'mmio_writes':state['writes'],'copied_response_bytes':len(state['tx'])})
 result={'passed':True,'physical_access':False,'scope':'Actual linked input copy, task construction, native PMIC/USB and resource constructors, finite client, IN callback accounting and native MMIO shutdown guards. Scheduler, hardware provider progression, TinyUSB vendor FIFO/events and register effects modeled. Earlier provider/TinyUSB cases reused; no physical enumeration, transfers, scheduling or ROM return established.','elf_sha256':hashlib.sha256((e/'build/probe.elf').read_bytes()).hexdigest(),'checker_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'cases':cases}

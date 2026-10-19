@@ -64,7 +64,9 @@ static int irq_excluded(void)
 {return !((mmio_read(0x03400114)|mmio_read(0x03400314))&0x70000000);}
 static int no_dma(void)
 {
-    if(mmio_read(0x04100040)&0x700)return 0;
+    /* DEVCTL HOSTREQ/HOSTMODE exclude a host actor; SESSION is also
+     * meaningful in peripheral mode and does not enable DMA. */
+    if(mmio_read(0x04100040)&0x600)return 0;
     for(unsigned i=0;i<16;++i)if(mmio_read(0x04100540+i*16)&0x80000000)return 0;
     return 1;
 }

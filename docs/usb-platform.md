@@ -86,7 +86,7 @@ programming. Polling returns while these absolute counter deadlines are pending.
 There is no busy wait or additional assumed PHY delay.
 
 Before PHY programming and at final verification, the driver checks soft-connect,
-session/request controls, endpoint and USB interrupt enables, DMA interrupt
+host request/mode controls, endpoint and USB interrupt enables, DMA interrupt
 enables, all sixteen DMA start bits, and the interface-status register's edge
 interrupt enables. Readback preserves pending W1C flags. These observations do
 not prove completion of previously accepted external memory transactions.
@@ -125,8 +125,19 @@ and device bus/reset controls `0x01000100` under mask `0x01110111`. The USB0
 host gates and resets must be clear. It reserves the common reference as a
 shared consumer and preserves USB1 and the reference registers.
 
-Before mutation, the provider requires device session, host request and host
-mode clear, and all sixteen internal DMA start bits clear. FIFO bus selection
+Before mutation, the provider requires DEVCTL.BDEVICE set, HOSTREQ and HOSTMODE
+clear, and all sixteen internal DMA start bits clear. DEVCTL.SESSION may be set
+in device mode; it neither selects host mode nor enables DMA. The packed word
+at USB0+0x40 contains PCTL, DEVCTL, EPIND and VEND0 bytes. The observed
+`0x00029940` therefore carries SESSION, valid VBUS, B-device, soft-connect and
+endpoint index2; the endpoint index is not a transfer-active or DMA flag.
+The matched nonsecure ROM tests BDEVICE and VBUS at offsets0x23bc..0x23e8,
+and its FEL execute path waits for TXPKTRDY before calling the target without
+resetting USB0. The pinned Linux BSP header names the DEVCTL fields; the A733
+manual18.5 describes the controller capabilities but omits this register table.
+The detached-core and returning-client checks reject host request/mode while
+allowing SESSION. All DMA, interrupt, disconnect and retained-owner checks
+remain required. FIFO bus selection
 is allowed in either state: the pinned `USBC_SelectBus` sets it even for PIO
 on newer controllers. It masks endpoint, bus, DMA and interface interrupts,
 removes soft-connect, and allows the host 150 ms to observe disconnection.
