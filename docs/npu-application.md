@@ -465,32 +465,33 @@ an older DCXO24/equal-factor restriction. It now uses the same reference decoder
 and PERI0 control policy as the canonical NPU provider. PERI0 bit 24 is permitted;
 input-divider bit 1 remains a refusal.
 
-The current frozen image is
-`~/.cache/sunstoneos/evidence/npu-single-core-20261018/reference-refresh/image.elf`,
-SHA-256 `e12d3031854a39c22a829a5e6b2fdca5d2bd44145ec5622b4c1cbbc251519452`.
-Only the application clock object and generated build identity differ; 68 linked
-objects remain identical. The compiler closure still covers 177 inputs and 70
-objects. Current shared startup sources produce the same effective NPU translation
-units after inactive RTC, board and thermal branches are removed. Six focused
-actual-image acquisition cases cover normalized reference acceptance, unstable or
-incorrect reference refusal and the retained M1-divider refusal using the recorded
-200/600/600 MHz fabric. Mutex, scheduler, counter and register responses remain
-modeled; no PLL write, startup replay or inference runs. Focused review accepts
-the correction. Existing model, reference, retained startup and host-capture
-evidence is reused.
+The clock correction passed six focused acquisition cases, including normalized
+reference acceptance and refusal of unsupported inputs. A later case accepts the
+observed 200/600/400 MHz fabric profile. Model, numerical-reference and unchanged
+startup evidence remain valid for their recorded scope.
 
-The cache-only physical candidate under `physical-candidate/` references actual
-second-board observations and keeps every root authorization unset. The PMIC
-supply probe already captured enabled DCDC2, selector 30 and its normal-page
-identity, supporting programmed 800 mV under reviewed continuity. No additional
-PMIC selector read is requested for that lifetime. Missing NPU-specific input is
-one bounded batch of 21 CCU/PCK-gate words. Two NPU PCK-domain words may be read
-only if its gate is enabled and access is established. The batch selects the
-supported enabled-retune or live-enable profile; unsupported domain/PLL combinations
-remain blockers. It never reads the NPU command aperture or touches storage.
+The first physical attempt used the trusted convolution, observed clock/power
+configuration, and reviewed MMU/SRAM ownership. It produced no native USB frames;
+the sole refusal-report read timed out. The user removed power, and a new ROM
+identity response confirmed recovery. Evidence is under
+`npu-single-core-20261018/physical-candidate/runtime/` and
+`second-board-recovery-122-20261018/`. The failure location remains unknown.
 
-The coordinator's retained GPU attempt invalidates `003:116` as a future NPU
-launch target. Confirm full power removal after that attempt, then establish the
-actual new instance, DDR/cache state and required ownership before finalizing an
-NPU package. Historical observations remain historical. The candidate does not
-substitute the earlier software-only NPU fixture for physical admission.
+## Failure reports use independently validated USB transport
+
+The single-core application now permits bounded failure reporting after an NPU
+client failure while the USB transport remains valid. Counter, registry, retained
+platform locks, task ownership, session evidence, deadlines and USB provider
+checks still stop access when their conditions fail. The earlier full application
+liveness check stopped USB polling before the prepared failure frame could be sent.
+This source defect does not establish the cause of the physical failure.
+
+Ten focused cases execute the changed native paths, including terminal reporting
+before and after USB readiness and refusal after shared-resource or transport
+failure. Independent review accepted the implementation and frozen compiler
+closure. The image is `npu-usb-terminal-20261018/image.elf`, SHA-256
+`22306882147c06f5e0fbbfaf652692d4a5c9c487ebe64f949f41a6bd99dd243b`.
+All 123 compiler inputs from repository source match integration; the frozen
+closure also records generated and external inputs. Unchanged startup, model,
+clock and host tests were reused. Physical reporting and inference remain untested
+with this image. A new launch must bind its actual image and board lifetime.

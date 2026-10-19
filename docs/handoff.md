@@ -19,8 +19,11 @@ The old runner and coordinator stopped, the failed claim closed, and a new A733
 ROM identity response passed. No further user action is pending. Evidence:
 `npu-single-core-20261018/physical-candidate/runtime/session.json` and
 `second-board-recovery-122-20261018/recovery.json`.
-The cold preparation is complete. Refresh warm launcher state and device
-observations before the corrected GPU launch; reuse the DDR lifetime from `122`.
+Cold and warm preparation are complete. The returning cache-disable helper and
+final launcher survey passed. All seven secondaries are OFF; fresh GPU/DMA and
+common accelerator configuration reads restored scratch and left ROM responsive.
+Evidence: `second-board-cold-122-20261018/{cache-off,survey-after-cache-off/runtime,cpu-gpu-state,accelerator-state/npu-state}/`.
+Reuse the DDR lifetime from `122` for the corrected GPU launch.
 
 The attempted NPU session used normalized fabric words and 200/600/400 MHz rates.
 The previous GPU session contained an NSI bit rejected by its USB provider;
@@ -29,6 +32,18 @@ observed configuration. Four focused calls into the frozen GPU ELF pass under
 `gpu-usb-ordering-20261018/physical-candidate-119/fabric-admission-result.json`.
 This identifies an input defect; the physical failure stage remains unknown.
 The GPU candidate needs new board observations and ownership review after recovery.
+
+The NPU USB reporting correction is integrated. Ten affected native cases and
+independent review pass; 123 repository compiler inputs match the frozen image.
+Evidence: `npu-usb-terminal-20261018/handoff.json` and `integration.json`.
+USB retains independent counter, registry, lock, owner and lifetime checks while
+permitting terminal NPU failure frames. This is not a physical failure diagnosis.
+
+The first board also completed a read-only boot-CPU GIC observation under
+`primary-gic-state-121-20261018/`. Its redistributor is powered and awake, with
+no enabled, pending or active local interrupts. A returning primary diagnostic
+must restore that awake state; the secondary helper assumes an asleep baseline.
+No GIC configuration was changed, and FEL scratch restoration passed.
 
 The preceding complete eight-core image and first single-core GPU image both
 produced no native USB result. Each sole refusal-report read timed out, and

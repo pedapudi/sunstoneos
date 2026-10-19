@@ -770,6 +770,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   reference and recorded PERI0 settings. Six focused final-image cases pass
   under `npu-single-core-20261018/reference-refresh/`; unchanged startup and
   inference evidence is reused. Physical NPU computation remains unobserved.
+  The first physical attempt returned no USB result and required power removal.
+  The application now preserves failure reporting over independently valid USB;
+  ten affected native cases and source review pass under
+  `npu-usb-terminal-20261018/`. Physical reporting and inference remain untested
+  with the corrected image.
   **Implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
   passes host startup, completion, cancellation, and retained-fault checks.
