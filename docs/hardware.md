@@ -358,15 +358,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   limit and 25 MHz, or require four-bit high speed at 50 MHz. The original
   one-bit 400 kHz profile is preserved. Native SCR/ACMD6/CMD6, actual provider,
   linked two-client read, preparation and host checks pass under
-  `sd-bus-modes-20261019/`. Integration verifies 194 sources and 2,803 artifacts;
-  402 of 408 compiled inputs match current source. Six later USB HID inputs
-  differ, including headers that change the enclosing board-application layout
-  used by SD. The frozen image and complete source closure remain authoritative,
-  and their compiled layouts remain coherent. Review: `integration-review/review.json`.
-  A future current-source build must rebuild affected consumers consistently,
-  include the HID class source and regenerate image identity. Actual mode
-  negotiation, read data, electrical/timing margins and recovery remain
-  unqualified. No card write or voltage change is part of these profiles.
+  `sd-bus-modes-20261019/`. The current-layout image includes USB HID headers
+  and class source consistently across all consumers. Linked SD/client, USB0
+  copied-read, moved-field liveness and host identity checks pass; focused review
+  is closed. Integration verifies 182 sources, 1,219 artifacts and all 411 compiled
+  inputs under `sd-shared-usb-20261019/root-integration.json`. Its 163 linked
+  objects and full source closure remain frozen together. The preceding image's
+  six later USB-input differences remain historical; unchanged protocol, clock
+  and refusal evidence was reused. Actual mode negotiation, read data,
+  electrical/timing margins and recovery remain unqualified. No card write or
+  voltage change is part of these profiles.
   The second board's inherited JTAG pin pattern now has an exact read-only
   handoff with explicit debug-client exclusion. Focused provider, host-policy and
   native parser checks pass; three objects were rebuilt and 163 reused under
@@ -702,11 +703,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   trusted compiled programs and copied input through a sealed session without
   rebuilding firmware. Both checked array kernels pass compiler-reference,
   sanitizer, native service and host checks with modeled device writes.
-  Integration matches all 215 compiled inputs under
-  `gpu-program-submission-20261019/root-integration.json`. The bounded profile
-  supports one 32-lane workgroup; wider dispatch, same-session input replacement,
+  Bounded multi-dispatch now supports up to 31 direct dispatches, each with one
+  32-lane workgroup, and at most 992 elements within package input/output bounds.
+  One final firmware timeline covers all dispatches. Compiler-reference,
+  sanitizer, native service and host checks pass with focused review under
+  `gpu-dispatch-geometry-20261019/`. Integration verifies 85 objects, 169 sources
+  and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor source
+  difference adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor
+  source/object identities remain authoritative without active GPU monitor or
+  structure changes. General dispatch geometry, same-session input replacement,
   graphics, concurrency, physical computation and mimus acceleration remain
-  required.
+  required. The accepted fixed-workload returning profile is preserved.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The

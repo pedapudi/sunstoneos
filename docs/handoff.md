@@ -95,16 +95,16 @@ Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
 and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
 linked two-client reads, preparation and host checks pass under
-`sd-bus-modes-20261019/`. Root integration verifies 194 sources and 2,803
-artifacts; 402 of 408 compiled inputs match current source. Six later USB HID
-inputs differ, including headers that change the enclosing board-application
-layout used by SD. The frozen image and complete source closure remain
-authoritative, and their compiled layouts remain coherent. Review is recorded in
-`integration-review/review.json`. Its ELF SHA-256 is
-`0ff1d98d381f5435b83cb84e876e922d88f1666fa44295ec74f37f112c53adb1`.
-A future current-source build must rebuild affected consumers consistently,
-include the HID class source and regenerate image identity. No card write or
-physical qualification is established. Both microSD cards remain preserved.
+`sd-bus-modes-20261019/`. The current-layout SD image includes the USB HID
+headers and class source consistently across all consumers. Linked SD/client,
+USB0 copied-read, moved-field liveness and host identity checks pass; focused
+review is closed. Integration verifies 182 sources, 1,219 artifacts and all
+411 compiled inputs under `sd-shared-usb-20261019/root-integration.json`.
+Its ELF SHA-256 is
+`141078f41ea22546a55117dd21245655a20162d4d09487a6647bad7ddf0a9d78`.
+The preceding image and its six later USB-input differences remain historical;
+unchanged protocol, clock and refusal evidence was reused. No card writes or
+physical qualification are established. Both microSD cards remain preserved.
 
 Native read-only eMMC access is integrated through the existing copied-client
 service. Both SDC2 and SDC3 selections pass instruction checks for identification,
@@ -198,9 +198,15 @@ Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
 Caller-selected GPU compute programs are integrated. A sealed session fixes a
 trusted host-compiled program and copied input; the same executable supports
-both checked array kernels. Native service, compiler-reference, sanitizer and
-host checks pass, with device writes modeled. All 215 compiled inputs match
-integration under `gpu-program-submission-20261019/root-integration.json`.
+both checked array kernels. Bounded multi-dispatch now supports up to 31 direct
+dispatches, each containing one 32-lane workgroup, and at most 992 elements
+within the package's input/output bounds. One final firmware timeline covers
+all dispatches. Compiler-reference, sanitizer, native service and host checks
+pass with device writes modeled; focused review is closed. Evidence is under
+`gpu-dispatch-geometry-20261019/`. Integration verifies 85 objects, 169 sources
+and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor difference
+adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor source and object
+remain authoritative; no active GPU monitor or structure change is present.
 The native reservation callback now permits another submission after acquired
 completion, checking owner, epoch, serial and the actual firmware timeline.
 Focused checks exercise that callback and reject stale ownership/completion.
@@ -214,8 +220,8 @@ verifying all 88 objects, 218 frozen inputs and eight unchanged linked return
 functions. Physical admission remains false. The historical two-job image
 contains the previous NEW-only check and is superseded for repeated submission;
 its publication and host evidence retain their narrower scope. Physical
-computation, wider dispatch, same-session input replacement, graphics and
-concurrency remain unqualified.
+computation remains unqualified. General dispatch geometry, same-session input
+replacement, graphics and concurrency remain required.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document the Nonsecure publication requirement. Root retains
 CPU and architectural return review. For the preceding adapter, all 172 NPU
@@ -290,21 +296,16 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Develop bounded trusted GPU multi-dispatch in `gpu-dispatch-geometry`.
-   The planned limit is 31 dispatches, each with one 32-lane workgroup, and
-   992 elements. Verify actual backing and source limits during implementation;
-   preserve the accepted fixed-workload returning profile. Investigate and design
-   hardware cyclic DMA for I2S from pinned sources. Preserve copied-slot
-   acknowledgment and cancellation-backlog rules. These extensions are in
-   development. Continue remaining native mode integration from the hardware matrix.
-   Negotiated read-only SD profiles, UART interrupt service, USB host HID input,
-   trusted GPU programs, deferred NPU interrupt completion and H.264, JPEG and
-   crypto runtime input delivery are integrated. Preserve the frozen SD closure when reusing its accepted evidence;
-   current USB HID headers change embedding layouts. The corrected fixed-workload
-   GPU returning candidate passes root delta review but has no physical admission.
-   Broader GPU dispatch, same-session input replacement, graphics and concurrency
-   remain required. Repeated I2S streaming is integrated; its hardware cyclic-DMA
-   mode remains open. CPU/startup changes remain root-owned. Preserve both cards.
+1. Continue source-backed I2S hardware cyclic-DMA and USB host CPU interrupt
+   integration; both remain in progress. Preserve copied-slot acknowledgment and
+   cancellation-backlog rules. Negotiated read-only SD, UART interrupt service,
+   USB host HID input, bounded trusted GPU multi-dispatch, deferred NPU interrupt
+   completion and H.264, JPEG and crypto runtime input delivery are integrated.
+   Reuse the current-layout frozen SD image and its complete source closure.
+   Preserve the accepted fixed-workload GPU returning profile; its passed root
+   delta review supplies no physical admission. General GPU dispatch geometry,
+   same-session input replacement, graphics and concurrency remain required.
+   CPU/startup changes remain root-owned. Preserve both cards.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a
