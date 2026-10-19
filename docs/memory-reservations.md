@@ -47,8 +47,14 @@ heap exclusion and optional uncached-pool checks still apply.
 
 The shared checks are implemented and compile for AArch64. Default-profile
 executable object sections match the earlier NPU image's objects byte for byte.
-The graph application's final linker placement and actual allocator path still
-require validation. Evidence: `npu-large-memory-20261019/compile-results-fixed.json`.
+The graph candidate's linked staging and pool intervals now pass inspection.
+Its actual EL3 table builder produces identity mappings with write-back attributes
+for every staging and pool page in both translation regimes. The check restricts
+writes to the five table pages and the monitor stack. System-register inputs are
+modeled; this does not establish physical translation or cache visibility.
+Evidence: `npu-large-memory-20261019/linked-table-result.json`; the unchanged
+default-profile comparison remains in `compile-results-fixed.json`. Final graph
+integration must also preserve the native allocator and device-mapping evidence.
 
 Link ownership describes this image's allocations. It does not prove that a
 remote processor or inherited firmware has stopped accessing the same RAM.
