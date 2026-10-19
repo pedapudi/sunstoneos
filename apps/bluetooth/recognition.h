@@ -15,6 +15,15 @@ struct bluetooth_recognition_snapshot {
 #ifdef __cplusplus
 extern "C" {
 #endif
+struct bluetooth_repeated_snapshot {
+    struct bluetooth_recognition_snapshot result;
+    uint64_t ticket,first_sample,first_acquired,last_acquired;
+};
+/* One serialized USB consumer; status/copy/ACK never touch HCI or raw buffers. */
+int bluetooth_recognition_segment_copy(struct bluetooth_application *,uint64_t,uint32_t,size_t,
+    uint8_t out[1024],size_t *,struct bluetooth_repeated_snapshot *);
+int bluetooth_recognition_segment_ack(struct bluetooth_application *,uint64_t);
+int bluetooth_recognition_finished(struct bluetooth_application *);
 int bluetooth_recognition_start(struct bluetooth_application *,const struct bluetooth_recognition_profile *,uint64_t deadline);
 int bluetooth_recognition_live(struct bluetooth_application *);
 int bluetooth_recognition_output(struct bluetooth_application *,const void *,size_t);

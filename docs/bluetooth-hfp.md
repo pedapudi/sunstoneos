@@ -177,3 +177,11 @@ and headset qualification remain outstanding.
 The AG runtime is original Apache-2.0 code grounded in the HFP protocol. External
 Linux header and RFCOMM checksum fixtures preserve their original notices.
 Published BlueZ code is a reading reference and is not copied into this runtime.
+
+
+The native recognition application also supports [successive copied CVSD
+segments](bluetooth-native.md#repeated-headset-capture-and-recognition) within
+one bounded supervised session. Two input slots and exact transcript delivery
+acknowledgments provide backpressure; capture stops on backlog or loss. This
+application extension keeps the existing CVSD negotiation and disconnect path.
+Physical capture and wideband mSBC remain unqualified.

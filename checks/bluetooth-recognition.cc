@@ -53,6 +53,13 @@ extern "C" int bluetooth_headset_copy(bluetooth_application *p,unsigned kind,uin
     *snapshot=identity;if(loss)snapshot->loss_packets=1;
     std::memcpy(out,pcm.data()+offset,bytes);*copied=bytes;return 1;
 }
+// Finite fixture selects mode1; repeated-only entry points are unreachable.
+extern "C" int bluetooth_headset_repeated(const bluetooth_application *){return 0;}
+extern "C" int bluetooth_headset_segment_bind(bluetooth_application *,void *){assert(false);return -1;}
+extern "C" int bluetooth_headset_segment_copy(bluetooth_application *,uint64_t,uint32_t,size_t,uint8_t[1024],size_t *,bluetooth_segment_snapshot *){assert(false);return -1;}
+extern "C" int bluetooth_headset_segment_ack(bluetooth_application *,uint64_t){assert(false);return -1;}
+extern "C" int bluetooth_headset_segment_status(bluetooth_application *,bluetooth_segment_status *){assert(false);return -1;}
+extern "C" int bluetooth_headset_segment_stop(bluetooth_application *){assert(false);return -1;}
 static std::vector<uint8_t> read(const char *path)
 {std::ifstream f(path,std::ios::binary);assert(f);return {std::istreambuf_iterator<char>(f),{}};}
 int main(int argc,char **argv)

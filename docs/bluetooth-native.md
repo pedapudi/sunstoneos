@@ -343,7 +343,7 @@ results are under `~/.cache/sunstoneos/evidence/bluetooth-mimus-native-20261017`
 The software checks establish the finite integration and matching converted-input
 reference behavior. An identified headset, actual pairing/control/audio operation,
 concurrent receive-service bounds and physical transcription within the supervised
-window remain unqualified. Continuous dictation remains outside this finite path.
+window remain unqualified. This profile captures one finite segment. The repeated profile below accepts successive segments within the same supervised session.
 
 The recognition-enabled startup image is now preserved under
 `board-session-seal-mimus-20261018/`, with ELF SHA256
@@ -372,3 +372,99 @@ The repaired fixture uses one time value for both application paths. These resul
 close the recognition serializer/TinyUSB software gap. Physical headset operation,
 receive-service bounds and complete transcription within the supervised window
 remain unqualified.
+
+
+## Repeated headset capture and recognition
+
+The recognition profile also accepts successive 8 kHz, signed little-endian
+16-bit mono PCM segments from one authenticated CVSD synchronous link. Set the
+headset mode at byte 624 of the existing 832-byte profile to 2. Mode 1 retains
+its finite capture protocol. The controller performs CVSD coding; this profile
+adds no host codec and does not negotiate wideband mSBC.
+
+The Bluetooth task owns transport service and two copied PCM slots. Each slot
+holds at most 24,000 samples and 1,024 packet records. A packet that crosses a
+segment boundary retains its acquired-record identity and byte offset until its
+remaining bytes enter the next slot. The task releases the HCI record only after
+its final byte is copied, or explicitly abandons the remainder while closing.
+Complete, loss-free segments carry an increasing ticket, absolute sample offset,
+transport identities and SHA256 digest. Release/acquire publication prevents a
+consumer from reading a mutable slot.
+
+The recognizer copies one complete segment into its private PCM buffer, checks
+its identity and digest, then acknowledges that exact input ticket. Only that
+acknowledgment permits the Bluetooth task to reuse the slot. The existing
+8-to-16 kHz converter and recorded recognition engine process the private copy.
+One transcript log remains immutable until its entire byte range completes USB
+transfer and the host acknowledges the current ticket. Queueing USB bytes or
+reading a partial log provides no acknowledgment credit. Recognition waits for
+that acknowledgment before processing the next segment.
+
+The profile retains the session's overall deadline. New capture admission ends
+38 seconds after application start, and the matching synchronous disconnect must
+arrive by 40 seconds. These are application budgets within the existing roughly
+60-second session; they are not evidence of a transport drain. Recognition and
+copied output may continue after capture stops, subject to the session deadline.
+
+A full copied-input queue, packet loss or a capture deadline stops admission and
+starts the existing bounded close sequence. Accepted complete segments and their
+transcripts remain available after an orderly close. The application waits for
+accepted H4 output to complete locally before requesting synchronous disconnect,
+then requires its matching disconnect event. An unknown or late result retains
+failure. Security revocation denies further input and transcript publication.
+The Bluetooth task continues security/control service after audio disconnect.
+No condition silently overwrites accepted input or reports a guessed disconnect.
+
+### Repeated USB requests and results
+
+Requests are 16 little-endian bytes. Byte 0 is `0x80`; byte 1 selects status (0),
+read (1), acknowledge (2), or capture cancellation (3). Bytes 2–3 hold a read
+length of at most 1,024 bytes, bytes 4–7 the byte offset, and bytes 8–15 the
+64-bit transcript ticket. Read and acknowledge require a nonzero ticket.
+Acknowledgment requires zero offset and length. Status and cancellation require
+all remaining fields to be zero. The existing one-byte identity query remains
+available. Cancellation may truncate audio and is not a graceful wire drain.
+
+Responses contain a 272-byte header and up to 1,024 transcript bytes. All fields
+are little-endian. Reserved and unpublished metadata bytes are zero.
+
+| Offset | Field |
+| --- | --- |
+| 0, 4 | 32-bit magic `0x53525442`, version 1 |
+| 8, 12 | 32-bit state (pending 0, result 1, finished 2, failure 3), payload bytes |
+| 16, 24, 32 | 64-bit session epoch and generation, 32-byte profile SHA256 |
+| 64–95 | Four 64-bit firmware, UART, ACL and audio identities |
+| 96, 104 | 64-bit transcript ticket and first input sample |
+| 112, 116, 120, 124 | 32-bit text bytes, input samples, output samples, reserved zero |
+| 128, 160, 192 | 32-byte PCM, converted WAV and transcript SHA256 digests |
+| 224, 232 | 64-bit published and consumed input counts |
+| 240, 244 | 32-bit stop flags and confirmed-disconnect flag |
+| 248, 256 | 64-bit first and last acquired HCI record serials |
+| 264, 268 | 32-bit recognition-finished flag and returned byte offset |
+
+Stop flags are cancellation (1), admission window (2), backlog (4), loss (8),
+and deadline (16). A failure response may still carry an accepted transcript
+when a capture stop flag is set. Authorization failure suppresses its metadata
+and body. Finished means that disconnect is confirmed and all accepted inputs
+have passed through recognition and their transcript acknowledgments.
+The host stores each complete transcript and its digest before acknowledging it.
+It requires matching session/profile identities, consecutive tickets and sample
+offsets, confirmed disconnect, and equal accepted/consumed/acknowledged counts.
+
+### Software evidence and remaining qualification
+
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/bluetooth-repeated-recognition-20261019/`.
+Six actual-stack ownership/error cases pass. A separate stack composition copies
+two distinct speech segments across HCI record boundaries. The unchanged
+recognizer processes those copied segments, and both results match the portable
+host reference for features, log probabilities, frames and formatted text.
+
+The actual native USB task, serializer, result APIs and TinyUSB pass delivery,
+early/stale acknowledgment, revocation and publication-order checks. The host
+uses their produced frames to check two-result collection, backlog, durable-store
+failure, wrong identity, sample gaps, missing disconnect and a 512-byte first
+USB packet. Scheduler progress, device registers, radio/controller events and
+USB device effects are modeled. No hardware transaction or performance
+measurement was performed. Physical headset operation, receive-service bounds,
+recognition within the session deadline and wideband mSBC remain unqualified.

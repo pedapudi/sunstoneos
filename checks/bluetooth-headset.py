@@ -14,15 +14,16 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--setup-only',action='store_true')
+p.add_argument('--repeated',action='store_true',help='Build only the new repeated headset composition')
 p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech'])
+p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation'])
 a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 cache=Path('/home/sunil/.cache/sunstoneos');security=a.build/'bluetooth-application/security'
 reference=cache/'evidence/bluetooth-native-20261017/composition'
-cc='/usr/bin/clang-21';commands=[]
+cc='/usr/bin/clang-21';commands=[];executing_cases=False
 common=['-std=c11','-Wall','-Wextra','-Wno-unused-function','-Wno-sign-compare','-Wno-for-loop-analysis','-g','-O1',
         '-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer',
         '-DSUNSTONE_BLUETOOTH_HEADSET=1','-Inetwork/include','-Iinclude','-I'+str(reference),'-I'+str(security),'-I'+str(a.build/'bluetooth-application'),
@@ -36,6 +37,9 @@ sources=['drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetoo
          'drivers/bluetooth/bt_hfp_ag.c','drivers/bluetooth/bt_sco.c','drivers/bluetooth/bt_security.c',
          'drivers/storage/storage_digest.c','apps/bluetooth/result.c','checks/bluetooth-headset.c',
          *[str(security/name) for name in ('zephyr-ssp.c','zephyr-keys_br.c','zephyr-security-level.c')]]
+if a.repeated:
+    assert a.recognition_profile
+    sources[sources.index('checks/bluetooth-headset.c')]='checks/bluetooth-headset-repeated.c'
 def run(name,cmd):
     cmd=list(map(str,cmd));commands.append(cmd)
     r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','ASAN_OPTIONS':'halt_on_error=1'})
@@ -43,7 +47,7 @@ def run(name,cmd):
     if log.exists():
         prior=out/'prior'/hashlib.sha256(log.read_bytes()).hexdigest()/log.name;prior.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(log,prior)
     log.write_text(r.stdout+r.stderr)
-    (out/('runtime-commands.json' if a.run_only else 'commands.json')).write_text(json.dumps(commands,indent=2)+'\n')
+    (out/('runtime-commands.json' if a.run_only or executing_cases else 'commands.json')).write_text(json.dumps(commands,indent=2)+'\n')
     return r.returncode
 exe=out/'bluetooth-headset-model'
 if not a.run_only:
@@ -82,6 +86,7 @@ if a.setup_only:sys.exit(0)
 for name,identity in json.loads((out/'setup-inputs.json').read_text()).items():
     if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=identity['sha256'] or hashlib.sha256((out/identity['snapshot']).read_bytes()).hexdigest()!=identity['sha256']:
         sys.exit('Refused changed fixture input: '+name)
+executing_cases=True
 for case in a.case or ('success','justworks','keyreplace','deadline','loss','handoff','security-pending'):
     cmd=[exe,case]
     if case=='speech':

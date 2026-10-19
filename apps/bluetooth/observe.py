@@ -87,3 +87,34 @@ def decode_recognition(frame,session,profile,offset,count):
                   bytes=total,input_samples=source,output_samples=converted,pcm_sha256=frame[112:144].hex(),
                   wav_sha256=frame[144:176].hex(),text_sha256=frame[176:208].hex())
     return result,frame[208:]
+
+def decode_repeated(frame,session,profile,offset=0):
+    """Decode one copied mode2 transcript/status; no physical-disconnect inference."""
+    def require(ok,message):
+        if not ok:raise ValueError(message)
+    require(len(profile)==832 and struct.unpack_from('<I',profile,624)[0]==2,'Repeated headset profile required.')
+    require(272<=len(frame)<=1296 and struct.unpack_from('<II',frame)==(0x53525442,1),'Repeated Bluetooth frame/version differs.')
+    state,count=struct.unpack_from('<2I',frame,8)
+    require(state<=3 and count<=1024 and len(frame)==272+count and
+            struct.unpack_from('<2Q',frame,16)==struct.unpack_from('<2Q',session,24) and
+            frame[32:64]==hashlib.sha256(profile).digest(),'Repeated Bluetooth identity or extent differs.')
+    firmware,uart,acl,audio,ticket,first=struct.unpack_from('<6Q',frame,64)
+    total,inputs,outputs,reserved=struct.unpack_from('<4I',frame,112)
+    published,consumed=struct.unpack_from('<2Q',frame,224)
+    flags,disconnected=struct.unpack_from('<2I',frame,240)
+    first_acquired,last_acquired=struct.unpack_from('<2Q',frame,248)
+    finished,returned=struct.unpack_from('<2I',frame,264)
+    require(not reserved and flags<=31 and disconnected<=1 and finished<=1 and consumed<=published and
+            (not finished or disconnected) and returned==offset,'Repeated Bluetooth status or reserved field differs.')
+    if ticket:
+        samples=struct.unpack_from('<I',profile,720)[0]
+        require(all((firmware,uart,acl,audio)) and ticket<=consumed and
+                first==(ticket-1)*samples and inputs==samples and outputs==2*inputs and
+                total<=65536 and first_acquired<=last_acquired and first_acquired and
+                offset<=total and count<=total-offset and state in (1,3),'Repeated transcript metadata differs.')
+        require(all(any(frame[n:n+32]) for n in (128,160,192)),'Repeated transcript digests missing.')
+    else:require(not count and not any(frame[64:224]) and not any(frame[248:264]),'Unpublished transcript metadata leaked.')
+    return {'state':state,'firmware':firmware,'uart':uart,'acl':acl,'audio':audio,'ticket':ticket,'first_sample':first,
+            'bytes':total,'input_samples':inputs,'output_samples':outputs,'pcm_sha256':frame[128:160].hex(),
+            'wav_sha256':frame[160:192].hex(),'text_sha256':frame[192:224].hex(),'published':published,'consumed':consumed,
+            'flags':flags,'disconnected':disconnected,'finished':finished,'first_acquired':first_acquired,'last_acquired':last_acquired},frame[272:]

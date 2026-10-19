@@ -25,16 +25,19 @@ struct Retained {
     alignas(4) uint8_t wav[BLUETOOTH_WAV_BYTES];
     uint8_t pcm[48000],log[BLUETOOTH_RECOGNITION_LOG];
     bluetooth_recognition_snapshot snapshot;
+    bluetooth_repeated_snapshot segment;
     unsigned used;
 } retained;
 std::atomic<unsigned> terminal{0};
 std::atomic<bool> stopped{false};
+std::atomic<unsigned> finished{0};
 uint64_t now(){return mimus::asr::platform::MonotonicNanos()/1000;}
 
 bool live()
 {return retained.app&&!stopped.load(std::memory_order_acquire)&&now()<retained.deadline&&bluetooth_recognition_live(retained.app)==1;}
 void fail()
-{stopped.store(true,std::memory_order_release);terminal.store(2,std::memory_order_release);}
+{if(retained.app&&bluetooth_headset_repeated(retained.app)==1)(void)bluetooth_headset_segment_stop(retained.app);
+ stopped.store(true,std::memory_order_release);terminal.store(2,std::memory_order_release);}
 [[noreturn]] void failed(){fail();for(;;)vTaskSuspend(nullptr);}
 bool separate(const void *a,size_t n,const void *b,size_t m)
 {uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;return a&&b&&n<=UINTPTR_MAX-x&&m<=UINTPTR_MAX-y&&(x+n<=y||y+m<=x);}
@@ -52,23 +55,37 @@ bool model_hash(unsigned i)
 }
 void recognize(void *)
 {
-    bluetooth_pcm_snapshot capture{};size_t copied=0;uint8_t chunk[1024];int result=0;
-    while(live()){
-        result=bluetooth_headset_copy(retained.app,0,0,2,chunk,&copied,&capture);
-        if(result<0){failed();}
-        if(result==1)break;
-        vTaskDelay(1);
-    }
-    if(result!=1||!live()||!capture.bytes||(capture.bytes&1)||capture.bytes>sizeof(retained.pcm)||capture.loss_packets){failed();}
-    const bluetooth_pcm_snapshot identity=capture;
-    for(uint32_t offset=0;offset<identity.bytes;){
-        size_t count=identity.bytes-offset;if(count>1024)count=1024;
-        if(!live()||bluetooth_headset_copy(retained.app,0,offset,count,chunk,&copied,&capture)!=1||copied!=count||
-            std::memcmp(&capture,&identity,sizeof(identity))){failed();}
-        std::memcpy(retained.pcm+offset,chunk,count);offset+=static_cast<uint32_t>(count);
-    }
-    uint8_t hash[32];storage_digest_bytes(retained.pcm,identity.bytes,hash);
-    if(!live()||std::memcmp(hash,identity.sha256,32)){failed();}
+    const bool repeated=bluetooth_headset_repeated(retained.app)==1;
+    for(;;){
+        bluetooth_pcm_snapshot capture{};bluetooth_segment_snapshot segment{};
+        size_t copied=0;uint8_t chunk[1024];int result=0;
+        while(live()){
+            result=repeated?bluetooth_headset_segment_copy(retained.app,0,0,2,chunk,&copied,&segment):
+                bluetooth_headset_copy(retained.app,0,0,2,chunk,&copied,&capture);
+            if(result<0){failed();}if(result==1)break;
+            if(repeated){bluetooth_segment_status state{};
+                if(bluetooth_headset_segment_status(retained.app,&state)!=1){failed();}
+                if(state.disconnected&&state.published==state.consumed){
+                    finished.store(1,std::memory_order_release);for(;;)vTaskSuspend(nullptr);}
+            }
+            vTaskDelay(1);
+        }
+        if(repeated)capture=segment.capture;
+        if(result!=1||!live()||!capture.bytes||(capture.bytes&1)||capture.bytes>sizeof(retained.pcm)||capture.loss_packets){failed();}
+        const bluetooth_pcm_snapshot identity=capture;
+        const bluetooth_segment_snapshot segment_identity=segment;
+        for(uint32_t offset=0;offset<identity.bytes;){
+            size_t count=identity.bytes-offset;if(count>1024)count=1024;
+            int got=repeated?bluetooth_headset_segment_copy(retained.app,segment_identity.ticket,offset,count,chunk,&copied,&segment):
+                bluetooth_headset_copy(retained.app,0,offset,count,chunk,&copied,&capture);
+            if(!live()||got!=1||copied!=count||(repeated?
+                std::memcmp(&segment,&segment_identity,sizeof(segment)):std::memcmp(&capture,&identity,sizeof(identity)))){failed();}
+            std::memcpy(retained.pcm+offset,chunk,count);offset+=static_cast<uint32_t>(count);
+        }
+        uint8_t hash[32];storage_digest_bytes(retained.pcm,identity.bytes,hash);
+        if(!live()||std::memcmp(hash,identity.sha256,32)){failed();}
+        if(repeated&&bluetooth_headset_segment_ack(retained.app,segment_identity.ticket)!=1){failed();}
+        retained.used=0;
     size_t wav_bytes=0;
     if(bluetooth_pcm_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes)!=1||!live()||!model_hash(0)||!model_hash(1)){
         failed();
@@ -90,7 +107,17 @@ void recognize(void *)
     storage_digest_bytes(retained.wav,wav_bytes,retained.snapshot.wav_sha256);
     storage_digest_bytes(retained.log,retained.used,retained.snapshot.text_sha256);
     if(!live()){failed();}
-    terminal.store(1,std::memory_order_release);for(;;)vTaskSuspend(nullptr);
+
+        if(repeated){
+            retained.segment.result=retained.snapshot;retained.segment.ticket=segment_identity.ticket;
+            retained.segment.first_sample=segment_identity.first_sample;
+            retained.segment.first_acquired=segment_identity.first_acquired;retained.segment.last_acquired=segment_identity.last_acquired;
+        }
+        terminal.store(1,std::memory_order_release);
+        if(!repeated)for(;;)vTaskSuspend(nullptr);
+        while(live()&&terminal.load(std::memory_order_acquire)==1)vTaskDelay(1);
+        if(!live()||terminal.load(std::memory_order_acquire)==2){failed();}
+    }
 }
 }
 extern "C" void platform_puts(const char *text)
@@ -110,13 +137,13 @@ extern "C" int bluetooth_recognition_start(bluetooth_application *app,const blue
     retained.app=app;retained.models=*models;retained.deadline=deadline;
     runtime_smp_init();runtime_init();
     retained.owner=xTaskCreateStatic(recognize,"headset-mimus",16384,nullptr,3,retained.stack,&retained.task);
-    return retained.owner!=nullptr;
+    return retained.owner!=nullptr&&(bluetooth_headset_repeated(app)!=1||bluetooth_headset_segment_bind(app,retained.owner)==1);
 }
 extern "C" void bluetooth_recognition_abort(void){fail();}
 extern "C" int bluetooth_recognition_copy(bluetooth_application *app,uint32_t offset,size_t bytes,uint8_t out[1024],
                                            size_t *copied,bluetooth_recognition_snapshot *snapshot)
 {
-    if(!app||app!=retained.app||!bytes||bytes>1024||!separate(out,1024,copied,sizeof(*copied))||
+    if(!app||app!=retained.app||bluetooth_headset_repeated(app)==1||!bytes||bytes>1024||!separate(out,1024,copied,sizeof(*copied))||
         !separate(out,1024,snapshot,sizeof(*snapshot))||!separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
     const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};
     for(unsigned i=0;i<3;++i)if(bluetooth_recognition_output(app,buffers[i],sizes[i])!=1||!separate(buffers[i],sizes[i],&retained,sizeof(retained))||
@@ -129,3 +156,29 @@ extern "C" int bluetooth_recognition_copy(bluetooth_application *app,uint32_t of
     std::memcpy(out,retained.log+offset,bytes);*copied=bytes;*snapshot=retained.snapshot;
     return live()?1:-1;
 }
+
+extern "C" int bluetooth_recognition_segment_copy(bluetooth_application *app,uint64_t ticket,uint32_t offset,size_t bytes,
+    uint8_t out[1024],size_t *copied,bluetooth_repeated_snapshot *snapshot)
+{
+    if(!app||app!=retained.app||bluetooth_headset_repeated(app)!=1||!copied||!snapshot||bytes>1024||
+       (bytes&&!out)||!separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
+    const void *buffers[]={out,copied,snapshot};size_t sizes[]={bytes?1024u:0u,sizeof(*copied),sizeof(*snapshot)};
+    for(unsigned i=0;i<3;++i)if(sizes[i]&&(bluetooth_recognition_output(app,buffers[i],sizes[i])!=1||
+        !separate(buffers[i],sizes[i],&retained,sizeof(retained))||
+        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(BLUETOOTH_MODEL_BASE),2*BLUETOOTH_MODEL_SLOT)||
+        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(0x46000000),16*1024*1024)))return -1;
+    if(bytes&&(!separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))))return -1;
+    *copied=0;std::memset(snapshot,0,sizeof(*snapshot));
+    unsigned state=terminal.load(std::memory_order_acquire);
+    if(!live()||state==2)return -1;if(!state)return 0;
+    if((ticket&&ticket!=retained.segment.ticket)||(bytes&&!ticket)||offset>retained.used||bytes>retained.used-offset)return -1;
+    if(bytes)std::memcpy(out,retained.log+offset,bytes);*copied=bytes;*snapshot=retained.segment;return live()?1:-1;
+}
+extern "C" int bluetooth_recognition_segment_ack(bluetooth_application *app,uint64_t ticket)
+{
+    if(!app||app!=retained.app||bluetooth_headset_repeated(app)!=1||!ticket||!live()||
+       terminal.load(std::memory_order_acquire)!=1||retained.segment.ticket!=ticket)return -1;
+    terminal.store(0,std::memory_order_release);return 1;
+}
+extern "C" int bluetooth_recognition_finished(bluetooth_application *app)
+{return app==retained.app&&bluetooth_recognition_live(app)==1?static_cast<int>(finished.load(std::memory_order_acquire)):-1;}

@@ -159,3 +159,11 @@ security/scheduling prerequisites.
 Primary references: [Core 5.4 HCI specification](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html),
 [HFP 1.9](https://www.bluetooth.org/DocMan/handlers/DownloadDoc.ashx?doc_id=574215),
 and the pinned [published CVSD setup](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/net/bluetooth/hci_conn.c).
+
+
+The native recognition application also supports [successive copied CVSD
+segments](bluetooth-native.md#repeated-headset-capture-and-recognition) within
+one bounded supervised session. Two input slots and exact transcript delivery
+acknowledgments provide backpressure; capture stops on backlog or loss. This
+application extension keeps the existing CVSD negotiation and disconnect path.
+Physical capture and wideband mSBC remain unqualified.

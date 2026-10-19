@@ -124,6 +124,9 @@ static void setup(void)
     memcpy(profile.recognition.bytes,bluetooth_model_bytes,sizeof(bluetooth_model_bytes));
     memcpy(profile.recognition.sha256,bluetooth_model_sha256,sizeof(bluetooth_model_sha256));
 #endif
+#ifdef BLUETOOTH_CHECK_REPEATED
+    profile.headset.mode=2;
+#endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest));
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
@@ -135,7 +138,10 @@ static void setup(void)
 #endif
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;bootstrap_ready=1;
 }
-int main(int argc,char **argv)
+#ifndef BLUETOOTH_HEADSET_FIXTURE_ENTRY
+#define BLUETOOTH_HEADSET_FIXTURE_ENTRY main
+#endif
+int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
 {
     assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");setup();
     if(handoff){

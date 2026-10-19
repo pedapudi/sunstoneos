@@ -31,7 +31,7 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         return 0;
 #else
         const struct bluetooth_headset_profile *h=&p->headset;
-        if(h->mode!=1||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
+        if((h->mode!=1&&(h->mode!=2||p->version!=3))||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
             h->minimum_security<2||h->minimum_security>3||!h->server_channel||h->server_channel>30||
             !h->scheduling_authority||!present(h->scheduling_evidence,32)||!h->receive_latency_us||
             !h->response_timeout_us||h->receive_latency_us>=1000000||h->response_timeout_us>=1000000||

@@ -57,12 +57,12 @@ def setup(out):
                             if 'DW_AT_byte_size' in t.attributes:types[n]=members(t)
                             if 'DW_AT_byte_size' in t.attributes:sizes[n]=int(t.attributes['DW_AT_byte_size'].value)
                     except KeyError:pass
-                if die.tag=='DW_TAG_variable' and ((unit.endswith('/apps/bluetooth/usb0.c') and n in ('identity_frame','identity_bytes','identity_sent','identity_transferred')) or (unit.endswith('/apps/bluetooth/recognition.cc') and n in ('retained','terminal','stopped'))):
+                if die.tag=='DW_TAG_variable' and ((unit.endswith('/apps/bluetooth/usb0.c') and n in ('identity_frame','identity_bytes','identity_sent','identity_transferred','transcript_delivered','transcript_delivered_bytes')) or (unit.endswith('/apps/bluetooth/recognition.cc') and n in ('retained','terminal','stopped','finished')) or (unit.endswith('/apps/bluetooth/headset.c') and n=='voice')):
                     loc=die.attributes.get('DW_AT_location');assert loc,(unit,n)
                     ops=DWARFExprParser(dw.structs).parse_expr(loc.value)
                     assert len(ops)==1 and ops[0].op_name in ('DW_OP_addr','DW_OP_addrx'),(unit,n)
                     address=ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dw.get_addr(cu,ops[0].args[0])
-                    variables[n]={'address':address,'unit':unit,'members':members(die.get_DIE_from_attribute('DW_AT_type')) if n=='retained' else {}}
+                    variables[n]={'address':address,'unit':unit,'members':members(die.get_DIE_from_attribute('DW_AT_type')) if n in ('retained','voice') else {}}
         required=['board_usb0_task','board','bluetooth','providers','board_live','board_fail','vTaskDelay','a733_smp_counter',
           '_ZN5mimus3asr8platform14MonotonicNanosEv','xTaskGetCurrentTaskHandle','a733_clock_token_status','a733_rail_status','a733_pmic_live',
           'a733_native_usb_step','a733_native_usb_health','a733_usb_platform_poll','bluetooth_recognition_copy',
@@ -72,7 +72,11 @@ def setup(out):
           'dcd_edpt_close_all','dcd_edpt0_setup_begin','dcd_edpt_stall','dcd_sof_enable']
         for name in required:
             assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
-        assert len(variables)==7
+        assert all(n in variables for n in ('identity_frame','identity_bytes','identity_sent','identity_transferred','retained','terminal','stopped'))
+        if 'finished' in variables:
+            for name in ('bluetooth_recognition_segment_copy','bluetooth_recognition_segment_ack','bluetooth_recognition_finished',
+                         'bluetooth_headset_segment_status','bluetooth_headset_segment_stop'):
+                assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
         fields={'board_application':['session','fatal','watchdog_state','live_until'],
           'bluetooth_application':['self','profile','shared','failed','recovery_state'],'a733_native_usb':['clocks','rails','pmic','usb','usb.token','usb.token.id','usb_rail','usb_rail.id','boot.usb.owner','usb.token.owner','usb.registry','usb.self','usb.initialized','usb.stage','usb.fault','usb_rail.owner','usb_power.owner','usb_power.provider','live','fail','context','usb_task','usb_step','usb_rail_index','pmic_ready','usb_prepared','clocks.failed','locks.retained'],
           'dcd_event_t':['rhport','event_id','setup_received','bus_reset.speed','xfer_complete.ep_addr','xfer_complete.result','xfer_complete.len']}

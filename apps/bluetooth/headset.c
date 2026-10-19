@@ -25,6 +25,18 @@ static struct {
     uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence;
     unsigned stage,auth_started,silence_bytes,configured;
     atomic_uint terminal;
+    void *segment_consumer;
+    struct bluetooth_application *segment_app;
+    atomic_ullong segment_head,segment_tail;
+    atomic_uint segment_stop,segment_flags,segment_disconnected;
+    struct {
+        struct bluetooth_segment_snapshot snapshot;
+        struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
+        uint8_t pcm[BLUETOOTH_PCM_BYTES];
+    } segments[BLUETOOTH_SEGMENT_SLOTS];
+    uint64_t partial_serial;
+    unsigned partial_offset,segment_bytes,segment_records;
+
 } voice;
 static struct {struct bluetooth_application *app;} context;
 static int live(struct bluetooth_application *a)
@@ -110,13 +122,15 @@ static int control_step(struct bluetooth_application *a)
     else if(bt_rfcomm_step(&voice.rfcomm,64,a->deadline)<0)return -1;
     return bt_security_service(&voice.security,a->deadline);
 }
+static int repeated_audio(struct bluetooth_application *,struct bt_sco_link *,uint64_t);
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
     if(!a||a->profile->version<2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
     if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
     if(!live(a)||now<voice.last_owner||now-voice.last_owner>a->profile->headset.receive_latency_us)return fail();
     voice.last_owner=now;
-    if(atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
+    if(a->profile->headset.mode!=2&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
+    if(a->profile->headset.mode==2&&voice.stage<AUDIO&&atomic_load_explicit(&voice.segment_stop,memory_order_acquire))return fail();
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     if(voice.operation_deadline&&now>=voice.operation_deadline)return fail();
     if(voice.stage==CONFIGURE){
@@ -199,10 +213,11 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         if(l->phase==BT_SCO_CLOSED||l->phase==BT_SCO_RETAINED)return fail();
         if(l->phase!=BT_SCO_OPEN)return 0;
         voice.capture_deadline=cap(now,p->capture_timeout_us,stage_deadline(a,59000000));
-        voice.operation_deadline=voice.capture_deadline;voice.next_silence=now;
+        voice.operation_deadline=p->mode==2?0:voice.capture_deadline;voice.next_silence=now;
         voice.silence_bytes=voice.audio.mtu&~1u;if(voice.silence_bytes>254)voice.silence_bytes=254;
         if(!voice.silence_bytes)return fail();voice.stage=CAPTURE;
     }
+    if(p->mode==2)return repeated_audio(a,l,now);
     const struct bt_sco_packet *rx=bt_sco_receive(&voice.audio);
     if(rx){
         if(rx->link!=voice.stream)return fail();
@@ -265,4 +280,136 @@ int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_
     *snapshot=voice.snapshot;*copied=bytes;
     return atomic_load_explicit(&a->failed,memory_order_acquire)||
         (atomic_load_explicit(a->recovery_state,memory_order_acquire)&4)?-1:1;
+}
+
+/* The input slots have one serialized Bluetooth producer and one bound
+ * recognizer consumer. An unreturned slot is never written again. */
+int bluetooth_headset_repeated(const struct bluetooth_application *a)
+{return a&&a->self==a&&a->profile&&a->profile->version==3&&a->profile->headset.mode==2;}
+static int segment_live(struct bluetooth_application *a)
+{return bluetooth_headset_repeated(a)&&voice.segment_app==a&&
+    !atomic_load_explicit(&a->failed,memory_order_acquire)&&
+    !(atomic_load_explicit(a->recovery_state,memory_order_acquire)&4);}
+int bluetooth_headset_segment_bind(struct bluetooth_application *a,void *consumer)
+{
+    if(!bluetooth_headset_repeated(a)||!consumer||voice.segment_consumer||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    voice.segment_app=a;voice.segment_consumer=consumer;return 1;
+}
+int bluetooth_headset_segment_stop(struct bluetooth_application *a)
+{if(!segment_live(a))return -1;atomic_store_explicit(&voice.segment_stop,1,memory_order_release);return 1;}
+int bluetooth_headset_segment_status(struct bluetooth_application *a,struct bluetooth_segment_status *out)
+{
+    if(!segment_live(a)||!out||!separate(out,sizeof(*out),&voice,sizeof(voice))||
+       !separate(out,sizeof(*out),a,sizeof(*a))||!separate(out,sizeof(*out),a->profile,sizeof(*a->profile))||
+       !separate(out,sizeof(*out),a->shared,sizeof(*a->shared)))return -1;
+    /* Tail precedes head so concurrent publication/consumption cannot make the
+     * observed consumer count exceed the observed producer count. */
+    /* Acquire closure before its preceding publications, so a terminal empty
+     * observation cannot omit the last accepted segment. */
+    out->disconnected=atomic_load_explicit(&voice.segment_disconnected,memory_order_acquire);
+    out->consumed=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
+    out->published=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
+    out->flags=atomic_load_explicit(&voice.segment_flags,memory_order_acquire);
+    return 1;
+}
+int bluetooth_headset_segment_copy(struct bluetooth_application *a,uint64_t ticket,uint32_t offset,size_t bytes,
+    uint8_t out[1024],size_t *copied,struct bluetooth_segment_snapshot *snapshot)
+{
+    if(!segment_live(a)||!voice.segment_consumer||xTaskGetCurrentTaskHandle()!=voice.segment_consumer||
+       !out||!copied||!snapshot||!bytes||bytes>1024||
+       !separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))||
+       !separate(copied,sizeof(*copied),snapshot,sizeof(*snapshot)))return -1;
+    const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};
+    for(unsigned i=0;i<3;++i)if(!separate(buffers[i],sizes[i],&voice,sizeof(voice))||
+        !separate(buffers[i],sizes[i],a,sizeof(*a))||!separate(buffers[i],sizes[i],a->profile,sizeof(*a->profile))||
+        !separate(buffers[i],sizes[i],a->shared,sizeof(*a->shared)))return -1;
+    *copied=0;memset(snapshot,0,sizeof(*snapshot));
+    uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_relaxed);
+    uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
+    if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;if(head==tail)return 0;
+    const struct bluetooth_segment_snapshot *s=&voice.segments[tail%BLUETOOTH_SEGMENT_SLOTS].snapshot;
+    if((ticket&&ticket!=tail+1)||s->ticket!=tail+1||offset>s->capture.bytes||bytes>s->capture.bytes-offset)return -1;
+    memcpy(out,voice.segments[tail%BLUETOOTH_SEGMENT_SLOTS].pcm+offset,bytes);*copied=bytes;*snapshot=*s;
+    return segment_live(a)?1:-1;
+}
+int bluetooth_headset_segment_ack(struct bluetooth_application *a,uint64_t ticket)
+{
+    if(!segment_live(a)||!voice.segment_consumer||xTaskGetCurrentTaskHandle()!=voice.segment_consumer)return -1;
+    uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_relaxed);
+    uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
+    if(!ticket||tail==UINT64_MAX||ticket!=tail+1||head<=tail||head-tail>BLUETOOTH_SEGMENT_SLOTS)return -1;
+    atomic_store_explicit(&voice.segment_tail,tail+1,memory_order_release);return 1;
+}
+static void segment_stopping(unsigned flag)
+{
+    atomic_fetch_or_explicit(&voice.segment_flags,flag,memory_order_release);
+    atomic_store_explicit(&voice.segment_stop,1,memory_order_release);
+    voice.operation_deadline=voice.app->started+40000000;
+}
+static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,uint64_t now)
+{
+    const struct bluetooth_headset_profile *p=&a->profile->headset;
+    if(voice.stage==CAPTURE){
+        if(l->phase!=BT_SCO_OPEN)return fail();
+        if(now>=a->started+38000000)segment_stopping(BLUETOOTH_SEGMENT_WINDOW);
+        else if(now>=voice.capture_deadline)segment_stopping(BLUETOOTH_SEGMENT_DEADLINE);
+        if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)&&!voice.operation_deadline)
+            segment_stopping(BLUETOOTH_SEGMENT_CANCEL);
+    }
+    const struct bt_sco_packet *rx=bt_sco_receive(&voice.audio);
+    if(rx){
+        if(rx->link!=voice.stream)return fail();
+        if(voice.partial_serial&&voice.partial_serial!=rx->serial)return fail();
+        if(voice.stage==CAPTURE&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
+            voice.partial_serial=rx->serial;
+            if(rx->status)segment_stopping(BLUETOOTH_SEGMENT_LOSS);
+            while(voice.partial_offset<rx->length&&!atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
+                uint64_t head=atomic_load_explicit(&voice.segment_head,memory_order_relaxed);
+                uint64_t tail=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
+                if(head<tail||head-tail>BLUETOOTH_SEGMENT_SLOTS||head>=UINT64_MAX/p->samples)return fail();
+                if(head-tail==BLUETOOTH_SEGMENT_SLOTS||voice.segment_records==BLUETOOTH_PCM_RECORDS){
+                    segment_stopping(BLUETOOTH_SEGMENT_BACKLOG);break;}
+                unsigned slot=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);
+                struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
+                if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->ticket=head+1;s->first_sample=head*p->samples;s->first_acquired=rx->acquired;}
+                unsigned remaining=p->samples*2-voice.segment_bytes;
+                size_t used=rx->length-voice.partial_offset;if(used>remaining)used=remaining;
+                voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){rx->acquired,
+                    voice.segment_bytes,(uint16_t)rx->length,(uint16_t)used,rx->status,0};
+                memcpy(voice.segments[slot].pcm+voice.segment_bytes,rx->bytes+voice.partial_offset,used);
+                voice.segment_bytes+=(unsigned)used;voice.partial_offset+=(unsigned)used;s->last_acquired=rx->acquired;
+                if(voice.segment_bytes==p->samples*2){
+                    s->capture=(struct bluetooth_pcm_snapshot){.firmware=a->firmware_generation,.uart=a->uart_generation,
+                        .acl=voice.link,.audio=voice.stream,.state=1,.bytes=voice.segment_bytes,.records=voice.segment_records};
+                    storage_digest_bytes(voice.segments[slot].pcm,voice.segment_bytes,s->capture.sha256);
+                    atomic_store_explicit(&voice.segment_head,head+1,memory_order_release);
+                    voice.segment_bytes=voice.segment_records=0;
+                    voice.capture_deadline=cap(now,p->capture_timeout_us,a->started+38000000);
+                }
+            }
+        }
+        /* Closing explicitly abandons unpublished packet tails. Accepted input
+         * slots stay immutable; only the exact currently borrowed RX is freed. */
+        if(voice.partial_offset==rx->length||voice.stage!=CAPTURE||atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
+            if(bt_sco_release_receive(&voice.audio,rx->serial)!=1)return fail();
+            voice.partial_serial=0;voice.partial_offset=0;
+        }
+    }
+    if(voice.stage==CAPTURE){
+        if(atomic_load_explicit(&voice.segment_stop,memory_order_acquire)){
+            if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
+            if(bt_sco_close(&voice.audio,voice.stream,a->started+40000000)!=1)return fail();voice.stage=CLOSE;return 0;
+        }
+        if(now>=voice.next_silence){uint64_t serial;
+            int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
+            if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}
+        return 0;
+    }
+    if(voice.stage==CLOSE&&l->phase==BT_SCO_CLOSED){
+        voice.stage=DONE;voice.operation_deadline=0;
+        atomic_store_explicit(&voice.segment_disconnected,1,memory_order_release);return 1;
+    }
+    /* DONE still reaches control_step, bt_sco_step and security_service in the
+     * owner poll. Revocation remains observable through the output lifetime. */
+    return voice.stage==DONE?1:0;
 }
