@@ -43,6 +43,10 @@ require owner verification; request another substantive review only when the
 repair changes coverage, modeled boundaries or production behavior. Preserve
 completed results and resume only failed or affected steps.
 
+Collect an executable's dependency inventory from its actual linked objects.
+A compilation database can also contain unrelated targets. Report entries outside
+the selected executable separately; their exclusion is not a source change.
+
 ## Reuse valid evidence
 
 A successful result remains valid when its relevant inputs are unchanged:
@@ -56,6 +60,10 @@ A commit, conflict-free rebase, handoff, or final response is not an input chang
 Use existing build dependencies and a small evidence record before introducing
 new caching infrastructure. Missing dependency information prevents reuse only
 for checks affected by that uncertainty.
+
+A runner may skip a preserved passing case only when its artifact identity
+matches. Reusing a result across different images requires an explicit comparison
+of the affected inputs and behavior; the case name alone is insufficient.
 
 Preserve successful executables, logs and relevant inputs before another build
 can overwrite them. Existing evidence runners may already do this. Otherwise,
