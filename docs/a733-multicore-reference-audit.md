@@ -100,6 +100,23 @@ previous interrupt is deactivated; the handler uses combined EOI/deactivation
 before returning and does not depend on nested delivery. These exclusions do
 not qualify shutdown after general peripheral interrupt use.
 
+The complete returning 32-round workload has the same interrupt scope. Its
+distributor preparation disables every SPI bank before enabling delivery, and
+local admission requires LPIs disabled. The USB observer is suppressed. Only
+SGI0 and timer PPI30 execute, so erratum 2384374's SPI/LPI conditions remain
+excluded. The actual FreeRTOS IRQ handler writes `ICC_EOIR1_EL1` before task
+selection, with `ICC_CTLR_EL1.EOImode=0` for combined priority drop and
+deactivation. It therefore does not depend on nested delivery of another
+same-priority SGI/PPI while the previous interrupt remains active.
+
+At workload completion, every CPU stops timer generation and group delivery
+before publishing its final writer record. Cleanup waits for all eight records,
+then rejects active or unrelated pending interrupts and clears its owned pending
+bits. This source review reuses SDEN-892601 version 12.0 and the frozen linked
+handler; no workload or hardware check was repeated. Evidence:
+`all-core-task-workload-20261019/interrupt-errata-review.json`. Physical scheduling
+and general peripheral-interrupt shutdown remain unqualified.
+
 
 The corrected interrupt diagnostic passes physically under
 `secondary-interrupt-probe-20261018/physical-114/runtime/`. All seven targets
