@@ -35,7 +35,6 @@ class Check(unittest.TestCase):
         self.assertEqual(len(rows), len(inventory))
         self.assertEqual(parser['status'], 'ok')
         by_name = {row['name']: row for row in rows}
-        self.assertEqual(by_name['UART']['implementation'], 'planned')
         self.assertNotIn('board', by_name['DMA and device address translation']['evidence'])
         self.assertIn('host', by_name['DMA and device address translation']['evidence'])
         self.assertIn('board', by_name['CPU cores']['evidence'])
@@ -48,11 +47,64 @@ class Check(unittest.TestCase):
 | --- | --- | --- |
 | DMA and device address translation | Transfers | Memory |
 | CPU cores | Tasks | Clocks |
+| UART | Console | Pins |
 '''
         parsed, _ = progress.parse_hardware(sample)
         self.assertEqual(parsed[0]['evidence'], [])
         self.assertNotIn('board', parsed[1]['evidence'])
         self.assertIn('host', parsed[1]['evidence'])
+        self.assertEqual(parsed[2]['implementation'], 'planned')
+
+    def test_dependency_coverage_and_scoped_edges(self):
+        data = json.loads(self.view.snapshot()[0])
+        graph = data['dependencies']
+        self.assertEqual(graph['status'], 'ok', graph['warnings'])
+        nodes = {node['id']: node for node in graph['nodes']}
+        inventory = {row['id']: row for row in data['hardware']}
+        self.assertEqual({key for key, node in nodes.items() if node['hardware_id']}, set(inventory))
+        self.assertEqual(set(nodes['all-board-support']['requires']), set(inventory))
+        for key, node in nodes.items():
+            self.assertTrue((ROOT / node['record']).is_file())
+            for parent in node['requires']:
+                self.assertLess(nodes[parent]['level'], node['level'])
+            if key in inventory:
+                self.assertEqual(node['evidence'], inventory[key]['evidence'])
+                self.assertEqual(node['qualification'], inventory[key]['qualification'])
+        def ancestors(key):
+            return set(nodes[key]['requires']).union(*(ancestors(parent) for parent in nodes[key]['requires']))
+        for key in ('gpu', 'npu', 'usb-controllers-and-phys'):
+            self.assertNotIn('cpu-cores', ancestors(key))
+            self.assertNotIn('system-iommu', ancestors(key))
+            self.assertNotIn('dma-controllers', ancestors(key))
+        self.assertNotIn('wi-fi', ancestors('bluetooth-controller-and-profiles'))
+        self.assertIn('radio-firmware', ancestors('bluetooth-controller-and-profiles'))
+        self.assertIn('dma-controllers', ancestors('audio-controllers'))
+        self.assertIn('system-iommu', ancestors('display-engine'))
+        self.assertEqual(nodes['single-core-runtime']['status'], 'structural')
+
+    def test_dependency_invalid_records_and_cache(self):
+        path = self.root / 'docs/hardware-dependencies.md'
+        original = path.read_text()
+        body, tag = self.view.snapshot()
+        invalid = [
+            (original.replace('| gpu | GPU |', '| omitted-gpu | GPU |'), 'missing'),
+            (original + '\n| extra | Extra | unknown | Scope | Condition | hardware.md |\n', 'Unknown'),
+            (original + '\n| loop | Loop | loop | Scope | Condition | hardware.md |\n', 'cycle'),
+            (original + '\n| gpu | Duplicate | - | Scope | Condition | hardware.md |\n', 'duplicate'),
+            ('', 'unavailable'),
+        ]
+        for source, warning in invalid:
+            path.write_text(source)
+            updated, new_tag = self.view.snapshot()
+            self.assertNotEqual(tag, new_tag)
+            graph = json.loads(updated)['dependencies']
+            self.assertEqual(graph['status'], 'invalid')
+            self.assertEqual(graph['nodes'], [])
+            self.assertIn(warning, ' '.join(graph['warnings']))
+        path.write_text(original)
+        restored, restored_tag = self.view.snapshot()
+        self.assertEqual(json.loads(restored)['dependencies']['status'], 'ok')
+        self.assertEqual(self.view.snapshot(), (restored, restored_tag))
 
     def test_cache_and_changed_format(self):
         one, tag = self.view.snapshot()

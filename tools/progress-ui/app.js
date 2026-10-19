@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = (id) => document.getElementById(id);
-  const state = { data: null, revision: null, etag: null, view: 'hardware', expanded: new Set(), request: 0, controller: null, docRequest: 0, docController: null, document: null, history: [], opener: null };
+  const state = { data: null, revision: null, etag: null, view: 'hardware', dependency: 'gpu', expanded: new Set(), request: 0, controller: null, docRequest: 0, docController: null, document: null, history: [], opener: null };
   const evidenceLabels = { board: 'Physical result', host: 'Host checked', emulator: 'Emulator checked', source: 'Source reviewed' };
   const statusLabels = { planned: 'Planned', implemented: 'Partial implementation', host_tested: 'Host / emulator evidence', board_tested: 'Physical result (partial)', qualified: 'Qualified' };
   function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = String(text); return node; }
@@ -214,12 +214,86 @@
     const statuses = [...new Set(items.map((item) => item.status).filter(Boolean))];
     const options = Object.entries(statusLabels).filter(([key]) => statuses.includes(key) || key === 'qualified' && items.some((item) => item.qualification === key));
     for (const value of statuses) if (!statusLabels[value]) options.push([value, value.replace(/_/g, ' ')]);
-    syncFilter('status', options, 'All statuses'); hardware(); nextActions(); activity();
+    syncFilter('status', options, 'All statuses'); hardware(); dependencies(); nextActions(); activity();
     const performance = summary.performance_note || data.performance_note;
     $('performance-note').hidden = !performance; $('performance-copy').textContent = plain(performance);
     $('source-time').textContent = `Records updated ${date(data.updated_at, true)} · Checks every 30 seconds while visible`;
     $('source-time').title = data.updated_at || '';
   }
+  function dependencies() {
+    const graph = state.data?.dependencies, canvas = $('dependency-graph'), detail = $('dependency-detail');
+    canvas.replaceChildren(); detail.replaceChildren();
+    if (graph?.status !== 'ok') {
+      $('dependency-summary').textContent = 'Dependency graph unavailable. ' + list(graph?.warnings).join(' ');
+      $('dependency-focus').replaceChildren(); return;
+    }
+    const nodes = graph.nodes, byId = new Map(nodes.map((node) => [node.id, node]));
+    if (!byId.has(state.dependency)) state.dependency = nodes[0].id;
+    const select = $('dependency-focus'); select.replaceChildren();
+    for (const node of nodes) { const option = el('option', '', node.name); option.value = node.id; select.append(option); }
+    select.value = state.dependency;
+    const selected = byId.get(state.dependency), ancestors = new Set(), descendants = new Set();
+    function visit(id) { for (const parent of byId.get(id).requires) if (!ancestors.has(parent)) { ancestors.add(parent); visit(parent); } }
+    visit(selected.id);
+    for (const node of nodes) if (node.requires.includes(selected.id)) descendants.add(node.id);
+    const all = $('dependency-all').checked;
+    const visible = nodes.filter((node) => all || node.id === selected.id || ancestors.has(node.id) || descendants.has(node.id));
+    $('dependency-summary').textContent = `${graph.hardware_count} hardware areas · ${nodes.length} functions and shared prerequisites · ${visible.length} shown. ${all ? 'Complete graph; scroll horizontally to explore.' : 'Showing all prerequisites and direct dependents of ' + selected.name + '. Scroll horizontally to follow the path.'}`;
+    // Compact the levels in a focused view; retain topological order.
+    const levels = [...new Set(visible.map((node) => node.level))].sort((a, b) => a - b), positions = new Map();
+    const width = 218, gap = 54, height = 92, rowGap = 16;
+    let rows = 1;
+    levels.forEach((level, column) => {
+      const group = visible.filter((node) => node.level === level); rows = Math.max(rows, group.length);
+      const heading = el('span', 'dependency-column', `DEPTH ${level + 1}`);
+      heading.style.left = `${column * (width + gap) + 20}px`; canvas.append(heading);
+      group.forEach((node, row) => positions.set(node.id, { x: column * (width + gap) + 20, y: row * (height + rowGap) + 44 }));
+    });
+    const totalWidth = levels.length * (width + gap) - gap + 40, totalHeight = rows * (height + rowGap) + 48;
+    canvas.style.width = `${totalWidth}px`; canvas.style.height = `${totalHeight}px`;
+    const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', totalWidth); svg.setAttribute('height', totalHeight); svg.setAttribute('aria-hidden', 'true');
+    const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker');
+    marker.id = 'dependency-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '5'); marker.setAttribute('markerHeight', '5'); marker.setAttribute('orient', 'auto');
+    const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); arrow.setAttribute('fill', '#6b8175'); marker.append(arrow); defs.append(marker); svg.append(defs);
+    for (const edge of graph.edges) {
+      if (!positions.has(edge.from) || !positions.has(edge.to)) continue;
+      // Focused graphs show only the dependency closure and selected node's outgoing edges.
+      if (!all && descendants.has(edge.to) && edge.from !== selected.id) continue;
+      const start = positions.get(edge.from), end = positions.get(edge.to), x = start.x + width, y = start.y + height / 2, toY = end.y + height / 2;
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', `M ${x} ${y} C ${x + gap / 2} ${y}, ${end.x - gap / 2} ${toY}, ${end.x} ${toY}`);
+      path.setAttribute('class', 'dependency-edge' + (edge.from === selected.id ? ' downstream' : ''));
+      path.setAttribute('marker-end', 'url(#dependency-arrow)'); svg.append(path);
+    }
+    canvas.prepend(svg);
+    function choose(id) { state.dependency = id; dependencies(); }
+    for (const node of visible) {
+      const pos = positions.get(node.id), active = node.id === selected.id;
+      const button = el('button', 'dependency-node' + (active ? ' selected' : '') + (descendants.has(node.id) ? ' dependent' : ''));
+      button.type = 'button'; button.dataset.node = node.id; button.setAttribute('aria-pressed', String(active));
+      button.style.left = `${pos.x}px`; button.style.top = `${pos.y}px`;
+      button.append(el('strong', '', node.name), el('span', 'dependency-node-status', node.hardware_id ? (statusLabels[node.status] || node.status_label) : 'Shared function / milestone'));
+      button.addEventListener('click', () => { choose(node.id); canvas.querySelector(`[data-node="${node.id}"]`)?.focus({ preventScroll: true }); });
+      canvas.append(button);
+    }
+    detail.append(el('p', 'eyebrow', selected.hardware_id ? 'HARDWARE FUNCTION' : 'SHARED FUNCTION / MILESTONE'), el('h3', '', selected.name), el('p', '', selected.scope));
+    const area = list(state.data.hardware).find((item) => item.id === selected.id);
+    if (area) {
+      detail.append(el('h4', '', 'Recorded evidence'), el('p', 'secondary', (statusLabels[area.status] || area.status_label) + '. Applies only to the scope in the support matrix.'), el('p', 'secondary', 'Qualification: ' + area.qualification.replace(/_/g, ' ') + '.'));
+      const evidence = el('details', 'dependency-evidence'); evidence.append(el('summary', '', 'Read current scope'));
+      const copy = el('div', 'prose'); markdown(copy, area.details.map((part) => part.markdown).join('\n\n')); evidence.append(copy); detail.append(evidence);
+    } else detail.append(el('p', 'secondary', 'This node describes required functionality. Its component record holds the evidence; no separate completion status is inferred.'));
+    for (const [title, ids] of [['Direct prerequisites', selected.requires], ['Direct dependents', [...descendants]]]) {
+      detail.append(el('h4', '', title));
+      if (!ids.length) detail.append(el('p', 'secondary', 'None in this graph.'));
+      const links = el('div', 'dependency-links');
+      for (const id of ids) { const button = el('button', 'text-button', byId.get(id).name); button.type = 'button'; button.addEventListener('click', () => choose(id)); links.append(button); }
+      detail.append(links);
+    }
+    detail.append(el('h4', '', 'Physical qualification needs'), el('p', '', selected.conditions), documentButton(selected.record, 'Open component record ↗'), documentButton('docs/hardware.md', 'Open support matrix ↗'));
+  }
+
   function setConnection(kind, label) { $('connection').className = 'connection ' + kind; $('connection-label').textContent = label; }
   async function refresh() {
     const request = ++state.request;
@@ -254,10 +328,10 @@
     } finally { clearTimeout(timeout); if (request === state.request) $('refresh').disabled = false; }
   }
   function view(name) {
-    if (!['hardware', 'next', 'activity'].includes(name)) return;
-    state.view = name;
+    if (!['hardware', 'dependencies', 'next', 'activity'].includes(name)) return;
+    state.view = name; history.replaceState(null, '', '#' + name);
     for (const button of document.querySelectorAll('[data-view]')) { const active = button.dataset.view === name; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
-    for (const key of ['hardware', 'next', 'activity']) $('view-' + key).hidden = key !== name;
+    for (const key of ['hardware', 'dependencies', 'next', 'activity']) $('view-' + key).hidden = key !== name;
   }
   function showDocumentText() {
     const container = $('document-body'); container.replaceChildren();
@@ -294,6 +368,8 @@
     if (button && !button.disabled) openDocument(button.dataset.document);
     const tab = event.target.closest('[data-view]'); if (tab) view(tab.dataset.view);
   });
+  $('dependency-focus').addEventListener('change', (event) => { state.dependency = event.target.value; dependencies(); });
+  $('dependency-all').addEventListener('change', dependencies);
   $('refresh').addEventListener('click', refresh);
   $('search').addEventListener('input', hardware); $('area').addEventListener('change', hardware); $('status').addEventListener('change', hardware);
   $('clear-filters').addEventListener('click', clearFilters); $('empty-clear').addEventListener('click', clearFilters);
@@ -305,5 +381,6 @@
   $('document-path').before(back);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+  view(location.hash.slice(1) || 'hardware');
   if (!document.hidden) refresh();
 })();

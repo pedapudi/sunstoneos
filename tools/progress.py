@@ -18,7 +18,8 @@ import unicodedata
 from urllib.parse import parse_qs, quote, urlsplit
 
 DEFAULT_QUEUE = Path.home() / '.cache/sunstoneos/board-tests.sqlite3'
-SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md')
+SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md',
+           'docs/hardware-dependencies.md')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/index.html': ('index.html', 'text/html; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
@@ -68,6 +69,65 @@ def normalized(text):
 
 def slug(text):
     return re.sub(r'[^a-z0-9]+', '-', normalized(text)).strip('-')
+
+
+def parse_dependencies(text, hardware):
+    """Validate topology separately from evidence; never infer subsystem readiness."""
+    inventory = {item['id']: item for item in hardware}
+    nodes, warnings = {}, []
+    for line in text.splitlines():
+        if not line.startswith('| ') or line.startswith(('| ID |', '| ---')):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        if len(cells) != 6:
+            warnings.append('Dependency row must have six cells.')
+            continue
+        key, name, requires, scope, conditions, record = cells
+        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', key) or key in nodes:
+            warnings.append('Invalid or duplicate dependency ID: ' + key)
+            continue
+        prerequisites = (list(inventory) if requires == '@hardware' else
+                         [] if requires == '-' else [part.strip() for part in requires.split(',')])
+        path = 'docs/' + record
+        if not doc_path(path):
+            warnings.append('Invalid dependency record: ' + record)
+        area = inventory.get(key)
+        nodes[key] = {'id': key, 'name': name, 'requires': prerequisites,
+                      'scope': scope, 'conditions': conditions, 'record': path,
+                      'hardware_id': key if area else None,
+                      'status': area['status'] if area else 'structural',
+                      'status_label': area['status_label'] if area else 'Component evidence in record',
+                      'qualification': area['qualification'] if area else 'not_assessed',
+                      'evidence': area['evidence'] if area else []}
+    missing = sorted(set(inventory) - nodes.keys())
+    if missing:
+        warnings.append('Hardware missing from dependency graph: ' + ', '.join(missing))
+    if not nodes:
+        warnings.append('Dependency graph is unavailable.')
+    for node in nodes.values():
+        for prerequisite in node['requires']:
+            if prerequisite not in nodes:
+                warnings.append('Unknown prerequisite: ' + prerequisite)
+    # Kahn traversal detects cycles and supplies stable, dependency-ordered columns.
+    remaining = set(nodes)
+    resolved = {}
+    while remaining:
+        ready = [key for key in nodes if key in remaining and
+                 all(parent in resolved for parent in nodes[key]['requires'])]
+        if not ready:
+            if not any('Unknown prerequisite:' in warning for warning in warnings):
+                warnings.append('Dependency graph contains a cycle.')
+            break
+        for key in ready:
+            resolved[key] = max((resolved[parent] + 1 for parent in nodes[key]['requires']), default=0)
+            nodes[key]['level'] = resolved[key]
+            remaining.remove(key)
+    if warnings:
+        return {'status': 'invalid', 'warnings': warnings, 'nodes': [], 'edges': []}
+    edges = [{'from': parent, 'to': node['id']} for node in nodes.values()
+             for parent in node['requires']]
+    return {'status': 'ok', 'warnings': [], 'nodes': list(nodes.values()), 'edges': edges,
+            'hardware_count': len(inventory), 'source': 'docs/hardware-dependencies.md'}
 
 
 def iso(timestamp):
@@ -434,6 +494,7 @@ class Progress:
                                        'Canonical status format is unavailable or changed. Qualification totals are unknown.'),
                             'performance_note': performance},
                 'performance_note': performance, 'hardware': hardware,
+                'dependencies': parse_dependencies(texts['docs/hardware-dependencies.md'], hardware),
                 'handoff': parse_handoff(texts['docs/handoff.md']),
                 'mimus': {'summary': mimus_summary, 'markdown': texts['docs/mimus.md'],
                           'url': '/api/document?path=docs%2Fmimus.md', 'links': links(texts['docs/mimus.md'], 'docs/mimus.md')},

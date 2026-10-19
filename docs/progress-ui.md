@@ -52,6 +52,26 @@ not reinterpret missing rows as planned work. Unmatched evidence bullets appear
 in parser warnings with their original text so that aliases can be updated.
 The ordered next actions and blocker paragraphs are copied from the handoff.
 
+## Dependency graph covers the complete inventory
+
+The **Dependencies** tab displays the implementation graph from
+[hardware-dependencies.md](hardware-dependencies.md). Select a function to see
+all its prerequisites and direct dependents. Enable **Show the complete graph**
+to explore every hardware area and shared function. Arrows point from prerequisite
+to dependent; the columns reflect dependency depth, not a required serial schedule.
+
+The detail panel shows the selected function's required scope, current inventory
+evidence, direct relationships and physical qualification conditions. It links to
+the component record and support matrix. Missing cameras, panels and other
+accessories remain visible as qualification requirements.
+
+The graph table contains topology and scope only. Matching inventory IDs obtain
+evidence automatically from the hardware matrix; shared-function nodes link to
+component evidence without inferring readiness. Update the graph only when a
+prerequisite or required scope changes. Normal evidence updates need no graph edits.
+The server rejects missing inventory rows, duplicate IDs, unknown prerequisites
+and cycles without suppressing the other dashboard views.
+
 ## Refreshes perform bounded local reads
 
 The browser refreshes while the page is visible. The server compares file
@@ -112,10 +132,10 @@ python3 -B checks/progress.py
 ```
 
 The focused fixture checks inventory coverage, planned rows, host-versus-physical
-classification, unknown-format reporting, cache reuse and invalidation, Git
-worktree metadata, unchanged queue bytes, secret omission, concurrent queue
-changes, document boundaries, symlink refusal, Host/Origin validation and HTTP
-conditional requests. Temporary SQLite files and a loopback HTTP server are
+classification, dependency coverage, cycle detection and unknown-format reporting.
+It also checks cache invalidation, Git worktree metadata, unchanged queue bytes,
+secret omission, concurrent queue changes, document boundaries, symlink refusal,
+Host/Origin validation and HTTP conditional requests. Temporary SQLite files and a loopback HTTP server are
 confined to the fixture. No board access occurs.
 
 Backend evidence is retained outside Git under
@@ -126,3 +146,9 @@ mobile layout. Desktop and mobile screenshots and results are retained in
 The first browser harness used a string-evaluation wait prohibited by the page's
 content policy. Locator assertions replaced that wait; only the remaining
 interaction checks continued. No application change or hardware test was needed.
+
+Dependency graph verification covers complete inventory coverage, scoped
+prerequisites, invalid references, cycles and cache invalidation. Browser checks
+cover node selection, complete-graph expansion, component navigation, refresh
+retention and mobile overflow. Evidence and screenshots are retained under
+`~/.cache/sunstoneos/evidence/progress-dependencies-20261018/`.
