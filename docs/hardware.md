@@ -317,7 +317,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   integration under `thermal-returning-final-20261018/`. Clocks and configuration
   remain retained. Physical acquisition and return remain untested.
 - Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
-  for the 1-bit legacy-speed profile. Host checks and source comparisons cover capacity, full-range
+  for the one-bit legacy-speed profile and negotiated read-only SD profiles.
+  Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
   native compilation passes. Controller access, pin/clock restoration, and ROM
   return are **tested** in the earlier eMMC probe; CMD1 received no response.
@@ -353,6 +354,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   acknowledgments permit slot reuse. The native task reads its configured range
   twice, and USB uses the same API. One image, eleven modeled native cases and
   host/package checks pass under `storage-read-service-20261018/`.
+  Negotiated SD profiles now select four-bit default speed up to the card's CSD
+  limit and 25 MHz, or require four-bit high speed at 50 MHz. The original
+  one-bit 400 kHz profile is preserved. Native SCR/ACMD6/CMD6, actual provider,
+  linked two-client read, preparation and host checks pass under
+  `sd-bus-modes-20261019/`. Integration verifies 194 sources and 2,803 artifacts;
+  402 of 408 compiled inputs match current source. Six later USB HID inputs
+  differ, including headers that change the enclosing board-application layout
+  used by SD. The frozen image and complete source closure remain authoritative,
+  and their compiled layouts remain coherent. Review: `integration-review/review.json`.
+  A future current-source build must rebuild affected consumers consistently,
+  include the HID class source and regenerate image identity. Actual mode
+  negotiation, read data, electrical/timing margins and recovery remain
+  unqualified. No card write or voltage change is part of these profiles.
   The second board's inherited JTAG pin pattern now has an exact read-only
   handoff with explicit debug-client exclusion. Focused provider, host-policy and
   native parser checks pass; three objects were rebuilt and 163 reused under
@@ -561,8 +575,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   have separate modeled evidence. Its corrected fixed-workload candidate passes
   seven helper instruction cases and one normal two-job/CLOSE/provider-parking
   model under `gpu-returning-repeat-fix-20261019/`. It reuses 86 of 88 objects
-  with unchanged return objects and structure layouts. Root architecture/admission
-  review remains pending. Evidence for the preceding finite/publication paths is
+  with unchanged return objects and structure layouts. Root source/binary review
+  passes under `root-review.json`, verifying 88 objects, 218 frozen inputs and
+  eight unchanged linked return functions. Physical admission remains false.
+  Evidence for the preceding finite/publication paths is
   preserved under `gpu-finite-adapter-20261018/layout-correction/` and
   `gpu-returning-application-20261019/ns-publication/`.
   The earlier single-core application's startup, packaging and USB profile checks
@@ -900,9 +916,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `npu-usb-terminal-20261018/`. Physical reporting and inference remain untested
   with the corrected image.
   Terminal CLOSE and authenticated local gate/reset shutdown now pass focused
-  checks and Astra review. A finite inference adapter is implemented, but its
-  retained session and complete memory-cleanup extent still need integration
-  into the returning platform. The integrated device quiescence path suspends
+  checks and Astra review. The finite inference adapter is integrated with
+  retained session and complete memory cleanup in the returning platform.
+  The optional single-core [interrupt profile](../apps/npu-interrupt/README.md)
+  runs bootstrap and two inferences through deferred interrupt 97 service.
+  Only the owner task acknowledges events and acquires output. Source-off CLOSE
+  and verified GIC stop precede ownership release. Host success requires three
+  notified completions, the stopped receipt and both copied numerical outputs.
+  Nine service scenarios, controller/native-client/host checks and Astra review
+  pass; eighteen root routing/dispatch/monitor instruction cases also pass.
+  Integration matches all 184 compiled inputs and verifies 144 sources, 1,026
+  artifacts and four tools under `npu-interrupt-service-20261019/root-integration.json`.
+  Physical interrupt delivery, inference, numerical output, shutdown and ROM
+  return remain unqualified. The integrated device quiescence path suspends
   workers, parks PMIC outside active ownership, verifies interrupt inactivity
   and enters a task critical section before exit. Six client and nineteen
   quiescence cases pass with Astra review; all 172 compiler inputs match.

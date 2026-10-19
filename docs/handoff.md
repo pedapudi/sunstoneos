@@ -91,6 +91,21 @@ Integration matches all 163 compiled inputs and the accepted image. Evidence:
 `root-integration.json`. Accepted checks were reused. Hardware-linked cyclic DMA,
 physical continuity, scheduling gaps and wire-level drain remain outstanding.
 
+Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
+400 kHz operation or select four-bit default speed up to the card's CSD limit
+and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
+linked two-client reads, preparation and host checks pass under
+`sd-bus-modes-20261019/`. Root integration verifies 194 sources and 2,803
+artifacts; 402 of 408 compiled inputs match current source. Six later USB HID
+inputs differ, including headers that change the enclosing board-application
+layout used by SD. The frozen image and complete source closure remain
+authoritative, and their compiled layouts remain coherent. Review is recorded in
+`integration-review/review.json`. Its ELF SHA-256 is
+`0ff1d98d381f5435b83cb84e876e922d88f1666fa44295ec74f37f112c53adb1`.
+A future current-source build must rebuild affected consumers consistently,
+include the HID class source and regenerate image identity. No card write or
+physical qualification is established. Both microSD cards remain preserved.
+
 Native read-only eMMC access is integrated through the existing copied-client
 service. Both SDC2 and SDC3 selections pass instruction checks for identification,
 EXT_CSD and copied reads. Admission/capture checks and source review pass under
@@ -158,6 +173,17 @@ the platform-admission function used by NPU is unchanged. Frozen compiler inputs
 remain authoritative: the current USB header changes an embedded structure's
 layout, even though this NPU image does not execute USB platform functions.
 
+The optional single-core NPU interrupt profile is integrated. Bootstrap and two
+inferences complete through deferred interrupt 97 service. The ISR masks and
+notifies; one owner task acknowledges events and acquires output. Source-off
+CLOSE and verified GIC stop precede ownership release. Host success requires
+three notified completions and the stopped receipt, plus both copied outputs.
+Nine service scenarios, controller/native-client/host checks and Astra review
+pass; eighteen root routing/dispatch/monitor instruction cases pass. Integration
+verifies all 184 compiled inputs, 144 sources, 1,026 artifacts and four tools
+under `npu-interrupt-service-20261019/root-integration.json`. Physical interrupt
+delivery, inference, numerical output, shutdown and ROM return remain unqualified.
+
 The corrected GPU returning composition is integrated. It publishes private and
 device data through Nonsecure EL1 mappings before SMC, then completes final stack
 cleanup before reset. Root source review and 25 selective modeled cases pass;
@@ -183,7 +209,9 @@ The corrected fixed-workload returning candidate is frozen under
 normal two-job/CLOSE/provider-parking model passing. It reuses 86 of 88 objects;
 return objects and structure layouts are unchanged. Its ELF SHA-256 is
 `2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d`.
-Root architecture/admission review remains pending. The historical two-job image
+Root source and binary review passes under `root-review.json` in that directory,
+verifying all 88 objects, 218 frozen inputs and eight unchanged linked return
+functions. Physical admission remains false. The historical two-job image
 contains the previous NEW-only check and is superseded for repeated submission;
 its publication and host evidence retain their narrower scope. Physical
 computation, wider dispatch, same-session input replacement, graphics and
@@ -262,15 +290,21 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Extend the actual read-only microSD application with
-   negotiated four-bit/default-speed and high-speed profiles in `sd-bus-modes`.
-   Preserve the legacy profile, actual clock/pin ownership and both cards.
-   UART interrupt service, USB host HID input, trusted GPU programs and H.264,
-   JPEG and crypto runtime input delivery are integrated. Complete root review
-   of the corrected fixed-workload GPU returning candidate before considering
-   physical use. Broader GPU dispatch, same-session input replacement,
-   graphics and concurrency remain required. Repeated I2S streaming is integrated;
-   its hardware cyclic-DMA mode remains open. CPU/startup changes remain root-owned.
+1. Develop bounded trusted GPU multi-dispatch in `gpu-dispatch-geometry`.
+   The planned limit is 31 dispatches, each with one 32-lane workgroup, and
+   992 elements. Verify actual backing and source limits during implementation;
+   preserve the accepted fixed-workload returning profile. Investigate and design
+   hardware cyclic DMA for I2S from pinned sources. Preserve copied-slot
+   acknowledgment and cancellation-backlog rules. These extensions are in
+   development. Continue remaining native mode integration from the hardware matrix.
+   Negotiated read-only SD profiles, UART interrupt service, USB host HID input,
+   trusted GPU programs, deferred NPU interrupt completion and H.264, JPEG and
+   crypto runtime input delivery are integrated. Preserve the frozen SD closure when reusing its accepted evidence;
+   current USB HID headers change embedding layouts. The corrected fixed-workload
+   GPU returning candidate passes root delta review but has no physical admission.
+   Broader GPU dispatch, same-session input replacement, graphics and concurrency
+   remain required. Repeated I2S streaming is integrated; its hardware cyclic-DMA
+   mode remains open. CPU/startup changes remain root-owned. Preserve both cards.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a
