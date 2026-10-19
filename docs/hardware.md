@@ -1005,8 +1005,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   integration. Its physical attempt returned responsive ROM with native status
   1 during USB preparation, before any host exchange. All four PMIC supply
   snapshots matched, but the original platform failure stage was overwritten.
-  USB writes and shutdown state remain unresolved; the runner retains ownership
-  pending physical recovery. No transport failure occurred. Evidence:
+  USB writes and shutdown state remain unresolved. The user recovered the board
+  by removing power; the retained processes stopped and the failed claim closed.
+  No transport failure occurred. Evidence:
   `usb-returning-20261018/physical/runtime/`. This does not qualify the native
   USB composition or authorize an unchanged retry.
 

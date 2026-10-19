@@ -38,23 +38,24 @@ also integrated. Twelve source cases and seventeen alarm cases pass, with
 own physical admission before alarm testing. Alarm success additionally requires
 verified Secure interrupt-state restoration; a completion message is insufficient.
 
-The second board requires recovery after the bounded USB attempt. It returned
-responsive ROM as `003:063`, but native USB preparation failed with step 5,
-PMIC stage 4 and USB stage 19. All four PMIC supply snapshots matched and were
-reaped. The platform fault overwrites its original stage, so USB writes cannot
-be excluded from this report. No host exchange occurred. Source diagnosis and
-first-fault instrumentation are in progress; no unchanged retry is permitted.
-Evidence: `usb-returning-20261018/physical/runtime/session.json`.
+The second board is recovered on port `3-3` as `003:064`, identity
+`[7,3762,1097023,0,0]`, after the user removed and reconnected USB power.
+FEL version responds and session access persists. The prior outer coordinator,
+wrapper and retained runner are stopped; their failed queue claim is closed and
+the halt is cleared. Evidence:
+`usb-returning-20261018/root-physical-056/recovery-064.json`.
+Cold DDR initialization and fresh platform admission are required before native
+DRAM execution. Previous056 electrical, clock and memory observations do not
+transfer across the power cycle. Board one remains available on `3-1`.
 
-The runner remains live holding the port `3-3` lock and queue claim
-`df4a206a916528fce522e7a1ba3579927b8af565e92cd6af8d8c41b693454dc2`.
-Coordinator PID 1262160 waits on wrapper 1262383, which waits on retained runner
-1262389. Verify these exact processes after explicit board recovery. Stop the
-outer coordinator and wrapper before the retained runner, so they cannot begin
-post-return RAM restoration against the recovered instance. Then verify all have
-stopped before resolving the old claim. Saved RAM is under
-`usb-returning-20261018/root-physical-056/`; restoration has not run. The user has
-been asked to reconnect only board two. Board one remains available on `3-1`.
+The preceding bounded USB attempt returned responsive ROM as `003:063`, but
+native preparation failed with step 5, PMIC stage 4 and USB stage 19. All four
+PMIC supply snapshots matched and were reaped. The platform fault overwrites its
+original stage, so USB writes cannot be excluded from this report. No host
+exchange occurred. Source diagnosis and first-fault instrumentation are in
+progress; no unchanged retry is permitted. Evidence:
+`usb-returning-20261018/physical/runtime/session.json`. Saved diagnostic RAM
+remains under `root-physical-056/`; it was not restored across cold power loss.
 
 The scheduler privilege audit identified an EL0 lock-wait defect. FreeRTOS's
 contended recursive lock executes WFE, but cached startup left SCTLR_EL1.nTWE
@@ -111,7 +112,7 @@ responsive ROM return passed. The kernel runner did not restore prior DRAM
 contents; this result does not establish memory restoration. No RTC register was
 written. The runner exited and its claim closed as passed. Evidence:
 `rtc-rc-readonly-20261018/physical/observation.json`. The subsequent USB failure
-requires the recovery recorded above.
+was recovered by the power cycle recorded above.
 Read progression is established; accuracy, absolute time, alarms and retention
 remain open. The integrated source and alarm applications await physical admission.
 
@@ -119,8 +120,8 @@ Second-board DDR continuity is cold126 → register capture127 → PMIC009 → R
 → RTC056. Current056 launcher/cache preparation and fourteen CCU reads pass
 under `usb-returning-20261018/warm-056/` and `fabric-056/`. USB selector zero
 and reset-held DMA0 pass under `entry-056/`; no DMA aperture was accessed.
-The subsequent USB attempt returned a failure report; do not reuse that
-powered lifetime until the recovery recorded above is resolved.
+The subsequent USB attempt returned a failure report. Power removal ended
+that lifetime; current064 needs new cold admission.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:
