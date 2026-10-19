@@ -3,7 +3,9 @@
 
 No boot, identity preparation, CPU startup, MMIO or hardware recognition is run.
 The scheduler pauses at vTaskDelay. USB host enumeration, read10 bus completion,
-controller health and USB0 FIFO calls are modeled. The linked read-sector,
+controller health and USB0 FIFO calls are modeled. In keyboard mode HID bus
+completion and acquired class metadata are modeled; actual TinyUSB mounted/mode
+getters, checked HID copy, mailbox/gate and trigger serialization execute. The linked read-sector,
 read-result, application ownership, serializer and retention instructions run.
 Recognition-active and successful transcript return are injected task states;
 model parity is a separate unchanged-recognizer check.
@@ -17,7 +19,7 @@ from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--keyboard',action='store_true');a=p.parse_args()
 with a.image.open('rb') as f:
     elf=ELFFile(f);segments=[(s['p_vaddr'],s.data()) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
     symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols() if s['st_value']}
@@ -39,30 +41,38 @@ with a.image.open('rb') as f:
         for d in cu.iter_DIEs():
             if 'DW_AT_name' not in d.attributes:continue
             name=d.attributes['DW_AT_name'].value.decode()
-            if d.tag=='DW_TAG_structure_type' and name in ('board_application','a733_usb2_native','a733_typec_token') and 'DW_AT_byte_size' in d.attributes:fields[name]=members(d)
+            if d.tag in ('DW_TAG_structure_type','DW_TAG_typedef') and name in ('board_application','a733_usb2_native','a733_typec_token','hidh_interface_t','a733_xhci_device') and ('DW_AT_byte_size' in d.attributes or name=='hidh_interface_t'):fields[name]=members(d)
             if d.tag=='DW_TAG_variable' and 'DW_AT_location' in d.attributes:
-                wanted=(unit.endswith('/a733_xhci_tinyusb.c') and name=='host') or (unit.endswith('/apps/mimus-board/recognition.cc') and name in ('state','started','overlap','transcript','used'))
+                wanted=(unit.endswith('/class/hid/hid_host.c') and name=='_hidh_itf') or (unit.endswith('/a733_xhci_tinyusb.c') and name=='host') or (unit.endswith('/apps/mimus-board/recognition.cc') and name in ('state','started','overlap','transcript','used'))
                 if wanted:
                     ops=DWARFExprParser(dwarf.structs).parse_expr(d.attributes['DW_AT_location'].value)
                     assert len(ops)==1 and ops[0].op_name in ('DW_OP_addr','DW_OP_addrx')
                     local[name]=ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dwarf.get_addr(cu,ops[0].args[0])
 class Machine:
-    def __init__(self):
+    def __init__(self,keyboard=False):
         self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.mem_map(0x41000000,0x7000000);self.cpu.mem_map(0x50000000,0x200000)
         for address,data in segments:self.cpu.mem_write(address,data)
         self.b=symbols['board'];self.bf=fields['board_application'];self.h=self.b+self.bf['host'];self.hf=fields['a733_usb2_native'];self.time=1000
-        self.current=1;self.live=1;self.detach=False;self.rx=bytearray();self.tx=bytearray();self.pending=0;self.paused=False;self.taskpc={};self.polls=0;self.reads=0;self.copies=0;self.usb_polls=0;self.snapshot_result=1
+        self.keyboard=keyboard;self.inputs=[];self.hid_requests=0;self.current=1;self.live=1;self.detach=False;self.rx=bytearray();self.tx=bytearray();self.pending=0;self.paused=False;self.taskpc={};self.polls=0;self.reads=0;self.copies=0;self.usb_polls=0;self.snapshot_result=1
         self.sector=bytes((i*7+3)&255 for i in range(512));self.text=b'TEXT accepted unchanged recorded input\nFORMATTED Accepted unchanged recorded input.\n'
         self.write(self.b+self.bf['live_until'],10000000);self.write(self.b+self.bf['session.deadline_us'],10000000)
         self.write(self.b+self.bf['session.epoch'],19);self.write(self.b+self.bf['session.generation'],23)
         self.write(local['host'],self.h);self.write(self.h+self.hf['self'],self.h)
         for field in ('core_started','mounted','msc_mounted'):self.write(self.h+self.hf[field],1,4)
-        self.write(self.h+self.hf['kind'],1,4);self.write(self.h+self.hf['blocks'],64,4)
+        self.write(self.h+self.hf['kind'],4 if keyboard else 1,4);self.write(self.h+self.hf['blocks'],64,4)
         self.write(self.h+self.hf['platform.config.lifetime_deadline'],9000000)
         self.write(self.h+self.hf['core.context'],self.h);self.write(self.h+self.hf['core.generation'],29)
         for name,index in (('current',1),('now',2),('live',3)):self.write(self.h+self.hf['core.ops.'+name],0x50000000+index*4)
         self.cpu.mem_write(self.h+self.hf['sector'],self.sector)
-        self.token=struct.pack('<QQQQI',self.b+self.bf['typec.provider'],31,29,self.time,1)+bytes(4)
+        self.token=struct.pack('<QQQQI',self.b+self.bf['typec.provider'],31,23 if keyboard else 29,self.time,1)+bytes(4)
+        if keyboard:
+            self.write(self.b+self.bf['session.workload'],4,4)
+            self.write(self.h+self.hf['core.generation'],23)
+            self.write(self.h+self.hf['core.self'],self.h+self.hf['core'])
+            device=self.h+self.hf['core.devices']
+            for field,value in [('address',3),('speed',1)]:self.write(device+fields['a733_xhci_device'][field],value,4)
+            for field,value in [('hid_mounted',1),('hid_seen',1),('hid_address',3),('hid.subclass',1),('hid.protocol',1),('hid.endpoint',0x81)]:self.write(self.h+self.hf[field],value,4)
+            for field,value in [('daddr',3),('mounted',1),('protocol_mode',0)]:self.write(local['_hidh_itf']+fields['hidh_interface_t'][field],value,1)
         self.cpu.mem_write(self.h+self.hf['platform.attachment'],self.token)
         self.cpu.hook_add(UC_HOOK_CODE,self.hook)
     def write(self,p,n,z=8):self.cpu.mem_write(p,n.to_bytes(z,'little'))
@@ -79,7 +89,13 @@ class Machine:
             self.paused=True;self.pc=cpu.reg_read(UC_ARM64_REG_LR);cpu.emu_stop();return
         if address==symbols['a733_usb2_native_poll']:
             self.polls+=1
+            if self.keyboard and self.inputs and self.word(self.h+self.hf['hid.pending'],4) and not self.word(self.h+self.hf['hid.complete'],4):
+                data=self.inputs.pop(0);self.cpu.mem_write(self.h+self.hf['hid.copied'],data)
+                self.write(self.h+self.hf['hid.event_bytes'],len(data),4);self.write(self.h+self.hf['hid.complete'],1,4)
+                self.write(self.h+self.hf['hid.sequence'],self.word(self.h+self.hf['hid.sequence'])+1)
             self.cpu.mem_write(self.h+self.hf['platform.attachment'],self.token[:24]+struct.pack('<Q',self.time)+self.token[32:]);self.ret(1);return
+        if self.keyboard and address==symbols['tuh_hid_receive_report']:
+            self.hid_requests+=1;self.ret(1);return
         if address==symbols['tuh_msc_read10']:
             self.reads+=1;assert self.word(local['started'],4)==1
             self.write(self.h+self.hf['read_complete'],1,4);self.ret(1);return
@@ -126,32 +142,71 @@ class Machine:
             if expected is not None and len(data)==expected:return bytes(data)
         raise AssertionError('Response budget exceeded')
 results={}
-m=Machine();m.tick('board_host_task');assert not m.reads
-# Native storage is held while the recognition task authenticates inputs.
-m.write(local['started'],1,4);m.tick('board_host_task')
-assert m.reads==1 and m.copies==1 and m.word(local['overlap'],4)==1 and m.word(m.b+m.bf['result'],4)==1
-assert bytes(m.cpu.mem_read(m.b+m.bf['sector'],512))==m.sector
-results['actual_read_result_copy_during_recognition']=True
-m.cpu.mem_write(local['transcript'],m.text);m.write(local['used'],len(m.text),4);m.write(local['state'],1,4)
-first=m.response(1,0,len(m.text));second=m.response(1,0,len(m.text));assert first==second and first[64:]==m.text
-assert m.response(2,0,512)[64:]==m.sector
-before=m.polls;m.tick('board_host_task');assert m.polls>before
-results.update(fragmented_immutable_delivery=True,continued_storage_polling=True)
-for label,mutate in [('expiry',lambda:setattr(m,'time',11000000)),('detach',lambda:setattr(m,'detach',True)),('fault',lambda:m.write(m.b+m.bf['result'],2,4))]:
-    # Direct actual export guard demonstrates refusal without another transfer.
+if not a.keyboard:
+ m=Machine();m.tick('board_host_task');assert not m.reads
+ # Native storage is held while the recognition task authenticates inputs.
+ m.write(local['started'],1,4);m.tick('board_host_task')
+ assert m.reads==1 and m.copies==1 and m.word(local['overlap'],4)==1 and m.word(m.b+m.bf['result'],4)==1
+ assert bytes(m.cpu.mem_read(m.b+m.bf['sector'],512))==m.sector
+ results['actual_read_result_copy_during_recognition']=True
+ m.cpu.mem_write(local['transcript'],m.text);m.write(local['used'],len(m.text),4);m.write(local['state'],1,4)
+ first=m.response(1,0,len(m.text));second=m.response(1,0,len(m.text));assert first==second and first[64:]==m.text
+ assert m.response(2,0,512)[64:]==m.sector
+ before=m.polls;m.tick('board_host_task');assert m.polls>before
+ results.update(fragmented_immutable_delivery=True,continued_storage_polling=True)
+ for label,mutate in [('expiry',lambda:setattr(m,'time',11000000)),('detach',lambda:setattr(m,'detach',True)),('fault',lambda:m.write(m.b+m.bf['result'],2,4))]:
+     # Direct actual export guard demonstrates refusal without another transfer.
+     m.time=1000;m.detach=False;m.write(m.b+m.bf['result'],1,4);mutate()
+     assert (m.call('mimus_board_export_live')&0xffffffff)==0xffffffff,label;results[label+'_refused']=True
+ m.time=1000;m.detach=False;m.write(m.b+m.bf['result'],1,4)
+ m.tick('board_host_task');before=m.usb_polls;m.tick('board_usb0_task');assert m.usb_polls>before
+ results['continued_usb0_polling']=True
+ # Provider contention preserves the earlier bounded observation.
+ m.live=0;m.call('mimus_board_host_observed',1);assert m.call('mimus_board_live')==1;m.live=1
+ m.snapshot_result=0;assert m.call('mimus_board_export_live')==0;m.snapshot_result=1
+ results['publication_busy_preserves_bounded_observation']=True
+ # Detach while a copied response is only partly queued closes session admission.
+ m.rx.extend(struct.pack('<BBHIQ',1,0,len(m.text),0,0));m.tick('board_usb0_task');m.tick('board_usb0_task')
+ assert m.pending and m.pending<64+len(m.text)
+ m.detach=True;m.tick('board_usb0_task');assert m.word(m.b+m.bf['fatal'],4)==1
+ results['detach_during_fragmented_send_closes_session']=True
+if a.keyboard:
+ def fresh():
+    m=Machine(True);m.tick('board_host_task');assert not m.reads;return m
+ def report(m,data):
+    m.inputs.append(data)
+    for _ in range(3):m.tick('board_host_task')
+    return m.call('mimus_board_trigger_step')&0xffffffff
+ m=fresh();assert m.hid_requests==1
+ assert report(m,bytes([0,0,0x28,0,0,0,0,0]))==0 and not m.reads
+ m.tick('board_host_task');assert report(m,bytes(8))==0
+ m.tick('board_host_task');assert report(m,bytes([0,0,0x28,0,0,0,0,0]))==1
+ assert not m.reads
+ m.write(local['started'],1,4);m.tick('board_host_task')
+ assert m.reads==1 and m.copies==1 and m.word(local['overlap'],4)==1
+ m.cpu.mem_write(local['transcript'],m.text);m.write(local['used'],len(m.text),4);m.write(local['state'],1,4)
+ trigger=m.response(3,0,128);assert struct.unpack_from('<I',trigger,4)[0]==2
+ assert trigger==m.response(3,0,128) and trigger[64+40:64+48]==bytes(8)
+ assert trigger[64+88:64+96]==bytes([0,0,0x28,0,0,0,0,0])
+ assert m.response(1,0,len(m.text))[64:]==m.text and m.response(2,0,512)[64:]==m.sector
+ before=m.polls;requests=m.hid_requests;m.tick('board_host_task');assert m.polls>before and m.hid_requests==requests
+ a.output.with_suffix('.trigger-frame.bin').write_bytes(trigger)
+ results.update(actual_boot_protocol_getter=True,exact_neutral_enter=True,no_read_before_trigger_and_recognition=True,
+    actual_hid_result_copy=True,actual_sector_copy_during_recognition=True,immutable_fragmented_trigger_export=True,
+    transcript_and_sector_export=True,one_shot_no_rearm=True,continued_polling=True)
+ for mode in ('report','unmounted','mouse'):
+    bad=Machine(True)
+    if mode=='report':bad.write(local['_hidh_itf']+fields['hidh_interface_t']['protocol_mode'],1,1)
+    elif mode=='unmounted':bad.write(local['_hidh_itf']+fields['hidh_interface_t']['mounted'],0,1)
+    else:bad.write(bad.h+bad.hf['hid.protocol'],2,4)
+    bad.tick('board_host_task');assert bad.word(bad.b+bad.bf['result'],4)==2 and not bad.hid_requests and not bad.reads
+    results[mode+'_refused']=True
+ for label,data in [('short',bytes(7)),('reserved',bytes([0,1,0,0,0,0,0,0])),('rollover',bytes([0,0,1,0,0,0,0,0]))]:
+    bad=fresh();status=report(bad,data)
+    assert status==0xffffffff or bad.word(bad.b+bad.bf['result'],4)==2
+    assert not bad.reads;results[label+'_refused']=True
+ for label,mutate in [('expiry',lambda:setattr(m,'time',11000000)),('detach',lambda:setattr(m,'detach',True)),('fault',lambda:m.write(m.b+m.bf['result'],2,4))]:
     m.time=1000;m.detach=False;m.write(m.b+m.bf['result'],1,4);mutate()
-    assert (m.call('mimus_board_export_live')&0xffffffff)==0xffffffff,label;results[label+'_refused']=True
-m.time=1000;m.detach=False;m.write(m.b+m.bf['result'],1,4)
-m.tick('board_host_task');before=m.usb_polls;m.tick('board_usb0_task');assert m.usb_polls>before
-results['continued_usb0_polling']=True
-# Provider contention preserves the earlier bounded observation.
-m.live=0;m.call('mimus_board_host_observed',1);assert m.call('mimus_board_live')==1;m.live=1
-m.snapshot_result=0;assert m.call('mimus_board_export_live')==0;m.snapshot_result=1
-results['publication_busy_preserves_bounded_observation']=True
-# Detach while a copied response is only partly queued closes session admission.
-m.rx.extend(struct.pack('<BBHIQ',1,0,len(m.text),0,0));m.tick('board_usb0_task');m.tick('board_usb0_task')
-assert m.pending and m.pending<64+len(m.text)
-m.detach=True;m.tick('board_usb0_task');assert m.word(m.b+m.bf['fatal'],4)==1
-results['detach_during_fragmented_send_closes_session']=True
+    assert (m.call('mimus_board_export_live')&0xffffffff)==0xffffffff;results[label+'_refused']=True
 results['image_sha256']=hashlib.sha256(a.image.read_bytes()).hexdigest()
 results['boundaries']=__doc__;a.output.write_text(json.dumps(results,indent=2)+'\n');print(json.dumps({k:v for k,v in results.items() if k!='boundaries'}))

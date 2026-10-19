@@ -37,6 +37,11 @@ void recognize(void *)
     }
     std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
         input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
+    /* The existing EL0 task consumes copied keyboard bytes after authentication. */
+    for(;;){
+        int trigger=mimus_board_trigger_step();if(trigger<0){failed();}
+        if(trigger==1)break;vTaskDelay(1);
+    }
     started.store(1,std::memory_order_release);
     bool ok=mimus_transcribe_recorded(input,scratch,&stopped);
     started.store(2,std::memory_order_release);

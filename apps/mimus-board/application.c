@@ -1,6 +1,10 @@
 #include "../board/application.h"
 #include "application.h"
 #include "assets.h"
+#include "keyboard.h"
+#include <string.h>
+#include "host/usbh.h"
+#include "class/hid/hid_host.h"
 #include "boot.h"
 #include "aarch64_device_memory.h"
 static atomic_uint attached;
@@ -27,7 +31,7 @@ int mimus_board_export_live(void)
 /* Only the privileged USB2 owner accesses its mutable controller state. */
 void mimus_board_host_observed(int ready)
 {
-    if(ready&&a733_usb2_device_kind(&board.host)!=A733_USB2_DEVICE_MSC){board_fail(NULL);return;}
+    if(ready&&a733_usb2_device_kind(&board.host)!=(board.session.workload==4?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_MSC)){board_fail(NULL);return;}
     if(!ready)return;
     int live=board.host.core.ops.live?board.host.core.ops.live(board.host.core.context,
         board.host.core.generation,board.host.platform.config.lifetime_deadline):-1;
@@ -44,7 +48,7 @@ int board_application_task_privileged(void (*entry)(void *),void *context)
 {(void)entry;(void)context;return 0;}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
-    if(!pins||board.session.workload)return 0;
+    if(!pins||(board.session.workload!=0&&board.session.workload!=4))return 0;
     for(unsigned i=0;i<3;++i)for(uintptr_t page=mimus_asset_address[i]&~(uintptr_t)4095;
         page<mimus_asset_address[i]+mimus_asset_bytes[i];page+=4096){
         struct aarch64_translation t;
@@ -56,4 +60,36 @@ int board_application_pins(struct a733_pin_handoff *pins)
     }
     return 1;
 }
-int board_application_start(void){return board.session.workload==0&&mimus_board_start();}
+int board_application_start(void){return (board.session.workload==0||board.session.workload==4)&&mimus_board_start();}
+
+int mimus_board_keyboard(void){return board.session.workload==4;}
+int mimus_board_trigger_step(void)
+{
+    if(!mimus_board_live())return -1;
+    return mimus_board_keyboard()?mimus_keyboard_step():1;
+}
+int mimus_board_trigger_copy(uint8_t out[128])
+{
+    if(!mimus_board_keyboard()||!mimus_board_live())return -1;
+    int r=mimus_keyboard_copy(out);return mimus_board_live()?r:-1;
+}
+/* Called exclusively by the existing USB2 owner, never by an EL0 task. */
+int mimus_board_keyboard_poll(void)
+{
+    struct a733_usb2_native *n=&board.host;
+    if(!n->hid_mounted||!tuh_hid_mounted((uint8_t)n->hid_address,0)||n->hid.subclass!=1||n->hid.protocol!=1||
+       tuh_hid_get_protocol((uint8_t)n->hid_address,0)!=HID_PROTOCOL_BOOT)return 0;
+    if(n->hid.pending){
+        struct a733_usb2_hid_report raw;int r=a733_usb2_hid_result(n,&raw);
+        if(r<0)return 0;
+        if(r==1){
+            if(raw.generation!=n->core.generation||raw.generation!=n->platform.attachment.generation||raw.bytes!=8)return 0;
+            struct mimus_keyboard_report p={.generation=raw.generation,.sequence=raw.sequence,
+                .address=raw.address,.speed=raw.speed,.interface=raw.interface,.protocol=raw.protocol,
+                .endpoint=raw.endpoint,.subclass=1,.mode=HID_PROTOCOL_BOOT,.bytes=8};
+            memcpy(p.data,raw.data,8);if(mimus_keyboard_offer(&p)!=1)return 0;
+        }
+    }
+    if(!n->hid.pending&&mimus_keyboard_empty()&&!a733_usb2_hid_receive(n,n->platform.config.lifetime_deadline))return 0;
+    return 1;
+}

@@ -8,7 +8,8 @@ p=argparse.ArgumentParser(description=__doc__)
 for name in ('image','build-id','output'):p.add_argument('--'+name,type=Path,required=True)
 a=p.parse_args();root=Path(__file__).resolve().parents[2]
 value={'target':'sunstone-a733-mimus-board','execution_profile':'board-supervised-v2',
-       'application':'recorded-mimus-with-read-only-usb-storage-v1',
+       'application':'recorded-mimus-with-read-only-usb-storage-v2','usb2_combined':True,
+       'keyboard_trigger':'boot-neutral-enter-v1',
        'final_elf':hashlib.sha256(a.image.read_bytes()).hexdigest(),'build_id':a.build_id.read_text().strip(),
        'models':json.loads((root/'apps/bluetooth/recognition-models.json').read_text()),
        'recorded_input':json.loads((root/'apps/mimus-board/inputs.json').read_text()),

@@ -28,7 +28,7 @@ def input_admission(record,image,read):
     for item in value['evidence']:read(item)
 def prepare(image,manifest,admission,template,assets,output,clang,lld):
     image,manifest,admission,output=map(Path,(image,manifest,admission,output));data=json.loads(manifest.read_text())
-    require(data.get('target')=='sunstone-a733-mimus-board' and data.get('application')=='recorded-mimus-with-read-only-usb-storage-v1',
+    require(data.get('target')=='sunstone-a733-mimus-board' and data.get('application')=='recorded-mimus-with-read-only-usb-storage-v2' and data.get('usb2_combined') is True and data.get('keyboard_trigger')=='boot-neutral-enter-v1',
         'Mimus board image manifest required.')
     require(data.get('models')==json.loads((ROOT/'apps/bluetooth/recognition-models.json').read_text()) and
         data.get('recorded_input')==json.loads((ROOT/'apps/mimus-board/inputs.json').read_text()),'Compiled input declarations differ.')
@@ -40,7 +40,7 @@ def prepare(image,manifest,admission,template,assets,output,clang,lld):
     input_admission(record,digest(image),evidence)
     output.mkdir(parents=True,exist_ok=False)
     base=board.prepare(image,manifest,admission,template,output/'board',clang,lld)
-    require(base['workload']==0,'Workload zero required.')
+    require(base['workload'] in (0,4),'Only storage or keyboard/storage workload admitted.')
     fixed=host.freeze_assets(assets,output/'assets')
     refs={}
     for i,(name,blob) in enumerate(cache.items()):
@@ -50,18 +50,18 @@ def prepare(image,manifest,admission,template,assets,output,clang,lld):
         'board_prepared_sha256':digest(output/'board/prepared.json'),'assets_sha256':digest(output/'assets/assets.json'),
         'input_evidence':refs,'uploads':[{'directory':'board',**item} for item in base['segments']]+[{'directory':'assets','name':item['name'],'address':item['address']} for item in fixed['assets']]}
     (output/'prepared.json').write_text(json.dumps(value,indent=2)+'\n');return validate_bundle(output)
-def validate_bundle(output):
+def validate_bundle(output,*,capture_identity=False):
     output=Path(output);value=json.loads((output/'prepared.json').read_text())
     require(value.get('schema')=='mimus-board-supervised-bundle-v1' and value.get('physical_access') is False,'Bundle schema differs.')
     require(digest(output/'board/prepared.json')==value['board_prepared_sha256'] and digest(output/'assets/assets.json')==value['assets_sha256'],'Bundle identity differs.')
     base=board.validate_bundle(output/'board');assets=host.validate_assets(output/'assets')
-    require(base['workload']==0,'Workload zero required.')
+    require(base['workload'] in (0,4),'Only storage or keyboard/storage workload admitted.')
     def evidence(item):
         retained=value['input_evidence'][item['path']];require(retained['sha256']==item['sha256'] and Path(retained['name']).name==retained['name'],'Evidence identity differs.')
         blob=(output/retained['name']).read_bytes();require(hashlib.sha256(blob).hexdigest()==item['sha256'],'Evidence changed.');return blob
     input_admission(json.loads((output/'board/admission.json').read_text()),base['image_sha256'],evidence)
     require(value['uploads']==[{'directory':'board',**item} for item in base['segments']]+[{'directory':'assets','name':item['name'],'address':item['address']} for item in assets['assets']], 'Upload plan differs.')
-    return value
+    return {key:base[key] for key in ('epoch','generation','workload')} if capture_identity else value
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','session-template','base','overlay','wav','output','clang','lld'):p.add_argument('--'+name,type=Path,required=True)

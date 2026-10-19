@@ -24,6 +24,19 @@ s=(a.root/'apps/board/client.c').read_text().replace('#include "application.h"',
 s='#include "../mimus-board/application.h"\n'+s
 # The original owner continues every poll after issuing or completing its read.
 s=replace(s,'enum a733_usb2_result r=a733_usb2_native_poll(&board.host);','enum a733_usb2_result r=a733_usb2_native_poll(&board.host);\n        mimus_board_host_observed(r==A733_USB2_READY);')
+s='#include <string.h>\nint mimus_board_keyboard_poll(void);\n'+s
+s=replace(s,'if(!dual_step(&issued,&reports,&sector_done))break;',
+    '''if(r==A733_USB2_READY){
+                if(!mimus_board_keyboard_poll())break;
+                if(!issued&&mimus_board_started()){
+                    if(!a733_usb2_read_sector(&board.host,0,board.host.platform.config.lifetime_deadline))break;
+                    issued=1;
+                }
+                if(issued==1){
+                    int done=a733_usb2_read_result(&board.host,board.sector);if(done<0)break;
+                    if(done==1){mimus_board_storage_completed();atomic_store_explicit(&board.result,1,memory_order_release);issued=2;}
+                }
+            }''')
 s=replace(s,'}else if(r==A733_USB2_READY&&!issued){','}else if(r==A733_USB2_READY&&!issued&&mimus_board_started()){')
 s=replace(s,'if(done==1){\n                if(board.session.workload==6){','if(done==1){\n                mimus_board_storage_completed();\n                if(board.session.workload==6){')
 (a.output/'mimus-client.c').write_text(s)

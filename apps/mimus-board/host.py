@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import importlib.util
 from pathlib import Path
 import struct
 import time
@@ -33,7 +34,7 @@ def validate_assets(output):
         require(len(data)==item['bytes'] and hashlib.sha256(data).hexdigest()==item['sha256'],'Frozen input changed.')
     return value
 
-def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep):
+def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep,*,keyboard=False):
     """Exchange must preserve USB identity and never retry failed transport.
 
     It writes each complete request and assembles exactly one complete response.
@@ -48,7 +49,7 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
         frame=exchange(packet);frames.append(frame)
         require(now()<deadline and len(frame)>=64,'Incomplete or expired response.')
         magic,version,state,size,total,position,storage,reply=struct.unpack_from('<8I',frame)
-        require((magic,version,reply,position)==(0x424d494d,1,op,offset),'Response identity differs.')
+        require((magic,version,reply,position)==(0x424d494d,2 if keyboard else 1,op,offset),'Response identity differs.')
         require(struct.unpack_from('<QQ',frame,32)==(epoch,generation) and not any(frame[48:64]),'Session identity differs.')
         require(state in (0,1,2) and size<=1024 and len(frame)==64+size,'Invalid result extent.')
         require(state!=2,'Native combined workload refused result.')
@@ -73,9 +74,35 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
         text.extend(data)
     state,current,sector=ready(2,0,512)
     require(state==1 and current==total and len(sector)==512,'Copied sector incomplete.')
+    trigger=None
+    if keyboard:
+        state,current,data=ready(3,0,128)
+        require(state==1 and current==total and len(data)==128,'Trigger evidence incomplete.')
+        trigger=decode_trigger(data)
+        require(trigger['attachment_generation']==generation,'Trigger attachment generation differs.')
     state,current,data=ready(0)
     require(state==1 and current==total and not data,'Final live status refused.')
-    return {'transcript':bytes(text),'sector':sector,'frames':frames}
+    return {'transcript':bytes(text),'sector':sector,'trigger':trigger,'frames':frames}
+def capture_bundle(exchange,bundle,deadline,now=time.monotonic,pause=time.sleep):
+    """Select capture policy from the validated frozen session, before transport."""
+    spec=importlib.util.spec_from_file_location('mimus_capture_prepare',ROOT/'apps/mimus-board/prepare.py')
+    preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
+    identity=preparation.validate_bundle(bundle,capture_identity=True)
+    return capture(exchange,identity['epoch'],identity['generation'],deadline,now,pause,keyboard=identity['workload']==4)
+
+def decode_trigger(data):
+    require(len(data)==128,'Trigger extent differs.')
+    require(struct.unpack_from('<4I',data)==(0x4752544b,1,128,2),'Trigger header differs.')
+    attachment=struct.unpack_from('<Q',data,16)[0]
+    address,speed,interface,protocol,endpoint,subclass,mode,reserved=struct.unpack_from('<8B',data,24)
+    require(attachment and 1<=address<=127 and 1<=speed<=3 and not interface and protocol==1 and
+        endpoint&0x80 and endpoint&15 and not endpoint&0x70 and subclass==1 and not mode and not reserved,'Keyboard authority differs.')
+    baseline=struct.unpack_from('<Q',data,32)[0];pressed=struct.unpack_from('<Q',data,80)[0]
+    require(baseline and pressed==baseline+1 and not any(data[40:80]) and
+        data[88:96]==bytes([0,0,0x28,0,0,0,0,0]) and not any(data[96:]),'Neutral to Enter evidence differs.')
+    return {'attachment_generation':attachment,'address':address,'speed':speed,'interface':interface,
+        'protocol':protocol,'endpoint':endpoint,'baseline_sequence':baseline,'enter_sequence':pressed,'bytes':data}
+
 def device_exchange(device,same,deadline,retain,now=time.monotonic):
     """Use an already claimed device; same() enforces the coordinator identity.
 

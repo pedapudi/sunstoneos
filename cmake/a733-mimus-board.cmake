@@ -18,7 +18,7 @@ get_target_property(mb_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM mb_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
   "${mb_root}/apps/board/client.c" "${mb_root}/apps/board/usb0.c" "${mb_root}/apps/board/identity.c"
   "${board_build}/build-id.c" "${mb_root}/runtime/memory.c" "${mb_root}/runtime/memmove.c")
-set(mb_added apps/mimus-board/application.c apps/mimus-board/identity.c apps/mimus-board/recognition.cc
+set(mb_added apps/mimus-board/application.c apps/mimus-board/keyboard.c apps/mimus-board/identity.c apps/mimus-board/recognition.cc
   apps/mimus-board/usb0.c apps/mimus/recorded.cc apps/mimus/platform.cc runtime/newlib.c runtime/newlib_smp.c
   runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc)
 foreach(source IN LISTS mb_added)
@@ -33,7 +33,7 @@ foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS LINK_OP
   endif()
 endforeach()
 # This new executable still uses the board's actual dual USB device/host build.
-target_compile_definitions(sunstone-a733-mimus-board PRIVATE SUNSTONE_BOARD_APPLICATION=1
+target_compile_definitions(sunstone-a733-mimus-board PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1
   "$<$<COMPILE_LANGUAGE:CXX>:SUNSTONE_MIMUS_NATIVE=1;SUNSTONE_MIMUS_SUPERVISED=1>")
 get_target_property(mb_includes sunstone-a733-mimus-board INCLUDE_DIRECTORIES)
 list(REMOVE_ITEM mb_includes "${mb_root}/runtime/include" "${SUNSTONE_NETWORK_C_HEADERS}")

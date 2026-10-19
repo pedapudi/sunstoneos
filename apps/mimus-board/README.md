@@ -1,10 +1,18 @@
-# Recorded recognition with concurrent USB storage
+# Recorded recognition with keyboard control and concurrent USB storage
 
 This fixed application runs the existing recorded Mimus recognizer at EL0 while
 the board's privileged USB2 owner reads sector zero from one USB mass-storage
-device. It uses the supervised board image, workload zero and the existing PMIC,
+device. It uses the supervised board image and the existing PMIC,
 clock, pin, rail, Type-C and USB providers. Storage operations are read-only.
 Both microSD cards remain outside this application.
+
+Workload zero starts after storage attachment. Workload four accepts one boot
+keyboard and one high-speed storage device behind the existing self-powered
+high-speed hub. Press and release a key, then press unmodified Enter. After
+input authentication, the observed release followed by Enter starts the same
+recorded recognition. A key press before the
+neutral report does not start it. Recognition remains one-shot per retained
+session. The recording supplies speech while no microphone is attached.
 
 The native application and host capture are implemented and tested offline.
 Physical concurrent operation, scheduling and recovery remain unqualified.
@@ -43,8 +51,24 @@ while recognition is still active. Combined success requires this overlap,
 successful recognition and a completed copied sector. A slow device that finishes
 after recognition does not establish the combined workload.
 
-Only the USB2 task accesses mutable controller state. It publishes a bounded
-atomic liveness observation for the EL0 recognizer and an immutable attachment
+Only the USB2 task accesses mutable controller state. In keyboard mode it also
+owns every TinyUSB HID call. It requires mounted subclass-one keyboard metadata
+and the actual TinyUSB BOOT protocol mode. The pinned stack attempts
+SET_PROTOCOL during enumeration but tolerates a stall; a stalled request leaves
+REPORT mode and is refused. Raw eight-byte reports alone do not establish boot
+semantics.
+
+The owner copies completed reports into a single 32-byte CPU mailbox. The EL0
+recognition task consumes those bytes through release/acquire publication; it
+never calls HID, MMIO or providers. Reports bind the attachment generation,
+address, speed, interface, endpoint and consecutive sequence. Reserved-byte,
+rollover, duplicate-key, short-report or identity errors refuse the session.
+A neutral report followed immediately by Enter publishes immutable evidence
+with the two sequences and exact input bytes. Other valid keys require another
+neutral report. The producer holds the mailbox until consumption and stops
+requesting input after acceptance. No keyboard events enter the host desktop.
+
+The USB2 task publishes a bounded atomic liveness observation for the EL0 recognizer and an immutable attachment
 identity. The existing recognizer yield checkpoint closes admission and parks
 on expired or failed observations. USB0 uses fresh concurrent Type-C metadata,
 the pinned attachment identity and acquired storage result state before result
@@ -56,18 +80,33 @@ failure. Recovery requires the existing supervised whole-board power removal.
 USB0 accepts a fixed 16-byte little-endian request: operation byte, zero byte,
 16-bit count, 32-bit offset and eight zero bytes. Operation zero queries status
 with zero count and offset. Operation one copies up to 1,024 transcript bytes.
-Operation two copies the 512-byte sector with zero offset. Requests may arrive
-in fragments. Responses have a 64-byte header followed by the requested copy.
-The header contains eight 32-bit words: magic `0x424d494d`, version one, state
+Operation two copies the 512-byte sector with zero offset. Workload four also
+accepts operation three, with zero offset and count 128, to copy the trigger
+evidence. Requests may arrive in fragments. Responses have a 64-byte header followed by the requested copy.
+The header contains eight 32-bit words: magic `0x424d494d`, version, state
 (pending zero, success one, failure two), copied length, full transcript length,
 requested offset, storage state and operation. The epoch and generation follow
-as two 64-bit words; the final 16 bytes are zero.
+as two 64-bit words; the final 16 bytes are zero. Frame version is one for
+workload zero and two for workload four.
 
 `host.py` freezes and rechecks exact input bytes, assembles fragmented USB replies
 and collects transcript plus sector followed by a final live status query. Its
 transport adapter accepts an already claimed device and an identity-check
 callback from the coordinator. It repeats only completed pending responses within
 an absolute deadline and query budget. Transport failures propagate immediately.
+`capture_bundle()` selects the frame version and required trigger read from
+identity metadata returned by frozen-bundle validation. Keyboard capture requires
+trigger generation equal to session generation, consecutive neutral/Enter
+sequences, boot keyboard metadata and exact reserved bytes. The final live query
+follows all three outputs.
+
+The 128-byte trigger starts with four little-endian words: magic `0x4752544b`,
+version one, extent 128 and record count two. Offset 16 holds attachment
+generation. Bytes 24–31 hold address, speed, interface, keyboard protocol,
+endpoint, subclass, boot mode and zero. The neutral and Enter records begin at
+offsets 32 and 80; each holds a 64-bit sequence and eight report bytes followed
+by 32 zero bytes. The existing storage result remains a copied sector.
+
 Bytes already queued to USB cannot be recalled; partial captures and a refused
 final status do not establish success.
 
@@ -89,7 +128,34 @@ instructions. It models scheduling, enumeration, controller health, read-command
 bus completion and USB FIFO calls. It does not execute boot or identity hooks.
 `check-recognition.cc` runs the new task's input authentication and unchanged
 recorded recognizer on the host; scheduling and overlap are modeled there.
+`check-keyboard-host.py` covers the actual native trigger frame, strict host
+refusals, production preparation and capture entry from a nondeployable frozen
+bundle. Its platform/DDR/accessory claims and transport are explicitly modeled.
 `check-host.py` covers fragmented capture, pending replies, transport refusal and
 fixed input preservation. These checks establish software behavior, not physical
 USB transfers, accelerator execution or native scheduling. No performance claim
 follows from their timing.
+
+The keyboard integration reuses model parity from
+`~/.cache/sunstoneos/evidence/mimus-board-20261019/` and the USB dual-leaf path
+from `usb-host-dual-leaf-20261019/`. Affected keyboard/native/host checks pass
+under `mimus-keyboard-20261019/`. The six sanitizer cases include real CPU producer/consumer threads plus stale
+sequence, generation, address, duplicate-key and modified-Enter refusals.
+Instruction fixtures model HID and MSC bus
+completion, acquired TinyUSB metadata, recognition state, scheduling and FIFOs.
+They execute the linked protocol-mode getters, HID checked copy, mailbox and
+keyboard gate, storage checked copy and fragmented USB0 serializer. They do not
+execute boot or identity hooks. A supported keyboard, hub, storage device, fresh
+electrical/DDR admission and available whole-board recovery remain physical
+prerequisites. No attached accessory or physical concurrent operation is assumed.
+
+The final keyboard image SHA-256 is
+`bd2007542c2cd2ef3696f73ebdbc865bdc012454f8394564694efd11b76142d1`.
+Separate private identity-hook cases admit workloads zero/four and refuse
+one/two/six/eight; exception level, cache/session validation and publication are
+modeled. Static linked review places the mailbox and evidence in ordinary BSS,
+the 4 MiB heap at `0x413584c0..0x417584c0`, and the cached device pool at
+`0x41759000..0x41959000`. Only the identity and build-ID objects changed after
+the successful application instruction cases; their explicit object comparison
+preserves those results. Shared startup, scheduler and physical DMA remain
+outside these checks.

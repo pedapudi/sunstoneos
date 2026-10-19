@@ -27,6 +27,7 @@ extern "C" void fixture_task_yield(){if(mimus_board_started()&&!overlap){mimus_b
 extern "C" void runtime_smp_init(){}
 extern "C" void runtime_init(){}
 extern "C" size_t runtime_heap_peak(){return 0;}
+extern "C" int mimus_board_trigger_step(){return live?1:-1;}
 extern "C" int mimus_board_live(){return live;}
 extern "C" int mimus_board_session_live(){return live;}
 extern "C" void mimus_board_fail(){failed=true;live=false;}
