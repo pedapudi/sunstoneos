@@ -1,0 +1,11 @@
+--- platform.c
++++ uart-platform.c
+@@ -133,6 +133,8 @@
+ }
+ void vApplicationIRQHandler(uint64_t interrupt)
+ {
++    extern void uart_application_irq(void);
++    if(interrupt==36){uart_application_irq();return;}
+     unsigned c=core();
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
+     if(interrupt==30 && !c) {

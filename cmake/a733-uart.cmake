@@ -17,11 +17,14 @@ list(REMOVE_ITEM uart_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 # Keep normal source inclusion, actual boot and provider source identities.
 apply_build_patch("${uart_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/boot.patch")
-list(APPEND uart_sources "${uart_build}/boot.c"
+list(REMOVE_ITEM uart_sources "${storage_build}/platform.c")
+apply_build_patch("${uart_build}/platform.c" "${storage_build}/platform.c"
+ "${SUNSTONE_SOURCE_ROOT}/apps/uart/platform.patch")
+list(APPEND uart_sources "${uart_build}/boot.c" "${uart_build}/platform.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart_platform.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/uart/a733_uart_platform_native.c")
-foreach(source IN ITEMS apps/uart/main.c apps/uart/native.c apps/uart/run.c apps/uart/usb0.c apps/uart/admission.c apps/uart/snapshot.c)
+foreach(source IN ITEMS apps/uart/main.c apps/uart/native.c apps/uart/irq.c apps/uart/run.c apps/uart/usb0.c apps/uart/admission.c apps/uart/snapshot.c)
  list(APPEND uart_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 add_executable(sunstone-a733-uart EXCLUDE_FROM_ALL ${uart_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
@@ -44,9 +47,10 @@ file(GLOB uart_headers "${SUNSTONE_SOURCE_ROOT}/apps/uart/*.h")
 set(uart_inputs ${uart_sources} ${uart_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/include/a733_uart.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_uart_platform.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_uart_platform_native.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/boot.patch"
+ "${SUNSTONE_SOURCE_ROOT}/apps/uart/platform.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES uart_inputs)
-set(uart_identity "native-uart2;supervised60;pb0-pb1-passive-loopback;8n1-115200;closed;${CMAKE_C_COMPILER_VERSION}")
+set(uart_identity "native-uart2;supervised60;pb0-pb1-passive-loopback;8n1-115200;IRQ36;closed;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS uart_inputs)
  file(SHA256 "${input}" uart_hash)
  string(APPEND uart_identity "${uart_hash}")
