@@ -164,10 +164,10 @@ these sources to an existing admitted native image.
 
 The image must supply authenticated initial isolation and drain, stable supplies,
 remote-writer exclusion, analog-profile provenance and a selected panel's real
-power, reset and command-controller sequence. No selected panel, qualified cold
-PLL profile or complete standalone DSI launch image is provided. These inputs
-remain physical prerequisites; neither register reads nor numeric generations
-establish them. The shared retained IOMMU provider must keep all other masters
+power, reset and command-controller sequence. Neither a selected panel nor a
+qualified cold PLL profile is provided. The standalone application below requires
+these physical inputs. Register reads and numeric generations cannot establish
+them. The shared retained IOMMU provider must keep all other masters
 excluded for the complete session.
 
 The native binding supplies no DE drain or output-quiescence proof. A STOP
@@ -220,3 +220,81 @@ results are preserved under
 `~/.cache/sunstoneos/evidence/display-scanout-20261016/initial-snapshot/`.
 Existing leaf source-comparison evidence was reused. No physical hardware or
 performance benchmark was run.
+
+## Standalone retained DSI application
+
+`apps/dsi-scanout` builds `sunstone-a733-dsi-scanout` without selecting a panel.
+The image composes the actual PMIC, rail and clock leases, pin manager,
+media-clock and PLL producers, display IOMMU and native scanout provider. Its
+single privileged owner creates an immutable XRGB8888 color-bar framebuffer,
+starts the DE1/LCD1/DSI1 route, and copies one controller observation to USB0.
+The observation does not establish visible pixels, panel readiness or electrical
+correctness. No panel is selected or attached, and physical qualification is
+false.
+
+The private target uses the existing extended memory provider unchanged. Entry
+must reserve and exclude aliases and remote writers from the complete 768 MiB
+write-back pool `[0x48000000,0x78000000)` and 16 MiB uncached pool
+`[0x78000000,0x79000000)`. The runtime validates both full pools before releasing
+the scheduler. DSI uses the uncached pool for 32 KiB of aligned IOMMU tables and
+one page-rounded framebuffer including explicit, qualified fetch padding. A
+1280×720 image with 5120-byte pitch occupies 3,686,400 bytes before padding;
+1920×1080 with 7680-byte pitch occupies 8,294,400 bytes. Both fit the 16 MiB pool.
+Narrower valid modes remain available within the existing planners' constraints;
+this path does not admit modes beyond their limits.
+
+`profile.py` encodes a caller-supplied value-only panel JSON and a bound 592-byte
+board prefix into a sealed 4096-byte session. No command sequence or electrical
+values are supplied by default. The profile includes exact timing and rates,
+seven qualified initial PLL words and their generations, supplies, pin states,
+fetch padding, and bounded GPIO, delay and LP packet steps. DSI1 uses the pinned
+real-silicon PD10–PD19 mux4 route with four lanes. Optional power, reset and
+backlight pins are explicit. The actual timing, PLL, pin and packet validators
+run before providers. Up to 48 steps and 1536 payload bytes are admitted; LP
+packets run before video, and GPIO/delay steps may continue after video. A panel
+that requires unsupported reads or another initialization mechanism needs a
+further implementation.
+
+`prepare.py` binds the selected image, complete session, full memory reservation,
+initial isolation, electrical/PLL record and selected-panel record. The board
+prefix must already bind the initial qualification and recovery digest, memory
+and wiring authority; the value encoder does not manufacture those facts. Each
+DSI fact record must identify the exact profile values and image, include frozen
+source evidence, and state that physical access established the required facts.
+The panel record also requires a model and datasheet. Model-only records are
+not launch authority. The private 288-byte supervised boot record carries the
+existing extended-memory layout and separate full-session and entry digests.
+Its retained copy and sealed session survive ordinary BSS clearing. The private
+linker bounds the heap, including the exception stack, below the uploaded
+session. Shared CPU, GIC and memory-provider sources are unchanged.
+
+After video starts, the owner completes the explicit post-video steps, obtains a
+native controller observation and scans display IOMMU faults. It publishes a
+256-byte immutable result with session/frame hashes, geometry, generations,
+controller state and raw observations. It continues bounded controller and
+IOMMU observations while the original result remains immutable. A deadline,
+uncertain access or fault closes admission and retains memory and resources.
+There is no successful STOP, release, retry or panel power-down claim: the
+existing provider still lacks a DE drain proof.
+
+The USB0 response has a 128-byte header with magic `0x31525344`, version 1,
+status, copied byte count, epoch/generation, session and payload SHA256 hashes,
+and zero reserved bytes. Status 1 appends exactly 256 bytes; pending or failure
+has no payload. `observe.py` validates identity, dimensions, allocation extent,
+frame hash, panel identity and completed controller/IOMMU state. `capture.py`
+preserves that copied observation under the existing supervised claim and
+frozen-bundle workflow. It never sends desktop events or storage commands.
+
+Offline application evidence is under
+`~/.cache/sunstoneos/evidence/dsi-scanout-application-20261019/`. Actual producer
+composition passes at 720p and 1080p with explicit model-only electrical and panel
+inputs; mapping mismatch, IOMMU fault and expiry retain both allocations. The
+linked private serializer, admission and seal execute with modeled boundaries;
+real host decoding and durable capture validate the copied observations. The
+selected SRAM launcher cases execute only its private admission and handoff
+boundary. Root separately reviewed linked startup geometry and retained
+lifetimes; shared cache/table setup, GIC, secondary startup and devices were not
+executed in these checks. Existing provider/planner evidence remains applicable.
+A selected panel, qualified analog profile, actual rail and bank voltages,
+connector/cable verification, initial isolation, fetch-padding proof and
+supervised physical recovery remain prerequisites for a physical run.

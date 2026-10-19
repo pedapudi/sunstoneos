@@ -1,0 +1,54 @@
+--- monitor.c
++++ dsi-monitor.c
+@@ -9,6 +9,9 @@
+ #include "snapshot.h"
+ #endif
+ #include "a733_storage_digest.h"
++#ifdef SUNSTONE_DSI_APPLICATION
++#include "dsi-session.h"
++#endif
+ #include <string.h>
+ #ifdef SUNSTONE_NPU_INTERRUPT
+ #include "../npu-interrupt/irq-route.h"
+@@ -30,7 +33,14 @@
+ static struct a733_smp_contract thermal_runtime_contract __attribute__((section(".thermal_runtime_retained")));
+ static unsigned thermal_runtime_secondary_off __attribute__((section(".thermal_runtime_retained")));
+ #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
+-static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
++#ifdef SUNSTONE_DSI_APPLICATION
++static struct dsi_boot_contract dsi_admission __attribute__((section(".monitor_state")));
++#define admission dsi_admission.base
++const uint8_t *dsi_contract_session(const struct a733_smp_contract *c){return c==&admission?dsi_admission.session_digest:0;}
++const uint8_t *dsi_contract_entry(const struct a733_smp_contract *c){return c==&admission?dsi_admission.entry_digest:0;}
++#else
++static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
++#endif
+ static struct a733_smp_contract board_runtime_contract __attribute__((section(".board_runtime_retained")));
+ static unsigned board_runtime_secondary_off __attribute__((section(".board_runtime_retained")));
+ #elif defined(SUNSTONE_RTC_SINGLE_CORE)
+@@ -109,7 +119,11 @@
+     extern uint64_t __npu_retained_start[],__npu_retained_end[];
+     for(uint64_t *p=__npu_retained_start;p<__npu_retained_end;++p)*p=0;
+ #endif
++#ifdef SUNSTONE_DSI_APPLICATION
++    for(unsigned i=0;i<sizeof(dsi_admission)/8;++i)((uint64_t *)&dsi_admission)[i]=((const volatile uint64_t *)source)[i];
++#else
+     for(unsigned i=0;i<sizeof(admission)/8;++i)((uint64_t *)&admission)[i]=((const volatile uint64_t *)source)[i];
++#endif
+ #endif
+     __asm__ volatile("dsb sy":::"memory");
+     if(!a733_smp_contract_valid(&admission,counter())||source->magic!=admission.magic||
+@@ -137,8 +151,13 @@
+     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+ #elif defined(SUNSTONE_BOARD_SINGLE_CORE)
+     extern int board_identity_prepare(uint64_t);
++#ifdef SUNSTONE_DSI_APPLICATION
++    if(!secondaries_off()||!dsi_session_prepare(&admission)||
++       !a733_device_memory_boot_admit(&admission)||!a733_cached_memory_prepare())finish(1);
++#else
+     if(!secondaries_off()||!board_session_prepare(&admission)||
+        !board_identity_prepare(admission.startup_deadline)||!a733_cached_memory_prepare())finish(1);
++#endif
+     a733_cached_el1_l1[0]|=UINT64_C(2)<<8;
+     a733_cached_el3_l1[0]|=UINT64_C(2)<<8;
+ #elif defined(SUNSTONE_RTC_SINGLE_CORE)

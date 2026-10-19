@@ -1,0 +1,11 @@
+--- runtime.c
++++ dsi-runtime.c
+@@ -83,7 +83,7 @@
+     a733_observe_boot_identity(c->epoch,c->generation,c->lease,c->armed_at,c->diagnostic_deadline);
+ #endif
+     preparing=1;
+-#ifdef SUNSTONE_GPU_SINGLE_CORE
++#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_DSI_APPLICATION)
+     int ready;
+     do{ready=a733_device_memory_prepare();}while(ready==0);
+     if(ready!=1)platform_panic("GPU single-core memory",1);

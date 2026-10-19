@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.24)
+project(a733_dsi_scanout LANGUAGES C ASM)
+get_filename_component(SUNSTONE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised retained DSI" FORCE)
+set(SUNSTONE_BOARD_USB2_IRQ OFF CACHE BOOL "DSI uses polling" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../board-single-core" "${CMAKE_CURRENT_BINARY_DIR}/board-single-core-base")
+include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-dsi-scanout.cmake")
