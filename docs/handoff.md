@@ -61,6 +61,15 @@ Evidence: `uart-native-20261018/frozen/manifest.json` and `integration.json`.
 Physical loopback, electrical admission, recovery and inherited multicore startup
 remain outstanding.
 
+The UART interrupt extension is being completed in the `uart-irq` worktree.
+Root commits `e1e3f5d` and `cdf99a4` supply its private IRQ36 route, dispatch hook
+and linked checks. All eleven root checks pass on image
+`7d112182035d38de6c8e448f9107e55f24adead928e5f69abad820165d33c4b5`.
+Evidence and the GIC errata assessment are under `uart-irq-20261019/root/`.
+The worker is finishing host validation and the frozen handoff. Integrate the
+two root commits together with its service commit; they are not yet in bringup.
+Physical delivery and UART operation remain unqualified.
+
 Simultaneous I2S capture/playback is integrated with separate DMA channels and
 period catalogues, shared clock/pin lifetime and failure propagation to both
 directions. Success requires both transfer counts and both drained results.
