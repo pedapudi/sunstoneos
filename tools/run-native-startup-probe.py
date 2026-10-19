@@ -328,6 +328,7 @@ def run(a):
         primary=module('returning_cpu_host',ROOT/'tools'/('primary-cache-host.py' if is_primary_cache else 'secondary-interrupt-host.py' if is_interrupts else 'secondary-coherence-host.py' if is_coherent else 'secondary-cache-host.py' if is_cached else 'secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
         frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
         native=primary.probe.NATIVE;profile=primary.PROFILE
+        primary_report = primary.probe.report_spec(m) if is_primary_cache else primary.probe.REPORT
     else:
         profile=manifest_profile(m)
         require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
@@ -389,7 +390,7 @@ def run(a):
                         (0x42004000,prepared['_frozen']['contract.bin'],'contract.bin'),(0x52c00,prepared['_frozen']['request.bin'],'request.bin'),
                         (0x52d00,bytes(128),'launch-report.bin'),(0x52000,prepared['_frozen']['launch.bin'],'launch.bin')]
             if is_primary:
-                uploads.insert(0,(primary.probe.REPORT[0],primary.initial_report(nonce),'primary-report.bin'))
+                uploads.insert(0,(primary_report[0],primary.initial_report(nonce, *([m] if is_primary_cache else [])),'primary-report.bin'))
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
             _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
             with usb_guard.reenumeration('sunstoneos-a733','Native returning CPU diagnostic with verified restoration',2):
@@ -402,7 +403,7 @@ def run(a):
                 node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
                 record.update(returned_identity=identity,returned_node=str(node));journal()
             require('soc=00001903(A733)' in transaction('version'),'Return is not A733 ROM service.')
-            for name,address,size in ([('report',primary.probe.REPORT[0],primary.probe.REPORT[1])] if is_primary else [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x7000),
+            for name,address,size in ([('report',*primary_report)] if is_primary else [('report',REPORT,256),('native-result',0x42000000,128),('admission',0x42004000,224),('tables',0x421f0000,0x7000),
                                       ('coherence',0x4200e480,184),('core-record',0x4200e080,128),('gic',0x42002100,512),
                                       ('observation',0x42002700,512),('local-interrupts',0x42002900,96),('controller-access',0x42002960,32),('local-initialization',0x42002980,256),('el3-cache',0x42002a80,160),('el1-cache',0x42002b20,256),('ns-publication',0x42002c20,128),('redistributor',0x42002500,512),('activation',0x42002400,256),('power',0x4200eb48,128),('owner',0x4200eec8,248),('mailbox1',0x42005100,256)]):
                 transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
@@ -410,7 +411,7 @@ def run(a):
             try:
                 if is_primary:
                     record['result']=primary.probe.decode((a.evidence/'report.bin').read_bytes(),nonce,
-                        *([m['hooks']['el1_smc_return']] if is_cached else []))
+                        *([m['hooks']['el1_smc_return']] if is_cached else [m] if is_primary_cache else []))
                     if is_identity or is_primary_cache:
                         contract=prepared['_frozen']['contract.bin']
                         require(record['result']['epoch']==struct.unpack_from('<Q',contract,24)[0],

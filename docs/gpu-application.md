@@ -444,3 +444,13 @@ establish whether provider or GPU initialization began. Attempt evidence:
 `gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
 A narrower shared-startup observation or concrete correction must precede another
 full launch. Performance measurement remains deferred.
+
+
+A later returning diagnostic captured nine TWI controller words that the PMIC
+provider checks before USB initialization. All nine satisfy the native masks in
+that fresh powered lifetime. The diagnostic performed no I2C transactions or
+TWI writes and returned with status zero and automatic USB access. Evidence:
+`pmic-baseline-probe-20261018/capture-only/physical/predicate-comparison.json`.
+These observations do not establish the complete PMIC startup or identify the
+earlier GPU failure stage. Root continues shared startup diagnosis before any
+full accelerator retry.

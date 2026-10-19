@@ -7,10 +7,19 @@ primary_cache_probe:
     ldr x2, =0x42004000
     ldr x0, [x2, #24]
     ldr x1, [x2, #88]
+#ifdef SUNSTONE_PRIMARY_EL1
+    bl primary_local_cache_probe
+#else
     bl native_el3_cache_probe
+#endif
 primary_cache_returned:
+#ifdef SUNSTONE_PRIMARY_EL1
+    cmp w0, #2
+    b.eq .Lprimary_restored
+#endif
     cmp w0, #1
     b.ne primary_cache_park
+.Lprimary_restored:
     // Replay the displaced literal load before the original restoration path.
     ldr x16, =0x42018000
     b primary_cache_original_next

@@ -1341,3 +1341,33 @@ and `checks/primary-cache-host.py`. Evidence resides under
 `~/.cache/sunstoneos/evidence/primary-cache-probe-20261018/`; the previously accepted
 primary preparation and frozen production ELF are referenced by hash. No native
 runtime image was rebuilt for this diagnostic.
+
+
+## Boot-CPU EL1 diagnostic returns recoverable refusals
+
+The primary-cache builder's `--el1` option extends the physically demonstrated
+CPU0 preparation and EL3 cache interval. It runs the frozen production local
+interrupt controller and cached EL1 entry. A checkpoint before EL1 interrupt
+configuration records the translation controls and returns through SMC. EL1
+performs no data stores and starts no task or secondary core.
+
+The wrapper saves the primary's interrupt configuration and requires a powered,
+awake redistributor with no enabled, pending or active local interrupts. It
+restores the distributor, local configuration, group enables and priority mask
+before the established CPU reset to ROM. CPU-interface entry controls reset with
+that transition. This cleanup differs from the secondary diagnostic, which puts
+its redistributor to sleep before powering down.
+
+A baseline refusal before device writes returns a report without initialization.
+A controller refusal can also return after verified restoration. The decoder
+labels both as refusals and leaves cached-entry completion false. Failed cleanup
+or an invalid cached return retains ownership. A stalled hardware access can
+still prevent a report; this is not independent fault recovery.
+
+Six instruction cases cover successful entry, baseline refusal, restored
+controller refusal, wrong EL1 identity, local-restoration failure and cache-
+restoration failure. Nine host cases cover capture, retained transport failures,
+restoration, input binding and the distinction between returned refusal and
+successful entry. The preparation prefix executes once per instruction batch.
+Evidence is under `primary-el1-probe-20261018/`. Physical execution, interrupt
+delivery on CPU0 and FreeRTOS scheduling remain outstanding.

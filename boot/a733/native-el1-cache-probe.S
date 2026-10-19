@@ -109,7 +109,11 @@ el1_return_checkpoint:
     mrs x16, mpidr_el1
     ubfx x16, x16, #8, #3
 #ifdef SUNSTONE_SECONDARY_CACHE
+#ifdef SUNSTONE_PRIMARY_EL1
+    cbnz x16, .Lel1_park
+#else
     cbz x16, .Lel1_park
+#endif
     ldr x19, =0x4201a800
     add x19, x19, x16, lsl #8
 #else

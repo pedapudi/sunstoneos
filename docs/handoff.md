@@ -9,12 +9,14 @@ restored saved DRAM. Evidence: `reconnect-20261018-120/` and
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
-The second board responds to A733 boot-ROM commands on port `3-3` as
-`003:126`, identity `[7,2846,1097085,0,0]`. The user confirmed power removal
-and reconnection. Automatic USB permissions remain valid. The failed GPU
-runner and coordinator stopped; their claim is closed and the queue resumed.
-Recovery evidence: `second-board-recovery-126-20261018/recovery.json`.
-Cold DDR preparation is required before native DRAM execution.
+The second board responds on port `3-3` as `003:127`, identity
+`[7,2858,1097086,0,0]`, after a successful returning TWI register capture.
+Fresh DDR and launcher survey passed on cold instance `126`; preserve that
+powered lifetime through the recorded return. Automatic USB access works and
+all preparation/probe processes are stopped with their claims closed.
+Evidence: `second-board-cold-126-20261018/` and
+`pmic-baseline-probe-20261018/capture-only/physical/runtime/session.json`.
+Refresh warm launcher/cache state before another native launch; do not retrain DDR.
 
 The corrected GPU attempt on the preceding instance `003:125` produced no
 native USB response. Its sole refusal-report read timed out, and communication
@@ -28,10 +30,12 @@ support the attempted bundle; they do not transfer to the recovered session.
 The corrected masked fabric and USB-before-GPU ordering did not produce an
 observable result. A narrower shared single-core startup diagnostic or concrete
 new correction must precede another full accelerator launch. Root owns shared
-startup diagnosis. The device worker is preparing a returning PMIC observation
-for the strict startup predicates not covered by the successful basic probe.
-The primary-source audit found no proven incorrect address or mask. Inactive
-controller state and line sampling remain physically unverified. Evidence:
+startup diagnosis. The returning TWI capture observed all nine strict PMIC
+baseline predicates, and each matched in the new lifetime. The probe performed
+no I2C transactions or TWI writes. This removes a candidate mismatch for the
+observed session; it does not locate the previous GPU failure. Comparison:
+`pmic-baseline-probe-20261018/capture-only/physical/predicate-comparison.json`.
+The primary-source audit remains under
 `gpu-usb-ordering-20261018/audit125-provider/primary-predicate-audit.json`.
 
 The frozen USB provider delegates interrupt-state admission to its authority
@@ -90,9 +94,13 @@ changed inputs and retained failures; evidence is under that directory's `host/`
 Physical execution passed on the first board. This establishes CPU0 EL3 cache
 adoption and restoration before GIC initialization or secondary release; combined
 startup barriers, CPU0 cached EL1 participation and full scheduling remain unobserved.
-The optional boot-CPU local-GIC/EL1 extension is being implemented and is not
-ready for physical execution. Before launch, root must finish the executed-path
-review and affected instruction/host checks, including refusal and cleanup paths.
+The optional boot-CPU local-GIC/EL1 extension builds and passes six instruction
+cases and nine host cases under `primary-el1-probe-20261018/`. It executes the
+production local controller and cached EL1 entry, then restores the primary's
+awake interrupt state. Baseline refusals before device writes and controller
+refusals with verified restoration return distinct reports. Failed restoration
+retains ownership. Physical entry and return remain untested; launch still needs
+current board admission. Root review is recorded in `primary-el1-probe-20261018/root-review.json`.
 Earlier models missed implemented interrupt bits, Secure priority-mask behavior
 and security-specific cache publication. Passing modeled startup alone cannot
 justify another full image launch. A missing USB report can mean an intentional

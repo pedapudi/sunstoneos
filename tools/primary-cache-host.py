@@ -16,35 +16,37 @@ HOST_SOURCES = (*probe.primary.HOST_SOURCES, 'tools/primary-cache-host.py')
 MODEL_SOURCES = ('checks/primary-cache-probe.py', *probe.primary.MODEL_SOURCES)
 CASES = ('complete-return', 'transport-failure-retained', 'missing-return-retained',
          'invalid-report-restored', 'changed-input-refused', 'wrong-epoch-restored')
+EL1_CASES = CASES + ('returned-local-refusal', 'incomplete-el1-restored', 'changed-entry-patch-refused')
 
 
 def load(build, image, manifest):
     require(manifest.get('schema') == 'a733-primary-cache-probe-v1' and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
             'Wrong primary cache profile.')
-    require(manifest['sources'] == {n: digest(ROOT/n) for n in probe.SOURCES}, 'Cache probe sources changed.')
+    el1 = manifest.get('el1', False)
+    require(type(el1) is bool, 'Invalid EL1 selection.')
+    report = probe.report_spec(manifest)
+    require(manifest['sources'] == {n: digest(ROOT/n) for n in probe.sources(el1)}, 'Cache probe sources changed.')
     parent_path = Path(manifest['primary_manifest']['path'])
     require(parent_path.is_absolute() and digest(parent_path) == manifest['primary_manifest']['sha256'],
             'Primary preparation manifest changed.')
     parent = json.loads(parent_path.read_text())
     frozen, dram = probe.primary.load(parent_path.parent, image, parent)
-    require(manifest['parent_hooks'] == parent['hooks'] and manifest['payloads'] == parent['payloads'],
+    require(manifest['parent_hooks'] == parent['hooks'],
             'Primary preparation bindings changed.')
-    require(manifest['report'] == {'address': probe.REPORT[0], 'bytes': probe.REPORT[1]},
+    require(manifest['report'] == {'address': report[0], 'bytes': report[1]},
             'Cache report reservation differs.')
-    dram = [(name, *(probe.REPORT if name == 'primary-report' else (address, size)))
+    dram = [(name, *(report if name == 'primary-report' else (address, size)))
             for name, address, size in dram]
-    require(all(probe.REPORT[0]+probe.REPORT[1] <= address or address+size <= probe.REPORT[0]
+    require(all(report[0]+report[1] <= address or address+size <= report[0]
                 for name, address, size in dram if name != 'primary-report'), 'Cache report overlaps native RAM.')
     with image.open('rb') as stream:
         symbols = {s.name: s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()}
-    require(manifest['native_symbols'] == {name: symbols[target] for name, target in {
-        'probe_production_allow_ns_code': 'a733_cached_allow_ns_code',
-        'probe_production_enable_el3': 'a733_cpu_coherence_enable_el3',
-        'probe_production_el3_root': 'a733_cached_el3_l1'}.items()}, 'Production cache callees differ.')
+    require(manifest['native_symbols'] == {name: symbols[target] for name, target in
+            probe.native_aliases(el1).items()}, 'Production cache callees differ.')
     with (build/'cache.elf').open('rb') as stream:
         hooks = {s.name: s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
-                 if s.name.startswith(('primary_cache_', 'native_el3_cache_probe'))}
+                 if s.name.startswith(probe.HOOK_PREFIXES)}
     require(manifest['hooks'] == hooks and hooks['primary_cache_probe'] == probe.EXTENSION,
             'Cache extension entry differs.')
     address = parent['hooks']['primary_publication_after_prepare']
@@ -62,9 +64,13 @@ def load(build, image, manifest):
     require(actual == expected and 0 < len(actual) <= probe.primary.probe.OVERLAY[1] and
             manifest['overlay'] == {**parent['overlay'], 'sha256': hashlib.sha256(actual).hexdigest()},
             'Cache overlay differs from the reviewed extension.')
-    for name, data in frozen.items():
-        if name != 'overlay.bin':
-            require((build/name).read_bytes() == data, 'Native payload differs from accepted preparation.')
+    payload_data, payloads, patches = probe.patch_payloads(frozen, parent['payloads'],
+                                                         probe.patch_points(symbols) if el1 else (), hooks)
+    require(manifest['payloads'] == payloads and manifest['native_patches'] == patches,
+            'EL1 checkpoint patches differ.')
+    for name, data in payload_data.items():
+        require((build/name).read_bytes() == data, 'Native payload differs beyond reviewed patches.')
+    frozen.update(payload_data)
     frozen['overlay.bin'] = actual
     return frozen, dram
 
@@ -74,7 +80,7 @@ def validate_software(software, manifest_hash):
             software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash,
             'Cache host evidence covers different inputs.')
     require(software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES}, 'Host implementation changed.')
-    require(software.get('host_cases') == dict.fromkeys(CASES, True), 'Cache host cases are incomplete.')
+    require(software.get('host_cases') == dict.fromkeys(EL1_CASES if software.get('el1', False) else CASES, True), 'Cache host cases are incomplete.')
     item = software['instruction_evidence']
     path = Path(item['path'])
     require(path.is_absolute() and digest(path) == item['sha256'], 'Cache instruction evidence changed.')
@@ -82,13 +88,17 @@ def validate_software(software, manifest_hash):
     require(model.get('physical_access') is False and model.get('native_sha256') == probe.NATIVE and
             model.get('manifest_sha256') == manifest_hash and
             model.get('sources') == {n: digest(ROOT/n) for n in MODEL_SOURCES}, 'Cache instruction inputs changed.')
-    require({c['case']: c['pass'] for c in model['cases']} == {
-        'primary-production-cache-adoption-restored-return': True,
-        'cache-restoration-failure-retains-without-reset': True}, 'Cache instruction cases incomplete.')
+    require(model.get('el1', False) == software.get('el1', False), 'Model covers another CPU interval.')
+    expected = ('success', 'baseline-refusal', 'group-refusal', 'wrong-el1-core',
+                'cleanup-readback', 'cache-restoration-failure') if model.get('el1', False) else (
+                'primary-production-cache-adoption-restored-return',
+                'cache-restoration-failure-retains-without-reset')
+    require({c['case']: c['pass'] for c in model['cases']} == dict.fromkeys(expected, True),
+            'Cache instruction cases incomplete.')
 
 
-def initial_report(nonce):
+def initial_report(nonce, manifest=None):
     require(len(nonce) == 16, 'Invalid nonce.')
-    result = bytearray(probe.REPORT[1])
+    result = bytearray(probe.report_spec(manifest or {})[1])
     result[32:48] = nonce
     return bytes(result)
