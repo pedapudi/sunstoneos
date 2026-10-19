@@ -12,6 +12,16 @@ USB. Cancellation follows the same ownership and restoration rules.
 The source and linked image pass focused software checks. Physical operation
 and retention remain unqualified.
 
+A separate finite returning client has now observed the controller's inherited
+clock state physically. R_CCU gate/reset-release is `0x10001`, RTC source control
+is `0x401c`, and source status is zero. The external-source adoption requirement
+refuses this state before calendar access. The client records an explicit
+negative outcome and returns normally without RTC writes. Zero calendar fields
+in its log are unobserved placeholders. Evidence:
+`rtc-returning-outcomes-20261018/physical/observation.json`.
+Clock-source support for this observed state is under source review; calendar
+progression, alarms, accuracy and retention remain physically unqualified.
+
 ## Sources and board prerequisites
 
 The pinned Orange Pi kernel revision

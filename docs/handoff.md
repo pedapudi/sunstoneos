@@ -27,22 +27,30 @@ Earlier builds without that entry correction are not eligible for execution.
 Reuse the accepted physical barrier result; the next CPU work is task selection
 and scheduler startup, including ownership and cleaning of their larger write set.
 
-The second board last returned responsive on port `3-3` as `003:009`, identity
-`[7,2874,1096968,0,0]`, after the production PMIC provider completed a DCDC1
-snapshot. Its actual FreeRTOS task, native mutex checks, shared clock/pin/rail
-providers and six I2C register reads executed. DCDC1 was enabled with selector
-`0x17`, decoded as a programmed 3.3 V. The request was reaped, client lease
-released, provider became idle, mutexes were released and inherited pin/TWI
-settings matched before normal ROM return. No regulator data was written.
-Evidence: `pmic-provider-probe-20261018/physical/runtime/session.json`.
-The physical process exited and its queue claim closed as passed.
+The second board last returned responsive on port `3-3` as `003:011`, identity
+`[7,2882,1096970,0,0]`, after a read-only RTC observation. R_CCU gate/reset-release
+was `0x10001`; RTC source control was `0x401c` and source status was zero.
+The production driver's external-clock requirement refused this state before
+calendar access. The explicit negative outcome returned normally through the
+accepted monitor. No RTC register was written; calendar zeros in the log are
+unobserved placeholders. The runner stopped and its claim closed as passed for
+the observation, with RTC functional qualification false. Evidence:
+`rtc-returning-outcomes-20261018/physical/observation.json`. No reconnect is needed.
+The RTC worker is checking source-backed support for the observed clock state.
 
-Second-board DDR continuity is cold126 → register capture127 → PMIC009.
-Refresh current009 launcher state before another native test; do not retrain DDR.
-This one-rail returning test does not qualify the accelerator applications'
-different startup/task configuration or native USB takeover. GPU transport-only
-and returning RTC integrations are being prepared offline in separate worktrees;
-root retains sole physical ownership and shared startup review.
+Second-board DDR continuity is cold126 → register capture127 → PMIC009 → RTC011.
+Refresh current011 launcher state before another native test; do not retrain DDR.
+The preceding production PMIC test completed one DCDC1 snapshot, request reap,
+client-lease release and idle-state checks with inherited settings restored.
+DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:
+`pmic-provider-probe-20261018/physical/runtime/session.json`.
+
+The GPU transport-only application is integrated, with eighteen focused cases
+and scoped Astra review under `gpu-transport-only-20261018/`. It retains actual
+PMIC/USB tasks, skips GPU construction and OPEN, and records transport success
+separately from GPU execution. Physical startup/takeover review remains required;
+inherited GPU admission requirements remain enforced, and USB has no close/restore
+API. No full GPU or NPU retry is admitted by these returning peripheral results.
 
 The corrected GPU attempt on the preceding instance `003:125` produced no
 native USB response. Its sole refusal-report read timed out, and communication
