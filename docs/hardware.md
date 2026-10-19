@@ -557,10 +557,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `gpu-returning-integration-20261018/`; physical shutdown remains untested.
   The finite GPU adapter is integrated with eight passing linked cases and
   Astra review. Its worker/PMIC quiescence and retained object placement are
-  checked; shared monitor/session/memory integration remains outstanding.
-  Evidence: `gpu-finite-adapter-20261018/layout-correction/`.
-  Its startup, packaging and USB profile checks pass; all 175 frozen
-  source inputs match integration. The first physical single-core attempt produced
+  checked. The returning composition's Nonsecure publication and host capture
+  have separate modeled evidence. Its corrected fixed-workload candidate passes
+  seven helper instruction cases and one normal two-job/CLOSE/provider-parking
+  model under `gpu-returning-repeat-fix-20261019/`. It reuses 86 of 88 objects
+  with unchanged return objects and structure layouts. Root architecture/admission
+  review remains pending. Evidence for the preceding finite/publication paths is
+  preserved under `gpu-finite-adapter-20261018/layout-correction/` and
+  `gpu-returning-application-20261019/ns-publication/`.
+  The earlier single-core application's startup, packaging and USB profile checks
+  pass; all 175 frozen source inputs match its integration. The first physical single-core attempt produced
   no native USB result; its refusal-report read timed out. GPU initialization and
   computation remain unobserved. Evidence:
   `gpu-single-core-20261018/physical-candidate-116/runtime/`. That failed session
@@ -606,10 +612,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [fixed-compute constructor](gpu-compute-reserved.md) now allocates payload,
   context and planner-sized VM tables, runs actual builders and binds the service.
   Native instruction checks pass for construction and retained capacity failure.
-  Native reservation admission currently rejects a second compute job after
-  completion; earlier repeated-job checks substituted that callback. The
-  correction is in progress. Replace the frozen two-job candidate before
-  physical use; its publication and host checks retain their original scope.
+  Native reservation admission now accepts acquired completion for another
+  submission, checking owner, epoch, command serials and the actual firmware
+  timeline. Focused checks exercise the real callback and reject changed
+  ownership/completion. Earlier repeated-job checks substituted that callback;
+  the historical returning image contains its previous NEW-only check and is
+  superseded by the corrected fixed-workload candidate. No physical operation
+  is established by these software checks.
   Physical computation, complete application binding, exclusion/drain and wider
   GPU workloads remain open.
   The [power controller](gpu-power.md) has host/reference evidence for GPU
@@ -672,8 +681,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   require advancing completion counters before acquiring and copying results.
   Cancellation revokes further publication and retains all resources. Five new
   composition cases and host decoding checks pass, and the native compute mode
-  links under `gpu-completion-20261018/`. Numerical writes remain modeled;
-  arbitrary programs, physical computation and mimus acceleration remain required.
+  links under `gpu-completion-20261018/`. The
+  [caller-selected compute application](gpu-compiled-programs.md) now accepts
+  trusted compiled programs and copied input through a sealed session without
+  rebuilding firmware. Both checked array kernels pass compiler-reference,
+  sanitizer, native service and host checks with modeled device writes.
+  Integration matches all 215 compiled inputs under
+  `gpu-program-submission-20261019/root-integration.json`. The bounded profile
+  supports one 32-lane workgroup; wider dispatch, same-session input replacement,
+  graphics, concurrency, physical computation and mimus acceleration remain
+  required.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The
@@ -1090,10 +1107,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   output. A supervised mode retains resources until manual power removal;
   USB0-only and USB0-with-radio selections can run without a powered host
   accessory. Its central build passes, and 25 host cases cover capture,
-  refusal and retained ownership. Full startup,
-  physical power and switch qualification, actual transfers, DMA drain,
-  repeated attachment, other speeds, hubs, periodic transfers, role swaps, USB PD,
-  VCONN and applicable alternate modes remain outstanding.
+  refusal and retained ownership. Native HID interrupt-IN input now uses the
+  actual TinyUSB class at low, full and high speed. The board application copies
+  four reports to USB0 output without sending desktop input events. Sanitizer,
+  native consumer/serializer and host checks pass; all 408 compiled inputs match
+  integration under `usb-host-interrupt-20261018/root-integration.json`.
+  xHCI schedules periodic bus transactions while CPU completion handling polls
+  the event ring. Full startup, physical power/switch qualification, actual
+  transfers and report timing, DMA drain, CPU interrupt delivery, repeated
+  attachment, safe detach/reuse, hubs, isochronous transfers, SuperSpeed, role
+  swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
 | --- | --- | --- |

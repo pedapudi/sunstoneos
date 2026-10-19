@@ -125,6 +125,15 @@ compiled inputs match integration. Review resolved key-cleanup races and bounded
 handling of empty USB fragments. Physical engine operation, secure access and
 drain remain unqualified. Both integrations reused accepted checks.
 
+Native USB host HID input is integrated through the actual TinyUSB class and
+xHCI interrupt-IN path at low, full and high speed. The board application copies
+four reports to USB0 output without sending desktop input events. Sanitizer,
+native consumer/serializer and host checks pass; source review is closed.
+Integration matches all 408 compiled inputs under
+`usb-host-interrupt-20261018/root-integration.json`. CPU event handling still
+polls the xHCI ring. Physical enumeration, report contents/timing, VBUS cutoff,
+interrupt delivery and detach/reuse remain unqualified.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:
@@ -161,16 +170,27 @@ Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return rema
 unqualified for both accelerators. Existing device checks were reused.
 Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
-Subsequent source review found that native reservation admission requires NEW
-client/job state on every COMPUTE request. The second request therefore fails
-after the first completes. Earlier repeated-job checks substituted admission
-and do not cover this native callback. The GPU worker is correcting that
-condition and checking actual epoch, serial and timeline ownership. The frozen
-two-job image is not eligible for a hardware attempt until replaced; its accepted
-publication and host checks retain their narrower scope.
+Caller-selected GPU compute programs are integrated. A sealed session fixes a
+trusted host-compiled program and copied input; the same executable supports
+both checked array kernels. Native service, compiler-reference, sanitizer and
+host checks pass, with device writes modeled. All 215 compiled inputs match
+integration under `gpu-program-submission-20261019/root-integration.json`.
+The native reservation callback now permits another submission after acquired
+completion, checking owner, epoch, serial and the actual firmware timeline.
+Focused checks exercise that callback and reject stale ownership/completion.
+The corrected fixed-workload returning candidate is frozen under
+`gpu-returning-repeat-fix-20261019/`, with seven helper instruction cases and one
+normal two-job/CLOSE/provider-parking model passing. It reuses 86 of 88 objects;
+return objects and structure layouts are unchanged. Its ELF SHA-256 is
+`2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d`.
+Root architecture/admission review remains pending. The historical two-job image
+contains the previous NEW-only check and is superseded for repeated submission;
+its publication and host evidence retain their narrower scope. Physical
+computation, wider dispatch, same-session input replacement, graphics and
+concurrency remain unqualified.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
-and device skill document this requirement. Root retains CPU and architectural
-return review. For the preceding adapter, all 172 NPU
+and device skill document the Nonsecure publication requirement. Root retains
+CPU and architectural return review. For the preceding adapter, all 172 NPU
 compiler inputs match. The 89 new GPU compiler inputs match; two inherited
 monitor/runtime sources have additional inactive branches, so the accepted GPU
 objects and their frozen inputs remain authoritative. Evidence:
@@ -242,20 +262,15 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Develop native USB host interrupt transfers and copied HID reports
-   in `usb-host-interrupt`, beginning with the pinned xHCI/TinyUSB requirements.
-   Coordinate shared-provider edits before implementation. CPU/startup changes
-   remain root-owned. UART interrupt service and H.264, JPEG and crypto runtime
-   input delivery are integrated.
-   Implement the approved trusted GPU compiled-program profile in
-   `gpu-program-submission`, using pinned Mesa metadata, copied input/output and
-   the existing native service. Preserve the frozen fixed-workload image.
-   Broader workgroup geometry, graphics and concurrency remain required.
-   Correct native GPU admission for repeated COMPUTE before replacing the frozen
-   two-job candidate. Extend the actual read-only microSD application with
+1. Extend the actual read-only microSD application with
    negotiated four-bit/default-speed and high-speed profiles in `sd-bus-modes`.
    Preserve the legacy profile, actual clock/pin ownership and both cards.
-   Repeated I2S streaming is integrated; its hardware cyclic-DMA mode remains open.
+   UART interrupt service, USB host HID input, trusted GPU programs and H.264,
+   JPEG and crypto runtime input delivery are integrated. Complete root review
+   of the corrected fixed-workload GPU returning candidate before considering
+   physical use. Broader GPU dispatch, same-session input replacement,
+   graphics and concurrency remain required. Repeated I2S streaming is integrated;
+   its hardware cyclic-DMA mode remains open. CPU/startup changes remain root-owned.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a
