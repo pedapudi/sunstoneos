@@ -60,6 +60,13 @@ does not imply a single-core image: some device images inherit the eight-core
 cached boot barrier. Conversely, do not require multicore qualification for an
 independent image without a real dependency.
 
+Establish task privilege from the selected build and linked stack constructor.
+The single-core SRE port with `GUEST=1` starts tasks at EL1t (`SPSR=4`), using
+`SP_EL0` as its stack. Selecting that stack does not mean execution at EL0.
+The cached SMP port starts tasks at EL0 and uses a different privileged exit
+handler. Trace the linked exit and exception vectors before transferring a
+privilege finding or changing a device application's return path.
+
 For DMA, distinguish CPU addresses, device addresses, mapped extents, cache
 visibility and lifetime. A buffer reservation alone does not prove translation
 or engine confinement. Verify command streams, descriptors, tensors and outputs
