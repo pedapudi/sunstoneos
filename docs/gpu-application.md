@@ -225,6 +225,18 @@ submission count, timeline sequence, session epoch and total verified words.
 Pending and failed responses contain no result bytes. The render protocol uses
 a different magic. The host observer validates both sequences and every result:
 
+The GPU client waits until one valid pending response has completed its USB IN
+transfer before sending OPEN. Queuing a response or completing only part of it
+does not open this gate. The existing pending-status request supplies this
+boundary; no new command or fixed delay is required. Waiting remains bounded by
+the admitted session deadline. This establishes working transport before GPU
+power or firmware startup can fail, without claiming host journal durability.
+
+Shared provider, power, clock, or transport faults still revoke the application
+and stop USB. A final failed-status frame is therefore not guaranteed after a
+fatal fault. Missing native USB alone cannot identify whether startup, PMIC/USB
+preparation, or a concurrent GPU OPEN failed in images preceding this gate.
+
 ```sh
 python3 apps/gpu-render/observe.py --compute --bus BUS --address ADDRESS \
   --epoch EPOCH --output /absolute/new/results.bin

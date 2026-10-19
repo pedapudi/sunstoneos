@@ -33,6 +33,7 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  * a 40-byte header plus 256 copied pixel bytes only after complete validation. */
 static uint8_t response[296];
 static unsigned response_bytes,response_sent,response_transferred;
+static unsigned response_pending;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 void tud_mount_cb(void){}
 void tud_umount_cb(void){}
@@ -41,7 +42,10 @@ void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 {(void)buffer;(void)bytes;if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {if(interface||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;
- if(response_transferred==response_bytes&&response_sent==response_bytes)response_bytes=0;}
+ if(response_transferred==response_bytes&&response_sent==response_bytes){
+    if(response_pending&&response_bytes&&gpu_application_live(NULL))
+        atomic_store_explicit(&app.usb_observed,1,memory_order_release);
+    response_bytes=0;response_pending=0;}}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
 static void exchange(void)
 {
@@ -57,6 +61,7 @@ static void exchange(void)
 #endif
     unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
     if(!gpu_application_live(NULL))result=2;
+    response_pending=result==0;
 #ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
     /* Distinct magic and sequence identify one copied numerical submission. */
     put32(response,0x43555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);

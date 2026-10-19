@@ -45,7 +45,10 @@ static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op,ui
 static void client(void *unused)
 {
     (void)unused;
-    while(!atomic_load_explicit(&app.shared.pmic_ready,memory_order_acquire)){
+    /* Do not let GPU OPEN revoke the shared providers before the host has
+     * received one complete pending response from the initialized transport. */
+    while(!atomic_load_explicit(&app.shared.pmic_ready,memory_order_acquire)||
+          !atomic_load_explicit(&app.usb_observed,memory_order_acquire)){
         if(!gpu_application_live(NULL)){retained();}vTaskDelay(1);}
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
