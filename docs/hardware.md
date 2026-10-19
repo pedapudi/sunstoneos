@@ -26,8 +26,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and focused provider, native-request and host electrical-policy checks pass
   under `pcie-pd-rail-native-20261018/`; all 174 compiled repository inputs match
   integration. Earlier controller/PHY/protocol evidence was reused without replay.
-  Physical link operation, endpoint power admission, BAR allocation, interrupts, DMA,
-  Gen2/Gen3, wider enumeration, power transitions and shutdown remain outstanding.
+  The separate [retained endpoint application](pcie-test-application.md) now
+  implements selected BAR/iATU programming, control MMIO and one 4,096-byte
+  endpoint-DMA COPY through the pinned `pci-epf-test` protocol. One privileged
+  owner claims the port, uses one-shot MSI on CPU0 INTID185, checks completion,
+  source/data/guards and link state, then publishes immutable copied USB output.
+  The configuration-only profile keeps its BME-clear, interrupt-masked policy.
+  Thirteen client/provider cases, linked application/host checks and thirteen root
+  route/dispatch cases pass with hardware, translations, scheduling and transport
+  modeled. Root verifies 451 inputs and 171 objects against revision `30e585e`,
+  with no compiled-source delta, under `pcie-endpoint-20261019/root-integration.json`.
+  The exact endpoint and its controller/DMA source-backed authority must establish
+  COPY capability, DMA completion before endpoint mapping removal, and data
+  visibility before status/MSI. No identified endpoint supplies that proof yet.
+  MSI, COMMAND clear and BAR/CPU addressing alone establish no DMA completion;
+  identity forwarding supplies no hostile-endpoint isolation. Success and faults
+  both retain all resources. Physical endpoint power/link, DMA visibility and
+  confinement, MSI, all-core startup/scheduling and recovery remain unqualified.
+  General endpoint drivers/enumeration, embedded root DMA, INTx/MSI-X, Gen2/Gen3,
+  power transitions and shutdown remain required.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
@@ -428,6 +445,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Selected sanitizer, session, host and linked routing checks pass, and the
   native image links. Evidence: `uart-native-20261018/` and
   `uart-irq-20261019/root-integration.json`.
+  The host-only UART supervisor correction at `2e0cac6` passes caller entry to a
+  readiness sentinel and a static audit of 21 production callers under
+  `uart-supervisor-entry-20261019/`. These checks stop before queue/device access
+  and establish no native startup or physical serial operation.
   It requires a passive PB0/PB1 loopback and electrical admission; inherited
   multicore startup remains physically unqualified. Physical serial and interrupt
   operation, DMA and advanced modes remain outstanding.
