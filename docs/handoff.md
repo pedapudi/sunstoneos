@@ -99,7 +99,10 @@ runner is integrated, with validated copied outputs before full DRAM restoration
 and retained ownership after uncertain completion. Its shared transport helper
 uses a per-port lock and forbids further requests after a transport failure.
 Host evidence is under `npu-finite-host-20261018/transport-frozen/`. Final root
-physical admission remains outstanding. Frozen compiler inputs
+physical admission remains outstanding. Root host source review is complete in
+`npu-finite-host-20261018/root-host-source-review.json`; accepted checks were
+reused. The sole changed host dependency adds an unrelated kernel observer;
+the platform-admission function used by NPU is unchanged. Frozen compiler inputs
 remain authoritative: the current USB header changes an embedded structure's
 layout, even though this NPU image does not execute USB platform functions.
 

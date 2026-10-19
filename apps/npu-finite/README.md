@@ -32,7 +32,7 @@ The coordinator must supply fresh physical admission and review the changed norm
 
 Before uploading, the host must save and hash the complete exclusive DRAM reservation `0x41000000..0x42200000`. After one bounded launch, it must confirm a responsive new ROM instance and copy the monitor report, platform log and return receipt. Only a validated normal completion permits restoring and comparing saved DRAM. Old SRAM must never overwrite the newly running ROM. Missing or uncertain completion retains ownership and requires explicit recovery.
 
-This is a complete software image with modeled handoff evidence. Root architecture/reset review, actual admission, physical inference and physical ROM return remain outstanding. Neither a build nor an instruction check establishes those physical results.
+This software image has modeled handoff evidence and completed root source review of its architecture/reset sequence and host capture path. Review records are `npu-finite-return-20261018/root-return-source-review.json` and `npu-finite-host-20261018/root-host-source-review.json`. Target-specific admission, physical inference and physical ROM return remain outstanding. Neither source review nor instruction checks establish those physical results.
 
 The application-local `host.py` implements the returned-RAM host path. `prepare` requires explicit image, manifest, session, admission, compiler, linker and objcopy paths. It reuses the original NPU image/session/request producers and protected SRAM launcher. `validate --bundle PATH` verifies all copied evidence, current host source hashes, exact ELF load bytes, request packets and launcher hash without accessing hardware. The prepared bundle includes evidence and source snapshots; it creates no qualified defaults.
 

@@ -47,12 +47,14 @@ independently qualified watchdog with ROM return. USB0, its PHY, clocks and
 complete shared register words must remain owned for the session. Admission
 flags identify that evidence; they cannot establish physical facts.
 
-The standalone target applies private FreeRTOS privilege and vector patches.
-Only the actual bootstrap, PMIC provider and NPU worker tasks receive EL1t
-execution. The client remains at EL0; USB uses the existing authenticated SVC
-entry. Current image mappings do not isolate arbitrary EL0 writes to all private
-metadata. These guards therefore require trusted application code and immutable
-platform metadata.
+The cached multicore target applies private FreeRTOS privilege and vector
+patches. Its bootstrap, PMIC provider and NPU worker tasks execute at EL1t;
+the client remains at EL0 and USB uses the authenticated SVC entry. The separate
+single-core SRE target, including the returning image, starts all tasks at EL1t
+with `SP_EL0` as the stack selector. Selecting that stack does not imply EL0
+execution. Both profiles require trusted application code and immutable platform
+metadata; their mappings do not isolate every private object from arbitrary
+application writes.
 
 ## Memory and service lifetime
 
@@ -201,9 +203,10 @@ No CPU, DMA engine, remote firmware or retained FEL continuation may use them.
 The native ELF places all loadable code, data, stacks, vectors, tables and results
 in `0x41000000..0x42200000`; the existing all-core preparation barrier precedes
 construction. All native tasks and callbacks retain those image allocations.
-The supervised image never returns through FEL. Its privileged Device mapping
-still permits SRAM access, so this is exclusive private-image ownership, not
-isolation against arbitrary privileged code. External users require independent
+This retained multicore profile has no FEL return. The separate finite returning
+profile described below uses a different shutdown and host-restoration contract.
+The privileged Device mapping still permits SRAM access, so private-image
+ownership does not isolate SRAM from arbitrary privileged code. External users require independent
 exclusion; pointer placement and ON status cannot establish that exclusion.
 
 The host requires explicit live-profile snapshot, SRAM-abandonment and supervised
@@ -532,8 +535,12 @@ interrupt cleanup and the accepted forced-FEL reset tail. Its manifest uses
 actual EL3 sealing, EL1 BSS clearing and mapped memory are checked separately.
 The selected SRE task constructor produces EL1t with PSTATE 4.
 
-Root architecture/reset review, an NPU-specific returned-RAM host wrapper and
-fresh physical admission remain required before execution. The earlier admission
+Root source review of the architecture/reset sequence and returned-RAM host path
+found no remaining concrete blocker. The host wrapper is integrated; its checks
+cover admission, copied reports, full DRAM restoration and retained failures.
+Review records are `npu-finite-return-20261018/root-return-source-review.json`
+and `npu-finite-host-20261018/root-host-source-review.json`. Fresh target-specific
+physical admission remains required before execution. The earlier admission
 profile retains resources until power removal and cannot be silently relabeled
 as normal returning retirement. Failure paths continue to retain potentially
 active device memory. Physical inference and ROM return remain unqualified.
