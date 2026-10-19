@@ -9,15 +9,18 @@ restored saved DRAM. Evidence: `reconnect-20261018-120/` and
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
-The second board is responsive on port `3-3` as `003:122`, identity
-`[7,2811,1097081,0,0]`. Its first NPU attempt on instance `119` produced no native
+The second board returned to responsive ROM as `003:125` on port `3-3` after
+fresh DDR preparation, two RAM-page comparisons, the startup survey and the
+returning PMIC read. Evidence: `second-board-cold-122-20261018/`.
+Its first NPU attempt on instance `119` produced no native
 USB frames; the sole refusal-report read timed out. NPU initialization and
 computation remain unobserved. The user removed its USB power and reconnected it.
 The old runner and coordinator stopped, the failed claim closed, and a new A733
 ROM identity response passed. No further user action is pending. Evidence:
 `npu-single-core-20261018/physical-candidate/runtime/session.json` and
 `second-board-recovery-122-20261018/recovery.json`.
-Fresh cold preparation is required before another native launch.
+The cold preparation is complete. Refresh warm launcher state and device
+observations before the corrected GPU launch; reuse the DDR lifetime from `122`.
 
 The attempted NPU session used normalized fabric words and 200/600/400 MHz rates.
 The previous GPU session contained an NSI bit rejected by its USB provider;
@@ -51,6 +54,10 @@ changed inputs and retained failures; evidence is under that directory's `host/`
 Physical execution passed on the first board. This establishes CPU0 EL3 cache
 adoption and restoration before GIC initialization or secondary release; combined
 startup barriers, CPU0 cached EL1 participation and full scheduling remain unobserved.
+The root-only next-interval review is preserved under
+`primary-cache-probe-20261018/next-primary-el1-review.json`. The secondary EL1
+diagnostic cannot be reused on CPU0 unchanged: it explicitly rejects core 0 and
+requires preceding local GIC setup and restoration suited to that core.
 
 Host USB power capacity and voltage under load are unmeasured. The board manual
 recommends 5 V / 3 A; this is a supply rating, not measured consumption. See
