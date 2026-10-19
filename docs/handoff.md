@@ -202,20 +202,24 @@ images remain valid with their own frozen inputs; these audits do not establish
 matching inputs at future revisions or require catch-up rebuilds. Physical
 interrupt delivery, enumeration, report timing/content, VBUS cutoff, DMA drain
 and detach/reuse remain unqualified.
-A bounded USB hub path now supports one self-powered high-speed USB2 hub with
-one to seven ports and one downstream low/full/high-speed HID or high-speed
-MSC device. It uses the actual TinyUSB hub class, separate slots/control rings
-and hub/transaction-translator contexts before child access. The existing CPU0
-IRQ profile is reused without CPU/GIC/PHY changes. Component, native owner and
-copied host checks pass with modeled hardware under `usb-host-hub-20261019/`.
-Root verifies 414 inputs and 162 objects against revision `3f94f90` under
-`dma-reconcile/root-integration.json`. The reconciled ELF SHA-256 is
-`54c13a7125ab0af070acdd15f23fb0c0e4049a85bd7f19baaa18e0c960ab4e09`.
-All load segments match the accepted candidate apart from build identity;
-accepted cases were reused. Later headers do not invalidate its frozen inputs.
-Hub signaling, external supply behavior,
-DMA ordering and detach/reuse remain physically unqualified. Type-C VBUS cutoff
-does not remove an independently powered hub's supply.
+The supervised board now supports workload 4: one self-powered high-speed USB2
+hub with one low/full/high-speed HID and one high-speed MSC device together.
+The actual client copies four HID reports and one read-only sector into a joint
+payload, immutable through transmission. Both results and fresh attachment
+authority are required for success; partial failure cannot publish joint success.
+Ten focused component cases, two affected single-result branches, actual native
+client/serializer/host checks and focused review pass. Root's selector-4 route
+case passes; the existing eighteen route cases are reused. CPU0 IRQ187 service
+is unchanged; only the supervised board target admits workload 4. Derived
+profiles retain workloads 0–3. Root verifies 414 inputs, 162 objects, 23 sources,
+82 artifacts and three tools against revision `1bb08d5` under
+`usb-host-dual-leaf-20261019/root-integration.json`. The final ELF SHA-256 is
+`0e0d173658081b8b3bb802f54c4550d8b1db13c56b75009bcc37ebf490ae5de5`.
+Allocated runtime bytes match the accepted route-case image apart from build
+identity, so accepted checks were reused. Earlier images retain their own frozen
+inputs. Hub/TT signaling, power, IRQ, DMA and drain remain physically unqualified;
+Type-C VBUS cutoff does not remove external hub power. SuperSpeed, bus-powered
+budgets and wider hub/class support remain required.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -393,10 +397,11 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue GPU grid dispatch, USB support for two downstream devices and
-   repeated Bluetooth capture implementation. Prepare the NPU multioperator
-   proposal; these extensions remain in progress. Bounded H.264 IDR/P sequences,
-   GPU/NPU live input and the single-leaf USB hub path are integrated offline.
+1. Continue GPU grid dispatch and repeated Bluetooth capture implementation.
+   Prepare the NPU multioperator proposal and research the USB SuperSpeed source
+   contract; these extensions remain in progress. Bounded H.264 IDR/P code,
+   GPU/NPU live input and USB hub modes for one device or combined HID/storage
+   are integrated offline.
    Preserve each image's complete frozen inputs and accepted audit scope.
    I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
    with physical RX admission blocked by the documented completion/reuse ordering

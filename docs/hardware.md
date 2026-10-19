@@ -1218,21 +1218,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   All selected consumers use the changed xHCI layouts consistently. Earlier SD,
   UART and other images retain their own frozen input/layout authority; their
   audits do not establish matches at future revisions or require catch-up builds.
-  A bounded hub path now uses the actual TinyUSB hub class and xHCI hub/TT
-  contexts for one self-powered high-speed USB2 hub with one to seven ports and
-  one downstream low/full/high-speed HID or high-speed MSC device. Separate
-  slots/control rings precede child access. Component, native owner and copied
-  host checks pass with modeled hardware under `usb-host-hub-20261019/`.
-  Root verifies 414 inputs and 162 objects against revision `3f94f90` under
-  `dma-reconcile/root-integration.json`; all load segments match the accepted
-  candidate apart from build identity, so accepted cases were reused.
-  Its frozen inputs remain authoritative across later shared-header changes.
-  Existing CPU0 IRQ service is reused without
-  CPU/GIC/PHY changes. Type-C VBUS cutoff does not remove external hub power.
+  Supervised board workload 4 now supports one self-powered high-speed USB2 hub
+  with one low/full/high-speed HID and one high-speed MSC device simultaneously.
+  The actual client/serializer/host copies four HID reports and one read-only
+  sector into a joint payload, immutable through transmission. Both results
+  and fresh attachment authority are required; partial failure cannot publish
+  joint success. Ten focused component cases, two affected single-result branches
+  and native client/serializer/host checks pass with review. Root's selector-4
+  route case passes; the earlier eighteen cases are reused. Existing CPU0 IRQ187
+  service is unchanged. Only the supervised board target admits workload 4;
+  derived profiles retain workloads 0–3. Root verifies 414 inputs, 162 objects,
+  23 sources, 82 artifacts and three tools against revision `1bb08d5` under
+  `usb-host-dual-leaf-20261019/root-integration.json`. Final runtime bytes match
+  the accepted route-case image apart from build identity, so checks were reused.
+  Earlier images retain their own frozen input/layout authority. Type-C VBUS
+  cutoff does not remove external hub power.
   Full startup, physical power/switch qualification, actual
   transfers and report timing, DMA drain, CPU interrupt delivery, repeated
-  attachment, safe detach/reuse, deeper hubs/multiple leaves, isochronous transfers,
-  SuperSpeed, role
+  attachment, safe detach/reuse, bus-powered budgets, deeper hubs/more leaves,
+  wider classes, isochronous transfers, SuperSpeed, role
   swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
 
 | Hardware | Required functions and application interface | Dependencies and physical checks |
