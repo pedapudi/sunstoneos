@@ -38,7 +38,7 @@ conversion is supplied.
 
 ## The analog supply is distinct from the reference
 
-The board audit connects AVCC to CLDO3. A733 Datasheet V0.93 section 5.2 lists
+The board audit connects AVCC to CLDO3. A733 Datasheet V0.93 section 5.3 lists
 VCC-ADC at nominal 1.8 V, separately from its VREFP-ADC reference row. Its supply
 minimum and maximum remain unspecified. Section 5.6 limits analog input to
 0–VCC-ADC. These nominal specifications do not qualify actual voltage or tolerance.
@@ -50,6 +50,85 @@ selector before controller startup. CLDO3 uses enable register `0x21` bit 5 and
 selector `0x31`, with the pinned AXP8191 control table's 100 mV steps from 500 mV.
 No PMIC voltage is changed. Programmed settings do not establish measured AVCC,
 stability, divider population or safe input range; reviewed evidence must do so.
+
+## The schematic bounds passive input loading but leaves population choices
+
+The pinned [V1.2 schematic](https://drive.google.com/uc?export=download&id=1layhtSvMpQo-z_iMJjNfNVvhPhObpsvW),
+sheet 10 (`10_A733 Analog&High-speed`), shows the following circuits. Resistor
+values are design annotations, not an observation of either attached board.
+The green labels R1–R12 are selection-table aliases; use the actual component
+references below when identifying fitted parts.
+
+| Input and SoC ball | Circuit drawn | Nominal voltage and source resistance |
+| --- | --- | --- |
+| GPADC0, 1D24 | `BOOT-SEL-ADC`: R24, 10 kΩ ±1%, to AVCC; no lower resistor drawn | AVCC and 10 kΩ for the circuit shown. The boot table also lists alternative divider populations. |
+| GPADC1, 1D25 | `DDR-PARA-SEL-ADC`: R25, 10 kΩ ±1%, to AVCC; R28, `X-1%`, to ground | Depends on R28: 1, 2.7, 5.1, 8.2, 14, 27 or 68 kΩ, or absent. The table lists approximately 0.163–1.569 V, or 1.8 V when absent, at AVCC = 1.8 V. |
+| GPADC2, 1D26 | `BOARD-ID-SEL-ADC`: R1126, 10 kΩ ±1%, to AVCC; no lower resistor drawn | AVCC and 10 kΩ for the circuit shown. The board-ID table lists the same optional lower values as the DDR divider. |
+| GPADC3, 1F24 | `USB-UPGRADE-COMBO1-SEL-ADC`: R33, 10 kΩ ±1%, to AVCC; R34, 27 kΩ ±1%, to ground | About 0.730 × AVCC and 7.30 kΩ. At 1.8 V this is about 1.314 V; the schematic table labels this option 1.315 V. |
+
+R27 and R1125 are separate GPIO selection pull-downs; neither is part of
+the analog dividers.
+
+For an upper resistor U and lower resistor L, the ideal unloaded voltage is
+AVCC × L/(U+L), and the Thevenin source resistance is U in parallel with L.
+An absent lower resistor gives AVCC with source resistance U. Every populated
+pull-up option in the boot table is at most 10 kΩ; its omitted-upper option
+has a 10 kΩ lower resistor. All shown divider options
+therefore have source resistance at most 10.1 kΩ including 1% resistor tolerance,
+assuming the depicted connections and a sufficiently low-impedance AVCC source.
+The GPADC3 ratio spans approximately 0.7258–0.7337 with independent 1% resistor
+tolerances; these are calculated design bounds, not measured input limits.
+
+All depicted passive inputs lie between ground and AVCC. Sheet 10 connects
+AVCC directly to both VCC-ADC at ball 1H21 and VREFP-ADC at 1F21. VREFN-ADC
+at 1F22 joins analog ground; R32, 0 Ω, joins analog and board ground.
+C198 and C200 provide the drawn 2.2 µF supply/reference decoupling; C199 is
+470 nF on VCM-ADC. Sheet 6 connects CLDO3 to AVCC and also to VDD18-DRAM,
+VCC-PLL, VCC-CPU-PLL and VCC-DCXO. These shared loads reinforce the requirement
+to observe the inherited supply without retuning it.
+
+The manual's section 18.12.5.2 requires acquisition time greater than 10RC,
+with sampling capacitance 6.4 pF. At the derived 10.1 kΩ bound, 10RC is
+0.647 µs after rounding upward, below the configured 100 µs acquisition time.
+This calculation resolves the design-level impedance question. It does not
+establish actual stuffing, AVCC source impedance, board damage or external
+loading. The schematic's highlighted boot/configuration rows and `8GB` label
+are not a fitted bill of materials for either board.
+
+Manual section 18.12.8.32 distinguishes internal and external LDO reference
+selection. The driver's required inherited internal selection remains separate
+from CLDO3 authority. The schematic establishes a common AVCC/VREFP net; it
+does not establish the internal LDO's actual voltage, readiness or accuracy.
+Datasheet V0.93 sections 5.3 and 5.6 give typical 1.8 V supply/reference and
+input range 0–VCC-ADC, with operating supply limits unspecified. Section 5.2's
+2.1 V absolute maximum is not an operating tolerance or an admission target.
+
+Before one passive board attempt, the coordinator must establish:
+
+- **Target population:** identify the selected board revision and a trustworthy
+  population record or physical inspection matching the four input routes.
+  Confirm the AVCC feed resistors are present, R28's fitted value or absence,
+  and any additional lower components or modifications. Exact selection values
+  are needed for expected-code interpretation; the passive safety bound needs
+  the same-rail topology and the source-resistance bound.
+- **Electrical state:** bind stable, enabled CLDO3 at its admitted programmed
+  1.8 V setting to that board and powered lifetime. Confirm the AVCC/ground
+  connection and absence of external drive or loading on these inputs. If the
+  revision or population cannot establish the range and impedance bounds,
+  obtain board-specific voltage or resistance evidence before conversion.
+  The PMIC snapshot verifies configuration, not voltage, ripple or damaged wiring.
+- **Reference state:** retain the inherited internal reference selection and
+  establish usable AVCC/reference operation under the reviewed electrical
+  authority. Claim only raw conversions; voltage and reference accuracy need
+  measurement against an independent reference.
+- **Execution ownership:** satisfy the existing frozen-image, PMIC/TWI/pin,
+  clock, controller, IRQ, security and recovery prerequisites. Retain all
+  supplies, configurations and reservations after configured disable and ROM
+  return as described by the returning-client procedure.
+
+No resistor change, signal injection, boot-pad contact or voltage adjustment is
+part of this test. Source inspection supplies the circuit calculation; physical
+records must bind its assumptions to the actual target.
 
 ## One retained task owns sampling and deferred interrupts
 

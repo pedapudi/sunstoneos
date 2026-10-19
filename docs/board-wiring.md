@@ -184,7 +184,7 @@ The separate low-resolution converter input LRADC0 has a 10 kΩ pull-up to
 AVCC through R23. The schematic does not show the five-key resistor ladder
 described by the kernel configuration. The PMIC's own GPADC pin is unconnected.
 AVCC uses CLDO3; actual voltage and fitted selection resistors remain unverified.
-The A733 datasheet V0.93 section 5.2 separately lists the ADC supply and positive
+The A733 datasheet V0.93 section 5.3 separately lists the ADC supply and positive
 reference at a typical 1.8 V, with operating minima and maxima unspecified.
 The internal reference setting therefore does not establish the CLDO3 supply
 setting or measured AVCC voltage. Native sampling must verify its admitted
