@@ -101,6 +101,12 @@ Nonsecure view. A maximum mask can round down to `0xf0`; an interrupt at that
 same priority remains masked. Set a known admitted priority, preserve neighboring
 fields and restore the original value during returning diagnostics.
 
+Validate interrupt groups from the Secure monitor. With `GICD_CTLR.DS=0`,
+Nonsecure accesses to `GICD_IGROUPR` are read-as-zero/write-ignored (IHI 0069G
+section 12.9.13). A Nonsecure runtime check that requires its group bit to read
+as one will reject a correctly configured interrupt. Preserve the monitor's group
+validation and check the runtime-accessible priority, route and enable state.
+
 ## Match diagnostics to the exact executable
 
 The startup overlay patches a particular frozen ELF. Its addresses, displaced
