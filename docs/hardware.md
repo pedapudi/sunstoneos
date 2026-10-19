@@ -981,9 +981,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Four independent x264/FFmpeg comparisons, parser sanitizer checks and native
   admission, executor, guarded-copy and USB checks pass. Evidence:
   `h264-stream-20261018/`. The driver accepts 16–64 by 16–32 pictures; the
-  application retains 48-by-32 compiled stream/reference inputs. Live ingestion,
-  physical H.264 pixel conformance, interframe references, multiple slices and
-  wider profiles remain outstanding.
+  application accepts a supplied 48-by-32 stream with an optional pixel reference
+  through one firmware image. Upload, immutable input publication, native copied
+  output, session admission and host checks pass under `h264-input-20261018/`.
+  One frame of at most 4096 input bytes is supported per retained session.
+  Repeated decoding, physical H.264 pixel conformance, interframe references,
+  multiple slices and wider profiles remain outstanding.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.

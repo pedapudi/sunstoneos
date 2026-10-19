@@ -77,10 +77,14 @@ single-core image retains resources permanently; it has no qualified ROM return.
 H.264 header parsing and register planning now accept bounded Baseline IDR streams
 with prediction and residual coding. Four independent x264/FFmpeg comparisons,
 parser sanitizer checks and native application checks pass. The driver accepts
-16–64 by 16–32 pictures; the application retains 48-by-32 compiled stream/reference
-inputs. Live ingestion, broader formats and physical pixel/confinement/drain
-qualification remain outstanding. Evidence: `h264-stream-20261018/final-frozen/`
-and `integration.json`. Successful checks were reused for all three integrations.
+16–64 by 16–32 pictures. The application now accepts a supplied 48-by-32 stream
+without rebuilding firmware, with an optional independent pixel reference.
+Upload, session admission, copied output and host capture checks pass under
+`h264-input-20261018/`; root integration matches the frozen image and 422 compiled
+inputs apart from one documented comment-only header change. Each retained
+session supports one frame of at most 4096 input bytes. Broader formats, repeated
+decoding and physical pixel/confinement/drain qualification remain outstanding.
+Parser evidence under `h264-stream-20261018/final-frozen/` was reused.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -1026,10 +1030,10 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Finish runtime input delivery for H.264, JPEG and crypto. Separate workers own
-   their private applications and checks in `h264-stream`, `jpeg-runtime-input`
-   and `crypto-runtime-input` worktrees. H.264 must accept a supplied bounded
-   stream without rebuilding firmware. JPEG must accept a supplied supported
+1. Finish runtime input delivery for JPEG and crypto. Separate workers own
+   their private applications and checks in `jpeg-runtime-input` and
+   `crypto-runtime-input` worktrees. H.264 runtime input is integrated.
+   JPEG must accept a supplied supported
    image and return copied pixels and dimensions. Crypto must accept bounded
    SHA-256 or AES-128 ECB requests and return request-bound results. Preserve
    private input ownership, generation checks and retained uncertain operations.
