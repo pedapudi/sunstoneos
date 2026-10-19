@@ -249,15 +249,17 @@ providers, two-channel duplex binding and admitted lifetime as finite modes.
 Transcription remains receive-only and finite. Playback repeats the embedded PCM
 periods; it does not accept arbitrary live playback data.
 
-The audio task returns DMA periods only after the existing service reports actual
-capture or transmit-memory completion. Capture first copies a completed 4,096-byte
-period into one of four private slots. Each slot contains 2,048 mono frames and
+Repeated modes use [fixed hardware-linked rings](i2s-stream.md#hardware-linked-repeated-streaming).
+Playback sources stay immutable while DMA repeats them. Capture uses the service's
+checked private staging copy, then copies its 4,096-byte period into one of four
+private USB slots. Physical RX admission remains blocked by the documented
+package/write/cursor ordering gap. Each slot contains 2,048 mono frames and
 remains immutable until the serialized USB consumer has delivered its complete
 contents and accepted an acknowledgment for its exact 64-bit ticket. Slot
 publication and reuse use release/acquire ordering between the two tasks.
 
 A full copied ring stops new reuse and starts the existing cancellation protocol;
-it never overwrites unread samples. The completed period that detected the full
+it never overwrites unread samples. The staging period that detected the full
 ring remains client-held without being copied or returned. Transmit underrun or
 another service failure also stops the pair. Cancellation observes each configured
 direction's terminal result and buffer hold before publishing its drain bit.
@@ -289,8 +291,9 @@ The remaining fields are little-endian:
 | 116 | Failure flags: 1 copied-ring overrun, 2 service failure | 32 bits |
 | 120 | Reserved zero | 64 bits |
 
-Completion counters count periods obtained from the service, including a captured
-period retained when the copied ring fills. They do not imply that all completed
+Completion counters report actual observed DMA package totals, including final
+progress sampled during cancellation. A playback result can account for several
+periods at once. Capture totals can include periods that could not be copied. They do not imply that all completed
 DMA periods were copied or delivered. In duplex mode, drain bits 0 and 1 describe
 capture and playback; single-direction modes use bit 0. State 2 means orderly
 cancellation with all configured directions drained. State 3 reports failure;

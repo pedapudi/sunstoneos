@@ -128,3 +128,22 @@ enum a733_dma_result a733_dma_build(
     }
     return A733_DMA_OK;
 }
+
+/* Pinned sunxi-dma cyclic builder closes the last descriptor onto the first. */
+enum a733_dma_result a733_dma_build_cyclic(struct a733_dma_descriptor *output,
+    size_t capacity,uint64_t bus,const struct a733_dma_segment *segments,size_t count)
+{
+    if(!segments || count<2 || count>A733_DMA_MAX_SEGMENTS)return A733_DMA_ARGUMENT;
+    unsigned receive=segments[0].source.request!=0;
+    const struct a733_dma_endpoint *first=receive?&segments[0].source:&segments[0].destination;
+    for(size_t i=0;i<count;++i) {
+        const struct a733_dma_endpoint *fifo=receive?&segments[i].source:&segments[i].destination;
+        const struct a733_dma_endpoint *ram=receive?&segments[i].destination:&segments[i].source;
+        if(ram->request || !fifo->request || segments[i].bytes!=segments[0].bytes ||
+           fifo->address!=first->address || fifo->request!=first->request ||
+           fifo->width!=first->width || fifo->burst!=first->burst)return A733_DMA_FORMAT;
+    }
+    enum a733_dma_result r=a733_dma_build(output,capacity,bus,segments,count);
+    if(r==A733_DMA_OK)put32(output[count-1].bytes+20,(uint32_t)bus);
+    return r;
+}

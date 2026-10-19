@@ -145,11 +145,13 @@ def validate_admission(admission_raw,raw,layout,identity,pcm,image_hash,cache=No
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
     validate(platform,{'image_sha256':image_hash},target,port)
     facts_raw=evidence(record['recovery']);facts=json.loads(facts_raw)
+    conditions=CONDITIONS|({'cyclic-rx-completion-and-reuse-ordering-established'}
+        if profile['direction'] in (3,5) else set())
     require(field(raw,layout,'recovery')==hashlib.sha256(facts_raw).digest() and facts.get('schema')=='a733-i2s-initial-entry-v1' and
         facts.get('identity')==target and facts.get('port')==port and facts.get('image_sha256')==image_hash and
         all(facts.get(k)==v for k,v in profile.items()) and facts.get('shared_sha256')==record['shared_sha256'] and
         facts.get('dma_sha256')==record['dma_sha256'] and facts.get('inherited_sha256')==record['inherited_sha256'] and
-        set(facts.get('conditions',{}))==CONDITIONS and facts.get('one_attempt') is True and
+        set(facts.get('conditions',{}))==conditions and facts.get('one_attempt') is True and
         facts.get('whole_board_power_removal') is True and facts.get('no_resource_reuse_before_power_removal') is True,
         'Actual DMA prior drain, audio/electrical/ownership and retained supervision evidence required')
     for ref in facts['conditions'].values():evidence(ref)

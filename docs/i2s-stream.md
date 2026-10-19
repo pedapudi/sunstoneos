@@ -1,10 +1,12 @@
-# Continuous I2S uses bounded DMA periods
+# I2S streaming uses bounded DMA storage
 
-The stream driver keeps the I2S clock and selected receiver or transmitter active
-between finite DMA transfers. FIFO storage carries samples while software drains
-one DMA transfer and arms the next. The implementation supports receive,
-transmit, or simultaneous receive and transmit on I2S0, with two to eight equal periods per direction. Cyclic DMA and
-graceful final-wire drain remain required audio capabilities.
+The stream driver supports receive, transmit and simultaneous operation on I2S0,
+with two to eight equal periods per direction. Finite mode keeps I2S active while
+software drains one DMA transfer and arms the next; FIFO storage covers that
+interval. Repeated native modes use fixed hardware-linked rings and private
+capture staging. Physical continuity and final serial wire drain remain
+unqualified. Cyclic capture also requires the device ordering contract described
+below before physical admission.
 
 The native profile uses the existing 24.576 MHz audio parent and 16 kHz framing
 with two 32-bit wire slots. The format can select one or two channels and 16-bit
@@ -148,20 +150,91 @@ preserved under `~/.cache/sunstoneos/evidence/i2s-duplex-20261018/`. These check
 establish software behavior; physical audio timing and operation remain
 unqualified.
 
-## Repeated application use and cyclic DMA gap
+## Hardware-linked repeated streaming
 
-The native application now repeatedly consumes and returns completed periods
-through this service; see [the application protocol](i2s-application.md#repeated-streaming).
-Its four copied capture slots require complete USB delivery and an exact ticket
-acknowledgment before reuse. Slow consumers stop the stream through the existing
-cancel/drain protocol, retaining unread copies and any client-held DMA period.
-The underlying finite-period completion and cache ownership rules are unchanged.
+Native session directions 3, 4 and 5 use one fixed four-descriptor ring per
+direction. The final descriptor links to the first descriptor. Capture and
+playback use separate channels, catalogues and memory. Finite directions retain
+their completed-period API. The existing paired provider keeps shared clocks and
+pins until both directions have stopped and relinquished their client leases.
 
-This is repeated streaming, not hardware-linked cyclic DMA. In the pinned Linux
-reference, `sunxi-dma.c` lines 1087–1198 build a closed descriptor chain, while
-lines 758–770 report package interrupts with the channel still active.
-`pcm_dmaengine.c` lines 148–174 use that cyclic path. A package notification alone
-does not establish the exclusive CPU ownership or DMA drain required by this
-service. Safe linked-ring ownership, FIFO scheduling gaps, physical continuity
-and final wire drain remain outstanding qualification work. No package interrupt
-has been substituted for the existing completion/drain proof.
+Playback commits every source period before starting DMA. The raw source stays
+immutable until cancellation and the existing controller quiescence protocol
+complete. `TX_REPEAT_PROGRESS` reports cumulative completed memory transfers,
+possibly several periods at once. It grants no CPU lease and needs no PUT.
+This plays the embedded recording repeatedly; it does not support live refills.
+
+Capture keeps all four raw periods reserved for DMA. Each period occupies
+separate cache lines. Initial publication cleans and invalidates them; later CPU
+access only reads them. The worker copies a completed period into a private
+4,096-byte staging buffer. It invalidates the raw range before and after copying,
+using the existing native INVALIDATE operation without cleaning DMA-written data.
+No raw pointer reaches the application. `CAPTURED_COPY` grants the immutable
+staging copy until its exact ticket is returned. The application copies staging
+into its existing four USB slots before returning it.
+
+For absolute period `k`, extended completed-package count `C` and ring length
+`N`, acquisition requires `k+1 <= C < k+N`. After acquisition it again requires
+`C < k+N`. Stable counter, next-descriptor and destination/remaining-byte readings
+must agree with the current period. A transition defers acquisition; reuse or an
+ambiguous postcheck discards staging and stops the stream. A held staging copy
+survives raw-ring overrun. A full USB ring stops capture without overwriting any
+unread copy. USB slots still require complete transfer delivery and exact ACK.
+
+The worker extends the 32-bit package counter with checked arithmetic. Progress
+observations must remain less than one second apart. The configured sample rate
+bounds plausible cumulative progress, allowing 128 FIFO frames. This detects
+counter jumps and rejects histories that could hide a wrap. Missing progress,
+FIFO errors, unexpected queue end, reuse and consumer backlog stop or retain the
+stream through the existing cancellation protocol. Stop samples final DMA
+progress before relinquishing resources. A rejected initial counter enters
+RECOVERY and never contributes frames. Canceling before arm preserves a held
+`TX_FILL` lease and reports no stale progress.
+
+### Documented completion and inferred ordering
+
+The pinned A733 User Manual V1.00, section 13.1.4.2, defines descriptor links.
+Section 13.1.4.3 defines package interrupts after transfer of a complete package
+and warns that later interrupts may overwrite earlier ones. Section 13.1.7.16
+counts completed packages. The counter, rather than interrupt multiplicity,
+therefore supplies progress.
+
+The pinned Linux `sunxi-dma.c` at commit
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, lines 1087–1198, closes cyclic
+chains. Lines 758–770 invoke callbacks while the channel remains active.
+Lines 498–542 extend the package counter and sample a stable descriptor/counter
+pair. Matching `lli->p_lli_next` establishes that `LLI_ADDR` names the next
+descriptor. The ALSA consumer uses coherent allocation in `snd_sunxi_pcm.c`
+line 259 and period callbacks in `pcm_dmaengine.c` lines 132–174. Its coherent
+mapping does not establish visibility for this application's write-back mapping.
+The same revision's DMA API permits partial synchronization but requires the
+transferred range to be complete before CPU access. ALSA stops on overrun rather
+than preserving data through unlimited consumer delays.
+
+No inspected source explicitly orders destination-write completion, package-count
+increment and next-descriptor/destination-cursor updates. The checked-copy path
+infers that a completed package has finished its destination writes and that
+reuse appears in the jointly consistent counter/cursor state before reused writes
+can escape observation. These are unqualified device assumptions. Manual section
+13.1.7.12 warns that remaining-byte data can precede destination arrival; cursor
+consistency is not a completion fence. CPU barriers and invalidation do not close
+this device-ordering gap.
+
+Cyclic RX physical admission remains false until that ordering contract is
+established. The existing launch evidence requires the additional
+`cyclic-rx-completion-and-reuse-ordering-established` condition for directions
+3 and 5. No qualifying record exists. Physical cache visibility, continuous
+capture/playback, underrun/overrun behavior, cancellation bus quiescence and final
+serial wire drain remain unqualified. DMA idle does not establish wire drain.
+
+### Offline evidence
+
+`~/.cache/sunstoneos/evidence/i2s-hardware-cyclic-20261019/` preserves descriptor
+checks, the actual native link, actual FreeRTOS/provider composition checks and
+producer-derived native client cases. The provider cases cover three ring wraps,
+coalesced progress, reuse during each invalidation, cursor transitions, retained
+staging, held fill leases, untrusted initial counts, delayed start readback and
+ambiguous observation history. Modeled registers, DMA writes and cache effects
+do not establish physical device ordering. Earlier finite, duplex and USB
+transfer/ACK evidence remains applicable. Root's CPU maintenance review and the
+focused device review are preserved with the compiled inputs.

@@ -1,7 +1,7 @@
 #include "a733_dma_controller.h"
 
 enum { ENABLE = 0, PAUSE = 4, DESCRIPTOR = 8, MODE = 0x28,
-       IRQ_ENABLE = 0x34, PENDING = 0x38, DESCRIPTOR_HIGH = 0x3c };
+       PACKAGES = 0x30, IRQ_ENABLE = 0x34, PENDING = 0x38, DESCRIPTOR_HIGH = 0x3c };
 enum { BUSY = 0x30, CPU_ROUTE = 0x34, MCU_ROUTE = 0x38 };
 
 static uint32_t read_global(struct a733_dma_controller *c, unsigned offset)
@@ -224,9 +224,9 @@ static void begin_stop(struct a733_dma_controller *c, unsigned channel,
     barrier(c);
 }
 
-enum a733_dma_control_status a733_dma_submit(
+static enum a733_dma_control_status submit(
     struct a733_dma_controller *c, unsigned channel,
-    const struct a733_dma_transfer *t, uint64_t timeout)
+    const struct a733_dma_transfer *t, uint64_t timeout, unsigned cyclic)
 {
     if (!valid_channel(c, channel) || !c->channels[channel].claimed ||
         !timeout || timeout > INT64_MAX) return A733_DMA_INVALID;
@@ -235,12 +235,23 @@ enum a733_dma_control_status a733_dma_submit(
     if (s->transfer) return A733_DMA_CONFLICT;
     enum a733_dma_control_status status = validate_transfer(c, t);
     if (status != A733_DMA_CONTROL_OK) return status;
+    if(cyclic) {
+        for(size_t i=0;i<t->mapping_count;++i)if(t->mappings[i].access!=(cyclic==1?A733_DMA_READ:A733_DMA_WRITE))return A733_DMA_INVALID;
+        if(t->mapping_count!=t->count)return A733_DMA_INVALID;
+        for(size_t i=0;i<t->count;++i) {
+            const struct a733_dma_endpoint *ram=cyclic==1?&t->segments[i].source:&t->segments[i].destination;
+            const struct a733_dma_endpoint *fifo=cyclic==1?&t->segments[i].destination:&t->segments[i].source;
+            if(ram->request || !fifo->request || ram->address!=t->mappings[i].bus ||
+               t->segments[i].bytes!=t->mappings[i].bytes)return A733_DMA_INVALID;
+        }
+    }
     if (!quiet(c, channel) || read_channel(c, channel, DESCRIPTOR) != s->saved_descriptor)
         return recovery(s);
-    if (a733_dma_build(t->descriptors.cpu, t->descriptors.bytes / 64,
-                       t->descriptors.bus, t->segments, t->count) != A733_DMA_OK)
-        return A733_DMA_INVALID;
-    s->transfer = t;
+    enum a733_dma_result encoded=cyclic?
+        a733_dma_build_cyclic(t->descriptors.cpu,t->descriptors.bytes/64,t->descriptors.bus,t->segments,t->count):
+        a733_dma_build(t->descriptors.cpu,t->descriptors.bytes/64,t->descriptors.bus,t->segments,t->count);
+    if(encoded!=A733_DMA_OK)return A733_DMA_INVALID;
+    s->transfer = t;s->cyclic=cyclic;s->package_last=0;s->packages=0;
     s->timeout = timeout;
     s->started = ticks(c);
     s->status = A733_DMA_ACTIVE;
@@ -252,17 +263,97 @@ enum a733_dma_control_status a733_dma_submit(
     c->operations.cache(c->cookie, A733_DMA_CLEAN, t->descriptors.cpu, t->descriptors.bytes);
     barrier(c);
     write_channel(c, channel, DESCRIPTOR, (uint32_t)t->descriptors.bus);
-    write_channel(c, channel, IRQ_ENABLE, 12); /* Queue end and timeout. */
+    uint32_t irq=cyclic?10:12; /* Cyclic package+timeout; finite queue+timeout. */
+    write_channel(c, channel, IRQ_ENABLE, irq);
     barrier(c);
     if (read_channel(c, channel, DESCRIPTOR) != t->descriptors.bus ||
-        read_channel(c, channel, IRQ_ENABLE) != 12 ||
+        read_channel(c, channel, IRQ_ENABLE) != irq ||
         ticks(c) - s->started >= s->timeout) {
         begin_stop(c, channel, A733_DMA_FAILED);
-        return s->status;
+        return cyclic?recovery(s):s->status;
     }
     write_channel(c, channel, ENABLE, 1);
     barrier(c);
+    s->observed=ticks(c);
+    /* The concrete I2S caller has not enabled DRQ yet. Reject a nonzero
+     * transmission counter rather than assuming an inherited reset value. */
+    if(cyclic && read_channel(c,channel,PACKAGES)) {
+        begin_stop(c,channel,A733_DMA_FAILED);
+        return recovery(s); /* Counter origin is untrusted; never export it. */
+    }
     return s->status;
+}
+enum a733_dma_control_status a733_dma_submit(struct a733_dma_controller *c,unsigned channel,
+    const struct a733_dma_transfer *t,uint64_t timeout)
+{return submit(c,channel,t,timeout,0);}
+enum a733_dma_control_status a733_dma_submit_cyclic_tx(struct a733_dma_controller *c,unsigned channel,
+    const struct a733_dma_transfer *t,uint64_t timeout)
+{return submit(c,channel,t,timeout,1);}
+enum a733_dma_control_status a733_dma_submit_cyclic_rx(struct a733_dma_controller *c,unsigned channel,
+    const struct a733_dma_transfer *t,uint64_t timeout)
+{return submit(c,channel,t,timeout,2);}
+static int cyclic_progress(struct a733_dma_controller *c,unsigned channel)
+{
+    struct a733_dma_channel *s=&c->channels[channel];
+    uint64_t time=ticks(c);uint32_t count=read_channel(c,channel,PACKAGES);
+    uint32_t delta=count-s->package_last;
+    if(time-s->observed>=s->timeout || delta>INT32_MAX || s->packages>UINT64_MAX-delta)return 0;
+    s->observed=time;s->package_last=count;s->packages+=delta;
+    if(delta)s->started=time;
+    return 1;
+}
+int a733_dma_cyclic_progress(const struct a733_dma_controller *c,unsigned channel,uint64_t *out)
+{
+    if(!out || !valid_channel(c,channel) || !c->channels[channel].claimed ||
+       !c->channels[channel].cyclic || c->channels[channel].status==A733_DMA_RECOVERY)return 0;
+    *out=c->channels[channel].packages;return 1;
+}
+
+/* This phase consistency check is not a completion fence. The manual does
+ * not specify PKG_NUM/write/cursor ordering; physical RX admission remains
+ * unqualified. In particular BCNT_LEFT can precede destination arrival.
+ * LLI_ADDR is the next descriptor: the pinned Linux residue routine matches
+ * lli->p_lli_next to this register. A count/cursor transition is deferred. */
+static int rx_position(struct a733_dma_controller *c,unsigned channel)
+{
+    struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
+    uint32_t before=read_channel(c,channel,PACKAGES);
+    uint32_t link=read_channel(c,channel,DESCRIPTOR);
+    uint32_t destination=read_channel(c,channel,0x14);
+    uint32_t remaining=read_channel(c,channel,0x18);
+    uint32_t again=read_channel(c,channel,DESCRIPTOR);
+    uint32_t after=read_channel(c,channel,PACKAGES);
+    if(before!=after || link!=again || after!=s->package_last)return 0;
+    unsigned current=(unsigned)(s->packages%t->count);
+    const struct a733_dma_mapping *m=&t->mappings[current];
+    uint64_t expected=t->descriptors.bus+((current+1)%t->count)*64;
+    if(link!=expected || m->bus>UINT32_MAX || destination<m->bus ||
+       destination-m->bus>m->bytes || remaining!=m->bytes-(destination-m->bus))return 0;
+    return 1;
+}
+int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint64_t period,
+    void *out,size_t bytes)
+{
+    if(!out || !bytes || !valid_channel(c,channel))return -1;
+    struct a733_dma_channel *s=&c->channels[channel];const struct a733_dma_transfer *t=s->transfer;
+    if(s->cyclic!=2 || s->status!=A733_DMA_ACTIVE || !t ||
+       period>UINT64_MAX-t->count || bytes!=t->segments[0].bytes ||
+       (uintptr_t)out>UINTPTR_MAX-bytes || cpu_overlap(&t->descriptors,out,bytes))return -1;
+    for(size_t i=0;i<t->mapping_count;++i)if(cpu_overlap(&t->mappings[i],out,bytes))return -1;
+    if(cpu_overlap(&(struct a733_dma_mapping){c,0,sizeof(*c),A733_DMA_READ},out,bytes))return -1;
+    if(!cyclic_progress(c,channel))return -1;
+    if(s->packages<=period)return 0;
+    if(s->packages>=period+t->count)return -1;
+    if(!rx_position(c,channel))return 0;
+    const struct a733_dma_mapping *m=&t->mappings[period%t->count];
+    c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
+    const volatile unsigned char *source=m->cpu;unsigned char *destination=out;
+    for(size_t i=0;i<bytes;++i)destination[i]=source[i];
+    /* CPU only read the raw range; never write back device-written bytes. */
+    c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
+    if(!cyclic_progress(c,channel) || s->packages>=period+t->count ||
+       !rx_position(c,channel) || (read_channel(c,channel,PENDING)&~3u))return -1;
+    return 1;
 }
 
 enum a733_dma_control_status a733_dma_cancel(struct a733_dma_controller *c, unsigned channel)
@@ -287,13 +378,15 @@ enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *c, unsign
     if (pending & ~15u) return recovery(s);
     if (pending) write_channel(c, channel, PENDING, pending);
     if (s->status == A733_DMA_ACTIVE) {
-        if (pending & 8) begin_stop(c, channel, A733_DMA_FAILED);
-        else if (pending & 4) begin_stop(c, channel, A733_DMA_COMPLETE);
+        int ambiguous=s->cyclic && !cyclic_progress(c,channel);
+        if (ambiguous || (pending & 8)) begin_stop(c, channel, A733_DMA_FAILED);
+        else if (pending & 4) begin_stop(c, channel,s->cyclic?A733_DMA_FAILED:A733_DMA_COMPLETE);
         else if (ticks(c) - s->started >= s->timeout) begin_stop(c, channel, A733_DMA_FAILED);
         else return s->status;
     } else if (pending & 8) s->outcome = A733_DMA_FAILED;
 
     if (idle(c, channel)) {
+        if(s->cyclic && !cyclic_progress(c,channel))return recovery(s);
         /* A late event is handled by the next bounded poll. */
         barrier(c);
         if (!read_channel(c, channel, PENDING)) {

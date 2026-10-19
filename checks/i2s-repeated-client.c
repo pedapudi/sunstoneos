@@ -6,6 +6,13 @@ static uint8_t rx[I2S_PERIODS][4096],tx[I2S_PERIODS][4096];
 static struct dma_service_request queued;
 static unsigned selected,phase[2],outcome[2],drains[2],primed[2],completed[2],sent,cancel_race,delayed;
 static uint64_t generations[2];
+static unsigned copied;
+static void check(int,unsigned);
+int dma_service_copy_period(struct dma_service *service,unsigned job,uint64_t ticket,void *out,size_t bytes)
+{
+ (void)service;check(ticket==generations[job]&&bytes==4096,50);
+ memset(out,0x40+completed[job]-1,bytes);++copied;return 1;
+}
 static void check(int ok,unsigned code){if(!ok){i2s_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 int i2s_live(void *p){(void)p;return !atomic_load(&app.fatal);}
 void i2s_fail(void *p){(void)p;atomic_store(&app.fatal,1);}
@@ -36,14 +43,15 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
    phase[j]=DMA_SERVICE_DRAINING;outcome[j]=DMA_SERVICE_FAILED;
   }
   if(phase[j]!=DMA_SERVICE_RUNNING){out->result=DMA_SERVICE_BUSY;break;}
-  {unsigned n=completed[j]++,slot=n%4;
-   out->period=(struct a733_i2s_period){.ticket=++generations[j],.slot=slot,.frames=2048,
-    .first_frame=(uint64_t)n*2048,.counter=(n+1)*2048,
-    .kind=transmit?A733_I2S_TX_MEMORY_CONSUMED:A733_I2S_CAPTURED};
+  {unsigned n=completed[j],amount=selected>=8&&transmit?4:1,slot=n%4;completed[j]+=amount;
+   out->period=(struct a733_i2s_period){.ticket=++generations[j],.slot=slot,.frames=amount*2048,
+    .first_frame=(uint64_t)n*2048,.counter=(n+amount)*2048,
+    .kind=selected>=8?(transmit?A733_I2S_TX_REPEAT_PROGRESS:A733_I2S_CAPTURED_COPY):
+      (transmit?A733_I2S_TX_MEMORY_CONSUMED:A733_I2S_CAPTURED)};
    if(transmit){const void *p=mode==2?tx[slot]:rx[slot];check(!memcmp(p,i2s_recorded_pcm+slot*4096,4096),20);}
    else memset(rx[slot],0x40+n,4096);
   }break;
- case DMA_SERVICE_PERIOD_PUT:check(queued.period_ticket==generations[j],21);break;
+ case DMA_SERVICE_PERIOD_PUT:check(!(selected>=8&&transmit&&phase[j]==DMA_SERVICE_RUNNING),51);check(queued.period_ticket==generations[j],21);break;
  case DMA_SERVICE_CANCEL:
   if(selected==5&&!cancel_race++){
    phase[j]=DMA_SERVICE_DRAINING;outcome[j]=DMA_SERVICE_CANCELED;out->result=DMA_SERVICE_BUSY;break;
@@ -52,6 +60,7 @@ int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service
   phase[j]=DMA_SERVICE_DRAINING;outcome[j]=DMA_SERVICE_CANCELED;break;
  default:check(0,23);
  }
+ out->stream_frames=(uint64_t)(completed[j]+(selected>=8&&transmit&&phase[j]==DMA_SERVICE_RESULT))*2048;
  out->phase=phase[j];out->outcome=outcome[j];return 1;
 }
 static void consume(void)
@@ -67,10 +76,11 @@ static void consume(void)
 void i2s_check_run(unsigned variant)
 {
  selected=variant;app.admitted=*(const struct i2s_session *)A733_STORAGE_SESSION_ADDRESS;
- app.session=app.admitted;app.session.direction=variant<3?3+variant:5;
+ app.session=app.admitted;app.session.direction=variant>=8?3+variant-8:variant<3?3+variant:5;
  app.session.dma.service_channels=app.session.direction%3==2?3:1;
  check(i2s_session_valid(&app.session),10);
  atomic_store(&app.dma.state,A733_DMA_POOL_READY);
+ if(variant>=8)for(unsigned j=0;j<2;++j)app.stream[j].stream.cyclic=1;
  for(unsigned i=0;i<4;++i){app.period_memory[i]=rx[i];app.playback_memory[i]=tx[i];}
  int result=0;unsigned cancelled=0;uint8_t preserved[4096];
  for(unsigned n=0;n<2000&&!result;++n){
@@ -91,6 +101,10 @@ void i2s_check_run(unsigned variant)
   check(atomic_load(&app.repeated.drained)==(app.session.direction%3==2?3u:1u),45);
   if(variant==6){check(atomic_load(&app.repeated.head)>atomic_load(&app.repeated.tail),46);while(atomic_load(&app.repeated.head)>atomic_load(&app.repeated.tail))consume();}
   if(variant==7)check(delayed,47);
+  if(variant>=8){
+   check(copied==(app.session.direction%3==1?0:completed[0]),52);
+   if(app.session.direction%3)check(atomic_load(&app.repeated.tx_frames)==(uint64_t)(completed[app.session.direction%3==2]+1)*2048,53);
+  }
  }
  i2s_check_result=1;__asm__ volatile("brk #0");for(;;){}
 }

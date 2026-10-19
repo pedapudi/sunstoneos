@@ -13,6 +13,8 @@ void i2s_fail(void *v){(void)v;atomic_store(&app.fatal,1);}
 int i2s_live(void *v){(void)v;return tick<app.deadline*24;}
 int i2s_prepare_audio(void){atomic_store(&app.audio_ready,1);return 1;}
 void vTaskDelay(TickType_t ticks){(void)ticks;}
+int dma_service_copy_period(struct dma_service *service,unsigned job,uint64_t ticket,void *out,size_t bytes)
+{(void)service;(void)job;(void)ticket;(void)out;(void)bytes;return 0;}
 int dma_service_send(struct dma_service *s,const struct dma_service_request *r,TickType_t wait,uint64_t *ticket)
 {(void)s;(void)wait;queued=*r;*ticket=++sent;return 1;}
 int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)

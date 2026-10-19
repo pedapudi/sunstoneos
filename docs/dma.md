@@ -181,7 +181,11 @@ so controller access requires a privileged service. Physical tests must establis
 that enable/busy observations and cache operations provide the assumed drain
 and visibility guarantees.
 
-Pause, cyclic transfers, hardware timeout modes, burst mode, IOspeed mode,
+The I2S application now uses [fixed cyclic rings](i2s-stream.md#hardware-linked-repeated-streaming)
+with immutable TX and checked RX staging. RX device ordering and physical
+visibility remain unqualified.
+
+Pause, hardware timeout modes, burst mode, IOspeed mode,
 request handshakes, DMA1, interrupt delivery, IOMMU integration, and concurrent
 peripheral workloads remain required.
 Bidirectional peripheral ports that share one register address need a

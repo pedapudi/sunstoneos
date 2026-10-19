@@ -37,7 +37,8 @@ struct dma_service_reply {
     enum dma_service_phase phase;
     enum dma_service_outcome outcome;
     unsigned owns_session, holds_buffers;
-    struct a733_i2s_period period; /* Only a successful PERIOD_GET grants CPU access. */
+    struct a733_i2s_period period; /* Kind distinguishes raw, copied and metadata-only progress. */
+    uint64_t stream_frames; /* Cumulative completed cyclic frames, including final drain. */
 };
 /* Metadata is copied at initialization; pointed-to RAM allocations remain
  * reserved/pinned for service lifetime. RAM jobs prohibit FIFO requests.
@@ -160,6 +161,9 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * only through capture APIs, never through an independent generic DMA poll. */
 int dma_service_send(struct dma_service *, const struct dma_service_request *, TickType_t wait, uint64_t *ticket);
 int dma_service_collect(struct dma_service *, uint64_t ticket, struct dma_service_reply *, TickType_t wait);
+/* Copy only a collected CAPTURED_COPY staging lease for this task/job/ticket.
+ * No pointer is queued; CPU destination must not alias service or DMA storage. */
+int dma_service_copy_period(struct dma_service *,unsigned,uint64_t,void *,size_t);
 /* Only init's private worker receives EL1t through the startup port hook. */
 BaseType_t dma_service_task_privileged(TaskFunction_t, void *);
 #endif

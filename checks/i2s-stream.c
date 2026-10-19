@@ -397,7 +397,7 @@ void kernel_main(void)
             j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE));
         profiles[j].stream=(struct a733_i2s_stream_profile){
             {24576000,16000,0,32,32,1,0},a733_i2s_platform_stream_operations(),&bindings[I2S_CHECK_DUPLEX?0:j],
-            j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE,10000};
+            j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE,10000,0};
     }
     struct dma_memory_window window={(uintptr_t)pool,(uintptr_t)pool,sizeof(pool),7};
     struct dma_fifo_port ports[]={{A733_I2S0_RXFIFO,3,1u<<4,1u<<8,A733_DMA_READ},

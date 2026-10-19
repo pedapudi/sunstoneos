@@ -84,9 +84,13 @@ int i2s_repeated_step(void)
   struct a733_i2s_period p=app.reply.period;unsigned tx=transmit(job);
   _Atomic uint64_t *frames=tx?&s->tx_frames:&s->rx_frames;
   uint64_t previous=atomic_load_explicit(frames,memory_order_relaxed);
-  if(p.slot>=I2S_PERIODS||p.frames!=I2S_PERIOD_BYTES/2||!p.ticket||p.ticket<=s->held[job]||
-   p.first_frame!=previous||previous>UINT64_MAX-p.frames||
-   p.kind!=(tx?A733_I2S_TX_MEMORY_CONSUMED:A733_I2S_CAPTURED))return failed();
+  unsigned cyclic=app.stream[job].stream.cyclic;
+  enum a733_i2s_period_kind expected=tx?(cyclic?A733_I2S_TX_REPEAT_PROGRESS:A733_I2S_TX_MEMORY_CONSUMED):
+      (cyclic?A733_I2S_CAPTURED_COPY:A733_I2S_CAPTURED);
+  if(p.slot>=I2S_PERIODS || !p.frames || p.frames%(I2S_PERIOD_BYTES/2) ||
+   (!tx && p.frames!=I2S_PERIOD_BYTES/2) || (!cyclic && p.frames!=I2S_PERIOD_BYTES/2) ||
+   !p.ticket || p.ticket<=s->held[job] || p.first_frame!=previous ||
+   previous>UINT64_MAX-p.frames || p.kind!=expected)return failed();
   s->held[job]=p.ticket;
   atomic_store_explicit(frames,previous+p.frames,memory_order_release);
   if(!tx){
@@ -95,11 +99,14 @@ int i2s_repeated_step(void)
    if(head<tail||head-tail>I2S_REPEATED_SLOTS||head==UINT64_MAX)return failed();
    if(head-tail==I2S_REPEATED_SLOTS){stopping(I2S_REPEATED_OVERRUN);return 0;}
    struct i2s_repeated_slot *slot=&s->slots[head%I2S_REPEATED_SLOTS];
-   memcpy(slot->bytes,app.period_memory[p.slot],I2S_PERIOD_BYTES);
+   if(cyclic) {
+    if(!dma_service_copy_period(&app.dma.service,job,p.ticket,slot->bytes,I2S_PERIOD_BYTES))return failed();
+   }else memcpy(slot->bytes,app.period_memory[p.slot],I2S_PERIOD_BYTES);
    slot->period=(struct i2s_repeated_period){head+1,p.first_frame,p.frames,p.counter};
    atomic_store_explicit(&s->head,head+1,memory_order_release);
   }
-  s->stage=PUT;return 0;}
+  if(tx && cyclic){s->direction=(job+1)%jobs();s->stage=GET;}
+  else s->stage=PUT;return 0;}
  case PUT:
   r=i2s_request(DMA_SERVICE_PERIOD_PUT,0,s->held[job]);if(r<0)return failed();if(!r)return 0;
   s->direction=(job+1)%jobs();s->stage=GET;return 0;
@@ -110,6 +117,12 @@ int i2s_repeated_step(void)
   s->stage=GET;return 0;
  case STOP_STATUS:
   app.job=job;r=i2s_request(DMA_SERVICE_STATUS,0,0);if(r<0)return failed();if(!r)return 0;
+  if(app.stream[job].stream.cyclic) {
+   _Atomic uint64_t *frames=transmit(job)?&s->tx_frames:&s->rx_frames;
+   uint64_t previous=atomic_load_explicit(frames,memory_order_relaxed);
+   if(app.reply.stream_frames<previous || app.reply.stream_frames%(I2S_PERIOD_BYTES/2))return failed();
+   atomic_store_explicit(frames,app.reply.stream_frames,memory_order_release);
+  }
   if(app.reply.phase==DMA_SERVICE_RUNNING||app.reply.phase==DMA_SERVICE_READY){s->stage=STOP_CANCEL;return 0;}
   if(app.reply.phase==DMA_SERVICE_DRAINING)return 0;
   if(app.reply.phase!=DMA_SERVICE_RESULT||!app.reply.holds_buffers||

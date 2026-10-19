@@ -66,7 +66,9 @@ struct a733_dma_channel {
     uint64_t started, timeout, stop_started;
     uint32_t saved_descriptor;
     enum a733_dma_control_status status, outcome;
-    unsigned claimed;
+    unsigned claimed, cyclic;
+    uint32_t package_last;
+    uint64_t packages, observed;
 };
 struct a733_dma_controller {
     struct a733_dma_operations operations;
@@ -100,6 +102,19 @@ enum a733_dma_control_status a733_dma_release(struct a733_dma_controller *, unsi
 enum a733_dma_control_status a733_dma_submit(
     struct a733_dma_controller *, unsigned channel,
     const struct a733_dma_transfer *, uint64_t timeout);
+/* Immutable memory-to-FIFO only. The caller keeps FIFO requests disabled until
+ * submit returns ACTIVE; every mapping is DMA_READ. No live CPU payload lease.
+ * timeout bounds progress observations and a missing completed package. */
+enum a733_dma_control_status a733_dma_submit_cyclic_tx(struct a733_dma_controller *,
+    unsigned,const struct a733_dma_transfer *,uint64_t);
+enum a733_dma_control_status a733_dma_submit_cyclic_rx(struct a733_dma_controller *,
+    unsigned,const struct a733_dma_transfer *,uint64_t);
+int a733_dma_cyclic_progress(const struct a733_dma_controller *,unsigned,uint64_t *);
+/* Copy only one completed, not-yet-reused RX range into private staging. No
+ * raw lease escapes. Return1 verified copy,0 not yet stable/ready,-1 overrun or
+ * ambiguous history. A failed copy remains unpublished. Serialized worker only. */
+int a733_dma_cyclic_rx_copy(struct a733_dma_controller *,unsigned,uint64_t,
+    void *,size_t);
 enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *, unsigned channel);
 enum a733_dma_control_status a733_dma_cancel(struct a733_dma_controller *, unsigned channel);
 int a733_dma_owns(const struct a733_dma_controller *, const struct a733_dma_transfer *);

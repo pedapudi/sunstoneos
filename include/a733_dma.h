@@ -55,4 +55,8 @@ enum a733_dma_result a733_dma_build(
     struct a733_dma_descriptor *output, size_t capacity, uint64_t descriptor_bus,
     const struct a733_dma_segment *segments, size_t count);
 
+/* Concrete immutable playback ring. Same validation/atomic failure contract;
+ * every segment reads RAM and writes the same FIFO, with equal payload sizes. */
+enum a733_dma_result a733_dma_build_cyclic(struct a733_dma_descriptor *,size_t,
+    uint64_t,const struct a733_dma_segment *,size_t);
 #endif

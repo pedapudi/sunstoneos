@@ -308,6 +308,8 @@ static void worker(void *argument)
             struct dma_service_channel *c=&s->channels[s->jobs[message.request.job].channel];
             reply.phase=c->phase; reply.outcome=c->outcome; reply.job_ticket=c->job_ticket;
             reply.owns_session=c->owner == message.client; reply.holds_buffers=c->holds_buffers;
+            if(s->jobs[message.request.job].kind==DMA_SERVICE_I2S_STREAM && c->stream.profile.cyclic)
+                reply.stream_frames=c->stream.frames;
             if (message.request.operation == DMA_SERVICE_REAP && reply.result == DMA_SERVICE_OK) {
                 if(s->jobs[message.request.job].kind!=DMA_SERVICE_I2S_STREAM)c->job=DMA_SERVICE_NO_JOB;
                 c->job_ticket=0; c->outcome=DMA_SERVICE_NO_RESULT;
@@ -447,6 +449,23 @@ static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
     TaskHandle_t task=xTaskGetCurrentTaskHandle();
     for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) { *slot=i; return &s->clients[i]; }
     return NULL;
+}
+int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,void *out,size_t bytes)
+{
+    unsigned slot;struct dma_service_client *client=caller(s,&slot);
+    if(!client || client->pending || job>=s->job_count || !out || bytes!=4096 ||
+       !(client->jobs&(UINT32_C(1)<<job)) || (uintptr_t)out>UINTPTR_MAX-bytes ||
+       overlap((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
+    struct dma_service_private_job *j=&s->jobs[job];
+    struct dma_service_channel *ch=&s->channels[j->channel];
+    if(j->kind!=DMA_SERVICE_I2S_STREAM || ch->owner!=slot || ch->profile!=job)return 0;
+    for(unsigned n=0;n<s->job_count;++n) {
+        const struct a733_dma_transfer *t=&s->jobs[n].transfer;
+        if(overlap((uintptr_t)out,bytes,(uintptr_t)t->descriptors.cpu,t->descriptors.bytes))return 0;
+        for(size_t i=0;i<t->mapping_count;++i)
+            if(overlap((uintptr_t)out,bytes,(uintptr_t)t->mappings[i].cpu,t->mappings[i].bytes))return 0;
+    }
+    return a733_i2s_stream_copy(&ch->stream,ticket,out,bytes);
 }
 int dma_service_send(struct dma_service *s,const struct dma_service_request *request,TickType_t wait,uint64_t *ticket)
 {

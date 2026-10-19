@@ -6,7 +6,7 @@
 #define A733_I2S0_TXFIFO (A733_I2S0_BASE + 0x20u)
 enum a733_i2s_direction { A733_I2S_RECEIVE, A733_I2S_TRANSMIT };
 enum a733_i2s_period_kind { A733_I2S_NO_PERIOD, A733_I2S_CAPTURED,
-    A733_I2S_TX_FILL, A733_I2S_TX_MEMORY_CONSUMED };
+    A733_I2S_TX_FILL, A733_I2S_TX_MEMORY_CONSUMED, A733_I2S_TX_REPEAT_PROGRESS, A733_I2S_CAPTURED_COPY };
 /* Copied observation, never a wire timestamp. RX counter counts samples entering
  * RX FIFO; TX counter counts writes into TX FIFO. CPU access begins only after
  * GET succeeds and ends before PUT is queued. TX consumption does not prove
@@ -30,6 +30,7 @@ struct a733_i2s_stream_profile {
     void *cookie;
     enum a733_i2s_direction direction;
     uint64_t operation_us; /* Finite health/register operation budget. */
+    unsigned cyclic; /* Fixed private ring; live RX is checked-copy only. */
 };
 /* Catalogue: 2..8 equal whole-frame segments, one disjoint full allocation per
  * period, and one separate 64-byte descriptor slot per period. All metadata is
@@ -58,6 +59,10 @@ struct a733_i2s_stream {
     uint64_t deadline, time, timeout, generation, frames, bridge_deadline;
     enum a733_i2s_status status, outcome;
     unsigned channel, count, current, next, stage, dma_held, platform_held, priming;
+    uint64_t reported, raw_next, cyclic_since, cyclic_observed_us;
+    struct a733_i2s_period snapshot_result;
+    unsigned snapshot_state, cyclic_started;
+    _Alignas(64) unsigned char snapshot[4096];
 };
 enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,
     const struct a733_i2s_stream_profile *, const struct a733_dma_transfer *,
@@ -73,10 +78,13 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *);
 enum a733_i2s_status a733_i2s_stream_cancel(struct a733_i2s_stream *);
 enum a733_i2s_status a733_i2s_stream_close(struct a733_i2s_stream *, uint64_t deadline_us);
 /* GET is a live-authority operation and changes output only on success.
+ * Cyclic TX progress is metadata only and grants no PUT lease.
  * PUT consumes the exact ticket once. RX returns an allocation; TX commits
  * immutable payload. On a stopped stream PUT relinquishes without restarting.
  * Return: 1 success, 0 unavailable, -1 retained fault. */
 int a733_i2s_stream_get(struct a733_i2s_stream *, struct a733_i2s_period *);
+/* Read-only CPU staging lease after CAPTURED_COPY GET, never raw DMA memory. */
+int a733_i2s_stream_copy(const struct a733_i2s_stream *,uint64_t,void *,size_t);
 int a733_i2s_stream_put(struct a733_i2s_stream *, uint64_t ticket);
 /* Terminal REAP is allowed only after actual drain and every client PUT;
  * discards unclaimed periods, but preserves the whole catalogue reservation. */

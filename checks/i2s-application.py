@@ -25,6 +25,8 @@ def main():
     parser.add_argument('--freertos', type=Path, required=True)
     parser.add_argument('--tinyusb', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--cyclic-only',action='store_true',help='Run changed cyclic copied RX, immutable TX and final-count client branches only')
+    parser.add_argument('--native-build',type=Path,help='Reuse this already-built native image for cyclic-only cases')
     parser.add_argument('--repeated-only',action='store_true',help='Run repeated client ownership and actual USB acknowledgment cases only')
     parser.add_argument('--duplex-only',action='store_true',help='Run changed duplex client and two-catalogue constructor cases only')
     parser.add_argument('--wav',type=Path,required=True)
@@ -80,11 +82,14 @@ def main():
     toolchain = out/'toolchain.cmake'
     if not toolchain.exists():
         toolchain.write_text(f'set(SUNSTONE_LLD "{linker}" CACHE FILEPATH "")\ninclude("{source}/cmake/aarch64-clang.cmake")\nset(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_ASM_COMPILER "{compiler}")\n')
-    build = out/'build'
-    run('configure',['cmake','-S',source/'apps/i2s','-B',build,f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',
+    build = a.native_build.resolve() if a.native_build else out/'build'
+    if a.native_build:
+        assert a.cyclic_only, '--native-build is only supported for focused cyclic cases'
+    else:
+        run('configure',['cmake','-S',source/'apps/i2s','-B',build,f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',
         f'-DFREERTOS_DIR={out}/dependencies/freertos',f'-DTINYUSB_DIR={out}/dependencies/tinyusb',
         f'-DSUNSTONE_I2S_RECORDED_WAV={out}/dependencies/recorded.wav','-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'])
-    run('build',['cmake','--build',build,'--target','sunstone-a733-i2s','-j4'])
+        run('build',['cmake','--build',build,'--target','sunstone-a733-i2s','-j4'])
     image = build/'sunstone-a733-i2s.elf'
     dependencies = {}
     for dep in list(build.rglob('*.o.d'))+list(build.rglob('*.obj.d')):
@@ -117,7 +122,7 @@ def main():
             ('output',['checks/i2s-application-output.c','apps/i2s/client.c','drivers/storage/storage_digest.c'],
             [None]*3+['duplex-usb-completion-counts'])]
     repeated_session=None
-    if a.repeated_only:
+    if a.repeated_only or a.cyclic_only:
         spec=importlib.util.spec_from_file_location('i2s_repeated_prepare',source/'apps/i2s/prepare.py')
         preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
         _,_,identity,layout,pcm=preparation.image_data(image.read_bytes())
@@ -137,6 +142,9 @@ def main():
                 ['repeated-rx-wrap','repeated-tx-wrap','repeated-duplex-wrap','slow-consumer-drained-retention',
                  'tx-underrun-drain','cancel-races-terminal','cancel-preserves-copied-backlog','pending-get-collected-before-cancel']),
                ('repeated-usb',['checks/i2s-repeated-usb.c','apps/i2s/client.c']+common,['usb-full-delivery-before-ack','usb-partial-delivery-before-ack'])]
+    if a.cyclic_only:
+        cases=[('cyclic-client',['checks/i2s-repeated-client.c','apps/i2s/client.c']+common,
+            [None]*8+['cyclic-copied-rx-client','cyclic-immutable-tx-aggregate-progress','cyclic-duplex-final-drain-count'])]
     for label,names,labels in cases:
         if 'apps/i2s/client.c' in names and 'apps/i2s/repeated.c' not in names:names=names+['apps/i2s/repeated.c']
         executable=out/(label+'.elf')
@@ -166,11 +174,12 @@ def main():
             result=int.from_bytes(uc.mem_read(symbols['i2s_check_result'],4),'little')
             steps[case]={'exit':0 if result==1 else result or -1,'result':result,'pc':uc.reg_read(UC_ARM64_REG_PC)}
             steps_path.write_text(json.dumps(steps,indent=2)+'\n');assert result==1,(case,result)
-    if a.repeated_only:
+    if a.repeated_only or a.cyclic_only:
         (out/'result.json').write_text(json.dumps({'image_sha256':sha(image),
             'image_build_id':(build/'i2s-application/build-id.txt').read_text().strip(),
             'steps':steps,'physical':False},indent=2)+'\n')
-        print('PASS repeated native I2S image, owned copied-ring reuse, cancellation/drain and USB delivery acknowledgments')
+        print('PASS cyclic native client RX copy, aggregate immutable TX and final drain counts' if a.cyclic_only else
+              'PASS repeated native I2S image, owned copied-ring reuse, cancellation/drain and USB delivery acknowledgments')
         return
     # Actual native pool/service constructors; no scheduling or A733 MMIO.
     project=out/'pool-project';project.mkdir(exist_ok=True)
