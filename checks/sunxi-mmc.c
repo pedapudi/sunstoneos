@@ -195,8 +195,8 @@ static int retained(void *ctx, uintptr_t token)
 static void init(struct model *m, struct sunxi_mmc *h, unsigned kind, unsigned sector)
 {
     seed(m, h, kind, sector);
-    struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained},
-        m, 0xa733, (enum sunxi_mmc_kind)kind, 800000, 0x00300000};
+    struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained, NULL},
+        m, 0xa733, (enum sunxi_mmc_kind)kind, 800000, 0x00300000, SUNXI_MMC_SD_LEGACY};
     assert(sunxi_mmc_init(h, &c)); assert(!m->calls);
     assert(!sunxi_mmc_init(h, &c));
     assert(sunxi_mmc_open(h, 1000000)); assert(!m->calls);
@@ -363,5 +363,6 @@ int main(int argc, char **argv)
         if (scenario == 2 || scenario == 3 || scenario == 4 || scenario == 7) assert(!m.command_count);
     }
     puts("PASS: pinned CSD parity, SD/eMMC identification and bounded reads, full-range admission, independent completion/status, retained faults and callback guards");
+    return 0;
     return 0;
 }

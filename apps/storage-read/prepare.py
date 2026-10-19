@@ -45,7 +45,9 @@ def session_check(raw):
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid storage_read owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728,760)),'Missing SD0 physical authority.')
-    require(raw[834:840]==bytes(6) and raw[860:864]==bytes(4),'Reserved SD0 fields must be zero.')
+    require(raw[834:840]==bytes(6),'Reserved SD0 fields must be zero.')
+    profile=struct.unpack_from('<I',raw,860)[0]
+    require(profile in (0,1,2),'Unsupported SD0 bus profile.')
     first,blocks,reserved=struct.unpack_from('<QII',raw,864)
     require(1<=blocks<=8 and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
     identify,read,voltage=struct.unpack_from('<QQI',raw,840)
@@ -53,7 +55,7 @@ def session_check(raw):
     require(inherited_mux(raw),'Unsupported inherited SD0 pin route.')
     for i in range(7):
         ef,ep,ed=raw[792+3*i:795+3*i];df,dp,dd=raw[813+3*i:816+3*i]
-        require(ep<=2 and ed<=3 and df==(2 if 1<=i<=3 else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid fixed one-bit PF route.')
+        require(ep<=2 and ed<=3 and df==(2 if (i<6 if profile else 1<=i<=3) else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid selected SD0 PF route.')
 
 def embedded_reference(image,session):
     """Bind actual immutable geometry and const build ID before behavioral use."""
@@ -64,7 +66,10 @@ def embedded_reference(image,session):
     require(table is not None,'SD0 image has no symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
     expected=struct.pack('<5Q',SESSION_MAGIC,SESSION_BYTES,288,4096,2)
-    for name,body in [('storage_read_geometry',expected)]:
+    markers=[('storage_read_geometry',expected)]
+    if struct.unpack_from('<I',session,860)[0]:
+        markers.append(('storage_read_sd_modes',struct.pack('<4Q',0x4153373353444d31,1,7,400000000)))
+    for name,body in markers:
         require(name in symbols,'Missing immutable SD0 geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong SD0 geometry size.')
         parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
@@ -187,6 +192,13 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                   'authorize_one_disconnect_and_device_reset','preserve_usb1_and_shared_reference',
                   'whole_board_power_removal_on_uncertainty']
         require(all(fact.get(key) is True for key in required),'Required ROM USB0 takeover authority absent.')
+    profile=struct.unpack_from('<I',raw,860)[0]
+    if profile:
+        authority=json.loads(cache[str(Path(record['topology']['path']))])
+        require(authority.get('four_bit_data_route_authorized') is True and
+                authority.get('read_only_bus_negotiation_authorized') is True and
+                authority.get('peri0_400m_stable_owned') is True and
+                authority.get('sd_profile')==profile,'Missing negotiated SD0 mode authority.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):

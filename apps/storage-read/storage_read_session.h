@@ -28,7 +28,7 @@ struct storage_read_session {
 #ifdef SUNSTONE_EMMC_READ
  uint32_t emmc_host;
 #else
- uint32_t reserved32;
+ uint32_t sd_profile; /* enum sunxi_mmc_sd_profile, legacy zero preserved. */
 #endif
  uint64_t application_first_sector;
  uint32_t application_blocks,application_reserved;

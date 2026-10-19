@@ -38,7 +38,10 @@ static int now(void *cookie,uint64_t *v)
 static int admit(void *cookie,const struct a733_mmc_platform_config *c,const struct a733_clock_token *t)
 {
     struct a733_mmc_platform_native *n=cookie;
-    return c->kind==n->kind&&c->emmc_host==n->emmc_host&&current(n) ? n->admit(n->admission_cookie,c,t) : -1;
+    if(c->kind!=n->kind||c->emmc_host!=n->emmc_host||!current(n))return -1;
+    int r=n->admit(n->admission_cookie,c,t);
+    if(r==1)n->sd_profile=c->sd_profile;
+    return r;
 }
 static int enter(void *cookie,uint64_t deadline)
 {
@@ -85,7 +88,12 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if(v!=(1u<<(index+1)))return 0;
     } else if(a==module||a==module+0xc) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
-        if(a==module&&(v&(mask&~UINT32_C(0x80000000)))!=29)return 0;
+        if(a==module){
+            uint32_t setting=v&(mask&~UINT32_C(0x80000000));
+            if(setting!=29&&(n->kind!=SUNXI_MMC_SD||
+               !n->sd_profile||(setting&~31u)!=UINT32_C(0x01000000)||
+               (n->sd_profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)<7:(setting&31u)!=3)))return 0;
+        }
         __asm__ volatile("dsb sy" ::: "memory");
         uint32_t old=*(volatile const uint32_t *)a;
         if((old^v)&~mask)return 0;
@@ -96,6 +104,17 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if(!(v&(1u<<21)))switch(v&63) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
         case 16:case 17:case 18:case 41:case 55:break;
+        case 6:case 51:
+            if(n->kind!=SUNXI_MMC_SD||!n->sd_profile)return 0;
+            /* New SD commands have fixed read-only protocol forms. No eMMC
+             * SWITCH or write-direction command is admitted by this path. */
+            {uint32_t argument=*(volatile const uint32_t *)(base+0x1c);
+             uint32_t flags=(1u<<31)|(1u<<13)|(1u<<8)|(1u<<6);
+             if((v&63u)==51){if(v!=(flags|(1u<<9)|51u)||argument)return 0;}
+             else if(v==(flags|6u)){if(argument!=2)return 0;}
+             else if(v==(flags|(1u<<9)|6u)){if(n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||(argument!=0x00fffff1&&argument!=0x80fffff1))return 0;}
+             else return 0;}
+            break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;
         default:return 0;
         }

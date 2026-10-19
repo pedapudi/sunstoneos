@@ -9,9 +9,10 @@ The application runs under a supervised RAM-only lifetime with manual whole-boar
 power-removal recovery. It does not arm a watchdog or authorize media writes.
 
 The service uses the existing MMC platform and controller, common clocks, PF
-pins, rails, PMIC, register mutex and memory services. SD0 uses PF0–6, one-bit
-legacy mode and active-low detection on PF6. Its 800 kHz module clock produces
-a 400 kHz card clock. Startup verifies the reset-held controller baseline,
+pins, rails, PMIC, register mutex and memory services. SD0 uses PF0–6 and
+active-low detection on PF6. Profile zero retains the original one-bit mode:
+its 800 kHz module clock produces a 400 kHz card clock. Profiles one and two
+negotiate four-bit default speed and required high-speed operation at 3.3 V. Startup verifies the reset-held controller baseline,
 then performs the existing local controller reset and card initialization. The service adds no post-fault reset, recovery pulses or retry. It exposes
 no filesystem, raw command, write, erase, trim or update authority.
 
@@ -46,6 +47,40 @@ The existing card API copies cached CID/CSD/capacity after those checks; it does
 not reread identity. An unobserved removal and replacement between observations
 cannot establish that the original card remains inserted. Hotplug recovery and
 card substitution remain unsupported modes.
+
+## A sealed profile selects read-only SD bus negotiation
+
+The existing 880-byte version-two session uses its former reserved word at
+offset 860 as typed `sd_profile`. Zero selects the original one-bit 400 kHz
+path. One selects four-bit default speed up to the card's CSD limit and
+25 MHz. Two requires four-bit high speed at 50 MHz. Profile zero preserves its original
+pin route and version-two response. Nonzero profiles also require a read-only,
+file-backed SD capability marker in the actual image. An older legacy image
+cannot be prepared for a new profile merely because its session size matches.
+No CPU/startup geometry or code changes are part of this extension.
+
+Wider profiles require complete PF0–5 data/command/clock routing and explicit
+physical authority for that route, read-only card mode negotiation and stable
+shared PERI0_400M ownership. The topology evidence binds the selected profile to
+the exact image and board. All existing 3.3 V signaling, supply, detection,
+exclusive ownership and recovery conditions remain required. No CMD11, voltage
+change, media write or uncertain-command fallback is admitted.
+
+The actual [MMC controller and platform](mmc.md) read SCR, negotiate ACMD6 and,
+for profile two, check and select high speed through CMD6. Card-output disable
+and completed update precede the local module-clock change. Completed timing
+and clock readback plus final CMD13 precede client access. Native and USB clients
+then use the existing copied read service without an additional command API.
+The requested profile remains fixed for the session lifetime.
+
+Nonzero profiles use response wire version three while retaining the 288-byte
+header and version-two read-request format. Bytes 280–283 contain requested
+profile, actual bus width, card timing and module divisor in byte order.
+Bytes 284–287 contain the derived integer card-clock rate. The observer checks
+mode/card agreement, source/divider-derived rates and the CSD cap before accepting
+completed reads. Pending or retained records may report incomplete mode state;
+they carry no successful sector payload. A zero rate means unpublished state.
+Module/card rates describe register configuration rather than measured frequency.
 
 ## First initialization can establish the card protocol state
 
@@ -255,8 +290,8 @@ refusal and the version-two producer/package. The compiled closure contains
 166 objects and 589 inputs. Evidence is under
 `~/.cache/sunstoneos/evidence/storage-read-service-20261018/`.
 The checks execute actual linked application and MMC code; scheduling, shared
-provider returns, card/MMIO and USB completion are modeled. Physical card reads,
-faster SD modes, wider buses, filesystem operations, updates and watchdog recovery
+provider returns, card/MMIO and USB completion are modeled. Physical card reads and negotiated bus/timing operation,
+UHS/voltage switching/tuning, filesystem operations, updates and watchdog recovery
 remain unqualified. Neither current board has populated eMMC or UFS; those media
 are not physical qualification targets for these boards.
 The coordinator alone may prepare and execute a reviewed physical request after
@@ -289,3 +324,46 @@ further card commands. This adds no voltage writes or switching commands.
 Qualified stable supplies, actual signaling and excluded voltage writers remain
 required. Adaptive evidence is under
 `~/.cache/sunstoneos/evidence/second-board-20261018-3-3/sd-adaptive-voltage/`.
+
+## Negotiated SD mode software evidence
+
+Evidence is under `~/.cache/sunstoneos/evidence/sd-bus-modes-20261019/`.
+The final single-core native ELF SHA-256 is
+`0ff1d98d381f5435b83cb84e876e922d88f1666fa44295ec74f37f112c53adb1`.
+Selected sanitizer checks execute actual SCR/ACMD6/CMD6 and read state machines,
+CSD-capped 25 MHz, 20 MHz and 14,285,714 Hz plans, required 50 MHz high speed,
+exact transfer sizes and retained mode/clock/time/owner failures. Actual provider
+composition checks full PF ownership, independent 400 MHz parent proof, gated
+module changes and copied card/block completion.
+
+The linked native service/native filter/core executes both negotiated profiles
+with modeled providers, card/MMIO, time and scheduling. Each profile completes
+two native application reads and two copied host ranges. Production preparation,
+explicit wire-version/CSD/mode refusal and fragmented durable host capture pass.
+Six authority refusals were separately checked at the new exact predicate after
+a fixture correction; successful nominal results were preserved.
+
+An immutable capability object prevents preparation of new profiles against the
+accepted older legacy image. The final diagnostic fix selects the wire version
+from the admitted session before owner construction. Linked checks cover pending
+and early mapping-failure diagnostics for each profile. Of 162 linked objects,
+160 remain identical to the preceding marker image; only native service and
+build identity objects change. Within the native object, only
+`storage_read_copy` changes. The comparison and source closure are preserved in
+`early-copy-object-comparison.json`, `compiled-dependencies-complete.json` and
+`image-complete/image-input-manifest.json`.
+
+Final preparation and observation binding appear in `complete-binding/result.json`.
+Derived observations replace only session identity and image build identity;
+card, mode and data facts retain their accepted bytes. The retained runtime
+functions support reuse of completed read checks. Prior identification, original
+profile, client retention and startup evidence retains its original scope.
+
+Focused Astra review found no actionable core/protocol/platform/filter risk.
+Its diagnostic wire-version finding is closed by the focused linked checks.
+These software checks do not qualify actual card signaling, timing margins,
+clock frequency, removal, recovery or concurrent physical workloads. No device,
+USB or queue access occurred. Both fitted microSD cards still require supervised,
+read-only qualification; absent eMMC and UFS are not targets. Where supported,
+UHS/voltage switching, tuning, interrupts, DMA, writes, recovery and power
+management remain outstanding functional requirements. No benchmark is claimed.

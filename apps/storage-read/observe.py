@@ -15,12 +15,27 @@ def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_by
     if len(session)!=session_bytes or struct.unpack_from('<3Q',session,592)!=(session_magic,2,session_bytes):raise ValueError('Wrong SD0 session geometry')
     if len(raw)<HEADER:raise ValueError('Truncated SD0 record')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
-    if (magic,version)!=(0x44524453,2) or status not in range(5):raise ValueError('Wrong SD0 record')
+    profile=struct.unpack_from('<I',session,860)[0] if session_magic==0x4153373352444131 else 0
+    if profile not in (0,1,2):raise ValueError('Unsupported SD0 bus profile')
+    if (magic,version)!=(0x44524453,3 if profile else 2) or status not in range(5):raise ValueError('Wrong SD0 record')
     if (epoch,generation)!=struct.unpack_from('<2Q',session,24) or raw[208:240]!=session[48:80]:raise ValueError('Different SD0 session/build')
-    if any(raw[280:HEADER]):raise ValueError('Nonzero reserved SD0 bytes')
+    mode,card_hz=struct.unpack_from('<2I',raw,280)
+    width,timing,divisor=(mode>>8)&255,(mode>>16)&255,mode>>24
+    if profile:
+        if mode&255!=profile or width not in (0,1,4) or timing>1 or divisor>32:raise ValueError('Invalid negotiated SD0 mode')
+    elif mode or card_hz:raise ValueError('Nonzero reserved SD0 bytes')
     ticket,first,request_id,blocks,client,application_status,application_reads=struct.unpack_from('<3Q4I',raw,240)
     if client>1 or application_status>2 or application_reads>2:raise ValueError('Invalid native client summary')
     facts=struct.unpack_from('<19I',raw,112)
+    if profile and facts[18]:
+        if profile==1:
+            speed=struct.unpack_from('<I',raw,80)[0]&255
+            factors=(0,10,12,13,15,20,25,30,35,40,45,50,55,60,70,80)
+            if speed&128 or speed&7>3 or not factors[(speed>>3)&15]:raise ValueError('Invalid default-speed CSD limit')
+            cap=min(25000000,(100000,1000000,10000000,100000000)[speed&7]*factors[(speed>>3)&15]//10)
+            if divisor!=(400000000+2*cap-1)//(2*cap):raise ValueError('Default speed exceeds CSD or differs from admitted plan')
+        if (width!=4 or timing!=(profile==2) or not (8<=divisor<=32 if profile==1 else divisor==4) or card_hz!=400000000//(2*divisor)):
+            raise ValueError('Incomplete negotiated SD0 mode')
     if status==1:
         sectors=struct.unpack_from('<Q',raw,104)[0]
         if not ticket or not request_id or not 1<=blocks<=8 or first>=sectors or blocks>sectors-first:raise ValueError('Invalid completed read range')
@@ -31,6 +46,8 @@ def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_by
     result=dict(status=status,bytes=count,epoch=epoch,generation=generation,ticket=ticket,
         first_sector=first,blocks=blocks,request_id=request_id,client=client,
         application_status=application_status,application_reads=application_reads,
+        sd_profile=profile,bus_width=width if profile else 1,timing=timing,
+        card_hz=card_hz if profile else 400000,module_hz=(400000000//divisor if divisor and card_hz else 0) if profile else 800000,
         cid=list(struct.unpack_from('<4I',raw,64)),csd=list(struct.unpack_from('<4I',raw,80)),
         ocr=struct.unpack_from('<I',raw,96)[0],rca=struct.unpack_from('<H',raw,100)[0],
         sector_addressed=raw[102],ext_revision=raw[103],sectors=struct.unpack_from('<Q',raw,104)[0],

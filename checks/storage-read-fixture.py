@@ -11,12 +11,13 @@ FACTS={
  'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],
  'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
  'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}
-def produce(image,out,rom_usb_takeover=False):
+def produce(image,out,rom_usb_takeover=False,sd_profile=0):
  out.mkdir(parents=True,exist_ok=False);prep=module('sd0_fixture_prepare',ROOT/'apps/storage-read/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
  raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(288));struct.pack_into('<3I',raw,488,0,1<<31,1<<31);struct.pack_into('<5Q',raw,592,0x4153373352444131,2,880,23,91)
- for i in range(7):raw[813+3*i:816+3*i]=bytes((2 if 1<=i<=3 else 0,1,0))
+ for i in range(7):raw[813+3*i:816+3*i]=bytes((2 if (i<6 if sd_profile else 1<=i<=3) else 0,1,0))
  struct.pack_into('<QQI',raw,840,10000000,5000000,0x00300000)
+ struct.pack_into('<I',raw,860,sd_profile)
  struct.pack_into('<QII',raw,864,7,2,0)
  # The inherited board model did not initialize providers. Use the accepted
  # actual PMIC producer's two PL pin triples before testing whole construction.
@@ -32,7 +33,8 @@ def produce(image,out,rom_usb_takeover=False):
  for offset in (80,216,248,280):raw[offset:offset+32]=bytes.fromhex(evidence['sha256'])
  refs={}
  for i,(key,required) in enumerate(FACTS.items()):
-  refs[key]=record(key+'.json',dict(**target,schema='a733-storage-read-'+key+'-v2',reviewed=True,physical_access=False,**{k:True for k in required}));raw[632+32*i:664+32*i]=bytes.fromhex(refs[key]['sha256'])
+  extra=dict(four_bit_data_route_authorized=True,read_only_bus_negotiation_authorized=True,peri0_400m_stable_owned=True,sd_profile=sd_profile) if key=='topology' and sd_profile else {}
+  refs[key]=record(key+'.json',dict(**target,schema='a733-storage-read-'+key+'-v2',reviewed=True,physical_access=False,**{k:True for k in required},**extra));raw[632+32*i:664+32*i]=bytes.fromhex(refs[key]['sha256'])
  template=out/'session-template.bin';template.write_bytes(raw);prep.session_check(raw);prep.embedded_reference(image.read_bytes(),raw)
  conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}
  usb_authority=evidence
@@ -49,4 +51,4 @@ def produce(image,out,rom_usb_takeover=False):
  return template,path
 if __name__=='__main__':
  import argparse
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--rom-usb-takeover',action='store_true');a=p.parse_args();produce(a.image,a.output,a.rom_usb_takeover)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--rom-usb-takeover',action='store_true');p.add_argument('--sd-profile',type=int,choices=(0,1,2),default=0);a=p.parse_args();produce(a.image,a.output,a.rom_usb_takeover,a.sd_profile)

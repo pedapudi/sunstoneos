@@ -33,6 +33,7 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
        (c->kind!=SUNXI_MMC_SD&&c->kind!=SUNXI_MMC_EMMC)||
        (unsigned)c->emmc_host>A733_MMC_EMMC_SDC3||
        (c->kind==SUNXI_MMC_SD&&c->emmc_host!=A733_MMC_EMMC_SDC2)||
+       (unsigned)c->sd_profile>SUNXI_MMC_SD_HIGH_SPEED4||(c->kind!=SUNXI_MMC_SD&&c->sd_profile)||
        !c->voltage_mask||(c->voltage_mask&~UINT32_C(0x00300000)))return 0;
     a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
     for(unsigned i=0;i<3;++i) {
@@ -41,6 +42,7 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
            (mhz*1000000u)%div||c->fabric_hz[i]!=mhz*1000000u/div)return 0;
         if(mhz!=24)shared|=A733_CLOCK_PERI0;
     }
+    if(c->sd_profile)shared|=A733_CLOCK_PERI0;
     *out=shared;return 1;
 }
 static enum a733_mmc_platform_result fail(struct a733_mmc_platform *p)
@@ -102,6 +104,12 @@ static int profile(struct a733_mmc_platform *p)
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
         !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return 0;
     unsigned n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
+    if(p->config.sd_profile){
+        uint32_t required=(BIT(11)|BIT(2)|BIT(1));
+        unsigned n=((pll>>8)&255)+1,div=(((pll>>20)&7)+1)*3;
+        if((gate&(required|(required<<16)))!=(required|(required<<16))||
+           (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return 0;
+    }
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=parent_mhz[i][(p->config.fabric[i]>>24)&7],div,branches;
         switch(mhz) {
@@ -197,7 +205,7 @@ static int supply_poll(struct a733_mmc_platform *p)
 /* Core callbacks execute only within one admitted, mutex-held poll. Pin and
  * shared-manager methods are never called recursively through these callbacks. */
 static int core_guard(struct a733_mmc_platform *p)
-{return p->core_call&&p->held&&!p->fault&&(!p->update||a733_storage_update_alive(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
+{return p->core_call&&p->held&&!p->fault&&!atomic_load_explicit(&p->clocks->failed,memory_order_acquire)&&(!p->update||a733_storage_update_alive(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
 static int core_read(void *v,uint32_t off,uint32_t *out)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&rd(p,p->base+off,out);if(!ok)fail(p);return ok;}
 static int core_write(void *v,uint32_t off,uint32_t value)
@@ -210,6 +218,25 @@ static int core_retained(void *v,uintptr_t token)
 {struct a733_mmc_platform *p=v;return token==(uintptr_t)p&&core_guard(p);}
 static int core_admit(void *v,uintptr_t token,enum sunxi_mmc_kind kind,uint32_t hz)
 {struct a733_mmc_platform *p=v;return kind==p->config.kind&&hz==800000&&core_retained(v,token);}
+static int core_sd_module(void *v,uintptr_t token,unsigned divisor)
+{
+    struct a733_mmc_platform *p=v;uint32_t ctrl,command,status;
+    if(token!=(uintptr_t)p||p->config.kind!=SUNXI_MMC_SD||!p->config.sd_profile||
+       divisor<4||divisor>32||!core_guard(p)||!profile(p)||!voltage(p,0)||masked(p)!=1||
+       atomic_load_explicit(&p->clocks->failed,memory_order_acquire)||p->pins->failed||
+       !rd(p,p->base+4,&ctrl)||ctrl||!rd(p,p->base+0x18,&command)||(command&BIT(31))||
+       !rd(p,p->base+0x3c,&status)||(status&((1u<<10)|(1u<<9)|(15u<<4)))){fail(p);return 0;}
+    uint32_t next=UINT32_C(0x81000000)|(divisor-1);
+    /* No parent or shared gate write. The selected module is gated while its
+     * source/divider changes, and every successful readback becomes live state. */
+    uint32_t old=p->running_module;
+    if(!update(p,p->module,0x87001f1f,old,old&~BIT(31))||
+       !core_guard(p)||!update(p,p->module,0x87001f1f,old&~BIT(31),next&~BIT(31))||
+       !core_guard(p)||!update(p,p->module,0x87001f1f,next&~BIT(31),next)||
+       !core_guard(p)||!profile(p)||!voltage(p,0)||
+       atomic_load_explicit(&p->clocks->failed,memory_order_acquire)){fail(p);return 0;}
+    p->running_module=next;return 1;
+}
 int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_platform_config *c,
     const struct a733_mmc_platform_ops *o,void *cookie,struct a733_clock_leases *clocks,
     struct a733_pins *pins,struct a733_rail_leases *rails,struct a733_pmic *pmic)
@@ -228,7 +255,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
     unsigned sd=c->kind==SUNXI_MMC_SD,count=sd?7:12,bank=sd?A733_PIN_F:A733_PIN_C;
     if(sd&&!a733_mmc_sd0_inherited_mux(c->expected))return 0;
     for(unsigned i=0;i<count;++i) {
-        unsigned pin=sd?i:emmc_pins[i],fn=sd?(pin>=1&&pin<=3?2:0):((pin==5||pin==6||pin==10)?3+(unsigned)c->emmc_host:0);
+        unsigned pin=sd?i:emmc_pins[i],fn=sd?((c->sd_profile?pin<6:pin>=1&&pin<=3)?2:0):((pin==5||pin==6||pin==10)?3+(unsigned)c->emmc_host:0);
         if((!sd&&c->expected[i].function!=0&&c->expected[i].function!=15)||c->desired[i].function!=fn||
            !a733_pin_config_valid_banked(bank,pin,c->expected[i])||
            !a733_pin_config_valid_banked(bank,pin,c->desired[i]))return 0;
@@ -239,9 +266,9 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
     unsigned index=sd?0:c->emmc_host==A733_MMC_EMMC_SDC3?3:2;
     *p=(struct a733_mmc_platform){.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,.pins=pins,
         .rails=rails,.pmic=pmic,.power=identity,.shared=shared,.deadline=c->deadline_us,
-        .base=0x04020000+index*0x1000,.module=CCU+0xd00+index*0x10,.bus=CCU+0xd0c+index*0x10};
-    struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained},
-        p,(uintptr_t)p,c->kind,800000,c->voltage_mask};
+        .base=0x04020000+index*0x1000,.module=CCU+0xd00+index*0x10,.bus=CCU+0xd0c+index*0x10,.running_module=0x8000001d};
+    struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained,core_sd_module},
+        p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
@@ -304,7 +331,7 @@ static int running(struct a733_mmc_platform *p)
 {
     uint32_t module,bus,ndma;
     if(p->pins->failed||!profile(p)||!voltage(p,0)||masked(p)!=1||
-       !rd(p,p->module,&module)||(module&0x87001f1fu)!=0x8000001du||
+       !rd(p,p->module,&module)||(module&0x87001f1fu)!=p->running_module||
        !rd(p,p->bus,&bus)||(bus&0x10001u)!=0x10001u)return 0;
     return p->config.kind!=SUNXI_MMC_EMMC||p->config.emmc_host!=A733_MMC_EMMC_SDC3||
         (rd(p,p->base+0x7c,&ndma)&&!(ndma&3));

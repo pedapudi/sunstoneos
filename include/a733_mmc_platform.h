@@ -13,6 +13,7 @@ struct a733_mmc_platform_config {
     uint64_t owner, handoff, topology, deadline_us, lifetime_deadline_us;
     enum sunxi_mmc_kind kind;
     uint32_t voltage_mask;
+    enum sunxi_mmc_sd_profile sd_profile; /* SD only; default0 unchanged. */
     /* Exact inherited AHB/NSI/MBUS selector/divider profiles and rates. */
     uint32_t fabric[3], fabric_hz[3];
     /* SD: PF0..6. eMMC: PC0,1,5,6,8,9,10,11,13,14,15,16.
@@ -78,7 +79,7 @@ struct a733_mmc_platform {
     a733_clock_mask_t shared;
     uintptr_t base, module, bus;
     uint64_t last_now, deadline, reset_since;
-    uint32_t initial_module, initial_bus, voltage_mode;
+    uint32_t initial_module, initial_bus, voltage_mode, running_module;
     unsigned initialized, stage, fault, held, clock_retained, rail_retained;
     unsigned rail_index, core_call;
 };

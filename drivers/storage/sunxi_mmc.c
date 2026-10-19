@@ -24,7 +24,9 @@
 
 enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_CID, P_RCA, P_CSD, P_SELECT, P_STATUS, P_BLOCKLEN, P_EXT,
-       P_EXT_STATUS, P_READ, P_READ_STATUS, P_WRITE_PRE, P_WRITE, P_WRITE_STATUS };
+       P_EXT_STATUS, P_READ, P_READ_STATUS, P_WRITE_PRE, P_WRITE, P_WRITE_STATUS,
+       P_SD_SCR_APP, P_SD_SCR, P_SD_WIDTH_APP, P_SD_WIDTH,
+       P_SD_SWITCH_CHECK, P_SD_SWITCH_SET, P_SD_CLOCK, P_SD_MODE_STATUS };
 
 static int span(const void *p, size_t n)
 { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
@@ -115,6 +117,8 @@ int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
         !c->ops.now_us || !c->ops.admit || !c->ops.retained || !c->token ||
         (c->kind != SUNXI_MMC_SD && c->kind != SUNXI_MMC_EMMC) ||
         c->module_hz < 200000 || c->module_hz > 800000 || (c->module_hz & 1u) ||
+        (unsigned)c->sd_profile>SUNXI_MMC_SD_HIGH_SPEED4 ||
+        (c->sd_profile&&(c->kind!=SUNXI_MMC_SD||!c->ops.sd_module)) ||
         !c->voltage_mask || (c->voltage_mask & ~0x00300000u)) return 0;
     struct sunxi_mmc fresh = {0};
     fresh.config = *c; fresh.initialized = 1; *h = fresh; return 1;
@@ -299,7 +303,7 @@ static int command_step(struct sunxi_mmc *h)
         if (h->data_bytes) {
             if (!rd(h, 0, &v) || (v & 2u)) return 0;
             if ((v & (START | (1u << 5) | 7u)) != START) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
-            if (!wr(h, 0x10, 512) || !wr(h, 0x14, (uint32_t)h->data_bytes)) return 0;
+            if (!wr(h, 0x10, h->data_bytes<512?(uint32_t)h->data_bytes:512) || !wr(h, 0x14, (uint32_t)h->data_bytes)) return 0;
         }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
@@ -379,6 +383,62 @@ static void next_write(struct sunxi_mmc *h)
     queue(h,P_WRITE,24u|RESP|CRC|DATA|WRITE|WAIT,arg,
           h->write_payload+h->result.confirmed_blocks*512u,512);
 }
+/* SD v2 capability data is read at the admitted identification clock. No
+ * capability probe failure permits a mode fallback or repeated switch command. */
+static void sd_modes(struct sunxi_mmc *h)
+{
+    if(!h->config.sd_profile){h->state=SUNXI_MMC_READY;return;}
+    queue(h,P_SD_SCR_APP,55u|RESP|CRC,(uint32_t)h->card.rca<<16,0,0);
+}
+static int sd_rate(struct sunxi_mmc *h)
+{
+    static const unsigned units[]={100000,1000000,10000000,100000000};
+    static const unsigned values[]={0,10,12,13,15,20,25,30,35,40,45,50,55,60,70,80};
+    unsigned speed=bits(h->card.csd,96,8),u=speed&7,m=(speed>>3)&15;
+    if((speed&128)||u>3||!values[m])return 0;
+    uint32_t cap=(uint32_t)((uint64_t)units[u]*values[m]/10);
+    if(cap>25000000)cap=25000000;
+    unsigned divisor=h->config.sd_profile==SUNXI_MMC_SD_HIGH_SPEED4?4:
+        (unsigned)((UINT64_C(400000000)+2u*cap-1)/(2u*cap));
+    if(divisor<4||divisor>32||(h->config.sd_profile==SUNXI_MMC_SD_DEFAULT4&&divisor<8))return 0;
+    h->card.module_divisor=divisor;return 1;
+}
+static void sd_clock(struct sunxi_mmc *h)
+{
+    uint32_t v;unsigned hs=h->card.timing==1;
+    switch(h->sd_ios){
+    case 0:
+        if(!rd(h,0x18,&v)||(v&START)||!rd(h,0x3c,&v)||(v&BUSY))return;
+        if(!interrupts(h)||!wr(h,4,0)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        ++h->sd_ios;return;
+    case 1:
+        if(!rd(h,0x18,&v)||(v&START))return;
+        if(!interrupts(h)||!rd(h,4,&v))return;
+        if(v){fault(h,SUNXI_MMC_CONTROLLER);return;}
+        /* Fresh time/ownership surround the provider's bounded rate change. */
+        if(!time_ok(h)||h->config.ops.retained(h->config.context,h->config.token)!=1){fault(h,SUNXI_MMC_ADMISSION);return;}
+        if(h->config.ops.sd_module(h->config.context,h->config.token,h->card.module_divisor)!=1){fault(h,SUNXI_MMC_IO);return;}
+        if(!time_ok(h)||h->config.ops.retained(h->config.context,h->config.token)!=1){fault(h,SUNXI_MMC_ADMISSION);return;}
+        ++h->sd_ios;return;
+    case 2:
+        /* Pinned v5p3x defaults: CMD drive180, data drive90/180 and
+         * CMD/data sample phases0/1 for <=26MHz/default and <=52MHz/HS. */
+        if(!rd(h,0x140,&v)||!wr(h,0x140,(v&~(3u<<16))|((hs?3u:1u)<<16))||
+           !rd(h,0x5c,&v)||!wr(h,0x5c,(v&~(START|0x331u))|START|(hs?0x110u:0))||
+           !wr(h,4,1u<<16)||!fence(h)||!wr(h,0x18,UPDATE))return;
+        ++h->sd_ios;return;
+    case 3:
+        if(!rd(h,0x18,&v)||(v&START))return;
+        if(!interrupts(h)||!rd(h,4,&v))return;
+        if(v!=(1u<<16)){fault(h,SUNXI_MMC_CONTROLLER);return;}
+        if(!rd(h,0xc,&v)||v!=1||!rd(h,0x140,&v)||((v>>16)&3)!=(hs?3u:1u)||
+           !rd(h,0x5c,&v)||(v&(START|0x331u))!=(START|(hs?0x110u:0))){fault(h,SUNXI_MMC_CONTROLLER);return;}
+        h->card.module_hz=400000000u/h->card.module_divisor;
+        h->card.card_hz=400000000u/(2*h->card.module_divisor);
+        ready_status(h,P_SD_MODE_STATUS);return;
+    default:fault(h,SUNXI_MMC_CONTROLLER);return;
+    }
+}
 static void protocol(struct sunxi_mmc *h)
 {
     uint32_t r = h->response[0], voltage = h->config.voltage_mask;
@@ -442,7 +502,7 @@ static void protocol(struct sunxi_mmc *h)
             queue(h, P_BLOCKLEN, 16u | RESP | CRC | WAIT, 512, 0, 0); return;
         }
         if (mmc) queue(h, P_EXT, 8u | RESP | CRC | DATA | WAIT, 0, h->ext_csd, 512);
-        else h->state = SUNXI_MMC_READY;
+        else {h->card.bus_width=1;h->card.module_hz=h->config.module_hz;h->card.card_hz=h->config.module_hz/2;sd_modes(h);}
         return;
     case P_BLOCKLEN:
         if (!card_response(h)) return;
@@ -456,8 +516,41 @@ static void protocol(struct sunxi_mmc *h)
         }
         h->card.ext_revision = h->ext_csd[192]; ready_status(h, P_EXT_STATUS); return;
     case P_EXT_STATUS:
-        if (ready(h)) h->state = SUNXI_MMC_READY;
+        if (ready(h)) {h->card.bus_width=1;h->card.module_hz=h->config.module_hz;h->card.card_hz=h->config.module_hz/2;if(mmc)h->state=SUNXI_MMC_READY;else sd_modes(h);}
         return;
+    case P_SD_SCR_APP:
+        if(!card_response(h))return;
+        if(!(r&(1u<<5))){fault(h,SUNXI_MMC_CARD);return;}
+        queue(h,P_SD_SCR,51u|RESP|CRC|DATA|WAIT,0,h->card.scr,8);return;
+    case P_SD_SCR:
+        if(!card_response(h))return;
+        if((h->card.scr[0]>>4)!=0||(h->card.scr[0]&15)>2||(h->card.scr[1]&5)!=5){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+        queue(h,P_SD_WIDTH_APP,55u|RESP|CRC,(uint32_t)h->card.rca<<16,0,0);return;
+    case P_SD_WIDTH_APP:
+        if(!card_response(h))return;
+        if(!(r&(1u<<5))){fault(h,SUNXI_MMC_CARD);return;}
+        queue(h,P_SD_WIDTH,6u|RESP|CRC|WAIT,2,0,0);return;
+    case P_SD_WIDTH:
+        if(!card_response(h)||!wr(h,0xc,1)||!rd(h,0xc,&r))return;
+        if(r!=1){fault(h,SUNXI_MMC_CONTROLLER);return;}h->card.bus_width=4;
+        if(h->config.sd_profile==SUNXI_MMC_SD_HIGH_SPEED4){
+            if((h->card.scr[0]&15)<1||!(bits(h->card.csd,84,12)&(1u<<10))){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+            queue(h,P_SD_SWITCH_CHECK,6u|RESP|CRC|DATA|WAIT,0x00fffff1,h->card.switch_status,64);return;
+        }
+        if(!sd_rate(h)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+        h->protocol=P_SD_CLOCK;return;
+    case P_SD_SWITCH_CHECK:
+        if(!card_response(h))return;
+        if(!(h->card.switch_status[13]&2)||(h->card.switch_status[29]&2)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+        queue(h,P_SD_SWITCH_SET,6u|RESP|CRC|DATA|WAIT,0x80fffff1,h->card.switch_status,64);return;
+    case P_SD_SWITCH_SET:
+        if(!card_response(h))return;
+        if((h->card.switch_status[16]&15)!=1||!(h->card.switch_status[13]&2)||(h->card.switch_status[29]&2)){fault(h,SUNXI_MMC_CARD);return;}
+        h->card.timing=1;
+        if(!sd_rate(h)){fault(h,SUNXI_MMC_UNSUPPORTED);return;}
+        h->protocol=P_SD_CLOCK;return;
+    case P_SD_MODE_STATUS:
+        if(ready(h))h->state=SUNXI_MMC_READY;return;
     case P_READ:
         if (card_response(h)) ready_status(h, P_READ_STATUS);
         return;
@@ -495,6 +588,7 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
     }
     if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
     if (h->setup < 6) setup(h);
+    else if(h->protocol==P_SD_CLOCK)sd_clock(h);
     else if (h->last_us >= h->retry_us && command_step(h)) protocol(h);
     if (h->state != SUNXI_MMC_FAULT) (void)time_ok(h);
 out:

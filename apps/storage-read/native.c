@@ -51,7 +51,7 @@ static int construct(void)
 #ifdef SUNSTONE_EMMC_READ
  .kind=SUNXI_MMC_EMMC,.emmc_host=storage_read.session.emmc_host,
 #else
- .kind=SUNXI_MMC_SD,
+ .kind=SUNXI_MMC_SD,.sd_profile=storage_read.session.sd_profile,
 #endif
  .voltage_mask=storage_read.session.voltage_mask};
  memcpy(storage_read.config.fabric,board.session.fabric,sizeof(storage_read.config.fabric));
@@ -253,7 +253,13 @@ int storage_read_copy(uint8_t *out,size_t capacity,unsigned *bytes)
  unsigned count=result==STORAGE_READ_SUCCESS?slot->request.blocks*512u:0;
  if(capacity<STORAGE_READ_HEADER+count){(void)xSemaphoreGive(storage_read.mutex);return 0;}
  memset(out,0,STORAGE_READ_HEADER);
- put32(out,0x44524453);put32(out+4,2);put32(out+8,result);put32(out+12,count);
+ put32(out,0x44524453);
+#ifdef SUNSTONE_EMMC_READ
+ put32(out+4,2);
+#else
+ put32(out+4,storage_read.session.sd_profile?3:2);
+#endif
+ put32(out+8,result);put32(out+12,count);
  put64(out+16,board.session.epoch);put64(out+24,board.session.generation);
  const struct sunxi_mmc_card *c=storage_read.card_valid?&storage_read.card:&storage_read.platform.core.card;
  for(unsigned j=0;j<4;++j){put32(out+64+4*j,c->cid[j]);put32(out+80+4*j,c->csd[j]);}
@@ -272,6 +278,12 @@ int storage_read_copy(uint8_t *out,size_t capacity,unsigned *bytes)
  put64(out+256,slot->request.request_id);put32(out+264,slot->request.blocks);put32(out+268,(uint32_t)i);
  put32(out+272,atomic_load_explicit(&storage_read_consumer.result,memory_order_acquire));
  put32(out+276,atomic_load_explicit(&storage_read_consumer.completed,memory_order_acquire));
+#ifndef SUNSTONE_EMMC_READ
+ if(storage_read.session.sd_profile){
+  put32(out+280,(uint32_t)storage_read.session.sd_profile|(c->bus_width<<8)|(c->timing<<16)|(c->module_divisor<<24));
+  put32(out+284,c->card_hz);
+ }
+#endif
  if(result==STORAGE_READ_SUCCESS){memcpy(out+32,slot->digest,32);memcpy(out+STORAGE_READ_HEADER,slot->copied,count);}
  if(result==STORAGE_READ_SUCCESS&&!storage_read_output_ready()){storage_read_revoke(1);result=STORAGE_READ_RETAINED;
   put32(out+8,result);put32(out+12,0);memset(out+32,0,32);count=0;}

@@ -106,7 +106,7 @@ def read_frame(device,same,deadline,evidence,record,save,now=time.monotonic):
         frame.extend(fragment)
         if expected is None and len(frame)>=decoder.HEADER:
             magic,version,status,count=struct.unpack_from('<4I',frame)
-            require((magic,version)==(0x44524453,2) and status in range(5) and
+            require(magic==0x44524453 and version in (2,3) and status in range(5) and
                     ((0<count<=decoder.MAXIMUM and count%512==0) if status==1 else count==0),'Invalid SD0 frame extent.')
             expected=decoder.HEADER+count;require(len(frame)<=expected,'SD0 frame exceeds extent.')
     return bytes(frame)

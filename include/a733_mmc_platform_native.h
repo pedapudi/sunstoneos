@@ -12,6 +12,7 @@ struct a733_mmc_platform_native {
     enum a733_mmc_emmc_host emmc_host;
     struct a733_storage_update *update;
     unsigned initialized;
+    enum sunxi_mmc_sd_profile sd_profile; /* Set by successful actual platform admission. */
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
  * PMIC, other storage controllers and card data writes are never writable. */

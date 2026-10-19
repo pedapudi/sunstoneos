@@ -4,7 +4,8 @@ The native [storage driver](../drivers/storage/sunxi_mmc.c) implements bounded
 card identification and reads through the A733 SD/MMC controller. SD cards use
 SDC0 at `0x04020000`. The [platform binding](mmc-platform.md) selects SDC2 at
 `0x04022000` or SDC3 at `0x04023000` for eMMC, with SDC2 as the default.
-The caller selects the card type explicitly. SDC1 remains owned by the
+The caller selects the card type explicitly. Both current boards have microSD;
+neither has populated eMMC or UFS. SDC1 remains owned by the
 [SDIO driver](sdio.md).
 
 This component is implemented and passes the source and controller/card model
@@ -22,8 +23,7 @@ The caller supplies an absolute deadline in monotonic microseconds.
 
 The initial profile uses one data line, single-data-rate signaling and a
 100–400 kHz card clock. The platform must admit an even 200–800 kHz module clock;
-the controller divides that rate by two. Identification and subsequent reads
-retain this rate. The voltage request is a nonzero subset of the OCR bits for
+the controller divides that rate by two. Profile zero keeps this rate for identification and subsequent reads. The voltage request is a nonzero subset of the OCR bits for
 3.2–3.4 V, consistent with independently admitted supplies.
 
 After confirming the enabled card clock, identification waits at least 1 ms
@@ -65,6 +65,66 @@ checks the last requested block against byte-address overflow. A separate
 The native platform remains read-only. There is no erase, partition-switch,
 generic-command or automatic fallback API.
 CMD16 changes the volatile read block length; it does not write media contents.
+
+## SD can negotiate four-bit default and high-speed operation
+
+The read-only application selects a typed SD profile before identification.
+Profile zero preserves the original one-bit 400 kHz path. Profile one requires
+four-bit default-speed signaling at a configured rate no greater than the CSD
+`TRAN_SPEED` limit or 25 MHz. Profile two requires positive high-speed support
+and selection, using four-bit 50 MHz signaling at the existing 3.3 V.
+Unsupported capabilities retain a clear refusal. No uncertain command permits
+fallback, another CMD0, voltage switching or a media write.
+
+After normal identification and transfer-state confirmation, profiles one and
+two issue CMD55 with the assigned RCA and read the eight-byte SCR through
+ACMD51. SCR structure must be known, with both one-bit and four-bit support.
+CMD55/ACMD6 argument two selects four data lines. Only successful card completion
+permits the host width write and readback. The next data command therefore uses
+the same width at the card and controller.
+
+Profile two additionally requires SCR specification version at least 1 and the
+CSD switch command class. CMD6 check mode reads 64 status bytes and requires
+function-group-one high-speed support without its busy indication. CMD6 switch
+mode then reads another 64 bytes, requiring selected function one, support and
+no busy indication. A busy or unsupported check is a terminal refusal under
+this service's no-retry policy. Successful commands change volatile card mode;
+they do not modify stored sectors.
+
+The driver stops card output and waits for completed clock-update command
+before changing the selected module through its bounded platform callback.
+Fresh time and owner checks surround that callback. The platform preserves
+shared parents and changes only its exclusively owned SDC0 module. After timing
+and clock readback, the driver enables card output, waits for another completed
+update and requires final CMD13 ready/transfer state. Only then is the card
+published as READY for the existing sector-read API.
+
+Negotiated SDR uses a stable 400 MHz PERI0 branch. The module divider is linear,
+with N equal to one. Card clock is module clock divided by two. Profile one's
+M is the ceiling of `400000000 / (2 × min(TRAN_SPEED, 25000000))`, restricted
+to eight through 32; an unrepresentable cap is refused. Profile two uses M four.
+Reported integer rates are the floor of those ratios, derived from configured
+registers. They are not frequency measurements. For example, M eight produces
+25 MHz card clock, M ten produces 20 MHz, and M fourteen produces a reported
+14,285,714 Hz without exceeding a 15 MHz CSD cap.
+
+The phase settings follow the pinned Linux v5p3x profiles: command drive at
+180 degrees, data drive at 90 degrees for default speed and 180 degrees for
+high speed. Command/data sample phases use 90 degrees for default speed and
+180 degrees for high speed. New timing mode is selected with HS400 disabled;
+physical timing margins and tuning remain unqualified.
+
+Internal SCR/CMD6 transfers program eight- and 64-byte block sizes respectively.
+Subsequent CMD17/CMD18 sector reads restore 512-byte blocks. All transfers retain
+exact byte counts, command/data completion, FIFO-empty checks, error handling
+and final card status. No public raw-command escape is added.
+
+The source basis is the pinned Linux `mmc-read/linux-sd.c` SCR and switch
+handlers, U-Boot `drivers/mmc/mmc.c` capability/width/switch operations and Linux
+`sunxi-mmc-v5p3x.c` clock/timing code. A733 manual sections 4.1.6.128,
+11.3.5.6 and 11.3.8 define module divisors, timing controls and controller
+transfers. The original SD specification file was inaccessible offline, so
+implementation claims use these cached Linux, U-Boot and manual sources.
 
 ## Ownership and completion
 

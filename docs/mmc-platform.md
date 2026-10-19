@@ -15,13 +15,15 @@ from an established native SD 3.3 V signaling mode without claiming cold card
 history. Neither software ownership nor a register read establishes wiring or
 signaling mode.
 
-## One-bit reads preserve media contents
+## Read-only profiles preserve media contents
 
 The selected controller uses a 24 MHz system reference divided by thirty. The
 existing MMC core divides the resulting 800 kHz module clock by two, producing a
 400 kHz card clock. SD uses SDC0. eMMC defaults to SDC2; setting
 `emmc_host` to `A733_MMC_EMMC_SDC3` selects SDC3. SD rejects that selector.
-Identification and reads retain one-bit SDR signaling and programmed I/O. The public API provides startup polling, card information,
+Profile zero retains one-bit SDR signaling and programmed I/O. SD profiles one
+and two negotiate four-bit default-speed and high-speed operation; eMMC remains
+on its existing profile. The public API provides startup polling, card information,
 bounded block reads and result collection. It exposes no raw controller pointer,
 command escape, write, erase, partition switch or recovery operation.
 
@@ -31,7 +33,10 @@ command escape, write, erase, partition switch or recovery operation.
 | eMMC, default | SDC2, `0x04022000` | `0x02002d20` / `0x02002d2c` | 195 | PC5 clock, PC6 command, PC10 data 0; mux 3 |
 | eMMC, explicit selection | SDC3, `0x04023000` | `0x02002d30` / `0x02002d3c` | 196 | Same PC signals; mux 4 |
 
-SD reserves PF0–6. The unused data pins remain inputs with pull-ups, and PF6
+SD reserves PF0–6. In profile zero, unused data pins remain inputs with pull-ups.
+Wider profiles select mux two for PF0/D1, PF1/CMD, PF2/CLK, PF3/D0, PF4/D3 and
+PF5/D2 before identification; the controller remains one-bit until ACMD6 completes.
+PF6
 provides active-low card detection. Removal refuses further controller access
 and retains the session. Detection is sampled before each bounded operation;
 it cannot guarantee that a card remains inserted between samples.
@@ -88,6 +93,28 @@ the internal withstand circuit to detected voltage, separately from PF supply
 selection. No voltage setting is written. eMMC requires PC's manual 1.8 V
 mode and its distinct 1.8 V status encoding. Every writer that could change the
 bank voltage must remain excluded for the session's lifetime.
+
+## Negotiated rates retain shared-parent ownership
+
+Nonzero SD profiles add a shared PERI0 lease. The platform verifies the enabled,
+locked PLL and actual 400 MHz branch gates even when every fabric consumer uses
+the 24 MHz reference. It never enables or retunes that shared parent. Missing
+or changed parent state retains the session before further card commands.
+
+After the core proves completed card-output disable, a callback runs within
+the existing designated owner and common register mutex. It checks live time,
+shared-clock health, voltage, masked interrupt and idle command/data state.
+It gates only SDC0's module, selects PERI0_400M and its linear divider, then
+reenables the module with exact readback. The recorded module configuration
+becomes the expected value for every later live check. A failed access, lost
+clock authority or wrong readback retains all resources without rollback.
+
+The native filter enables the new forms only after successful actual SD profile
+admission. It admits ACMD51 argument zero, ACMD6 argument two, and the exact
+read-direction CMD6 check/switch arguments for the required high-speed profile.
+It excludes eMMC CMD6 and every data-write direction from this read-only path.
+GPIO voltage modes, selected supplies, reset and shared fabric policy remain
+subject to the existing retained lifetime.
 
 ## Startup refuses inherited activity and faults
 
@@ -218,7 +245,7 @@ version 5.3 or later, below 6.0. A device-tree compatibility string does not pro
 that the physical version register meets this condition. A mismatch remains a
 retained refusal requiring investigation.
 
-SD v1, wider buses, faster clocks, voltage switching, tuning, DMA, interrupts,
+SD v1, voltage switching, UHS/tuning, DMA, interrupts,
 hotplug, recovery, storage writes, alternate eMMC partitions, command queuing and
 power management remain required storage work. UFS remains separate. Physical
 read qualification must preserve the inserted card and use its reviewed recovery

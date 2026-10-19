@@ -7,6 +7,8 @@
 #define SUNXI_MMC_MAX_BLOCKS 8u
 /* Explicit physical slot selection; SDC1 belongs to the radio driver. */
 enum sunxi_mmc_kind { SUNXI_MMC_SD = 1, SUNXI_MMC_EMMC = 2 };
+enum sunxi_mmc_sd_profile { SUNXI_MMC_SD_LEGACY=0, SUNXI_MMC_SD_DEFAULT4=1,
+    SUNXI_MMC_SD_HIGH_SPEED4=2 };
 enum sunxi_mmc_state { SUNXI_MMC_COLD, SUNXI_MMC_IDENTIFY,
     SUNXI_MMC_READY, SUNXI_MMC_READING, SUNXI_MMC_DONE, SUNXI_MMC_FAULT,
     SUNXI_MMC_WRITING };
@@ -40,6 +42,11 @@ struct sunxi_mmc_ops {
      * freezes the core and retains ownership; it does not release any lease.
      */
     int (*retained)(void *, uintptr_t token);
+    /* SD-only negotiated profile: called once with card output stopped and
+     * UPDATE completed. Provider owns stable PERI0_400M and changes only the
+     * selected module to 400MHz/divisor (N=1), preserving other writers.
+     * Exactly1 completes; uncertainty is terminal, with no retry/rollback. */
+    int (*sd_module)(void *,uintptr_t token,unsigned divisor);
 };
 struct sunxi_mmc_config {
     struct sunxi_mmc_ops ops;
@@ -48,6 +55,7 @@ struct sunxi_mmc_config {
     enum sunxi_mmc_kind kind;
     uint32_t module_hz; /* Even 200000..800000; SDR card clock = module / 2. */
     uint32_t voltage_mask; /* Admitted 3.2–3.4 V OCR bits: nonzero subset 0x00300000. */
+    enum sunxi_mmc_sd_profile sd_profile; /* SD only; zero preserves initial profile. */
 };
 struct sunxi_mmc_card {
     uint32_t cid[4], csd[4]; /* Card bit 127 is word 0 bit 31. */
@@ -55,6 +63,10 @@ struct sunxi_mmc_card {
     uint64_t sectors; /* Count of 512-byte blocks; 2^32 is representable. */
     uint16_t rca;
     uint8_t sector_addressed, ext_revision;
+    uint8_t scr[8],switch_status[64]; /* Raw wire byte order, SD profiles only. */
+    uint32_t bus_width, timing, module_hz, card_hz, module_divisor;
+    /* Configured rates are floor(400MHz/divisor) and floor(400MHz/(2*divisor));
+     * these decode register configuration and do not measure frequency. */
 };
 struct sunxi_mmc_result {
     enum sunxi_mmc_error error;
@@ -105,6 +117,7 @@ struct sunxi_mmc {
     struct sunxi_mmc_write_authority write_authority;
     uint8_t write_payload[SUNXI_MMC_MAX_BLOCKS * SUNXI_MMC_BLOCK_BYTES];
     unsigned writing;
+    unsigned sd_ios;
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
  * callback access. Config, context and callback-owned storage must not overlap
