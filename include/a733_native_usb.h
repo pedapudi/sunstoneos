@@ -38,7 +38,22 @@ struct a733_native_usb {
     void *context;
     atomic_uint pmic_ready,usb_prepared;
     unsigned used,usb_step,usb_rail_index;
+    /* First non-BUSY callback denial; no extra register reads. */
+    unsigned usb_io_denial;
+    int usb_io_provider_status;
+    unsigned usb_provider_denial;
+    int usb_provider_result;
 };
+enum a733_native_usb_provider_denial { A733_NATIVE_USB_PROVIDER_NONE,
+    A733_NATIVE_USB_PROVIDER_LIVE, A733_NATIVE_USB_PROVIDER_TASK,
+    A733_NATIVE_USB_PROVIDER_RETAINED_LOCK, A733_NATIVE_USB_PROVIDER_RAIL_INDEX,
+    A733_NATIVE_USB_PROVIDER_CLOCK_OWNER, A733_NATIVE_USB_PROVIDER_RAIL_OWNER,
+    A733_NATIVE_USB_PROVIDER_CLOCK, A733_NATIVE_USB_PROVIDER_RAIL,
+    A733_NATIVE_USB_PROVIDER_PMIC };
+enum a733_native_usb_denial { A733_NATIVE_USB_DENIAL_NONE,
+    A733_NATIVE_USB_DENIAL_LIVE, A733_NATIVE_USB_DENIAL_TASK,
+    A733_NATIVE_USB_DENIAL_MUTEX, A733_NATIVE_USB_DENIAL_PROVIDER,
+    A733_NATIVE_USB_DENIAL_ADAPTER };
 int a733_native_usb_init(struct a733_native_usb *,const struct a733_native_usb_config *,
     int (*)(void *),void (*)(void *),void *);
 int a733_native_usb_bind(struct a733_native_usb *,TaskHandle_t,TaskHandle_t);

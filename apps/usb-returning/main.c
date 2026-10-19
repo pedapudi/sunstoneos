@@ -32,7 +32,25 @@ static _Noreturn void retained(const char *reason)
 {
     failed=1;platform_puts("INCOMPLETE USB: ");platform_puts(reason);platform_puts("\n");
     report("USB_STEP=",shared.usb_step);report("PMIC_STAGE=",shared.pmic.stage);
-    report("USB_STAGE=",shared.usb.stage);report("USB_RECEIVED=",received);
+    report("USB_STAGE=",shared.usb.stage);
+    const struct a733_usb_failure *fault=&shared.usb.failure;
+    report("USB_FAULT_KIND=",fault->kind);report("USB_FAULT_STAGE=",fault->stage);
+    report("USB_FAULT_STEP=",fault->step);report("USB_FAULT_WROTE=",fault->wrote);
+    report("USB_FAULT_ADDRESS=",fault->address);report("USB_FAULT_MASK=",fault->mask);
+    report("USB_FAULT_EXPECTED=",fault->expected);report("USB_FAULT_OBSERVED=",fault->observed);
+    report("USB_FAULT_OBSERVED_VALID=",fault->observed_valid);
+    report("USB_FAULT_CALLBACK_RESULT=",(uint64_t)(int64_t)fault->callback_result);
+    report("USB_FAULT_WRITES_ATTEMPTED=",fault->writes_attempted);
+    report("USB_FAULT_WRITES_COMPLETED=",fault->writes_completed);
+    report("USB_FAULT_LAST_US=",fault->last_us);report("USB_FAULT_SAMPLE_US=",fault->sample_us);
+    report("USB_FAULT_DEADLINE_US=",fault->deadline_us);
+    report("USB_IO_DENIAL=",shared.usb_io_denial);
+    report("USB_IO_PROVIDER_STATUS=",(uint64_t)(int64_t)shared.usb_io_provider_status);
+    report("USB_PROVIDER_DENIAL=",shared.usb_provider_denial);
+    report("USB_PROVIDER_RESULT=",(uint64_t)(int64_t)shared.usb_provider_result);
+    report("PMIC_FAILED=",shared.pmic.failed);report("PMIC_HELD=",shared.pmic.held);
+    report("PMIC_RETAINED=",shared.pmic.retained);
+    report("USB_RECEIVED=",received);
     report("USB_SENT=",sent);report("USB_TRANSFERRED=",transferred);
     /* No lease release, resource restoration or successful-return marker. */
     platform_exit(1);

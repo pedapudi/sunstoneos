@@ -16,6 +16,28 @@ struct a733_usb_platform_config {
 };
 enum a733_usb_platform_result { A733_USB_PLATFORM_PENDING, A733_USB_PLATFORM_BUSY,
     A733_USB_PLATFORM_PREPARED, A733_USB_PLATFORM_RETAINED, A733_USB_PLATFORM_INVALID };
+/* A BUSY callback guarantees that it issued no MMIO, including no read. */
+#define A733_USB_PLATFORM_IO_BUSY 2
+enum a733_usb_failure_kind {
+    A733_USB_FAILURE_NONE, A733_USB_FAILURE_TIME, A733_USB_FAILURE_READ,
+    A733_USB_FAILURE_WRITE, A733_USB_FAILURE_VALUE, A733_USB_FAILURE_CLOCK_ACQUIRE,
+    A733_USB_FAILURE_CLOCK_TOKEN, A733_USB_FAILURE_AUTHORITY, A733_USB_FAILURE_LOCK,
+    A733_USB_FAILURE_REFERENCE, A733_USB_FAILURE_PERI_PROFILE,
+    A733_USB_FAILURE_PERI_RATE, A733_USB_FAILURE_REFERENCE_SELECT,
+    A733_USB_FAILURE_DIRECT_OSC, A733_USB_FAILURE_WAIT,
+    A733_USB_FAILURE_BUSY_AFTER_WRITE, A733_USB_FAILURE_STAGE
+};
+/* First failing condition, copied from existing operations without extra I/O.
+ * wrote is the legacy attempted-write flag. Successful callbacks are counted
+ * separately; neither counter establishes device completion or bus drain. */
+struct a733_usb_failure {
+    uintptr_t address;
+    uint64_t last_us,sample_us,deadline_us;
+    uint32_t mask,expected,observed;
+    unsigned kind,stage,step,wrote,observed_valid;
+    unsigned writes_attempted,writes_completed;
+    int callback_result;
+};
 struct a733_usb_platform_ops {
     int (*now_us)(void *,uint64_t *);
     /* 1 authenticates the exact owner/handoff/token, persistent rail and sink
@@ -43,6 +65,10 @@ struct a733_usb_platform_ops {
     int (*enter)(void *,uint64_t); /* Common register mutex: 1 held, 0 busy. */
     void (*leave)(void *);
     void (*retain)(void *); /* Keep an uncertain held mutex; no subsequent MMIO. */
+    /* 1 succeeds; IO_BUSY waits only if this poll has issued no successful
+     * write. IO_BUSY after a write retains ownership rather than replaying a
+     * partial reset/write sequence. Other values fault. These registers have
+     * no read-to-clear semantics. A BUSY callback must issue no MMIO. */
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
 };
@@ -58,6 +84,12 @@ struct a733_usb_platform {
     a733_clock_mask_t shared, exclusive;
     uint32_t reference; /* Admitted gate/selector; retained through verification. */
     unsigned parent_mhz[3], stage, step, initialized, fault, held, wrote;
+    struct a733_usb_failure failure;
+    uintptr_t last_address;
+    uint64_t last_sample_us;
+    uint32_t last_observed;
+    unsigned last_observed_valid,io_busy,poll_writes,writes_attempted,writes_completed;
+    int last_callback_result;
 };
 /* Zero once. Objects/config/ops/registry are private, disjoint and live until
  * disposal. Callbacks are bounded and non-reentrant, return exactly 1 on

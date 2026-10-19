@@ -15,19 +15,30 @@ static void retain(void *p)
 /* The USB task owns both tokens from acquisition through permanent retention.
  * Startup calls this only after clock acquisition and all supply snapshots.
  * Runtime callers additionally require the final PREPARED publication. */
+static int usb_provider_bad(struct a733_native_usb *n,unsigned reason,int result)
+{
+    if(!n->usb_provider_denial){n->usb_provider_denial=reason;n->usb_provider_result=result;}
+    return -1;
+}
 static int usb_providers(struct a733_native_usb *n)
 {
-    if(!n->live(n->context)||xTaskGetCurrentTaskHandle()!=n->usb_task||
-       atomic_load_explicit(&n->locks.retained,memory_order_acquire)||
-       n->usb_rail_index!=4||n->usb.token.owner!=n->boot.usb.owner||
-       n->usb_rail.owner!=n->boot.usb.owner)return -1;
+    if(!n->live(n->context))return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_LIVE,0);
+    if(xTaskGetCurrentTaskHandle()!=n->usb_task)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_TASK,0);
+    if(atomic_load_explicit(&n->locks.retained,memory_order_acquire))
+        return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_RETAINED_LOCK,0);
+    if(n->usb_rail_index!=4)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_RAIL_INDEX,0);
+    if(n->usb.token.owner!=n->boot.usb.owner)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_CLOCK_OWNER,0);
+    if(n->usb_rail.owner!=n->boot.usb.owner)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_RAIL_OWNER,0);
     enum a733_clock_result c=a733_clock_token_status(&n->clocks,&n->usb.token);
-    if(c==A733_CLOCK_BUSY)return 0;if(c!=A733_CLOCK_OK)return -1;
+    if(c==A733_CLOCK_BUSY)return 0;
+    if(c!=A733_CLOCK_OK)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_CLOCK,c);
     enum a733_rail_result r=a733_rail_status(&n->rails,&n->usb_rail);
-    if(r==A733_RAIL_BUSY)return 0;if(r!=A733_RAIL_READY)return -1;
+    if(r==A733_RAIL_BUSY)return 0;
+    if(r!=A733_RAIL_READY)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_RAIL,r);
     enum a733_pmic_status p=a733_pmic_live(&n->pmic,&n->usb_power);
-    if(p==A733_PMIC_BUSY)return 0;if(p!=A733_PMIC_READY)return -1;
-    return n->live(n->context)?1:-1;
+    if(p==A733_PMIC_BUSY)return 0;
+    if(p!=A733_PMIC_READY)return usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_PMIC,p);
+    return n->live(n->context)?1:usb_provider_bad(n,A733_NATIVE_USB_PROVIDER_LIVE,0);
 }
 int a733_native_usb_health(struct a733_native_usb *n)
 {
@@ -46,21 +57,36 @@ static int usb_authorize(void *p,const struct a733_usb_platform_config *c,const 
        t!=&n->usb.token||t->owner!=c->owner)return -1;
     return usb_providers(n);
 }
+static int usb_denied(struct a733_native_usb *n,unsigned reason,int status)
+{
+    if(!n->usb_io_denial){n->usb_io_denial=reason;n->usb_io_provider_status=status;}
+    return 0;
+}
+static int usb_io_ready(struct a733_native_usb *n)
+{
+    if(!n->live(n->context))return usb_denied(n,A733_NATIVE_USB_DENIAL_LIVE,0);
+    if(xTaskGetCurrentTaskHandle()!=n->usb_task)return usb_denied(n,A733_NATIVE_USB_DENIAL_TASK,0);
+    if(xSemaphoreGetMutexHolder(n->locks.mutex[0])!=n->usb_task)
+        return usb_denied(n,A733_NATIVE_USB_DENIAL_MUTEX,0);
+    int result=usb_providers(n);
+    /* Metadata contention issues no MMIO. The provider may retry a poll only
+     * before a successful write; partial reset/write stages stay retained. */
+    if(result==0)return A733_USB_PLATFORM_IO_BUSY;
+    return result==1 ? 1 : usb_denied(n,A733_NATIVE_USB_DENIAL_PROVIDER,result);
+}
 static int usb_read(void *p,uintptr_t a,uint32_t *v)
 {
-    struct a733_native_usb *n=p;
-    return n->live(n->context)&&xTaskGetCurrentTaskHandle()==n->usb_task&&
-        xSemaphoreGetMutexHolder(n->locks.mutex[0])==n->usb_task&&
-        usb_providers(n)==1&&
-        a733_usb_platform_native_read(NULL,a,v);
+    struct a733_native_usb *n=p;int ready=usb_io_ready(n);
+    if(ready!=1)return ready;
+    return a733_usb_platform_native_read(NULL,a,v)==1 ? 1 :
+        usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
 }
 static int usb_write(void *p,uintptr_t a,uint32_t v)
 {
-    struct a733_native_usb *n=p;
-    return n->live(n->context)&&xTaskGetCurrentTaskHandle()==n->usb_task&&
-        xSemaphoreGetMutexHolder(n->locks.mutex[0])==n->usb_task&&
-        usb_providers(n)==1&&
-        a733_usb_platform_native_write(NULL,a,v);
+    struct a733_native_usb *n=p;int ready=usb_io_ready(n);
+    if(ready!=1)return ready;
+    return a733_usb_platform_native_write(NULL,a,v)==1 ? 1 :
+        usb_denied(n,A733_NATIVE_USB_DENIAL_ADAPTER,0);
 }
 int a733_native_usb_step(struct a733_native_usb *n)
 {

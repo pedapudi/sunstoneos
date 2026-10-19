@@ -47,28 +47,60 @@ int a733_usb_platform_init(struct a733_usb_platform *p,const struct a733_usb_pla
     for (unsigned i=0;i<3;++i) p->parent_mhz[i]=mhz[i];
     atomic_init(&p->busy,0);return 1;
 }
+static void record(struct a733_usb_platform *p,unsigned kind,uintptr_t address,
+    uint32_t mask,uint32_t expected,uint32_t observed,unsigned valid,int result)
+{
+    if(p->failure.kind)return;
+    p->failure=(struct a733_usb_failure){.kind=kind,.stage=p->stage,.step=p->step,
+        .wrote=p->wrote,.address=address,.mask=mask,.expected=expected,
+        .observed=observed,.observed_valid=valid,.callback_result=result,
+        .writes_attempted=p->writes_attempted,.writes_completed=p->writes_completed,
+        .last_us=p->last_now,.sample_us=p->last_sample_us,.deadline_us=p->config.deadline_us};
+}
 static int timely(struct a733_usb_platform *p)
 {
-    uint64_t now;
-    if (p->ops.now_us(p->cookie,&now)!=1 || now<p->last_now || now>=p->config.deadline_us) return 0;
+    uint64_t now=0;int result=p->ops.now_us(p->cookie,&now);p->last_sample_us=now;
+    if (result!=1 || now<p->last_now || now>=p->config.deadline_us) {
+        record(p,A733_USB_FAILURE_TIME,p->last_address,0,0,p->last_observed,
+            p->last_observed_valid,result);return 0;
+    }
     p->last_now=now;return 1;
 }
 static int rd(struct a733_usb_platform *p,uintptr_t a,uint32_t *v)
-{return timely(p) && p->ops.read(p->cookie,a,v)==1 && timely(p);}
+{
+    p->last_address=a;p->last_observed_valid=0;
+    if(!timely(p))return 0;
+    int result=p->ops.read(p->cookie,a,v);p->last_callback_result=result;
+    if(result==A733_USB_PLATFORM_IO_BUSY){p->io_busy=1;return 0;}
+    if(result!=1){record(p,A733_USB_FAILURE_READ,a,0,0,0,0,result);return 0;}
+    p->last_observed=*v;p->last_observed_valid=1;return timely(p);
+}
+static int value_bits(struct a733_usb_platform *p,uintptr_t a,uint32_t v,uint32_t mask,uint32_t value)
+{
+    if((v&mask)==value)return 1;
+    record(p,A733_USB_FAILURE_VALUE,a,mask,value,v,1,1);return 0;
+}
 static int bits(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t value)
-{uint32_t v;return rd(p,a,&v) && (v&mask)==value;}
+{uint32_t v;return rd(p,a,&v)&&value_bits(p,a,v,mask,value);}
 static int update(struct a733_usb_platform *p,uintptr_t a,uint32_t mask,uint32_t value,uint32_t w1c)
 {
     uint32_t old;
     if (!rd(p,a,&old)) return 0;
     uint32_t next=((old&~mask)|value)&~w1c;
     if (next==old) return 1;
-    p->wrote=1;
-    return timely(p) && p->ops.write(p->cookie,a,next)==1 && timely(p) && bits(p,a,mask,value);
+    if(!timely(p))return 0;
+    p->wrote=1;++p->writes_attempted;
+    int result=p->ops.write(p->cookie,a,next);p->last_callback_result=result;
+    if(result==A733_USB_PLATFORM_IO_BUSY){p->io_busy=1;return 0;}
+    if(result!=1){record(p,A733_USB_FAILURE_WRITE,a,mask,next,old,1,result);return 0;}
+    ++p->poll_writes;++p->writes_completed;
+    return timely(p)&&bits(p,a,mask,value);
 }
 static int wait_start(struct a733_usb_platform *p,uint64_t delay)
 {
-    if (!timely(p) || delay>=p->config.deadline_us-p->last_now) return 0;
+    if(!timely(p))return 0;
+    if(delay>=p->config.deadline_us-p->last_now){
+        record(p,A733_USB_FAILURE_WAIT,0,0,(uint32_t)delay,0,0,0);return 0;}
     p->wait_until=p->last_now+delay;return 1;
 }
 static int peri_rate(struct a733_usb_platform *p,uint32_t v,unsigned mhz)
@@ -82,7 +114,8 @@ static int peri_rate(struct a733_usb_platform *p,uint32_t v,unsigned mhz)
     case 480:div=((v>>2)&7)+1;mask=BIT(8)|BIT(7);break;
     default:return 0;
     }
-    return 24u*n==mhz*div && bits(p,CCU+0x1908,mask|(mask<<16),mask|(mask<<16)) &&
+    if(24u*n!=mhz*div){record(p,A733_USB_FAILURE_PERI_RATE,CCU+0xa0,0,mhz,v,1,1);return 0;}
+    return bits(p,CCU+0x1908,mask|(mask<<16),mask|(mask<<16)) &&
         bits(p,CCU+0x1988,mask<<16,mask<<16);
 }
 static int stable(struct a733_usb_platform *p)
@@ -92,11 +125,13 @@ static int stable(struct a733_usb_platform *p)
         !bits(p,UINT32_C(0x070101ac),1,1)) return 0;
     /* Manual11.3.3 defines SYS_CLK24M as fixed24MHz from the DCXO/PLL_REF
      * mux. Decode PLL_REF from the actual DCXO rate; DCXO need not be24MHz. */
-    if (!rd(p,CCU,&v) || !a733_clock_ref24_valid(osc,v)) return 0;
+    if(!rd(p,CCU,&v))return 0;
+    if(!a733_clock_ref24_valid(osc,v)){record(p,A733_USB_FAILURE_REFERENCE,CCU,0,24000000,v,1,1);return 0;}
     if (p->shared&A733_CLOCK_PERI0) {
-        if (!rd(p,CCU+0xa0,&v) ||
-            (v&0xfe000002u)!=0xfe000000u || (((v>>8)&255)+1)<53 || (((v>>8)&255)+1)>105 ||
-            !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000u,0)) return 0;
+        if(!rd(p,CCU+0xa0,&v)||!value_bits(p,CCU+0xa0,v,0xfe000002u,0xfe000000u))return 0;
+        if((((v>>8)&255)+1)<53 || (((v>>8)&255)+1)>105){
+            record(p,A733_USB_FAILURE_PERI_PROFILE,CCU+0xa0,0,0,v,1,1);return 0;}
+        if(!bits(p,CCU+0xa8,BIT(31),0)||!bits(p,CCU+0xac,0x8e000000u,0))return 0;
         for (unsigned i=0;i<3;++i) if (!peri_rate(p,v,p->parent_mhz[i])) return 0;
     }
     for (unsigned i=0;i<3;++i)
@@ -108,9 +143,18 @@ static int stable(struct a733_usb_platform *p)
 static int reference_valid(struct a733_usb_platform *p)
 {
     uint32_t osc;
-    return bits(p,CCU+0x1340,REF_MASK,p->reference) &&
-        (p->reference==BIT(31) ||
-         (rd(p,UINT32_C(0x07090160),&osc) && a733_clock_dcxo_hz(osc)==24000000));
+    if(!bits(p,CCU+0x1340,REF_MASK,p->reference))return 0;
+    if(p->reference==BIT(31))return 1;
+    if(!rd(p,UINT32_C(0x07090160),&osc))return 0;
+    if(a733_clock_dcxo_hz(osc)==24000000)return 1;
+    record(p,A733_USB_FAILURE_DIRECT_OSC,UINT32_C(0x07090160),0,24000000,osc,1,1);return 0;
+}
+static int reference_selected(struct a733_usb_platform *p,uint32_t v)
+{
+    p->reference=v&REF_MASK;
+    if(p->reference!=BIT(31)&&p->reference!=(BIT(31)|BIT(24))){
+        record(p,A733_USB_FAILURE_REFERENCE_SELECT,CCU+0x1340,REF_MASK&~BIT(24),BIT(31),v,1,1);return 0;}
+    return reference_valid(p);
 }
 static int cold(struct a733_usb_platform *p)
 {
@@ -124,8 +168,7 @@ static int cold(struct a733_usb_platform *p)
         return 1;
     }
     if (!rd(p,CCU+0x1340,&v)) return 0;
-    p->reference=v&REF_MASK;
-    return (p->reference==BIT(31) || p->reference==(BIT(31)|BIT(24))) && reference_valid(p);
+    return reference_selected(p,v);
 }
 /* A device-only, PIO ROM handoff. These observations reject a running DMA
  * engine; they do not establish completion of previously issued bus writes. */
@@ -135,8 +178,7 @@ static int rom_baseline(struct a733_usb_platform *p)
     if (!bits(p,CCU+0x1300,0xc0000000u,BIT(30)) ||
         !bits(p,CCU+0x1304,0x01110111,0x01000100) ||
         !rd(p,CCU+0x1340,&v)) return 0;
-    p->reference=v&REF_MASK;
-    return (p->reference==BIT(31) || p->reference==(BIT(31)|BIT(24))) && reference_valid(p);
+    return reference_selected(p,v);
 }
 static int rom_pio(struct a733_usb_platform *p)
 {
@@ -158,6 +200,8 @@ static enum a733_usb_platform_result finish(struct a733_usb_platform *p,enum a73
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
 static enum a733_usb_platform_result failed(struct a733_usb_platform *p)
 {
+    if(!p->failure.kind)record(p,A733_USB_FAILURE_STAGE,p->last_address,0,0,
+        p->last_observed,p->last_observed_valid,p->last_callback_result);
     p->fault=1;
     if (p->held) {p->ops.retain(p->cookie);p->held=0;}
     if (p->token.id && a733_clock_retain(p->registry,&p->token)==A733_CLOCK_BUSY)
@@ -175,23 +219,26 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     if (p->stage==COMPLETE) {
         enum a733_clock_result r=a733_clock_token_status(p->registry,&p->token);
         if (r==A733_CLOCK_BUSY) return finish(p,A733_USB_PLATFORM_BUSY);
-        if (r!=A733_CLOCK_OK) return failed(p);
+        if(r!=A733_CLOCK_OK){record(p,A733_USB_FAILURE_CLOCK_TOKEN,0,0,0,0,0,r);return failed(p);}
         return finish(p,A733_USB_PLATFORM_PREPARED);
     }
+    p->io_busy=0;p->poll_writes=0;
     if (!timely(p)) return failed(p);
     if (p->stage==ACQUIRE) {
         enum a733_clock_result r=a733_clock_acquire(p->registry,p->config.owner,p->shared,p->exclusive,
             p->config.deadline_us,&p->token);
         if (r==A733_CLOCK_BUSY) return finish(p,A733_USB_PLATFORM_BUSY);
-        if (r!=A733_CLOCK_OK || !timely(p)) return failed(p);
+        if(r!=A733_CLOCK_OK){record(p,A733_USB_FAILURE_CLOCK_ACQUIRE,0,0,0,0,0,r);return failed(p);}
+        if(!timely(p))return failed(p);
         p->stage=AUTHORIZE;return finish(p,A733_USB_PLATFORM_PENDING);
     }
     enum a733_clock_result cr=a733_clock_token_status(p->registry,&p->token);
     if (cr==A733_CLOCK_BUSY) return finish(p,A733_USB_PLATFORM_BUSY);
-    if (cr!=A733_CLOCK_OK) return failed(p);
+    if(cr!=A733_CLOCK_OK){record(p,A733_USB_FAILURE_CLOCK_TOKEN,0,0,0,0,0,cr);return failed(p);}
     if (p->stage==AUTHORIZE) {
         int r=p->ops.authorize(p->cookie,&p->config,&p->token);
-        if (!timely(p) || (r!=0 && r!=1)) return failed(p);
+        if(r!=0&&r!=1){record(p,A733_USB_FAILURE_AUTHORITY,0,0,0,0,0,r);return failed(p);}
+        if(!timely(p))return failed(p);
         if (r) p->stage=BASELINE;
         return finish(p,A733_USB_PLATFORM_PENDING);
     }
@@ -201,7 +248,7 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
             cr=a733_clock_publish_stable(p->registry,&p->token,A733_CLOCK_USB01_REF,
                 p->config.deadline_us,&replacement);
             if (cr==A733_CLOCK_BUSY) return finish(p,A733_USB_PLATFORM_BUSY);
-            if (cr!=A733_CLOCK_OK) return failed(p);
+            if(cr!=A733_CLOCK_OK){record(p,A733_USB_FAILURE_CLOCK_TOKEN,0,0,0,0,0,cr);return failed(p);}
             p->token=replacement; /* Adopt the sole live token before callbacks. */
         }
         if (!timely(p)) return failed(p);
@@ -215,7 +262,8 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
     int entered=p->ops.enter(p->cookie,p->config.deadline_us);
     if (entered!=0) p->held=1;
     if (entered!=1) {
-        if (entered!=0 || !timely(p)) return failed(p);
+        if(entered!=0){record(p,A733_USB_FAILURE_LOCK,0,0,0,0,0,entered);return failed(p);}
+        if(!timely(p))return failed(p);
         return finish(p,A733_USB_PLATFORM_BUSY);
     }
     if (!timely(p)) return failed(p);
@@ -251,6 +299,18 @@ enum a733_usb_platform_result a733_usb_platform_poll(struct a733_usb_platform *p
         bits(p,USB+0x410,0xa8,0x20)&&bits(p,USB+0x420,1,1)&&bits(p,USB+0x418,0xf3f,0x806)&&
         bits(p,USB+0x400,0xf000,0xf000);break;
     default:break;
+    }
+    if(p->io_busy&&!p->failure.kind){
+        if(!p->poll_writes){
+            /* All whitelist reads are non-acknowledging. No successful write
+             * occurred in this poll, so retrying this unchanged stage cannot
+             * replay a device-reset assertion or a partial write sequence. */
+            p->ops.leave(p->cookie);p->held=0;
+            if(!timely(p))return failed(p);
+            return finish(p,A733_USB_PLATFORM_BUSY);
+        }
+        record(p,A733_USB_FAILURE_BUSY_AFTER_WRITE,p->last_address,0,0,
+            p->last_observed,p->last_observed_valid,p->last_callback_result);
     }
     if (!ok || !timely(p)) return failed(p);
     p->ops.leave(p->cookie);p->held=0;

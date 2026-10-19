@@ -250,5 +250,10 @@ one complete PIO response within a fixed window, parks PMIC work, masks controll
 interrupt generation, detaches, and verifies quiescence before the monitor enters
 the source-backed forced-FEL initialization path. Every resource stays retained
 through reset. Observation expiry reports a controlled negative; it does not
-establish a successful transfer. Software checks pass; physical execution of this
-composition remains pending coordinator admission.
+establish a successful transfer. One supervised image returned status 1 before
+TinyUSB initialization; its original report omitted the failing platform stage
+and write history. The provider now preserves the first failed predicate and
+separates no-access metadata BUSY from I/O failure. It retries only polls without
+a successful write; partial write/reset state stays retained. Focused software
+checks pass. The corrected image remains physically unqualified and requires
+fresh admission after the failed lifetime's cold recovery.

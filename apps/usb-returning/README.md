@@ -22,6 +22,39 @@ The reviewed ROM and TinyUSB paths transfer USB data through CPU FIFO copies wit
 
 The existing patched TinyUSB implementation is reused byte-for-byte from `gpu-transport-only-20261018`. Its actual configuration is `platform/a733-storage-update/tusb_config.h`: no TinyUSB OS layer, 2048-byte vendor FIFOs, high-speed PIO and four task events per run. The image recompiles its native USB provider against the returning platform's FreeRTOS configuration. It reuses accepted monitor, platform, kernel, PMIC, clock, rail and pin objects from `pmic-provider-probe-20261018`. Source snapshots, tool identities and object hashes remain in the evidence directory.
 
+## Initialization failure records and provider contention
+
+The first supervised image returned to ROM as `003:063` with monitor status 1 before TinyUSB initialization. Its log reported USB preparation step 5, PMIC stage 4 and USB platform stage 19. Step 5 follows matching and reaping all four PMIC supply snapshots; PMIC stage 4 is READY. Platform stage 19 is FAULTED, which overwrote the original failing stage. The old report cannot establish which platform predicate failed or whether takeover MMIO occurred. Its SMC64 exception and return address identify an explicit `platform_exit(1)` call. The recorded FAR is not a failed MMIO address for that SMC. Evidence is `~/.cache/sunstoneos/evidence/usb-returning-20261018/physical/runtime/`.
+
+The current provider preserves the first failed condition before entering FAULTED. The error log copies its original stage, check kind, address, mask, expected value, observation-valid flag, existing observed value, callback result and write counters. It performs no diagnostic MMIO. `USB_FAULT_WROTE` is the legacy attempted-write flag. `USB_FAULT_WRITES_ATTEMPTED` counts write callbacks attempted; `USB_FAULT_WRITES_COMPLETED` counts successful callbacks. Neither proves engine completion or bus drain. A time failure reports the last good time, the existing callback's sample and the deadline; the sample is valid only when its callback result is 1.
+
+The numeric `USB_FAULT_KIND` identifies the following conditions:
+
+| Kind | Condition |
+| --- | --- |
+| 0 | No platform fault recorded |
+| 1 | Time callback failure, regression or deadline; compare callback result, last time, sample and deadline |
+| 2, 3 | Read or write callback failure |
+| 4 | Register value failed the recorded mask and expected value |
+| 5, 6 | Clock acquisition or clock token check failed |
+| 7, 8 | Authority callback or register-lock entry failed |
+| 9 | Oscillator/PLL reference did not decode to 24 MHz; observation is the raw PLL word |
+| 10 | PERI0 multiplier is outside the admitted range 53 through 105 |
+| 11 | PERI0 rate equation failed; observation is the raw PLL word and expected is the requested parent MHz |
+| 12 | USB reference gate/selector is outside the admitted selectors 0 and 1 |
+| 13 | Direct oscillator selection does not supply 24 MHz; observation is the raw oscillator word |
+| 14 | Required wait cannot fit before the deadline |
+| 15 | Metadata BUSY followed a successful write in the same poll; partial state stays retained |
+| 16 | Remaining stage-level failure without a more specific record |
+
+For write callback failures, expected contains the complete attempted write word and observed contains its existing pre-write value. `USB_IO_DENIAL` distinguishes live-session, task, mutex, provider-health and native-adapter refusals. `USB_PROVIDER_DENIAL` identifies the failed live/task/retained-lock/rail-index/clock-owner/rail-owner check, or the clock, rail or PMIC provider. `USB_PROVIDER_RESULT` preserves that provider's result code. These fields separate an authority or metadata refusal from native MMIO-guard rejection.
+
+A focused execution of the frozen old callback demonstrates a separate contract defect. PMIC metadata BUSY returns without MMIO, but the old native callback returned the same zero used for I/O failure. The platform then permanently faulted. This demonstrates a software defect; it does not identify the physical attempt's cause.
+
+Native callbacks now return `A733_USB_PLATFORM_IO_BUSY` only when metadata contention prevented every MMIO access in that callback. A platform poll releases its mutex and retries the unchanged stage only when that poll completed no write callback. The provider whitelist contains no read-to-clear registers. BUSY after a successful write remains retained, preventing replay of partial reset or write sequences. All ownership checks remain required. The correction adds no scheduler or CPU mechanism.
+
+Thirteen focused cases execute actual native callbacks, PMIC live/BUSY handling, platform polling, MMIO guards and fault serialization. They cover read/write BUSY, resumption, BUSY before and after writes, provider/context/I/O/value/deadline failures, and preservation of authority denial before a later time failure. The scheduler, mutex, clock/rail health and register effects are modeled. Evidence is `~/.cache/sunstoneos/evidence/usb-first-fault-20261018/`. Provider structures grew; rebuild consuming images and preserve matching source, object and image identities. The corrected image has no physical qualification. The later cold reconnect ended the failed image's powered lifetime; any next attempt needs fresh DDR, clock, ownership and recovery admission.
+
 ## Build and focused checks
 
 Run from the repository root:
