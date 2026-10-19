@@ -121,9 +121,11 @@ linking those adapters grants no usable memory. The central build and symbol
 inspection are recorded in `gpu-central-integration-20261017/`. Component runtime
 cases were not repeated for this build integration.
 
-Remaining work includes a real render context and geometry/fragment command
-rings, context-switch and vertex/fragment programs, executable commands, color
-output ownership and acquired output validation. Physical firmware startup,
-external request blocking, complete transaction drain and resource disposal
-remain prerequisites for qualification. Resource preparation alone establishes
-none of those conditions.
+The [fixed offscreen render service](gpu-render.md) adds a real render context,
+separate geometry/fragment command rings, programs, color output ownership and
+acquired pixel/guard validation through `a733_gpu_graphics_memory_prepare_clear()`.
+The resource-only constructor remains available. The fixed render path admits one
+64 × 64 RGBA8 clear per boot; wider workloads and safe repeated submission remain
+required. Physical firmware startup, external request blocking, transaction drain
+and resource disposal remain unqualified. Preparing resources establishes none of
+those physical conditions.

@@ -13,25 +13,35 @@ SunstoneOS. Physical qualification remains outstanding.
 | [Power/resources](gpu-platform.md), [native backend](gpu-backend.md), and [interrupt delivery](gpu-interrupts.md) | Native register, shared-lock and interrupt adapters have instruction/scheduler evidence; board resources and electrical operation remain unqualified |
 | [Firmware reservations](gpu-reserved.md) and [native memory](gpu-memory.md) | Real linker-owned parent leases, firmware buffers and cache/translation operations exist; external exclusion and physical visibility remain required |
 | [Workload VM](gpu-vm.md), [native table publication](gpu-vm-memory.md), and [translation invalidation](gpu-flush.md) | Offline tables and publication exist; live mapping changes and invalidation integration remain required |
-| [Free-list manager](gpu-freelist.md), [event decoding](gpu-events.md), and [lifecycle integration](gpu-freelist-service.md) | Construction, growth, reconstruction, responses and shutdown draining exist; native backing operations and linked render-target recovery remain required |
+| [Free-list manager](gpu-freelist.md), [event decoding](gpu-events.md), and [native graphics memory](gpu-graphics-memory.md) | Parent-backed allocation, protected mappings, linked render-target records, reconstruction and lifecycle publication exist; firmware execution and physical drain remain unqualified |
 | [Fixed compute programs](gpu-compute-programs.md), [numerical job](gpu-compute-job.md), [service](gpu-compute-service.md), and [reservations](gpu-compute-reserved.md) | Actual shader/command generation, reserved memory, publication and guarded output checking exist; simulated completion does not establish GPU execution |
+| [Fixed offscreen rendering](gpu-render.md) | Native programs, context, paired geometry/fragment commands and acquired pixel/guard checks exist for one 64 × 64 RGBA8 clear; physical rendering remains unqualified |
 | [Core-mode admission](gpu-compute-mode.md) | Post-power native observation must establish the supported single-core profile before startup/submission; physical observation remains required |
 
-The [native backend](../platform/a733/gpu_backend.c) forwards the free-list manager's allocation, publication,
-shared-memory and render-target recovery operations with their retained context.
-It does not supply those operations. The manager's page allocation protocol is
-implemented; its native parent-backed allocator and render-target catalogue are
-still missing. Its current bound is 16,384 backing pages per list, or 64 MiB.
-That is an implementation limit, not a final GPU capability limit.
+The [native graphics owner](../platform/a733/gpu_graphics_memory.c) supplies the
+free-list manager's parent-backed allocation, publication, shared-memory and
+linked render-target recovery operations. The [native backend](../platform/a733/gpu_backend.c)
+forwards those operations with their retained context. The owner reserves four
+parents, grants bounded child pages and builds two hardware render-target records.
+It protects the free-list tables and render backing through the actual graphics
+VM. Its current bound is 16,384 backing pages per list, or 64 MiB. That is an
+implementation limit, not a final GPU capability limit.
 
-The [fixed-compute constructor](../platform/a733/gpu_compute_reserved.c) presently
-refuses a configuration with free lists enabled. The
-[lifecycle service](../drivers/gpu/pvr_gpu_service.c) rebuilds firmware mappings from its 19 base
-resources and six optional compute objects. A native graphics owner must register
-its free-list and render-target firmware mappings in that actual preparation
-path, reserve their backing beside the existing compute allocations, and publish
-their workload tables before use. Preparing separate allocations without those
-connections would not produce a usable graphics context.
+Construction follows the existing order: firmware reservations, fixed compute
+owner, graphics owner, native backend, then lifecycle service. The
+[fixed-compute constructor](../platform/a733/gpu_compute_reserved.c) refuses an
+already free-list-enabled configuration. This prevents rebinding an owner after
+graphics admission. The graphics constructor subsequently attaches its lists and
+records to that same compute/firmware ownership. The
+[lifecycle service](../drivers/gpu/pvr_gpu_service.c) includes graphics objects
+alongside its 19 base resources and six compute objects when rebuilding MIPS
+mappings. Initial free-list, graphics and compute publication precede power.
+
+The render application calls the fixed-clear constructor and submits through the
+same service. It copies output only after timeline, pixel and guard validation.
+The compute-only application does not enable free lists or supply substitute
+graphics resources. Existing source and native composition evidence is recorded
+in [graphics memory](gpu-graphics-memory.md) and [offscreen rendering](gpu-render.md).
 
 This document assumes familiarity with device drivers, memory mappings, and
 ELF executable files. PowerVR identifies GPU revisions with four numbers,
@@ -170,34 +180,23 @@ SPI 63, DVFS interrupt SPI 64, GPU/bus clocks, a bus reset, the GPU power
 domain, and regulator DCDC4. These are source descriptions, not verified
 live state. Clock/voltage changes require the platform power implementation.
 
-The next implementation steps are:
+The remaining work is:
 
-1. Bind the existing free-list manager to native parent allocations, protected
-   GPU tables and uncached firmware records. Keep page leases and partial
-   publication failures retained. Build actual render-target records and their
-   linked recovery catalogue; reconstruction must update those records before
-   returning its firmware response. Extend actual service mapping/publication
-   and combined compute/graphics ownership, preserving all existing allocations.
-2. Construct a render context with separate geometry and fragment command rings,
-   context-switch programs, global/local free lists and render-target storage.
-   Generate vertex/fragment shaders, sequencer programs and the complete geometry
-   and fragment control streams for a bounded offscreen image. Publish every
-   context, program, mapping, command and output allocation before submission.
-   Require geometry completion/dependencies, fragment completion and acquired
-   pixel/guard agreement. Command acceptance alone cannot establish rendering.
-3. Integrate the native application with actual shared power, clocks, interrupt
-   routing, resource authority and observed GPU identity. Qualify independent
-   watchdog recovery before board execution. Boot the pinned firmware, execute
-   the existing numerical compute job and the offscreen render, and preserve
-   every lease on failure. [Isolation](gpu-isolation.md) still requires primary
-   evidence of request blocking and completion of accepted external traffic.
-4. Complete reusable context/buffer allocation, cleanup acknowledgements, live
+1. Qualify native startup, admitted shared power/clock/interrupt resources,
+   firmware identity and execution, the fixed numerical compute job and the
+   offscreen render. A bounded supervised attempt may use admitted manual
+   whole-board power removal with every resource retained. Independent watchdog
+   recovery remains required for modes that depend on it. [Isolation](gpu-isolation.md)
+   still requires primary evidence of request blocking and completion of accepted
+   external traffic before reuse.
+2. Complete reusable context/buffer allocation, cleanup acknowledgements, live
    mappings and invalidation, repeated jobs, wider graphics/compute workloads,
-   display integration and supported concurrency. The present 2 MiB write-back
-   pool is insufficient for the complete camera/display/accelerator workload;
-   larger authenticated reservations and qualified DRAM remain required. Keep
-   all required resolutions and concurrency in scope. Complete fault recovery,
-   cancellation and power transitions before performance optimization, following
+   display integration and supported concurrency. The compact 2 MiB write-back
+   pool is insufficient for the complete camera/display/accelerator workload.
+   Expanded authenticated reservations exist; each application still requires
+   qualified DRAM and external ownership for its chosen ranges. Keep all required
+   resolutions and concurrency in scope. Complete fault recovery, cancellation
+   and power transitions before performance optimization, following
    [validation.md](validation.md).
 
 [Issue 8](https://github.com/pedapudi/sunstoneos/issues/8) retains full display

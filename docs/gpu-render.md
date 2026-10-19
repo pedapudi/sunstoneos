@@ -116,10 +116,13 @@ the four emulator executables and logs. The final input manifest distinguishes
 executed inputs from later harness-only archival corrections.
 These checks establish software behavior; they do not establish rendering.
 
-Physical qualification requires watchdog recovery, native platform startup,
-firmware identity and execution, interrupts, completed GPU timelines and the
-unaltered color/guard checks. Physical cleanup and drain must precede resource
-reclamation. No physical request is submitted by these host checks.
+Physical qualification requires native platform startup, admitted power and
+clock resources, firmware identity and execution, interrupts, completed GPU
+timelines and the unaltered color/guard checks. A bounded supervised attempt may
+retain every resource until admitted manual whole-board power removal. Modes
+that require autonomous watchdog recovery still need that recovery qualified.
+Physical cleanup and drain must precede resource reclamation. No physical request
+is submitted by these host checks.
 
 Full graphics still requires general draw commands, vertex and fragment shader
 production, textures, more render formats and sizes, synchronization across
