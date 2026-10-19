@@ -45,6 +45,9 @@ static struct {
     StackType_t stack[2][4096] __attribute__((aligned(16)));
     TaskHandle_t pmic_task,bootstrap_task,client;
     atomic_uint ready,worker_admitted,stopped;
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    atomic_uint pmic_stop,pmic_parked,quiescent;
+#endif
     unsigned used,creating;
 } app;
 atomic_uint a733_npu_application_failed;
@@ -167,6 +170,19 @@ static void pmic_task(void *argument)
 {
     if(argument!=&app)fatal(NULL);
     for(;;) {
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+        if(atomic_load_explicit(&app.pmic_stop,memory_order_acquire)) {
+            unsigned idle=!app.pmic.held && !app.pmic.retained && !app.pmic.failed &&
+                !atomic_load_explicit(&app.pmic.busy,memory_order_acquire) &&
+                app.pmic.active==A733_PMIC_REQUESTS;
+            for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
+                if(app.pmic.slots[i].state || app.pmic.slots[i].borrow.id)idle=0;
+            if(idle) {
+                atomic_store_explicit(&app.pmic_parked,1,memory_order_release);
+                for(;;)vTaskSuspend(NULL);
+            }
+        }
+#endif
         if(!live())break;
         enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
         if(r!=A733_PMIC_READY && r!=A733_PMIC_PENDING && r!=A733_PMIC_BUSY)break;
@@ -230,6 +246,74 @@ unsigned a733_npu_application_ready(void)
 {return atomic_load_explicit(&app.ready,memory_order_acquire) && live();}
 unsigned a733_npu_application_stopped(void)
 {return atomic_load_explicit(&app.stopped,memory_order_acquire) && live();}
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+#if !defined(SUNSTONE_NPU_SINGLE_CORE) || !defined(SUNSTONE_NPU_SUPERVISED)
+#error "Finite NPU quiescence requires the supervised single-core image"
+#endif
+static int finite_irq_quiet(void)
+{
+    /* NPU INTID97: distributor bank3, bit1. Only observe the established
+     * masked interrupt; never acknowledge or change inherited GIC state. */
+    const uintptr_t addresses[]={0x03400000,0x0340010c,0x0340020c,0x0340030c};
+    uint32_t value[4];
+    for(unsigned i=0;i<4;++i) {
+        struct aarch64_translation t;
+        if(!aarch64_device_translate(addresses[i],0,&t) ||
+           t.physical!=addresses[i] || t.attributes!=0)return -1;
+        __asm__ volatile("dsb sy":::"memory");
+        value[i]=*(volatile uint32_t *)addresses[i];
+        __asm__ volatile("dsb sy":::"memory");
+    }
+    return !(value[0]&UINT32_C(0x80000000)) && !((value[1]|value[2]|value[3])&2);
+}
+unsigned a733_npu_application_quiesce(void)
+{
+    if(xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+       xTaskGetCurrentTaskHandle()!=app.client)return 0;
+    if(!a733_npu_application_stopped() || !parent() ||
+       !atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire) ||
+       !app.reserved.convolution.service.worker || !app.bootstrap_task || !app.pmic_task ||
+       app.reserved.convolution.service.worker==app.client || app.bootstrap_task==app.client ||
+       app.pmic_task==app.client || app.reserved.convolution.service.worker==app.pmic_task ||
+       app.reserved.convolution.service.worker==app.bootstrap_task || app.bootstrap_task==app.pmic_task)goto failed;
+    /* CLOSED has no further register callbacks. On this single CPU, suspend
+     * the original worker and bootstrap before checking provider storage. */
+    vTaskSuspend(app.reserved.convolution.service.worker);
+    vTaskSuspend(app.bootstrap_task);
+    atomic_store_explicit(&app.pmic_stop,1,memory_order_release);
+    while(!atomic_load_explicit(&app.pmic_parked,memory_order_acquire)) {
+        uint64_t now;
+        if(!live() || !a733_counter_clock_now(&app.clock,&now) ||
+           now>=app.handoff.allowed.deadline_us)goto failed;
+        vTaskDelay(1);
+    }
+    vTaskSuspend(app.pmic_task);
+    if(app.pmic.held || app.pmic.retained || app.pmic.failed ||
+       atomic_load_explicit(&app.pmic.busy,memory_order_acquire) ||
+       app.pmic.active!=A733_PMIC_REQUESTS ||
+       atomic_load_explicit(&app.locks.retained,memory_order_acquire))goto failed;
+    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
+        if(app.pmic.slots[i].state || app.pmic.slots[i].borrow.id)goto failed;
+    if(xSemaphoreGetMutexHolder(app.locks.mutex[0]) ||
+       xSemaphoreGetMutexHolder(app.locks.mutex[1]))goto failed;
+    int quiet;
+    do {
+        uint64_t now;
+        quiet=finite_irq_quiet();
+        if(quiet<0 || !live() || !a733_counter_clock_now(&app.clock,&now) ||
+           now>=app.handoff.allowed.deadline_us)goto failed;
+        if(!quiet)vTaskDelay(1);
+    }while(!quiet);
+    atomic_store_explicit(&app.quiescent,1,memory_order_release);
+    return 1;
+failed:
+    a733_npu_application_fail(20);return 0;
+}
+unsigned a733_npu_application_quiescent(void)
+{return atomic_load_explicit(&app.quiescent,memory_order_acquire) &&
+    atomic_load_explicit(&app.pmic_parked,memory_order_acquire) &&
+    a733_npu_application_stopped() && finite_irq_quiet()==1;}
+#endif
 struct npu_convolution *a733_npu_application_client(void)
 {
     return app.used && xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&

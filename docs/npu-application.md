@@ -517,10 +517,16 @@ Evidence resides under `npu-close-returning-20261018`.
 The finite client/device adapter is implemented behind
 `SUNSTONE_NPU_FINITE_RETURN`. It preserves the existing session validator and
 service path, waits for terminal CLOSE and bootstrap-owned local shutdown,
-then reports copied output and returns. Four linked client cases cover matched
-outputs, numerical mismatch, CLOSE failure and an uncompleted stop. Their service
-and bootstrap replies are modeled. The full development ELF under
-`npu-finite-adapter-20261018` links this adapter with the existing full single-core
+then parks the PMIC outside active requests and borrows and suspends the worker
+and bootstrap. It validates provider slots, mutexes and NPU interrupt 97 before
+reporting copied output. A final quiescence check and task critical section
+precede return. Six linked client cases cover matched outputs, numerical mismatch, CLOSE
+failure, an uncompleted stop, failed task quiescence and lost final quiescence.
+Their service, bootstrap and quiescence replies are modeled. Nineteen native
+instruction cases execute the actual worker/bootstrap suspension, PMIC checkpoint,
+slot/borrow/mutex checks and interrupt observations, with scheduler and hardware
+boundaries modeled. The full development ELF under
+`npu-finite-quiescence-20261018` links this adapter with the existing full single-core
 monitor and is explicitly ineligible for physical execution.
 
 A complete returning convolution still needs the returning monitor to retain

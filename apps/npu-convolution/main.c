@@ -98,12 +98,14 @@ static void client(void *unused)
     a733_npu_application_result.end=a733_smp_counter();
     atomic_store_explicit(&a733_npu_application_result.complete,mismatch ? 2 : 1,memory_order_release);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
-    platform_puts("NPU_STAGE=STOPPED\nNPU_FIRST_DIGEST=\n");
+    if(!a733_npu_application_quiesce())retained(20);
+    platform_puts("NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n");
     for(unsigned i=0;i<32;++i){platform_hex(a733_npu_application_result.first_digest[i]);platform_puts("\n");}
     platform_puts("NPU_SECOND_OUTPUT=\n");
     for(unsigned i=0;i<a733_npu_application_reference_bytes;++i){platform_hex(a733_npu_application_result.output[i]);platform_puts("\n");}
-    platform_puts(mismatch?"FAIL NPU numerical comparison\n":"PASS NPU two matched jobs, copied output, REAP, CLOSE and local stop\n");
-    if(!live() || !a733_npu_application_stopped())retained(19);
+    if(!live() || !a733_npu_application_quiescent())retained(19);
+    taskENTER_CRITICAL();
+    platform_puts(mismatch?"FAIL NPU numerical comparison\n":"PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers\n");
     /* The returning platform must keep all reservations and restore RAM only
      * after this successful stop; a retained failure never takes this path. */
     platform_exit(mismatch?1:0);

@@ -54,6 +54,13 @@ unsigned a733_npu_application_ready(void);
 /* Finite adapter only: original bootstrap publishes after matched CLOSE and
  * successful local gate/reset stop. Allocations and shared leases stay owned. */
 unsigned a733_npu_application_stopped(void);
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+/* Finite single-core client after successful CLOSE/local stop. Suspend the
+ * worker/bootstrap, park the idle PMIC task, check slots/borrows/mutexes and
+ * observe disabled/inactive/clear NPU INTID97. Failure retains the session. */
+unsigned a733_npu_application_quiesce(void);
+unsigned a733_npu_application_quiescent(void);
+#endif
 /* Bounded acquire reads; latches any shared clock/registry/lock failure. */
 unsigned a733_npu_application_health(void);
 void a733_npu_application_fail(unsigned);
