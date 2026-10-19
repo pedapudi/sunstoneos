@@ -23,6 +23,7 @@ SOURCES = ('checks/all-core-pre-scheduler-probe.py', 'checks/secondary-cache-pro
 
 
 class AllCore(cached.Cached):
+    cache_lines = 192
     def restore(self, snapshot, fault):
         super().restore(snapshot, fault)
         ctypes.memset(self.ram_pointer+0x42018100-0x41000000, 0, 0x5100)
@@ -112,10 +113,10 @@ class AllCore(cached.Cached):
             assert m['currentel'] == 4
             assert self.called == set(range(8)) and all(self.q(SHARED+c*64) == self.epoch for c in range(8)), 'Cleaning before all production calls return'
             line = self.reg(core, args[1]); index = len(self.cleaned[core])
-            assert index < 192 and line == self.pages(core)[index//64]+64*(index%64)
+            assert index < self.cache_lines and line == self.pages(core)[index//64]+64*(index%64)
             self.cleaned[core].append(line); self.dirty[core].discard(line)
         if address == self.survey_hooks['identity_pre_scheduler_clean_done']:
-            assert len(self.cleaned[core]) == 192 and not self.dirty[core]
+            assert len(self.cleaned[core]) == self.cache_lines and not self.dirty[core]
             previous = next(self.decoder.disasm(bytes(u.mem_read(address-4, 4)), address-4))
             assert previous.mnemonic == 'dsb' and previous.op_str == 'sy'
             self.clean_complete.add(core)

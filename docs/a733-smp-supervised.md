@@ -1443,6 +1443,44 @@ path without task selection. Complete scheduling, broader runtime memory use
 and concurrent device workloads remain outstanding.
 
 
+## First-task restoration passes the returning instruction check
+
+The offline first-task profile runs the frozen native task construction and
+FreeRTOS context-restoration code on all eight CPUs. Each CPU initially enters
+its idle task, matching the kernel's initial task assignment. An SVC at that
+boundary records the task pointer, argument, stack and exception state before
+joining a completion barrier. Task bodies, timer interrupts and the application
+SGI workload do not execute in this profile.
+
+The builder's `--first-task` option binds every patch to the demonstrated native
+ELF and checks each displaced instruction. It applies the EL0 WFE permission
+correction and saves, initializes and restores the Secure priority mask. Ordinary
+FreeRTOS SVCs still run their original handler. The intercepted diagnostic SVC
+requires EL0 origin, the expected return address, a zero idle-task argument and
+the kernel's assigned idle-task pointer.
+
+Every CPU stops writing before any CPU begins cache cleanup. Cleanup covers the
+complete linker-owned writable interval `0x41200000..0x41291000`: 145 pages or
+9,280 cache lines per CPU. The interval includes task stacks, kernel state and
+diagnostic records. Metadata occupies a reserved page at the bottom of CPU0's
+EL1 stack. Instruction checks reject stores outside the owned interval and any
+store after cleaning begins. Each CPU completes DSB SY before the existing
+SMC return; CPU0 restores its controls and all secondaries reach observed OFF
+in the model before shared cleanup.
+
+Evidence is under `all-core-first-task-20261018/`. The normal case passes eight
+first-task entries, complete cleaning, report copies and matched restoration.
+The invalid-task-argument case retains all CPUs without cleaning or claiming
+return. The failed-EL3-restoration case retains the affected secondary after
+cleaning. The successful checker is preserved by its exact hash; adding the
+negative cases did not require another normal run.
+
+This profile remains explicitly ineligible for physical execution. Host report
+validation, final root review and a frozen board proposal are still required.
+Modeled register, MMIO and coherent-memory effects do not prove physical task
+entry, cache visibility or full scheduling. The preceding physical barrier
+result remains the last demonstrated all-core execution boundary.
+
 ## All eight CPUs complete the production barrier and atomic increments
 
 The returning all-core diagnostic calls the frozen production

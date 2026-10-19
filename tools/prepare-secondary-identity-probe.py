@@ -33,7 +33,8 @@ def cached_patch_points(native):
 
 
 def prepare(args):
-    pre_scheduler=getattr(args,"pre_scheduler",False)
+    first_task=getattr(args,"first_task",False)
+    pre_scheduler=getattr(args,"pre_scheduler",False) or first_task
     interrupts=getattr(args,"interrupts",False)
     require(not(pre_scheduler and interrupts),'Pre-scheduler profile keeps interrupt delivery disabled.')
     coherent=getattr(args,"coherent",False) or interrupts or pre_scheduler
@@ -58,7 +59,15 @@ def prepare(args):
                           'a733_cached_enter_el1','a733_cached_el1_l1','a733_cpu_el1_stacks','a733_cached_el3_fault')
         if pre_scheduler:names+=('a733_cached_block_walks','a733_smp_pre_scheduler','probe_arrived','probe_count','probe_lock',
                                  'probe_finished','probe_release')
+        if first_task:names+=('a733_cached_el1','a733_smp_primary_el1','a733_smp_diagnostic_start',
+                              'platform_tick_setup','prvIdleTask','prvPassiveIdleTask',
+                              'FreeRTOS_SWI_Handler','pxCurrentTCBs','xIdleTaskHandles')
         native={n:address(n) for n in names}
+        if first_task:
+            data,bss=(elf.get_section_by_name(n) for n in ('.data','.bss'))
+            require(data['sh_addr']==0x41200000 and data['sh_addr']+data['sh_size']<=0x41201000 and
+                    bss['sh_addr']==0x41201000 and bss['sh_addr']+bss['sh_size']==0x41290d10,
+                    'First-task writable extent differs from the reviewed frozen ELF.')
         if pre_scheduler:
             state=native['probe_arrived']&~4095
             require(all(native[n]&~4095==state for n in ('probe_count','probe_lock','probe_finished','probe_release')),
@@ -88,7 +97,7 @@ def prepare(args):
     if local:units += [('boot/a733/secondary-local-probe.c','local.o'),('boot/a733/secondary-distributor-probe.c','distributor.o')]
     if cached:units += [('boot/a733/native-el3-cache-probe.S','el3-cache.o'),('boot/a733/native-el1-cache-probe.S','el1-cache.o')]
     if pre_scheduler:
-        units += [('boot/a733/all-core-pre-scheduler-probe.S','pre-scheduler.o'),
+        units += [('boot/a733/all-core-first-task-probe.S' if first_task else 'boot/a733/all-core-pre-scheduler-probe.S','pre-scheduler.o'),
                   ('boot/a733/primary-local-cache-probe.c','primary-local.o')]
     elif coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
     if interrupts:units += [('boot/a733/secondary-interrupt-probe.S','interrupt.o')]
@@ -99,6 +108,7 @@ def prepare(args):
             *(['-DSUNSTONE_SECONDARY_CACHE=1','-DSUNSTONE_PROBE_EL1_CACHE=1'] if cached else []),
             *(['-DSUNSTONE_SECONDARY_COHERENCE=1'] if coherent else []),
             *(['-DSUNSTONE_ALL_CORE_PRE_SCHEDULER=1'] if pre_scheduler else []),
+            *(['-DSUNSTONE_FIRST_TASK=1'] if first_task else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -111,6 +121,9 @@ def prepare(args):
         symbols += [f'--defsym=probe_production_pre_scheduler={native["a733_smp_pre_scheduler"]:#x}',
                     f'--defsym=probe_scheduler_count={native["probe_count"]:#x}',
                     f'--defsym=probe_scheduler_state={state:#x}']
+    if first_task:
+        symbols += [f'--defsym=probe_swi_next={native["FreeRTOS_SWI_Handler"]+4:#x}',
+                    '--defsym=probe_writable_start=0x41200000','--defsym=probe_writable_end=0x41291000']
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
     commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
@@ -138,6 +151,15 @@ def prepare(args):
     (args.output/'overlay.bin').write_bytes(overlay)
     payloads=[];patches=[{'address':return_address,'original':word,'replacement':replacement,'space':'overlay'}]
     target=native['a733_cpu_secondary_continue'];patched=0
+    first_patches=[];first_patched=0
+    if first_task:
+        first_patches=[
+            (native['a733_cached_enter_el1']+0xac,0xaa0203f9,0xb26e0059),
+            (native['a733_smp_primary_el1'],0xa9bd7bfd,branch(native['a733_smp_primary_el1'],native['a733_smp_diagnostic_start'])),
+            (native['platform_tick_setup'],0xd538d088,0xd65f03c0),
+            (native['prvIdleTask'],0xa9be7bfd,branch(native['prvIdleTask'],hooks['identity_first_task_el0'])),
+            (native['prvPassiveIdleTask'],0xd4000d21,branch(native['prvPassiveIdleTask'],hooks['identity_first_task_el0'])),
+            (native['FreeRTOS_SWI_Handler'],0xa9bf07e0,branch(native['FreeRTOS_SWI_Handler'],hooks['identity_first_task_svc']))]
     for item in base['payloads']:
         data=bytearray(frozen[item['name']]);start=item['address']
         if start<=target<start+len(data):
@@ -152,26 +174,38 @@ def prepare(args):
                     require(struct.unpack_from('<I',data,offset)[0]==original,'Cached-entry patch differs.')
                     replacement=branch(address,hooks[hook]);struct.pack_into('<I',data,offset,replacement)
                     patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
+        for address,original,replacement in first_patches:
+            if start<=address<start+len(data):
+                offset=address-start
+                require(struct.unpack_from('<I',data,offset)[0]==original,'First-task displaced instruction differs.')
+                struct.pack_into('<I',data,offset,replacement)
+                patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
+                first_patched+=1
         path=args.output/item['name'];path.write_bytes(data)
         payloads.append(dict(item,sha256=digest(path)))
     require(patched==1,'Secondary patch did not match exactly one segment.')
+    require(first_patched==len(first_patches),'First-task patch coverage differs.')
     names=(source+'.c',source+'.S',source+'.h','include/a733_cpu_entry.h','include/a733_cpu_start.h',
            'platform/a733-smp-cached/boot.h','tools/prepare-secondary-identity-probe.py')
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
-    if pre_scheduler:names+=('boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
+    if pre_scheduler:names+=('boot/a733/all-core-first-task-probe.S' if first_task else 'boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
     elif coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
-    manifest={'schema':'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
+    manifest={'schema':'a733-all-core-first-task-probe-v1' if first_task else 'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
         'identity_report':{'address':report[0],'bytes':report[1]},
         'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
+    if first_task:
+        manifest['first_task']={'physical_eligible':False,'writable_interval':[0x41200000,0x41291000],
+            'cache_lines_per_core':9280,'task_bodies':False,'timer_and_sgi_workload':False,
+            'pending':'Instruction execution, return validation and source review required before physical use.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('Prepared '+('production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
+    print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
 
 if __name__=='__main__':
@@ -183,4 +217,5 @@ if __name__=='__main__':
     parser.add_argument("--coherent",action="store_true",help="Run seven concurrent EL1 shared-memory participants before restored return")
     parser.add_argument("--interrupts",action="store_true",help="Deliver one timer PPI and peer SGI on every secondary before cleaned return")
     parser.add_argument("--pre-scheduler",action="store_true",help="Execute the production barrier and atomic lock on all eight cores before cleaned return")
+    parser.add_argument("--first-task",action="store_true",help="Offline-only actual task creation/context entry followed by matched cleanup")
     prepare(parser.parse_args())

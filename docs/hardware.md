@@ -232,6 +232,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is written; restored RAM and responsive ROM return pass. Absolute time,
   accuracy, alarms and retention remain unqualified. Evidence:
   `rtc-rc-readonly-20261018/physical/observation.json`.
+  Separate finite source-selection and alarm applications pass twelve and
+  seventeen linked cases respectively, with focused Astra review. Secure
+  interrupt-state admission and restoration are included. Their compiled inputs
+  match integration under `rtc-source-returning-20261018/` and
+  `rtc-alarm-returning-20261018/`; physical source switching and alarms remain
+  untested.
   **Implemented** [native RTC operations](rtc-application.md)
   include coherent reads, non-waking alarms, cold-start crystal/calendar
   initialization and reusable calendar setting. One owner serializes two registered
@@ -291,6 +297,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Existing calibration and controller evidence was reused. Physical acquisition,
   accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
   policy, rate changes and regulator control remain outstanding.
+  A separate [finite returning application](../apps/thermal-returning/README.md)
+  gathers two sets with the actual driver and disables configured acquisition.
+  Thirteen linked cases and Astra review pass; all 46 compiled inputs match
+  integration under `thermal-returning-final-20261018/`. Clocks and configuration
+  remain retained. Physical acquisition and return remain untested.
 - Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
   for the 1-bit legacy-speed profile. Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
@@ -418,6 +429,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   documented usable connection. LRADC0 has a pull-up but no documented key ladder.
   These usable accessory and LRADC functions remain outstanding. Fitted components,
   analog supply and reference still require physical confirmation.
+  A separate finite ADC application now uses the actual CLDO3 provider and
+  normalized clock decoder. Nine linked application/provider cases and fourteen
+  sanitized clock cases pass; all 45 compiled inputs match integration under
+  `adc-returning-final-20261018/`. It retains clocks, power, pins and pending IRQ
+  state after configured disable. Electrical admission and physical sampling
+  remain outstanding.
 - UFS initialization: **implemented**, but the physical attempt did not return
   to ROM. [Storage evidence](storage.md) records the failure and untested correction.
 - Independent watchdog: **implemented** register operations with host checks.
@@ -495,12 +512,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
-  of SMP. Its startup, packaging and USB profile checks pass; all 175 frozen
+  of SMP. Healthy CLOSE now validates firmware power states, completes asynchronous
+  platform power-off and releases buffers only after verified OFF. Application
+  success requires STOPPED. Focused checks and Astra review pass under
+  `gpu-returning-integration-20261018/`; physical shutdown remains untested.
+  Its startup, packaging and USB profile checks pass; all 175 frozen
   source inputs match integration. The first physical single-core attempt produced
   no native USB result; its refusal-report read timed out. GPU initialization and
   computation remain unobserved. Evidence:
-  `gpu-single-core-20261018/physical-candidate-116/runtime/`. The board remains
-  retained until confirmed power removal; do not repeat the image unchanged.
+  `gpu-single-core-20261018/physical-candidate-116/runtime/`. That failed session
+  was recovered by power removal; do not repeat the image unchanged.
   The second board's GPU clock and reset/bus registers both read zero under
   `gpu-clock-read-20261018/`, satisfying that current-state prerequisite.
   A returning 20-register PMIC probe also observes DCDC4 enabled with selector
@@ -809,6 +830,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   ten affected native cases and source review pass under
   `npu-usb-terminal-20261018/`. Physical reporting and inference remain untested
   with the corrected image.
+  Terminal CLOSE and authenticated local gate/reset shutdown now pass focused
+  checks and Astra review. A finite inference adapter is implemented, but its
+  retained session and complete memory-cleanup extent still need integration
+  into the returning platform. The separate DCDC2 observation image has six
+  passing linked cases and 40 matching compiled inputs under
+  `npu-supply-returning-20261018/`. Physical inference and shutdown remain open.
   **Implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
   passes host startup, completion, cancellation, and retained-fault checks.
@@ -962,6 +989,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the device disconnected and does not enable DMA or host power. Actual
   fabric/power/security/recovery admission, connection, USB1 and USB2/DWC3 modes
   and physical cold-start qualification remain outstanding.
+  A finite composition with actual PMIC/USB tasks now passes fifteen native
+  and twenty-three host cases under `usb-returning-20261018/`. It requires a
+  complete 40-byte response, parks PMIC activity, quiesces USB and returns through
+  the matched ROM initialization path. All 65 newly compiled inputs match
+  integration. This composition still requires its own physical validation.
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through

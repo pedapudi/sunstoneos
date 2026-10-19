@@ -1,5 +1,36 @@
 # Current work
 
+The returning first-task diagnostic is implemented and passes instruction checks.
+Actual FreeRTOS task construction and initial context restoration reach the idle
+task on every CPU. Each CPU records its task context, joins the completion barrier
+and cleans all 9,280 lines in the complete owned writable interval before return.
+Invalid task arguments and failed EL3 restoration retain the session. Evidence:
+`all-core-first-task-20261018/`. This profile is explicitly offline-only; host
+report validation, final root review and physical execution remain outstanding.
+The builder patches the exact previously demonstrated ELF, including the EL0 WFE
+permission correction. It suppresses timer/SGI generation and intercepts the first
+task instruction, so it does not establish workload scheduling.
+
+Finite thermal, ADC and USB applications are integrated, together with healthy
+GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
+compiled-input comparisons reuse those results without repeating them. Evidence:
+`thermal-adc-returning-source-20261018/integration.json`,
+`usb-returning-20261018/integration.json`,
+`npu-supply-returning-20261018/integration.json` and
+`gpu-returning-integration-20261018/frozen/integration.json`.
+None has new physical execution evidence. The NPU finite inference adapter still
+needs shared retained-session and memory-cleanup integration; the GPU worker is
+preparing the corresponding device adapter. USB observation/return is the next
+shared peripheral test candidate. Thermal and ADC retain configuration and leases;
+ADC additionally requires electrical admission for the fitted input dividers.
+Separate RTC source initialization and external-source alarm applications are
+also integrated. Twelve source cases and seventeen alarm cases pass, with
+35 and 33 matching compiled inputs respectively. Evidence is in
+`rtc-source-returning-20261018/integration.json` and
+`rtc-alarm-returning-20261018/integration.json`. Source initialization needs its
+own physical admission before alarm testing. Alarm success additionally requires
+verified Secure interrupt-state restoration; a completion message is insufficient.
+
 The scheduler privilege audit identified an EL0 lock-wait defect. FreeRTOS's
 contended recursive lock executes WFE, but cached startup left SCTLR_EL1.nTWE
 clear. A blocking wait could therefore enter the synchronous exception handler,
@@ -11,14 +42,11 @@ the [reference audit](a733-multicore-reference-audit.md#el0-lock-waits-require-p
 This is a source-backed correction, not a physical failure diagnosis. No board
 operation accompanied it. The next physical diagnostic must observe task entry
 and preserve the established return path before another complete-image launch.
-The linked first-task check now stops each CPU at its first EL0 instruction.
-All eight first enter their idle task, matching FreeRTOS's explicit initial TCB
-assignment; the FP workers run after scheduling. Evidence:
-`scheduler-el0-access-20261018/first-task-entry.json`. It observes EL1 stores in
-88 pages. The next returning diagnostic must cover the complete linker-owned
-normal writable interval `0x41200000..0x41291000` (145 pages), including task
-creation and context restoration, rather than treating observed stores as an
-exhaustive bound. Monitor and table reservations are outside that interval.
+The original task-entry trace is preserved under
+`scheduler-el0-access-20261018/first-task-entry.json`. Its observed stores covered
+88 pages. The returning diagnostic covers the complete linker-owned normal
+writable interval `0x41200000..0x41291000` (145 pages), including task creation
+and context restoration. Monitor and table reservations are outside that interval.
 
 The first board last returned responsive on port `3-1` as `003:010`, identity
 `[7,2878,1096969,0,0]`. All eight CPUs completed the frozen production
@@ -57,7 +85,7 @@ monitor status zero and responsive ROM return also passed. No RTC register was
 written. The runner exited and its claim closed as passed. Evidence:
 `rtc-rc-readonly-20261018/physical/observation.json`. No reconnect is needed.
 Read progression is established; accuracy, absolute time, alarms and retention
-remain open. The RTC worker is preparing a source-backed alarm proposal.
+remain open. The integrated source and alarm applications await physical admission.
 
 Second-board DDR continuity is cold126 → register capture127 → PMIC009 → RTC011
 → RTC056. Refresh current056 launcher state before another native test; do not retrain DDR.
