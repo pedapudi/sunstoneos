@@ -41,6 +41,9 @@ static int return_gic(uint64_t deadline)
     mmio_write(GICR_SGI+0x41c,saved.priorities);
     mmio_write(GICR_SGI+0x100,saved.enabled);
     if(!return_wait(GICR_BASE,8,deadline))return 0;
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(!npu_irq_route_restore(&saved.npu_irq,deadline))return 0;
+#endif
     for(unsigned i=1;i<saved.banks;++i) {
         if(!return_timely(deadline))return 0;
         mmio_write(GICD_BASE+0x100+4*i,saved.spi_enabled[i]);

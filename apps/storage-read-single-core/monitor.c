@@ -10,6 +10,9 @@
 #endif
 #include "a733_storage_digest.h"
 #include <string.h>
+#ifdef SUNSTONE_NPU_INTERRUPT
+#include "../npu-interrupt/irq-route.h"
+#endif
 #define REPORT ((volatile struct a733_smp_result *)A733_SMP_RESULT_ADDRESS)
 #ifdef SUNSTONE_GPU_SINGLE_CORE
 static struct gpu_boot_contract gpu_admission __attribute__((section(".monitor_state")));
@@ -45,6 +48,9 @@ static unsigned secondary_off_admitted __attribute__((section(".monitor_state"))
 static struct {
     uint32_t ready,banks,ctlr,group,modifier,enabled,configuration;
     uint32_t priorities,spi_enabled[32];
+#ifdef SUNSTONE_NPU_INTERRUPT
+    struct npu_irq_route_snapshot npu_irq;
+#endif
 } saved __attribute__((section(".monitor_state")));
 uint64_t a733_smp_counter(void){return counter();}
 _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
@@ -189,6 +195,9 @@ void sd_single_core_monitor_init(void)
     saved.priorities = mmio_read(GICR_SGI + 0x41c);
     for (unsigned i = 1; i < saved.banks; ++i)
         saved.spi_enabled[i] = mmio_read(GICD_BASE + 0x100 + 4 * i);
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(!npu_irq_route_capture(&saved.npu_irq,admission.startup_deadline))finish(4);
+#endif
     saved.ready = 1;
     // Disable groups before changing routing or per-interrupt configuration.
     mmio_write(GICD_BASE, saved.ctlr & ~7U);
@@ -198,6 +207,9 @@ void sd_single_core_monitor_init(void)
     wait_clear(GICD_BASE, 1U << 31);
     mmio_write(GICD_BASE, (saved.ctlr & ~7U) | 0x30U);
     wait_clear(GICD_BASE, 1U << 31);
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(!npu_irq_route_install(&saved.npu_irq,admission.startup_deadline))finish(4);
+#endif
     mmio_write(GICR_BASE + 0x14, mmio_read(GICR_BASE + 0x14) & ~2U);
     wait_clear(GICR_BASE + 0x14, 4);
     mmio_write(GICR_SGI + 0x180, 0xffffffffU);
