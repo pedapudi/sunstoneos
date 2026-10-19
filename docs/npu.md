@@ -1,7 +1,13 @@
 # NPU implementation and model format
 
-Native NPU execution remains **physically untested**. The host model inspector
-passes a reference comparison. [Page-table construction](npu-mmu.md) and the
+Physical NPU execution remains **unproven**. The first supervised native launch
+produced no USB frames, and its sole refusal-report read timed out. That result
+does not establish whether NPU initialization began. The
+[native application record](npu-application.md) preserves the attempt, recovery
+and exact image identities.
+
+The host model inspector passes a reference comparison.
+[Page-table construction](npu-mmu.md) and the
 [controller core](npu-controller.md) pass host models and compile for AArch64.
 The [memory policy](npu-memory.md) passes host integration for private mappings,
 table validation, cache publication, and retained faults. The
@@ -26,9 +32,26 @@ now has native decoding support. The [directory investigation](nbg-directory.md)
 records its changed layouts and checksum coverage. Native checksum verification
 passes host checks. The [convolution capture](nbg-conv-loader.md) supplies allocation
 and command evidence now matched by native assembly with no working-pool allocation.
-Board-resource integration, model admission, and numerical inference remain outstanding.
-Physical access remains conditional on qualified independent
-watchdog recovery and protected ROM return.
+The [native convolution application](npu-application.md) implements platform
+resource ownership, private memory, trusted compiled-model registration and
+repeated-job inference through the FreeRTOS service. Three pinned convolution
+artifacts are selectable before scheduling; their native modeled-output checks
+and host numerical references do not establish physical inference. An independent
+boot-CPU profile is implemented alongside the cached all-core profile. All-core
+hardware support remains required.
+
+The single-core terminal-USB correction integrated as `ef00a07` allows an NPU
+failure frame only while USB retains its independent authenticated lifetime,
+clock, lock, task and provider checks. Ten affected native cases and independent
+review pass under `npu-usb-terminal-20261018/`. The corrected image has not
+established physical USB reporting or NPU execution; the reporting defect does
+not identify the earlier physical failure's cause.
+
+Recovery depends on the selected profile. The watchdog profile requires qualified
+watchdog recovery and ROM return. The supervised RAM-only profile instead uses
+reviewed manual whole-board power removal, storage preservation and one bounded
+attempt. Independent watchdog qualification is not a blanket prerequisite.
+Every resource remains reserved until the selected recovery condition is met.
 
 This document assumes familiarity with drivers, virtual memory, and neural
 network inference. A Network Binary Graph (NBG) contains compiled operations,
@@ -44,7 +67,7 @@ An adaptation can select the MIT terms while preserving the required notices.
 Downloaded reference files retain their original notices outside the repository.
 
 The SoC device tree supplies the following resources. These are reference
-values; the attached NPU has not been identified or accessed.
+values; no native NPU identity or execution result has been captured.
 
 | Resource | Reference value |
 | --- | --- |
@@ -64,9 +87,12 @@ The driver separates register control, device page tables, memory allocation,
 command construction, task scheduling, and power management. Its OS interface
 covers register reads/writes, allocation, cache maintenance, interrupt waits,
 mutexes, atomics, threads, signals, timers, and monotonic time. Some core files
-still include Linux-specific interface headers. Removing Linux requires a
-native platform interface and allocator, as well as FreeRTOS implementations
-of those services.
+still include Linux-specific interface headers. The native application supplies
+its own checked register access, private allocations, cache publication, bounded
+polling and FreeRTOS task/lock interfaces through repository source. It does not
+link the Linux driver or its file and ioctl interfaces into FreeRTOS. The first
+trusted convolution polls completion with interrupt ID 97 masked; interrupt-driven
+completion and broader concurrent use still require qualification.
 
 No external firmware request was found in the inspected VIPLite 2 subtree.
 That observation does not establish that every compiler or execution mode is
@@ -102,9 +128,28 @@ The [compilation example](https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cu
 selects hardware version `v3` and runtime version `v2.0` for A733.
 The [compiler record](npu-compiler.md) pins the downloaded image, target,
 dependencies, and original license information. A small convolution now compiles
-and passes a host simulator comparison. Its emitted `0x20000` format differs from
-the existing decoder profile. Host-side Linux tools are compatible with the
-FreeRTOS requirement; the board runtime remains native.
+and passes a host simulator comparison. Native decoding, checksum verification,
+allocation planning and assembly now support its observed `0x20000` profile;
+the Python inspection tool remains limited to `0x1001e`.
+
+The runtime links repository NPU/NBG source, FreeRTOS and TinyUSB source. The
+native C/AArch64 image is built with the pinned Clang/LLD toolchain. Model
+compilation uses the external x86-64 Linux ACUITY 6.30.22 and Vivante IDE 5.11.0
+host package; it is separate from building the native executable. The application
+artifact generator checks the model/input/reference hashes in
+[`tools/npu-models.json`](../tools/npu-models.json) and embeds the selected bytes
+without invoking that compiler. Model and command artifacts remain external
+compiler outputs, not repository compiler source.
+
+`libNBGlinker.so`, `libVIPhal.so`, `nbinfo` and the compiler image's simulator
+supply the documented format, loader and address-path reference evidence. Their
+Linux shared libraries are not loaded by the FreeRTOS application. Existing
+platform DDR preparation also retains its pinned boot firmware. These accepted
+dependencies, their execution locations and original license records are
+separate from a claim that every NPU mode is firmware-independent. Source pins,
+compiler identities and artifact provenance are recorded in
+[npu-compiler.md](npu-compiler.md), [sources.md](sources.md) and the component
+records. No dependency replacement is needed to attempt the trusted workload.
 
 [Issue 12](https://github.com/pedapudi/sunstoneos/issues/12) tracks an
 in-repository compiler and development toolkit with native FreeRTOS execution.
@@ -229,53 +274,58 @@ access extents or prefetch behavior.
 The initial saved inventory is `descriptor-research.json` under
 `~/.cache/sunstoneos/evidence/nbg-checksum-20261016/`. It includes every decoded
 candidate field, relocation correspondence, and descriptor tail. The ring record
-adds a complete range inventory. Resolve instruction-family semantics, stride
-units, the extra word, linear access bounds, and prefetch extents before
-authorizing device execution.
+adds a complete range inventory. General model admission still needs resolved
+instruction-family semantics, stride units, the extra word, linear access bounds
+and prefetch extents. These structural comparisons alone do not authorize a new
+model. The fixed trusted convolution has a separate
+[address-path review](npu-address-path.md) of translated external accesses and
+owned internal SRAM; its physical confinement remains unqualified.
 
-## Native implementation sequence
+## Implemented path and remaining qualification
 
-1. **Load the numerical fixture natively.** The pinned compiler now produces a
-   small convolution with exact float and matched quantized simulator references.
-   Native decoding and checksum verification now support its `0x20000` layout.
-   Native assembly now matches the [SDK convolution capture](nbg-conv-loader.md),
-   including allocation planning for its zero working pool. Keep the existing SDK network
-   as the `0x1001e` format reference.
-2. **Complete driver integration.** The native controller, memory policy, CPU
-   adapter, and FreeRTOS service have software evidence. Add interrupt delivery,
-   controlled model/command registration, and recovery. Retain required source
-   license notices and keep Linux file and ioctl interfaces out of the runtime.
-3. **Integrate platform resources.** Establish the NPU power domain, regulators,
-   clocks, resets, and interrupt route. Confirm identity after watchdog recovery
-   is qualified. Derive safe operating points from board-specific power data.
-4. **Complete device-memory integration.** Ordinary RAM mappings and ownership
-   have software evidence. Qualify internal-SRAM routing and complete fault
-   reporting. Reserve model buffers and track CPU/device addresses separately.
-   Qualify the complete mapping, cache, and translation-cache behavior physically.
-   The [memory policy](npu-memory.md) records the reference driver's separate SRAM
-   window and the native bootstrap's existing base-address command. Do not add
-   ordinary RAM page-table entries for this window without contrary hardware evidence.
-5. **Complete native model admission.** Container decoding, allocation planning,
-   and assembly have host evidence for the observed neural-operation profile.
-   Establish full descriptor access extents,
-   command permissions, supported operators, and output
-   padding. Inspect `libNBGlinker.so` where published source is insufficient.
-   Extend to other format versions with representative compiler output.
-6. **Execute and recover.** Submit a bounded job, synchronize completion, and
-   compare numerical output. On timeout or fault, retain buffers until device
-   quiescence is established. Qualify cancellation, reset, stale interrupts,
-   repeated loads, concurrent CPU access, and power transitions.
-7. **Expose application inference.** Provide model lifetime, tensor binding,
-   asynchronous completion, cancellation, resource limits, and capability queries.
-   Required hardware behavior must work independently of mimus.
-8. **Evaluate mimus separately.** Map compatible operations and shapes while
-   preserving the existing model. Measure transfer and scheduling overhead,
-   numerical differences, recognition accuracy, latency, and resource use.
-   CPU execution of unsupported operations must remain explicit and cannot
-   establish full NPU support.
+1. **Qualify the trusted convolution on hardware.** Native decoding, checksum
+   verification, allocation planning, assembly and immutable registration are
+   implemented for the selected compiler artifacts. The application submits two
+   distinct jobs and checks both copied outputs. Saved CPU and host-simulator
+   references are valid evidence for comparison; modeled device output is not
+   numerical inference. Keep the SDK ShuffleNet artifact as the separate
+   `0x1001e` format reference.
+2. **Qualify platform and device-memory behavior.** Native providers implement
+   PMIC sampling, PLL acquisition, clocks, resets and power-domain startup under
+   shared ownership. The permanent reservation tracks CPU/device addresses,
+   private tables, cache publication and retained faults. Actual board admission
+   must establish independent DRAM/PHY sources, complete SRAM ownership, supported
+   operating points and excluded writers. Qualify the effective mapping, SRAM
+   routes, cache visibility and translation-cache behavior physically. The
+   [memory policy](npu-memory.md) records the separate SRAM route; ordinary RAM
+   page-table entries do not replace its ownership contract.
+3. **Qualify completion, errors and recovery.** The initial workload polls
+   completion. The corrected single-core USB path can report a terminal NPU
+   failure only while the transport remains valid. Physical delivery remains
+   untested. Keep buffers and hardware resources on timeout or fault until the
+   reviewed recovery condition is met. Interrupt-driven completion, cancellation,
+   reset, stale interrupts, repeated loads, concurrent CPU access and power
+   transitions remain required hardware coverage.
+4. **Extend admission beyond the trusted catalogue.** Arbitrary executable model
+   descriptors, runtime model switching, concurrent models and other graph or
+   operator classes are unsupported. Establish complete descriptor access extents,
+   command permissions, operator semantics and output padding for each added
+   profile. Reuse published source and representative compiler output; inspect
+   binary loader references where source is insufficient.
+5. **Broaden application inference after the fixed path works.** The current
+   service already provides model/session lifetime, copied tensor input and
+   output, asynchronous jobs, deadlines and explicit result reaping. Wider
+   capability queries, limits and concurrent-client behavior need an explicit
+   supported contract and hardware evidence. Required NPU behavior must work
+   independently of mimus.
+6. **Evaluate mimus separately.** Map compatible operations and shapes while
+   preserving the existing model. After hardware functionality, measure transfer
+   and scheduling overhead, numerical differences, recognition accuracy, latency
+   and resource use. Explicit CPU fallback for unsupported operations does not
+   establish full NPU support. The native compiler/toolkit under issue 12 remains
+   deferred as described above.
 
-The next independent implementation work is complete descriptor access bounds
-and command admission. Physical inference
-remains untested, and
-[issue 9](https://github.com/pedapudi/sunstoneos/issues/9) retains both NPU and
-video-codec acceptance requirements.
+A first native launch has been attempted, but no captured result establishes NPU
+execution. Physical completion with copied numerical output is still the gating
+result for this application. [Issue 9](https://github.com/pedapudi/sunstoneos/issues/9)
+retains both NPU and video-codec acceptance requirements.
