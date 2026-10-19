@@ -1,32 +1,31 @@
 # Current work
 
-The first board last returned responsive on port `3-1` as `003:008`, identity
-`[7,2870,1096967,0,0]`. The user reports a 5 V / 3 A port. The returning boot-CPU
-diagnostic handled timer PPI30 and self-directed SGI0 through the actual FreeRTOS
-interrupt handler. Its general/vector register checks, cached stack and nesting
-writes, and cleaning of all 192 owned cache lines passed. It disabled delivery,
-verified empty pending/active state, restored controls and saved DRAM, and returned
-to ROM. The process exited and its claim closed as passed. Task selection and
-eight-core scheduling remain unqualified. Evidence:
-`primary-context-probe-20261018/physical-005/runtime/session.json`.
-DDR continuity begins at `reconnect-20261018-120/` and includes the preceding
-CPU0 EL3/EL1 diagnostics, returning SRAM survey and instruction-cache disable.
-Reuse that DDR lifetime; refresh warm launcher state before the next native test.
-Recovery must remove every connected power source.
+The first board last returned responsive on port `3-1` as `003:010`, identity
+`[7,2878,1096969,0,0]`. All eight CPUs completed the frozen production
+`a733_smp_pre_scheduler` barrier and 256 lock-protected increments. Each core
+cleaned all 192 cache lines in its two shared pages and final stack page.
+The copied physical pages match the expected completed state. CPU0 restored
+its controls and awake interrupt configuration; every secondary restored its
+local state and reached independently observed OFF. Saved DRAM restored before
+responsive ROM return. The runner exited and its queue claim closed as passed.
+Evidence: `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/session.json`.
+No reconnect is needed. Task selection and full eight-core scheduling remain
+unqualified. The user reports a 5 V / 3 A port; recovery removes all power sources.
 
-The returning all-core diagnostic calls the frozen production
-`a733_smp_pre_scheduler` function on all eight cores, including CPU0. Three
-instruction cases and seven host cases pass under
-`all-core-pre-scheduler-20261018/entry-corrected/`. The diagnostic reapplies
-CPU0's required EL1 preparation after the reused prefix restores its original
-controls, then verifies their restoration after the new interval. Each core
-completes the production barrier and its 32 increments before cleaning the two
-shared pages and its final stack page. The host requires all eight results,
-256 increments and 192 cleaned cache lines per core. It rejects incomplete
-participants, restoration and shared-memory results. Physical execution remains
-outstanding. The current008 warm survey, returning cache-off helper and final
-launcher confirmation pass under that directory's `warm-008/`; DDR is unchanged.
-Earlier builds without the CPU0 entry correction are not eligible for execution.
+DDR continuity begins at `reconnect-20261018-120/` and includes the returning
+CPU0 EL3/EL1/interrupt/context intervals, current008 SRAM preparation and this
+all-core return. Refresh current010 launcher state before another native test;
+do not retrain DDR. The CPU0 production IRQ handler previously passed register
+restoration and owned-page cleaning under
+`primary-context-probe-20261018/physical-005/runtime/session.json`.
+
+The all-core diagnostic's corrected image and three instruction/seven host cases
+are preserved under `all-core-pre-scheduler-20261018/entry-corrected/`.
+CPU0 reapplies required EL1 preparation after the reused prefix restores its
+original controls, then verifies exact restoration after the new interval.
+Earlier builds without that entry correction are not eligible for execution.
+Reuse the accepted physical barrier result; the next CPU work is task selection
+and scheduler startup, including ownership and cleaning of their larger write set.
 
 The second board last returned responsive on port `3-3` as `003:009`, identity
 `[7,2874,1096968,0,0]`, after the production PMIC provider completed a DCDC1
@@ -161,8 +160,8 @@ application dispatcher; the native vector, register saves, nesting updates and
 non-switching return execute unchanged. A delivery race was corrected before
 launch: final counters are read after masking interrupts, including handlers
 that finish just after the deadline decision. The next CPU boundary is actual
-task selection and combined eight-core startup, with the complete runtime write
-set cleaned before return. Do not repeat the failed full launch unchanged.
+task selection and scheduler startup, with the complete runtime write set
+cleaned before return. The production all-core barrier now passes physically. Do not repeat the failed full launch unchanged.
 
 Host USB power capacity and voltage under load are unmeasured. The board manual
 recommends 5 V / 3 A; this is a supply rating, not measured consumption. See
@@ -867,9 +866,9 @@ The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
 observations.
 
-1. Finish host decoding and runner binding for the implemented all-core
-   pre-scheduler diagnostic, then qualify its production barrier and lock on the
-   first board. Continue to actual task selection after that boundary is observed.
+1. Continue from the physically passing all-eight-core production barrier to
+   actual task selection and scheduler startup on the first board. Reuse the
+   completed barrier and host evidence.
    The full image and model already include the Secure PMR correction.
    Preserve final-store synchronization and Nonsecure cache-clean completion
    for the complete write set before shutdown. The prior interrupt result does

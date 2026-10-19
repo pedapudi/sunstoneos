@@ -1441,3 +1441,37 @@ translation restoration and saved DRAM restoration pass. ROM returns responsive,
 and the runner exits with its claim closed. This establishes the production IRQ
 path without task selection. Complete scheduling, broader runtime memory use
 and concurrent device workloads remain outstanding.
+
+
+## All eight CPUs complete the production barrier and atomic increments
+
+The returning all-core diagnostic calls the frozen production
+`a733_smp_pre_scheduler` on every CPU. All eight arrive, each makes 32 increments
+under the production atomic lock, and CPU0 releases the participants after
+checking the total of 256. The native function is unchanged. The interval ends
+before task creation, interrupt delivery or scheduler dispatch.
+
+The diagnostic records completion separately from the production state. Each
+CPU waits for all eight calls to finish before cleaning the completion page,
+production-state page and its final EL1 stack page. These are 192 cache lines
+per CPU. Nonsecure DC CIVAC and DSB SY finish before SMC; no later Normal-memory
+store is permitted. CPU0 restores its awake interrupt configuration. Every
+secondary restores local state and reaches observed OFF before shared cleanup.
+The host checks the copied completion and production pages, controls and DRAM
+restoration, as well as the returned ROM protocol response.
+
+The reused entry prefix has already restored CPU0's original EL1 controls.
+The diagnostic therefore records those controls and calls the production helper
+that blocks EL1 table walks before cached EL3 entry. Exact control restoration
+follows the interval. This omission was caught and corrected offline before
+physical execution. Three instruction cases cover completion, corrupted count
+and failed restoration; seven host cases cover capture, retention, restoration,
+changed inputs, incomplete participants and incorrect physical page contents.
+
+Physical execution passes under
+`all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/session.json`.
+Every participant reports success and the physical count is 256. All cache-clean
+counts, shared pages, control restoration, target shutdown and saved DRAM match.
+ROM returns as `003:010`; the process exits and its claim closes as passed.
+This establishes the combined production barrier. Task selection, scheduler
+startup and representative concurrent workloads remain outstanding.

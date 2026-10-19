@@ -118,6 +118,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `primary-context-probe-20261018/physical-005/runtime/session.json`.
   Its bounded application callback does not request a task switch; task selection
   and eight-core scheduling remain unqualified.
+  All eight CPUs also pass the production pre-scheduler barrier and 256 atomic
+  lock-protected increments. All participants finish before cleaning both shared
+  pages and their own stack page. CPU0 restores awake interrupt state; every
+  secondary restores local state and reaches observed OFF. Exact physical page
+  contents, saved DRAM restoration and responsive ROM return pass under
+  `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/`.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;

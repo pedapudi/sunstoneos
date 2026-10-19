@@ -21,7 +21,11 @@ with disabled delivery, empty pending/active state and restored controls before
 ROM return. The actual FreeRTOS IRQ handler also passes register checks, cached
 stack/nesting writes and complete owned-page cleaning under
 `primary-context-probe-20261018/physical-005/`. Its application callback is bounded
-and requests no context switch. Task selection, broader runtime memory use and
+and requests no context switch. All eight CPUs also complete the production pre-scheduler barrier and 256
+lock-protected increments under
+`all-core-pre-scheduler-20261018/entry-corrected/physical-008/`, followed by
+complete owned-page cleaning, restored controls and matching shutdown/OFF.
+Task selection, broader runtime memory use and
 eight-core FreeRTOS scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
