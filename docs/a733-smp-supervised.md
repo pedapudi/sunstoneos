@@ -1302,3 +1302,11 @@ USB controller calls and models cache, power and timing behavior; physical
 scheduling and USB capture remain unqualified. The exact image, 89 compiler
 inputs and 34 linked objects are preserved under the same evidence directory's
 `final-snapshot/`. Unchanged admission, launcher and host checks are reused.
+
+The subsequent physical attempt produced no USB observer result. After its
+observation window, the sole refusal-report read timed out. Device communication
+stopped and the runner retained ownership pending manual power removal.
+Evidence: `smp-secure-pmr-20261018/full-image/runtime/`. Full scheduling remains
+unobserved; no fault location can be inferred from the missing report. The
+Secure priority correction and modeled scheduling success do not establish the
+cause of this physical failure.

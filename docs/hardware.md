@@ -75,8 +75,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   observing ROM return. The exact offline bundle is prepared; physical USB
   timing, independent recovery and complete-image execution remain unqualified.
   The separate [supervised observer](a733-smp-supervised.md) uses manual
-  reconnection and leaves the watchdog disabled. Three physical attempts produced
-  no native result; scheduler execution remains unobserved. A returning native
+  reconnection and leaves the watchdog disabled. Physical attempts, including the corrected secure-priority image, produced
+  no native result; scheduler execution remains unobserved. The full instruction
+  model now covers Secure priority access and passes actual FreeRTOS scheduling
+  with the observer at background priority. Evidence:
+  `smp-secure-pmr-20261018/scheduler-observer-priority/` and `full-image/runtime/`. A returning native
   diagnostic now passes actual stack setup, admission, table construction and
   all three cache-publication calls. All five table pages match the instruction
   model; automatic ROM return and DRAM restoration pass. Native CPU/DSU identity
