@@ -1,0 +1,19 @@
+--- link.ld
++++ gpu-return-link.ld
+@@ -12,7 +12,7 @@
+         KEEP(*(.text.sd_single_core_boot)) KEEP(*(.text.boot)) KEEP(*(.text.vectors)) *(.text*)
+     } > CODE
+     .rodata : { *(.rodata*) } > CODE
+-    .data : { *(.data*) } > RAM
++    .data : { __gpu_private_start = .; *(.data*) } > RAM
+     .result 0x42000000 (NOLOAD) : {
+         __a733_smp_result = .; . += 0x4000; __a733_smp_result_end = .;
+     } > MONITOR
+@@ -46,6 +46,7 @@
+         . += 32768; __exception_stack_top = .;
+     } > RAM
+     __heap_end = .;
++    __gpu_private_end = .;
+     __device_memory_profile = 1;
+     .device_pool (NOLOAD) : {
+         __device_pool_start = .; . += LENGTH(DEVICE_WB); __device_pool_end = .;

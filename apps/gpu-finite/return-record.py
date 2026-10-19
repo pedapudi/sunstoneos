@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Freeze the linked GPU return ownership and coordinator host proposal."""
+import argparse,hashlib,json
+from pathlib import Path
+from elftools.elf.elffile import ELFFile
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();e=a.evidence.resolve();r=Path(__file__).resolve().parents[2];path=e/'build/return.elf'
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+with path.open('rb') as f:
+ elf=ELFFile(f);sections={x.name:[int(x['sh_addr']),int(x['sh_addr']+x['sh_size'])] for x in elf.iter_sections() if int(x['sh_flags'])&2};segments=[{'physical':int(x['p_paddr']),'memory_bytes':int(x['p_memsz']),'file_bytes':int(x['p_filesz']),'flags':int(x['p_flags'])} for x in elf.iter_segments() if x['p_type']=='PT_LOAD'];syms={x.name:(int(x['st_value']),int(x['st_size'])) for x in elf.get_section_by_name('.symtab').iter_symbols()}
+def at(n):return syms[n][0]
+retained=['gpu_runtime_contract','gpu_runtime_secondary_off','sealed_session','session_sealed','gpu_return_receipt']
+for n in retained:
+ start,size=syms[n];assert size and at('__gpu_retained_start')<=start<start+size<=at('__gpu_retained_end');assert start+size<=at('__bss_start') or start>=at('__bss_end')
+base=json.loads((Path.home()/'.cache/sunstoneos/evidence/gpu-finite-adapter-20261018/layout-correction/integration-prerequisites.json').read_text())
+record={'physical_eligible':False,'elf_sha256':sha(path),'worktree':str(r),'retained_symbols':{n:{'start':syms[n][0],'bytes':syms[n][1]} for n in retained},'allocated_sections':sections,'load_segments':segments,'bss':[at('__bss_start'),at('__bss_end')],'el1_private_clean':[at('__gpu_private_start'),(at('__gpu_private_end')+63)&~63],'wb_clean':[0x48000000,0x48086000],'nc_owned':[0x78000000,0x78033000],'authenticated_wb':[0x48000000,0x78000000],'authenticated_nc':[0x78000000,0x79000000],'interfaces':{k:base[k] for k in ['session_upload','session_bytes','contract_upload','contract_bytes','el3_interfaces','el1_interfaces','stop_contract']},'execution':'Independent single-core SRE; tasks execute at EL1t, PSTATE4 with critical section interrupt mask before exit. No secondary release.','cleanup':'EL1 NS DC CVAC private interval plus134WB pages; DSB; no-stack EL1 M/C/I disable and SMC. EL3 receipt/stop/ownership gate, timer and interrupt restoration, final existing set/way clean for late NS stack stores. NC ordering only. No EL3 VA publication claim.','host_proposal':{'implemented':False,'queue_created':False,'requires':['Root architectural and hardware admission review','Physical board availability and exclusive all-master/DDR/power/clock ownership','Snapshot complete image writable/private, monitor/report, session/contract upload and full authenticated WB/NC pool ranges before launch','Authenticated manifest/build/epoch/generation/lease/session/entry evidence preparation','One bounded launch; copy report and verify packet identity and all64 outputs after ROM availability','Restore exact snapshots only after qualified return; retain on any timeout/fault, no retry']},'superseded_evidence':'Earlier parent and profile-correction shared-byte models do not prove NS publication. Only ns-publication security-tagged results apply.'}
+record['source_artifacts']={str(p.relative_to(r)):sha(p) for p in sorted((r/'apps/gpu-finite').glob('*')) if p.is_file()}
+(e/'return-integration.json').write_text(json.dumps(record,indent=2)+'\n');print('Recorded retained layout, publication ranges and coordinator host proposal.')

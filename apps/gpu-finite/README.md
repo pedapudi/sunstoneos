@@ -1,5 +1,7 @@
 # Finite GPU client and device adapter
 
+The separate [returning single-core composition](RETURN.md) adds an application-local EL1 publication shim and EL3 return monitor around this device adapter. Its image and selective handoff evidence are distinct from the development adapter described below. Physical eligibility still requires coordinator architectural and admission review.
+
 This adapter runs the existing repeated fixed-compute client through normal CLOSE, parks its providers, reports the copied results and calls `platform_exit(0)`. It is intended for maintainers composing the common returning FreeRTOS platform. The supplied ELF is development-only and physically ineligible: it retains the earlier full single-core monitor/runtime objects, which do not implement the required return. Physical GPU firmware execution, computation, shutdown and ROM return remain unqualified.
 
 `SUNSTONE_GPU_FINITE_RETURN=1` requires the supervised, single-core compute configuration. The existing authenticated GPU contract and session validators remain in use. The client waits for the real PMIC provider, runs two sequential jobs and copies both results before CLOSE. It waits for STOPPED before invoking the finite completion helper. The finite path creates no USB task and performs no native USB controller construction or operation. Its PMIC binding uses the same existing provider constructors as the shared USB binding.

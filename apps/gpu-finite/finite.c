@@ -90,3 +90,18 @@ _Noreturn void gpu_finite_complete(void)
     platform_puts("PASS GPU two copied results, CLOSE and parked providers\n");
     platform_exit(0);
 }
+
+/* EL3 reads only after publishing the CPU-private image to PoC. This is a
+ * scalar check of the completed trusted adapter, with no translation, task,
+ * provider, cache or device callback. Architectural cleanup remains separate. */
+int gpu_finite_return_ready(void)
+{
+    if(!stopped()||!atomic_load_explicit(&pmic_parked,memory_order_acquire)||
+       atomic_load_explicit(&app.result,memory_order_acquire)!=1)return 0;
+    const struct a733_pmic *p=&app.shared.pmic;
+    if(p->held||p->retained||p->failed||p->active!=A733_PMIC_REQUESTS||
+       atomic_load_explicit(&app.shared.locks.retained,memory_order_acquire))return 0;
+    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
+        if(p->slots[i].state||p->slots[i].borrow.id)return 0;
+    return 1;
+}
