@@ -561,9 +561,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   four copied capture slots. Full USB delivery and exact acknowledgment precede
   slot reuse; cancellation preserves backlog through terminal drain. Focused
   ownership, USB and host checks pass under `i2s-repeated-20261018/`; all 163
-  compiled inputs match integration. Hardware-linked cyclic DMA,
-  physical continuous/duplex audio, wire-level drain, Bluetooth PCM and physical
-  continuity remain open.
+  compiled inputs matched that image's integration. Fixed hardware-linked TX
+  rings and checked-copy cyclic RX/duplex are now integrated. TX sources remain
+  immutable; RX uses private staging before the existing USB slots. Complete USB
+  delivery and exact ACK still precede slot reuse. Selected descriptor/provider
+  checks and three standalone-client cases pass; client service calls are modeled.
+  The native image link is separate evidence. Three focused review findings are
+  resolved. Root integration verifies 168 compiled inputs, 69 linked objects,
+  127 sources, 224 artifacts and four tools under
+  `i2s-hardware-cyclic-20261019/root-integration.json`. Earlier unaffected cases
+  were reused within the scope in `identity-reuse-clarification.json`. The manual's
+  completed-package counter lacks explicit destination-write/cursor ordering,
+  so cyclic RX/duplex physical
+  admission requires `cyclic-rx-completion-and-reuse-ordering-established`.
+  No qualifying record exists; CPU-cache review alone does not establish it.
+  Physical continuity, DMA drain, cache visibility, wire-level drain, TX live
+  refills, Bluetooth PCM and broader routed audio functions remain outstanding.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently

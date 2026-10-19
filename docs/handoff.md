@@ -86,10 +86,24 @@ Repeated I2S capture, playback and duplex are integrated. Four copied capture
 slots remain owned until complete USB delivery and matching acknowledgment.
 Cancellation preserves the copied backlog through terminal drain. Focused
 native ownership, USB completion and host checks pass; source review is closed.
-Integration matches all 163 compiled inputs and the accepted image. Evidence:
+The earlier image's audit matched all 163 compiled inputs. Evidence:
 `i2s-repeated-20261018/snapshot/manifest.json`, `review.json` and
-`root-integration.json`. Accepted checks were reused. Hardware-linked cyclic DMA,
-physical continuity, scheduling gaps and wire-level drain remain outstanding.
+`root-integration.json`. Accepted checks were reused.
+Fixed hardware-linked rings are now integrated for repeating TX and checked-copy
+cyclic RX/duplex. TX sources remain immutable; RX copies pass through private
+staging before the existing USB slots. Complete USB delivery and exact ACK still
+precede slot reuse. Descriptor/provider checks and three standalone-client cases
+pass; client service calls are modeled, and the native image link is separate
+evidence. Three focused review findings are resolved. Root integration verifies
+168 compiled inputs, 69 linked objects, 127 sources, 224 artifacts and four tools
+under `i2s-hardware-cyclic-20261019/root-integration.json`. Earlier unaffected
+evidence was reused within the scope recorded in `identity-reuse-clarification.json`.
+Root CPU-cache review does not establish device write completion. The manual's
+completed-package counter does not explicitly order destination writes and
+cursor updates. Cyclic RX/duplex physical admission additionally requires
+`cyclic-rx-completion-and-reuse-ordering-established`; no qualifying record
+exists. Physical continuity, DMA drain, cache visibility and wire-level drain
+remain unqualified. TX live refills and broader audio modes remain required.
 
 Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
@@ -308,17 +322,15 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue source-backed I2S hardware cyclic-DMA integration; it remains in
-   progress. Preserve copied-slot acknowledgment and
-   cancellation-backlog rules. Negotiated read-only SD, UART interrupt service,
-   USB host HID input and optional CPU interrupt service, bounded trusted GPU
-   multi-dispatch, deferred NPU interrupt
-   completion and H.264, JPEG and crypto runtime input delivery are integrated.
-   Reuse each accepted image with its complete frozen source closure, including
-   SD and UART images that predate the latest shared USB layout.
-   Preserve the accepted fixed-workload GPU returning profile; its passed root
-   delta review supplies no physical admission. General GPU dispatch geometry,
-   same-session input replacement, graphics and concurrency remain required.
+1. Develop same-session GPU and NPU live input, USB hub support and bounded
+   H.264 IDR/P-frame sequences; these extensions remain in progress. Fixed I2S
+   cyclic TX and checked-copy RX/duplex are integrated, with physical RX admission
+   blocked by the documented completion/reuse ordering gap. Preserve copied-slot
+   acknowledgment and cancellation-backlog rules. Reuse accepted images with
+   their complete frozen source closures, including SD and UART images that
+   predate the latest shared USB layout. Preserve the accepted fixed-workload GPU
+   returning profile; its passed root delta review supplies no physical admission.
+   General GPU geometry, graphics and concurrency remain required.
    CPU/startup changes remain root-owned. Preserve both cards.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
