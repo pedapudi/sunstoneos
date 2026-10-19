@@ -19,7 +19,7 @@ struct gpu_application {
     StaticTask_t tasks[3];
     StackType_t stacks[3][4096];
     TaskHandle_t handles[3];
-    atomic_uint fatal,result,usb_observed;
+    atomic_uint fatal,result,usb_observed,preparation_failed;
     struct pvr_gpu_service_reply last;
     uint32_t pixels[4096];
     uint32_t compute_words[2][PVR_COMPUTE_JOB_WORDS], compute_sequence[2];

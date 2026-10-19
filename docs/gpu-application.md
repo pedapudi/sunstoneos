@@ -232,6 +232,21 @@ boundary; no new command or fixed delay is required. Waiting remains bounded by
 the admitted session deadline. This establishes working transport before GPU
 power or firmware startup can fail, without claiming host journal durability.
 
+Software GPU preparation still runs before the scheduler starts. A returned
+failure from firmware memory preparation, compute memory preparation, backend
+binding, service initialization or client binding retains the allocations and
+publishes the existing failure result. An already-created service worker stays
+suspended; a permanent preparation-failure latch parks the client and blocks GPU
+IRQ dispatch, including after a later shared fault. No OPEN request follows this
+failure. Healthy shared PMIC/USB providers can deliver the existing 40-byte
+failure response without first publishing a pending response.
+
+The preparation-failure latch does not revoke the shared lifetime. Its scope is
+the software construction chain; shared initialization, PMIC polling, transport
+faults and expiry keep their fatal behavior. Every outcome retains the resources
+until whole-board power removal. This reporting behavior does not identify the
+stage reached by any earlier physical attempt.
+
 Shared provider, power, clock, or transport faults still revoke the application
 and stop USB. A final failed-status frame is therefore not guaranteed after a
 fatal fault. Missing native USB alone cannot identify whether startup, PMIC/USB

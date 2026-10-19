@@ -45,6 +45,7 @@ static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op,ui
 static void client(void *unused)
 {
     (void)unused;
+    if(atomic_load_explicit(&app.preparation_failed,memory_order_acquire))park();
     /* Do not let GPU OPEN revoke the shared providers before the host has
      * received one complete pending response from the initialized transport. */
     while(!atomic_load_explicit(&app.shared.pmic_ready,memory_order_acquire)||
@@ -90,6 +91,7 @@ int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
     (entry==pmic||entry==gpu_application_usb||entry==client));}
 void gpu_application_irq(void)
 {
+    if(atomic_load_explicit(&app.preparation_failed,memory_order_acquire))return;
     BaseType_t woken=pdFALSE;
     if(!pvr_gpu_service_interrupt(&app.service,&woken))gpu_application_fail(NULL);
     portYIELD_FROM_ISR(woken);
@@ -161,6 +163,13 @@ void a733_smp_diagnostic_start(void)
 #endif
        !a733_gpu_backend_bind(&app.backend,&app.service,&app.firmware.config,&app.firmware.memory,&app.power,&external)||
        !pvr_gpu_service_init(&app.service,&app.firmware.config,3,1)||
-       !pvr_gpu_service_bind(&app.service,0,app.handles[2]))platform_panic("GPU service",8);
+       !pvr_gpu_service_bind(&app.service,0,app.handles[2])){
+        /* Preparation has not opened the GPU. Keep every allocation and
+         * prevent a partially bound worker from running, while healthy
+         * shared providers deliver the existing terminal failure report. */
+        atomic_store_explicit(&app.preparation_failed,1,memory_order_release);
+        atomic_store_explicit(&app.result,2,memory_order_release);
+        if(app.service.worker)vTaskSuspend(app.service.worker);
+    }
     vTaskStartScheduler();platform_panic("GPU scheduler returned",9);
 }
