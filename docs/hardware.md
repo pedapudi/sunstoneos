@@ -1201,6 +1201,29 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
+  The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
+  is implemented for progressive Baseline IDR/P clips with one short-term reference
+  and picture-order count type 2. Its coded 1920-by-1088 references retain all rows;
+  copied output removes exactly eight bottom rows for visible 1920-by-1080 YU12.
+  The authenticated clip admits at most 256 access units, each bounded to 4 MiB.
+  Fixed extended-memory allocations retain input, references, scratch and two
+  private copied-output slots. Healthy input refill, reference retirement and
+  completed-output acknowledgment remain separate; uncertainty retains every lease.
+  Six-picture checks execute the actual allocator, tables, parser, controller,
+  cropped copy and serializer. Independent syntax/register comparisons, private
+  launcher/sealer and host capture checks pass. Device pixels, registers,
+  translation, scheduling and transport are modeled; normal-mode evidence checks
+  one copied picture without numerical qualification. Shared startup and secondary
+  execution are not exercised. Root verifies 434 inputs and 171 objects under
+  `h264-fullhd-20261019/root-integration.json`, with private startup placement review
+  preserved separately. Fourteen later shared USB/clock/board source differences
+  are classified; the consistent frozen image remains authoritative, and future
+  builds must compile affected consumers together. The full-HD ELF SHA-256 is
+  `b48123e301ec40ae4ec104e58d4c57b347e619b6a0a62a82263e0d0fe491a643`.
+  Physical startup, pixels, reference visibility, confinement, timing and drain
+  remain unqualified. Wider profiles/reference patterns, unmanifested input and
+  allocation reclamation remain required. Existing VGA and small-picture profiles
+  retain their separate accepted images and evidence.
   The [VGA H.264 streaming application](h264-native.md) implements a finite
   prepared clip of up to 256 progressive 640-by-480 Baseline IDR/P pictures, with
   one short-term reference and at most 512 KiB per access unit. A fixed retained
