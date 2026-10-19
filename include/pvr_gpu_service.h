@@ -7,6 +7,7 @@
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
 struct pvr_compute_service;
+struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 
@@ -19,7 +20,8 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
-    PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT };
+    PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
+    PVR_GPU_SERVICE_DRAW };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -135,6 +137,11 @@ struct pvr_gpu_service_message {
     unsigned client;
     uint32_t render_first_pixel, compute_first_word, compute_sequence;
 };
+/* Scoped copied triangle upload. epoch must match the caller's OPEN reply.
+ * The complete input is copied before enqueue; no caller pointer reaches the
+ * worker. One accepted draw per session; use the existing paged render read. */
+int pvr_gpu_service_draw(struct pvr_gpu_service *,uint64_t epoch,const void *vertices,
+    size_t bytes,uint32_t count,uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
 struct pvr_gpu_service_client {
     TaskHandle_t task;
     uint64_t next_ticket, pending;

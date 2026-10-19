@@ -1,4 +1,97 @@
-# Native fixed offscreen rendering
+# Native offscreen rendering
+
+The optional triangle application accepts a copied, caller-selected triangle
+list through `pvr_gpu_service_draw()`. Real vertex and fragment shaders, vertex
+fetch programs, primitive state and draw commands feed the existing paired
+geometry and fragment queues. The application returns a copied 64 × 64 RGBA8
+framebuffer. Physical GPU rasterization remains unqualified.
+
+## Copied triangle submission
+
+The draw profile admits 3 through 126 vertices, in groups of three. Each
+`pvr_render_vertex` contains four binary32 clip-position components followed by
+four color components, with a 32-byte stride. Positions have finite x/y in
+[-1, 1], z equal to zero and w equal to one. Colors have finite components in
+[0, 1]. A dedicated read-only GPU page holds at most 4,032 vertex bytes. The
+126-vertex limit follows from one 4 KiB page rounded down to complete triangles;
+it is an initial allocation policy, not a hardware limit.
+
+The resident trusted vertex shader passes position and color to the rasterizer.
+The fragment shader interpolates color without perspective correction and packs
+it into RGBA8. Viewport and scissor cover the framebuffer. Uncovered pixels use
+the existing background color `0xffc08020`. Degenerate triangles may produce
+only background. This profile has no indices, instancing, depth/stencil,
+blending, textures or multisampling. Broader shader and graphics support remains
+required work.
+
+`pvr_gpu_service_draw(service, epoch, vertices, bytes, count, timeout, wait,
+ticket)` copies the complete input before enqueue. The epoch comes from the
+caller's OPEN reply. One scoped staging slot binds the copy to its client and
+ticket; queue refusal and consumed rejection release that slot. The privileged
+worker checks the current owner, epoch, native mappings and READY state again
+before accepting a draw. Invalid input does not change device backing.
+
+The graphics owner constructs and publishes all program, interpolation,
+fragment-metadata, scissor and primitive state before OPEN. Runtime submission
+copies the vertices into its private page and updates the draw count. It
+publishes both changed pages through their EL1 mappings before the combined
+kick. Input and commands remain immutable for the submitted lifetime. Both
+acquired completion timelines precede output invalidation, guard checks and
+pixel copies. Guard checks protect the copied extent; they do not independently
+prove rasterization. Uncertain completion retains all owners.
+
+One draw is accepted per session. Existing `pvr_gpu_service_render_read()`
+returns 64 copied pixels per page after completion. CLOSE follows the normal
+reviewed shutdown path. Repeated draws and context disposal remain unsupported.
+
+Build `apps/gpu-render` with `SUNSTONE_GPU_RUNTIME_DRAW=ON`,
+`SUNSTONE_GPU_SUPERVISED=ON` and `SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`,
+then select `sunstone-a733-gpu-draw-single-core`. The executable contains the
+trusted shader pair; caller-selected vertices do not change its bytes.
+`apps/gpu-render/draw.py` supplies `vertices()`, `sequence()` and `capture()`.
+The latter uses a coordinator-owned, identity-validated, locked device handle;
+it does not discover or launch hardware. The private version-3 mailbox has
+SUBMIT, READ and CLOSE operations. Existing compute version-2 framing remains
+unchanged. Session and per-request deadlines bound partial uploads and work.
+
+## Draw compiler and software evidence
+
+The pinned Mesa revision listed below supplies the actual PCO shader compiler,
+vertex/fragment allocators and programmable data sequencer (PDS) generators for
+vertex fetch, interpolation, fragment launch and descriptor upload. The descriptor program loads
+the required fragment metadata word. Compiler metadata reserves eight vertex
+input and eight vertex output dwords. The fragment stage uses 16 coefficient
+dwords for interpolation and one shared register for metadata. This register
+is not application shared memory. Vertex code occupies 88 bytes and fragment
+code 64 bytes; each has its required executable padding. Shader temporary
+counts are zero and five respectively. No scratch or spill storage is used.
+
+The producer uses Mesa's feature-dependent vertex CAM allocator and generated
+Rogue control encoders. The initial primitive state contains 26 words; the
+40-byte vertex control stream references it, configures vertex fetch, submits
+a non-indexed triangle list and terminates. Resource fields use their source
+units and aligned PDS data lengths. The programs fit within the existing PDS
+and unified shader core (USC) pages. The vertex page adds 4 KiB to the existing allocation.
+
+Focused evidence is retained outside Git in
+`~/.cache/sunstoneos/evidence/gpu-triangle-draw-20261019/`. It includes actual
+compiler output and source identities, complete native payload comparison,
+numeric input refusal, and actual FreeRTOS service execution through native
+owner, translation and cache helpers. The service cases cover copied input,
+stale epoch, revoked ownership, queue saturation, guarded copied output,
+uncertain submission and healthy CLOSE. The linked native application and host
+consumer process two different scenes on the same image. A separate instruction
+case checks refusal publication before mailbox release and a subsequent retry.
+Firmware replies, GPU writes and USB effects are modeled. None of these checks
+establishes physical cache visibility or shader execution.
+
+The draw profile retains the accepted opaque firmware coherence contract:
+default jobs flush device caches before completion. CPU publication and acquired
+completion remain necessary. Physical qualification requires a known scene,
+copied background and interior colors, guard integrity and healthy shutdown;
+exact floating-point edge coverage is not assumed by software evidence.
+
+## Fixed clear profile
 
 The native graphics service submits a 64 × 64 RGBA8 clear using actual GPU
 programs, geometry and fragment command rings, firmware render context, and

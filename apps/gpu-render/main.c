@@ -17,6 +17,9 @@ const uint64_t gpu_transport_only_marker[2]={UINT64_C(0x4750555553423031),1};
 #ifdef SUNSTONE_GPU_RUNTIME_INPUT
 const uint64_t gpu_runtime_input_marker[2]={UINT64_C(0x475055494e503032),2};
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+const uint64_t gpu_runtime_draw_marker[2]={UINT64_C(0x4750554452415731),PVR_RENDER_DRAW_PROFILE};
+#endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
 const uint64_t gpu_program_application_marker[2]={UINT64_C(0x4750555052473031),1};
 #endif
@@ -98,6 +101,38 @@ static void runtime_inputs(void)
     }
 }
 #endif
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+static void runtime_draw(void)
+{
+    for(;;) {
+        while(atomic_load_explicit(&app.runtime_state,memory_order_acquire)!=1) {
+            if(!gpu_application_live(NULL))retained();
+            (void)request(PVR_GPU_SERVICE_STATUS,0);vTaskDelay(1);
+        }
+        if(app.runtime_operation==3)return;
+        uint64_t ticket;struct pvr_gpu_service_reply r;
+        int sent=pvr_gpu_service_draw(&app.service,app.last.epoch,app.runtime_input,app.runtime_bytes,
+            app.runtime_bytes/sizeof(struct pvr_render_vertex),1000000,1,&ticket);
+        if(sent) {
+            while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+            if(r.result==PVR_GPU_SERVICE_FAULT)retained();
+            sent=r.result==PVR_GPU_SERVICE_OK;
+        }
+        if(sent) {
+            atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
+            while(r.render_phase!=PVR_RENDER_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+            for(unsigned first=0;first<4096;first+=64) {
+                if(!pvr_gpu_service_render_read(&app.service,first,1,&ticket))retained();
+                while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+                if(r.result!=PVR_GPU_SERVICE_OK || r.render_first_pixel!=first || r.render_pixel_count!=64)retained();
+                memcpy(app.pixels+first,r.render_pixels,256);
+            }
+        }
+        atomic_store_explicit(&app.result,sent?1:4,memory_order_release);
+        atomic_store_explicit(&app.runtime_state,0,memory_order_release);
+    }
+}
+#endif
 static void client(void *unused)
 {
     (void)unused;
@@ -117,7 +152,9 @@ static void client(void *unused)
 #endif
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
-#ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+    runtime_draw();
+#elif defined(SUNSTONE_GPU_COMPUTE_APPLICATION)
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
     unsigned total=gpu_application_package()->output_bytes/4;
     r=request(PVR_GPU_SERVICE_COMPUTE,1000000);
@@ -173,7 +210,7 @@ static void client(void *unused)
 #ifdef SUNSTONE_GPU_FINITE_RETURN
     gpu_finite_complete();
 #endif
-#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+#if defined(SUNSTONE_GPU_RUNTIME_INPUT) || defined(SUNSTONE_GPU_RUNTIME_DRAW)
     atomic_store_explicit(&app.runtime_closed,1,memory_order_release);
     atomic_store_explicit(&app.runtime_state,0,memory_order_release);
 #endif
@@ -194,6 +231,9 @@ void gpu_application_irq(void)
 }
 void a733_smp_diagnostic_start(void)
 {
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+    __asm__ volatile("" :: "r"(gpu_runtime_draw_marker) : "memory");
+#endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
     __asm__ volatile("" :: "r"(gpu_program_application_marker) : "memory");
 #ifdef SUNSTONE_GPU_RUNTIME_INPUT
@@ -278,7 +318,11 @@ void a733_smp_diagnostic_start(void)
        !a733_gpu_compute_reserved_prepare(&app.compute,&app.firmware,&app.service,10)||
 #endif
 #ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+       !a733_gpu_graphics_memory_prepare_draw(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||
+#else
        !a733_gpu_graphics_memory_prepare_clear(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile)||
+#endif
 #endif
        !a733_gpu_backend_bind(&app.backend,&app.service,&app.firmware.config,&app.firmware.memory,&app.power,&external)||
        !pvr_gpu_service_init(&app.service,&app.firmware.config,3,1)||

@@ -446,7 +446,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
                                            const struct pvr_gpu_service_message *m)
 {
     const struct pvr_gpu_service_request *r = &m->request;
-    if ((unsigned)r->operation > PVR_GPU_SERVICE_COMPUTE_INPUT ||
+    if ((unsigned)r->operation > PVR_GPU_SERVICE_DRAW ||
         ((r->operation == PVR_GPU_SERVICE_STATUS || r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT ||
           r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT || r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) ? r->timeout_us != 0 :
          (!r->timeout_us || r->timeout_us > INT64_MAX))) return PVR_GPU_SERVICE_INVALID;
@@ -496,8 +496,22 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     }
     if (s->config.render && s->config.render->phase != PVR_RENDER_SERVICE_READY &&
         s->config.render->phase != PVR_RENDER_SERVICE_COMPLETE) return PVR_GPU_SERVICE_BUSY;
+    if(r->operation==PVR_GPU_SERVICE_DRAW) {
+        struct pvr_render_service *d=s->config.render;
+        if(!d || !s->config.compute || !d->owner || d->owner->draw!=1 ||
+            atomic_load_explicit(&d->draw_state,memory_order_acquire)!=2 ||
+            d->draw_ticket!=m->ticket || d->draw_client!=m->client || d->draw_epoch!=s->epoch)return PVR_GPU_SERVICE_INVALID;
+        if(d->phase!=PVR_RENDER_SERVICE_READY ||
+            (s->config.compute->phase!=PVR_COMPUTE_SERVICE_READY &&
+             s->config.compute->phase!=PVR_COMPUTE_SERVICE_COMPLETE))return PVR_GPU_SERVICE_BUSY;
+        if(!deadline(s,r->timeout_us))return PVR_GPU_SERVICE_FAULT;
+        int result=pvr_render_service_draw(d,d->draw_copy,d->draw_bytes,d->draw_count,s->deadline);
+        if(result<0){fail(s,PVR_GPU_SERVICE_GRAPHICS);return PVR_GPU_SERVICE_FAULT;}
+        return result?PVR_GPU_SERVICE_OK:PVR_GPU_SERVICE_INVALID;
+    }
     if (r->operation == PVR_GPU_SERVICE_RENDER) {
         if (!s->config.render) return PVR_GPU_SERVICE_INVALID;
+        if(s->config.render->owner && s->config.render->owner->draw)return PVR_GPU_SERVICE_INVALID;
         if (s->config.render->phase != PVR_RENDER_SERVICE_READY ||
             (s->config.compute->phase != PVR_COMPUTE_SERVICE_READY &&
              s->config.compute->phase != PVR_COMPUTE_SERVICE_COMPLETE)) return PVR_GPU_SERVICE_BUSY;
@@ -555,6 +569,12 @@ static void worker(void *argument)
             if(c&&atomic_load_explicit(&c->input_state,memory_order_acquire)==2&&
                c->input_ticket==message.ticket&&c->input_client==message.client)
                 atomic_store_explicit(&c->input_state,0,memory_order_release);
+        }
+        if(message.request.operation==PVR_GPU_SERVICE_DRAW) {
+            struct pvr_render_service *d=s->config.render;
+            if(d && atomic_load_explicit(&d->draw_state,memory_order_acquire)==2 &&
+                d->draw_ticket==message.ticket && d->draw_client==message.client)
+                atomic_store_explicit(&d->draw_state,0,memory_order_release);
         }
         reply.phase = s->phase; reply.error = s->error; reply.epoch = s->epoch;
         reply.owns_session = s->owner == message.client;
@@ -640,7 +660,8 @@ static struct pvr_gpu_service_client *caller(struct pvr_gpu_service *s, unsigned
 int pvr_gpu_service_send(struct pvr_gpu_service *s, const struct pvr_gpu_service_request *r,
                          TickType_t wait, uint64_t *ticket)
 {
-    if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT) return 0;
+    if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT ||
+        r->operation==PVR_GPU_SERVICE_DRAW) return 0;
     unsigned slot; struct pvr_gpu_service_client *c = caller(s, &slot);
     if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;
     struct pvr_gpu_service_message message = {.request=*r, .ticket=c->next_ticket+1, .client=slot};
@@ -712,6 +733,27 @@ int pvr_gpu_service_compute_input(struct pvr_gpu_service *s,uint32_t sequence,
     atomic_store_explicit(&c->input_state,2,memory_order_release);
     if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
         client->pending=0;atomic_store_explicit(&c->input_state,0,memory_order_release);return 0;
+    }
+    client->next_ticket=m.ticket;*ticket=m.ticket;return 1;
+}
+int pvr_gpu_service_draw(struct pvr_gpu_service *s,uint64_t epoch,const void *vertices,
+    size_t bytes,uint32_t count,uint64_t timeout,TickType_t wait,uint64_t *ticket)
+{
+    if(!epoch || !ticket || !span(vertices,bytes) || !pvr_render_draw_vertices_valid(vertices,bytes,count) ||
+        !timeout || timeout>INT64_MAX || wait==portMAX_DELAY)return 0;
+    unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
+    if(!client || client->pending || client->next_ticket==UINT64_MAX || !s->config.render)return 0;
+    struct pvr_render_service *d=s->config.render;
+    if(!separate(vertices,bytes,d,sizeof(*d)))return 0;
+    unsigned empty=0;
+    if(!atomic_compare_exchange_strong_explicit(&d->draw_state,&empty,1,memory_order_acquire,memory_order_relaxed))return 0;
+    struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_DRAW,timeout},.ticket=client->next_ticket+1,.client=slot};
+    memcpy(d->draw_copy,vertices,bytes);d->draw_count=count;d->draw_bytes=(uint32_t)bytes;
+    d->draw_ticket=m.ticket;d->draw_client=slot;d->draw_epoch=epoch;
+    client->pending=m.ticket;
+    atomic_store_explicit(&d->draw_state,2,memory_order_release);
+    if(xQueueSend(s->requests,&m,wait)!=pdTRUE) {
+        client->pending=0;atomic_store_explicit(&d->draw_state,0,memory_order_release);return 0;
     }
     client->next_ticket=m.ticket;*ticket=m.ticket;return 1;
 }

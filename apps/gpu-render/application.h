@@ -20,7 +20,7 @@ struct gpu_application {
     StackType_t stacks[3][4096];
     TaskHandle_t handles[3];
     atomic_uint fatal,result,usb_observed,preparation_failed;
-#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+#if defined(SUNSTONE_GPU_RUNTIME_INPUT) || defined(SUNSTONE_GPU_RUNTIME_DRAW)
     /* USB writes only while idle, client consumes after acquire. The slot stays
      * owned until completion/rejection; USB output copies stop while pending. */
     atomic_uint runtime_state, runtime_sequence, runtime_closed;

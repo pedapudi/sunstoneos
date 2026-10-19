@@ -82,7 +82,7 @@ static int barrier(void *s,enum pvr_ccb_barrier kind)
 { (void)kind;if(!admitted(s))return 0;__asm__ volatile("dsb sy":::"memory");return 1; }
 int pvr_render_service_begin(struct pvr_render_service *s,uint64_t deadline)
 {
-    if(!s || s->phase!=PVR_RENDER_SERVICE_READY || !s->owner) return 0;
+    if(!s || s->phase!=PVR_RENDER_SERVICE_READY || !s->owner || (s->owner->draw && !s->draw_accepted)) return 0;
     struct pvr_gpu_service *g=s->owner->service;
     s->epoch=g->epoch;
     uint64_t clock;
@@ -100,6 +100,32 @@ int pvr_render_service_begin(struct pvr_render_service *s,uint64_t deadline)
     }
     s->phase=PVR_RENDER_SERVICE_FORMAT_GEOMETRY;
     if(!now(s,&clock) || clock>=deadline){failed(s,PVR_RENDER_SERVICE_CLOCK);return 0;}
+    return 1;
+}
+int pvr_render_service_draw(struct pvr_render_service *s,const void *vertices,size_t bytes,uint32_t count,uint64_t deadline)
+{
+    if(!s || !s->owner || s->owner->draw!=1 || s->phase!=PVR_RENDER_SERVICE_READY ||
+        s->draw_accepted || !pvr_render_draw_vertices_valid(vertices,bytes,count))return 0;
+    s->epoch=s->owner->service->epoch;
+    uint64_t clock;
+    if(!admitted(s) || !now(s,&clock) || deadline<=clock ||
+        pvr_compute_service_admit_mode(s->owner->service->config.compute)!=1)return 0;
+    uintptr_t timelines=a733_gpu_graphics_memory_render_shared(s->owner)+1408;
+    if(!mapped(timelines,8,0x44) || __atomic_load_n((uint32_t *)timelines,__ATOMIC_ACQUIRE) ||
+        __atomic_load_n((uint32_t *)(timelines+4),__ATOMIC_ACQUIRE))return 0;
+    uintptr_t payload=s->owner->payload_extent.cpu+s->owner->render.payload_bytes;
+    uintptr_t input=payload+PVR_RENDER_PROGRAM_BYTES+4096u;
+    uintptr_t commands=payload+8192+0xf000;
+    if(!mapped(input,4096,0xff) || !mapped(commands,4096,0xff))return failed(s,PVR_RENDER_SERVICE_MEMORY);
+    memset((void *)input,0,4096);memcpy((void *)input,vertices,bytes);
+    memcpy((void *)(commands+0x20),&count,4);
+    /* Programs/PPP/metadata were published before OPEN. Runtime changes only
+     * this input page and the VDM count; publish both through their EL1 mapping. */
+    if(!aarch64_device_cache(AARCH64_CACHE_CLEAN,input,4096) ||
+        !aarch64_device_cache(AARCH64_CACHE_CLEAN,commands,4096))return failed(s,PVR_RENDER_SERVICE_MEMORY);
+    __asm__ volatile("dsb sy":::"memory");
+    s->draw_accepted=1;
+    if(!pvr_render_service_begin(s,deadline))return failed(s,PVR_RENDER_SERVICE_ADMISSION);
     return 1;
 }
 int pvr_render_service_poll(struct pvr_render_service *s)
@@ -162,7 +188,8 @@ int pvr_render_service_poll(struct pvr_render_service *s)
         for(unsigned i=0;i<n;i+=4) {
             unsigned at=s->checked+i;
             int guard=at<64 || at>=PVR_RENDER_OUTPUT_BYTES-64;
-            if(values[i/4]!=(guard?PVR_RENDER_GUARD:PVR_RENDER_PIXEL))return failed(s,PVR_RENDER_SERVICE_RESULT);
+            if((guard && values[i/4]!=PVR_RENDER_GUARD) ||
+                (!guard && !s->owner->draw && values[i/4]!=PVR_RENDER_PIXEL))return failed(s,PVR_RENDER_SERVICE_RESULT);
             if(!guard)s->pixels[(at-64)/4]=values[i/4];
         }
         s->checked+=n;

@@ -6,7 +6,7 @@
 
 #define A733_GPU_GRAPHICS_TABLE_PAGES 16u
 #define A733_GPU_GRAPHICS_MAPS (PVR_RENDER_REGIONS + 2u)
-#define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 4u)
+#define A733_GPU_GRAPHICS_MAX_MAPS (A733_GPU_GRAPHICS_MAPS + 5u)
 #define A733_GPU_RENDER_FW UINT32_C(0xc0a00000)
 enum a733_gpu_graphics_phase { A733_GPU_GRAPHICS_NEW, A733_GPU_GRAPHICS_ACQUIRED,
     A733_GPU_GRAPHICS_BOUND, A733_GPU_GRAPHICS_DATA, A733_GPU_GRAPHICS_TABLES,
@@ -43,7 +43,7 @@ struct a733_gpu_graphics_memory {
     struct pvr_free_list_config lists[2]; /* local, global */
     struct pvr_free_list_page local_pages[PVR_RENDER_LOCAL_PAGES];
     struct pvr_free_list_page global_pages[PVR_FREE_LIST_MAX_PAGES];
-    uint32_t acquired[2], cursor, fixed_clear;
+    uint32_t acquired[2], cursor, fixed_clear, draw;
     enum a733_gpu_graphics_phase phase;
 };
 /* Native identity-image constructor, before scheduler/backend binding. Require
@@ -63,6 +63,11 @@ int a733_gpu_graphics_memory_prepare(struct a733_gpu_graphics_memory *,
 int a733_gpu_graphics_memory_prepare_clear(struct a733_gpu_graphics_memory *,
     struct a733_gpu_reserved *, struct a733_gpu_compute_reserved *,
     struct pvr_gpu_service *, uint64_t owner, const struct a733_gpu_graphics_profile *);
+/* Same render ownership with one bounded copied triangle-list submission.
+ * Adds one GPU-read-only vertex page; existing clear construction is unchanged. */
+int a733_gpu_graphics_memory_prepare_draw(struct a733_gpu_graphics_memory *,
+    struct a733_gpu_reserved *,struct a733_gpu_compute_reserved *,
+    struct pvr_gpu_service *,uint64_t owner,const struct a733_gpu_graphics_profile *);
 /* Called before service preparation writes. Validates the combined native
  * parents, metadata/config spans, exact descriptors and compute ownership. */
 int a733_gpu_graphics_memory_validate(struct a733_gpu_graphics_memory *,

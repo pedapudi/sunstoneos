@@ -48,7 +48,7 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
         atomic_store_explicit(&app.usb_observed,1,memory_order_release);
     response_bytes=0;response_pending=0;}}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
-#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+#if defined(SUNSTONE_GPU_RUNTIME_INPUT) || defined(SUNSTONE_GPU_RUNTIME_DRAW)
 /* Version2 request: magic/version/op/expected-sequence/epoch-lo/epoch-hi/
  * first-word/input-bytes, then bounded input bytes for SUBMIT. A partial frame
  * owns the mailbox but never reaches the service. */
@@ -85,18 +85,30 @@ static void runtime_exchange(void)
     unsigned op=get32(runtime_header+8),expected=get32(runtime_header+12),first=get32(runtime_header+24);
     unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
     unsigned sequence=atomic_load_explicit(&app.runtime_sequence,memory_order_acquire);
-    unsigned total=gpu_application_package()->output_bytes/4,count=0,posted=0;
+    unsigned count=0,posted=0;
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+    unsigned total=4096,version=3,page=64;
+#else
+    unsigned total=gpu_application_package()->output_bytes/4,version=2,page=32;
+#endif
     uint64_t epoch=(uint64_t)get32(runtime_header+16)|(uint64_t)get32(runtime_header+20)<<32;
-    int valid=get32(runtime_header)==0x49525047&&get32(runtime_header+4)==2&&epoch==app.session.epoch;
+    int valid=get32(runtime_header)==0x49525047&&get32(runtime_header+4)==version&&epoch==app.session.epoch;
     if(!gpu_application_live(NULL))result=2;
     else if(!valid)result=4;
-    else if(op==1&&!runtime_length&&first<total&&!(first&31)) {
+    else if(op==1&&!runtime_length&&first<total&&!(first&(page-1))) {
         if(expected!=sequence&&!(result==0&&expected==sequence+1))result=4;
-        else if(result==1)count=total-first<32?total-first:32;
-    } else if(op==2&&runtime_reserved&&runtime_length==gpu_application_package()->input_bytes&&
+        else if(result==1)count=total-first<page?total-first:page;
+    }
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+    else if(op==2&&runtime_reserved&&runtime_length<=PVR_RENDER_DRAW_BYTES&&first==0&&expected==0&&sequence==0&&result!=2&&
+        pvr_render_draw_vertices_valid(app.runtime_input,runtime_length,runtime_length/32)&&
+        !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
+#else
+    else if(op==2&&runtime_reserved&&runtime_length==gpu_application_package()->input_bytes&&
               get32(app.runtime_input)==gpu_application_package()->count&&first==0&&
               result==1&&sequence&&sequence!=UINT32_MAX&&expected==sequence&&
               !atomic_load_explicit(&app.runtime_closed,memory_order_acquire)) {
+        #endif
         app.runtime_operation=2;app.runtime_expected=expected;app.runtime_bytes=runtime_length;
         atomic_store_explicit(&app.result,0,memory_order_release);
         atomic_store_explicit(&app.runtime_state,1,memory_order_release);
@@ -110,7 +122,7 @@ static void runtime_exchange(void)
     } else result=4;
     if(runtime_reserved)atomic_store_explicit(&app.runtime_state,0,memory_order_release);
     if(!posted&&atomic_load_explicit(&app.runtime_closed,memory_order_acquire)&&result!=4&&result!=2){result=3;count=0;}
-    put32(response,0x50555047);put32(response+4,2);put32(response+8,result);put32(response+12,first/32);
+    put32(response,0x50555047);put32(response+4,version);put32(response+8,result);put32(response+12,first/page);
     put32(response+16,count);put32(response+20,total);put32(response+24,sequence);
     put32(response+28,(uint32_t)app.session.epoch);put32(response+32,(uint32_t)(app.session.epoch>>32));
     put32(response+36,count?total:0);
@@ -123,7 +135,7 @@ static void exchange(void)
 {
     if(response_bytes){unsigned n=tud_vendor_write(response+response_sent,response_bytes-response_sent);
         response_sent+=n;tud_vendor_flush();return;}
-#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+#if defined(SUNSTONE_GPU_RUNTIME_INPUT) || defined(SUNSTONE_GPU_RUNTIME_DRAW)
     if(!tud_vendor_available()&&!runtime_header_bytes)return;
     runtime_exchange();return;
 #else

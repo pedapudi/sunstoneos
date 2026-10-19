@@ -44,7 +44,7 @@ if(SUNSTONE_GPU_FIRMWARE)
     drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
     drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c
-    drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_context.c
+    drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c drivers/gpu/pvr_render_context.c
     drivers/gpu/pvr_render_job.c drivers/gpu/pvr_render_service.c
     platform/a733/gpu_graphics_memory.c platform/a733/gpu_compute_reserved.c
     platform/a733/memory_reservations.c platform/a733/memory_uncached.c

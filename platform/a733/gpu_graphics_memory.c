@@ -1,5 +1,6 @@
 #include "a733_gpu_graphics_memory.h"
 #include "aarch64_device_memory.h"
+#include "pvr_render_draw.h"
 #include <string.h>
 
 static struct a733_gpu_graphics_memory *graphics_owner;
@@ -58,14 +59,14 @@ static int parents(const struct a733_gpu_graphics_memory *s)
 }
 /* Physical payload order is PDS, USC, general, static fence. VM spans must
  * instead be sorted by device address: fence, HWRT/tables, general, PDS, USC. */
-static unsigned render_map_index(unsigned i)
-{ const unsigned indices[4]={A733_GPU_GRAPHICS_MAPS+2,A733_GPU_GRAPHICS_MAPS+3,A733_GPU_GRAPHICS_MAPS+1,0};return indices[i]; }
+static unsigned render_map_index(const struct a733_gpu_graphics_memory *s,unsigned i)
+{ const unsigned indices[4]={A733_GPU_GRAPHICS_MAPS+2+s->draw,A733_GPU_GRAPHICS_MAPS+3+s->draw,A733_GPU_GRAPHICS_MAPS+1,0};return indices[i]; }
 static unsigned map_count(const struct a733_gpu_graphics_memory *s)
-{ return A733_GPU_GRAPHICS_MAPS + (s->fixed_clear ? 4u : 0u); }
+{ return A733_GPU_GRAPHICS_MAPS + (s->fixed_clear ? 4u : 0u) + s->draw; }
 uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *s)
 { return s->shared_extent.cpu + 8192 + rounded(s->profile.render.global_maximum_pages * 4u); }
 static size_t extra_payload(const struct a733_gpu_graphics_memory *s)
-{ return s->fixed_clear ? PVR_RENDER_PROGRAM_BYTES + 4096u : 0; }
+{ return s->fixed_clear ? PVR_RENDER_PROGRAM_BYTES + 4096u + s->draw*4096u : 0; }
 static unsigned list_index(const struct a733_gpu_graphics_memory *s, uint64_t token)
 { return token == s->lists[0].resource.token ? 0 : token == s->lists[1].resource.token ? 1 : 2; }
 static int allocate(void *ctx, uint64_t epoch, uint64_t owner, uint64_t token,
@@ -198,7 +199,8 @@ int a733_gpu_graphics_memory_validate(struct a733_gpu_graphics_memory *s,
         if (extents[i].cpu < boundary) return 0;
     }
     struct pvr_render_requirements r;
-    if (!pvr_render_target_require(&s->profile.render, &r) || memcmp(&r, &s->render, sizeof(r)) ||
+    if (s->fixed_clear>1 || s->draw>1 || (s->draw && !s->fixed_clear) ||
+        !pvr_render_target_require(&s->profile.render, &r) || memcmp(&r, &s->render, sizeof(r)) ||
         s->backing_extent.bytes != ((size_t)s->profile.render.global_maximum_pages + 28) * 4096 ||
         s->payload_extent.bytes != r.payload_bytes + extra_payload(s) ||
         s->shared_extent.bytes != 8192 + rounded(s->profile.render.global_maximum_pages * 4u) +
@@ -267,7 +269,7 @@ static int construction_failed(struct a733_gpu_graphics_memory *s)
 }
 static int prepare(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *compute,
-    struct pvr_gpu_service *service, uint64_t owner, const struct a733_gpu_graphics_profile *profile, unsigned fixed_clear)
+    struct pvr_gpu_service *service, uint64_t owner, const struct a733_gpu_graphics_profile *profile, unsigned fixed_clear,unsigned draw)
 {
     if (graphics_owner || !s || !g || !compute || !service || !profile || !owner ||
         (uintptr_t)s % _Alignof(struct a733_gpu_graphics_memory) ||
@@ -295,7 +297,7 @@ static int prepare(struct a733_gpu_graphics_memory *s,
         compute->binding.service != service || compute->compute.phase != PVR_COMPUTE_SERVICE_BOUND ||
         !a733_gpu_compute_reserved_admitted(compute, g, service) ||
         g->memory.phase != A733_GPU_MEMORY_OFFLINE || !g->prepared || !g->admitted ||
-        fixed_clear > 1 ||
+        fixed_clear > 1 || draw>1 || (draw && !fixed_clear) ||
         (fixed_clear && (profile->render.width != 64 || profile->render.height != 64)) ||
         !profile->operation_timeout_us || profile->operation_timeout_us > INT64_MAX ||
         profile->initial_pages < 28 || profile->initial_pages > profile->render.global_maximum_pages ||
@@ -312,7 +314,7 @@ static int prepare(struct a733_gpu_graphics_memory *s,
     if (!device_memory_acquire(g->wb_pool, owner,
         ((size_t)profile->render.global_maximum_pages + 28) * 4096, &first, &extent)) return 0;
     graphics_owner = s; s->self = (uintptr_t)s; s->firmware = g; s->compute = compute; s->service = service;
-    s->owner = owner; s->profile = *profile; s->fixed_clear = fixed_clear; s->render = r; s->backing_lease = first; s->backing_extent = extent;
+    s->owner = owner; s->profile = *profile; s->fixed_clear = fixed_clear; s->draw=draw;s->render = r; s->backing_lease = first; s->backing_extent = extent;
     s->phase = A733_GPU_GRAPHICS_ACQUIRED;
     device_memory_lookup(g->wb_pool, first)->state = DEVICE_MEMORY_DEVICE;
     if (!acquire(g->wb_pool, owner, r.payload_bytes + extra_payload(s), &s->payload_lease, &s->payload_extent, 1) ||
@@ -341,10 +343,12 @@ static int prepare(struct a733_gpu_graphics_memory *s,
         const uint32_t sizes[4]={4096,4096,PVR_RENDER_GENERAL_BYTES,4096};
         size_t cursor=r.payload_bytes;
         for (unsigned i=0;i<4;i++) {
-            s->maps[render_map_index(i)]=(struct pvr_gpu_mapping){addresses[i],
+            s->maps[render_map_index(s,i)]=(struct pvr_gpu_mapping){addresses[i],
                 s->payload_extent.physical+cursor,sizes[i],12,i<2?PVR_GPU_VM_READ_ONLY:PVR_GPU_VM_SLC_BYPASS};
             cursor+=sizes[i];
         }
+        if(draw)s->maps[A733_GPU_GRAPHICS_MAPS+2]=(struct pvr_gpu_mapping){PVR_RENDER_DRAW_ADDRESS,
+            s->payload_extent.physical+cursor,4096,12,PVR_GPU_VM_READ_ONLY};
     }
     if (!pvr_gpu_vm_require(s->maps, map_count(s), &s->requirements) ||
         s->requirements.table_pages > A733_GPU_GRAPHICS_TABLE_PAGES ||
@@ -371,6 +375,8 @@ static int prepare(struct a733_gpu_graphics_memory *s,
         s->submission.owner=s;
         if (!pvr_render_programs_build((void *)(s->payload_extent.cpu+r.payload_bytes),PVR_RENDER_PROGRAM_BYTES,
             &s->submission.programs)) return construction_failed(s);
+        if(draw && !pvr_render_draw_programs_build((void *)(s->payload_extent.cpu+r.payload_bytes),PVR_RENDER_PROGRAM_BYTES))
+            return construction_failed(s);
         struct pvr_render_context_config cfg={.bvnc=PVR_FW_A733_BVNC,.callstack=PVR_RENDER_CALLSTACK,
             .priority=1,.context_id=2,.owner_id=1};
         memcpy(cfg.switch_registers,s->submission.programs.switch_registers,sizeof(cfg.switch_registers));
@@ -382,6 +388,10 @@ static int prepare(struct a733_gpu_graphics_memory *s,
         if (!pvr_render_context_build(&cfg,buffers) ||
             !pvr_render_job_build(&s->submission.programs,s->target.data_firmware[0],
                 A733_GPU_RENDER_FW+1408,A733_GPU_RENDER_FW+1412,&s->submission.image)) return construction_failed(s);
+        if(draw) {
+            uint64_t scissor=PVR_RENDER_DRAW_SCISSOR;
+            memcpy(s->submission.image.fragment+112,&scissor,8);
+        }
         s->submission.phase=PVR_RENDER_SERVICE_BOUND;
         g->config.render=&s->submission;
     }
@@ -434,11 +444,11 @@ int a733_gpu_graphics_memory_poll(struct a733_gpu_graphics_memory *s)
 
 int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *s)
 {
-    if (!live(s) || s->fixed_clear != 1 || s->profile.render.width != 64 || s->profile.render.height != 64 ||
+    if (!live(s) || s->fixed_clear != 1 || s->draw>1 || s->profile.render.width != 64 || s->profile.render.height != 64 ||
         s->submission.owner != s || s->submission.phase == PVR_RENDER_SERVICE_FAILED ||
         s->firmware->config.render != &s->submission || !parents(s) ||
         !a733_gpu_compute_reserved_admitted(s->compute,s->firmware,s->service) ||
-        s->payload_extent.bytes != s->render.payload_bytes+PVR_RENDER_PROGRAM_BYTES+4096u ||
+        s->payload_extent.bytes != s->render.payload_bytes+extra_payload(s) ||
         s->shared_extent.bytes != 8192+rounded(s->profile.render.global_maximum_pages*4u)+12288 ||
         s->render_object.pages != s->render_pages || s->render_object.page_count != 3 ||
         s->render_object.address != A733_GPU_RENDER_FW || s->render_object.cache_policy != PVR_MIPS_UNCACHED) return 0;
@@ -450,8 +460,12 @@ int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *s)
     size_t cursor=s->render.payload_bytes;
     for(unsigned i=0;i<4;i++) {
         struct pvr_gpu_mapping expected={addresses[i],s->payload_extent.physical+cursor,sizes[i],12,i<2?PVR_GPU_VM_READ_ONLY:PVR_GPU_VM_SLC_BYPASS};
-        if(memcmp(s->maps+render_map_index(i),&expected,sizeof(expected))) return 0;
+        if(memcmp(s->maps+render_map_index(s,i),&expected,sizeof(expected))) return 0;
         cursor+=sizes[i];
+    }
+    if(s->draw) {
+        struct pvr_gpu_mapping expected={PVR_RENDER_DRAW_ADDRESS,s->payload_extent.physical+cursor,4096,12,PVR_GPU_VM_READ_ONLY};
+        if(memcmp(s->maps+A733_GPU_GRAPHICS_MAPS+2,&expected,sizeof(expected)))return 0;
     }
     return 1;
 }
@@ -459,8 +473,12 @@ int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *s)
 int a733_gpu_graphics_memory_prepare(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *c,
     struct pvr_gpu_service *v, uint64_t owner, const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,0); }
+{ return prepare(s,g,c,v,owner,p,0,0); }
 int a733_gpu_graphics_memory_prepare_clear(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *c,
     struct pvr_gpu_service *v, uint64_t owner, const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,1); }
+{ return prepare(s,g,c,v,owner,p,1,0); }
+int a733_gpu_graphics_memory_prepare_draw(struct a733_gpu_graphics_memory *s,
+    struct a733_gpu_reserved *g,struct a733_gpu_compute_reserved *c,
+    struct pvr_gpu_service *v,uint64_t owner,const struct a733_gpu_graphics_profile *p)
+{ return prepare(s,g,c,v,owner,p,1,1); }

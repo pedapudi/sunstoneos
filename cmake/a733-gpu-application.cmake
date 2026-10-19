@@ -6,6 +6,10 @@ if(NOT TARGET sunstone-a733-storage-maintenance)
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
 option(SUNSTONE_GPU_COMPUTE_APPLICATION "Run repeated native numerical GPU jobs" OFF)
+option(SUNSTONE_GPU_RUNTIME_DRAW "Accept one copied native triangle-list draw" OFF)
+if(SUNSTONE_GPU_RUNTIME_DRAW AND SUNSTONE_GPU_COMPUTE_APPLICATION)
+  message(FATAL_ERROR "Runtime draw and compute are separate application modes")
+endif()
 option(SUNSTONE_GPU_SUPERVISED "Use reviewed one-attempt supervised RAM-only GPU admission" OFF)
 set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
 if(NOT SUNSTONE_GPU_FIRMWARE)
@@ -54,7 +58,7 @@ set(gpu_app_extra
   drivers/gpu/gicv3_spi.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
   drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
   drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c drivers/gpu/pvr_render_target.c
-  drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
+  drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
   drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c
   drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c drivers/gpu/pvr_gpu_control.c
   drivers/gpu/pvr_gpu_stop.c drivers/gpu/pvr_free_list.c drivers/gpu/pvr_gpu_events.c
@@ -73,6 +77,10 @@ set(gpu_app_workload "fixed-clear")
 if(SUNSTONE_GPU_COMPUTE_APPLICATION)
   set(gpu_app_workload "fixed-arithmetic-repeat")
   target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_GPU_COMPUTE_APPLICATION=1)
+endif()
+if(SUNSTONE_GPU_RUNTIME_DRAW)
+  target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_GPU_RUNTIME_DRAW=1)
+  set(gpu_app_workload "copied-triangle-draw")
 endif()
 target_include_directories(sunstone-a733-gpu-render BEFORE PRIVATE "${gpu_app_root}/apps/gpu-render")
 target_compile_definitions(sunstone-a733-gpu-render PRIVATE SUNSTONE_SECURE_MONITOR=1
@@ -130,8 +138,8 @@ endif()
 
 option(SUNSTONE_GPU_SINGLE_CORE_APPLICATION "Build supervised boot-CPU-only GPU compute application" OFF)
 if(SUNSTONE_GPU_SINGLE_CORE_APPLICATION)
-  if(NOT SUNSTONE_GPU_SUPERVISED OR NOT SUNSTONE_GPU_COMPUTE_APPLICATION)
-    message(FATAL_ERROR "Single-core GPU mode requires supervised repeated compute")
+  if(NOT SUNSTONE_GPU_SUPERVISED OR (NOT SUNSTONE_GPU_COMPUTE_APPLICATION AND NOT SUNSTONE_GPU_RUNTIME_DRAW))
+    message(FATAL_ERROR "Single-core GPU mode requires supervised compute or copied draw")
   endif()
   include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-gpu-single-core.cmake")
 endif()
