@@ -540,8 +540,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Simultaneous capture/playback now uses separate DMA channels and period
   catalogues with shared clock/pin lifetime. Both directions must complete and
   drain before success; uncertainty retains both. Composed stream, native
-  client/pool/USB and host checks pass under `i2s-duplex-20261018/`. Cyclic
-  operation, physical duplex audio, wire-level drain, Bluetooth PCM and physical
+  client/pool/USB and host checks pass under `i2s-duplex-20261018/`.
+  Repeated capture/playback/duplex now reuse the existing period service with
+  four copied capture slots. Full USB delivery and exact acknowledgment precede
+  slot reuse; cancellation preserves backlog through terminal drain. Focused
+  ownership, USB and host checks pass under `i2s-repeated-20261018/`; all 163
+  compiled inputs match integration. Hardware-linked cyclic DMA,
+  physical continuous/duplex audio, wire-level drain, Bluetooth PCM and physical
   continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
@@ -601,6 +606,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [fixed-compute constructor](gpu-compute-reserved.md) now allocates payload,
   context and planner-sized VM tables, runs actual builders and binds the service.
   Native instruction checks pass for construction and retained capacity failure.
+  Native reservation admission currently rejects a second compute job after
+  completion; earlier repeated-job checks substituted that callback. The
+  correction is in progress. Replace the frozen two-job candidate before
+  physical use; its publication and host checks retain their original scope.
   Physical computation, complete application binding, exclusion/drain and wider
   GPU workloads remain open.
   The [power controller](gpu-power.md) has host/reference evidence for GPU

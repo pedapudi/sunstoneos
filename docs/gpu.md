@@ -6,6 +6,13 @@ reservations, free-list management, and a fixed numerical compute submission.
 The GPU has not booted firmware or executed a graphics or compute workload in
 SunstoneOS. Physical qualification remains outstanding.
 
+Native reservation admission currently rejects the second compute submission
+because it still requires NEW client/job state. Component repeated-job checks
+used a substituted admission callback. A correction using actual completed-job
+ownership is in progress; the frozen two-job candidate must be replaced before
+hardware testing. Its publication and host-capture evidence remain valid within
+their recorded scope.
+
 | Implemented component | Evidence and remaining boundary |
 | --- | --- |
 | [Firmware/MIPS preparation](gpu-mips.md), [initialization records](gpu-fw-state.md), and [queues](gpu-queues.md) | Source comparisons and host checks cover actual buffer construction and firmware transport; firmware execution is unqualified |

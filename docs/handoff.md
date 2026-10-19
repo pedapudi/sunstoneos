@@ -82,6 +82,15 @@ Native client/pool/USB checks, composed stream checks and host capture pass;
 focused source review is complete. Evidence: `i2s-duplex-20261018/snapshot/` and
 `integration.json`. Physical audio and wire-level drain remain unqualified.
 
+Repeated I2S capture, playback and duplex are integrated. Four copied capture
+slots remain owned until complete USB delivery and matching acknowledgment.
+Cancellation preserves the copied backlog through terminal drain. Focused
+native ownership, USB completion and host checks pass; source review is closed.
+Integration matches all 163 compiled inputs and the accepted image. Evidence:
+`i2s-repeated-20261018/snapshot/manifest.json`, `review.json` and
+`root-integration.json`. Accepted checks were reused. Hardware-linked cyclic DMA,
+physical continuity, scheduling gaps and wire-level drain remain outstanding.
+
 Native read-only eMMC access is integrated through the existing copied-client
 service. Both SDC2 and SDC3 selections pass instruction checks for identification,
 EXT_CSD and copied reads. Admission/capture checks and source review pass under
@@ -152,6 +161,13 @@ Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return rema
 unqualified for both accelerators. Existing device checks were reused.
 Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
+Subsequent source review found that native reservation admission requires NEW
+client/job state on every COMPUTE request. The second request therefore fails
+after the first completes. Earlier repeated-job checks substituted admission
+and do not cover this native callback. The GPU worker is correcting that
+condition and checking actual epoch, serial and timeline ownership. The frozen
+two-job image is not eligible for a hardware attempt until replaced; its accepted
+publication and host checks retain their narrower scope.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document this requirement. Root retains CPU and architectural
 return review. For the preceding adapter, all 172 NPU
@@ -226,9 +242,7 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Complete repeated I2S streaming in `i2s-cyclic`, including copied-period
-   ownership, USB completion before acknowledgment, cancellation and retained
-   backlog. Develop native USB host interrupt transfers and copied HID reports
+1. Develop native USB host interrupt transfers and copied HID reports
    in `usb-host-interrupt`, beginning with the pinned xHCI/TinyUSB requirements.
    Coordinate shared-provider edits before implementation. CPU/startup changes
    remain root-owned. UART interrupt service and H.264, JPEG and crypto runtime
@@ -237,6 +251,11 @@ historical evidence; they do not authorize a new session.
    `gpu-program-submission`, using pinned Mesa metadata, copied input/output and
    the existing native service. Preserve the frozen fixed-workload image.
    Broader workgroup geometry, graphics and concurrency remain required.
+   Correct native GPU admission for repeated COMPUTE before replacing the frozen
+   two-job candidate. Extend the actual read-only microSD application with
+   negotiated four-bit/default-speed and high-speed profiles in `sd-bus-modes`.
+   Preserve the legacy profile, actual clock/pin ownership and both cards.
+   Repeated I2S streaming is integrated; its hardware cyclic-DMA mode remains open.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a
