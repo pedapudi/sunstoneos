@@ -238,7 +238,8 @@ static int event_step(struct a733_xhci *x)
     unsigned type=(control>>10)&63;
     /* Release the consumed event before callbacks. No callback may reenter. */
     if(++x->event_index==A733_XHCI_EVENT_TRBS){x->event_index=0;x->event_cycle^=1;}
-    if(!wr64(x,x->runtime+0x38,x->event_pa+16*x->event_index+8))return -1;
+    if(x->irq_mode)++x->irq_events;
+    else if(!wr64(x,x->runtime+0x38,x->event_pa+16*x->event_index+8))return -1;
     if(type==32)return transfer_event(x,&event)?1:-1;
     if(type==33)return command_event(x,&event)?1:-1;
     if(type==34)return (event.parameter_lo>>24)==x->usb2_port&&(event.status>>24)==1?1:-1;
@@ -365,7 +366,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
     case P_ACTIVE:
         if(!rd(x,x->operational+4,&v)||(v&(1|BIT(2)|BIT(11)|BIT(12)))||!port(x))goto failed;
         if(x->failed)goto failed;
-        {int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
+        if(!x->irq_mode||x->irq_service){int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
         if(x->command_kind)break;
         if(x->port_ready==1){if(!command(x,C_ENABLE,x->slot_type<<16))goto failed;x->port_ready=4;break;}
         if(x->port_ready==2){address_context(x);if(!command(x,C_ADDRESS,(x->slot<<24)|BIT(9)))goto failed;x->port_ready=4;break;}
@@ -476,3 +477,58 @@ int a733_xhci_abort(struct a733_xhci *x,unsigned address,unsigned ep)
 }
 void a733_xhci_lost(struct a733_xhci *x)
 {if(owner(x))fault(x);}
+/* Intel xHCI1.2 4.17,5.4.2,5.5.2; pinned Linux xhci_irq uses the same
+ * EINT/IP ordering. GIC masking/EOI belong to the application dispatcher. */
+int a733_xhci_interrupt_begin(struct a733_xhci *x)
+{
+    uint32_t status,iman;
+    if(!owner(x)||x->failed||!x->irq_mode||x->irq_service)return -1;
+    if(!rd(x,x->operational+4,&status)||(status&(1|BIT(2)|BIT(11)|BIT(12)))||
+       !rd(x,x->runtime+0x20,&iman)||!(iman&2)||
+       !wr(x,x->operational+4,BIT(3))||!wr(x,x->runtime+0x20,iman|1)||
+       !rd(x,x->runtime+0x20,&iman)||!(iman&2))goto failed;
+    x->irq_service=1;x->irq_events=0;x->irq_asserted=!!(status&BIT(3));return 1;
+failed:fault(x);return -1;
+}
+int a733_xhci_interrupt_start(struct a733_xhci *x)
+{
+    uint32_t command,iman;
+    if(!owner(x)||x->failed)return -1;
+    if(x->irq_mode)return 1;
+    if(x->phase!=P_ACTIVE)return 0;
+    if(!rd(x,x->operational,&command)||command!=1||
+       !rd(x,x->runtime+0x20,&iman)||(iman&2)||
+       !wr(x,x->operational+4,BIT(3))||!wr(x,x->runtime+0x20,iman|3)||
+       !rd(x,x->runtime+0x20,&iman)||!(iman&2)||
+       !wr(x,x->operational,command|BIT(2))||
+       !rd(x,x->operational,&command)||command!=5)goto failed;
+    /* Own the startup backlog even when no CPU interrupt was delivered. */
+    x->irq_mode=1;x->irq_service=1;x->irq_events=0;x->irq_asserted=!!(iman&1);return 1;
+failed:fault(x);return -1;
+}
+int a733_xhci_interrupt_finish(struct a733_xhci *x)
+{
+    uint32_t iman,status;
+    if(!owner(x)||x->failed||!x->irq_mode||!x->irq_service)return -1;
+    if(!rd(x,x->operational+4,&status)||(status&(1|BIT(2)|BIT(11)|BIT(12)))||!barrier(x))goto failed;
+    int ready=(x->events[x->event_index].control&1)==x->event_cycle;
+    if(ready){
+        /* Publish progress before the fixed32-entry ring can fill. The final
+         * advancement is combined with EHB release, never duplicated. */
+        if(x->irq_events>=A733_XHCI_EVENT_TRBS/2){
+            if(!wr64(x,x->runtime+0x38,x->event_pa+16*x->event_index))goto failed;
+            x->irq_events=0;
+        }
+        return 0;
+    }
+    if(x->irq_events){
+        if(!wr64(x,x->runtime+0x38,(x->event_pa+16*x->event_index)|8))goto failed;
+        x->irq_events=0;
+    }else if(x->irq_asserted)goto failed; /* IP without an owned event is uncertain. */
+    if(!barrier(x)||!rd(x,x->runtime+0x20,&iman)||!(iman&2))goto failed;
+    ready=(x->events[x->event_index].control&1)==x->event_cycle;
+    x->irq_service=0;x->irq_asserted=0;
+    if(ready||(iman&1))return a733_xhci_interrupt_begin(x)==1?0:-1;
+    return 1;
+failed:fault(x);return -1;
+}

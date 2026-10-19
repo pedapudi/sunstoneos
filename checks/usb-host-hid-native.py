@@ -50,6 +50,7 @@ def run(image_path,reports_path,out,resume_batch=None):
     report_bytes=reports_path.read_bytes();stride=image.sizes['a733_usb2_hid_report'];assert stride==96 and len(report_bytes)==4*stride
     calls=[];completed=[];requests=[];pending=[];done=[];response_available=[False]
     names=('board_live','a733_usb2_native_poll','a733_usb2_device_kind','a733_usb2_hid_receive','a733_usb2_hid_result','vTaskDelay','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read')
+    if 'board_host_irq_before' in image.symbols:names+=('board_host_irq_before','board_host_irq_after','board_host_irq_wait')
     hooks={image.address(n):n for n in names}
     def ret(value):cpu.reg_write(UC_ARM64_REG_X0,value);cpu.reg_write(UC_ARM64_REG_PC,cpu.reg_read(UC_ARM64_REG_LR))
     def hook(machine,a,size,unused):
@@ -60,7 +61,7 @@ def run(image_path,reports_path,out,resume_batch=None):
         if name=='a733_usb2_hid_receive':assert args[1]==10000000 and not pending;pending.append(True);requests.append(True);ret(1)
         elif name=='a733_usb2_hid_result':
             assert pending and len(completed)<4;at=len(completed)*stride;machine.mem_write(args[1],report_bytes[at:at+stride]);pending.clear();completed.append(True);ret(1)
-        elif name=='vTaskDelay':
+        elif name in ('vTaskDelay','board_host_irq_wait'):
             assert cpu.mem_read(board+layout['result'],4)==struct.pack('<I',1) if len(completed)==4 else True
             if len(completed)==4 or resume_batch is not None:done.append(True);machine.emu_stop()
             else:ret(0)

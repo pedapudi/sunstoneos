@@ -2557,5 +2557,17 @@
     "url": "https://documentation-service.arm.com/static/601412d54ccc190e5e681269",
     "sha256": "f5461ced0b908141c87f655e602ff6340a90f14028ea009239c388ed69b78ac6",
     "archive": "cpu-audit/arm-gic-architecture-ihi0069g.pdf"
+  },
+  "board-usb-host-irq-xhci-ring-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/host/xhci-ring.c",
+    "archive": "usb-host-irq/xhci-ring.c",
+    "sha256": "a04d1fbb6e09a7f43ba5713aa8832727d9aa5fd1f20e70d83af95462cd4b9170"
+  },
+  "board-usb-host-irq-xhci-h": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/host/xhci.h",
+    "archive": "usb-host-irq/xhci.h",
+    "sha256": "88f1bd7ff2374d37ffcf924c826774c34bbd60d3a604dd70d6d9c1f6b501af45"
   }
 }

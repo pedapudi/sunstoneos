@@ -1,3 +1,6 @@
+if(SUNSTONE_BOARD_USB2_IRQ)
+  message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
+endif()
 # Supervised fixed RTC adoption, initialization and owner-task operations.
 set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
 if(NOT TARGET sunstone-a733-board)

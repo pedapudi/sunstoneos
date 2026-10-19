@@ -61,6 +61,7 @@ struct a733_xhci {
     unsigned pending_address,address,port_reset,port_ready,connected,control_stage,control_length,control_in;
     unsigned configure_needed,configure_pending,evaluate_pending,ep0_packet,address_status,stop_endpoint;
     unsigned slot_type,command_mask,hardware_address,publication,notifying,port_power_control;
+    unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;
     uint8_t setup[8];
     struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
@@ -83,6 +84,16 @@ int a733_xhci_init(struct a733_xhci *,const struct a733_xhci_ops *,void *,
  * not recover a stalled peripheral/interconnect; qualified recovery is required.
  */
 enum a733_xhci_result a733_xhci_poll(struct a733_xhci *);
+/* Optional owner-task interrupt profile. The platform keeps its level SPI
+ * masked and deactivated throughout begin/drain/finish. Start returns0 until
+ * ACTIVE, then1; all three return-1 and retain on failure. Begin acknowledges
+ * EINT before IP. Poll still advances timers/submission without an interrupt,
+ * but consumes events only inside a service. Finish returns0 for more drain,
+ * 1 after empty/EHB release and race recheck, permitting platform rearm.
+ * No ISR calls these functions. No drain or DMA release is implied. */
+int a733_xhci_interrupt_start(struct a733_xhci *);
+int a733_xhci_interrupt_begin(struct a733_xhci *);
+int a733_xhci_interrupt_finish(struct a733_xhci *);
 int a733_xhci_reset_port(struct a733_xhci *,uint64_t deadline);
 int a733_xhci_port_connected(const struct a733_xhci *);
 int a733_xhci_open(struct a733_xhci *,unsigned address,unsigned endpoint,

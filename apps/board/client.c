@@ -1,4 +1,7 @@
 #include "application.h"
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+#include "host_irq.h"
+#endif
 #include <string.h>
 static void put32(uint8_t *p,uint32_t n)
 {for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
@@ -9,8 +12,15 @@ void board_host_task(void *unused)
     (void)unused;unsigned issued=0,reports=0;
     for(;;){
         if(!board_live(NULL))break;
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+        int irq_ready=board_host_irq_before();if(irq_ready<0)break;
+        if(!irq_ready){board_host_irq_wait();continue;}
+#endif
         enum a733_usb2_result r=a733_usb2_native_poll(&board.host);
         if(r==A733_USB2_RETAINED||r==A733_USB2_INVALID)break;
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+        if(board_host_irq_after()<0)break;
+#endif
         enum a733_usb2_device_kind kind=a733_usb2_device_kind(&board.host);
         if(r==A733_USB2_READY&&!issued){
             if(kind==A733_USB2_DEVICE_MSC){
@@ -44,8 +54,15 @@ void board_host_task(void *unused)
         }
         /* The published sector or four-report HID envelope is immutable.
          * Continue observing attachment, controller faults and lifetime. */
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+        board_host_irq_wait();
+#else
         vTaskDelay(1);
+#endif
     }
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+    board_host_irq_stop();
+#endif
     a733_usb2_native_lost(&board.host);
     a733_typec_revoke(&board.typec.provider);
     atomic_store_explicit(&board.result,2,memory_order_release);

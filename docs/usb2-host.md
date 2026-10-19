@@ -53,8 +53,10 @@ ownership. The provider enables only the source-defined USB2 fields and applies
 the board PHY tuning value. It observes DWC_usb31 identity after enabling the
 bus, checks the admitted revision, and configures UTMI8, turnaround 9, host mode
 and the published 24 MHz reference adjustment. The native adapter limits writes
-to these addresses and fields. INTID 187 must remain disabled, inactive and
-without a pending handler; this profile polls completion events.
+to these addresses and fields. Admission requires INTID 187 disabled, inactive
+and clear. The default profile keeps it masked and polls completion events.
+The optional supervised board interrupt profile below configures and enables
+only this owned source.
 
 ## Type-C power remains independently supervised
 
@@ -108,8 +110,9 @@ reattach or retry API. A failed command is not reported as a completed read.
 The TinyUSB stack uses its single-context queue implementation inside the actual
 FreeRTOS owner task. No interrupt or second task may call the stack. Each host
 poll advances at most one xHCI event/state and two TinyUSB queue iterations.
-All control calls are asynchronous. The native image must schedule this task
-within operation deadlines and keep the independent Type-C tasks runnable.
+All control calls are asynchronous. The optional interrupt handler masks its
+source and notifies this same task; it never calls TinyUSB. The native image
+must schedule this task within operation deadlines and keep the independent Type-C tasks runnable.
 
 ## Interrupt input uses the real HID class and native application
 
@@ -145,8 +148,9 @@ selected packet limit as Max ESIT Payload, and the source-defined interval:
 
 These encodings follow Intel xHCI 1.2 section 6.2.3.6 and Table 6-12, including
 its required downward rounding for full/low-speed interrupt endpoints. The xHCI
-controller schedules periodic bus transactions. CPU completion handling still
-polls the event ring; this work does not qualify INTID 187 interrupt delivery.
+controller schedules periodic bus transactions. CPU completion handling
+uses the optional CPU interrupt completion profile below or the existing
+polling profile. Physical INTID 187 delivery remains unqualified.
 
 `a733_usb2_hid_receive` queues one report under the owner's absolute deadline.
 An idle HID endpoint may NAK until that deadline without inheriting the shorter
@@ -173,6 +177,62 @@ controller faults and lifetime without changing the published bytes. The board
 wire session remains unchanged; internal native layouts include new typed
 periodic/HID metadata and require recompiling their embedding consumers.
 Earlier frozen images remain tied to their original compiled layouts.
+
+## CPU interrupts wake the existing host owner
+
+The supervised board build can select `SUNSTONE_BOARD_USB2_IRQ=ON`.
+Its USB owner task is pinned to CPU0. The pinned A733 device tree routes
+xHCI2 at 0x06a00000 through SPI 155, level high: architectural INTID 187.
+Private EL3 boot code checks the authenticated workload and inherited interrupt
+state, then installs Group1NS, level-high, CPU0 routing and the API-safe priority.
+Non-host workloads do not configure this source. The dispatcher retains
+acknowledge, EOI and deactivation; only CPU0 dispatches INTID 187 to the handler.
+
+The handler uses the existing kernel ISR critical section to mask the GIC source,
+publish a pending notification and wake the owner task. It accesses no xHCI
+registers, DMA storage, Type-C provider or TinyUSB state. The owner waits for GIC
+mask propagation and deactivation before claiming the matching notification.
+Claim and mask checks share one critical section, so a later interrupt remains
+pending for a subsequent checked service entry.
+
+The task enables xHCI global interrupt generation and primary-interrupter IE only
+after the controller reaches its active state. It owns any startup event backlog
+before first GIC rearm. Each service clears USBSTS.EINT before IMAN.IP, with
+readback, following xHCI 1.2 sections 4.17, 5.4.2 and 5.5.2 and the pinned Linux
+`xhci_irq` ordering. All event TRBs retain their existing cycle, pointer, slot,
+endpoint, residual and generation checks. Unknown events, including event-ring
+full or lost-event errors, close admission and retain backing.
+
+Service consumes one event per core poll. Intermediate ERDP updates free space
+after sixteen events when more remain; the final advancement clears EHB only
+after observing an empty ring. This avoids consecutive unchanged ERDP writes.
+A post-release ring and IP check captures an event arriving during rearm;
+continued service acknowledges a newly asserted EINT/IP before further drain.
+The task rearms the GIC only after the empty check, inside a critical section
+that excludes a newly published notification. RWP, deactivation and rearm waits
+have a fixed retry limit. Every failure stops the binding with its GIC source
+masked and retains the controller, contexts, rings and copied backing. Masking
+is not evidence of stopped or drained external transactions.
+
+The owner uses FreeRTOS task notifications with a one-tick safety wake. TinyUSB
+timers, queued commands and TD submission still progress without another IRQ;
+only event consumption is gated by the owned interrupt service. Batches yield
+after thirty-two owner iterations, and independent Type-C power tasks remain
+runnable. Published HID/storage payloads and their host transport are unchanged.
+Derived applications refuse the optional IRQ configure flag and continue using
+their separate polling builds.
+
+Focused sanitizer checks run actual xHCI/TinyUSB MSC and all three admitted HID
+speeds with modeled IRQ status, EINT/IP acknowledgement, EHB-release races,
+queued-event bursts, event-consumption exclusion and retained overflow/failure.
+The actual application binding check covers mask propagation, inactive waits,
+notification claims and rearm exclusion. Linked instruction checks cover its
+handler and GIC mask/rearm code, with kernel boundaries and hardware effects
+modeled. Copied host capture reuses the accepted report-object producer and runs
+the current native board consumer and serializer. Evidence is retained under
+`~/.cache/sunstoneos/evidence/usb-host-cpu-irq-20261019/`.
+Physical GIC delivery, interrupt latency, DMA ordering and electrical behavior
+remain unqualified. No hardware or desktop input access is part of these checks.
 
 ## HID capture has an explicit transport discriminator
 
@@ -210,7 +270,7 @@ not implemented; devices that stall GET_MAX_LUN are retained rather than using
 the usual fallback. These are implementation limits, not claims that the board
 cannot support those modes.
 
-Further required work includes wider xHCI endpoint modes, interrupt integration,
+Further required work includes wider xHCI endpoint modes, physical interrupt qualification,
 USB2 device/OTG roles, SuperSpeed COMB0 routing and orientation, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain and repeated
 attachment. DisplayPort lane ownership must be coordinated with display users.
@@ -294,5 +354,5 @@ admission, the exposed TYPEC24 data connector, an electrically suitable adapter,
 a supported directly attached HID device and a way to produce known reports.
 VBUS shutdown, device enumeration, report timing and observed report contents
 remain physically unqualified. Both microSD cards remain preserved. Broader
-speed/class support, hubs, isochronous transfers, SuperSpeed, CPU interrupt
-delivery and safe detach/reuse remain required work.
+speed/class support, hubs, isochronous transfers, SuperSpeed, physical CPU
+interrupt delivery and safe detach/reuse remain required work.

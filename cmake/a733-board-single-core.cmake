@@ -1,3 +1,6 @@
+if(SUNSTONE_BOARD_USB2_IRQ)
+  message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
+endif()
 # Complete supervised board application on the boot CPU.
 set(bdsc_root "${CMAKE_CURRENT_LIST_DIR}/..")
 get_filename_component(bdsc_root "${bdsc_root}" ABSOLUTE)

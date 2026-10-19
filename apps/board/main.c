@@ -1,4 +1,7 @@
 #include "application.h"
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+#include "host_irq.h"
+#endif
 #include "session.h"
 #include "cached.h"
 #include "a733_memory_uncached.h"
@@ -263,6 +266,9 @@ void a733_smp_diagnostic_start(void)
            )continue;
         board.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i==2||i==3?5:4,board.stacks[i],&board.tasks[i]);
         if(!board.handles[i])platform_panic("board tasks",5);
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+        if(i==4)vTaskCoreAffinitySet(board.handles[i],1);
+#endif
     }
     if(!a733_native_usb_bind(&providers.shared,board.handles[0],board.handles[1]))platform_panic("board bind",6);
     if(a733_board_host_workload(s->workload)){
@@ -284,6 +290,9 @@ void a733_smp_diagnostic_start(void)
     if(!pool||!a733_usb2_native_init(&board.host,hc,&providers.shared.locks,board.handles[4],pool,
        &providers.shared.clocks,&providers.shared.rails,&providers.shared.pmic,&providers.shared.gpu,
        &board.typec.provider,host_admit,&board))platform_panic("board usb2",8);
+#ifdef SUNSTONE_BOARD_USB2_IRQ
+    if(!board_host_irq_bind())platform_panic("board usb2 irq",8);
+#endif
     }
     if(a733_board_radio_workload(s->workload)){
         const struct board_radio_profile *profile=radio_profile();
