@@ -49,13 +49,21 @@ timer-priority restoration, saved-RAM restoration and failure retention.
 Evidence: `host-frozen/` and `host-root-review.json` in the same directory.
 Physical qualification remains outstanding; no launch is admitted.
 
-Native DSI scanout binding is integrated. It connects the media/PLL providers,
-retained memory allocations, actual IOMMU tables and ordered controller accesses.
-Focused composed checks, AArch64 compilation and source review pass under
-`display-native-20261018/`; accepted evidence was reused during integration.
-Panel selection, analog-profile qualification and initial isolation authority
-remain outstanding. STOP retains resources because display-engine drain is
-unsupported. No standalone image or physical scanout is qualified.
+The [standalone DSI application](display-scanout.md#standalone-retained-dsi-application)
+is implemented with one privileged scanout owner and the existing PMIC, clock,
+rail, pin, media/PLL, IOMMU and USB0 providers. It builds an immutable XRGB8888
+color-bar framebuffer, starts DE1/LCD1/DSI1 and returns a copied controller
+observation. Actual producer compositions pass at 720p and 1080p; retained-fault,
+linked private seal/serializer, generated launcher and host capture checks pass
+with electrical/panel facts and hardware effects modeled. Shared startup, GIC
+and secondary execution are excluded. Root verifies 462 native inputs,
+176 objects and 195 host inputs against revision `0dcf977`, with no source delta,
+under `dsi-scanout-application-20261019/root-integration.json`.
+No panel is selected or attached. Physical preparation requires image-bound panel,
+electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding evidence;
+model-only records are refused. Visible pixels and physical scanout remain
+unqualified. Faults retain all resources; successful STOP, drain, release,
+retry, live-frame updates and wider display modes remain required.
 
 The finite UART2 header application is integrated. Actual clock/pin ownership,
 FIFO exchange, bounded drain and release produce copied USB results. Selected
@@ -385,6 +393,24 @@ Load-segment equivalence apart from build identity supports reuse of accepted
 checks. Later shared-header changes do not invalidate this frozen candidate.
 The fixed returning profiles remain separate.
 
+The [complete weight-bearing neural-network graph](npu-complete-nn.md) is implemented
+for the original published ShuffleNetV2 compiled artifact: 125 sequential NN
+operations with immutable coefficients and an external intermediate pool.
+The fixed selection accepts 150,528 UINT8 input bytes and returns two copied
+output bytes through the existing large-tensor owner protocol. One completion
+covers the complete graph; pool clearing, coefficient revalidation, complete
+output transmission and FINISH precede reuse. Two copied jobs and healthy CLOSE
+pass native allocation/table/assembly and host checks with NPU replies, IRQ,
+cache effects and transport modeled. Root verifies 189 inputs and 75 objects
+against revision `0dcf977`, with no source delta, under
+`npu-complete-nn-20261019/root-integration.json`. Its ELF SHA-256 is
+`5e578a3c8253fa00868a8d7cb7b9ca0f62a9091dfec38270feaf5be9af1ae9d1`.
+The SDK consumed two distinct input patterns, but both outputs saturated to
+`[0,255]`; class meanings are undocumented. This establishes fixed whole-graph
+software coverage, not input-sensitive classification, accuracy, physical
+inference or unchanged mimus acceleration. Broader operators, models,
+concurrency, physical confinement and numerical qualification remain required.
+
 The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
 through one shader (SH) operation and three neural-transpose (NT) operations, with an
 external intermediate pool. Four heads and 128 steps use 522,240 input bytes
@@ -571,11 +597,11 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue standalone DSI application assessment. Full-HD H.264 is integrated
-   offline within its fixed-profile and frozen-image scope. Repeated GPU drawing, fixed NPU shader/neural-transpose
-   large tensors, optional mSBC recognition, native VGA streaming, direct Gen1 BOT
-   and the combined recorded-recognition/storage image are integrated
-   offline within their frozen evidence scopes.
+1. Continue Bluetooth playback implementation. Standalone DSI scanout, the fixed
+   complete NN graph, full-HD H.264, repeated GPU drawing, fixed NPU
+   shader/neural-transpose large tensors, optional mSBC recognition, native VGA
+   streaming, direct Gen1 BOT and the combined recorded-recognition/storage
+   image are integrated offline within their frozen evidence scopes.
    The NPU graph adds operator/memory coverage without replacing or optimizing
    mimus. Physical operation and timing remain unqualified. The VGA image includes
    the native-read correction, and its corrected launcher and supervised policy

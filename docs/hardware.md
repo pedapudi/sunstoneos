@@ -800,9 +800,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   actual IOMMU mappings and ordered controller accesses. Focused composed checks
   and AArch64 compilation pass under `display-native-20261018/`. Panel selection,
   analog-profile qualification and initial isolation authority remain required;
-  STOP retains resources because display-engine drain is unsupported. A standalone
-  image, shutdown/release, physical scanout, live frame
-  updates, composition, additional formats and synchronization remain outstanding.
+  STOP retains resources because display-engine drain is unsupported.
+  The [standalone DSI application](display-scanout.md#standalone-retained-dsi-application)
+  is implemented with one privileged scanout owner and the existing PMIC, clock,
+  rail, pin, media/PLL, IOMMU and USB0 providers. It builds an immutable XRGB8888
+  color-bar framebuffer, starts DE1/LCD1/DSI1 and returns a copied controller
+  observation. Actual producer compositions pass at 720p and 1080p; retained-fault,
+  linked private seal/serializer, generated launcher and host capture checks pass
+  with electrical/panel facts and hardware effects modeled. Shared startup, GIC
+  and secondary execution are excluded. Root verifies 462 native inputs,
+  176 objects and 195 host inputs against revision `0dcf977`, with no source delta,
+  under `dsi-scanout-application-20261019/root-integration.json`.
+  No panel is selected or attached. Physical preparation requires image-bound panel,
+  electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding evidence;
+  model-only records are refused. Visible pixels and physical scanout remain
+  unqualified. Faults retain all resources; successful STOP, drain, release,
+  retry, live-frame updates and wider display modes remain required.
+  Composition, additional formats and synchronization remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
@@ -1114,6 +1128,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Two additional compiler/simulator cases match CPU references; focused native
   construction, result and failure checks pass with modeled device output under
   `npu-models-20261018/`. The software-validation image is not deployable.
+  The [complete weight-bearing neural-network graph](npu-complete-nn.md) is implemented
+  for the original published ShuffleNetV2 compiled artifact: 125 sequential NN
+  operations with immutable coefficients and an external intermediate pool.
+  The fixed selection accepts 150,528 UINT8 input bytes and returns two copied
+  output bytes through the existing large-tensor owner protocol. One completion
+  covers the complete graph; pool clearing, coefficient revalidation, complete
+  output transmission and FINISH precede reuse. Two copied jobs and healthy CLOSE
+  pass native allocation/table/assembly and host checks with NPU replies, IRQ,
+  cache effects and transport modeled. Root verifies 189 inputs and 75 objects
+  against revision `0dcf977`, with no source delta, under
+  `npu-complete-nn-20261019/root-integration.json`. Its ELF SHA-256 is
+  `5e578a3c8253fa00868a8d7cb7b9ca0f62a9091dfec38270feaf5be9af1ae9d1`.
+  The SDK consumed two distinct input patterns, but both outputs saturated to
+  `[0,255]`; class meanings are undocumented. This establishes fixed whole-graph
+  software coverage, not input-sensitive classification, accuracy, physical
+  inference or unchanged mimus acceleration. Broader operators, models,
+  concurrency, physical confinement and numerical qualification remain required.
   The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
   through one shader (SH) operation and three neural-transpose (NT) operations, with an
   external intermediate pool. Four heads and 128 steps use 522,240 input bytes
