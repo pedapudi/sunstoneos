@@ -37,14 +37,27 @@ CPU, RAM and USB ownership and requires manual power removal.
 The returning diagnostic's cleanup covers SGI0/PPI30 and a single shared page;
 it does not qualify general peripheral interrupt or OS shutdown.
 
-The second board completed the 21-register PMIC probe and returned as `003:112`,
-identity `[7,2745,1097071,0,0]`, on port `3-3`. DCDC2 is enabled and programmed
-to 800 mV; CLDO3 is enabled and programmed to 1.8 V. These are register-derived
-settings; analog voltage and stability were not measured. The process exited
-and its claim closed. Evidence: `sys-supply-probe-20261018/runtime/`.
-The thermal candidate now uses this return and the earlier unchanged clock
-observations under `thermal-clock-reference-20261018/physical-candidate-adopt-112/`.
-Resource ownership, supply stability and entry admission remain outstanding.
+The second board completed three nonsecure EL1 reads of thermal calibration
+shadows and returned as `003:116`, identity `[7,2774,1097075,0,0]`, on port `3-3`.
+Addresses `0x03006244`, `0x03006248` and `0x0300624c` returned `0x66961102`,
+`0x19689689` and `0x00000496`. The probe programs no fuses or thermal registers.
+Evidence: `thermal-sid-shadow-20261018/runtime/`. Runner PID `28797` exited
+successfully and is absent; exec session `22934` is terminal and its queue claim
+closed as passed. No reconnect is needed for this board.
+
+This establishes calibration-shadow accessibility in the thermal driver's
+security state. Calibration decoding, physical temperature acquisition and
+interrupts remain separate requirements. Earlier PMIC reads established enabled
+DCDC2 programmed to 800 mV and CLDO3 programmed to 1.8 V; they did not measure
+analog stability. The thermal candidate is being updated from the preserved
+`physical-candidate-adopt-112/` inputs to the actual return. Preserve DDR
+continuity; refresh warm launcher state only for the selected next operation.
+
+The SID probe reused fourteen accepted monitor/platform/FreeRTOS objects and
+compiled only its new payload. Its focused model and source review passed.
+A missing runtime-hashed survey source was caught before any device access;
+the frozen package was repaired and the unexecuted operation resumed under the
+same claim. Packaging now verifies those source dependencies before claiming.
 
 The complete PWM fan/LED and SHA-256/AES applications now have independent
 boot-CPU profiles. Their frozen images and focused results are integrated under

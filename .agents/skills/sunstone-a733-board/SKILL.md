@@ -67,6 +67,12 @@ Before claiming the queue, freeze the image, host tools and required inputs.
 The proposal needs the target, changed behavior, prerequisite evidence, expected
 result, timeout, stop condition and evidence directory. Reuse the existing queue
 schema and component procedure instead of creating another execution framework.
+When freezing a host tool, include files that it hashes at runtime as well as
+Python imports. `run-launch-survey.py`, for example, requires
+`boot/a733/launch-survey.S` beneath its frozen repository root. Verify those
+paths and the final invocation's artifact hashes before claiming the queue.
+A preflight refusal before device access does not invalidate passing checks;
+repair the missing package input and resume the unexecuted operation.
 
 Require reconnect permissions before intentional re-enumeration. On the first
 transport failure or disappearance, stop commands to that instance. Do not reset,

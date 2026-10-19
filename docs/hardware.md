@@ -253,6 +253,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Second-board PMIC reads establish enabled DCDC2 programmed to 800 mV and
   CLDO3 programmed to 1.8 V under `sys-supply-probe-20261018/runtime/`.
   These register settings do not measure analog supply stability.
+  Three calibration-shadow reads also pass physically in nonsecure EL1 under
+  `thermal-sid-shadow-20261018/runtime/`, followed by successful ROM return.
+  This proves access to the calibration words, not temperature acquisition.
   Existing calibration and controller evidence was reused. Physical acquisition,
   accuracy, interrupt delivery and recovery remain unqualified. Automatic thermal
   policy, rate changes and regulator control remain outstanding.

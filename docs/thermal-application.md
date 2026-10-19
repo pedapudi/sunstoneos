@@ -155,3 +155,17 @@ calibration. No heating, forced threshold crossing or threshold change is
 requested. Stop at the first transport failure or disappearance and retain every
 resource until confirmed whole-board power removal. Software fixtures grant no
 physical admission; alarm-free output does not qualify IRQ delivery.
+
+## Calibration shadows are readable on the second board
+
+A returning FreeRTOS payload reads all three thermal calibration shadows in
+nonsecure EL1. The observed words are `0x66961102` at `0x03006244`, `0x19689689`
+at `0x03006248`, and `0x00000496` at `0x0300624c`. The payload makes no fuse,
+thermal-controller, clock or supply writes. The accepted monitor returns to ROM
+with automatic USB access. Evidence: `thermal-sid-shadow-20261018/runtime/`.
+
+This establishes the shadow-access prerequisite for the native thermal image.
+It does not establish calibration accuracy, sensor acquisition or interrupts.
+The payload reuses fourteen accepted monitor/platform/FreeRTOS objects; only its
+three-read task was compiled. Its focused model checks exact read order, raw
+logging and normal exit. Earlier controller and host checks were reused.
