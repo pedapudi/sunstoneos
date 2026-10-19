@@ -4,6 +4,12 @@
 #include "platform.h"
 #include "a733_maintenance_watchdog_internal.h"
 #include <string.h>
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+#include "../gpu-finite/finite.h"
+#if !defined(SUNSTONE_GPU_SINGLE_CORE) || !defined(SUNSTONE_GPU_SUPERVISED) || !defined(SUNSTONE_GPU_COMPUTE_APPLICATION) || defined(SUNSTONE_GPU_TRANSPORT_ONLY)
+#error "Finite GPU adapter requires supervised single-core compute"
+#endif
+#endif
 struct gpu_application app;
 #ifdef SUNSTONE_GPU_TRANSPORT_ONLY
 const uint64_t gpu_transport_only_marker[2]={UINT64_C(0x4750555553423031),1};
@@ -23,6 +29,9 @@ void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 static void pmic(void *unused)
 {
     (void)unused;for(;;){
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+        gpu_finite_pmic_checkpoint();
+#endif
         /* A provider must poll once after a consumer fault to retain its mutex. */
         enum a733_pmic_status r=a733_pmic_poll(&app.shared.pmic);
         if(!gpu_application_live(NULL))park();
@@ -52,8 +61,16 @@ static void client(void *unused)
     /* Do not let GPU OPEN revoke the shared providers before the host has
      * received one complete pending response from the initialized transport. */
     while(!atomic_load_explicit(&app.shared.pmic_ready,memory_order_acquire)||
-          !atomic_load_explicit(&app.usb_observed,memory_order_acquire)){
+#ifndef SUNSTONE_GPU_FINITE_RETURN
+          !atomic_load_explicit(&app.usb_observed,memory_order_acquire)
+#else
+          0
+#endif
+          ){
         if(!gpu_application_live(NULL)){retained();}vTaskDelay(1);}
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+    platform_puts("GPU_STAGE=OPEN\n");
+#endif
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
 #ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
@@ -84,10 +101,16 @@ static void client(void *unused)
     }
 #endif
     if(!gpu_application_live(NULL)){retained();}
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+    platform_puts("GPU_STAGE=CLOSE\n");
+#endif
     r=request(PVR_GPU_SERVICE_CLOSE,1000000);
     while(r.phase!=PVR_GPU_SERVICE_STOPPED){
         vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);
     }
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+    gpu_finite_complete();
+#endif
     atomic_store_explicit(&app.result,1,memory_order_release);
     /* Copied output and reserved parents stay owned for host capture. CLOSE
      * returned the GPU power token; USB/PMIC retain their own live session. */
@@ -146,6 +169,9 @@ void a733_smp_diagnostic_start(void)
     TaskFunction_t functions[]={pmic,gpu_application_usb,client};
     const char *names[]={"gpu-pmic","gpu-usb","gpu-client"};
     for(unsigned i=0;i<3;++i){
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+        if(i==1)continue; /* No native USB task or controller preparation. */
+#endif
 #ifdef SUNSTONE_GPU_SINGLE_CORE
         app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,2,app.stacks[i],&app.tasks[i]);
 #else
@@ -153,7 +179,11 @@ void a733_smp_diagnostic_start(void)
         app.stacks[i],&app.tasks[i],1);
 #endif
         if(!app.handles[i])platform_panic("GPU tasks",4);}
+#ifdef SUNSTONE_GPU_FINITE_RETURN
+    if(!gpu_finite_bind_pmic())platform_panic("GPU finite PMIC bind",5);
+#else
     if(!a733_native_usb_bind(&app.shared,app.handles[0],app.handles[1]))platform_panic("GPU USB bind",5);
+#endif
 #ifdef SUNSTONE_GPU_TRANSPORT_ONLY
     /* Keep the real PMIC/USB tasks and pending-response protocol. The client
      * parks before OPEN; no GPU platform, firmware or worker is constructed. */

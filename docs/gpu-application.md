@@ -508,3 +508,22 @@ evidence. A finite returning GPU application still requires the USB owner's
 return path and qualified healthy GPU stop. Shared startup diagnosis must precede
 another full launch. Existing RAM/master exclusion, supported power/clock,
 transport ownership and recovery prerequisites remain required.
+
+## Finite client for returning-platform composition
+
+The [finite GPU adapter](../apps/gpu-finite/README.md) runs the existing client
+without native USB observation, requires normal CLOSE, suspends the GPU worker,
+parks PMIC outside polling, checks interrupt/mutex/request quiescence and reports
+the owned output before entering a task critical section and `platform_exit(0)`.
+Its eight linked cases model service and scheduler effects; no physical GPU
+execution or ROM return follows from them.
+
+The development-only ELF under `gpu-finite-adapter-20261018/layout-correction`
+retains the accepted
+full single-core monitor/runtime. Its manifest explicitly forbids physical
+execution. `integration-prerequisites.json` gives exact linked retained/BSS/stack
+and pool bounds, authenticated EL3/EL1 interfaces, and the remaining common
+monitor cleanup requirements. The existing large memory contract remains in
+force even though the fixed workload uses 134 write-back and 51 non-cacheable
+pages. The coordinator owns authenticated session retention, final mappings,
+scheduler stop, cache maintenance, RAM restoration and confirmed ROM return.
