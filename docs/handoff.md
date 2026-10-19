@@ -59,8 +59,28 @@ sanitizer, session and host checks pass; the native image links. All 419 compile
 inputs and 195 preserved repository sources match during integration.
 Evidence: `uart-native-20261018/frozen/manifest.json` and `integration.json`.
 Physical loopback, electrical admission, recovery and inherited multicore startup
-remain outstanding. I2S simultaneous capture/playback and H.264 stream decoding
-beyond the fixed sample continue offline in separate worktrees.
+remain outstanding.
+
+Simultaneous I2S capture/playback is integrated with separate DMA channels and
+period catalogues, shared clock/pin lifetime and failure propagation to both
+directions. Success requires both transfer counts and both drained results.
+Native client/pool/USB checks, composed stream checks and host capture pass;
+focused source review is complete. Evidence: `i2s-duplex-20261018/snapshot/` and
+`integration.json`. Physical audio and wire-level drain remain unqualified.
+
+Native read-only eMMC access is integrated through the existing copied-client
+service. Both SDC2 and SDC3 selections pass instruction checks for identification,
+EXT_CSD and copied reads. Admission/capture checks and source review pass under
+`emmc-native-20261018/`. Population and the fitted route remain unknown. The
+single-core image retains resources permanently; it has no qualified ROM return.
+
+H.264 header parsing and register planning now accept bounded Baseline IDR streams
+with prediction and residual coding. Four independent x264/FFmpeg comparisons,
+parser sanitizer checks and native application checks pass. The driver accepts
+16–64 by 16–32 pictures; the application retains 48-by-32 compiled stream/reference
+inputs. Live ingestion, broader formats and physical pixel/confinement/drain
+qualification remain outstanding. Evidence: `h264-stream-20261018/final-frozen/`
+and `integration.json`. Successful checks were reused for all three integrations.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;

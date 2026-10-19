@@ -328,7 +328,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   mux 3 for SDC2 and mux 4 for SDC3. Focused host checks cover both routes,
   conflicting ownership and controller refusal; native compilation passes.
   Earlier model evidence used the NAND pin function and cannot establish correct
-  eMMC routing. The [bounded write primitive](mmc-write.md) snapshots input,
+  eMMC routing. The [native read-only eMMC application](emmc-read-application.md)
+  connects either explicitly selected controller to the existing copied-client
+  service. Both controller instruction checks, admission and host capture pass.
+  Evidence: `emmc-native-20261018/`. Population and fitted routing remain unknown;
+  its single-core lifetime retains resources permanently and has no qualified ROM
+  return. The [bounded write primitive](mmc-write.md) snapshots input,
   authenticates each request and confirms each sector through card status.
   Focused host checks cover SD/eMMC writes, authority loss and retained partial
   failure; affected native consumers compile. The [storage update service](storage-update.md)
@@ -525,8 +530,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   session before provider initialization; the affected image and five binding
   checks pass under `i2s-binding-20261018/`. Existing audio and inference evidence
   was reused. Physical capture and inference timing remain unqualified.
-  Cyclic/full-duplex operation, wire-level drain, Bluetooth PCM and
-  physical continuity remain open.
+  Simultaneous capture/playback now uses separate DMA channels and period
+  catalogues with shared clock/pin lifetime. Both directions must complete and
+  drain before success; uncertainty retains both. Composed stream, native
+  client/pool/USB and host checks pass under `i2s-duplex-20261018/`. Cyclic
+  operation, physical duplex audio, wire-level drain, Bluetooth PCM and physical
+  continuity remain open.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
@@ -967,12 +976,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
-  The [native H.264 application](h264-native.md) implements one fixed 48-by-32
-  Baseline IDR picture with direct-sample macroblocks. Its image and focused
-  admission, executor, guarded-copy and USB checks pass with modeled hardware.
-  The independent CPU output and selected A733 instruction traces were reused.
-  Physical H.264 decoding, prediction, transform coefficients, interframe
-  references, multiple slices and wider profiles remain outstanding.
+  The [native H.264 application](h264-native.md) uses parsed Baseline IDR headers
+  and derived register plans, including prediction and transform-coded content.
+  Four independent x264/FFmpeg comparisons, parser sanitizer checks and native
+  admission, executor, guarded-copy and USB checks pass. Evidence:
+  `h264-stream-20261018/`. The driver accepts 16–64 by 16–32 pictures; the
+  application retains 48-by-32 compiled stream/reference inputs. Live ingestion,
+  physical H.264 pixel conformance, interframe references, multiple slices and
+  wider profiles remain outstanding.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
