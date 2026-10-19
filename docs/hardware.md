@@ -1094,19 +1094,30 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
-  The [native H.264 application](h264-native.md) now accepts an uploaded IDR
+  The H.264 lower native VE policy now admits the decoded-macroblock counter
+  at VE+`0x22c`. Actual AArch64 native-read checks pass counter/status access and
+  neighboring, misaligned and null-output refusals with inert MMIO. Root verifies
+  five sources, three artifacts and two tools under `h264-native-access-20261019/`.
+  No corrected full image has been rebuilt. The historical interframe candidate
+  omits that permission, refuses before the counter load and cannot publish
+  completed output. Earlier sequence composition substituted the lower read;
+  its passing results cover only those modeled paths. A replacement image must
+  include the fix and receive its own audit before use.
+  The [implemented H.264 application](h264-native.md) accepts an uploaded IDR
   optionally followed by one P picture, with an 8 KiB clip and 4 KiB per NAL unit.
   The application requires 48-by-32 progressive Baseline pictures; the driver
   retains its 16–64 by 16–32 bounds. Two-picture operation uses picture-order
   count type 2 and one default short-term reference. Picture-info/neighbor scratch
   persists in the decoder context, while input/output/motion-vector slots remain
   distinct. Up to two indexed immutable copied outputs preserve completed IDR
-  data if the P picture fails. Controller/provider, parser, independent syntax
-  and host checks pass with device effects modeled under
+  data if the P picture fails. Earlier controller/provider, parser, independent
+  syntax and host checks passed with modeled device effects and the lower native
+  read substituted in sequence cases under
   `h264-interframes-20261019/`. Root verifies 425 frozen inputs, 166 objects,
   194 sources, 786 artifacts and seven tools in `root-integration.json`.
   Six later USB hub dependencies differ from the integration tree; the internally
-  consistent frozen candidate is not current-tree rebuild evidence. Unchanged
+  consistent historical candidate contains the native-read defect; it is not
+  corrected full-path or current-tree rebuild evidence. Unchanged
   parser/upload checks were reused. Physical reference visibility, pixels,
   confinement and drain remain unqualified; no resources are reclaimed. Longer
   clips, repeated clips, multiple references/slices and wider profiles remain

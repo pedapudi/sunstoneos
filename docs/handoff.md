@@ -137,20 +137,33 @@ EXT_CSD and copied reads. Admission/capture checks and source review pass under
 no physical qualification target. Its single-core image retains resources
 permanently and has no qualified ROM return.
 
-The native H.264 application now accepts one uploaded IDR picture, optionally
+The H.264 decoded-macroblock counter read is corrected in the lowest native
+VE access policy. The historical frozen image below omits that permission,
+refuses before the counter load and cannot publish completed output. Earlier
+sequence composition substituted the lower read, so its passing results cover
+only those modeled paths. The actual AArch64 native-read check now passes
+counter/status access and neighboring, misaligned and null-output refusals with
+inert MMIO. Root verifies five sources, three artifacts and two tools under
+`h264-native-access-20261019/freeze/manifest.json`; results are in `final/result.json`.
+No full image has been rebuilt with this fix. The next VGA candidate must include
+it and receive its own audit; the historical candidate is not eligible for use.
+
+The implemented H.264 application accepts one uploaded IDR picture, optionally
 followed by one P picture, within an 8 KiB clip and 4 KiB per NAL unit. Pictures
 are 48 by 32 pixels in progressive Baseline format. The two-picture profile uses
 picture-order count type 2 and one default short-term reference. Decoder-context
 picture-info/neighbor scratch persists across pictures; input, output and
 motion-vector slots remain distinct. Up to two indexed immutable copied outputs
-are available, preserving the IDR result if P decoding fails. Controller/provider,
-parser, independent syntax and host checks pass with device effects modeled.
+are implemented, preserving the IDR result if P decoding fails. Earlier
+controller/provider, parser, independent syntax and host checks passed with
+device effects modeled and the lower native read substituted in sequence cases.
 Root verifies 425 frozen inputs, 166 objects, 194 sources, 786 artifacts and seven
-tools under `h264-interframes-20261019/root-integration.json`. Its ELF SHA-256 is
+tools under `h264-interframes-20261019/root-integration.json`. That historical
+modeled-path image's ELF SHA-256 is
 `862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`.
 Six later USB hub dependencies differ from the integration tree; the frozen
-candidate retains consistent inputs/layouts and supplies no current-tree rebuild
-evidence. Earlier unaffected parser/upload checks were reused. Physical
+image retains consistent inputs/layouts but contains the native-read defect;
+it supplies no corrected full-path or current-tree rebuild evidence. Earlier unaffected parser/upload checks were reused. Physical
 reference visibility, pixels, confinement and drain remain unqualified; all
 resources remain retained. Longer clips, repeated clips and wider profiles
 remain required.
