@@ -40,10 +40,23 @@ compiled-input comparisons reuse those results without repeating them. Evidence:
 `npu-supply-returning-20261018/integration.json` and
 `gpu-returning-integration-20261018/frozen/integration.json`.
 GPU and NPU finite adapters are integrated. Both stop their workers and park
-PMIC outside active requests before the final task critical section. Shared
-monitor, timer, memory and retained-session integration remains. GPU and NPU
-workers now own separate app-local returning compositions offline; root retains
-CPU and shared-startup ownership. All 172 NPU
+PMIC outside active requests before the final task critical section. The NPU
+returning composition is now integrated, with 26 new return checks, three
+session-retention checks and a check of the linked task privilege state.
+Evidence: `npu-finite-return-20261018/frozen/`. Its SRE tasks run at EL1t;
+the cached multicore image's EL0 exit rules do not apply. Returned-RAM host
+integration and final root admission remain outstanding. Frozen compiler inputs
+remain authoritative: the current USB header changes an embedded structure's
+layout, even though this NPU image does not execute USB platform functions.
+
+Root review rejected the GPU composition's EL3 cache cleanup: with translation
+disabled, maintenance targets Secure physical addresses and cannot publish the
+application's dirty Nonsecure lines. The worker is moving publication to EL1
+before SMC and preserving final stack cleanup before reset. Existing device
+checks remain valid; the changed return path requires focused verification.
+The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
+and device skill document this requirement. Root retains CPU and architectural
+return review. For the preceding adapter, all 172 NPU
 compiler inputs match. The 89 new GPU compiler inputs match; two inherited
 monitor/runtime sources have additional inactive branches, so the accepted GPU
 objects and their frozen inputs remain authoritative. Evidence:

@@ -74,6 +74,14 @@ against their actual address paths, including internal SRAM or bypass routes.
 Exact register readback can reject unsupported state without proving the engine
 uses the intended mapping.
 
+Cache publication must target the writer's physical address space. EL3 with its
+MMU disabled uses Secure addresses, even when `SCR_EL3.NS=1`; maintenance by
+virtual address there does not publish dirty Nonsecure EL1 lines. Publish through
+the existing EL1 mapping before entering the monitor, or use an explicitly
+reviewed Nonsecure maintenance mapping. See the [publication audit](../../../docs/a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space).
+A shared byte array in an instruction model cannot verify security-tagged cache
+visibility. Keep monitor writes away from unpublished dirty application lines.
+
 Startup must retain and validate session inputs before provider initialization.
 The [session contract](../../../docs/board-session-seal.md) binds identities and
 geometry; test fixtures that fabricate its authority cannot become launch evidence.
