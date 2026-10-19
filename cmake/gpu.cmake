@@ -40,7 +40,7 @@ if(SUNSTONE_GPU_FIRMWARE)
   file(REMOVE "${gpu_service_linker}.tmp")
   set(gpu_compute_sources
     drivers/gpu/pvr_compute_mode.c
-    drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_job.c
+    drivers/gpu/pvr_compute_service.c drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c
     drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
     drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c

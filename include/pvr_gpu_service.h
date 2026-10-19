@@ -124,6 +124,7 @@ struct pvr_gpu_service_reply {
     uint32_t free_list_error, free_list_pending;
     uint32_t compute_phase, compute_error, compute_job_error;
     uint32_t compute_sequence, compute_word_count, compute_words[32];
+    uint32_t compute_first_word, compute_total_words;
     uint32_t graphics_phase;
     uint32_t render_phase, render_error, render_checked;
     uint32_t render_first_pixel, render_pixel_count, render_pixels[64];
@@ -132,7 +133,7 @@ struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
     uint64_t ticket;
     unsigned client;
-    uint32_t render_first_pixel;
+    uint32_t render_first_pixel, compute_first_word;
 };
 struct pvr_gpu_service_client {
     TaskHandle_t task;
@@ -217,4 +218,7 @@ BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t, void *);
  * device backing remains retained. No application pointer reaches the worker. */
 int pvr_gpu_service_render_read(struct pvr_gpu_service *, uint32_t first_pixel,
     TickType_t wait, uint64_t *ticket);
+/* Copied owner-only output slice; at most 32 words, after acquired completion. */
+int pvr_gpu_service_compute_read(struct pvr_gpu_service *,uint32_t first_word,
+    TickType_t wait,uint64_t *ticket);
 #endif

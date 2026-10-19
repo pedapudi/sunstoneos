@@ -9,7 +9,7 @@
  }
  SECTIONS {
      .text : {
-@@ -25,6 +27,17 @@
+@@ -25,6 +27,20 @@
          . += 16384; __monitor_stack_top = .;
      } > MONITOR
      .platform_log 0x42020000 (NOLOAD) : { . += 0x4000; } > MONITOR
@@ -19,7 +19,10 @@
 +    .gpu_retained (NOLOAD) : ALIGN(16) {
 +        __gpu_retained_start = .;
 +        *(.gpu_runtime_retained)
-+        *session.c.o*(.bss.sealed_session .bss.session_sealed)
++        . = ALIGN(8); __gpu_program_copy_start = .;
++        *(.gpu_program_session_retained)
++        __gpu_program_copy_end = .;
++        *session.c.o*(.bss.sealed_session .bss.program_session .bss.session_sealed)
 +        *device_memory_layout.c.o*(.bss*)
 +        . = ALIGN(16); __gpu_retained_end = .;
 +        __gpu_platform_log = .; . += 16384;
@@ -27,7 +30,7 @@
      .bss (NOLOAD) : ALIGN(4096) {
          __bss_start = .; *(.bss*) *(COMMON)
          . = ALIGN(16); __bss_end = .;
-@@ -33,34 +46,17 @@
+@@ -33,34 +49,21 @@
          . += 32768; __exception_stack_top = .;
      } > RAM
      __heap_end = .;
@@ -66,10 +69,14 @@
 +    .uncached_pool (NOLOAD) : {
 +        __uncached_pool_start = .; . += LENGTH(DEVICE_NC); __uncached_pool_end = .;
 +    } > DEVICE_NC
-+    .gpu_session 0x41f00000 (NOLOAD) : { . += 4096; } > RAM
++    .gpu_session 0x41f00000 (NOLOAD) : { . += DEFINED(__gpu_session_bytes) ? __gpu_session_bytes : 4096; } > RAM
 +    ASSERT(__bss_end <= 0x41f00000, "GPU EL1 allocations overlap uploaded session")
 +    ASSERT(__monitor_stack_top <= 0x42020000, "GPU monitor overlaps platform log")
 +    ASSERT(__tables_end <= 0x42200000, "GPU tables exceed reservation")
 +    ASSERT(__gpu_retained_end > __gpu_retained_start, "GPU retained state absent")
++    ASSERT(!DEFINED(__gpu_session_bytes) || (__gpu_program_copy_end - __gpu_program_copy_start == 8944 &&
++           __gpu_program_copy_end <= __bss_start && SIZEOF(.gpu_session) >= 8944),
++           "GPU program session must survive BSS clearing and fit uploaded reservation")
++    ASSERT(ADDR(.gpu_session) + SIZEOF(.gpu_session) <= 0x42000000, "GPU upload exceeds RAM")
      /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
  }

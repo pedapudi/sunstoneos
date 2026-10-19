@@ -98,7 +98,7 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
     const uint8_t *entry=gpu_application_entry_digest(c);
     if(!entry||memcmp(s->qualification,entry,32))return 0;
 #endif
-    uint8_t session_digest[32];storage_digest_bytes(s,sizeof(*s),session_digest);
+    uint8_t session_digest[32];storage_digest_bytes(s,GPU_APPLICATION_SESSION_BYTES,session_digest);
     const uint8_t *bound=gpu_application_contract_digest(c);
     if(!bound)return 0;
     for(unsigned i=0;i<32;++i)if(session_digest[i]!=bound[i])return 0;

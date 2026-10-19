@@ -50,16 +50,34 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
         set(gpu.get('conditions',{}))==GPU_CONDITIONS,
         'Actual power, shared ownership, mappings and initial GPU isolation evidence required.')
     for ref in gpu['conditions'].values():evidence(ref)
+    if record.get('gpu_program'):
+        program=json.loads(evidence(record['gpu_program']))
+        require(program.get('schema')=='sunstone-gpu-trusted-program-v1' and program.get('source_reviewed') is True,
+                'Explicit GPU program source review required.')
     require(not record.get('payloads') and record.get('radio_ddr') is None,'Fixed GPU application accepts no unrelated assets.')
     return cache
 
 def session_check(raw):
+    if len(raw)==8944:
+        require(struct.unpack_from('<4Q',raw,592)==(0x4153373347505031,1,8944,8288),
+                'Invalid GPU program envelope.')
+        require(hashlib.sha256(raw[656:]).digest()==raw[624:656],'GPU program digest differs.')
+        raw=raw[:592]
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(0x4153373342535332,2,592),'Distinct supervised session required.')
     require(raw[112:184]==bytes(72) and struct.unpack_from('<I',raw,400)[0]==2,
         'Supervised GPU session must contain no watchdog or uploaded software time claims.')
     owners=struct.unpack_from('<2Q',raw,456)
     require(owners[0] and owners[1] and owners[0]!=owners[1] and all(x not in (9,10,11) for x in owners),
         'GPU session owners conflict.')
+
+def program_admission(record,cache,raw):
+    require((len(raw)==8944)==bool(record.get('gpu_program')),'GPU program review binding differs.')
+    if len(raw)!=8944:return
+    review=json.loads(cache[record['gpu_program']['path']]);package=raw[656:]
+    require(review.get('schema')=='sunstone-gpu-trusted-program-v1' and review.get('source_reviewed') is True and
+        review.get('package_sha256')==hashlib.sha256(package).hexdigest() and
+        review.get('source_sha256')==package[80:112].hex() and
+        review.get('compiler_sha256')==package[112:144].hex(), 'GPU program source review does not bind these inputs.')
 
 def request_bytes(address,identity,epoch,generation,lease,session,reservation,entry_digest):
     require(len(identity)==32 and len(entry_digest)==32 and any(entry_digest) and
@@ -116,7 +134,7 @@ def image_manifest_check(manifest,image,session=None):
                 'Single-core GPU image requires its own execution profile.')
         return
     workload=manifest.get('workload')
-    require(workload in ('fixed-arithmetic-repeat','shared-usb-pending') and marker is not None and marker[1]==32 and
+    require(workload in ('fixed-arithmetic-repeat','shared-usb-pending','trusted-compiled-program') and marker is not None and marker[1]==32 and
             symbols.get('sd_single_core_entry',(0,))[0]==int(elf.header['e_entry']) and
             not any(symbols.get(name,(0,))[0] for name in
                 ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset')),
@@ -129,7 +147,11 @@ def image_manifest_check(manifest,image,session=None):
     require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373347505331,1,592,60),
             'Single-core GPU geometry differs.')
     transport=symbols.get('gpu_transport_only_marker')
-    if workload=='fixed-arithmetic-repeat':
+    program=symbols.get('gpu_program_application_marker')
+    require((workload=='trusted-compiled-program')==(program is not None), 'GPU program profile differs.')
+    if session is not None:
+        require((len(session)==8944)==(workload=='trusted-compiled-program'), 'GPU session profile differs.')
+    if workload!='shared-usb-pending':
         require(transport is None,'Transport-only image cannot claim GPU computation.')
     else:
         require(transport is not None and transport[1]==16,'Transport-only image marker absent.')
@@ -168,6 +190,7 @@ def prepare(image,manifest,admission,session_template,output,clang,lld):
     image_hash=hashlib.sha256(image_data).hexdigest();m=json.loads(manifest_data);record=json.loads(admission_data)
     image_manifest_check(m,image_data,template)
     cache=validate_admission(record,image_hash,hashlib.sha256(template).hexdigest());session_check(template)
+    program_admission(record,cache,template)
     gpu=json.loads(cache[record['gpu']['path']]);entry=bytes.fromhex(record['gpu']['sha256'])
     require(template[80:112]==entry and struct.unpack_from('<Q',template,192)[0]==gpu['cold_master'],'Session does not bind actual GPU entry evidence.')
     output.mkdir(parents=True,exist_ok=False)
@@ -201,7 +224,7 @@ def validate_bundle(bundle):
     record=json.loads((bundle/'admission.json').read_text());validate_admission(record,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True)
     manifest=json.loads((bundle/'image-input-manifest.json').read_text())
     image_manifest_check(manifest,(bundle/'image.elf').read_bytes(),(bundle/'session.bin').read_bytes())
-    raw=(bundle/'session.bin').read_bytes();session_check(raw);parts,address,identity=image_parts(bundle/'image.elf')
+    raw=(bundle/'session.bin').read_bytes();session_check(raw);program_admission(record,cache,raw);parts,address,identity=image_parts(bundle/'image.elf')
     derived=bytearray((bundle/'session-template.bin').read_bytes());struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=identity
     require(raw==derived and p['build_id']==identity.hex() and p['reservation']==record['reservation'],'GPU session derivation changed.')
     entry=bytes.fromhex(record['gpu']['sha256']);gpu=json.loads(cache[record['gpu']['path']])

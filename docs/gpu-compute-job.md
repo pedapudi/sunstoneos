@@ -5,6 +5,10 @@ A733 GPU. Source-byte comparisons and host completion models pass. Execution on
 physical hardware remains unqualified. The interface is
 [pvr_compute_job.h](../include/pvr_compute_job.h).
 
+The optional [compiled-program profile](gpu-compiled-programs.md) uses the same
+producer and service with caller-selected trusted USC code and copied data.
+The default fixed profile retains the behavior described below.
+
 The fixed shader reads two unsigned 32-bit input words, `seed` and `factor`.
 For each lane `i` from 0 through 31, it writes:
 

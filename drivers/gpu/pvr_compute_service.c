@@ -77,7 +77,7 @@ struct view {const void *p;size_t n;};
 static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
     struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c)
 {
-    enum { VIEW_CAPACITY=9+OWNED+3+PVR_FW_RESOURCE_COUNT+1+PVR_FREE_LISTS };
+    enum { VIEW_CAPACITY=10+OWNED+3+PVR_FW_RESOURCE_COUNT+1+PVR_FREE_LISTS };
     _Static_assert(VIEW_CAPACITY<=128,"bounded metadata admission");
     struct view views[VIEW_CAPACITY];unsigned count=0;
 #define ADD(p,n) do{views[count++]=(struct view){(p),(n)};}while(0)
@@ -85,6 +85,7 @@ static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
     ADD(c->job->programs,sizeof(*c->job->programs));ADD(c->job->program_result,sizeof(*c->job->program_result));
     ADD(c->maps,c->map_count*sizeof(*c->maps));ADD(c->vm->tables.physical_pages,c->vm->tables.page_count*8);
     ADD(gc->firmware,gc->firmware_bytes);
+    if(c->job->package)ADD(c->job->package,sizeof(*c->job->package));
     for(unsigned i=0;i<OWNED;++i){const struct pvr_mips_buffer *b=owned(c,i);ADD(b->pages,b->page_count*8);}
     for(unsigned i=0;i<3+PVR_FW_RESOURCE_COUNT;++i){const struct pvr_mips_buffer *b=system_buffer(gc,i);ADD(b->pages,b->page_count*8);}
     if(gc->free_lists.count) {
@@ -284,9 +285,10 @@ static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t
     /* UPDATE follows the finished CDM task. The preceding acquired completion
      * owns this exclusive output again; preserve the immutable program/input. */
     uint32_t *words=output->storage.cpu;
-    for(unsigned i=0;i<64;++i)words[i]=PVR_COMPUTE_JOB_GUARD;
+    for(unsigned i=0;i<pvr_compute_job_region_bytes(job,PVR_JOB_OUTPUT)/4;++i)words[i]=PVR_COMPUTE_JOB_GUARD;
     /* Always use the complement of each expected result as its poison. */
-    for(unsigned i=0;i<PVR_COMPUTE_JOB_WORDS;++i)words[16+i]=~s->config->image->expected[i];
+    for(unsigned i=0;i<pvr_compute_job_result_words(job);++i)
+        words[16+i]=job->package?UINT32_C(0xa5a5a5a5):~s->config->image->expected[i];
     if(!aarch64_device_cache(AARCH64_CACHE_CLEAN_INVALIDATE,(uintptr_t)output->storage.cpu,PAGE))return 0;
     __asm__ volatile("dsb sy":::"memory");return 1;
 }
@@ -299,7 +301,7 @@ static int read_fence(void *ctx,uint32_t *out)
 static int read_output(void *ctx,void *out,size_t bytes)
 {
     struct pvr_compute_service *s=ctx;const struct pvr_mips_buffer *b=&s->config->buffers[PVR_JOB_OUTPUT];
-    if(bytes!=256||!mapped(b,0,0xff)||
+    if(bytes!=pvr_compute_job_region_bytes(s->config->job,PVR_JOB_OUTPUT)||!mapped(b,0,0xff)||
        !aarch64_device_cache(AARCH64_CACHE_INVALIDATE,(uintptr_t)b->storage.cpu,bytes))return 0;
     const volatile unsigned char *input=b->storage.cpu;unsigned char *output=out;
     for(size_t i=0;i<bytes;++i)output[i]=input[i];

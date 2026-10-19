@@ -25,6 +25,14 @@
 #include "pvr_compute_probe.inc"
 _Static_assert(sizeof(probe_usc)==PVR_COMPUTE_JOB_USC_BYTES,"USC probe size");
 const uint32_t pvr_compute_job_bytes[PVR_JOB_REGIONS]={320,128,64,4096,64,256,64,262144};
+size_t pvr_compute_job_region_bytes(const struct pvr_compute_job_config *c,unsigned i)
+{
+    if(i>=PVR_JOB_REGIONS)return 0;
+    if(c->package&&(i==PVR_JOB_USC||i==PVR_JOB_INPUT||i==PVR_JOB_OUTPUT))return 4096;
+    return pvr_compute_job_bytes[i];
+}
+unsigned pvr_compute_job_result_words(const struct pvr_compute_job_config *c)
+{return c->package?c->package->output_bytes/4:PVR_COMPUTE_JOB_WORDS;}
 static int range(const void *p,size_t n)
 { return p && n && n<=UINTPTR_MAX-(uintptr_t)p; }
 static int gpu(uint64_t a,size_t n)
@@ -64,6 +72,8 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
        !apart(c->programs,sizeof(*c->programs),out,out_size)||
        !apart(c->program_result,sizeof(*c->program_result),out,out_size)||
        !fw(c->firmware_context,232,8)||!fw(c->firmware_ufo,64,4))return 0;
+    if(c->package&&(!range(c->package,sizeof(*c->package))||!pvr_compute_package_valid(c->package)||
+       !apart(c->package,sizeof(*c->package),out,out_size)))return 0;
     const struct pvr_compute_program_config *p=c->programs;
     if(p->bvnc!=PVR_FW_A733_BVNC||p->execution_cores!=1||!p->admission_token||
        p->excluded_count<5||p->excluded_count>PVR_COMPUTE_PROGRAM_EXCLUSIONS||
@@ -91,11 +101,12 @@ static int valid(const struct pvr_compute_job_config *c,const void *out,size_t o
         const struct pvr_compute_program_span *s=&c->buffers[i];
         const struct pvr_compute_program_heap *h=i==PVR_JOB_USC?&p->usc:
             i==PVR_JOB_PDS||i==PVR_JOB_FENCE_PDS?&p->pds:&p->general;
-        if(!span(s)||s->bytes!=pvr_compute_job_bytes[i]||(s->gpu&63)||
+        if(!span(s)||s->bytes!=pvr_compute_job_region_bytes(c,i)||(s->gpu&63)||
            (i==PVR_JOB_CDM&&(s->gpu&4095))||(i!=PVR_JOB_UFO&&!inside(h,s))||
            !apart(s->cpu,s->bytes,c,sizeof(*c))||!apart(s->cpu,s->bytes,p,sizeof(*p))||
            !apart(s->cpu,s->bytes,c->program_result,sizeof(*c->program_result))||
            !apart(s->cpu,s->bytes,out,out_size))return 0;
+        if(c->package&&!apart(s->cpu,s->bytes,c->package,sizeof(*c->package)))return 0;
         for(unsigned j=0;j<i;++j)
             if(!apart(s->cpu,s->bytes,c->buffers[j].cpu,c->buffers[j].bytes)||
                overlap(s->gpu,s->bytes,c->buffers[j].gpu,c->buffers[j].bytes))return 0;
@@ -119,7 +130,7 @@ static void image(const struct pvr_compute_job_config *c,struct pvr_compute_job_
     /* Source flags: prevent all overlap and execute on one GPU core. */
     put32(out->compute,80,(1u<<2)|(1u<<5));
     put32(out->update,0,c->firmware_ufo);put32(out->update,4,1);
-    for(unsigned i=0;i<PVR_COMPUTE_JOB_WORDS;++i)
+    for(unsigned i=0;!c->package&&i<PVR_COMPUTE_JOB_WORDS;++i)
         out->expected[i]=(c->seed+(i+1u)*c->factor)^(0x9e3779b9u+(i<<16));
 }
 int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_compute_job_image *out)
@@ -127,12 +138,14 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     if((uintptr_t)out%_Alignof(struct pvr_compute_job_image)||!valid(c,out,sizeof(*out))||
        c->admit(c->admission_context,c)!=1)return 0;
     for(unsigned i=0;i<PVR_JOB_REGIONS;++i)clear(c->buffers[i].cpu,c->buffers[i].bytes);
-    image(c,out);words(c->buffers[PVR_JOB_USC].cpu,0,probe_usc,70);
+    image(c,out);
+    if(c->package)memcpy(c->buffers[PVR_JOB_USC].cpu,c->package->code,c->package->code_bytes);
+    else words(c->buffers[PVR_JOB_USC].cpu,0,probe_usc,70);
     void *pds=c->buffers[PVR_JOB_PDS].cpu;
     uint64_t input=c->buffers[PVR_JOB_INPUT].gpu,output=c->buffers[PVR_JOB_OUTPUT].gpu+64;
     put32(pds,0,(uint32_t)(input>>32));put32(pds,4,(uint32_t)input);put32(pds,8,2);
     put32(pds,16,(uint32_t)(output>>32));put32(pds,20,(uint32_t)output);put32(pds,24,0x80004002u);
-    put64(pds,32,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|(UINT64_C(2)<<35));
+    put64(pds,32,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|((uint64_t)(c->package?(pvr_compute_package_temps(c->package)+3)/4:2)<<35));
     static const uint32_t dispatch[]={0xc1100001u,0xdb000000u,0xc1080001u,0xf0020001u,0xf0060201u,0xfc000402u};
     words(pds,64,dispatch,6);
     static const uint32_t fence[]={0xc2c00002u,0xd3000000u,0x80000010u,0xf0000005u,0xd3000000u};
@@ -141,11 +154,17 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     uint32_t a=(uint32_t)(c->buffers[PVR_JOB_PDS].gpu-c->programs->pds.base);
     uint32_t b=(uint32_t)(c->buffers[PVR_JOB_FENCE_PDS].gpu-c->programs->pds.base);
     /* Kernel: 32 instances, one workgroup, four unified blocks, any USC. */
-    put32(cdm,0,(4u<<12)|(4u<<2)|(1u<<1));put32(cdm,4,a);put32(cdm,8,a+64);
+    put32(cdm,0,((c->package?1u:4u)<<12)|(4u<<2)|(1u<<1));put32(cdm,4,a);put32(cdm,8,a+64);
     put32(cdm,24,31u<<18);
     /* Fence: eight maximum packed one-instance groups, PDS dependency, shared free. */
     put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,b|(1u<<2)|(1u<<1));
     put32(cdm,36,b+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+    if(c->package) {
+        memcpy(c->buffers[PVR_JOB_INPUT].cpu,c->package->input,c->package->input_bytes);
+        for(unsigned i=0;i<1024;++i)put32(c->buffers[PVR_JOB_OUTPUT].cpu,4*i,
+            i>=16&&i<16+pvr_compute_job_result_words(c)?UINT32_C(0xa5a5a5a5):PVR_COMPUTE_JOB_GUARD);
+        return 1;
+    }
     put32(c->buffers[PVR_JOB_INPUT].cpu,0,c->seed);put32(c->buffers[PVR_JOB_INPUT].cpu,4,c->factor);
     for(unsigned i=0;i<64;++i)put32(c->buffers[PVR_JOB_OUTPUT].cpu,4*i,
         i>=16&&i<48?~out->expected[i-16]:PVR_COMPUTE_JOB_GUARD);
@@ -244,12 +263,17 @@ int pvr_compute_job_poll(struct pvr_compute_job *j)
         break;
     }
     case PVR_JOB_READ_OUTPUT: {
-        unsigned char data[256];
-        if(j->ops.read_output(j->context,data,sizeof(data))!=1)return fail(j,PVR_JOB_IO);
+        unsigned char data[4096];
+        size_t bytes=pvr_compute_job_region_bytes(j->config,PVR_JOB_OUTPUT);
+        if(j->ops.read_output(j->context,data,bytes)!=1)return fail(j,PVR_JOB_IO);
         if(clock_ok(j)!=1)return -1;
-        for(unsigned n=0;n<64;++n)
-            if(get32(data,4*n)!=(n>=16&&n<48?j->image->expected[n-16]:PVR_COMPUTE_JOB_GUARD))return fail(j,PVR_JOB_RESULT);
-        for(unsigned n=0;n<PVR_COMPUTE_JOB_WORDS;++n)j->results[n]=get32(data,64+4*n);
+        unsigned count=pvr_compute_job_result_words(j->config);
+        for(unsigned n=0;n<bytes/4;++n) {
+            if(n>=16&&n<16+count) {
+                if(!j->config->package&&get32(data,4*n)!=j->image->expected[n-16])return fail(j,PVR_JOB_RESULT);
+            } else if(get32(data,4*n)!=PVR_COMPUTE_JOB_GUARD)return fail(j,PVR_JOB_RESULT);
+        }
+        for(unsigned n=0;n<count;++n)j->results[n]=get32(data,64+4*n);
         j->phase=PVR_JOB_COMPLETE;return 1;
     }
     default:return fail(j,PVR_JOB_TRANSPORT);

@@ -20,6 +20,7 @@ def sha(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--cases',nargs='+',type=int,choices=(0,1),default=[0,1])
     parser.add_argument('--resume', action='store_true', help='Resume a failed build before any mode ran')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
@@ -122,7 +123,7 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
         (out / 'inputs.json').write_text(json.dumps(inputs, indent=2) + '\n')
         (out / 'execution-input.json').write_text(json.dumps({'elf_sha256': sha(binary),
             'qemu_sha256': sha(args.qemu.resolve()), 'modes': [0, 1]}, indent=2) + '\n')
-        for mode in (0, 1):
+        for mode in args.cases:
             payload = bytearray(binary.read_bytes())
             payload[selector_offset:selector_offset + 4] = mode.to_bytes(4, 'little')
             selected = out / ('mode-' + str(mode) + '.elf')

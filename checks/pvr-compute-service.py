@@ -25,7 +25,9 @@ def main():
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 12)), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 13)), default=[1, 2, 3])
+    parser.add_argument('--package',type=Path)
+    parser.add_argument('--expected',type=Path)
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--run-only', action='store_true')
     a = parser.parse_args()
@@ -33,7 +35,7 @@ def main():
     out = a.output.resolve(); out.mkdir(parents=True, exist_ok=True)
     source = out / 'project'; source.mkdir(exist_ok=True)
     build = out / 'build'
-    extra = ['drivers/gpu/pvr_compute_service.c', 'drivers/gpu/pvr_compute_job.c',
+    extra = ['drivers/gpu/pvr_compute_service.c', 'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_compute_job.c',
              'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
              'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c', 'platform/a733/gpu_vm_memory.c']
     cmake = '''cmake_minimum_required(VERSION 3.24)
@@ -61,6 +63,11 @@ set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/sunstone/gpu-service-po
  COMPILE_DEFINITIONS "npu_service_task_privileged=pvr_gpu_service_task_privileged")
 set_target_properties(compute-model PROPERTIES SUFFIX ".elf")
 '''.replace('ROOT', str(root)).replace('EXTRA', ' '.join('"' + str(root / p) + '"' for p in extra))
+    if a.package:
+        assert a.expected and a.package.stat().st_size==8288
+        assembly=source/'package.S'
+        assembly.write_text('.section .rodata\n.balign 8\n.global fixture_package\nfixture_package:\n.incbin "'+str(a.package.resolve())+'"\n.global fixture_expected\nfixture_expected:\n.incbin "'+str(a.expected.resolve())+'"\n')
+        cmake+='\ntarget_sources(compute-model PRIVATE "'+str(assembly)+'")\ntarget_compile_definitions(compute-model PRIVATE PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE=1)\n'
     (source / 'CMakeLists.txt').write_text(cmake)
     commands = [['cmake', '-S', str(source), '-B', str(build),
                  '-DCMAKE_TOOLCHAIN_FILE=' + str(root / 'cmake/aarch64-clang.cmake'),
@@ -86,6 +93,7 @@ set_target_properties(compute-model PROPERTIES SUFFIX ".elf")
         files.update([root / 'checks/pvr-gpu-service.c', root / 'drivers/gpu/pvr_compute_probe.inc',
                       root / 'drivers/gpu/pvr_compute_usc.inc', root / 'checks/pvr-compute-service.py',
                       a.firmware.resolve(), root / 'platform/qemu-smp/link.ld'])
+        if a.package:files.update([a.package.resolve(),a.expected.resolve()])
         hashes = {}
         for p in sorted(files):
             data = p.read_bytes(); hashes[str(p)] = hashlib.sha256(data).hexdigest()

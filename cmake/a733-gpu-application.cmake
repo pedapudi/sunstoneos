@@ -52,7 +52,7 @@ set(gpu_app_extra
   platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c platform/a733/gpu_backend.c
   drivers/gpu/a733_gpu_power.c drivers/gpu/a733_gpu_platform.c drivers/gpu/a733_gpu_platform_native.c
   drivers/gpu/gicv3_spi.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
-  drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
+  drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c drivers/gpu/pvr_compute_context.c
   drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c drivers/gpu/pvr_render_target.c
   drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
   drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c drivers/gpu/pvr_mips.c

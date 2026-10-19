@@ -1,4 +1,5 @@
 #include "application.h"
+#include "session.h"
 #include "boot.h"
 #include "platform.h"
 #include "tusb.h"
@@ -55,7 +56,11 @@ static void exchange(void)
     uint8_t request[4];if(tud_vendor_available()!=4||tud_vendor_read(request,4)!=4)stop();
     unsigned first=(unsigned)request[0]|(unsigned)request[1]<<8|(unsigned)request[2]<<16|(unsigned)request[3]<<24;
 #ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+#ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
+    if(first>=31)stop();
+#else
     if(first>=2)stop();
+#endif
 #else
     if(first>=64)stop();
 #endif
@@ -63,6 +68,17 @@ static void exchange(void)
     if(!gpu_application_live(NULL))result=2;
     response_pending=result==0;
 #ifdef SUNSTONE_GPU_COMPUTE_APPLICATION
+#ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
+    unsigned total=gpu_application_package()->output_bytes/4;
+    unsigned offset=first*32,count=offset<total?(total-offset<32?total-offset:32):0;
+    if(!count)stop();
+    put32(response,0x50555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);
+    put32(response+16,result==1?count:0);put32(response+20,total);put32(response+24,result==1?1:0);
+    put32(response+28,(uint32_t)app.session.epoch);put32(response+32,(uint32_t)(app.session.epoch>>32));
+    put32(response+36,result==1?total:0);
+    if(result==1)for(unsigned i=0;i<count;++i)put32(response+40+4*i,app.pixels[offset+i]);
+    response_sent=response_transferred=0;response_bytes=result==1?40+4*count:40;
+#else
     /* Distinct magic and sequence identify one copied numerical submission. */
     put32(response,0x43555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);
     put32(response+16,result==1?PVR_COMPUTE_JOB_WORDS:0);put32(response+20,2);
@@ -71,6 +87,7 @@ static void exchange(void)
     put32(response+36,result==1?2*PVR_COMPUTE_JOB_WORDS:0);
     if(result==1)for(unsigned i=0;i<PVR_COMPUTE_JOB_WORDS;++i)put32(response+40+4*i,app.compute_words[first][i]);
     response_sent=response_transferred=0;response_bytes=result==1?168:40;
+#endif
 #else
     put32(response,0x52555047);put32(response+4,1);put32(response+8,result);put32(response+12,first);
     put32(response+16,result==1?64:0);put32(response+20,64);put32(response+24,64);

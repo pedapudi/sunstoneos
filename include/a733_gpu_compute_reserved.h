@@ -37,6 +37,7 @@ struct a733_gpu_compute_reserved {
     uint64_t payload_pages[A733_GPU_COMPUTE_PAYLOAD_PAGES];
     uint64_t firmware_pages[PVR_COMPUTE_SERVICE_OBJECTS];
     uint64_t table_pages[PVR_COMPUTE_SERVICE_TABLE_PAGES];
+    const struct pvr_compute_package *package;
     unsigned stage;
 };
 
@@ -60,6 +61,11 @@ struct a733_gpu_compute_reserved {
 struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     struct a733_gpu_compute_reserved *, struct a733_gpu_reserved *,
     struct pvr_gpu_service *, uint32_t owner);
+/* Package must already be copied, authenticated and source-admitted by the
+ * native application; it remains immutable/pinned through retained cleanup. */
+struct pvr_compute_service *a733_gpu_compute_reserved_prepare_package(
+    struct a733_gpu_compute_reserved *, struct a733_gpu_reserved *,
+    struct pvr_gpu_service *, uint32_t owner, const struct pvr_compute_package *);
 /* Direct native provenance check for composing another retained device owner.
  * Authenticates the private constructor singleton and exact native callbacks,
  * then applies the existing lease/mapping/program admission checks. It cannot

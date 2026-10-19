@@ -120,6 +120,7 @@ static int admitted(struct a733_gpu_compute_binding *b)
          s->vm.phase != A733_GPU_VM_MEMORY_PUBLISHED)) return 0;
     for (unsigned i = 0; i < s->requirements.table_pages; ++i)
         if (s->table_pages[i] != s->table_extent.physical + i * 4096u) return 0;
+    if(s->job.package!=s->package||(s->package&&!pvr_compute_package_valid(s->package)))return 0;
     if (s->stage >= JOB_BUILT &&
         (s->config.job != &s->job || s->config.image != &s->image ||
          s->config.vm != &s->vm || s->config.maps != s->maps ||
@@ -146,7 +147,7 @@ static int admitted(struct a733_gpu_compute_binding *b)
         unsigned j = program ? i : i - PVR_PROGRAM_REGIONS;
         if (!program && j == PVR_JOB_UFO) continue;
         const struct pvr_mips_buffer *d = program ? &s->config.programs[j] : &s->config.buffers[j];
-        size_t n = program ? pvr_compute_program_bytes[j] : pvr_compute_job_bytes[j];
+        size_t n = program ? pvr_compute_program_bytes[j] : pvr_compute_job_region_bytes(&s->job,j);
         uint64_t va = address(program, j);
         if (!descriptor(d, s->payload_extent, off, rounded(n), s->payload_pages + off / 4096) ||
             !logical(program ? &p->buffers[j] : &s->job.buffers[j], d, n, va)) return 0;
@@ -176,6 +177,22 @@ static int admit_program(void *ctx, const struct pvr_compute_program_config *p)
     struct a733_gpu_compute_binding *b = ctx;
     return admitted(b) && p == &b->session->programs && p->admit == admit_program;
 }
+static int submission_owned(const struct a733_gpu_compute_reserved *s)
+{
+    if(s->compute.client.phase==PVR_CCCB_NEW&&s->compute.job.phase==PVR_JOB_NEW)return 1;
+    const struct pvr_compute_service *c=&s->compute;
+    const struct pvr_compute_job *j=&c->job;
+    if(c->phase!=PVR_COMPUTE_SERVICE_COMPLETE||j->phase!=PVR_JOB_COMPLETE||!c->epoch||
+       s->binding.service->owner>=PVR_GPU_SERVICE_CLIENTS||
+       c->client.phase!=PVR_CCCB_IDLE||s->binding.service->phase!=PVR_GPU_SERVICE_READY||
+       s->binding.service->queue.phase!=PVR_CCB_ACTIVE||!j->sequence||
+       c->epoch!=s->binding.service->epoch||j->epoch!=c->epoch||c->client.epoch!=c->epoch||
+       s->binding.service->queue.epoch!=c->epoch||c->client.serial!=j->serial||
+       j->transport!=&c->client||c->client.queue!=&s->binding.service->queue||j->config!=&s->job)return 0;
+    uint32_t timeline=*(volatile uint32_t *)s->config.firmware[5].storage.cpu;
+    __asm__ volatile("dsb sy":::"memory");
+    return timeline==j->sequence;
+}
 static int admit_job(void *ctx, const struct pvr_compute_job_config *j)
 {
     struct a733_gpu_compute_binding *b = ctx;
@@ -185,7 +202,7 @@ static int admit_job(void *ctx, const struct pvr_compute_job_config *j)
         j->admission_context == b && j->programs == &s->programs && j->program_result == &s->program_result &&
         j->firmware_context == s->config.firmware_address[0] && j->firmware_ufo == s->config.firmware_address[5] &&
         j->seed == 17 && j->factor == 3 && j->job_id == 1 && s->programs.admit == admit_program &&
-        s->compute.client.phase == PVR_CCCB_NEW && s->compute.job.phase == PVR_JOB_NEW;
+        submission_owned(s);
 }
 int a733_gpu_compute_reserved_admitted(struct a733_gpu_compute_reserved *s,
     struct a733_gpu_reserved *firmware, struct pvr_gpu_service *service)
@@ -212,10 +229,14 @@ static int acquire(struct device_memory_pool *pool, uint64_t owner, size_t bytes
     return 1;
 }
 
-struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
+static struct pvr_compute_service *prepare(
     struct a733_gpu_compute_reserved *s, struct a733_gpu_reserved *g,
-    struct pvr_gpu_service *service, uint32_t owner)
+    struct pvr_gpu_service *service, uint32_t owner, const struct pvr_compute_package *package)
 {
+    if(package&&(!private_image((uintptr_t)package,sizeof(*package),0)||!pvr_compute_package_valid(package)||
+        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)s,sizeof(*s))||
+        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)g,sizeof(*g))||
+        !apart((uintptr_t)package,sizeof(*package),(uintptr_t)service,sizeof(*service))))return NULL;
     if (compute_owner || !s || !g || !service || !owner || (uintptr_t)s % _Alignof(struct a733_gpu_compute_reserved) ||
         (uintptr_t)g % _Alignof(struct a733_gpu_reserved) || (uintptr_t)service % _Alignof(struct pvr_gpu_service) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
@@ -238,6 +259,7 @@ struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     if (!device_memory_acquire(g->wb_pool, owner, A733_GPU_COMPUTE_PAYLOAD_PAGES * 4096u, &first, &extent)) return NULL;
     compute_owner = s;
     s->binding = (struct a733_gpu_compute_binding){(uintptr_t)&s->binding, s, g, service, g->wb_pool, g->nc_pool, owner};
+    s->package=package;s->job.package=package;
     s->payload_lease = first; s->payload_extent = extent; s->stage = ACQUIRED;
     device_memory_lookup(g->wb_pool, first)->state = DEVICE_MEMORY_DEVICE;
     memset((void *)extent.cpu, 0, extent.bytes);
@@ -261,7 +283,7 @@ struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     for (unsigned i = 0; i < PVR_PROGRAM_REGIONS + PVR_JOB_REGIONS; ++i) {
         int program = i < PVR_PROGRAM_REGIONS; unsigned j = program ? i : i - PVR_PROGRAM_REGIONS;
         if (!program && j == PVR_JOB_UFO) continue;
-        size_t n = program ? pvr_compute_program_bytes[j] : pvr_compute_job_bytes[j];
+        size_t n = program ? pvr_compute_program_bytes[j] : pvr_compute_job_region_bytes(&s->job,j);
         if (off > extent.bytes || rounded(n) > extent.bytes - off) return failed(s);
         struct pvr_mips_buffer *d = program ? &s->config.programs[j] : &s->config.buffers[j];
         *d = child(extent, off, rounded(n), s->payload_pages + off / 4096);
@@ -319,3 +341,12 @@ struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     s->stage = BOUND;
     return &s->compute;
 }
+
+struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
+    struct a733_gpu_compute_reserved *s,struct a733_gpu_reserved *g,
+    struct pvr_gpu_service *service,uint32_t owner)
+{return prepare(s,g,service,owner,NULL);}
+struct pvr_compute_service *a733_gpu_compute_reserved_prepare_package(
+    struct a733_gpu_compute_reserved *s,struct a733_gpu_reserved *g,
+    struct pvr_gpu_service *service,uint32_t owner,const struct pvr_compute_package *package)
+{return package?prepare(s,g,service,owner,package):NULL;}

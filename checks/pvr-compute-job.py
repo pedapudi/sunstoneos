@@ -155,7 +155,7 @@ def main():
                      (src / 'src/imagination/pco/pco_data.h').read_text(), re.S)[0] + '\n'
     ref += re.search(r'static const uint32_t cs_sunstone_probe_common_0_common\[72\] = \{.*?\};', generated, re.S)[0] + '\n'
     (out / 'reference.h').write_text(ref)
-    inputs = ['checks/pvr-compute-job.c', 'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c',
+    inputs = ['checks/pvr-compute-job.c', 'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c',
               'drivers/gpu/pvr_compute_context.c', 'drivers/gpu/pvr_gpu_vm.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_ccb.c']
     cmds = []
     # All emitted job bytes are compared once; lower-layer standalone suites are reused.

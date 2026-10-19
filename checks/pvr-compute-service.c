@@ -42,8 +42,15 @@ static struct pvr_mips_buffer allocation(uintptr_t cpu,size_t bytes)
     memset((void *)cpu,0xa5,rounded);
     return (struct pvr_mips_buffer){{(void *)cpu,rounded},backing_pages+first,(uint32_t)(rounded/4096)};
 }
+#ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
+extern const struct pvr_compute_package fixture_package;
+extern const unsigned char fixture_expected[];
+#endif
 static void workload(void)
 {
+#ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
+    if(compute_service_case==12)job_config.package=&fixture_package;
+#endif
     programs=(struct pvr_compute_program_config){.bvnc=PVR_FW_A733_BVNC,
         .pds={UINT64_C(0x400000000),UINT64_C(1)<<32},.usc={UINT64_C(0x500000000),UINT64_C(1)<<32},
         .general={UINT64_C(0x600000000),UINT64_C(1)<<32},.excluded_count=5,
@@ -62,7 +69,7 @@ static void workload(void)
     for(unsigned i=0;i<18;++i) {
         int is_program=i<10;unsigned j=is_program?i:i-10;
         if(!is_program&&j==PVR_JOB_UFO){computation.buffers[j]=computation.firmware[5];continue;}
-        size_t bytes=is_program?pvr_compute_program_bytes[j]:pvr_compute_job_bytes[j];
+        size_t bytes=is_program?pvr_compute_program_bytes[j]:pvr_compute_job_region_bytes(&job_config,j);
         uintptr_t cpu=0x44000000+i*0x50000;
         struct pvr_mips_buffer *b=is_program?&computation.programs[j]:&computation.buffers[j];
         *b=allocation(cpu,bytes);
@@ -124,6 +131,12 @@ static int event(void *ctx,const unsigned char command[88])
 static void completion_model(void)
 {
     unsigned char *out=job_config.buffers[PVR_JOB_OUTPUT].cpu;
+#ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
+    if(compute_service_case==12) {
+        memcpy(out+64,fixture_expected,fixture_package.output_bytes);
+        __asm__ volatile("dsb sy":::"memory");put(computation.firmware[5].storage.cpu,4,compute.job.sequence);return;
+    }
+#endif
     for(unsigned i=0;i<32;++i)put(out+64+4*i,4,(17u+(i+1u)*3u)^(0x9e3779b9u+(i<<16)));
     __asm__ volatile("dsb sy":::"memory");put(computation.firmware[5].storage.cpu,4,compute.job.sequence);
 }
@@ -166,6 +179,25 @@ static void compute_owner(void *unused)
     }
     r=wait_phase(PVR_GPU_SERVICE_READY);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_READY);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
+#ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
+    if(compute_service_case==12) {
+        configASSERT(request(PVR_GPU_SERVICE_COMPUTE,1000000).result==PVR_GPU_SERVICE_OK);
+        wait_flag(&peer_checked,1);set(&allow_complete,1);completion_model();
+        do{vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
+        unsigned total=fixture_package.output_bytes/4;
+        for(unsigned first=0;first<total;first+=32) {
+            uint64_t ticket;configASSERT(pvr_gpu_service_compute_read(&service,first,1,&ticket));
+            while(!pvr_gpu_service_collect(&service,ticket,&r,1))vTaskDelay(1);
+            unsigned n=total-first<32?total-first:32;
+            configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_first_word==first&&r.compute_word_count==n&&
+                r.compute_total_words==total&&r.compute_sequence==1&&!memcmp(r.compute_words,fixture_expected+first*4,n*4));
+        }
+        configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);
+        r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_COMPLETE);
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; native package publication and paged copied output with modeled GPU writes\n");platform_exit(0);
+    }
+#endif
     if(compute_service_case==5) {
         configASSERT(mode_calls==1);
         r=request(PVR_GPU_SERVICE_COMPUTE,500000);

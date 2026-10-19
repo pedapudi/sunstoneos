@@ -472,7 +472,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
         return s->config.render->phase == PVR_RENDER_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
     }
     if (r->operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT) {
-        if (!s->config.compute) return PVR_GPU_SERVICE_INVALID;
+        if (!s->config.compute || m->compute_first_word >= pvr_compute_job_result_words(s->config.compute->config->job)) return PVR_GPU_SERVICE_INVALID;
         return s->config.compute->phase == PVR_COMPUTE_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
     }
     if (r->operation == PVR_GPU_SERVICE_COMPUTE_CANCEL) {
@@ -556,8 +556,11 @@ static void worker(void *argument)
             reply.compute_job_error = s->config.compute->job.error;
             reply.compute_sequence = s->config.compute->job.sequence;
             if (message.request.operation == PVR_GPU_SERVICE_COMPUTE_OUTPUT && reply.result == PVR_GPU_SERVICE_OK) {
-                reply.compute_word_count = PVR_COMPUTE_JOB_WORDS;
-                memcpy(reply.compute_words,s->config.compute->job.results,sizeof(reply.compute_words));
+                reply.compute_first_word=message.compute_first_word;
+                reply.compute_total_words=pvr_compute_job_result_words(s->config.compute->config->job);
+                reply.compute_word_count=reply.compute_total_words-reply.compute_first_word;
+                if(reply.compute_word_count>32)reply.compute_word_count=32;
+                memcpy(reply.compute_words,s->config.compute->job.results+reply.compute_first_word,reply.compute_word_count*4);
             }
         }
         configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
@@ -648,4 +651,17 @@ int pvr_gpu_service_render_read(struct pvr_gpu_service *s,uint32_t first_pixel,
     c->pending=message.ticket;
     if(xQueueSend(s->requests,&message,wait)!=pdTRUE){c->pending=0;return 0;}
     c->next_ticket=message.ticket;*ticket=message.ticket;return 1;
+}
+
+int pvr_gpu_service_compute_read(struct pvr_gpu_service *s,uint32_t first,
+    TickType_t wait,uint64_t *ticket)
+{
+    if(!ticket||wait==portMAX_DELAY||first>=PVR_COMPUTE_PACKAGE_OUTPUT/4)return 0;
+    unsigned slot;struct pvr_gpu_service_client *c=caller(s,&slot);
+    if(!c||c->pending||c->next_ticket==UINT64_MAX)return 0;
+    struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_COMPUTE_OUTPUT,0},
+        .ticket=c->next_ticket+1,.client=slot,.compute_first_word=first};
+    c->pending=m.ticket;
+    if(xQueueSend(s->requests,&m,wait)!=pdTRUE){c->pending=0;return 0;}
+    c->next_ticket=m.ticket;*ticket=m.ticket;return 1;
 }

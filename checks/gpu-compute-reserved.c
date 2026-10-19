@@ -87,6 +87,30 @@ void kernel_main(void)
         configASSERT(!compute.job.admit(compute.job.admission_context, &compute.job));
         compute.table_lease = token;
         configASSERT(compute.job.admit(compute.job.admission_context, &compute.job));
+        /* Exercise the real native reservation callback after completion. */
+        service.phase=PVR_GPU_SERVICE_READY;service.epoch=17;
+        service.queue.phase=PVR_CCB_ACTIVE;service.queue.epoch=17;
+        compute.compute.phase=PVR_COMPUTE_SERVICE_COMPLETE;compute.compute.epoch=17;
+        compute.compute.client.phase=PVR_CCCB_IDLE;compute.compute.client.epoch=17;
+        compute.compute.client.serial=1;compute.compute.client.queue=&service.queue;
+        compute.compute.job.phase=PVR_JOB_COMPLETE;compute.compute.job.epoch=17;
+        compute.compute.job.serial=1;compute.compute.job.sequence=1;
+        compute.compute.job.transport=&compute.compute.client;compute.compute.job.config=&compute.job;
+        *(volatile uint32_t *)compute.config.firmware[5].storage.cpu=1;
+        configASSERT(compute.job.admit(compute.job.admission_context,&compute.job));
+        service.owner=PVR_GPU_SERVICE_CLIENTS;
+        configASSERT(!compute.job.admit(compute.job.admission_context,&compute.job));
+        service.owner=0;
+        ++compute.compute.job.epoch;
+        configASSERT(!compute.job.admit(compute.job.admission_context,&compute.job));
+        --compute.compute.job.epoch;
+        *(volatile uint32_t *)compute.config.firmware[5].storage.cpu=0;
+        configASSERT(!compute.job.admit(compute.job.admission_context,&compute.job));
+        *(volatile uint32_t *)compute.config.firmware[5].storage.cpu=1;
+        ++compute.compute.client.serial;
+        configASSERT(!compute.job.admit(compute.job.admission_context,&compute.job));
+        --compute.compute.client.serial;
+        configASSERT(compute.job.admit(compute.job.admission_context,&compute.job));
         unsigned wb_pages = 0, nc_pages = 0;
         for (unsigned i = 0; i < DEVICE_MEMORY_MAX_ALLOCATIONS; ++i) {
             if (wb->allocations[i].state != DEVICE_MEMORY_FREE) wb_pages += wb->allocations[i].pages;

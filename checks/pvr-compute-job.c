@@ -169,7 +169,7 @@ static int publish(void *ctx,const struct pvr_compute_job_config *c,uint64_t dea
 {(void)ctx;assert(c==&config&&deadline==job.deadline);++io;published=1;if(late_publish)now=deadline;return !fail_publish;}
 static int fence_read(void *ctx,uint32_t *out){(void)ctx;assert(published);++io;*out=get(config.buffers[6].cpu,0);return 1;}
 static int output_read(void *ctx,void *out,size_t n)
-{(void)ctx;assert(n==256);++io;++reads;memcpy(out,config.buffers[5].cpu,n);return !fail_output;}
+{(void)ctx;assert(n==pvr_compute_job_region_bytes(&config,PVR_JOB_OUTPUT));++io;++reads;memcpy(out,config.buffers[5].cpu,n);return !fail_output;}
 static const struct pvr_compute_job_ops job_ops={clock_now,publish,fence_read,output_read};
 static void runtime(void)
 {

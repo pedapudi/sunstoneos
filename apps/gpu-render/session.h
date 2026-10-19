@@ -2,6 +2,19 @@
 #define SUNSTONE_GPU_APPLICATION_SESSION_H
 #include "boot.h"
 #include "a733_board_application.h"
+#include "pvr_compute_package.h"
+#ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
+struct gpu_program_session {
+    struct a733_board_session base;
+    uint64_t magic,version,bytes,package_bytes;
+    uint8_t package_digest[32];
+    struct pvr_compute_package package;
+};
+#define GPU_APPLICATION_SESSION_BYTES sizeof(struct gpu_program_session)
+const struct pvr_compute_package *gpu_application_package(void);
+#else
+#define GPU_APPLICATION_SESSION_BYTES sizeof(struct a733_board_session)
+#endif
 #define A733_GPU_SUPERVISED_TICKS (UINT64_C(60)*A733_SMP_COUNTER_HZ)
 struct gpu_boot_contract {struct a733_smp_contract base;uint8_t session_digest[32];
 #ifdef SUNSTONE_GPU_SUPERVISED
