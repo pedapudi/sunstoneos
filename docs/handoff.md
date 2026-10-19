@@ -95,11 +95,12 @@ Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
 and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
 linked two-client reads, preparation and host checks pass under
-`sd-bus-modes-20261019/`. The current-layout SD image includes the USB HID
-headers and class source consistently across all consumers. Linked SD/client,
+`sd-bus-modes-20261019/`. The SD image rebuilt for USB HID layouts includes
+those headers and class source consistently across all consumers. Linked SD/client,
 USB0 copied-read, moved-field liveness and host identity checks pass; focused
-review is closed. Integration verifies 182 sources, 1,219 artifacts and all
-411 compiled inputs under `sd-shared-usb-20261019/root-integration.json`.
+review is closed. At integration revision `894051d`, the audit verified 182
+sources, 1,219 artifacts and all 411 compiled inputs under
+`sd-shared-usb-20261019/root-integration.json`.
 Its ELF SHA-256 is
 `141078f41ea22546a55117dd21245655a20162d4d09487a6647bad7ddf0a9d78`.
 The preceding image and its six later USB-input differences remain historical;
@@ -144,10 +145,21 @@ Native USB host HID input is integrated through the actual TinyUSB class and
 xHCI interrupt-IN path at low, full and high speed. The board application copies
 four reports to USB0 output without sending desktop input events. Sanitizer,
 native consumer/serializer and host checks pass; source review is closed.
-Integration matches all 408 compiled inputs under
-`usb-host-interrupt-20261018/root-integration.json`. CPU event handling still
-polls the xHCI ring. Physical enumeration, report contents/timing, VBUS cutoff,
-interrupt delivery and detach/reuse remain unqualified.
+The original polling HID image's audit matched 408 compiled inputs under
+`usb-host-interrupt-20261018/root-integration.json`.
+Optional CPU interrupt completion is now integrated for the supervised board
+image through `SUNSTONE_BOARD_USB2_IRQ=ON`. CPU0 interrupt 187 masks and notifies
+the existing HID/MSC owner. That task acknowledges events, drains a bounded
+batch and checks empty/race state before rearming. Other profiles retain polling.
+Eighteen root routing/dispatch cases, ten composed device cases and owner,
+native-capture and review checks pass. The IRQ image's audit matches 413 compiled
+inputs and 161 objects, with 32 sources, 59 artifacts and three tools verified
+under `usb-host-cpu-irq-20261019/root-integration.json`. Its selected consumers
+use the new xHCI structure layouts consistently. Earlier SD, UART and other
+images remain valid with their own frozen inputs; these audits do not establish
+matching inputs at future revisions or require catch-up rebuilds. Physical
+interrupt delivery, enumeration, report timing/content, VBUS cutoff, DMA drain
+and detach/reuse remain unqualified.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -296,12 +308,14 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue source-backed I2S hardware cyclic-DMA and USB host CPU interrupt
-   integration; both remain in progress. Preserve copied-slot acknowledgment and
+1. Continue source-backed I2S hardware cyclic-DMA integration; it remains in
+   progress. Preserve copied-slot acknowledgment and
    cancellation-backlog rules. Negotiated read-only SD, UART interrupt service,
-   USB host HID input, bounded trusted GPU multi-dispatch, deferred NPU interrupt
+   USB host HID input and optional CPU interrupt service, bounded trusted GPU
+   multi-dispatch, deferred NPU interrupt
    completion and H.264, JPEG and crypto runtime input delivery are integrated.
-   Reuse the current-layout frozen SD image and its complete source closure.
+   Reuse each accepted image with its complete frozen source closure, including
+   SD and UART images that predate the latest shared USB layout.
    Preserve the accepted fixed-workload GPU returning profile; its passed root
    delta review supplies no physical admission. General GPU dispatch geometry,
    same-session input replacement, graphics and concurrency remain required.

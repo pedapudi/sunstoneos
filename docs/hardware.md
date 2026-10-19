@@ -358,11 +358,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   limit and 25 MHz, or require four-bit high speed at 50 MHz. The original
   one-bit 400 kHz profile is preserved. Native SCR/ACMD6/CMD6, actual provider,
   linked two-client read, preparation and host checks pass under
-  `sd-bus-modes-20261019/`. The current-layout image includes USB HID headers
-  and class source consistently across all consumers. Linked SD/client, USB0
+  `sd-bus-modes-20261019/`. The SD image rebuilt for HID layouts includes those
+  headers and class source consistently across all consumers. Linked SD/client, USB0
   copied-read, moved-field liveness and host identity checks pass; focused review
-  is closed. Integration verifies 182 sources, 1,219 artifacts and all 411 compiled
-  inputs under `sd-shared-usb-20261019/root-integration.json`. Its 163 linked
+  is closed. At integration revision `894051d`, the audit verified 182 sources,
+  1,219 artifacts and all 411 compiled inputs under
+  `sd-shared-usb-20261019/root-integration.json`. Its 163 linked
   objects and full source closure remain frozen together. The preceding image's
   six later USB-input differences remain historical; unchanged protocol, clock
   and refusal evidence was reused. Actual mode negotiation, read data,
@@ -1143,10 +1144,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   refusal and retained ownership. Native HID interrupt-IN input now uses the
   actual TinyUSB class at low, full and high speed. The board application copies
   four reports to USB0 output without sending desktop input events. Sanitizer,
-  native consumer/serializer and host checks pass; all 408 compiled inputs match
-  integration under `usb-host-interrupt-20261018/root-integration.json`.
-  xHCI schedules periodic bus transactions while CPU completion handling polls
-  the event ring. Full startup, physical power/switch qualification, actual
+  native consumer/serializer and host checks pass. The original polling HID
+  image's audit matched 408 compiled inputs under
+  `usb-host-interrupt-20261018/root-integration.json`.
+  Optional supervised board CPU interrupt completion now routes INTID 187 to
+  CPU0 and wakes the existing HID/MSC owner task. The ISR masks and notifies;
+  only the owner acknowledges/drains events and checks empty/race state before
+  rearming. Other profiles retain polling. Eighteen root routing/dispatch cases,
+  ten composed device cases and owner/native-capture checks pass with review.
+  Integration verifies 413 compiled inputs, 161 objects, 32 sources, 59 artifacts
+  and three tools under `usb-host-cpu-irq-20261019/root-integration.json`.
+  All selected consumers use the changed xHCI layouts consistently. Earlier SD,
+  UART and other images retain their own frozen input/layout authority; their
+  audits do not establish matches at future revisions or require catch-up builds.
+  Full startup, physical power/switch qualification, actual
   transfers and report timing, DMA drain, CPU interrupt delivery, repeated
   attachment, safe detach/reuse, hubs, isochronous transfers, SuperSpeed, role
   swaps, USB PD, VCONN and applicable alternate modes remain outstanding.
