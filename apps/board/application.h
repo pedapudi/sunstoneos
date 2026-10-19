@@ -9,6 +9,7 @@
 #include "radio.h"
 _Static_assert(offsetof(struct a733_board_session,radio_profile_digest)==368,"observer session digest");
 _Static_assert(offsetof(struct a733_board_session,workload)==400,"observer workload");
+_Static_assert(offsetof(struct a733_board_session,source_ma)==552,"SS source admission");
 _Static_assert(offsetof(struct board_radio_profile,response_bytes)==BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET,
     "observer response extent");
 _Static_assert(offsetof(struct board_radio_profile,response)==1596 &&
@@ -45,6 +46,7 @@ struct board_application {
     atomic_uint_fast64_t live_until;
     uint8_t sector[512];
     uint8_t dual_result[1088];
+    uint8_t ss_result[544];
 };
 _Static_assert(64+512==576 && 576+512==sizeof(((struct board_application *)0)->dual_result),
     "combined header and disjoint copied output extents");

@@ -39,7 +39,7 @@ uint32_t tusb_time_millis_api(void)
 int a733_usb2_host_bind(struct a733_usb2_native *n)
 {
     if(host||!n||n->self!=n||!n->core_started||!n->core.self||n->core.ops.current(n->core.context)!=1)return 0;
-    host=n;const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=TUSB_SPEED_HIGH};
+    host=n;const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=n->platform.config.superspeed?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH};
     if(!tusb_init(0,&init)){lost();return 0;}return 1;
 }
 int a733_usb2_host_poll(struct a733_usb2_native *n)
@@ -107,6 +107,46 @@ static int bot_complete(const struct a733_xhci_notice *e)
     n->bot_stage=0;n->bot_buffer=NULL;return 1;
 }
 static unsigned le16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
+static int ss_bos(const uint8_t *p,unsigned bytes)
+{
+    struct a733_usb2_native *n=host;
+    if(bytes<5||p[0]!=5||p[1]!=15||le16(p+2)<15||le16(p+2)>sizeof(n->ss_bos)||!p[4])return 0;
+    if(bytes==5){if(n->ss_control)return 0;memcpy(n->ss_bos_prefix,p,5);n->ss_bos_bytes=le16(p+2);n->ss_control=1;return 1;}
+    if(n->ss_control!=1||bytes!=n->ss_bos_bytes||memcmp(n->ss_bos_prefix,p,5))return 0;
+    unsigned count=0,seen=0;
+    for(unsigned at=5;at<bytes;){
+        if(bytes-at<3||p[at]<3||p[at]>bytes-at||p[at+1]!=16)return 0;
+        const uint8_t *c=p+at;
+        if(c[2]==3){
+            if(seen++||c[0]!=10||(c[3]&~2u)||!(le16(c+4)&8)||le16(c+4)&~15u||
+               c[6]>3||!(le16(c+4)&(1u<<c[6]))||c[7]>10||le16(c+8)>2047)return 0;
+            n->ss_u1=c[7];n->ss_u2=le16(c+8);
+        }else if(c[2]==2){if(c[0]!=7||(le32(c+3)&1))return 0;}
+        else if(c[2]==4&&c[0]!=20)return 0;
+        ++count;at+=c[0];
+    }
+    if(seen!=1||count!=p[4])return 0;
+    memcpy(n->ss_bos,p,bytes);n->ss_control=2;return 1;
+}
+bool a733_tinyusb_ss_enumerate(uint8_t address,unsigned stage,uint8_t *buffer,tuh_xfer_cb_t callback,uintptr_t next)
+{
+    if(!owner()||!host->platform.config.superspeed||!address||!buffer||stage!=host->ss_control||stage>3||
+       host->core.ops.outside(host->core.context,buffer,256)!=1){lost();return false;}
+    tusb_control_request_t request={0};request.bRequest=stage<2?6:stage==2?49:48;
+    request.bmRequestType=stage<2?0x80:0;request.wValue=stage<2?0x0f00:stage==2?40:0;
+    request.wLength=stage==0?5:stage==1?(uint16_t)host->ss_bos_bytes:stage==3?6:0;
+    if(stage==3){
+        unsigned u1=host->ss_u1>host->core.root_u1?host->ss_u1:host->core.root_u1;
+        unsigned u2=host->ss_u2>host->core.root_u2?host->ss_u2:host->core.root_u2;
+        if(!u1)u1=1;if(!u2)u2=1;
+        host->ss_sel[0]=host->ss_sel[1]=(uint8_t)u1;
+        host->ss_sel[2]=host->ss_sel[4]=(uint8_t)u2;host->ss_sel[3]=host->ss_sel[5]=(uint8_t)(u2>>8);
+        memcpy(buffer,host->ss_sel,6);
+    }
+    host->ss_request=stage;
+    tuh_xfer_t xfer={.daddr=address,.ep_addr=0,.setup=&request,.buffer=request.wLength?buffer:NULL,.complete_cb=callback,.user_data=next};
+    return tuh_control_xfer(&xfer);
+}
 static int control_response(const struct a733_xhci_notice *e)
 {
     struct a733_usb2_native *n=host;
@@ -116,6 +156,10 @@ static int control_response(const struct a733_xhci_notice *e)
     struct a733_usb2_hub *hub=&n->hub;
     const uint8_t *p=n->control_buffer,*s=n->control_setup;unsigned bytes=n->control_bytes;
     if(!p){
+        if(n->platform.config.superspeed&&device->control_stage==0&&e->bytes==0&&e->endpoint==128){
+            if(s[1]==49){if(n->ss_control!=2||n->ss_request!=2)return 0;n->ss_control=3;}
+            if(s[1]==48){if(n->ss_control!=3||n->ss_request!=3)return 0;n->ss_control=4;n->ss_ready=1;}
+        }
         if(device->control_stage==0&&e->bytes==0&&e->endpoint==128&&desc->kind==A733_USB2_DEVICE_HUB){
             uint64_t now;
             if(s[0]==1&&s[1]==11&&le16(s+2)==1)hub->alt_selected=1;
@@ -132,6 +176,7 @@ static int control_response(const struct a733_xhci_notice *e)
     }
     if(e->endpoint!=128||e->result||e->bytes!=bytes||bytes!=le16(s+6))return 0;
     n->control_buffer=NULL;n->control_bytes=0;
+    if(n->platform.config.superspeed&&s[0]==0x80&&s[1]==6&&s[3]==15)return ss_bos(p,bytes);
     if(desc->kind==A733_USB2_DEVICE_HUB){
         if(s[0]==0xa0&&s[1]==6&&le16(s+2)==0x2900){
             unsigned chars=bytes>=5?le16(p+3):0;
@@ -171,6 +216,7 @@ static int control_response(const struct a733_xhci_notice *e)
     if(s[0]!=0x80||s[1]!=6||bytes<2||p[1]!=s[3])return 0;
     if(s[3]==1){
         unsigned speed=device->speed,is_hub=p[4]==9;
+        if(speed==4&&(is_hub||p[2]||p[3]!=3||p[7]!=9))return 0;
         if(p[0]!=18||p[5]||(!is_hub&&(p[4]||p[6]))||
            (is_hub&&(n->control_device||speed!=3||(p[6]!=1&&p[6]!=2)))||
            (speed==2&&p[7]!=8)||(speed==3&&p[7]!=64)||
@@ -187,9 +233,10 @@ static int control_response(const struct a733_xhci_notice *e)
         if(is_hub)hub->address=e->address;return 1;
     }
     if(s[3]==2){
-        unsigned total=bytes>=4?le16(p+2):0,is_hub=desc->kind==A733_USB2_DEVICE_HUB;
+        unsigned total=bytes>=4?le16(p+2):0,is_hub=desc->kind==A733_USB2_DEVICE_HUB,ss=device->speed==4;
+        if(ss&&(!n->ss_ready||(p[8]*8u>900u||p[8]*8u>n->platform.typec->config.source_ma)))return 0;
         if(bytes<9||p[0]!=9||p[4]!=1||p[5]!=1||!(p[7]&128)||p[8]>250||
-           (is_hub?(total!=(hub->protocol==2?41u:25u)||(p[7]&0xc0)!=0xc0||(p[7]&31)):(total!=32&&total!=34)))return 0;
+           (is_hub?(total!=(hub->protocol==2?41u:25u)||(p[7]&0xc0)!=0xc0||(p[7]&31)):(ss?total!=44:(total!=32&&total!=34))))return 0;
         if(bytes==9){if(desc->configuration_probe)return 0;memcpy(desc->configuration_prefix,p,9);desc->configuration_probe=1;return 1;}
         if(bytes!=total||!desc->configuration_probe||memcmp(desc->configuration_prefix,p,9)||p[9]!=9||p[10]!=4||p[11]||p[12])return 0;
         if(is_hub){
@@ -215,10 +262,11 @@ static int control_response(const struct a733_xhci_notice *e)
             desc->kind=A733_USB2_DEVICE_HID;n->kind=n->msc_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_HID;n->hid.endpoint=ep;n->hid.packet=packet;n->hid.interval=interval;
             n->hid.subclass=p[15];n->hid.protocol=p[16];n->hid.descriptor_bytes=le16(p+25);return 1;
         }
-        if(device->speed!=3||p[13]!=2||p[14]!=8||p[15]!=6||p[16]!=0x50)return 0;
+        if((device->speed!=3&&device->speed!=4)||p[13]!=2||p[14]!=8||p[15]!=6||p[16]!=0x50)return 0;
         unsigned dirs=0,seen=0;
-        for(unsigned at=18;at<32;at+=7){unsigned ep=p[at+2];
-            if(p[at]!=7||p[at+1]!=5||(ep&0x70)||!(ep&15)||p[at+3]!=2||le16(p+at+4)!=512)return 0;
+        for(unsigned at=18;at<total;at+=ss?13:7){unsigned ep=p[at+2];
+            if(p[at]!=7||p[at+1]!=5||(ep&0x70)||!(ep&15)||p[at+3]!=2||le16(p+at+4)!=(ss?1024u:512u))return 0;
+            if(ss){const uint8_t *c=p+at+7;if(c[0]!=6||c[1]!=0x30||c[2]>15||c[3]>16||le16(c+4))return 0;n->ss_burst[!!(ep&128)]=c[2];}
             if(ep&128)n->msc_in=ep;else n->msc_out=ep;
             unsigned bit=1u<<((ep&15)+((ep&128)?16:0));if(seen&bit)return 0;seen|=bit;dirs|=(ep&128)?2:1;}
         if(dirs!=3||n->msc_seen||(n->hid_seen&&!n->dual_leaf))return 0;
@@ -260,7 +308,7 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
     }else lost();
 }
 bool hcd_init(uint8_t port,const tusb_rhport_init_t *i)
-{return owner()&&!port&&i&&i->role==TUSB_ROLE_HOST&&i->speed==TUSB_SPEED_HIGH;}
+{return owner()&&!port&&i&&i->role==TUSB_ROLE_HOST&&i->speed==(host->platform.config.superspeed?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH);}
 bool hcd_deinit(uint8_t port){(void)port;lost();return false;}
 bool hcd_configure(uint8_t port,uint32_t id,const void *p){(void)port;(void)id;(void)p;return false;}
 void hcd_int_enable(uint8_t port){(void)port;}
@@ -278,7 +326,7 @@ void hcd_port_reset(uint8_t port)
 {uint64_t d=deadline();if(port||!d||!a733_xhci_reset_port(&host->core,d))lost();}
 void hcd_port_reset_end(uint8_t port){if(port||!owner())lost();}
 tusb_speed_t hcd_port_speed_get(uint8_t port)
-{return owner()&&!port?(host->core.speed==3?TUSB_SPEED_HIGH:host->core.speed==2?TUSB_SPEED_LOW:host->core.speed==1?TUSB_SPEED_FULL:TUSB_SPEED_INVALID):TUSB_SPEED_INVALID;}
+{return owner()&&!port?(host->core.speed==4?TUSB_SPEED_SUPER:host->core.speed==3?TUSB_SPEED_HIGH:host->core.speed==2?TUSB_SPEED_LOW:host->core.speed==1?TUSB_SPEED_FULL:TUSB_SPEED_INVALID):TUSB_SPEED_INVALID;}
 void hcd_device_close(uint8_t port,uint8_t address)
 {
     if(owner()&&!port&&!address&&a733_xhci_retire_zero(&host->core))return;
@@ -303,7 +351,11 @@ bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
           tu_unaligned_read16(&e->wMaxPacketSize)==host->hid.packet&&e->bInterval==host->hid.interval&&
           a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hid.packet,e->bInterval,d);
     }
-    return a733_xhci_open(&host->core,address,e->bEndpointAddress,e->bmAttributes.xfer,tu_edpt_packet_size(e),d);
+    int ok=a733_xhci_open(&host->core,address,e->bEndpointAddress,e->bmAttributes.xfer,tu_edpt_packet_size(e),d);
+    if(ok&&host->platform.config.superspeed&&(e->bEndpointAddress&15))
+        ok=host->ss_ready&&host->msc_seen&&address==host->address&&
+           a733_xhci_set_burst(&host->core,address,e->bEndpointAddress,host->ss_burst[!!(e->bEndpointAddress&128)]);
+    return ok;
 }
 
 bool hcd_edpt_close(uint8_t port,uint8_t address,uint8_t ep)
@@ -324,8 +376,10 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
     if(setup[0]==0x80&&setup[1]==6){
         valid=(setup[3]==1&&!setup[2]&&!index&&(len==8||len==18))||
             (setup[3]==2&&!setup[2]&&!index&&(len==9||(desc->configuration_probe&&len==le16(desc->configuration_prefix+2))))||
+            (host->platform.config.superspeed&&setup[3]==15&&!setup[2]&&!index&&(len==5||(host->ss_bos_bytes&&len==host->ss_bos_bytes)))||
             (setup[3]==3&&len>=2&&len<=254&&!(len&1));
-    }else if(!setup[0]&&!index&&!len)valid=(setup[1]==5&&value&&value<=127)||(setup[1]==9&&value==1);
+    }else if(host->platform.config.superspeed&&!setup[0]&&!index&&((setup[1]==49&&value==40&&!len&&host->ss_control==2)||(setup[1]==48&&!value&&len==6&&host->ss_control==3)))valid=1;
+    else if(!setup[0]&&!index&&!len)valid=(setup[1]==5&&value&&value<=127)||(setup[1]==9&&value==1&&(!host->platform.config.superspeed||host->ss_ready));
     else if(desc->kind==A733_USB2_DEVICE_HUB&&address==hub->address){
         valid=(setup[0]==1&&setup[1]==11&&!index&&value==1&&!len&&hub->protocol==2&&!hub->alt_selected)||
           (setup[0]==0xa0&&setup[1]==6&&value==0x2900&&!index&&len==9&&!hub->ports)||
@@ -360,6 +414,8 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
             host->hid.pending_buffer=buffer;host->hid.requested=bytes;
         }else if(!host->msc_seen||address!=host->address||!bot_submit(ep,buffer,bytes)){lost();return false;}
     }
+    if(host->platform.config.superspeed&&ep==0&&bytes&&
+       (host->control_setup[1]!=48||bytes!=6||!buffer||memcmp(buffer,host->ss_sel,6))){lost();return false;}
     int ok=a733_xhci_transfer(&host->core,address,ep,buffer,bytes,d);
     if(!ok&&(ep&15))lost();
     if(ok&&ep==128&&bytes){host->control_buffer=buffer;host->control_bytes=bytes;}

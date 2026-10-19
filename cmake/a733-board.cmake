@@ -52,7 +52,7 @@ endif()
 foreach(source IN ITEMS
   apps/board/main.c apps/board/session.c apps/board/radio_profile.c apps/board/admission.c apps/board/client.c apps/board/usb0.c apps/board/identity.c
   drivers/usb/a733_typec.c platform/a733/typec_native.c drivers/i2c/a733_twi.c drivers/i2c/a733_twi_native.c
-  drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c
+  drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c drivers/usb/a733_usb3_phy.c
   platform/a733/memory_uncached.c platform/a733/memory_reservations.c runtime/device_memory_pool.c
   apps/board/radio.c drivers/net/a733_radio_session.c drivers/net/a733_radio_platform.c
   drivers/net/a733_radio_platform_native.c drivers/net/a733_radio_entropy.c
@@ -70,15 +70,30 @@ endforeach()
 # touch one another's stack state or owner-dependent time implementation.
 apply_build_patch("${board_build}/hub-native.c" "${TINYUSB_DIR}/src/host/hub.c"
   "${board_root}/drivers/usb/host/hub.patch")
+set(board_cadence_source "$ENV{HOME}/.cache/sunstoneos/sources/pcie/kernel/bsp/drivers/phy/sunxi-cadence-combophy.c")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${board_root}/drivers/usb/host/cadence-source.py"
+  --source "${board_cadence_source}" --output "${board_build}/ss-cadence.inc" RESULT_VARIABLE ss_source_status)
+if(NOT ss_source_status EQUAL 0)
+  message(FATAL_ERROR "Pinned Cadence USB source preparation failed")
+endif()
+set(board_host_tiny "${board_build}/tinyusb-ss")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${board_root}/drivers/usb/host/superspeed.py"
+  --source "${TINYUSB_DIR}/src" --output "${board_host_tiny}" RESULT_VARIABLE ss_stack_status)
+if(NOT ss_stack_status EQUAL 0)
+  message(FATAL_ERROR "Pinned TinyUSB SuperSpeed preparation failed")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${board_root}/drivers/usb/host/superspeed.py"
+  "${board_root}/drivers/usb/host/cadence-source.py" "${board_cadence_source}")
 set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
   "${board_build}/hub-native.c"
-  "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/host/usbh.c"
-  "${TINYUSB_DIR}/src/class/msc/msc_host.c"
-  "${TINYUSB_DIR}/src/class/hid/hid_host.c")
+  "${board_host_tiny}/tusb.c" "${board_host_tiny}/host/usbh.c"
+  "${board_host_tiny}/class/msc/msc_host.c"
+  "${board_host_tiny}/class/hid/hid_host.c")
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
+target_include_directories(a733-board-usb2-host BEFORE PRIVATE "${board_host_tiny}")
 get_target_property(board_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET a733-board-usb2-host PROPERTY COMPILE_OPTIONS "${board_options}")
-target_compile_definitions(a733-board-usb2-host PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1>" SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
+target_compile_definitions(a733-board-usb2-host PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1;SUNSTONE_BOARD_USB3=1>" SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
 target_compile_options(a733-board-usb2-host PRIVATE -include "${board_root}/apps/board/host-symbols.h")
 target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/usb/host"
   "${board_root}/apps/board" "${board_root}/platform/a733-smp-cached"
@@ -93,6 +108,7 @@ list(APPEND board_sources ${board_tcp_sources} "${FREERTOS_DIR}/event_groups.c"
   "${SUNSTONE_TCP_DIR}/source/portable/BufferManagement/BufferAllocation_1.c")
 set_source_files_properties(${board_tcp_sources} PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
 add_executable(sunstone-a733-board EXCLUDE_FROM_ALL ${board_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
+target_include_directories(sunstone-a733-board PRIVATE "${board_build}")
 if(SUNSTONE_BOARD_USB2_IRQ)
   if(NOT SUNSTONE_BOARD_SUPERVISED)
     message(FATAL_ERROR "USB2 IRQ completion requires supervised board startup")
@@ -106,7 +122,7 @@ get_target_property(board_all_sources sunstone-a733-board SOURCES)
 list(REMOVE_ITEM board_all_sources "$<TARGET_OBJECTS:a733-board-usb2-host>")
 file(GLOB_RECURSE board_external_headers "${SUNSTONE_TCP_DIR}/source/*.h" "${SUNSTONE_RSN_DIR}/src/*.h"
   "${SUNSTONE_NETWORK_C_HEADERS}/*.h")
-set(board_inputs ${board_all_sources} ${board_external_headers} ${board_host_sources} ${storage_inputs}
+set(board_inputs "${board_cadence_source}" "${board_root}/drivers/usb/host/cadence-source.py" "${board_root}/drivers/usb/host/superspeed.py" ${board_all_sources} ${board_external_headers} ${board_host_sources} ${storage_inputs}
   "${board_root}/apps/board/boot.patch" "${board_root}/drivers/usb/host/hub.patch"
   "${TINYUSB_DIR}/src/host/hub.c" "${CMAKE_CURRENT_LIST_FILE}")
 file(GLOB board_headers "${board_root}/apps/board/*.h")
@@ -137,7 +153,7 @@ else()
   set(board_contract_magic 0x41533733424f4331ULL)
   set(board_result_magic 0x41533733424f5231ULL)
 endif()
-target_compile_definitions(sunstone-a733-board PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1>" SUNSTONE_SECURE_MONITOR=1
+target_compile_definitions(sunstone-a733-board PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1;SUNSTONE_BOARD_USB3=1>" SUNSTONE_SECURE_MONITOR=1
   SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_USB=1
   A733_SMP_CONTRACT_MAGIC=${board_contract_magic} A733_SMP_RESULT_MAGIC=${board_result_magic})
 target_link_options(sunstone-a733-board PRIVATE -nostdlib -static -Wl,--gc-sections

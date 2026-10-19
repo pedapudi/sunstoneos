@@ -50,6 +50,9 @@ struct a733_usb2_native {
     struct a733_usb2_hid hid;
     struct a733_usb2_hub hub;
     struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
+    uint8_t ss_bos_prefix[5],ss_sel[6];unsigned ss_bos_bytes,ss_bos_seen,ss_ready,ss_control,ss_request;
+    unsigned ss_u1,ss_u2,ss_burst[2];
+    uint8_t ss_bos[256];
     unsigned dual_leaf,msc_seen,hid_seen,msc_mounted,hid_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;

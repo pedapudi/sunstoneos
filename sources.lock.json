@@ -2577,5 +2577,25 @@
     "sha256": "5fe9c53c04033818af396e8852b3acbca5c3a76ba92fab549fd81cd0ea7b3692",
     "base_pdf_member": "usb_20_20250603/usb_20_20240927/usb_20_20240927/usb_20.pdf",
     "base_pdf_sha256": "d39698a33486c399124af92bd02e4f978fd9a836b5cf4e52e6e4633eb1d89f61"
+  },
+  "usb3-base-specification-bundle": {
+    "revision": "USB3.2 Revision1.1 June2022",
+    "url": "https://www.usb.org/sites/default/files/usb_32_202206_0.zip",
+    "archive": "usb-superspeed/usb_32_202206_0.zip",
+    "sha256": "25c48f7a214ed31f5ef6c58b9d6269dd1c872921c8a7a455324d4bd323728b8a",
+    "base_pdf_member": "usb_32_202206/USB 3.2 Revision 1.1.pdf",
+    "base_pdf_sha256": "26e025a56ce0352f4f91fcaaca67b622d8e9e030ca429804bf7da98f52e674fd"
+  },
+  "usb3-hub-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/core/hub.c",
+    "archive": "usb-superspeed/hub.c",
+    "sha256": "9a9cdda49dd7577f63f809932368c4fc04ed8eed5cc6b01844d98ec573c8c7e1"
+  },
+  "usb3-xhci-hub-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/host/xhci-hub.c",
+    "archive": "usb-superspeed/xhci-hub.c",
+    "sha256": "1c6021fa36775dffa11a0a4907255ed88993070e57168579db5d2372dbb2902c"
   }
 }

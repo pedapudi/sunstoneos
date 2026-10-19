@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_usb2_native.h"
+#include "a733_usb3_phy.h"
 #include "a733_platform_locks.h"
 #include "aarch64_device_memory.h"
 #include "task.h"
@@ -43,17 +44,32 @@ static int held(struct a733_usb2_native *n)
     xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;}
 static int read(void *cookie,uintptr_t a,uint32_t *v)
 {
-    struct a733_usb2_native *n=cookie;if(!v||!held(n)||!a733_usb2_platform_address(a,0))return 0;
+    struct a733_usb2_native *n=cookie;if(!v||!held(n)||!(a733_usb2_platform_address(a,0)||(n->platform.config.superspeed&&(a733_usb3_mask32(a)||a==0x06c01900))))return 0;
     __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint32_t *)a;
     __asm__ volatile("dsb sy":::"memory");return 1;
 }
 static int write(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_usb2_native *n=cookie;uint32_t mask=a733_usb2_platform_mask(a);
-    if(!mask||!held(n)||!a733_usb2_platform_address(a,1))return 0;
+    if(n->platform.config.superspeed&&a733_usb3_mask32(a))mask=a733_usb3_mask32(a);
+    if(!mask||!held(n)||!(a733_usb2_platform_address(a,1)||(n->platform.config.superspeed&&a733_usb3_mask32(a))))return 0;
     __asm__ volatile("dsb sy":::"memory");uint32_t old=*(volatile const uint32_t *)a;
     if((v^old)&~mask)return 0;*(volatile uint32_t *)a=v;
     __asm__ volatile("dsb sy":::"memory");return 1;
+}
+static int read16(void *cookie,uintptr_t a,uint16_t *v)
+{
+    struct a733_usb2_native *n=cookie;
+    if(!v||!held(n)||!n->platform.config.superspeed||!a733_usb3_address16(a))return 0;
+    __asm__ volatile("dsb sy":::"memory");*v=*(volatile const uint16_t *)a;
+    __asm__ volatile("dsb sy":::"memory");return 1;
+}
+static int write16(void *cookie,uintptr_t a,uint16_t v)
+{
+    struct a733_usb2_native *n=cookie;
+    if(!held(n)||!n->platform.config.superspeed||!a733_usb3_address16(a))return 0;
+    __asm__ volatile("dsb sy":::"memory");*(volatile uint16_t *)a=v;
+    __asm__ volatile("dsb sy":::"memory");return *(volatile const uint16_t *)a==v;
 }
 /* The embedded platform itself is an intentional constructor input. Other
  * caller buffers must exclude every other native field and the DMA parent. */
@@ -99,7 +115,8 @@ static int write32(void *cookie,uint32_t off,uint32_t v)
     struct a733_usb2_native *n=cookie;if(!core_allowed(n,off,4))return 0;
     struct a733_xhci *h=&n->core;unsigned op=h->operational,rt=h->runtime,db=h->doorbell;
     int allowed=op&&(off==op||off==op+4||off==op+0x38||
-        (h->usb2_port&&off==op+0x400+16*(h->usb2_port-1)));
+        (h->usb2_port&&off==op+0x400+16*(h->usb2_port-1))||
+        (h->require_ss&&h->usb2_companion_port&&off==op+0x400+16*(h->usb2_companion_port-1)));
     allowed|=rt&&(off==rt+0x20||off==rt+0x24||off==rt+0x28);
     allowed|=db&&off==db;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
@@ -149,6 +166,8 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
         0x07010000,0x07067000,0x07068000,0x07090000,0x06a0c000};
     for(unsigned i=0;i<sizeof(pages)/sizeof(pages[0]);++i)if(!mappings(pages[i],4096,0))return 0;
     if(!mappings(0x06a00000,0x8000,0))return 0;
+    if(c->superspeed&&(!mappings(0x06c01000,4096,0)||!mappings(0x06c06000,8192,0)||
+       !mappings(0x06c80000,0x20000,0)||!mappings(0x06a0d000,4096,0)))return 0;
     *n=(struct a733_usb2_native){.self=n,.locks=locks,.owner_task=task,.parent_pool=pool,
         .admit=admission,.admission_context=context};
     if(!device_memory_acquire(pool,c->owner,A733_XHCI_MEMORY_BYTES,&n->parent,&n->backing))return 0;
@@ -160,7 +179,7 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
     struct device_memory_allocation *a=device_memory_lookup(pool,n->parent);
     if(!a||a->state!=DEVICE_MEMORY_CPU){device_memory_retain(pool,n->parent);return 0;}
     a->state=DEVICE_MEMORY_DEVICE;
-    n->platform_ops=(struct a733_usb2_platform_ops){now,current,admit,enter,leave,retain,read,write,platform_outside};
+    n->platform_ops=(struct a733_usb2_platform_ops){now,current,admit,enter,leave,retain,read,write,platform_outside,read16,write16};
     n->core_ops=(struct a733_xhci_ops){now,current,live,read32,write32,write64,barrier,core_outside,a733_usb2_host_notice};
     if(!a733_usb2_platform_init(&n->platform,c,&n->platform_ops,n,clocks,rails,pmic,pck,typec)){
         device_memory_retain(pool,n->parent);return 0;}
@@ -181,6 +200,7 @@ enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *n)
         if(!a733_xhci_init(&n->core,&n->core_ops,n,&n->private_pool,n->memory,
             n->platform.attachment.generation,n->platform.config.deadline,n->platform.config.lifetime_deadline)){
             a733_usb2_native_lost(n);return A733_USB2_RETAINED;}}
+    n->core.require_ss=n->platform.config.superspeed;
     if(!n->stack_started){if(!a733_usb2_host_bind(n)){a733_usb2_native_lost(n);return A733_USB2_RETAINED;}n->stack_started=1;}
     int r=a733_usb2_host_poll(n);if(r<0){a733_usb2_native_lost(n);return A733_USB2_RETAINED;}
     return n->mounted?A733_USB2_READY:A733_USB2_PENDING;

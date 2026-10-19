@@ -13,8 +13,10 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        !s->epoch||!s->generation||!s->lease||!present(s->image,32)||
        !present(s->qualification,32)||!present(s->wiring,32)||!present(s->memory,32)||
        !present(s->recovery,32)||memcmp(s->qualification,s->recovery,32)||
-       s->reserved0||s->reserved_workload||s->workload>
-#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB2_DUAL)
+       s->reserved0||s->reserved_workload||s->workload==5||s->workload>
+#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB3)
+       6
+#elif defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB2_DUAL)
        4
 #elif defined(SUNSTONE_BOARD_SUPERVISED)
        3
@@ -48,7 +50,7 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
     if(a733_board_host_workload(s->workload)){
         if(!s->latch_identity||!s->latch_owner||s->latch_known_mask!=0x3fff||(s->latch_value&~UINT32_C(0x3fff))||
        s->source_min_mv<4750||s->source_max_mv>5500||s->source_min_mv>s->source_max_mv||
-       s->source_ma<500||!s->zero_threshold_max_mv||s->zero_threshold_max_mv>800||
+       s->source_ma<(s->workload==6?900u:500u)||!s->zero_threshold_max_mv||s->zero_threshold_max_mv>800||
        s->fusb_device_id<0x80||s->fusb_device_id>0x82||s->pck_client>=16||
        !s->usb2_revision||!s->typec_owner||!s->usb2_owner)return 0;
     }else if(s->latch_identity||s->latch_owner||s->latch_known_mask||s->latch_value||

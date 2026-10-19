@@ -29,6 +29,7 @@ def main():
     p.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     p.add_argument('--port', type=Path, required=True)
     p.add_argument('--cases',nargs='+',help='Only selected affected composition cases')
+    p.add_argument('--compile-only',action='store_true',help='Compile selected host/native units without executing composition models')
     p.add_argument('--resume', action='store_true', help='Only missing steps; refuses changed frozen inputs')
     a = p.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -51,15 +52,16 @@ def main():
     core_source = a.sources/'usb2-research/drivers/usb/dwc3/core.c'
     core_header = a.sources/'usb2-native/core.h'
     units = [root/u for u in ['checks/a733-usb2-host.c','drivers/usb/a733_usb2_platform.c',
-        'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c','drivers/power/a733_pmic.c',
+        'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c','drivers/usb/a733_usb3_phy.c','drivers/power/a733_pmic.c',
         'drivers/power/a733_rail_leases.c','drivers/clock/a733_clock_leases.c',
         'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c',
         'runtime/device_memory_pool.c']]
     units += [a.typec/'drivers/usb/a733_typec.c', a.twi/'drivers/i2c/a733_twi.c']
     units += [tiny/u for u in ['host/hub.c','tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c','class/hid/hid_host.c']]
     native = [root/u for u in ['drivers/usb/a733_usb2_platform.c','drivers/usb/a733_usb2_native.c',
-        'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c']]
-    paths = set(units+native+[Path(__file__).resolve(),root/'checks/a733-pmic.c',core_source,core_header,
+        'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c','drivers/usb/a733_usb3_phy.c']]
+    cadence = a.sources/'pcie/kernel/bsp/drivers/phy/sunxi-cadence-combophy.c'
+    paths = set(units+native+[cadence,root/'drivers/usb/a733_usb3_phy.h',root/'drivers/usb/host/cadence-source.py',root/'drivers/usb/host/superspeed.py',Path(__file__).resolve(),root/'checks/a733-pmic.c',core_source,core_header,
         a.typec/'include/a733_typec.h',a.twi/'include/a733_twi.h',root/'drivers/usb/host/tusb_config.h',root/'drivers/usb/host/hub.patch'])
     for directory in [root/'include',root/'runtime/include',root/'platform/a733',freertos,a.port]:
         paths.update(directory.glob('*.h'))
@@ -95,6 +97,8 @@ def main():
         report_path.write_text(json.dumps(steps, indent=2)+'\n')
         if r.returncode:
             raise RuntimeError(f'{label} failed; preserved {out/(label+".log")}')
+    run('ss-source',[interpreter,saved(root/'drivers/usb/host/cadence-source.py'),'--source',saved(cadence),'--output',out/'ss-cadence.inc'])
+    run('ss-stack',[interpreter,saved(root/'drivers/usb/host/superspeed.py'),'--source',saved(tiny),'--output',out/'tinyusb-ss'])
     # Exact native mapping loop, compiled on host with a translation model.
     mapping = '#include <assert.h>\n#include "aarch64_device_memory.h"\n'
     mapping += '''static unsigned attributes=0x44,shareability=2,bad_last,shift;
@@ -138,9 +142,10 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
     (out/'reference.c').write_text(ref)
     includes = [saved(root/'drivers/usb/host'),saved(root/'include'),saved(a.typec/'include'),
         saved(a.twi/'include'),saved(root/'checks'),saved(tiny),saved(tiny/'host')]
+    includes.insert(1,out/'tinyusb-ss');includes.append(out)
     flags = [compiler,'-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function',
         '-fsanitize=address,undefined','-fno-omit-frame-pointer']+['-I'+str(i) for i in includes]
-    run('host-build',flags+[hub_native if u==tiny/'host/hub.c' else saved(u) for u in units]+[out/'mapping.c',out/'reference.c','-o',out/'composed'])
+    run('host-build',flags+[hub_native if u==tiny/'host/hub.c' else out/'tinyusb-ss'/u.relative_to(tiny) if u.is_relative_to(tiny) else saved(u) for u in units]+[out/'mapping.c',out/'reference.c','-o',out/'composed'])
     loaded = subprocess.check_output(['ldd', str(out/'composed')], text=True)
     libraries = {}
     for line in loaded.splitlines():
@@ -149,16 +154,16 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
                 libraries[word] = hashlib.sha256(Path(word).read_bytes()).hexdigest()
     (out/'loaded-libraries.json').write_text(json.dumps({'ldd': loaded, 'sha256': libraries}, indent=2)+'\n')
     cases=['admission','read','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach']
-    cases=a.cases or cases
+    cases=[] if a.compile_only else a.cases or cases
     for case in cases:
-        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])
+        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])
     native_flags=[compiler,'--target=aarch64-none-elf','-march=armv8-a','-mstrict-align','-mgeneral-regs-only',
         '-std=gnu11','-O2','-g','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin',
         '-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1','-DINCLUDE_xSemaphoreGetMutexHolder=1']
     native_flags += ['-I'+str(i) for i in includes+[saved(root/'runtime/include'),saved(root/'platform/a733'),saved(freertos),saved(a.port)]]
     for i, unit in enumerate(native):
         run('native-'+str(i),native_flags+['-c',saved(unit),'-o',out/('native-'+str(i)+'.o')])
-    result={'result':'PASS','cases':cases,'native_objects':4,'hardware_access':False,
+    result={'result':'PASS','cases':cases,'native_objects':len(native),'hardware_access':False,
         'typec_boundary':'Actual snapshot/revoke from a prepared observation checkpoint; reuse separate role-engine evidence.',
         'artifact_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [out/'composed',*out.glob('native-*.o')]}}
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')

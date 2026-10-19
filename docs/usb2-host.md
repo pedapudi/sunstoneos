@@ -1,12 +1,18 @@
-# USB2 host storage reads and copied HID interrupt input
+# USB host storage reads and copied HID interrupt input
 
 The USB2 host implementation connects the A733 DWC3/xHCI controller to TinyUSB
 and copied read-only storage and HID input APIs. It supports one directly attached
 high-speed mass-storage device or one low-, full- or high-speed HID interface,
-directly or behind one admitted high-speed USB2 hub.
+directly or behind one admitted high-speed USB2 hub. A separate supervised
+profile adds one directly attached SuperSpeed Gen1 Bulk-Only Transport (BOT)
+mass-storage device on
+TYPEC24, using COMB0. The USB2 profiles keep their existing admission and wire
+contracts.
 The storage profile uses one configuration, interface 0, alternate 0, two bulk
 endpoints and LUN 0. Storage configuration descriptors must contain the standard
-32-byte configuration/interface/endpoint sequence. Blocks must be 512 bytes.
+32-byte configuration/interface/endpoint sequence for USB2, or the 44-byte
+sequence with two immediate SuperSpeed endpoint companions for Gen1. Blocks
+must be 512 bytes.
 The composed software check passes with the actual TinyUSB stack, xHCI core and
 shared resource providers. Physical operation, connector power and independent
 recovery remain unqualified.
@@ -405,13 +411,82 @@ and reserved fields. `tools/check-a733-board-supervised.py` saves HID capture as
 remain durable evidence. The separate `--sector-output` decoder option refuses
 a HID result; `--hid-output` writes its decoded records.
 
+## One direct Gen1 storage device uses COMB0
+
+Supervised workload 6 requires a SuperSpeed Gen1 BOT device; it cannot silently
+publish a USB2 fallback. Its source capacity must be at least 900 mA, and its
+configuration cannot request more than 900 mA even when the admitted source has
+more capacity. The existing 592-byte session and 128 KiB DMA reservation remain
+unchanged. The board target alone admits workload 6 through
+`SUNSTONE_BOARD_USB3`; derived compositions retain their existing selectors.
+
+The platform follows the selected A733 Cadence implementation. `cadence-source.py` verifies the pinned original source hash and
+extracts the USB-only clock and parameter functions into the private build. It
+preserves their license, values and halfword analog accesses. Native access
+checks allow only the used analog indices and the selected COMB0 top, routing,
+RTC and DWC3 registers. The adapter follows the actual normal/reverse Type-C
+orientation sequence and measures reset/PLL waits after completed writes. It
+uses the source PMA-ready check and bounded fallback; failure retains all
+ownership. It does not add a forced-Gen1 quirk or speculative analog settings.
+
+The owner holds the new exclusive COMB0 clock resource, stable shared SERDES and
+PERI parents, and the actual DCDC2 800 mV core and CLDO5 1.8 V analog rails.
+It adopts the documented common clock configuration without resetting or
+retuning the shared domain used by COMB1 PCIe. COMB0 is USB-only in this profile;
+DisplayPort and remote writers must be excluded for the whole retained lifetime.
+No COMB1 resource or existing USB0 power-provider behavior changes.
+
+The admitted device descriptor uses USB 3.0 revision encoding; later descriptor
+revisions remain outside this bounded profile. The xHCI path selects the USB3
+Supported Protocol root port, standard speed ID 4,
+and that protocol's slot type. The USB2 companion's status changes are
+acknowledged without enumeration. The Gen1 root must be enabled in U0; U1/U2
+entry stays disabled. EP0 uses 512-byte packets; the device descriptor encodes that size as
+exponent 9. Bulk endpoints use 1024-byte packets, with bMaxBurst from
+each immediate companion descriptor. Stream capability is checked but streams
+are disabled in the endpoint context. The existing owned rings, private bounce
+copies, event completion and retained failure protocol apply to this path.
+
+A private, hash-checked TinyUSB adaptation adds the SuperSpeed speed value,
+EP0 geometry and companion traversal to the actual host and MSC class code.
+The original source stays untouched. Enumeration reads the bounded BOS header
+and complete BOS before configuration. USB 3.2 Revision 1.1 sections 9.1.2,
+9.4.11 and 9.4.12 require SET_ISOCH_DELAY and SET_SEL even for BOT; both are
+issued and must complete. The direct-root isochronous delay uses the normative
+40 ns transmission delay. SET_SEL uses the larger of the BOS device and root
+HCSPARAMS3 exit latencies, with the pinned Linux minimum of one. No hub latency
+is inferred. These control values do not qualify actual link latency.
+
+A successful workload 6 result uses outer wire version 4 and a 544-byte payload:
+32 bytes of `SMSC` metadata followed by the copied 512-byte LBA 0 sector. The
+metadata contains version, extent, LBA, attachment generation, device address,
+Gen1 speed, interface and both bulk endpoint addresses. Publication follows the
+existing successful READ10 data and CSW checks plus a fresh live generation
+check. The host decoder validates every extent and identity field and saves the
+sector through the existing capture path. Versions 1, 2 and 3 keep their storage,
+HID and combined meanings. No storage write or desktop input operation is added.
+
+Preparation additionally requires an actual
+`a733-usb3-gen1-physical-entry-v1` record bound to the image, template, board and
+port, with frozen evidence of the fitted TYPEC24 route, both COMB0 rails and
+reference/common clocks. The evidence must also establish DP/remote-writer
+exclusion, a reviewed passive Gen1 cable and BOT device, and source
+switch/discharge/reverse blocking. The session source capacity may not exceed
+the authenticated physical record. A modeled 900 mA
+observation is never physical authority. That record is currently unavailable:
+boards require physical recovery, and 900 mA sourcing and COMB0 electrical
+operation remain unqualified. Source shutdown does not prove external device
+power removal or DMA drain. Neither board has eMMC or UFS populated; this work
+adds no probes for either absent device.
+
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
 refuses low/full-speed mass storage, deeper or bus-powered hubs, more than two
 leaves or two leaves of the same class,
 interrupt OUT, high-bandwidth periodic
-transfers, isochronous endpoints, SuperSpeed, nonstandard speed-ID tables, more than eight
+transfers, isochronous endpoints, SuperSpeed hubs or HID, Gen2, streams,
+nonstandard speed-ID tables, more than eight
 scratchpads and richer mass-storage configurations. Endpoint-stall recovery is
 not implemented; devices that stall GET_MAX_LUN are retained rather than using
 the usual fallback. These are implementation limits, not claims that the board
@@ -419,7 +494,7 @@ cannot support those modes.
 
 Further required work includes wider xHCI endpoint modes, physical interrupt
 qualification,
-USB2 device/OTG roles, SuperSpeed COMB0 routing and orientation, Type-C role/PD
+USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain and repeated
 attachment. DisplayPort lane ownership must be coordinated with display users.
 USB0 host capability requires an electrically valid route; USB1 needs a physical
@@ -448,7 +523,10 @@ mass-storage and HID class code under its existing MIT license. Downloaded sourc
 raw evidence stay outside the repository. The hub adaptation follows the
 [USB-IF USB2.0 specification](https://www.usb.org/document-library/usb-20-specification),
 sections 9.4 and 11.23–11.24; its base PDF and bundle identities are pinned in
-`sources.lock.json`. The focused runner snapshots its
+`sources.lock.json`. The USB3 path also pins the
+[USB-IF USB3.2 bundle](https://www.usb.org/sites/default/files/usb_32_202206_0.zip)
+and the same board-kernel Cadence PHY, USB core latency and xHCI root-BOS sources.
+The focused runner snapshots its
 inputs and preserves each executable, compiler command and result.
 
 ## Software evidence covers enumeration and retained failures
@@ -508,3 +586,31 @@ remain physically unqualified. Both microSD cards remain preserved. Broader
 speed/class support, broader hub topologies and power budgets, isochronous
 transfers, SuperSpeed, physical CPU
 interrupt delivery and safe detach/reuse remain required work.
+
+## Offline Gen1 evidence
+
+`usb-host-superspeed-20261019/frozen` preserves the selected 163-object image and
+all 435 actual compiler inputs, including the private TinyUSB files and Cadence
+includes. The source adaptation generators and their pinned original inputs are
+recorded separately. `snapshot/manifest.json` binds the source, tool and result
+inventory. The native image uses supervised board startup and CPU0 INTID 187;
+`root-route/review.json` admits only the additional workload selector and reuses
+the unchanged route evidence.
+
+Twenty focused SuperSpeed composition cases exercise the actual Cadence
+functions, TinyUSB enumeration/MSC callbacks and xHCI ring/context code under
+ASan/UBSan. They cover both orientations, maximum burst, advertised streams with
+stream contexts disabled, required BOS/ISOCH/SEL transfers, power and resource
+conflicts, malformed companions, link loss, unknown port events and stale
+generations. Two affected USB2 cases check HS MSC and FS HID through the private
+stack adaptation. Existing hub, dual-leaf and polling/IRQ evidence remains tied
+to its frozen inputs; no unchanged suite was replayed.
+
+The linked board instruction checks consume the actual composition's copied
+sector. They cover success through USB0 serialization and host capture, refusal
+of HS fallback publication, and authority loss after copy but before publication.
+Eight host-only capacity cases check the physical-record bound without creating
+a launch bundle. Focused Astra review covered the new PHY, descriptor, ownership
+and publication paths before their model execution. These are software results;
+physical link operation, source capacity, DMA confinement and interrupt delivery
+remain unqualified.

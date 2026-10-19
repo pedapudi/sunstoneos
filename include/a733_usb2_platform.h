@@ -11,7 +11,7 @@
  */
 struct a733_usb2_platform_config {
     uint64_t owner,identity,topology,deadline,lifetime_deadline;
-    unsigned pck_client;
+    unsigned pck_client,superspeed;
     uint32_t fabric[3],fabric_hz[3]; /* AHB/NSI/MBUS exact held profiles. */
     uint32_t supply_uv[A733_USB2_SUPPLIES]; /* DCDC1,DC1SW2,DCDC9,ELDO6,CLDO5. */
     uint32_t revision; /* Actual admitted DWC_usb31 release, checked after power. */
@@ -26,6 +26,8 @@ struct a733_usb2_platform_ops {
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
     int (*outside)(void *,const void *,size_t);
+    int (*read16)(void *,uintptr_t,uint16_t *);
+    int (*write16)(void *,uintptr_t,uint16_t);
 };
 enum a733_usb2_result { A733_USB2_PENDING,A733_USB2_READY,A733_USB2_BUSY,
     A733_USB2_INVALID,A733_USB2_RETAINED };
@@ -44,11 +46,12 @@ struct a733_usb2_platform {
     struct a733_gpu_resource_lease pck_lease;
     struct a733_pmic_lifetime pmic_lifetime;
     struct a733_pmic_request request;
-    struct a733_pmic_snapshot supplies[A733_USB2_SUPPLIES];
+    struct a733_pmic_snapshot supplies[A733_USB2_SUPPLIES+1];
     struct a733_typec_token attachment;
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned phase,supply_index,held,failed,clock_retained,rail_retained;
+    unsigned ss_phase,ss_failed;uint64_t ss_wait;
 };
 /* Zero private platform-lifetime storage before concurrency; dependencies use
  * one clock, registry, rail ledger and register mutex. One designated task owns

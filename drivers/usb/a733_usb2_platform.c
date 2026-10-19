@@ -5,13 +5,14 @@
  *          Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  */
 #include "a733_usb2_platform.h"
+#include "a733_usb3_phy.h"
 #define B(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
 #define DWC UINT32_C(0x06a00000)
 #define PHY UINT32_C(0x06b00000)
-enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,PCK,SUPPLY,ATTACH,BASELINE,CLOCKS,PHY_SETUP,GLOBAL,READY };
-static const enum a733_rail supplies[A733_USB2_SUPPLIES]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,
-    A733_RAIL_DCDC9,A733_RAIL_ELDO6,A733_RAIL_CLDO5};
+enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,PCK,SUPPLY,ATTACH,BASELINE,CLOCKS,PHY_SETUP,SS_SETUP,GLOBAL,READY };
+static const enum a733_rail supplies[A733_USB2_SUPPLIES+1]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,
+    A733_RAIL_DCDC9,A733_RAIL_ELDO6,A733_RAIL_CLDO5,A733_RAIL_DCDC2};
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const unsigned parent_mhz[3][8]={{24,0,0,600},{24,0,800,600,480},{24,600,0,480,400}};
@@ -29,7 +30,7 @@ int a733_usb2_platform_outside(struct a733_usb2_platform *p,const void *v,size_t
 static int valid(const struct a733_usb2_platform_config *c)
 {
     if(!c->owner||!c->identity||!c->topology||!c->deadline||c->lifetime_deadline<c->deadline||
-        c->pck_client>=A733_GPU_RESOURCE_CLIENTS||c->supply_uv[0]!=c->supply_uv[1])return 0;
+        c->superspeed>1||c->pck_client>=A733_GPU_RESOURCE_CLIENTS||c->supply_uv[0]!=c->supply_uv[1])return 0;
     for(unsigned i=0;i<A733_USB2_SUPPLIES;++i)if(!c->supply_uv[i])return 0;
     switch(c->revision){case 0x3131302a:case 0x3132302a:case 0x3136302a:case 0x3137302a:
         case 0x3138302a:case 0x3139302a:case 0x3230302a:break;default:return 0;}
@@ -47,6 +48,7 @@ int a733_usb2_platform_init(struct a733_usb2_platform *p,const struct a733_usb2_
         !clocks->initialized||rails->self!=rails||pmic->self!=pmic||!pck->initialized||
         typec->self!=typec||rails->binding.gpu!=pck||rails->binding.clocks!=clocks||
         pmic->clocks!=clocks||pmic->rails!=rails||!valid(c)||!o->now||!o->current||
+        (c->superspeed&&(!o->read16||!o->write16||typec->config.source_ma<900))||
         !o->admit||!o->enter||!o->leave||!o->retain||!o->read||!o->write||!o->outside||
         !separate(p,sizeof(*p),c,sizeof(*c))||!separate(p,sizeof(*p),o,sizeof(*o))||
         !separate(p,sizeof(*p),clocks,sizeof(*clocks))||!separate(p,sizeof(*p),rails,sizeof(*rails))||
@@ -73,6 +75,14 @@ static int update(struct a733_usb2_platform *p,uintptr_t a,uint32_t m,uint32_t v
     uint32_t r,got;if(!rd(p,a,&r))return 0;uint32_t next=(r&~m)|v;
     return (next==r||(permitted(p)&&p->ops.write(p->cookie,a,next)==1&&permitted(p)))&&rd(p,a,&got)&&got==next;
 }
+int a733_usb3_read32(struct a733_usb2_platform *p,uintptr_t a,uint32_t *v)
+{return p->config.superspeed&&p->held&&!p->ss_failed&&permitted(p)&&p->ops.read(p->cookie,a,v)==1&&permitted(p);}
+int a733_usb3_write32(struct a733_usb2_platform *p,uintptr_t a,uint32_t v)
+{return p->config.superspeed&&p->held&&!p->ss_failed&&permitted(p)&&p->ops.write(p->cookie,a,v)==1&&permitted(p);}
+int a733_usb3_read16(struct a733_usb2_platform *p,uintptr_t a,uint16_t *v)
+{return p->config.superspeed&&p->held&&!p->ss_failed&&a733_usb3_address16(a)&&permitted(p)&&p->ops.read16(p->cookie,a,v)==1&&permitted(p);}
+int a733_usb3_write16(struct a733_usb2_platform *p,uintptr_t a,uint16_t v)
+{return p->config.superspeed&&p->held&&!p->ss_failed&&a733_usb3_address16(a)&&permitted(p)&&p->ops.write16(p->cookie,a,v)==1&&permitted(p);}
 static int health(struct a733_usb2_platform *p)
 {
     if(p->clock.id){enum a733_clock_result r=a733_clock_token_status(p->clocks,&p->clock);
@@ -135,7 +145,8 @@ static int globals(struct a733_usb2_platform *p)
     uint32_t id,revision,mode,power,phy;
     if(!rd(p,DWC+0xc120,&id)||(id>>16)!=0x3331||!rd(p,DWC+0xc1a0,&revision)||revision!=p->config.revision||
         !rd(p,DWC+0xc140,&mode)||((mode&3)!=1&&(mode&3)!=2)||!rd(p,DWC+0xc144,&power)||
-        ((power>>24)&3)>1||!rd(p,DWC+0xc14c,&phy)||(((phy>>2)&3)!=1&&((phy>>2)&3)!=3))return 0;
+        ((power>>24)&3)>1||!rd(p,DWC+0xc14c,&phy)||(((phy>>2)&3)!=1&&((phy>>2)&3)!=3)||
+        (p->config.superspeed&&(!(phy&3)||(phy&3)>2)))return 0;
     /* Board phy_type=utmi: eight-bit interface, source-defined turnaround9.
      * Both suspend quirks and ENBLSLPM are disabled for the active profile. */
     if(!update(p,DWC+0xc200,0x80003d58,9u<<10)||!update(p,DWC+0xc2c0,B(31)|B(17),0))return 0;
@@ -157,9 +168,9 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
     switch(p->phase){
     case CLOCK:{enum a733_clock_result r=a733_clock_acquire(p->clocks,p->config.owner,
         A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_PERI0|A733_CLOCK_FABRIC|A733_CLOCK_SERDES_COMMON|A733_CLOCK_USB_PCIE_DOMAIN,
-        A733_CLOCK_USB2,p->deadline,&p->clock);if(r==A733_CLOCK_BUSY)break;
+        A733_CLOCK_USB2|(p->config.superspeed?A733_CLOCK_COMB0:0),p->deadline,&p->clock);if(r==A733_CLOCK_BUSY)break;
         if(r!=A733_CLOCK_OK)return finish(p,fault(p));++p->phase;break;}
-    case RAIL:{a733_rail_mask_t mask=0;for(unsigned i=0;i<A733_USB2_SUPPLIES;++i)mask|=A733_RAIL_BIT(supplies[i]);
+    case RAIL:{a733_rail_mask_t mask=0;for(unsigned i=0;i<A733_USB2_SUPPLIES+(p->config.superspeed?1u:0u);++i)mask|=A733_RAIL_BIT(supplies[i]);
         enum a733_rail_result r=a733_rail_acquire(p->rails,p->config.owner,mask,0,p->deadline,&p->rail);
         if(r==A733_RAIL_BUSY)break;if(r!=A733_RAIL_PENDING)return finish(p,fault(p));++p->phase;break;}
     case RAIL_WAIT:{enum a733_rail_result r=a733_rail_poll(p->rails,&p->rail);
@@ -179,10 +190,10 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
         else{struct a733_pmic_snapshot *s=&p->supplies[p->supply_index];r=a733_pmic_result(p->pmic,&p->request,s);
             if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)break;
             if(r!=A733_PMIC_COMPLETE||s->rail!=supplies[p->supply_index]||s->page_before||s->page_after||s->chip!=3||s->revision||
-                !s->enabled||!s->decoded||s->programmed_uv!=p->config.supply_uv[p->supply_index])return finish(p,fault(p));
+                !s->enabled||!s->decoded||s->programmed_uv!=(p->supply_index==A733_USB2_SUPPLIES?800000u:p->config.supply_uv[p->supply_index]))return finish(p,fault(p));
             r=a733_pmic_reap(p->pmic,&p->request);if(r==A733_PMIC_BUSY)break;
             if(r!=A733_PMIC_COMPLETE)return finish(p,fault(p));p->request=(struct a733_pmic_request){0};
-            if(++p->supply_index==A733_USB2_SUPPLIES)++p->phase;}break;}
+            if(++p->supply_index==A733_USB2_SUPPLIES+(p->config.superspeed?1u:0u))++p->phase;}break;}
     case ATTACH:h=attachment(p);if(h<0)return finish(p,fault(p));if(h==1)++p->phase;break;
     case READY:return finish(p,A733_USB2_READY);
     default:{int l=p->ops.enter(p->cookie,p->deadline);if(!l)break;
@@ -194,11 +205,14 @@ enum a733_usb2_result a733_usb2_platform_poll(struct a733_usb2_platform *p)
             ck(p,CCU+0x1364,B(31),0)&&ck(p,0x06c00008,0x330010,0);break;
         case CLOCKS:ok=update(p,CCU+0x1348,0x87000000,0x80000000)&&
             update(p,CCU+0x1350,0x8100001f,0x81000000)&&update(p,CCU+0x1354,0x8700001f,0x80000000)&&
-            update(p,CCU+0x1364,0x8700001f,0x81000003)&&update(p,0x06c00008,0x330010,0x130010)&&
+            update(p,CCU+0x1364,0x8700001f,p->config.superspeed?0:0x81000003)&&update(p,0x06c00008,0x330010,p->config.superspeed?0x30010:0x130010)&&
             update(p,CCU+0x135c,B(16),B(16));break;
         case PHY_SETUP:ok=ck(p,PHY+0x10,0x107183,0x2000)&&
             update(p,PHY+0x18,UINT32_MAX,0x143338d6)&&update(p,PHY+0x10,0x428,0x420);break;
-        case GLOBAL:ok=globals(p);break;
+        case SS_SETUP:
+            if(p->config.superspeed){int r=a733_usb3_phy_poll(p);if(r<0)ok=0;else if(!r)return finish(p,A733_USB2_PENDING);}
+            break;
+        case GLOBAL:ok=globals(p);if(ok&&p->config.superspeed)ok=update(p,DWC+0xd024,B(30),B(30));break;
         default:ok=0;break;}
         if(!ok)return finish(p,fault(p));++p->phase;break;}}
     return finish(p,p->phase==READY?A733_USB2_READY:A733_USB2_PENDING);

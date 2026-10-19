@@ -39,7 +39,7 @@ struct a733_xhci_endpoint {
     uint8_t *bounce,*caller;
     uint64_t ring_pa,bounce_pa,pending_trb,deadline;
     unsigned number,address,packet,index,cycle,opened,configured,pending;
-    unsigned kind,direction,length,aborted,transfer_type,interval; /* pending:0 idle,1 queued,2 on ring. */
+    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring. */
 };
 /* One root device and up to two children behind an admitted HS hub retain
  * own EP0, contexts and data rings; command/event rings remain controller-owned. */
@@ -72,7 +72,8 @@ struct a733_xhci {
     unsigned phase,failed,announced,removed,operational,runtime,doorbell;
     unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
     unsigned command_index,command_cycle,event_index,event_cycle,command_kind,command_device,default_device;
-    unsigned port_reset,connected,extra_endpoint_owner;
+    unsigned port_reset,connected,extra_endpoint_owner,require_ss,usb3_port,usb3_slot_type,usb3_seen;
+    unsigned root_u1,root_u2,usb2_companion_port;
     unsigned slot_type,publication,notifying,port_power_control;
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;
@@ -119,6 +120,7 @@ int a733_xhci_open(struct a733_xhci *,unsigned address,unsigned endpoint,
     unsigned transfer_type,unsigned packet,uint64_t deadline);
 /* Interrupt bInterval is the raw USB descriptor value. Only single-transaction
  * interrupt IN packets are admitted, <=8 bytes LS and <=64 bytes FS/HS. */
+int a733_xhci_set_burst(struct a733_xhci *,unsigned address,unsigned endpoint,unsigned burst);
 int a733_xhci_open_interrupt(struct a733_xhci *,unsigned address,unsigned endpoint,
     unsigned packet,unsigned interval,uint64_t deadline);
 int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_t deadline);

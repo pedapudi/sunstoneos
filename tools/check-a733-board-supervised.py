@@ -56,7 +56,7 @@ def capture(exchange, session, profile, evidence, record, save, deadline,
             record['board_result'] = 'observed-failure'
             save()
             return result
-        host_done = result['usb_state'] == (1 if workload < 2 or workload == 4 else 3)
+        host_done = result['usb_state'] == (1 if workload < 2 or workload in (4,6) else 3)
         radio_done = result['radio_state'] == (2 if workload & 1 else 0)
         if host_done and radio_done:
             if sector is not None:

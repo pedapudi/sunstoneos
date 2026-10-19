@@ -60,8 +60,9 @@ static void exchange(void)
     put32(response,0x52414f42);
     /* Acquiring result publishes immutable host kind and copied backing. */
     unsigned dual=board.session.workload==4;
-    unsigned payload=dual?1088:512;
-    put32(response+4,result==1?(dual?3:board.host.kind==A733_USB2_DEVICE_HID?2:1):1);put32(response+8,result);put32(response+12,result==1?payload:0);
+    unsigned ss=board.session.workload==6;
+    unsigned payload=ss?544:dual?1088:512;
+    put32(response+4,result==1?(ss?4:dual?3:board.host.kind==A733_USB2_DEVICE_HID?2:1):1);put32(response+8,result);put32(response+12,result==1?payload:0);
     unsigned radio=atomic_load_explicit(&board.radio_result,memory_order_acquire);
     if(a733_board_radio_workload(board.session.workload)&&(atomic_load_explicit(&board.watchdog_state,memory_order_acquire)&4))radio=3;
     put32(response+16,radio);
@@ -69,7 +70,7 @@ static void exchange(void)
     put32(response+24,(uint32_t)board.session.epoch);put32(response+28,(uint32_t)(board.session.epoch>>32));
     put32(response+32,(uint32_t)board.session.generation);put32(response+36,(uint32_t)(board.session.generation>>32));
     memcpy(response+40,board.session.radio_profile_digest,32);
-    if(result==1)memcpy(response+72,dual?board.dual_result:board.sector,payload);
+    if(result==1)memcpy(response+72,ss?board.ss_result:dual?board.dual_result:board.sector,payload);
     response_sent=response_transferred=0;response_bytes=result==1?72+payload:72;
 }
 void board_usb0_task(void *unused)

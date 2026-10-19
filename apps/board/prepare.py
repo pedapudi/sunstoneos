@@ -71,7 +71,7 @@ def session_check(raw,usb_reference_modes=(1,2)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
     require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
-    workload=struct.unpack_from('<I',raw,400)[0];require(workload<=4 and (workload!=4 or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
+    workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6) and (workload not in (4,6) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
     return workload
 
 def profile_spans(data,session,payload_spans=None):
@@ -154,7 +154,27 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,e
     for ref in recovery['evidence']:evidence(ref)
     require(record.get('whole_board_power_removal') is True and record.get('no_resource_reuse_before_power_removal') is True,
         'Explicit complete-power-removal/retention plan required.')
+    if record.get('superspeed') is not None:
+        ss=json.loads(evidence(record['superspeed']))
+        require(ss.get('schema')=='a733-usb3-gen1-physical-entry-v1' and ss.get('identity')==identity and ss.get('port')==port and
+            ss.get('image_sha256')==image_hash and ss.get('session_template_sha256')==template_hash and
+            ss.get('physical_access_performed') is True and type(ss.get('qualified_source_ma')) is int and ss['qualified_source_ma']>=900,
+            'Actual SuperSpeed physical/source admission differs.')
+        required={'typec24-comb0-fitted-route','dcdc2-comb0-core-stable-800mv','cldo5-comb0-analog-stable-1800mv',
+            'comb0-rtc-reference-and-common-clocks-stable','comb0-dp-remote-writers-excluded',
+            'reviewed-passive-gen1-cable-and-bot-device','source-switch-discharge-and-reverse-blocking-qualified'}
+        require(set(ss.get('conditions',{}))==required and all(v is True for v in ss['conditions'].values()) and ss.get('evidence'),
+            'SuperSpeed route/power/exclusion evidence missing.')
+        for ref in ss['evidence']:evidence(ref)
     return cache
+
+def superspeed_source_check(record,cache,session):
+    if struct.unpack_from('<I',session,400)[0]!=6:return
+    ref=record.get('superspeed')
+    require(ref is not None,'Actual SuperSpeed physical admission required.')
+    capacity=json.loads(cache[ref['path']]).get('qualified_source_ma')
+    require(type(capacity) is int and 900<=struct.unpack_from('<I',session,552)[0]<=capacity,
+            'Session source capacity exceeds actual SuperSpeed qualification.')
 
 def prepare(image,manifest_path,admission_path,session_template,output,clang,lld,profile=None,payloads=()):
     image=Path(image);output=Path(output);manifest_path=Path(manifest_path);admission_path=Path(admission_path);session_template=Path(session_template)
@@ -167,6 +187,8 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     admission=json.loads(admission_data);evidence_cache=validate_admission(admission,image_hash,template_hash,execution_profile=execution_profile)
     raw=bytearray(template_data);workload=session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))
     require(workload!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
+    require(workload!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
+    superspeed_source_check(admission,evidence_cache,raw)
     require(not workload&1 or admission.get('radio_ddr') is not None,'Radio profile/firmware DDR reservation missing.')
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -224,8 +246,11 @@ def validate_bundle(bundle):
     require(p.get('execution_profile','board-supervised-v2')==execution_profile,'Board execution profile changed.')
     validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True,execution_profile)
     require(p['workload']!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
+    require(p['workload']!=6 or admitted.get('superspeed') is not None,'Actual SuperSpeed physical admission required.')
+    require(p['workload']!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
     require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
     raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
+    superspeed_source_check(admitted,cache,raw)
     derived=bytearray((bundle/'session-template.bin').read_bytes())
     struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=bytes.fromhex(p['build_id'])
     require(raw==derived,'Session differs from admitted template derivation.')

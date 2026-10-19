@@ -83,7 +83,16 @@ void board_host_task(void *unused)
         if(board.session.workload!=4&&issued==1&&kind==A733_USB2_DEVICE_MSC){
             int done=a733_usb2_read_result(&board.host,board.sector);
             if(done<0)break;
-            if(done==1){atomic_store_explicit(&board.result,1,memory_order_release);issued=2;}
+            if(done==1){
+                if(board.session.workload==6){
+                    struct a733_usb2_native *n=&board.host;uint8_t *p=board.ss_result;
+                    if(n->core.speed!=4||n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)!=1)break;
+                    memset(p,0,sizeof(board.ss_result));put32(p,UINT32_C(0x43534d53));put32(p+4,1);put32(p+8,544);
+                    put64(p+16,n->core.generation);p[24]=(uint8_t)n->address;p[25]=4;p[27]=(uint8_t)n->msc_in;p[28]=(uint8_t)n->msc_out;
+                    memcpy(p+32,board.sector,512);
+                }
+                atomic_store_explicit(&board.result,1,memory_order_release);issued=2;
+            }
         }else if(issued==1&&kind==A733_USB2_DEVICE_HID){
             struct a733_usb2_hid_report report;
             int done=a733_usb2_hid_result(&board.host,&report);if(done<0)break;
