@@ -21,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cases',nargs='+',type=int,choices=(0,1),default=[0,1])
+    parser.add_argument('--package',type=Path)
     parser.add_argument('--resume', action='store_true', help='Resume a failed build before any mode ran')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
@@ -71,6 +72,12 @@ list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
 set_property(TARGET gpu-service-model PROPERTY LINK_OPTIONS "${{options}}")
 set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
 ''')
+    if args.package:
+        assert args.package.stat().st_size==8288
+        assembly=project/'package.S'
+        write(assembly,'.section .rodata\n.balign 8\n.global fixture_package\nfixture_package:\n.incbin "'+str(args.package.resolve())+'"\n')
+        with (project/'CMakeLists.txt').open('a') as stream:
+            stream.write('\ntarget_sources(gpu-service-model PRIVATE "'+str(assembly)+'")\ntarget_compile_definitions(gpu-service-model PRIVATE PVR_COMPUTE_RESERVED_PACKAGE=1)\n')
     environment = os.environ.copy()
     environment['PATH'] = str(args.lld.resolve().parent) + os.pathsep + environment.get('PATH', '')
     commands, results = [], {}

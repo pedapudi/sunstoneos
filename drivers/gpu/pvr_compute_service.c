@@ -343,9 +343,7 @@ int pvr_compute_service_replace(struct pvr_compute_service *s,uint32_t sequence,
        !s->config->job->package||bytes!=s->config->job->package->input_bytes||
        bytes<4||bytes>PVR_COMPUTE_PACKAGE_INPUT||sequence!=s->job.sequence||
        !pvr_compute_job_can_repeat(&s->job,deadline))return 0;
-    const unsigned char *data=input;
-    uint32_t count=(uint32_t)data[0]|(uint32_t)data[1]<<8|(uint32_t)data[2]<<16|(uint32_t)data[3]<<24;
-    if(count!=s->config->job->package->count)return 0;
+    if(!pvr_compute_package_input_valid(s->config->job->package,input,bytes))return 0;
     s->deadline=deadline;
     /* Admission reads the actual native owner/epoch/serial and acquired NC
      * timeline. Recheck at consumption, before modifying any device backing. */

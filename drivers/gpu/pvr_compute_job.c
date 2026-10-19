@@ -30,7 +30,7 @@ const uint32_t pvr_compute_job_bytes[PVR_JOB_REGIONS]={320,128,64,4096,64,256,64
 size_t pvr_compute_job_region_bytes(const struct pvr_compute_job_config *c,unsigned i)
 {
     if(i>=PVR_JOB_REGIONS)return 0;
-    if(c->package&&c->package->profile==2&&i==PVR_JOB_PDS)return PVR_COMPUTE_DISPATCH_PDS_BYTES;
+    if(c->package&&c->package->profile>=2&&i==PVR_JOB_PDS)return PVR_COMPUTE_DISPATCH_PDS_BYTES;
     if(c->package&&(i==PVR_JOB_USC||i==PVR_JOB_INPUT||i==PVR_JOB_OUTPUT))return 4096;
     return pvr_compute_job_bytes[i];
 }
@@ -142,7 +142,7 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
        c->admit(c->admission_context,c)!=1)return 0;
     for(unsigned i=0;i<PVR_JOB_REGIONS;++i)clear(c->buffers[i].cpu,c->buffers[i].bytes);
     image(c,out);
-    if(c->package)memcpy(c->buffers[PVR_JOB_USC].cpu,c->package->code,c->package->code_bytes);
+    if(c->package)memcpy(c->buffers[PVR_JOB_USC].cpu,pvr_compute_package_code(c->package),c->package->code_bytes);
     else words(c->buffers[PVR_JOB_USC].cpu,0,probe_usc,70);
     void *pds=c->buffers[PVR_JOB_PDS].cpu;
     uint64_t input=c->buffers[PVR_JOB_INPUT].gpu,output=c->buffers[PVR_JOB_OUTPUT].gpu+64;
@@ -190,6 +190,34 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
         size_t fence=(size_t)p->dispatch_count*28;
         put32(cdm,fence,(1u<<2)|(1u<<1)|1u);put32(cdm,fence+4,b|(1u<<2)|(1u<<1));
         put32(cdm,fence+8,b+16);put32(cdm,fence+24,8u<<27);put32(cdm,fence+28,2u<<30);
+    }
+    if(c->package&&c->package->profile==3) {
+        const struct pvr_compute_package *p=c->package;
+        clear(pds,c->buffers[PVR_JOB_PDS].bytes);clear(cdm,c->buffers[PVR_JOB_CDM].bytes);
+        /* Pinned compute PDS: coefficient task [0,10), ordinary task [10,13).
+         * Insert pointer writes at the ordinary entry. The relative branch10
+         * still enters that prefix; coefficient tasks halt before it. */
+        static const uint32_t data[]={0,0,0x10000002u,0x10004001u,0x10008002u,0x1000c000u,
+            0x90008000u,0x80008000u,0,0,0,0,0,0,0,0,0,0};
+        static const uint32_t code[]={0xc2c0000au,0x90022000u,0x90026041u,0x9002a0c3u,
+            0xf0024001u,0xf0034101u,0xf0040601u,0xf0050701u,0xf0060800u,0xd3000000u,
+            0xf0160a01u,0xf01a0c01u,0xf0074001u,0xfc000002u,0xd3000000u};
+        words(pds,0,data,18);words(pds,128,code,15);
+        put64(pds,0,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
+            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35));
+        for(unsigned i=0;i<3;++i)put32(pds,48+4*i,p->grid.groups[i]);
+        /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
+         * Their control words omit LAST; the ordinary local-index write ends it. */
+        put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
+        put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
+        /* Five unified regs ->2x16B; seven coeffs ->1x64B, not shared memory.
+         * Three PDS temps ->1x16B;112 data bytes ->7x16B. */
+        put32(cdm,0,(1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1));
+        put32(cdm,4,a);put32(cdm,8,a+128);
+        for(unsigned i=0;i<3;++i)put32(cdm,12+4*i,p->grid.groups[i]-1);
+        put32(cdm,24,31u<<18); /* Hardware local32x1x1; NIR unflattens it. */
+        put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,b|(1u<<2)|(1u<<1));
+        put32(cdm,36,b+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
     }
     if(c->package) {
         memcpy(c->buffers[PVR_JOB_INPUT].cpu,c->package->input,c->package->input_bytes);

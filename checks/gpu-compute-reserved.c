@@ -8,6 +8,9 @@ extern void platform_exit_privileged(unsigned) __attribute__((noreturn));
 static struct a733_gpu_reserved firmware;
 static struct a733_gpu_compute_reserved compute, copied;
 static struct pvr_gpu_service service;
+#ifdef PVR_COMPUTE_RESERVED_PACKAGE
+extern const struct pvr_compute_package fixture_package;
+#endif
 volatile unsigned gpu_compute_reserved_case = 0xfeed;
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 { (void)task; platform_panic(name, 0); }
@@ -39,7 +42,11 @@ void kernel_main(void)
          * short of the actual 12-page VM plan. The six NC pages are acquired. */
         configASSERT(device_memory_acquire(wb, 99, 113 * 4096u, &pressure, &pressure_range));
     }
+#ifdef PVR_COMPUTE_RESERVED_PACKAGE
+    struct pvr_compute_service *result=a733_gpu_compute_reserved_prepare_package(&compute,&firmware,&service,10,&fixture_package);
+#else
     struct pvr_compute_service *result = a733_gpu_compute_reserved_prepare(&compute, &firmware, &service, 10);
+#endif
     configASSERT(compute.requirements.table_pages == 12 && compute.requirements.table_bytes == 49152);
     configASSERT(compute.requirements.directory_pages == 3 && compute.requirements.leaf_tables == 8);
     configASSERT(compute.requirements.mapped_pages == 88 && compute.requirements.mapped_bytes == 360448);
@@ -65,8 +72,13 @@ void kernel_main(void)
         configASSERT(compute.job.admit(compute.job.admission_context, &compute.job) == 1);
         configASSERT(!pvr_gpu_service_init(&service, &firmware.config, 2, 1));
         configASSERT(!service.initialized && !firmware.config.compute_mode);
+#ifdef PVR_COMPUTE_RESERVED_PACKAGE
+        configASSERT(!memcmp(compute.job.buffers[PVR_JOB_USC].cpu,pvr_compute_package_code(&fixture_package),fixture_package.code_bytes));
+        configASSERT(compute.job.buffers[PVR_JOB_PDS].bytes==4096&&compute.job.package==&fixture_package);
+#else
         for (unsigned i = 0; i < 32; ++i)
             configASSERT(compute.image.expected[i] == ((17u + (i + 1u) * 3u) ^ (0x9e3779b9u + (i << 16))));
+#endif
         /* New proof refuses copied bindings, changed mappings and stale leases
          * without touching generated buffers or manufacturing readiness. */
         copied = compute;

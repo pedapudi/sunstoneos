@@ -14,9 +14,9 @@ def module(name,path):
 transport=module('gpu_runtime_transport',ROOT/'checks/gpu-usb-ordering.py')
 host=module('gpu_runtime_host',ROOT/'apps/gpu-program/runtime.py')
 class Machine(transport.Machine):
-    def __init__(self,image,package):
+    def __init__(self,image,package,kind='affine'):
         super().__init__(image)
-        self.package=package;self.total=struct.unpack_from('<I',package,32)[0]//4
+        self.kind=kind;self.package=package;self.total=struct.unpack_from('<I',package,32)[0]//4
         self.input_bytes=struct.unpack_from('<I',package,28)[0]
         self.input=package[4192:4192+self.input_bytes]
         self.sequence=0;self.operation=0;self.first=0;self.closed=False;self.operations=[]
@@ -27,8 +27,11 @@ class Machine(transport.Machine):
             self.hooks[image.address(name)]=name
     def expected(self):
         values=struct.unpack('<'+'I'*(len(self.input)//4),self.input)
-        count,factor,bias=values[:3]
-        return struct.pack('<'+'I'*count,*[((x*factor+bias)&0xffffffff) for x in values[3:]])
+        count,factor,bias=values[:3];data=values[3:]
+        if self.kind=='transpose':result=[data[y*factor+x] for x in range(factor) for y in range(bias)]
+        elif self.kind=='neighbor':result=[sum(data[y*factor+xx] for xx in range(max(0,x-1),min(factor,x+2)))&0xffffffff for y in range(bias) for x in range(factor)]
+        else:result=[(x*factor+bias)&0xffffffff for x in data]
+        return struct.pack('<'+'I'*count,*result)
     def hook(self,cpu,address,size,unused):
         name=self.hooks.get(address)
         args=[cpu.reg_read(UC_ARM64_REG_X0+n) for n in range(8)]
@@ -95,15 +98,15 @@ class Machine(transport.Machine):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','package','output'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--kind',choices=('affine','transpose','neighbor'),default='affine')
     a=parser.parse_args();a.output.mkdir(parents=True,exist_ok=True)
-    package=a.package.read_bytes();image=transport.layout.Image(a.image);m=Machine(image,package)
+    package=a.package.read_bytes();image=transport.layout.Image(a.image);m=Machine(image,package,a.kind)
     count=struct.unpack_from('<I',package,36)[0]
-    changed=struct.pack('<'+'I'*(count+3),count,7,19,*[1000+11*i for i in range(count)])
+    shape=struct.unpack_from('<2I',m.input,4) if a.kind!='affine' else (7,19)
+    changed=struct.pack('<'+'I'*(count+3),count,*shape,*[1000+11*i for i in range(count)])
+    reference=m.expected()
     before,after=host.sequence(m.exchange,123,count,changed)
-    expected_before=m.package[4192:4192+m.input_bytes]
-    values=struct.unpack('<'+'I'*(len(expected_before)//4),expected_before)
-    reference=struct.pack('<'+'I'*count,*[((x*values[1]+values[2])&0xffffffff) for x in values[3:]])
-    assert before==reference and after==struct.pack('<'+'I'*count,*[(1000+11*i)*7+19 for i in range(count)])
+    assert before==reference and after==m.expected()
     assert before!=after and m.copied==[changed] and m.closed
     assert m.field('runtime_closed')==1 and not m.field('runtime_state') and not m.field('fatal')
     assert m.operations.count(1)==1 and m.operations.count(3)==1 and m.operations.count(8)==1 and m.operations.count(2)==1
@@ -113,7 +116,7 @@ def main():
     (a.output/'before.bin').write_bytes(before);(a.output/'after.bin').write_bytes(after)
     result=dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
         package_sha256=hashlib.sha256(package).hexdigest(),input_sha256=hashlib.sha256(changed).hexdigest(),
-        count=count,sequences=[1,2],operations=m.operations,split_receive_bytes=7,split_transmit_bytes=23,
+        kernel=a.kind,count=count,sequences=[1,2],operations=m.operations,split_receive_bytes=7,split_transmit_bytes=23,
         scope='Actual linked native GPU owner task, mailbox, USB parser/copied response and host consumer. FreeRTOS service replies, GPU arithmetic and USB transport completion modeled; separate native FreeRTOS service case covers actual staging/worker. No physical GPU claim.')
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS native two-input host sequence and healthy CLOSE')
 if __name__=='__main__':main()

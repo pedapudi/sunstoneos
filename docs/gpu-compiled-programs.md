@@ -17,7 +17,7 @@ session. Selecting another program still requires another session.
 ## Trusted compiler profile
 
 The [package definition](../include/pvr_compute_package.h) accepts one common-profile
-Mesa USC program, at most 4,032 instruction bytes, 4,096 input bytes and 3,968
+Mesa USC program, at most 4,032 instruction bytes (4,000 in profile three), 4,096 input bytes and 3,968
 output bytes. The native producer copies code and input into separate private
 4 KiB allocations. USC storage includes 32 instruction-prefetch bytes and zero
 padding. The output has a 64-byte leading guard and guarded unused trailing bytes.
@@ -40,6 +40,7 @@ The package version and profile identify the register and dispatch ABI. The
 | --- | --- | --- |
 | One | Two pointers in four registers | One 32-lane workgroup; a lane can loop over elements |
 | Two | Two pointers and first-index/tile-count in six registers | One through 31 direct dispatches, each containing one 32-lane workgroup |
+| Three | Two pointers and local index in five unified registers; workgroup IDs/counts in seven coefficients | One direct dispatch containing a bounded 1D/2D grid of at most 31 workgroups |
 
 Version two partitions at most 992 elements. Dispatch `g` receives first index
 `32*g` and `min(32, count-32*g)` valid elements. A lane computes its global element
@@ -54,9 +55,8 @@ stores dispatch count in the header word at byte 68 and tile width at byte 156;
 version one requires both words to remain zero. All other resource requirements
 remain explicit. Programs cannot require shared memory, barriers, atomics,
 textures, scratch storage, spills or external USC library calls. Entry offset
-must be zero. A single dispatch containing multiple workgroups, general geometry,
-additional argument layouts, concurrent jobs, broader mappings and graphics
-remain required functionality.
+must be zero. Arbitrary geometry, additional argument layouts, kernel barriers/shared memory,
+concurrent jobs, broader mappings and graphics remain required functionality.
 
 Each dispatch has an immutable PDS data slot. The pinned three-constant generator
 emits 80 data bytes and 28 code bytes, including the conditional prelude. Data
@@ -84,8 +84,9 @@ must agree with the exported compiler metadata. The compiler can report zero
 allocated input registers for explicit input-register intrinsics. The host exports
 the actual register-use mask after NIR lowering and requires precisely registers
 zero through five for version two. Its ABI reserves all six despite the raw
-allocation count. The original compiler header remains unchanged. Coefficients
-and shared registers must be zero.
+allocation count. The original compiler header remains unchanged. Profiles one and two require coefficients and shared registers to be zero.
+Profile three uses the coefficient ranges described below and keeps shared
+registers at zero.
 
 Temporary registers use the upstream DOUTU encoding: round up to four-register
 blocks and encode the six-bit block count at bit 35. Four pointer registers use
@@ -98,6 +99,84 @@ These rules are an execution contract for trusted programs. Package hashes and
 bounds do not independently verify arbitrary USC instructions or prove that their
 memory accesses are confined. The actual VM mappings enforce their permissions;
 the native API requires the caller to establish reviewed source/build provenance.
+
+## A real workgroup grid
+
+Version/profile three submits one direct CDM kernel for a 1D or 2D grid.
+The sealed package fixes the compiler local shape `(Lx,Ly,1)`, with positive
+`Lx*Ly=32`. Logical global dimensions `(W,H,1)` satisfy `W*H=count<=992`.
+Group dimensions are `(ceil(W/Lx),ceil(H/Ly),1)` and their product is at most 31.
+This is an initial admission policy; it is not the hardware's grid limit.
+Programs must reject the padded lanes outside the logical dimensions.
+
+The common package prefix remains 160 bytes. Only version/profile three
+interprets the next 32 bytes as eight geometry words: group dimensions,
+logical global dimensions, system-value ABI one and reserved zero. Its actual
+USC source begins at byte 192 with a 4,000-byte capacity. Earlier profiles still
+place code at byte 160 with their 4,032-byte capacity. All versions retain an
+8,288-byte package, input at byte 4,192 and the same sealed envelope size.
+Mismatched version/profile pairs are refused before interpreting that union.
+
+Input begins with three unsigned words: count, width and height. Initial package
+admission and runtime copied-input consumption both require these words to match
+the sealed logical dimensions. The remaining input/output lengths must agree
+with the declared per-element layout. Input replacement changes values while
+retaining program, geometry, allocation and timeline ownership.
+
+The pinned compiler allocates local invocation index in unified register four,
+after the two pointer arguments in registers zero through three. Workgroup IDs
+occupy coefficients zero through two. Workgroup counts occupy coefficients four
+through six, leaving coefficient three as alignment padding. The compiler exports
+five unified inputs and seven coefficients. Coefficients are workgroup-local
+common-store inputs; they are separate from OpenCL shared memory and shared
+registers. Scratch, spills, barriers, atomics, shared memory and shared registers
+remain zero in this profile.
+
+The host adapter extracts the pinned `allocate_val`, `check_unused_sysvals` and
+`pvr_alloc_cs_sysvals` functions from Mesa's `pvr_arch_pipeline.c`. It reserves the
+four pointer inputs and invokes those functions after NIR postprocessing, at the
+same point as the Vulkan compiler. Both useful kernels use the standard local-ID,
+workgroup-ID and workgroup-count intrinsics. Metadata and actual system-value
+ranges must match the profile. The metadata exporter and a separate adapter
+without that exporter produce identical USC bytes. Provenance records identify
+the original upstream compiler, the actual comparison executable and its adapter
+source separately. Older profiles retain their original compiler comparison.
+
+The pinned compute PDS generator supplies a coefficient-update entry and an
+ordinary task entry. Its data uses 18 words; its emitted code ends after 13
+instructions. The generator's `code_size` reports 52 bytes despite the upstream
+upload interface naming its argument in words. The reference checks the emitted
+end pointer and records the units explicitly. It also saves the ordinary-entry
+offset before code generation resets that generator field.
+
+The coefficient path ends with HALT at instruction nine. The ordinary branch
+targets instruction ten. The native producer inserts two pointer DOUTWs at that
+ordinary entry, leaving the branch and coefficient path intact. Pointer constants
+and controls occupy bytes 80 through 111 after aligned generator data. The
+inserted writes use no temporaries and omit END/LAST. Original ordinary-task
+local-index publication and USC launch follow them. The resulting 60-byte code
+begins at byte 128. The indirect address stays zero; direct group counts use
+ordinary X/Y/Z word order. Pointer constants retain the earlier generator's
+H32/L32 convention. That byte comparison does not qualify physical register-half
+mapping.
+
+CDM allocates two 16-byte unified units, one 64-byte coefficient unit, one
+16-byte PDS temporary unit and seven 16-byte PDS data units. `USC_COMMON_SHARED`
+is false. Hardware local shape is flattened to `(32,1,1)`; NIR reconstructs the
+compiler's local coordinates. Mesa treats coefficient state as local to each
+workgroup, so another workgroup does not reuse it as persistent shared state.
+A final fence and termination follow the 28-byte grid command, for 60 command
+bytes total. One firmware task and one UPDATE cover the complete grid. The
+existing complete PDS page publication and per-job cache contract still apply.
+
+The [transpose kernel](../shaders/pvr_grid_transpose.cl) uses an `(8,4,1)` local
+shape and writes a row-major matrix into transposed order. Each admitted `(x,y)`
+writes `x*H+y`, a unique index below the element count. The
+[neighbor kernel](../shaders/pvr_grid_neighbor.cl) uses `(32,1,1)` and sums each
+matrix element with its available horizontal neighbors. It writes the unique
+row-major index and never crosses a row boundary. Both reject padded lanes.
+These consumers use the same native mechanism as other source-admitted programs;
+the runtime contains no kernel-name or executable-hash selection.
 
 ## Compiler and host preparation
 
@@ -288,3 +367,22 @@ and sequence-two results, stale output refusal and completed shutdown. Service
 replies, scheduling, USB completion and GPU arithmetic are modeled. Focused
 correctness review found no remaining substantive issue. These checks establish
 software behavior; physical GPU execution remains unqualified.
+
+Grid evidence resides in
+`~/.cache/sunstoneos/evidence/gpu-workgroup-grid-20261019/`. Both compiler products
+use 11 temporary registers, five unified inputs and seven coefficients. Six
+sanitizer/model and complete upstream-byte comparisons cover both kernels at one
+element, padded 13 × 5 dimensions and 992 elements. They include both PDS entry
+paths, exact emitted lengths, register allocations, padded coverage, retained
+guard failure and a single final timeline. One near-limit heap layout and one
+package from each legacy profile also pass.
+
+The actual reservation constructor accepts the grid package and checks private
+code copying, mappings, lease identity and completed native owner/timeline
+admission. Native FreeRTOS case 14 exercises two changing matrix inputs, geometry
+mismatch refusal before overwrite, copied-input ownership, sequence-specific
+output and healthy CLOSE. The same linked application ELF accepts each program
+in a separate session and runs two changed inputs through the existing runtime
+host consumer. The arithmetic and GPU writes are modeled. Focused correctness
+review found no remaining substantive issue; physical execution remains
+unqualified.

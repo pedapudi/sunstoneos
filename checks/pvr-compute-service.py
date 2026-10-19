@@ -25,9 +25,10 @@ def main():
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 14)), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 15)), default=[1, 2, 3])
     parser.add_argument('--package',type=Path)
     parser.add_argument('--expected',type=Path)
+    parser.add_argument('--expected-second',type=Path)
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--run-only', action='store_true')
     a = parser.parse_args()
@@ -66,7 +67,7 @@ set_target_properties(compute-model PROPERTIES SUFFIX ".elf")
     if a.package:
         assert a.expected and a.package.stat().st_size==8288
         assembly=source/'package.S'
-        assembly.write_text('.section .rodata\n.balign 8\n.global fixture_package\nfixture_package:\n.incbin "'+str(a.package.resolve())+'"\n.global fixture_expected\nfixture_expected:\n.incbin "'+str(a.expected.resolve())+'"\n')
+        assembly.write_text('.section .rodata\n.balign 8\n.global fixture_package\nfixture_package:\n.incbin "'+str(a.package.resolve())+'"\n.global fixture_expected\nfixture_expected:\n.incbin "'+str(a.expected.resolve())+'"\n.global fixture_expected_second\nfixture_expected_second:\n.incbin "'+str((a.expected_second or a.expected).resolve())+'"\n')
         cmake+='\ntarget_sources(compute-model PRIVATE "'+str(assembly)+'")\ntarget_compile_definitions(compute-model PRIVATE PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE=1)\n'
     (source / 'CMakeLists.txt').write_text(cmake)
     commands = [['cmake', '-S', str(source), '-B', str(build),

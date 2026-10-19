@@ -44,12 +44,12 @@ static struct pvr_mips_buffer allocation(uintptr_t cpu,size_t bytes)
 }
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
 extern const struct pvr_compute_package fixture_package;
-extern const unsigned char fixture_expected[];
+extern const unsigned char fixture_expected[],fixture_expected_second[];
 #endif
 static void workload(void)
 {
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
-    if((compute_service_case==12||compute_service_case==13))job_config.package=&fixture_package;
+    if((compute_service_case>=12&&compute_service_case<=14))job_config.package=&fixture_package;
 #endif
     programs=(struct pvr_compute_program_config){.bvnc=PVR_FW_A733_BVNC,
         .pds={UINT64_C(0x400000000),UINT64_C(1)<<32},.usc={UINT64_C(0x500000000),UINT64_C(1)<<32},
@@ -120,14 +120,22 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     callback(ctx);configASSERT(off==0xb00&&!value&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&get(&published));
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
-    if((compute_service_case==12||compute_service_case==13)&&fixture_package.profile==2) {
+    if((compute_service_case>=12&&compute_service_case<=14)&&fixture_package.profile>=2) {
         const struct pvr_mips_buffer *pds=&computation.buffers[PVR_JOB_PDS];
         unsigned last=fixture_package.dispatch_count-1,first=last*32;
         unsigned count=fixture_package.count-first;if(count>32)count=32;
         configASSERT(pds->page_count==1&&pds->storage.bytes==4096&&job_config.buffers[PVR_JOB_PDS].bytes==4096);
         const unsigned char *data=pds->storage.cpu;
-        configASSERT(word(data+last*128+32,4)==count&&word(data+last*128+36,4)==first);
-        configASSERT(word(data+PVR_COMPUTE_DISPATCH_PDS_CODE,4)==0xc1100001u);
+        if(fixture_package.profile==2) {
+            configASSERT(word(data+last*128+32,4)==count&&word(data+last*128+36,4)==first);
+            configASSERT(word(data+PVR_COMPUTE_DISPATCH_PDS_CODE,4)==0xc1100001u);
+        } else {
+            configASSERT(word(data+128,4)==0xc2c0000au&&word(data+164,4)==0xd3000000u);
+            configASSERT(word(data+168,4)==0xf0160a01u&&word(data+172,4)==0xf01a0c01u);
+            for(unsigned i=0;i<3;++i)configASSERT(word(data+48+4*i,4)==fixture_package.grid.groups[i]);
+            const unsigned char *stream=job_config.buffers[PVR_JOB_CDM].cpu;
+            configASSERT(word(stream,4)==((1u<<18)|(2u<<12)|(1u<<8)|(7u<<2)|(1u<<1)));
+        }
         unsigned mapping=0;
         for(unsigned i=0;i<computation.map_count;++i)if(computation.maps[i].address==job_config.buffers[PVR_JOB_PDS].gpu) {
             configASSERT(computation.maps[i].physical==pds->pages[0]&&computation.maps[i].bytes==4096&&
@@ -149,11 +157,14 @@ static void completion_model(void)
 {
     unsigned char *out=job_config.buffers[PVR_JOB_OUTPUT].cpu;
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
-    if((compute_service_case==12||compute_service_case==13)) {
-        if(compute_service_case==13&&compute.job.sequence==2) {
-            const unsigned char *in=job_config.buffers[PVR_JOB_INPUT].cpu;
-            for(unsigned i=0;i<fixture_package.count;++i)
-                put(out+64+4*i,4,word(in+12+4*i,4)*word(in+4,4)+word(in+8,4));
+    if((compute_service_case>=12&&compute_service_case<=14)) {
+        if((compute_service_case==13||compute_service_case==14)&&compute.job.sequence==2) {
+            if(compute_service_case==14)memcpy(out+64,fixture_expected_second,fixture_package.output_bytes);
+            else {
+                const unsigned char *in=job_config.buffers[PVR_JOB_INPUT].cpu;
+                for(unsigned i=0;i<fixture_package.count;++i)
+                    put(out+64+4*i,4,word(in+12+4*i,4)*word(in+4,4)+word(in+8,4));
+            }
         } else memcpy(out+64,fixture_expected,fixture_package.output_bytes);
         __asm__ volatile("dsb sy":::"memory");put(computation.firmware[5].storage.cpu,4,compute.job.sequence);return;
     }
@@ -169,7 +180,7 @@ static void compute_peer(void *unused)
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_DENIED);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE_CANCEL,0).result==PVR_GPU_SERVICE_DENIED);
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
-    if(compute_service_case==13) {
+    if((compute_service_case==13||compute_service_case==14)) {
         uint64_t ticket;struct pvr_gpu_service_reply reply;
         configASSERT(pvr_gpu_service_compute_input(&service,1,fixture_package.input,fixture_package.input_bytes,100000,1,&ticket));
         while(!pvr_gpu_service_collect(&service,ticket,&reply,1))vTaskDelay(1);
@@ -209,7 +220,7 @@ static void compute_owner(void *unused)
     r=wait_phase(PVR_GPU_SERVICE_READY);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_READY);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
-    if((compute_service_case==12||compute_service_case==13)) {
+    if((compute_service_case>=12&&compute_service_case<=14)) {
         configASSERT(request(PVR_GPU_SERVICE_COMPUTE,1000000).result==PVR_GPU_SERVICE_OK);
         wait_flag(&peer_checked,1);set(&allow_complete,1);completion_model();
         do{vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
@@ -221,11 +232,11 @@ static void compute_owner(void *unused)
             configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_first_word==first&&r.compute_word_count==n&&
                 r.compute_total_words==total&&r.compute_sequence==1&&!memcmp(r.compute_words,fixture_expected+first*4,n*4));
         }
-        if(compute_service_case==13) {
+        if((compute_service_case==13||compute_service_case==14)) {
             static unsigned char next[4096],expected[4096];
             unsigned bytes=fixture_package.input_bytes;uint64_t ticket;
             memcpy(next,fixture_package.input,bytes);
-            put(next+4,4,7);put(next+8,4,19);
+            if(compute_service_case==13){put(next+4,4,7);put(next+8,4,19);}
             for(unsigned i=0;i<fixture_package.count;++i)put(next+12+4*i,4,1000+i*11);
             memcpy(expected,next,bytes);
             configASSERT(!pvr_gpu_service_compute_read_sequence(&service,0,0,1,&ticket));
@@ -253,8 +264,10 @@ static void compute_owner(void *unused)
             while(!pvr_gpu_service_collect(&service,ticket,&r,1))vTaskDelay(1);
             configASSERT(r.result==PVR_GPU_SERVICE_DENIED&&!atomic_load(&compute.input_state));
             service.firmware_fixture_owner=0;
-            for(unsigned bad=0;bad<2;++bad) {
-                if(bad)put(next,4,fixture_package.count+1);
+            for(unsigned bad=0;bad<(compute_service_case==14?3u:2u);++bad) {
+                memcpy(next,expected,bytes);
+                if(bad==1)put(next,4,fixture_package.count+1);
+                if(bad==2)put(next+4,4,fixture_package.grid.global_extent[0]+1);
                 configASSERT(pvr_gpu_service_compute_input(&service,bad?1:2,next,bytes,1000000,1,&ticket));
                 while(!pvr_gpu_service_collect(&service,ticket,&r,1))vTaskDelay(1);
                 configASSERT(r.result==PVR_GPU_SERVICE_INVALID&&r.compute_sequence==1&&
@@ -278,7 +291,8 @@ static void compute_owner(void *unused)
                 while(!pvr_gpu_service_collect(&service,ticket,&r,1))vTaskDelay(1);
                 unsigned n=total-first<32?total-first:32;
                 configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_sequence==2&&r.compute_word_count==n);
-                for(unsigned i=0;i<n;++i)configASSERT(r.compute_words[i]==(1000+(first+i)*11)*7+19);
+                if(compute_service_case==14)configASSERT(!memcmp(r.compute_words,fixture_expected_second+4*first,n*4));
+                else for(unsigned i=0;i<n;++i)configASSERT(r.compute_words[i]==(1000+(first+i)*11)*7+19);
             }
         }
         configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);

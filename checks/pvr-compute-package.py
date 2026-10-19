@@ -13,7 +13,8 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for x in ('evidence','mesa-source','mesa-build'):p.add_argument('--'+x,type=Path,required=True)
-    p.add_argument('--profile',type=int,choices=(1,2),default=1)
+    p.add_argument('--profile',type=int,choices=(1,2,3),default=1)
+    p.add_argument('--cases',nargs='+',help='Run only named cases; builds the selected fixture once')
     a=p.parse_args();out=a.evidence.resolve()
     spec=importlib.util.spec_from_file_location('package_compile',ROOT/'apps/gpu-program/compile.py')
     tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(tool)
@@ -39,11 +40,16 @@ def main():
     commands.append(run(flags+['-DUPSTREAM',str(ROOT/'checks/pvr-compute-package.c')]+[str(ROOT/x) for x in inputs]+
       [str(old/'mesa-pds.o'),str(a.mesa_build/'src/util/libmesa_util.a'),'-Wl,--gc-sections','-pthread','-lm','-o',str(out/'package-reference')],'reference-build',a.mesa_build))
     results=[]
-    for kernel in ('affine','add'):
+    for kernel in (('transpose','neighbor') if a.profile==3 else ('affine','add')):
         directory=out/kernel
-        counts=(1,33,992 if kernel=='affine' else 511) if a.profile==2 else (1,37,127)
+        counts=(1,65,992) if a.profile==3 else (1,33,992 if kernel=='affine' else 511) if a.profile==2 else (1,37,127)
         for count in counts:
-            if kernel=='affine':
+            if a.profile==3:
+                width,height=(1,1) if count==1 else (13,5) if count==65 else (248,4) if kernel=='transpose' else (992,1)
+                values=[i*31 for i in range(count)];words=[count,width,height]+values;header,stride=12,4
+                if kernel=='transpose':expected=[values[y*width+x] for x in range(width) for y in range(height)]
+                else:expected=[sum(values[y*width+xx] for xx in range(max(0,x-1),min(width,x+2)))&0xffffffff for y in range(height) for x in range(width)]
+            elif kernel=='affine':
                 words=[count,17,0xfffffff0]+[i*31 for i in range(count)]
                 expected=[(x*17+0xfffffff0)&0xffffffff for x in words[3:]]
                 header,stride=12,4
@@ -56,15 +62,23 @@ def main():
             raw=tool.package(directory/'program.bin',directory/'manifest.json',path,count*4,header,stride,4)
             pkg=directory/f'package-{count}.bin';pkg.write_bytes(raw)
             for binary in ('native','reference'):
-                commands.append(run([str(out/('package-'+binary)),str(pkg),str(expect)],f'{kernel}-{count}-{binary}'))
+                name=f'{kernel}-{count}-{binary}'
+                if not a.cases or name in a.cases:commands.append(run([str(out/('package-'+binary)),str(pkg),str(expect)],name))
             results.append({'kernel':kernel,'count':count,'package_sha256':hashlib.sha256(raw).hexdigest(),
               'expected_sha256':hashlib.sha256(expect.read_bytes()).hexdigest()})
-    if a.profile==2:
+    if a.profile>=2:
         for binary in ('native','reference'):
-            commands.append(run([str(out/('package-'+binary)),str(out/'affine/package-992.bin'),str(out/'affine/expected-992.bin'),'1'],'heap-limit-'+binary))
+            name='heap-limit-'+binary
+            if not a.cases or name in a.cases:commands.append(run([str(out/('package-'+binary)),str(out/('transpose' if a.profile==3 else 'affine')/'package-992.bin'),str(out/('transpose' if a.profile==3 else 'affine')/'expected-992.bin'),'1'],name))
         oldcase=Path.home()/'.cache/sunstoneos/evidence/gpu-program-submission-20261019/affine'
         for binary in ('native','reference'):
-            commands.append(run([str(out/('package-'+binary)),str(oldcase/'package-37.bin'),str(oldcase/'expected-37.bin')],'legacy-profile-'+binary))
+            name='legacy-profile-'+binary
+            if not a.cases or name in a.cases:commands.append(run([str(out/('package-'+binary)),str(oldcase/'package-37.bin'),str(oldcase/'expected-37.bin')],name))
+    if a.profile==3:
+        legacy=Path.home()/'.cache/sunstoneos/evidence/gpu-dispatch-geometry-20261019/affine'
+        for binary in ('native','reference'):
+            name='legacy-profile2-'+binary
+            if not a.cases or name in a.cases:commands.append(run([str(out/('package-'+binary)),str(legacy/'package-33.bin'),str(legacy/'expected-33.bin')],name))
     files=[ROOT/x for x in inputs]+[ROOT/'checks/pvr-compute-package.c',ROOT/'checks/pvr-compute-package.py',ROOT/'include/pvr_compute_package.h',ROOT/'include/pvr_compute_job.h']
     manifest={'scope':'Real Mesa code/PDS/CDM bytes; modeled firmware timelines/numerical writes, no USC execution',
       'commands':commands,'cases':results,'inputs':{str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in files}}
