@@ -11,10 +11,11 @@ int board_identity_prepare(uint64_t deadline)
     const struct a733_board_session *s=board_session_snapshot();
     uint64_t el,sctlr;
     __asm__ volatile("mrs %0, CurrentEL\n mrs %1, sctlr_el3":"=r"(el),"=r"(sctlr));
-    if(el!=12||(sctlr&5)||!a733_board_session_valid(s,a733_smp_counter())||s->workload)return 0;
+    if(el!=12||(sctlr&5)||!a733_board_session_valid(s,a733_smp_counter())||
+       (s->workload!=0&&s->workload!=4))return 0;
     for(unsigned i=0;i<3;++i)
         if(a733_cpu_coherence_publish(mimus_asset_address[i],mimus_asset_bytes[i],deadline)!=1)return 0;
     return 1;
 }
-/* Workload zero has no radio authority or SID access. */
+/* Storage and keyboard/storage workloads have no radio authority or SID access. */
 const struct board_radio_chip_id *board_radio_chip_id(void){return 0;}
