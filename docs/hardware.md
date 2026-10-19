@@ -596,16 +596,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   so cyclic RX/duplex physical
   admission requires `cyclic-rx-completion-and-reuse-ordering-established`.
   No qualifying record exists; CPU-cache review alone does not establish it.
-  Runtime PCM direction 6 now accepts successive copied 16 kHz mono S16LE
-  periods through finite TX leases. Actual provider composition consumes eight
-  distinct periods; nine standalone client/USB cases and eight host cases pass.
-  The native image is linked, not executed. Root verifies 170 inputs, 70 objects,
-  131 sources, 314 artifacts and four tools against revision `0151af7` under
-  `i2s-runtime-pcm-20261019/root-integration.json`, within `closure.json` scopes.
-  The host sends a requested prefix and four guard periods before CANCEL; guard
-  playback may be truncated. No graceful wire drain or complete-file playback
-  is established. Physical continuity, DMA drain, cache visibility, Bluetooth
-  PCM and broader routed audio functions remain outstanding.
+  Runtime PCM direction 6 accepts copied 16 kHz mono S16LE periods through
+  finite TX leases. The [file-input protocol](i2s-application.md#complete-file-input-retains-unknown-serial-completion)
+  adds BEGIN_FILE and END_INPUT, with an exact short final period and no guard
+  padding. Normal EOF requires every declared frame's DMA consumption and an
+  observed empty FIFO. Serial-wire completion remains unknown: TX/GEN, clocks,
+  pins, catalogue and buffers stay owned; REAP and CLOSE are refused. Explicit
+  later CANCEL may truncate audio. The original prefix-plus-guards/CANCEL mode
+  remains separate. Actual native runtime/service/controller/cache/audio/pin
+  composition, compiled client/USB and host checks pass with register/DMA/FIFO
+  effects modeled. Root verifies 171 inputs and 70 objects against revision
+  `88bf392`, with no compiled-source divergence, under
+  `i2s-file-playback-20261019/root-integration.json`. Earlier refill evidence
+  remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
+  Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
+  routing and broader audio functions remain unqualified or required work.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
@@ -707,21 +712,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   paired geometry/fragment queues and copies output only after timeline, pixel
   and guard validation. Source comparisons and four native submission/failure
   cases pass. Six affected central targets link with the render implementation.
-  The [native triangle application](gpu-render.md) now accepts successive copied
-  triangle lists in one retained session. Each frame uses 3–126 vertices and
-  returns a copied 64-by-64 RGBA8 framebuffer through sequence-bound reads. Both
-  previous timelines and complete output copying precede the next frame; stale
-  reads and exhausted counters are refused. Paired geometry/fragment contexts
-  retain their rings and alternate render-target records without clearing
-  firmware-owned state. Twelve changing frames pass linked service/application,
-  ring-wrap, fragmented USB and host checks; uncertain completion retains owners.
-  GPU writes, firmware replies, cache visibility and transport effects are modeled.
-  Root verifies 217 inputs and 86 objects under
-  `gpu-repeated-draw-20261019/root-integration.json`. Later shared clock/board
-  changes and three comment-only GPU headers retain their classified audit scopes;
-  the original frozen image remains authoritative. Pinned compiler and shader
-  evidence is reused. Physical graphics, indices, textures, blending, depth/stencil,
-  wider rendering and context disposal remain required.
+  The [indexed-texture application](gpu-render.md#indexed-textured-frames) now
+  accepts copied float4 positions, float2 UVs, uint16 triangle indices and RGBA8
+  textures. Trusted resident shaders use nearest/clamp sampling at LOD0 without
+  perspective, depth/stencil or blending. Texture and output dimensions reach
+  1920-by-1080; framebuffer size remains fixed for the session. Complete
+  validated drafts and both prior timelines precede submission; invalid drafts
+  preserve the prior output. Guarded snapshots stream through copied slots, released
+  only after final USB transfer completion. Replacement and CLOSE refuse borrowed
+  slots. Compiler/reference, native service, refusal and linked USB/host checks pass.
+  GPU/firmware effects and architectural admission are modeled; linked application
+  checks also model service replies and endpoint hardware. Root verifies 220 inputs
+  and 88 objects against revision `916aea2`, with no compiled-source delta, under
+  `gpu-textured-render-20261019/root-integration.json`. The exact-image static layout
+  review is `root-layout-final.json`; it establishes no startup execution.
+  Physical arithmetic, cache visibility, completion and confinement remain
+  unqualified. Arbitrary shaders, perspective, depth/stencil, blending, other
+  index/topology and texture modes, multisampling, display presentation and context
+  disposal remain required. The repeated 64-by-64 triangle-color profile retains
+  its separate image and evidence under `gpu-repeated-draw-20261019/`.
   The [native GPU application](gpu-application.md) connects real firmware,
   providers, IRQ routing, fixed rendering and copied USB output. Its central
   image links; focused checks verify retention when isolation is unavailable
@@ -822,22 +831,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and AArch64 compilation pass under `display-native-20261018/`. Panel selection,
   analog-profile qualification and initial isolation authority remain required;
   STOP retains resources because display-engine drain is unsupported.
-  The [standalone DSI application](display-scanout.md#standalone-retained-dsi-application)
-  is implemented with one privileged scanout owner and the existing PMIC, clock,
-  rail, pin, media/PLL, IOMMU and USB0 providers. It builds an immutable XRGB8888
-  color-bar framebuffer, starts DE1/LCD1/DSI1 and returns a copied controller
-  observation. Actual producer compositions pass at 720p and 1080p; retained-fault,
-  linked private seal/serializer, generated launcher and host capture checks pass
-  with electrical/panel facts and hardware effects modeled. Shared startup, GIC
-  and secondary execution are excluded. Root verifies 462 native inputs,
-  176 objects and 195 host inputs against revision `0dcf977`, with no source delta,
-  under `dsi-scanout-application-20261019/root-integration.json`.
-  No panel is selected or attached. Physical preparation requires image-bound panel,
-  electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding evidence;
-  model-only records are refused. Visible pixels and physical scanout remain
-  unqualified. Faults retain all resources; successful STOP, drain, release,
-  retry, live-frame updates and wider display modes remain required.
-  Composition, additional formats and synchronization remain outstanding.
+  The [standalone DSI application](display-scanout.md#caller-uploaded-immutable-frame-replay)
+  now copies and authenticates two complete XRGB8888 frames before scanout, then
+  selects those immutable slots repeatedly through the register command queue
+  (RCQ). Actual provider composition passes 0→1→0 selection at 720p and 1080p.
+  Each result binds the requested sequence/slot, fresh RCQ completion and a later
+  DE frame-end observation; the next request waits for full copied USB delivery.
+  Both framebuffers and RCQ pages remain permanently immutable. These observations
+  establish no panel acceptance, outstanding-read retirement or safe overwrite.
+  Input/refusal, retained-fault, linked submit/serializer/credit, launcher and host
+  capture checks pass with hardware and critical primitive boundaries modeled.
+  Root verifies 464 native inputs, 177 objects and 198 host-composition inputs under
+  `display-frame-present-20261019/root-integration.json`; its static retained-layout
+  review is `root/layout-review.json`. Shared startup is unexecuted.
+  No panel is selected or attached. Image-bound electrical/PLL, rail/bank-voltage,
+  wiring, isolation, fetch-padding and panel facts remain physical prerequisites;
+  model-only records are refused. Physical pixels, DMA confinement and drain remain
+  unqualified. Arbitrary new-frame streaming, old-buffer recycling, successful STOP,
+  release/retry, composition and wider display modes remain required. The generated
+  single-frame profile retains its separate accepted evidence.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).
   Complete packet/register comparisons and retained-failure checks pass; native
