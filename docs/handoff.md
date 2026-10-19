@@ -114,6 +114,24 @@ The host supplies a requested prefix plus four guard periods, then CANCEL;
 guards may be truncated. No graceful wire drain or complete-file playback is
 established. Broader routed audio and physical qualification remain required.
 
+The [combined recorded-recognition application](../apps/mimus-board/README.md)
+is implemented in one supervised OS image with the existing PMIC, Type-C,
+USB0 and USB2 owners. The unchanged EL0 recognizer processes authenticated
+recorded input while the storage owner reads one read-only sector. Combined
+success requires the checked sector copy to complete during recognition,
+successful recognition and fresh attachment/liveness checks. USB0 returns copied
+transcript and sector data; service owners continue polling after completion.
+Root verifies all 744 compiled inputs and 202 objects, disjoint memory, input
+identity publication and the linked EL0 classifier under
+`mimus-board-20261019/root-integration.json`. The native fixture executes actual
+storage-copy and serialization instructions but injects recognition-active state
+and transcript, and models hardware and scheduling. A separate host recognizer
+check matches the historical recording's features, log probabilities and formatted
+text. These checks establish neither physical concurrent operation nor native
+scheduling or timing. Fresh image-bound DDR/model-memory admission, Type-C power,
+USB/DMA and recovery qualification remain required. The image retains all memory
+and does not replace the existing standalone mimus session.
+
 Repeated Bluetooth-headset recognition is implemented in the supervised
 CVSD profile. Two copied PCM slots feed successive bounded 8 kHz segments to
 the unchanged converter, recognizer and formatter. A private input copy precedes
@@ -138,6 +156,23 @@ the changed finished/status ordering case uses the final image, as recorded in
 recognition within the session deadline and wideband mSBC remain unqualified.
 The selected ELF SHA-256 is
 `dbf35d7fdd756d6c1f03b75681252b09572d96176a589ecf5924a7053757417d`.
+
+The optional [mSBC profile](bluetooth-native.md#wideband-capture-through-the-existing-recognizer)
+now negotiates transparent eSCO and decodes copied 16 kHz PCM into the unchanged
+repeated recognizer. Explicit CVSD fallback retains its separate codec identity.
+Two decoded speech segments match portable recognition references; the actual
+linked codec also reproduces 96,000 PCM bytes from 400 encoded frames. Framing,
+capability/refusal, copied ownership, revocation and USB/host checks pass with
+controller/radio events, scheduling and USB effects modeled.
+Native CPU encoding/decoding uses pinned BlueZ libsbc 2.0, revision
+`8dc5d5ba381512ad5b1afa45c63ec6b0a3833244`, under LGPL-2.1-or-later.
+`apps/bluetooth/msbc-source.json` records source hashes; the freeze retains source,
+notices and relinkable objects. The default CVSD build omits this dependency.
+Root verifies the compiled closure and six archives under
+`bluetooth-msbc-20261019/root-integration.json`. Later shared USB/board layouts
+remain distinct from the internally consistent frozen image; future builds must
+compile affected consumers together. Physical transparent eSCO, headset capture,
+playback/duplex, receive-service bounds and session timing remain unqualified.
 
 Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
@@ -194,6 +229,12 @@ workload-6 preparation branch does not change private H.264 launcher constructio
 System registers, counter values and MMIO are modeled; these checks establish
 neither AArch64 startup nor a physical launch. Physical preparation and recovery
 remain required.
+The actual shared supervised runner now accepts the H.264 caller's
+`h264_result` policy with a 59-second capture bound. The entry check reaches the
+readiness callback; 60 seconds and an unknown result key are refused. Evidence:
+`h264-supervisor-entry-20261019/result.json` and `frozen/manifest.json`.
+The sentinel stops before queue checks, evidence creation or USB access; it
+establishes no transport, native execution or physical launch.
 Physical reference visibility, pixels, confinement, timing and fault drain remain
 unqualified. Allocation reclamation, unmanifested live input, wider profiles,
 multiple references/slices and other required codec modes remain outstanding.
@@ -320,6 +361,22 @@ Load-segment equivalence apart from build identity supports reuse of accepted
 checks. Later shared-header changes do not invalidate this frozen candidate.
 The fixed returning profiles remain separate.
 
+The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
+through one shader (SH) operation and three neural-transpose (NT) operations, with an
+external intermediate pool. Four heads and 128 steps use 522,240 input bytes
+and 262,144 output bytes. Strictly ordered chunked upload, copied output and
+completed-transmission acknowledgments precede mailbox reuse; healthy CLOSE
+retires the service while retaining allocations. The wrapper clears the entire
+external pool before every job under idle ownership and publishes it through
+the existing cache policy. Two inputs through one prepared SDK network match
+all reference FP32 bits. Linked native allocation, assembly, copied protocol
+and CLOSE checks pass with NPU replies, IRQ, cache effects and transport modeled.
+Root verifies 189 inputs and 75 objects under
+`npu-relative-shift-20261019/root-integration.json`; later COMB0 clock-source
+differences do not replace the consistent frozen inputs. This fixed graph adds
+native operator/memory coverage; it does not replace or accelerate the unchanged
+mimus encoder. Physical inference, confinement and larger shapes remain required.
+
 The [two-stage NPU graph](npu-two-stage.md) is implemented as another fixed
 catalogue selection. It consumes 64 UINT8 input bytes and produces eight output
 bytes through two convolution stages, each fused with ReLU. Intermediate data
@@ -346,21 +403,21 @@ Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return rema
 unqualified for both accelerators. Existing device checks were reused.
 Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
-The [native triangle application](gpu-render.md) implements one caller-selected
-triangle-list draw per session, with 3–126 copied vertices and a copied 64-by-64
-RGBA8 framebuffer. Trusted compiled vertex/fragment shaders and actual
-programmable data sequencer (PDS),
-primitive and paired geometry/fragment commands use the existing native owners.
-Both acquired timelines precede guarded pixel copies. Compiler/reference,
-native service, linked application/host and retry checks pass with firmware
-replies, GPU writes and USB effects modeled. Evidence:
-`gpu-triangle-draw-20261019/root-integration.json` verifies 217 inputs and 86 objects;
-its frozen image remains authoritative across newer shared clock/memory changes.
-Root binary comparison supports scoped reuse of the earlier two-scene checks;
-the changed client ordering has a separate final-image case.
-Physical rasterization and cache visibility remain unqualified. Repeated drawing
-is in development; indices, textures, blending, depth/stencil, wider rendering
-and context disposal remain required.
+The [native triangle application](gpu-render.md) now accepts successive copied
+triangle lists in one retained session. Each frame uses 3–126 vertices and
+returns a copied 64-by-64 RGBA8 framebuffer through sequence-bound reads. Both
+previous timelines and complete output copying precede the next frame; stale
+reads and exhausted counters are refused. Paired geometry/fragment contexts
+retain their rings and alternate render-target records without clearing
+firmware-owned state. Twelve changing frames pass linked service/application,
+ring-wrap, fragmented USB and host checks; uncertain completion retains owners.
+GPU writes, firmware replies, cache visibility and transport effects are modeled.
+Root verifies 217 inputs and 86 objects under
+`gpu-repeated-draw-20261019/root-integration.json`. Later shared clock/board
+changes and three comment-only GPU headers retain their classified audit scopes;
+the original frozen image remains authoritative. Pinned compiler and shader
+evidence is reused. Physical graphics, indices, textures, blending, depth/stencil,
+wider rendering and context disposal remain required.
 
 Caller-selected GPU compute programs are integrated. A sealed session fixes a
 trusted host-compiled program and initial copied input; the same executable supports
@@ -490,18 +547,15 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue repeated GPU drawing, source-backed full-HD H.264 implementation
-   and standalone DSI application assessment.
-   One triangle draw, native VGA streaming and direct Gen1 BOT are implemented
-   offline, within their frozen evidence scopes. Repeated Bluetooth capture and
-   recognition are integrated offline; physical operation and session timing
-   remain unqualified. Implement
-   the approved mSBC profile and native NPU shader/neural-transpose large-tensor
-   graph path. The NPU work adds functional operator and external-memory coverage;
-   it does not replace or optimize mimus. Bounded GPU workgroup grids, the fixed
-   two-stage NPU graph, GPU/NPU live input and USB hub modes for one device or combined
-   HID/storage are integrated offline. The VGA image includes the native-read
-   correction, and its separately corrected launcher passes modeled admission.
+1. Continue source-backed full-HD H.264 implementation and standalone DSI
+   application assessment. Repeated GPU drawing, fixed NPU shader/neural-transpose
+   large tensors, optional mSBC recognition, native VGA streaming, direct Gen1 BOT
+   and the combined recorded-recognition/storage image are integrated
+   offline within their frozen evidence scopes.
+   The NPU graph adds operator/memory coverage without replacing or optimizing
+   mimus. Physical operation and timing remain unqualified. The VGA image includes
+   the native-read correction, and its corrected launcher and supervised policy
+   pass their separate modeled checks.
    Preserve each image's complete frozen inputs and accepted audit scope.
    I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
    with physical RX admission blocked by the documented completion/reuse ordering
