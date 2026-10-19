@@ -120,6 +120,8 @@ uses the same bounded transport as NPU. Its 93 focused checks and Astra review
 pass, including copied-result validation and bounded memory restoration.
 Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return remain
 unqualified for both accelerators. Existing device checks were reused.
+Root GPU host source review also passes; all 18 host sources match the preserved
+bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document this requirement. Root retains CPU and architectural
 return review. For the preceding adapter, all 172 NPU
