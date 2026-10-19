@@ -1,4 +1,5 @@
 #include "a733_uart_platform.h"
+#include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define RCCU UINT32_C(0x07010000)
 #define GICD UINT32_C(0x03400000)
@@ -94,14 +95,13 @@ static int update(struct a733_uart_platform *s,uintptr_t a,uint32_t mask,uint32_
 static int clock_profile(struct a733_uart_platform *s)
 {
     uint32_t osc,ref,v;
-    if (!rd(s,OSC,&osc) || (osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
-        (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) || !rd(s,parent(s),&v) || (v&0x0700001fu)) return 0;
-    /* SYS24M can select DCXO or PLL_REF. Prove both possible sources at 24MHz
-     * without altering their selection. APBS1 source0 uses DCXO directly. */
+    if (!rd(s,OSC,&osc) || !rd(s,parent(s),&v) || (v&0x0700001fu)) return 0;
+    /* Main source zero is normalized SYS_CLK24M. S_UART source zero is
+     * raw DCXO, so only that consumer requires a 24 MHz oscillator. */
     if (s->route.port<7) {
-        if (!rd(s,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u ||
-            ((ref>>8)&255)<79 || ((ref>>8)&255)>115 || ((ref>>8)&255)!=((ref>>16)&127)) return 0;
-    }
+        if (!rd(s,CCU,&ref) || !a733_clock_ref24_valid(osc,ref)) return 0;
+    } else if ((osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)) ||
+               a733_clock_dcxo_hz(osc)!=24000000) return 0;
     return 1;
 }
 /* Mask propagation and no active handler are necessary observations. The

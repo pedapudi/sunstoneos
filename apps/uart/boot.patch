@@ -1,0 +1,13 @@
+--- boot-supervised.c
++++ boot-uart.c
+@@ -82,8 +82,8 @@
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
+-    extern int board_identity_prepare(uint64_t);
+-    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
++    extern int uart_session_prepare(const struct a733_smp_contract *);
++    if(!uart_session_prepare(&admission))a733_smp_stop(3,0x30b);
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+         a733_smp_stop(3,0x308);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);

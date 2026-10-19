@@ -49,19 +49,19 @@ The binding does not program bank supply, security or retention voltage.
 UART0–6 use main CCU base `0x02002000`, APB_UART offset `0x538`, and separate
 local words at `0xe00 + 4 × port`. Each local word uses gate bit 0 and reset
 bit 16. The binding admits source zero and divider zero only.
-APB_UART source zero is SYS_CLK24M. Because that signal can select DCXO or
-PLL_REF, the binding proves both possible sources at 24 MHz without changing
-their selection.
+APB_UART source zero is SYS_CLK24M. The binding validates the normalized PLL reference with the shared
+`a733_clock_reference.h` decoder. A raw 19.2 or 26 MHz oscillator is accepted
+when its enabled, locked reference factors produce 24 MHz.
 
 S_UART0–1 use R_CCU base `0x07010000` and APBS1 offset `0x10`.
 Their shared local word at `0x18c` uses gate bits 0/1 and reset bits 16/17.
 APBS1 source zero is DCXO directly. Source four is SYS_CLK24M in the manual;
 the published clock source names alone do not establish its rate.
 
-DCXO admission requires enable and stable indications and a 24 MHz status
-code at `0x07090160`. Main UART admission additionally requires enabled,
-locked PLL_REF with equal encoded multiplier and divider fields in the
-source-supported range. Every register stage rechecks the source profile.
+DCXO admission requires enable and stable indications at `0x07090160`.
+S_UART source zero additionally requires a raw 24 MHz oscillator. Main UART
+admission requires enabled, locked PLL_REF whose decoded multiplier and divider
+normalize the oscillator to 24 MHz. Every register stage rechecks this profile.
 The registry holds the bus and its reference ancestry stable while reserving
 the selected controller exclusively. Separate UART controllers can coexist.
 Parent switching and cold PLL startup require separate implementations.
@@ -157,6 +157,8 @@ The runtime check passed once; native compiler setup corrections did not repeat 
 Existing UART format/FIFO/interrupt, pin-manager and I2S evidence remains valid;
 this binding does not rerun those component workloads.
 
+The [finite header application](uart-application.md) integrates UART2 with a
+passive PB0/PB1 loopback, copied USB output and complete UART teardown.
 The [native Bluetooth application](bluetooth-native.md) integrates this polled
 UART binding with module bootstrap and H4 transport. Physical admission and
 serial peer tests remain required. Interrupt-driven platform service, alternate

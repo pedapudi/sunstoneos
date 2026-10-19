@@ -71,7 +71,7 @@ struct a733_uart_platform {
 /* No MMIO. Zero private storage once; all inputs, registry and pin manager
  * remain disjoint and live. Callbacks use the same clock as both managers.
  * Every pin/clock/GIC writer uses these authorities and the common mutex.
- * Parent source0/divider0 is read-only: main SYS24M or S_UART DCXO at 24MHz.
+ * Parent source0/divider0 is read-only: main normalized SYS24M or raw S_UART DCXO at 24MHz.
  * Clock registry and pin manager changes do not establish physical admission. */
 int a733_uart_platform_init(struct a733_uart_platform *,
     const struct a733_uart_platform_config *,const struct a733_uart_platform_ops *,

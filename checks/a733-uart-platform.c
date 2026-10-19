@@ -11,6 +11,7 @@ static struct a733_clock_leases clocks;
 static struct a733_pins pins;
 static uint32_t ccu[0x2000/4],rccu[0x340/4],gic[0x10000/4],pio[0x600/4],rpio[0x410/4];
 static uint64_t now_us;
+static uint32_t oscillator;
 static unsigned held,lock_retained,reads,writes;
 struct fixture {
     struct a733_uart_platform binding;
@@ -81,7 +82,7 @@ static int read32(void *cookie,uintptr_t a,uint32_t *v)
         return 1;
     }
     assert(held && !lock_retained);
-    if (a==UINT32_C(0x07090160)) {*v=BIT(28)|BIT(1);return 1;}
+    if (a==UINT32_C(0x07090160)) {*v=oscillator;return 1;}
     if (a==GIC && f->gic_wait) {--f->gic_wait;*v=BIT(31);return 1;}
     *v=*reg(a);return 1;
 }
@@ -130,7 +131,7 @@ static void initialize_fixture(struct fixture *f,enum a733_uart_route route,unsi
 }
 static void setup(void)
 {
-    held=lock_retained=reads=writes=0;now_us=0;
+    held=lock_retained=reads=writes=0;now_us=0;oscillator=BIT(28)|BIT(1);
     memset(&clocks,0,sizeof(clocks));memset(&pins,0,sizeof(pins));
     memset(ccu,0,sizeof(ccu));memset(rccu,0,sizeof(rccu));memset(gic,0,sizeof(gic));
     memset(pio,0,sizeof(pio));memset(rpio,0,sizeof(rpio));
@@ -219,6 +220,23 @@ int main(void)
     initialize_fixture(&second,A733_S_UART1_PL,0,2);
     *reg(bus(8))=0x80010001;
     ready(&second);closed(&second);assert(*reg(bus(8))==0x80010001);
+
+    /* Normalized SYS_CLK24M accepts unequal PLL_REF factors for raw 26MHz
+     * and 19.2MHz oscillators. Direct S_UART DCXO must remain 24MHz. */
+    setup();initialize_fixture(&first,A733_UART2_PB,0,1);
+    oscillator|=2u<<14;ccu[0]=0xf8000000u|(95u<<8)|(103u<<16);
+    ready(&first);closed(&first);
+    setup();initialize_fixture(&first,A733_UART2_PB,0,1);
+    oscillator|=1u<<14;ccu[0]=0xf8000000u|(99u<<8)|(79u<<16);
+    ready(&first);closed(&first);
+    setup();initialize_fixture(&first,A733_S_UART0_PL,0,1);
+    oscillator|=2u<<14;ccu[0]=0xf8000000u|(95u<<8)|(103u<<16);
+    for(unsigned i=0;i<4&&!first.binding.fault;++i)(void)step(&first);
+    retained(&first,0);
+    setup();initialize_fixture(&first,A733_UART2_PB,0,1);
+    oscillator|=2u<<14; /* Equal factors cannot normalize 26MHz. */
+    for(unsigned i=0;i<4&&!first.binding.fault;++i)(void)step(&first);
+    retained(&first,0);
 
     /* Admission and source refusals perform no controller access. */
     setup();initialize_fixture(&first,A733_UART1_BLUETOOTH,1,1);first.admitted=0;
