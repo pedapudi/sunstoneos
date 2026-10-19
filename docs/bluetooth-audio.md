@@ -73,9 +73,10 @@ lengths; these are separate from HCI packet lengths.
 
 The module also has wired PCM signals on I2S1 pins PG11–PG14. Board wiring and
 an enabled PCM build option do not identify the controller's routing command or
-framing. This worker therefore does not configure that physical path. Verified
-controller-specific PCM routing, mSBC, LC3-SWB and codec negotiation remain
-hardware/profile requirements.
+framing. This worker therefore does not configure that physical path. Controller-specific physical PCM routing and LC3-SWB remain unimplemented.
+The optional [native mSBC path](bluetooth-native.md#wideband-capture-through-the-existing-recognizer)
+uses transparent HCI data, explicit codec negotiation and copied16kHz PCM.
+Controller support and physical operation remain unqualified.
 
 ## Credits and retained records have separate owners
 

@@ -8,22 +8,26 @@ def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('image','recognizer','output'):p.add_argument('--'+n,type=Path,required=True)
-p.add_argument('--host-case',action='append',choices=['host-two-results','host-backlog','host-journal-before-ack','host-wrong-session','host-sample-gap','host-missing-disconnect','host-packet-read'])
+p.add_argument('--msbc',action='store_true',help='Select mode3 with codec-bound version2 responses')
+p.add_argument('--host-case',action='append',choices=['host-two-results','host-backlog','host-journal-before-ack','host-wrong-session','host-sample-gap','host-missing-disconnect','host-packet-read','host-wrong-codec','host-fallback'])
 p.add_argument('--case',action='append',choices=['two-results','early-ack','stale-ack','revoked-copy','terminal-count-order','finished-status-order'])
 a=p.parse_args();out=a.output;out.mkdir(parents=True,exist_ok=False)
 base=module('bluetooth_usb_base_check',ROOT/'checks/bluetooth-usb-native.py');base.ELF_HASH=hashlib.sha256(a.image.read_bytes()).hexdigest()
 shutil.copy2(a.image,out/'bluetooth.elf')
 original=Path.home()/'.cache/sunstoneos/evidence/bluetooth-usb-native-20261018'
-profile=bytearray((original/'profile.bin').read_bytes());assert len(profile)==832;struct.pack_into('<I',profile,624,2);struct.pack_into('<I',profile,720,24000)
+profile=bytearray((original/'profile.bin').read_bytes());assert len(profile)==832;struct.pack_into('<I',profile,624,3 if a.msbc else 2);struct.pack_into('<I',profile,720,24000)
 session=bytearray((original/'admitted-session.bin').read_bytes());session[320:352]=hashlib.sha256(profile).digest()
 (out/'profile.bin').write_bytes(profile);(out/'admitted-session.bin').write_bytes(session)
 shutil.copy2(a.recognizer/'segment-1.txt',out/'transcript.bin');(out/'snapshot.bin').write_bytes((a.recognizer/'segment-1.snapshot.bin').read_bytes()[:144])
 observe=module('repeated_usb_observe',ROOT/'apps/bluetooth/observe.py')
 def packet(op,ticket=0,offset=0,count=0):return struct.pack('<BBHIQ',0x80,op,count,offset,ticket)
 def adopt(m,n):
- data=(a.recognizer/f'segment-{n}.txt').read_bytes();snapshot=(a.recognizer/f'segment-{n}.snapshot.bin').read_bytes();assert len(snapshot)==176
+ source=a.recognizer
+ if m.variant=='host-fallback':source=Path.home()/'.cache/sunstoneos/evidence/bluetooth-repeated-recognition-20261019/recognizer'
+ data=(source/f'segment-{n}.txt').read_bytes();snapshot=bytearray((source/f'segment-{n}.snapshot.bin').read_bytes());assert len(snapshot)==176
+ if m.variant=='host-fallback':struct.pack_into('<I',snapshot,44,1)
  assert m.word(m.variables['terminal']['address'])==0
- m.cpu.mem_write(m.service+m.sf['log'],data);m.cpu.mem_write(m.service+m.sf['segment'],snapshot);m.write(m.service+m.sf['used'],len(data),4)
+ m.cpu.mem_write(m.service+m.sf['log'],data);m.cpu.mem_write(m.service+m.sf['segment'],bytes(snapshot));m.write(m.service+m.sf['used'],len(data),4)
  m.write(m.voice+m.vf['segment_tail'],n,8);m.write(m.variables['terminal']['address'],1);return data
 
 def create(name):
@@ -92,7 +96,7 @@ for case in ([] if a.host_case else a.case or ['two-results','early-ack','stale-
   (out/(case+'-failed.json')).write_text(json.dumps(m.observation(),indent=2)+'\n');(out/(case+'-failure.log')).write_text(traceback.format_exc());raise
  (out/'results.json').write_text(json.dumps({'image_sha256':base.ELF_HASH,'physical_access':False,'cases':results,'scope':'Actual new native recognition copy/status/ACK, Bluetooth USB task/serializer and TinyUSB; scheduler, DCD, provider-ready state and adopted actual recognizer outputs modeled.'},indent=2)+'\n')
 (out/'results.json').write_text(json.dumps({'image_sha256':base.ELF_HASH,'physical_access':False,'cases':results,'scope':'Actual new native recognition copy/status/ACK, Bluetooth USB task/serializer and TinyUSB; scheduler, DCD, provider-ready state and adopted actual recognizer outputs modeled.'},indent=2)+'\n')
-print('PASS changed native mode2 USB delivery/ACK, revocation and last-publication ordering cases')
+print('PASS selected repeated Bluetooth native USB cases')
 
 if a.host_case:
  host=module('repeated_bluetooth_host',ROOT/'tools/check-a733-bluetooth-supervised.py')
@@ -115,6 +119,7 @@ if a.host_case:
    if op==3 and 2 in requests and name!='host-missing-disconnect':m.write(m.variables['finished']['address'],1)
    if name=='host-wrong-session':frame[32]^=1
    if name=='host-sample-gap':frame[104]^=1
+   if name=='host-wrong-codec' and ticket:frame[124]=1
    return bytes(frame)
   if name=='host-backlog':m.write(m.voice+m.vf['segment_flags'],4)
   def save():
@@ -139,9 +144,10 @@ if a.host_case:
    (out/'host-results.json').write_text(json.dumps({'image_sha256':base.ELF_HASH,'physical_access':False,'cases':results},indent=2)+'\n');continue
   try:host.capture_repeated(exchange,session,profile,dest,record,save,100.4 if name=='host-missing-disconnect' else 130,2,clock.now,clock.pause)
   except (ValueError,RuntimeError,OSError):assert name not in ('host-two-results','host-backlog'),name
-  else:assert record['bluetooth_result']==('observed-failure' if name=='host-backlog' else 'observed-success')
+  else:assert record['bluetooth_result']==('observed-failure' if name in ('host-backlog','host-fallback') else 'observed-success')
+  if name=='host-fallback':assert not record['repeated_recognition']['wideband'] and record['repeated_recognition']['wideband_fallback']
   if name=='host-journal-before-ack':assert 2 not in requests and m.word(m.variables['terminal']['address'])==1
   if name=='host-missing-disconnect':assert record['bluetooth_result']!='observed-success' and not m.word(m.voice+m.vf['segment_disconnected'])
   results[name]={'passed':True,'operations':requests,'record':record,**m.observation()}
   (out/'host-results.json').write_text(json.dumps({'image_sha256':base.ELF_HASH,'physical_access':False,'cases':results,'scope':'Host driven by actual new native USB/TinyUSB producer; adopted exact two real recognizer outputs and modeled input/disconnect progress.'},indent=2)+'\n')
- print('PASS host transcript collection/ACK, soft failure, identity/gap, durability and disconnect bounds')
+ print('PASS selected host transcript collection and validation cases')

@@ -17,6 +17,8 @@ struct bt_hfp_ag {
     uint64_t response_deadline, transmit, receive;
     size_t receive_cursor, line_length, response_length, response_cursor, chunk;
     uint32_t hf_features, pending_features;
+    unsigned local_codecs,peer_codecs,pending_codecs,offered_codec,selected_codec,pending_codec;
+    uint64_t codec_deadline;
     unsigned stage, pending_stage, response_accepted, discard, reporting, pending_reporting;
     unsigned active, pending_active, changed, notify_index, notify_value;
     unsigned cmer_mode, pending_mode;
@@ -26,7 +28,8 @@ struct bt_hfp_ag {
     enum bt_hfp_ag_phase phase;
     enum bt_hfp_ag_error error;
 };
-/* An original HFP1.9 AG control implementation; feature bitmap is exactly zero.
+/* HFP1.9 AG control. The legacy initializer advertises zero features;
+ * init_codecs adds only codec negotiation for the concrete wideband consumer.
  * The caller must configure matching local SDP features and retain actual
  * service security admission. This is a control subset, not HFP qualification
  * or microphone readiness. AG role is independent of RFCOMM direction.
@@ -41,6 +44,10 @@ struct bt_hfp_ag {
  * roam0..1, battery0..5. Values must describe actual application/device state.
  * Setup deadline and per-line/response timeout use absolute UART microseconds
  * and duration microseconds respectively; timeout1..60000000. Exact1/-1. */
+/* codecs=0 preserves the legacy subset;6 enables CVSD(1)/mSBC(2).
+ * Selection commits only after matching BCS and complete response acceptance. */
+int bt_hfp_ag_init_codecs(struct bt_hfp_ag *,struct bt_rfcomm *,const uint8_t[7],uint64_t,uint64_t,unsigned codecs);
+int bt_hfp_ag_select_codec(struct bt_hfp_ag *,unsigned codec);
 int bt_hfp_ag_init(struct bt_hfp_ag *,struct bt_rfcomm *,const uint8_t indicators[7],
     uint64_t setup_deadline,uint64_t timeout_us);
 /* One lower step, at most byte_budget input bytes (1..512), one complete AT

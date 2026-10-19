@@ -42,6 +42,10 @@ endif()
     list(APPEND bluetooth_manifest_security --security-inputs "${bluetooth_security_build}/security-inputs.json")
   endif()
   option(SUNSTONE_BLUETOOTH_MIMUS "Recognize a finite authenticated headset capture with unchanged Mimus" OFF)
+  option(SUNSTONE_BLUETOOTH_MSBC "Enable opt-in native mSBC capture with pinned libsbc" OFF)
+  if(SUNSTONE_BLUETOOTH_MSBC AND NOT SUNSTONE_BLUETOOTH_MIMUS)
+    message(FATAL_ERROR "Wideband capture requires the existing recognition application")
+  endif()
   set(bluetooth_manifest_recognition)
   set(bluetooth_recognition_sources)
   set(bluetooth_recognition_inputs)
@@ -49,7 +53,28 @@ endif()
     if(NOT SUNSTONE_BT_SECURITY_DIR OR NOT TARGET mimus_asr_smp)
       message(FATAL_ERROR "Headset recognition requires pinned security and existing SMP Mimus/newlib targets")
     endif()
-    set(bluetooth_recognition_sources
+    if(SUNSTONE_BLUETOOTH_MSBC)
+    set(SUNSTONE_BT_SBC_DIR "" CACHE PATH "Pinned BlueZ libsbc2.0 source directory")
+    if(NOT SUNSTONE_BT_SBC_DIR)
+      message(FATAL_ERROR "Recognition image requires pinned libsbc source for opt-in wideband capture")
+    endif()
+    file(READ "${bluetooth_root}/apps/bluetooth/msbc-source.json" bluetooth_sbc_manifest)
+    string(JSON bluetooth_sbc_count LENGTH "${bluetooth_sbc_manifest}" sources)
+    math(EXPR bluetooth_sbc_last "${bluetooth_sbc_count}-1")
+    foreach(index RANGE 0 ${bluetooth_sbc_last})
+      string(JSON name GET "${bluetooth_sbc_manifest}" sources ${index} path)
+      string(JSON expected GET "${bluetooth_sbc_manifest}" sources ${index} sha256)
+      file(SHA256 "${SUNSTONE_BT_SBC_DIR}/${name}" actual)
+      if(NOT actual STREQUAL expected)
+        message(FATAL_ERROR "Pinned libsbc input differs:${name}")
+      endif()
+      list(APPEND bluetooth_sbc_inputs "${SUNSTONE_BT_SBC_DIR}/${name}")
+    endforeach()
+    list(APPEND bluetooth_sbc_inputs "${bluetooth_root}/apps/bluetooth/msbc-source.json")
+    set(bluetooth_sbc_sources "${bluetooth_root}/apps/bluetooth/msbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c")
+    list(APPEND bluetooth_manifest_recognition --msbc-inputs "${bluetooth_root}/apps/bluetooth/msbc-source.json")
+    endif()
+    set(bluetooth_recognition_sources ${bluetooth_sbc_sources}
       "${bluetooth_root}/apps/bluetooth/recognition.cc" "${bluetooth_root}/apps/bluetooth/pcm.c"
       "${bluetooth_root}/apps/mimus/recorded.cc" "${bluetooth_root}/apps/mimus/platform.cc"
       "${bluetooth_root}/runtime/newlib.c" "${bluetooth_root}/runtime/newlib_smp.c"
@@ -73,7 +98,7 @@ endif()
     get_target_property(bluetooth_asr_inputs mimus_asr_smp SOURCES)
     file(GLOB_RECURSE bluetooth_asr_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
       "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
-    set(bluetooth_recognition_inputs ${bluetooth_recognition_sources} ${bluetooth_asr_inputs} ${bluetooth_asr_headers}
+    set(bluetooth_recognition_inputs ${bluetooth_sbc_inputs} ${bluetooth_recognition_sources} ${bluetooth_asr_inputs} ${bluetooth_asr_headers}
       "${bluetooth_root}/apps/bluetooth/recognition-models.json" "${bluetooth_root}/apps/mimus/recorded.h"
       "${bluetooth_root}/apps/mimus/source.json" "${bluetooth_root}/apps/mimus/link.patch"
       "${bluetooth_build}/recognition-models.h" "${bluetooth_build}/recognition-link.ld"
@@ -105,6 +130,10 @@ endif()
   list(APPEND bluetooth_sources ${bluetooth_security_sources} ${bluetooth_recognition_sources})
   add_executable(sunstone-a733-bluetooth EXCLUDE_FROM_ALL ${bluetooth_sources}
     $<TARGET_OBJECTS:a733-board-usb2-host>)
+  if(SUNSTONE_BLUETOOTH_MSBC)
+    set_source_files_properties("${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c"
+      PROPERTIES COMPILE_DEFINITIONS SBC_HIGH_PRECISION=1)
+  endif()
   foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS LINK_OPTIONS LINK_DEPENDS)
     get_target_property(value sunstone-a733-board ${property})
     if(NOT value STREQUAL "value-NOTFOUND")
@@ -128,6 +157,10 @@ endif()
     list(REMOVE_ITEM bluetooth_includes "${bluetooth_root}/runtime/include" "${SUNSTONE_NETWORK_C_HEADERS}")
     set_property(TARGET sunstone-a733-bluetooth PROPERTY INCLUDE_DIRECTORIES "${bluetooth_includes}")
     sunstone_smp_compile(sunstone-a733-bluetooth)
+    if(SUNSTONE_BLUETOOTH_MSBC)
+      target_include_directories(sunstone-a733-bluetooth PRIVATE "${SUNSTONE_BT_SBC_DIR}")
+      target_compile_definitions(sunstone-a733-bluetooth PRIVATE SUNSTONE_BLUETOOTH_MSBC=1)
+    endif()
     target_include_directories(sunstone-a733-bluetooth PRIVATE "${MIMUS_DIR}/firmware/components/pipeline/include")
     target_compile_definitions(sunstone-a733-bluetooth PRIVATE SUNSTONE_BLUETOOTH_RECOGNITION=1 "$<$<COMPILE_LANGUAGE:CXX>:SUNSTONE_MIMUS_NATIVE=1>")
     target_link_libraries(sunstone-a733-bluetooth PRIVATE mimus_asr_smp

@@ -24,8 +24,8 @@ int bt_sdp_server_init(struct bt_sdp_server *s,struct bt_l2cap *l,const struct b
     if(!s || !l || !p || !policy || s->initialized || l->state!=BT_L2CAP_OFF || !response || query<response ||
        overlap(s,sizeof(*s),l,sizeof(*l)) || overlap(s,sizeof(*s),p,sizeof(*p)) ||
        p->handle<0x10000 || !p->rfcomm_channel || p->rfcomm_channel>30 || p->version!=0x0109 ||
-       p->supported_features>31 || p->supported_features!=(p->brsf_features&31) ||
-       p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x1ffu))return -1;
+       p->supported_features>63 || p->supported_features!=((p->brsf_features&31)|((p->brsf_features>>4)&32)) ||
+       p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x3ffu))return -1;
     *s=(struct bt_sdp_server){.l2cap=l,.profile=*p,.policy=policy,.context=ctx,
         .response_us=response,.query_us=query,.next_query=1,.initialized=1};return 1;
 }

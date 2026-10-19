@@ -131,10 +131,11 @@ needs actual controller routing, packet framing, loss handling and conversion to
 the application's sample format. The no-call capture path still requires
 qualified audio setup, scheduling, buffering and shutdown.
 
-The next implementation work is a controller-bound synchronous audio service,
-application capture, security and the remaining HFP control procedures. Model checks qualify software behavior; headset interoperability
-and real microphone samples require physical testing after board recovery and
-radio initialization are qualified.
+The native application implements controller-bound CVSD capture and optional
+[mSBC capture](bluetooth-native.md#wideband-capture-through-the-existing-recognizer)
+through the existing repeated recognizer. Model checks establish the described
+software behavior. Headset interoperability and real microphone samples require
+physical qualification.
 
 ## Primary and implementation references
 

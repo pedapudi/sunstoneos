@@ -1,0 +1,93 @@
+{
+  "project": "BlueZ SBC library",
+  "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+  "version": "2.0",
+  "license": "LGPL-2.1-or-later",
+  "execution": "Native CPU; generic C selected with upstream SBC_HIGH_PRECISION. Session codec contexts use existing newlib allocation after runtime_init; no per-frame allocation. Preserve source, notices and relinkable objects with the image.",
+  "sources": [
+    {
+      "path": "COPYING.LIB",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/COPYING.LIB?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "ec60b993835e2c6b79e6d9226345f4e614e686eb57dc13b6420c15a33a8996e5"
+    },
+    {
+      "path": "Makefile.am",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/Makefile.am?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "0b4364844a99e32c072a469f73bf9e908d4a82770b55e9b1b65199e55ac157f8"
+    },
+    {
+      "path": "sbc/sbc.c",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc.c?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "bd68cc79609b4f80348a0b44b7087b8182cb346592be0f8a6d71187f4ca6c821"
+    },
+    {
+      "path": "sbc/sbc.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "cb00b5c374318f2b5532d945a9088e76c363a7657ebaddc1c863e4618b7b33da"
+    },
+    {
+      "path": "sbc/sbc_primitives.c",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives.c?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "e5f17ff5d9b0afe3c83e24dfe8ab85fa1f6b47181e17bafd5ec3209255038a2a"
+    },
+    {
+      "path": "sbc/sbc_primitives.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "a2b154ee35705e91bfaf35f9e86a95772ede515d4da8d07f1a5f4f434014b981"
+    },
+    {
+      "path": "sbc/sbc_tables.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_tables.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "fe2c1a0320cd71436e87aa5a22d20177d2f08961c4efac738a48d2ac028abeba"
+    },
+    {
+      "path": "sbc/sbc_math.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_math.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "a1f3a1776395b3389373a2e8879c2d2934e3fa34cf230a209a39a09f53dc5785"
+    },
+    {
+      "path": "sbc/sbc_private.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_private.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "b625e92d18adc885fd3eb800d1bfc5490d37fdb87bc7b6563e9a8c8c9a0f6e6b"
+    },
+    {
+      "path": "sbc/sbc_primitives_sse.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives_sse.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "b3da4fcbee9187ecc52380bd3e6da6d779752c11722a312e5231f809fe068005"
+    },
+    {
+      "path": "sbc/sbc_primitives_mmx.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives_mmx.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "6359f556abd29ae6296c9b44ef6921bb13a950774e99ee27ede718ce5f14c2d8"
+    },
+    {
+      "path": "sbc/sbc_primitives_iwmmxt.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives_iwmmxt.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "67b03850bc1f1f90e366fe1ef08aabbece01cf213aaf4d655e94da6f2d5ea85b"
+    },
+    {
+      "path": "sbc/sbc_primitives_neon.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives_neon.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "55e1e880953f6d66729813a6ce6ee57f9fee9193813bd7479e973ba1971b872c"
+    },
+    {
+      "path": "sbc/sbc_primitives_armv6.h",
+      "url": "https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/sbc/sbc_primitives_armv6.h?format=TEXT",
+      "revision": "8dc5d5ba381512ad5b1afa45c63ec6b0a3833244",
+      "sha256": "1cd9103050d1c45ad8741adf6a5dad2b602005b3c3c6259bb91ef46cfe868b08"
+    }
+  ]
+}

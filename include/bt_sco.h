@@ -33,7 +33,7 @@ struct bt_sco_link {
     uint64_t request_serial,request_deadline,closed_after;
     uint16_t handle,acl_handle,rx_packet_length,tx_packet_length;
     uint8_t address[6],features[8],status,reason,type,interval,retransmission;
-    unsigned listening,requested,request_type,profile,handle_valid;
+    unsigned listening,requested,request_type,profile,handle_valid,codec,fallback_allowed;
     enum bt_sco_phase phase;
 };
 struct bt_sco_packet {
@@ -55,7 +55,8 @@ struct bt_sco {
 };
 /* One serialized task owns the entire stack. Init requires optional pre-link
  * HCI audio configuration/readback; no guessed firmware/PCM routing. HCI path0,
- * CVSD air coding and signed16-bit8kHz PCM are the only admitted audio format.
+ * CVSD uses signed16-bit8kHz PCM. A completed AG mSBC selection admits
+ * transparent HCI bytes over T1/T2 eSCO; the application owns H2 and codec data.
  * All objects, callbacks, context and lower backing are disjoint and survive
  * faults. Register once per controller generation, no unregister/reinit.
  * Four peer/audio identities and eight copied packets per direction; closed
@@ -70,9 +71,14 @@ int bt_sco_open(struct bt_sco *,const struct bt_hfp_ag *,unsigned listening,
 /* One ACL/HCI step, bounded link scans and at most one new command or data
  * submission. Source-defined fallback follows confirmed terminal failures only;
  * uncertain timeouts retain the complete controller/audio lifetime. */
+/* Rebind a never-opened mSBC attempt only after a classified remote-feature
+ * refusal or matched terminal setup failure. The same AG must have completed
+ * fresh CVSD selection. Returns a fresh audio generation; uncertain faults deny. */
+int bt_sco_retry_cvsd(struct bt_sco *,uint64_t,uint64_t,uint64_t *);
 int bt_sco_step(struct bt_sco *,unsigned uart_budget,uint64_t deadline);
 /* Copy complete signed16-bit PCM samples in little-endian byte order; even
- * length2..min(controller MTU,254). Caller supplies actual playback/silence
+ * length2..min(controller MTU,254) for CVSD. Transparent mSBC accepts
+ * arbitrary byte fragments1..min(controller MTU,255). Caller supplies actual playback/silence
  * samples. No implicit speech or silence generation. Controller credits remain
  * separate from UART acceptance and peer rendering. */
 int bt_sco_send(struct bt_sco *,uint64_t link,const uint8_t *,size_t,uint64_t deadline,uint64_t *serial);

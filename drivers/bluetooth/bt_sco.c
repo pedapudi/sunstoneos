@@ -71,6 +71,7 @@ static int prepare(void *ctx)
         struct bt_sco_security s={0};
         if(!ag_current(q,l->ag,l->acl_generation,l->channel,&s) || s.generation!=l->security.generation ||
            s.secure_connections!=l->security.secure_connections)return fault(q,BT_SCO_SECURITY);
+        if(l->phase==BT_SCO_OPEN&&l->ag->local_codecs&&(l->ag->hf_features&128)&&l->ag->selected_codec!=l->codec)return fault(q,BT_SCO_IDENTITY);
         if(l->phase!=BT_SCO_OPEN && q->now>=l->deadline)return fault(q,BT_SCO_EXPIRED);
     }
     /* No other submitter can replace the H4 payload before this post-step
@@ -149,6 +150,11 @@ static int release(struct bt_sco *q,const struct bt_h4_record *r)
 static unsigned profile(struct bt_sco *q,struct bt_sco_link *l,unsigned type)
 {
     const uint8_t *local=q->acl->hci->identity.features;
+    if(l->codec==2){
+        if(type!=2 || !(local[2]&l->features[2]&8) || !(local[3]&l->features[3]&0x80))return 0;
+        if(local[5]&l->features[5]&0x20)return 6;
+        return l->security.secure_connections?0:5;
+    }
     if(!(l->features[1]&8) || !(l->features[2]&1))return 0;
     if(type==2 && (local[3]&l->features[3]&0x80)){
         if(l->security.secure_connections)return (local[5]&l->features[5]&0x20) ? 2 : 0;
@@ -162,7 +168,11 @@ static int completed_failure(struct bt_sco *q,struct bt_sco_link *l,unsigned sta
     l->status=(uint8_t)status;q->command_link=BT_SCO_LINKS;
     /* Retry only the finite HFP transport fallback after an actual terminal
      * setup event. Command refusal and timeout do not enter this path. */
-    if(!l->listening && l->phase==BT_SCO_SETUP_WAIT && !l->security.secure_connections &&
+    if(l->codec==2){
+        if(!l->listening&&l->phase==BT_SCO_SETUP_WAIT&&l->profile==6&&!l->security.secure_connections){
+            l->profile=5;l->phase=BT_SCO_SETUP_QUEUED;
+        }else {l->phase=BT_SCO_CLOSED;l->fallback_allowed=1;}
+    }else if(!l->listening && l->phase==BT_SCO_SETUP_WAIT && !l->security.secure_connections &&
        (l->profile==1 || l->profile==3)){
         l->profile=l->profile==1 ? profile(q,l,0) : 4;
         l->phase=l->profile ? BT_SCO_SETUP_QUEUED : BT_SCO_CLOSED;
@@ -226,7 +236,7 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
                 (l->features[3]&q->acl->hci->identity.features[3]&0x80) ? 2 : 0);
             if(!l->profile){
                 if(l->requested){l->reason=0x0e;l->phase=BT_SCO_REJECT_QUEUED;}
-                else {l->phase=BT_SCO_CLOSED;l->status=0x11;}
+                else {l->phase=BT_SCO_CLOSED;l->status=0x11;l->fallback_allowed=l->codec==2;}
             }else l->phase=l->listening && !l->requested ? BT_SCO_LISTENING : BT_SCO_SETUP_QUEUED;
         }
         return release(q,r);
@@ -257,8 +267,8 @@ static int synchronous_event(void *ctx,const struct bt_h4_record *r)
         if(!equal(l->address,p+5))return p[2] ? 0 : fault(q,BT_SCO_IDENTITY);
         if((l->phase!=BT_SCO_SETUP_WAIT && l->phase!=BT_SCO_REJECT_WAIT) || r->serial<=l->acknowledgement)return fault(q,BT_SCO_PROTOCOL);
         if(p[2]){completed_failure(q,l,p[2]);return release(q,r);}
-        unsigned h=le16(p+3),type=l->profile<=2 ? 2 : 0;
-        if(l->phase==BT_SCO_REJECT_WAIT || h>0xeff || handle(q,h) || p[11]!=type || p[18]!=2)return fault(q,BT_SCO_PROTOCOL);
+        unsigned h=le16(p+3),type=l->profile<=2||l->codec==2 ? 2 : 0;
+        if(l->phase==BT_SCO_REJECT_WAIT || h>0xeff || handle(q,h) || p[11]!=type || p[18]!=(l->codec==2?3:2))return fault(q,BT_SCO_PROTOCOL);
         for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->acl->links[i].handle_valid && q->acl->links[i].handle==h)return fault(q,BT_SCO_IDENTITY);
         if((!type && (p[12] || p[13] || le16(p+14) || le16(p+16))) ||
            (type && (!p[12] || !le16(p+14) || !le16(p+16))))return fault(q,BT_SCO_PROTOCOL);
@@ -299,17 +309,29 @@ int bt_sco_open(struct bt_sco *q,const struct bt_hfp_ag *ag,unsigned listening,u
     if(!valid(q) || !ag || listening>1 || !external(q,ag,sizeof(*ag)) || !external(q,id,sizeof(*id)) ||
        overlap(ag,sizeof(*ag),id,sizeof(*id)) || deadline<=q->acl->hci->transport.now)return -1;
     struct bt_sco_security s={0};
-    if(!ag_current(q,ag,ag->link,ag->channel,&s) || !ag_external(ag,q,sizeof(*q)) || !ag_external(ag,id,sizeof(*id)))return -1;
+    if((ag->local_codecs&&(ag->hf_features&128)&&!ag->selected_codec)||
+       !ag_current(q,ag,ag->link,ag->channel,&s) || !ag_external(ag,q,sizeof(*q)) || !ag_external(ag,id,sizeof(*id)))return -1;
     struct bt_acl_link *p=parent(q,ag->link);
     for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase!=BT_SCO_UNUSED && equal(q->links[i].address,p->peer.address))return -1;
     if(prepare(q)!=1)return -1;
     for(unsigned i=0;i<BT_SCO_LINKS;++i)if(q->links[i].phase==BT_SCO_UNUSED){
         struct bt_sco_link *l=&q->links[i];*l=(struct bt_sco_link){.ag=ag,.security=s,.generation=q->next_link++,
             .acl_generation=ag->link,.channel=ag->channel,.deadline=deadline,.acl_handle=p->handle,
-            .handle=0xffff,.listening=listening,.phase=BT_SCO_FEATURE_QUEUED};
+            .handle=0xffff,.listening=listening,.codec=ag->selected_codec==2?2:1,.phase=BT_SCO_FEATURE_QUEUED};
         for(unsigned j=0;j<6;++j)l->address[j]=p->peer.address[j];*id=l->generation;return 1;
     }
     return 0;
+}
+int bt_sco_retry_cvsd(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
+{
+    if(!valid(q)||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now)return -1;
+    struct bt_sco_link *l=link(q,old);struct bt_sco_security security={0};
+    if(!l||l->codec!=2||!l->fallback_allowed||l->phase!=BT_SCO_CLOSED||l->handle_valid||
+       l->ag->selected_codec!=1||!ag_current(q,l->ag,l->acl_generation,l->channel,&security)||
+       security.generation!=l->security.generation||security.secure_connections!=l->security.secure_connections||
+       q->next_link==UINT64_MAX)return -1;
+    l->generation=q->next_link++;l->codec=1;l->fallback_allowed=0;l->profile=0;
+    l->deadline=deadline;l->phase=BT_SCO_FEATURE_QUEUED;*id=l->generation;return 1;
 }
 static void parameters(const struct bt_sco_link *l,uint8_t *p)
 {
@@ -320,9 +342,10 @@ static void parameters(const struct bt_sco_link *l,uint8_t *p)
     put32(x+22,16000);put32(x+26,16000);x[30]=4;x[35]=4;
     put16(x+40,16);put16(x+42,16);x[44]=2;x[45]=2;
     /* Data paths and transport unit sizes are zero: HCI, not physical PCM. */
-    const unsigned masks[]={0,0x3c8,0x380,0x3c4,0x3c1};
-    const unsigned latency[]={0,7,12,5,4};
-    put16(x+52,latency[l->profile]);put16(x+54,masks[l->profile]);x[56]=l->profile==1 ? 1 : l->profile==2 ? 2 : 0;
+    if(l->codec==2){x[8]=x[13]=x[30]=x[35]=3;put32(x+22,8000);put32(x+26,8000);}
+    const unsigned masks[]={0,0x3c8,0x380,0x3c4,0x3c1,0x3c8,0x380};
+    const unsigned latency[]={0,7,12,5,4,8,13};
+    put16(x+52,latency[l->profile]);put16(x+54,masks[l->profile]);x[56]=l->codec==2?2:l->profile==1 ? 1 : l->profile==2 ? 2 : 0;
 }
 int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
 {
@@ -366,9 +389,9 @@ int bt_sco_step(struct bt_sco *q,unsigned budget,uint64_t deadline)
 }
 int bt_sco_send(struct bt_sco *q,uint64_t generation,const uint8_t *bytes,size_t n,uint64_t deadline,uint64_t *serial)
 {
-    if(!valid(q) || !n || (n&1) || n>254 || n>q->mtu || deadline<=q->acl->hci->transport.now ||
+    if(!valid(q) || !n || n>255 || n>q->mtu || deadline<=q->acl->hci->transport.now ||
        !external(q,bytes,n) || !external(q,serial,sizeof(*serial)) || overlap(bytes,n,serial,sizeof(*serial)))return -1;
-    struct bt_sco_link *l=link(q,generation);if(!l || l->phase!=BT_SCO_OPEN)return -1;
+    struct bt_sco_link *l=link(q,generation);if(!l || l->phase!=BT_SCO_OPEN || (l->codec!=2&&((n&1)||n>254)))return -1;
     if(prepare(q)!=1)return -1;
     if(q->next_packet==UINT64_MAX)return fault(q,BT_SCO_IDENTITY);
     for(unsigned i=0;i<BT_SCO_PACKETS;++i)if(q->tx[i].state==BT_SCO_FREE){struct bt_sco_packet *t=&q->tx[i];

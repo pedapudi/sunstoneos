@@ -468,3 +468,125 @@ USB packet. Scheduler progress, device registers, radio/controller events and
 USB device effects are modeled. No hardware transaction or performance
 measurement was performed. Physical headset operation, receive-service bounds,
 recognition within the session deadline and wideband mSBC remain unqualified.
+
+
+## Wideband capture through the existing recognizer
+
+An optional image profile negotiates mSBC and delivers decoded 16 kHz PCM to the
+same repeated recognition path. Enable `SUNSTONE_BLUETOOTH_MSBC=ON` and set
+`SUNSTONE_BT_SBC_DIR` to the pinned BlueZ SBC source directory. The default
+CVSD build omits this dependency. Set headset mode 3 in the existing 832-byte
+profile; its segment length must be a multiple of 120 and at most 24,000 samples.
+The existing two 48,000-byte copied slots therefore hold at most 1.5 seconds of
+wideband PCM each. The session and transcript acknowledgment budgets remain the
+same as those for repeated CVSD capture.
+
+The image compiles the generic C encoder and decoder from
+[BlueZ libsbc 2.0](https://kernel.googlesource.com/pub/scm/bluetooth/sbc/+/8dc5d5ba381512ad5b1afa45c63ec6b0a3833244/),
+using its `SBC_HIGH_PRECISION` configuration. The CPU executes this code;
+controller firmware does not perform the host decode. The source manifest
+[msbc-source.json](../apps/bluetooth/msbc-source.json) pins each file and its
+LGPL-2.1-or-later license. The evidence freeze retains the original notices,
+license, source, object files and link inputs needed to relink the application.
+No codec source is copied into the repository.
+
+Codec initialization follows `runtime_smp_init()` and `runtime_init()` before
+the scheduler starts. The existing runtime returns its global reentrancy state
+and bypasses mutex acquisition during this phase. The codec allocates one encoder
+context and one decoder context, then retains both for the session. No frame
+processing allocates memory. If the second allocation fails, initialization
+releases the first and denies startup. The Bluetooth owner alone subsequently
+uses both contexts and the bounded framing buffers.
+
+### Negotiation and controller admission
+
+Wideband advertisement requires the reported local eSCO and transparent-data
+features. The AG advertises codec negotiation in BRSF bit 9 and wideband in SDP
+bit 5. After the HF advertises negotiation support and supplies BAC, the AG
+selects only a codec in that list. A matching BCS command and complete local
+acceptance of its OK response precede synchronous setup. A changed BAC cancels
+an outstanding selection. Invalid or missing BCS cannot establish audio.
+
+The existing HCI owner queries remote features before setup. Transparent mSBC
+requires matching local and remote eSCO/transparent support. Enhanced setup and
+accept use transparent input/output and air formats, 8,000 octets/s in both
+directions, HCI data paths zero and transport-unit sizes zero. These parameters
+follow Core 5.4 §7.1.45–46. The cached Linux comparison uses transport-unit size
+one; the native path follows the Core requirement for HCI.
+
+T2 uses 2-EV3, 13 ms maximum latency and retransmission effort 2. T1 uses EV3,
+8 ms and effort 2. T2 is preferred when supported; T1 is the safe non-Secure
+Connections setting. Secure Connections requires T2. A matching terminal setup
+failure may lead to fresh CVSD negotiation and a new audio generation. A known
+remote-feature refusal before setup can also permit that fallback. Command
+refusal, uncertain timeout or an established handle cannot use this retry path.
+The host records fallback and cannot report it as successful wideband operation.
+
+The pinned AIC8800D80 bootstrap configures coant mode 5, UART port 2, 1.5 Mbaud,
+flow control and low-power support. Those published settings establish the chosen
+HCI mode. Neither those sources nor the opaque pinned firmware establish
+transparent eSCO support. Actual reported capabilities, matched command/event
+results and physical qualification remain necessary; no vendor routing command
+is guessed.
+
+### Framing, copied ownership and results
+
+The Bluetooth owner carries transparent bytes across HCI packet boundaries.
+A 60-byte transport frame contains the H2 header, a 57-byte mSBC frame and its
+padding byte. The decoder requires the next modulo-four H2 sequence and emits
+120 signed little-endian samples per frame. Initial alignment search is bounded
+to 120 discarded bytes before the first candidate. A rejected codec candidate,
+CRC error, unexpected sequence, reported HCI loss or later framing error stops
+capture without publishing its partial PCM segment. The implementation does not
+reuse decoder state after a failed candidate or conceal missing samples.
+
+H2's two-bit sequence alone cannot rule out every multiple-of-four frame loss.
+Controller packet-status reporting and the admitted receive-service bounds
+remain part of physical qualification. Acquired record serials identify host
+transport records; they are not radio timestamps.
+
+A complete decoded segment carries the negotiated codec in its copied capture
+identity. The recognizer verifies that identity on every chunk before input ACK.
+For mSBC, the WAV wrapper copies the 16 kHz samples directly; for explicit CVSD
+fallback, the existing 8-to-16 kHz converter applies. The model and recorded
+recognition engine remain unchanged. Full-ring backpressure stops before a raw
+byte can overwrite accepted PCM. Accepted slots and delivery-owned transcripts
+survive an orderly capture stop. Security revocation denies further publication.
+
+The reverse audio direction sends valid encoded silence with its own H2
+sequence. Its 60-byte backing remains stable until all fragments have entered
+SCO-owned copied packets. Controller credits and actual local H4 completion
+remain independent of this application buffer. Cancellation may truncate audio;
+no serial-wire drain or peer rendering is inferred.
+
+Mode 3 retains the 16-byte requests and 272-byte response header. Responses use
+version 2, and offset 124 holds the actual codec ID: 1 for CVSD, 2 for mSBC.
+For codec 2, input and output sample counts are equal; for codec 1, output is
+twice input. The profile, codec, rates, audio identity and sample counts remain
+bound through all reads and acknowledgments. The host rejects inconsistent
+counts or codec changes. An image manifest must identify the pinned native
+wideband provider before mode 3 can be prepared. Modes 1 and 2 retain their
+existing wire formats.
+
+### Focused software evidence
+
+Evidence resides under
+`~/.cache/sunstoneos/evidence/bluetooth-msbc-20261019/`. Actual-stack checks cover
+fragmented frames, CRC/sequence/HCI loss, full copied-ring backpressure,
+mismatched BCS, missing capability, confirmed CVSD fallback and command refusal.
+A separate composition copies two distinct decoded speech segments through the
+same stack. Both pass through the unchanged recognizer and match its portable
+reference for features, log probabilities, frames and formatted text.
+
+The linked AArch64 codec reproduces all 96,000 copied PCM bytes from 400
+producer-derived frames. It also checks retained contexts, initialization
+allocation failure and sequence loss. The native USB producer and host checks
+cover codec-bound results, exact delivery/ACK, revocation, explicit fallback and
+inconsistent codec metadata. A final authorization check after source-status
+collection closes the observed revocation window during transcript copying.
+
+Controller/radio events, allocator address effects, scheduling and USB device
+effects are modeled. Physical headset operation, transparent eSCO support,
+receive-service bounds and recognition within the session deadline remain
+unqualified. The speech stimuli originate from existing converted recordings;
+these checks establish codec integration, not acoustic wideband quality.

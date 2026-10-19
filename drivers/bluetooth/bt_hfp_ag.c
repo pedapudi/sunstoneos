@@ -22,21 +22,23 @@ static int external(const struct bt_hfp_ag *q,const void *p,size_t n)
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(q->registry->session[i] && overlap(q->registry->session[i],sizeof(struct bt_rfcomm),p,n))return 0;
     return 1;
 }
-int bt_hfp_ag_init(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t deadline,uint64_t timeout)
+int bt_hfp_ag_init_codecs(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t deadline,uint64_t timeout,unsigned codecs)
 {
-    if(!q || !r || !p || overlap(q,sizeof(*q),r,sizeof(*r)) || overlap(q,sizeof(*q),p,7) ||
+    if((codecs&&codecs!=6) || !q || !r || !p || overlap(q,sizeof(*q),r,sizeof(*r)) || overlap(q,sizeof(*q),p,7) ||
        q->rfcomm || q->phase!=BT_HFP_AG_OFF || r->phase!=BT_RFCOMM_OPEN || !r->registry || !r->l2cap ||
        (r->incoming ? r->service_uuid!=0x111f : r->service_uuid!=0x111e) || !timeout || timeout>60000000 ||
        !values(p) || deadline<=r->l2cap->acl->hci->transport.now)return -1;
     struct bt_hfp_ag temp={.rfcomm=r,.registry=r->registry,.link=r->link,.channel=r->channel,
         .setup_deadline=deadline,.timeout_us=timeout,.now=r->l2cap->acl->hci->transport.now,
-        .active=127,.pending_active=127,.phase=BT_HFP_AG_INITIALIZING};
+        .active=127,.pending_active=127,.local_codecs=codecs,.phase=BT_HFP_AG_INITIALIZING};
     if(!external(&temp,p,7) || !external(&temp,q,sizeof(*q)))return -1;
     for(unsigned i=0;i<BT_RFCOMM_DATA;++i)if(r->tx[i].state!=BT_RFCOMM_FREE)return -1;
     if(r->registry->authorize_service(r->registry->context,r->link,r->service_uuid,r->server)!=1)return -1;
     for(unsigned i=0;i<7;++i)temp.indicators[i]=temp.notified[i]=p[i];
     *q=temp;return 1;
 }
+int bt_hfp_ag_init(struct bt_hfp_ag *q,struct bt_rfcomm *r,const uint8_t *p,uint64_t d,uint64_t t)
+{return bt_hfp_ag_init_codecs(q,r,p,d,t,0);}
 static void text(struct bt_hfp_ag *q,const char *s)
 {while(*s && q->response_length<BT_HFP_AG_RESPONSE)q->response[q->response_length++]=(uint8_t)*s++;}
 static void number(struct bt_hfp_ag *q,uint32_t x)
@@ -84,10 +86,22 @@ static void response(struct bt_hfp_ag *q)
 {
     const uint8_t *p=q->line;size_t n=q->line_length,at=0;uint32_t value=0;unsigned ok=0;
     q->pending_stage=q->stage;q->pending_features=q->hf_features;
+    q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
     q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;q->notify_index=0;
     if(!q->discard && prefix(p,n,"AT+BRSF=",&at) && decimal(p,n,&at,&value) && at==n && !q->stage){
-        q->pending_features=value;q->pending_stage=1;text(q,"\r\n+BRSF: 0\r\n");ok=1;
-    }else if(!q->discard && q->stage && equal(p,n,"AT+CIND=?")){
+        q->pending_features=value;q->pending_stage=1;text(q,q->local_codecs?"\r\n+BRSF: 512\r\n":"\r\n+BRSF: 0\r\n");ok=1;
+    }else if(!q->discard && q->stage && q->local_codecs && (q->hf_features&128) && prefix(p,n,"AT+BAC=",&at)){
+        unsigned mask=0;ok=1;
+        do {if(!decimal(p,n,&at,&value)||!value||value>255){ok=0;break;}
+            if(value<3)mask|=1u<<value;
+            if(at==n)break;if(p[at++]!=','||at==n){ok=0;break;}
+        }while(at<n);
+        if(!(mask&2))ok=0;
+        if(ok){q->pending_codecs=mask;q->pending_codec=0;q->offered_codec=0;q->codec_deadline=0;}
+    }else if(!q->discard && q->stage>=4 && q->offered_codec && prefix(p,n,"AT+BCS=",&at) &&
+             decimal(p,n,&at,&value) && at==n && value==q->offered_codec && (q->peer_codecs&(1u<<value))){
+        q->pending_codec=value;ok=1;
+    }else if(!q->discard && q->stage && (!(q->local_codecs&&(q->hf_features&128))||q->peer_codecs) && equal(p,n,"AT+CIND=?")){
         text(q,"\r\n+CIND: (\"service\",(0,1)),(\"call\",(0,1)),(\"callsetup\",(0-3)),(\"callheld\",(0-2)),(\"signal\",(0-5)),(\"roam\",(0,1)),(\"battchg\",(0-5))\r\n");
         if(q->stage<2)q->pending_stage=2;ok=1;
     }else if(!q->discard && q->stage>=2 && equal(p,n,"AT+CIND?")){
@@ -101,7 +115,8 @@ static void response(struct bt_hfp_ag *q)
     }else if(!q->discard && q->stage>=4 && prefix(p,n,"AT+VGS=",&at) && decimal(p,n,&at,&value) && at==n && value<=15){
         q->speaker_gain=value;q->gain_valid|=2;ok=1;
     }
-    if(!ok){q->pending_stage=q->stage;q->pending_features=q->hf_features;
+    if(!ok){q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;q->pending_stage=q->stage;q->pending_features=q->hf_features;
+        q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
         q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;}
     text(q,ok ? "\r\nOK\r\n" : "\r\nERROR\r\n");
     q->response_deadline=after(q->now,q->timeout_us);q->line_length=0;q->discard=0;q->line_deadline=0;
@@ -109,6 +124,8 @@ static void response(struct bt_hfp_ag *q)
 static void accepted(struct bt_hfp_ag *q)
 {
     q->stage=q->pending_stage;q->hf_features=q->pending_features;
+    q->peer_codecs=q->pending_codecs;q->selected_codec=q->pending_codec;
+    if(q->selected_codec){q->codec_deadline=0;q->offered_codec=0;}
     q->reporting=q->pending_reporting;q->active=q->pending_active;q->cmer_mode=q->pending_mode;
     if(q->notify_index){unsigned i=q->notify_index-1;q->notified[i]=(uint8_t)q->notify_value;
         if(q->notified[i]==q->indicators[i])q->changed&=~(1u<<i);}
@@ -161,6 +178,17 @@ static int publish(struct bt_hfp_ag *q)
     if(r<0)return fail(q,BT_HFP_AG_LOWER);
     if(r==1){q->transmit=serial;q->chunk=n;}return 1;
 }
+int bt_hfp_ag_select_codec(struct bt_hfp_ag *q,unsigned codec)
+{
+    if(!q||!identity(q)||q->phase!=BT_HFP_AG_READY||!q->local_codecs||!(q->hf_features&128)||
+       codec<1||codec>2||!(q->peer_codecs&q->local_codecs&(1u<<codec)))return -1;
+    if(q->response_length||q->line_deadline||q->offered_codec)return 0;
+    q->selected_codec=q->pending_codec=0;q->offered_codec=codec;
+    q->codec_deadline=after(q->now,q->timeout_us);
+    q->pending_stage=q->stage;q->pending_features=q->hf_features;q->pending_codecs=q->peer_codecs;
+    q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;
+    text(q,"\r\n+BCS: ");number(q,codec);text(q,"\r\n");q->response_deadline=q->codec_deadline;return 1;
+}
 static void notify(struct bt_hfp_ag *q)
 {
     if(q->phase!=BT_HFP_AG_READY || !q->reporting)return;
@@ -168,6 +196,7 @@ static void notify(struct bt_hfp_ag *q)
         text(q,"\r\n+CIEV: ");number(q,i+1);text(q,",");number(q,q->indicators[i]);text(q,"\r\n");
         q->notify_value=q->indicators[i];q->notify_index=i+1;
         q->pending_stage=q->stage;q->pending_features=q->hf_features;
+        q->pending_codecs=q->peer_codecs;q->pending_codec=q->selected_codec;
         q->pending_reporting=q->reporting;q->pending_active=q->active;q->pending_mode=q->cmer_mode;
         q->response_deadline=after(q->now,q->timeout_us);break;}
 }
@@ -177,14 +206,14 @@ int bt_hfp_ag_step(struct bt_hfp_ag *q,unsigned budget,unsigned bytes,uint64_t d
     if(!identity(q))return fail(q,BT_HFP_AG_IDENTITY);
     if(q->phase==BT_HFP_AG_CLOSED)return 0;
     uint64_t now=stamp(q);if(now<q->now)return fail(q,BT_HFP_AG_LOWER);q->now=now;
-    if(q->phase!=BT_HFP_AG_CLOSING && ((q->phase==BT_HFP_AG_INITIALIZING && now>=q->setup_deadline) ||
+    if(q->phase!=BT_HFP_AG_CLOSING && ((q->codec_deadline && now>=q->codec_deadline) || (q->phase==BT_HFP_AG_INITIALIZING && now>=q->setup_deadline) ||
        (q->line_deadline && now>=q->line_deadline) || (q->response_length && !q->response_accepted && now>=q->response_deadline)))return fail(q,BT_HFP_AG_EXPIRED);
     if(bt_rfcomm_step(q->rfcomm,budget,deadline)<0)return fail(q,BT_HFP_AG_LOWER);
     now=stamp(q);if(now<q->now)return fail(q,BT_HFP_AG_LOWER);q->now=now;
     if(q->phase!=BT_HFP_AG_CLOSING && q->rfcomm->phase!=BT_RFCOMM_OPEN){
         if(q->rfcomm->phase==BT_RFCOMM_CLOSING || q->rfcomm->phase==BT_RFCOMM_CLOSED)q->phase=BT_HFP_AG_CLOSING;
         else return fail(q,BT_HFP_AG_LOWER);}
-    if(q->phase!=BT_HFP_AG_CLOSING && ((q->phase==BT_HFP_AG_INITIALIZING && now>=q->setup_deadline) ||
+    if(q->phase!=BT_HFP_AG_CLOSING && ((q->codec_deadline && now>=q->codec_deadline) || (q->phase==BT_HFP_AG_INITIALIZING && now>=q->setup_deadline) ||
        (q->line_deadline && now>=q->line_deadline) || (q->response_length && !q->response_accepted && now>=q->response_deadline)))return fail(q,BT_HFP_AG_EXPIRED);
     if(tx_result(q)<0)return -1;
     if(q->phase==BT_HFP_AG_CLOSING){

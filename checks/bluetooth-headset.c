@@ -30,7 +30,11 @@ static void command_reply(unsigned op,const uint8_t *p,unsigned n)
     if(op==0x0c03){}
     else if(op==0x1001){length=12;r[4]=13;}
     else if(op==0x1002){length=68;uint8_t *c=r+4;c[0]=0x30;c[1]=3;c[2]=0x20;c[5]=0x40;c[6]=1;c[7]=0xcc;c[8]=3;c[10]=0x18;c[16]=0x20;c[18]=0x0c;c[29]=0x18;c[63]=0x70;}
-    else if(op==0x1003){length=12;r[5]=0x28;r[6]=1;r[7]=0x80;r[9]=0x20;r[10]=8;}
+    else if(op==0x1003){length=12;r[5]=0x28;r[6]=1;
+#ifdef BLUETOOTH_CHECK_MSBC
+        if(!msbc_no_cap)r[6]|=8;
+#endif
+r[7]=0x80;r[9]=0x20;r[10]=8;}
     else if(op==0x1005){length=11;const uint8_t b[]={64,0,60,8,0,3,0};memcpy(r+4,b,7);}
     else if(op==0x1009){length=10;memcpy(r+4,"123456",6);}
     else if(op==0x0c15){length=6;put16(r+4,profile.headset.accept_slots);}
@@ -54,8 +58,25 @@ static void command_reply(unsigned op,const uint8_t *p,unsigned n)
     }
     else if(op==0x0413){cs(&wire,op,1,0);const uint8_t encrypted[]={0,0x23,0,1};event(&wire,8,encrypted,sizeof(encrypted));return;}
     else if(op==0x1408){length=7;memcpy(r+4,p,2);r[6]=16;}
-    else if(op==0x041b){cs(&wire,op,1,0);const uint8_t features[]={0,0x23,0,0,0x28,1,0x80,0,0x20,0,0};event(&wire,0x0b,features,sizeof(features));return;}
-    else if(op==0x043d){assert(n==59);cs(&wire,op,1,0);const uint8_t sync[]={0,0,0,1,2,3,4,5,6,2,6,2,30,0,30,0,2};event(&wire,0x2c,sync,sizeof(sync));return;}
+    else if(op==0x041b){cs(&wire,op,1,0);uint8_t features[]={0,0x23,0,0,0x28,1,0x80,0,0x20,0,0};
+#ifdef BLUETOOTH_CHECK_MSBC
+        if(!msbc_no_cap)features[5]|=8;
+#endif
+        event(&wire,0x0b,features,sizeof(features));return;}
+    else if(op==0x043d){assert(n==59);
+#ifdef BLUETOOTH_CHECK_MSBC
+        ++msbc_setups;assert(voice.ag.selected_codec==msbc_selected||msbc_no_cap);
+        if(p[10]==3){assert(get16(p+54)==13||get16(p+54)==8);assert(get16(p+56)==0x380||get16(p+56)==0x3c8);
+            assert(p[15]==3&&p[32]==3&&p[37]==3&&p[48]==0&&p[49]==0&&p[50]==0&&p[51]==0);
+            if(msbc_refuse){cs(&wire,op,1,0x0c);return;}
+            if(msbc_fallback){cs(&wire,op,1,0);const uint8_t failed[]={0x1c,0,0,1,2,3,4,5,6,2,0,0,0,0,0,0,3};event(&wire,0x2c,failed,sizeof(failed));return;}
+        }
+#endif
+        cs(&wire,op,1,0);uint8_t sync[]={0,0,0,1,2,3,4,5,6,2,6,2,30,0,30,0,2};
+#ifdef BLUETOOTH_CHECK_MSBC
+        if(p[10]==3)sync[16]=3;
+#endif
+        event(&wire,0x2c,sync,sizeof(sync));return;}
     else if(op==0x0406){assert(n==3&&!get16(p)&&p[2]==0x13);cs(&wire,op,1,0);return;}
     else assert(op==0x0c01||op==0x0c05||op==0x0c16||op==0x0c1c||op==0x0c2f||op==0x0c5b||op==0x0c1a||op==0x0c56);
     event(&wire,0x0e,r,length);
@@ -78,7 +99,14 @@ static void peer_acl(const uint8_t *p,unsigned n)
                 if(type==0x20){assert(!cr);rf_in(14,0x3f,NULL,0,-1);}
                 else if(type==0x38){const uint8_t msc[]={59,0x8d};if(cr){mcc_in(0x38,0,msc,2);mcc_in(0x38,1,msc,2);}else rf_in(14,0xff,NULL,0,100);}
                 else assert(0);
-            }else {assert(dlci==14);(void)count;}}
+            }else {assert(dlci==14);(void)count;
+#ifdef BLUETOOTH_CHECK_MSBC
+                for(unsigned i=0;i+7<count;++i)if(!memcmp(data+i,"+BCS: ",6)){
+                    msbc_selected=data[i+6]-'0';char response[20];snprintf(response,sizeof(response),"AT+BCS=%u\r",msbc_bad_bcs?3:msbc_selected);
+                    rf_in(14,0xef,(const uint8_t *)response,(unsigned)strlen(response),-1);
+                }
+#endif
+            }}
     }
 }
 static uint8_t assembled[1028];static unsigned assembled_bytes,assembled_total;
@@ -124,7 +152,9 @@ static void setup(void)
     memcpy(profile.recognition.bytes,bluetooth_model_bytes,sizeof(bluetooth_model_bytes));
     memcpy(profile.recognition.sha256,bluetooth_model_sha256,sizeof(bluetooth_model_sha256));
 #endif
-#ifdef BLUETOOTH_CHECK_REPEATED
+#ifdef BLUETOOTH_CHECK_MSBC
+    profile.headset.mode=3;profile.headset.samples=speech?24000:120;
+#elif defined(BLUETOOTH_CHECK_REPEATED)
     profile.headset.mode=2;
 #endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);

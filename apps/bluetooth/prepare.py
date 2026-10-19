@@ -28,9 +28,9 @@ def profile_check(data, session):
         latency,response=struct.unpack_from('<2Q',data,704)
         samples,mtu,slots,interval,window,line,capture=struct.unpack_from('<I4H2I',data,720)
         scan,role,clock=struct.unpack_from('<BBH',data,740)
-        require((mode==1 or (mode==2 and len(data)==832)) and incoming<=1 and any(data[632:638]) and data[654]==0 and data[655]<=1 and
+        require((mode==1 or (mode in (2,3) and len(data)==832)) and incoming<=1 and any(data[632:638]) and data[654]==0 and data[655]<=1 and
                 2<=minimum<=3 and 1<=channel<=30 and authority and any(data[672:704]) and
-                0<latency<1000000 and 0<response<1000000 and 0<samples<=24000 and 48<=mtu<=512 and
+                0<latency<1000000 and 0<response<1000000 and 0<samples<=24000 and (mode!=3 or samples%120==0) and 48<=mtu<=512 and
                 slots>=0xa0 and 0x12<=interval<=0x1000 and not interval%2 and 0x11<=window<=interval and
                 line and 0<capture<=5000000 and scan<=2 and role<=1 and not any(data[744:752]),
                 'Invalid immutable headset policy or discovery metadata.')
@@ -55,6 +55,9 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
     require(record.get('radio_ddr') is not None, 'Complete retained profile/firmware DDR reservation required.')
     board.session_check(session)
     spans = profile_check(profile, session)
+    if len(profile)==832 and struct.unpack_from('<I',profile,624)[0]==3:
+        require(manifest.get('wideband_provider')==json.loads(Path(__file__).with_name('msbc-source.json').read_text()),
+                'Actual native pinned mSBC provider required for wideband mode.')
     require(isinstance(record.get('payloads'), list) and len(record['payloads']) == 4, 'Exactly four admitted firmware payloads required.')
     for key, offset in [('bluetooth_wiring', 56), ('bluetooth_sid', 88), ('bluetooth_transport', 120)]:
         item = record.get(key)

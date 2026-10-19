@@ -14,12 +14,13 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--setup-only',action='store_true')
+p.add_argument('--msbc',action='store_true',help='Build the new actual mSBC stack composition')
 p.add_argument('--repeated',action='store_true',help='Build only the new repeated headset composition')
 p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation'])
+p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal'])
 a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 cache=Path('/home/sunil/.cache/sunstoneos');security=a.build/'bluetooth-application/security'
 reference=cache/'evidence/bluetooth-native-20261017/composition'
@@ -37,9 +38,14 @@ sources=['drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetoo
          'drivers/bluetooth/bt_hfp_ag.c','drivers/bluetooth/bt_sco.c','drivers/bluetooth/bt_security.c',
          'drivers/storage/storage_digest.c','apps/bluetooth/result.c','checks/bluetooth-headset.c',
          *[str(security/name) for name in ('zephyr-ssp.c','zephyr-keys_br.c','zephyr-security-level.c')]]
+if a.msbc:a.repeated=True
 if a.repeated:
     assert a.recognition_profile
-    sources[sources.index('checks/bluetooth-headset.c')]='checks/bluetooth-headset-repeated.c'
+    sources[sources.index('checks/bluetooth-headset.c')]='checks/bluetooth-msbc.c' if a.msbc else 'checks/bluetooth-headset-repeated.c'
+if a.msbc:
+    sbc=cache/'sources/bluetooth-msbc'
+    common+=['-I'+str(sbc),'-DSBC_HIGH_PRECISION=1','-DSUNSTONE_BLUETOOTH_MSBC=1']
+    sources+=['apps/bluetooth/msbc.c',str(sbc/'sbc/sbc.c'),str(sbc/'sbc/sbc_primitives.c')]
 def run(name,cmd):
     cmd=list(map(str,cmd));commands.append(cmd)
     r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','ASAN_OPTIONS':'halt_on_error=1'})

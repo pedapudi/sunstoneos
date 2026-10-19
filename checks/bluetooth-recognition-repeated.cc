@@ -40,6 +40,13 @@ extern "C" void runtime_init(){assert(!scheduler_started);}
 extern "C" size_t runtime_heap_peak(){return 0;}
 extern "C" int bluetooth_recognition_live(bluetooth_application *p){assert(p==app);return !revoked;}
 extern "C" int bluetooth_recognition_output(bluetooth_application *p,const void *out,size_t bytes){assert(p==app&&out&&bytes);return 1;}
+extern "C" int bluetooth_headset_wideband(const bluetooth_application *p){assert(p==app);
+#ifdef BLUETOOTH_CHECK_MSBC
+ return 1;
+#else
+ return 0;
+#endif
+}
 extern "C" int bluetooth_headset_repeated(const bluetooth_application *p){assert(p==app);return 1;}
 extern "C" int bluetooth_headset_segment_bind(bluetooth_application *p,void *consumer){assert(p==app&&consumer==task&&!scheduler_started);return 1;}
 extern "C" int bluetooth_headset_segment_stop(bluetooth_application *p){assert(p==app);++stops;return 1;}
@@ -65,7 +72,7 @@ extern "C" void vTaskDelay(TickType_t)
  int r=bluetooth_recognition_segment_copy(app,0,0,0,chunk,&copied,&s);
  if(r==1){
   assert(s.ticket==outputs+1&&s.first_sample==outputs*24000&&consumed==outputs+1);
-  assert(s.result.input_samples==24000&&s.result.output_samples==48000);
+  assert(s.result.input_samples==24000&&s.result.output_samples==(bluetooth_headset_wideband(app)?24000u:48000u));
   assert(!std::memcmp(s.result.pcm_sha256,identities[outputs].capture.sha256,32));
   std::vector<uint8_t> text;
   for(uint32_t off=0;off<s.result.bytes;){size_t n=s.result.bytes-off;if(n>1024)n=1024;
@@ -75,7 +82,12 @@ extern "C" void vTaskDelay(TickType_t)
   uint8_t digest[32];storage_digest_bytes(text.data(),text.size(),digest);assert(!std::memcmp(digest,s.result.text_sha256,32));
   const std::string stem=std::string(prefix)+"-"+std::to_string(s.ticket);
   write(stem+".txt",text.data(),text.size());write(stem+".snapshot.bin",&s,sizeof(s));
-  uint8_t wav[96044];size_t bytes;assert(bluetooth_pcm_wav(pcm.data()+outputs*48000,48000,wav,sizeof(wav),&bytes)==1);
+  uint8_t wav[96044];size_t bytes;
+#ifdef BLUETOOTH_CHECK_MSBC
+  assert(bluetooth_pcm16_wav(pcm.data()+outputs*48000,48000,wav,sizeof(wav),&bytes)==1&&s.result.reserved==2);
+#else
+  assert(bluetooth_pcm_wav(pcm.data()+outputs*48000,48000,wav,sizeof(wav),&bytes)==1);
+#endif
   write(stem+".wav",wav,bytes);
   assert(bluetooth_recognition_segment_ack(app,s.ticket+1)==-1);
   assert(bluetooth_recognition_segment_ack(app,s.ticket)==1&&bluetooth_recognition_segment_ack(app,s.ticket)==-1);++outputs;

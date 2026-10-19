@@ -31,7 +31,9 @@ struct bluetooth_segment_snapshot {
 };
 struct bluetooth_segment_status {uint64_t published,consumed;uint32_t flags,disconnected;};
 /* Mode2: bind the sole copied-input consumer before scheduling. The Bluetooth
- * owner alone changes raw transport ownership; copy/ACK never call providers. */
+ * owner alone changes raw transport ownership; copy/ACK never call providers.
+ * Mode3 capture.state binds the actual codec:1=CVSD PCM8k,2=mSBC PCM16k. */
+int bluetooth_headset_wideband(const struct bluetooth_application *);
 int bluetooth_headset_repeated(const struct bluetooth_application *);
 int bluetooth_headset_segment_bind(struct bluetooth_application *,void *consumer);
 int bluetooth_headset_segment_copy(struct bluetooth_application *,uint64_t ticket,uint32_t offset,size_t,

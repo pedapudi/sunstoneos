@@ -8,4 +8,5 @@
  * linear interpolation, with its limited image rejection and narrowband input.
  * Exact output is44+4*samples bytes, no heap or channel/rate guessing. */
 int bluetooth_pcm_wav(const uint8_t *,size_t bytes,uint8_t *,size_t capacity,size_t *written);
+int bluetooth_pcm16_wav(const uint8_t *,size_t,uint8_t *,size_t,size_t *);
 #endif

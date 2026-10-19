@@ -23,7 +23,7 @@ SERIAL='sunstoneos-a733-bluetooth'
 
 def capture(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,segments=2):
     preparation.profile_check(profile,session)
-    if len(profile)==832 and struct.unpack_from('<I',profile,624)[0]==2:
+    if len(profile)==832 and struct.unpack_from('<I',profile,624)[0] in (2,3):
         return capture_repeated(exchange,session,profile,evidence,record,save,deadline,segments,now,pause)
     if len(profile)>=752:
         result=capture_pcm(exchange,session,profile,evidence,record,save,deadline,now,pause)
@@ -150,8 +150,8 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
         if value['ticket']:
             require(value['ticket']==last+1,'Repeated headset skipped or repeated a transcript.')
             stamp={k:value[k] for k in ('firmware','uart','acl','audio','ticket','first_sample','bytes','input_samples','output_samples',
-                   'pcm_sha256','wav_sha256','text_sha256','first_acquired','last_acquired')}
-            lifetime=tuple(value[k] for k in ('firmware','uart','acl','audio'))
+                   'pcm_sha256','wav_sha256','text_sha256','first_acquired','last_acquired','codec','sample_rate')}
+            lifetime=tuple(value[k] for k in ('firmware','uart','acl','audio','codec','sample_rate'))
             require(identity is None or lifetime==identity,'Repeated headset audio identity changed.');identity=lifetime
             text=bytearray()
             while len(text)<stamp['bytes'] or not stamp['bytes']:
@@ -173,7 +173,9 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
         if value['disconnected'] and value['finished'] and not value['ticket']:
             require(value['published']==value['consumed']==last and (failure or last>=segments),'Repeated headset terminal work count differs.')
             result={k:value[k] for k in ('published','consumed','flags','disconnected','finished')}
-            result.update(transcripts=last,wideband=False,physical_audio_qualified=False)
+            result.update(transcripts=last,wideband=bool(identity and identity[-2]==2),codec=identity[-2] if identity else 0,physical_audio_qualified=False)
+            if struct.unpack_from('<I',profile,624)[0]==3 and not result['wideband']:failure=True
+            result['wideband_fallback']=bool(struct.unpack_from('<I',profile,624)[0]==3 and not result['wideband'])
             record['bluetooth_result']='observed-failure' if failure else 'observed-success';record['repeated_recognition']=result
             record['durable_result']=record['bluetooth_frames'][-1].copy()
             try:save()
@@ -189,7 +191,7 @@ def capture_device(device,same,deadline,session,profile,evidence,record,save,seg
         same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete Bluetooth request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'Bluetooth capture deadline expired after write.')
-        if len(profile)==832 and struct.unpack_from('<I',profile,624)[0]==2:
+        if len(profile)==832 and struct.unpack_from('<I',profile,624)[0] in (2,3):
             output=bytearray();extent=None;empty=0
             while extent is None or len(output)<extent:
                 same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'Repeated Bluetooth response deadline expired.')
@@ -205,7 +207,7 @@ def capture_device(device,same,deadline,session,profile,evidence,record,save,seg
 
 
 def source_files():
-    return [('bluetooth-model-pin.json',ROOT/'apps/bluetooth/recognition-models.json'),('bluetooth-host-tool.py',Path(__file__)),('bluetooth-preparation.py',Path(preparation.__file__)),
+    return [('bluetooth-msbc-pin.json',ROOT/'apps/bluetooth/msbc-source.json'),('bluetooth-model-pin.json',ROOT/'apps/bluetooth/recognition-models.json'),('bluetooth-host-tool.py',Path(__file__)),('bluetooth-preparation.py',Path(preparation.__file__)),
         ('bluetooth-decoder.py',Path(decoder.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 

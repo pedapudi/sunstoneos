@@ -5,7 +5,10 @@
 #include "bt_sco.h"
 #include "a733_storage_digest.h"
 #include <string.h>
-enum phase {CONFIGURE,CONFIGURING,SECURITY_CONFIG,CONNECT,AUTHENTICATE,SDP,CONTROL,AG,AUDIO,CAPTURE,CLOSE,DONE};
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+#include "msbc.h"
+#endif
+enum phase {CONFIGURE,CONFIGURING,SECURITY_CONFIG,CONNECT,AUTHENTICATE,SDP,CONTROL,AG,FALLBACK,AUDIO,CAPTURE,CLOSE,DONE};
 static struct {
     struct bluetooth_application *app;
     struct bt_hci_incoming_config incoming;
@@ -23,7 +26,7 @@ static struct {
     struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
     uint8_t pcm[BLUETOOTH_PCM_BYTES],silence[254];
     uint64_t link,stream,last_owner,operation_deadline,capture_deadline,next_silence;
-    unsigned stage,auth_started,silence_bytes,configured;
+    unsigned stage,auth_started,silence_bytes,configured,wideband,silence_offset,silence_ready;
     atomic_uint terminal;
     void *segment_consumer;
     struct bluetooth_application *segment_app;
@@ -104,7 +107,9 @@ static int upper_init(struct bluetooth_application *a)
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     struct bt_security_policy sec={.allow_just_works=p->allow_just_works,.minimum_level=p->minimum_security,.deadline=a->deadline};
     memcpy(sec.peer,p->peer,6);memcpy(sec.pin,p->pin,17);
-    struct bt_sdp_ag_profile ag={.handle=0x10000,.version=0x0109,.rfcomm_channel=(uint8_t)p->server_channel};
+    voice.wideband=p->mode==3&&(a->hci.identity.features[2]&8)&&(a->hci.identity.features[3]&0x80);
+    struct bt_sdp_ag_profile ag={.handle=0x10000,.version=0x0109,.rfcomm_channel=(uint8_t)p->server_channel,
+        .brsf_features=voice.wideband?512:0,.supported_features=voice.wideband?32:0};
     voice.audio_binding=(struct bt_sco_binding){p->scheduling_authority,p->receive_latency_us,p->response_timeout_us,audio_current,audio_security,&context};
     if(bt_acl_init(&voice.acl,&a->hci)!=1||bt_security_init(&voice.security,&voice.acl,a->owner,a->recovery_state,&sec,a->profile->command_timeout_us)!=1||
         bt_rfcomm_registry_init(&voice.registry,&voice.l2cap,psm,service,&context)!=1||
@@ -129,8 +134,8 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
     if(!live(a)||now<voice.last_owner||now-voice.last_owner>a->profile->headset.receive_latency_us)return fail();
     voice.last_owner=now;
-    if(a->profile->headset.mode!=2&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
-    if(a->profile->headset.mode==2&&voice.stage<AUDIO&&atomic_load_explicit(&voice.segment_stop,memory_order_acquire))return fail();
+    if(a->profile->headset.mode<2&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
+    if(a->profile->headset.mode>=2&&voice.stage<AUDIO&&atomic_load_explicit(&voice.segment_stop,memory_order_acquire))return fail();
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     if(voice.operation_deadline&&now>=voice.operation_deadline)return fail();
     if(voice.stage==CONFIGURE){
@@ -196,13 +201,21 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(voice.stage==CONTROL){
         if(voice.rfcomm.phase!=BT_RFCOMM_OPEN)return 0;
         static const uint8_t no_telephony[7]={0};
-        if(bt_hfp_ag_init(&voice.ag,&voice.rfcomm,no_telephony,voice.operation_deadline,p->line_timeout_us)!=1)return fail();
+        if(bt_hfp_ag_init_codecs(&voice.ag,&voice.rfcomm,no_telephony,voice.operation_deadline,p->line_timeout_us,voice.wideband?6:0)!=1)return fail();
         voice.stage=AG;return 0;
     }
-    if(voice.stage==AG){
+    if(voice.stage==AG||voice.stage==FALLBACK){
         if(voice.ag.phase!=BT_HFP_AG_READY)return 0;
+        if(voice.wideband&&(voice.ag.hf_features&128)){
+            unsigned desired=voice.stage==FALLBACK?1:(voice.ag.peer_codecs&4)?2:1;
+            if(!voice.ag.selected_codec||voice.ag.selected_codec!=desired){
+                if(!voice.ag.offered_codec){int selected=bt_hfp_ag_select_codec(&voice.ag,desired);if(selected<0)return fail();}
+                return 0;
+            }
+        }
         voice.operation_deadline=stage_deadline(a,58000000);
-        if(bt_sco_open(&voice.audio,&voice.ag,0,voice.operation_deadline,&voice.stream)!=1)return fail();
+        if(voice.stage==FALLBACK){if(bt_sco_retry_cvsd(&voice.audio,voice.stream,voice.operation_deadline,&voice.stream)!=1)return fail();}
+        else if(bt_sco_open(&voice.audio,&voice.ag,0,voice.operation_deadline,&voice.stream)!=1)return fail();
         voice.stage=AUDIO;return 0;
     }
     if(bt_sco_step(&voice.audio,64,a->deadline)!=1||bt_security_service(&voice.security,a->deadline)!=1)return fail();
@@ -210,14 +223,15 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     if(tx&&bt_sco_release_result(&voice.audio,tx->serial)!=1)return fail();
     struct bt_sco_link *l=stream();if(!l)return fail();
     if(voice.stage==AUDIO){
+        if(p->mode==3&&l->phase==BT_SCO_CLOSED&&l->codec==2&&l->fallback_allowed){voice.stage=FALLBACK;return 0;}
         if(l->phase==BT_SCO_CLOSED||l->phase==BT_SCO_RETAINED)return fail();
         if(l->phase!=BT_SCO_OPEN)return 0;
         voice.capture_deadline=cap(now,p->capture_timeout_us,stage_deadline(a,59000000));
-        voice.operation_deadline=p->mode==2?0:voice.capture_deadline;voice.next_silence=now;
+        voice.operation_deadline=p->mode>=2?0:voice.capture_deadline;voice.next_silence=now;
         voice.silence_bytes=voice.audio.mtu&~1u;if(voice.silence_bytes>254)voice.silence_bytes=254;
         if(!voice.silence_bytes)return fail();voice.stage=CAPTURE;
     }
-    if(p->mode==2)return repeated_audio(a,l,now);
+    if(p->mode>=2)return repeated_audio(a,l,now);
     const struct bt_sco_packet *rx=bt_sco_receive(&voice.audio);
     if(rx){
         if(rx->link!=voice.stream)return fail();
@@ -285,7 +299,9 @@ int bluetooth_headset_copy(struct bluetooth_application *a,unsigned kind,uint32_
 /* The input slots have one serialized Bluetooth producer and one bound
  * recognizer consumer. An unreturned slot is never written again. */
 int bluetooth_headset_repeated(const struct bluetooth_application *a)
-{return a&&a->self==a&&a->profile&&a->profile->version==3&&a->profile->headset.mode==2;}
+{return a&&a->self==a&&a->profile&&a->profile->version==3&&a->profile->headset.mode>=2;}
+int bluetooth_headset_wideband(const struct bluetooth_application *a)
+{return bluetooth_headset_repeated(a)&&a->profile->headset.mode==3;}
 static int segment_live(struct bluetooth_application *a)
 {return bluetooth_headset_repeated(a)&&voice.segment_app==a&&
     !atomic_load_explicit(&a->failed,memory_order_acquire)&&
@@ -310,7 +326,7 @@ int bluetooth_headset_segment_status(struct bluetooth_application *a,struct blue
     out->consumed=atomic_load_explicit(&voice.segment_tail,memory_order_acquire);
     out->published=atomic_load_explicit(&voice.segment_head,memory_order_acquire);
     out->flags=atomic_load_explicit(&voice.segment_flags,memory_order_acquire);
-    return 1;
+    return segment_live(a)?1:-1;
 }
 int bluetooth_headset_segment_copy(struct bluetooth_application *a,uint64_t ticket,uint32_t offset,size_t bytes,
     uint8_t out[1024],size_t *copied,struct bluetooth_segment_snapshot *snapshot)
@@ -372,15 +388,31 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
                 unsigned slot=(unsigned)(head%BLUETOOTH_SEGMENT_SLOTS);
                 struct bluetooth_segment_snapshot *s=&voice.segments[slot].snapshot;
                 if(!voice.segment_bytes){memset(s,0,sizeof(*s));s->ticket=head+1;s->first_sample=head*p->samples;s->first_acquired=rx->acquired;}
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+                if(l->codec==2){
+                    uint8_t decoded[240];uint64_t first=0;
+                    int result=bluetooth_msbc_byte(rx->bytes[voice.partial_offset++],rx->acquired,decoded,&first);
+                    if(result<0){segment_stopping(BLUETOOTH_SEGMENT_LOSS);break;}
+                    if(!result)continue;
+                    if(!voice.segment_bytes)s->first_acquired=first;
+                    if(p->samples*2-voice.segment_bytes<sizeof(decoded))return fail();
+                    voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){first,
+                        voice.segment_bytes,60,240,0,0};
+                    memcpy(voice.segments[slot].pcm+voice.segment_bytes,decoded,sizeof(decoded));
+                    voice.segment_bytes+=sizeof(decoded);s->last_acquired=rx->acquired;
+                }else
+#endif
+                {
                 unsigned remaining=p->samples*2-voice.segment_bytes;
                 size_t used=rx->length-voice.partial_offset;if(used>remaining)used=remaining;
                 voice.segments[slot].records[voice.segment_records++]=(struct bluetooth_pcm_record){rx->acquired,
                     voice.segment_bytes,(uint16_t)rx->length,(uint16_t)used,rx->status,0};
                 memcpy(voice.segments[slot].pcm+voice.segment_bytes,rx->bytes+voice.partial_offset,used);
                 voice.segment_bytes+=(unsigned)used;voice.partial_offset+=(unsigned)used;s->last_acquired=rx->acquired;
+                }
                 if(voice.segment_bytes==p->samples*2){
                     s->capture=(struct bluetooth_pcm_snapshot){.firmware=a->firmware_generation,.uart=a->uart_generation,
-                        .acl=voice.link,.audio=voice.stream,.state=1,.bytes=voice.segment_bytes,.records=voice.segment_records};
+                        .acl=voice.link,.audio=voice.stream,.state=l->codec,.bytes=voice.segment_bytes,.records=voice.segment_records};
                     storage_digest_bytes(voice.segments[slot].pcm,voice.segment_bytes,s->capture.sha256);
                     atomic_store_explicit(&voice.segment_head,head+1,memory_order_release);
                     voice.segment_bytes=voice.segment_records=0;
@@ -400,6 +432,17 @@ static int repeated_audio(struct bluetooth_application *a,struct bt_sco_link *l,
             if(voice.audio.active_tx<BT_SCO_PACKETS||a->hci.transport.tx_offset<a->hci.transport.tx_length)return 0;
             if(bt_sco_close(&voice.audio,voice.stream,a->started+40000000)!=1)return fail();voice.stage=CLOSE;return 0;
         }
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+        if(l->codec==2){
+            if(now>=voice.next_silence){
+                if(!voice.silence_ready){if(bluetooth_msbc_silence(voice.silence)!=1)return fail();voice.silence_ready=1;}
+                unsigned bytes=60-voice.silence_offset;if(bytes>voice.audio.mtu)bytes=voice.audio.mtu;
+                uint64_t serial;int r=bt_sco_send(&voice.audio,voice.stream,voice.silence+voice.silence_offset,bytes,voice.capture_deadline,&serial);
+                if(r<0)return fail();if(r==1){voice.silence_offset+=bytes;
+                    if(voice.silence_offset==60){voice.silence_offset=0;voice.silence_ready=0;voice.next_silence=cap(now,7500,voice.capture_deadline);}}
+            }
+        }else
+#endif
         if(now>=voice.next_silence){uint64_t serial;
             int r=bt_sco_send(&voice.audio,voice.stream,voice.silence,voice.silence_bytes,voice.capture_deadline,&serial);
             if(r<0)return fail();if(r==1)voice.next_silence=cap(now,(voice.silence_bytes/2)*125,voice.capture_deadline);}

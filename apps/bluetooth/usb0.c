@@ -152,7 +152,7 @@ static void repeated_exchange(const uint8_t request[16])
     if(status<0||done<0){r=-1;copied=0;memset(&value,0,sizeof(value));}
     unsigned state=r<0||status<0||done<0||source.flags&~3u?3:r==1?1:source.disconnected&&done?2:0;
     memset(identity_frame,0,sizeof(identity_frame));
-    put32(identity_frame,0x53525442);put32(identity_frame+4,1);put32(identity_frame+8,state);
+    put32(identity_frame,0x53525442);put32(identity_frame+4,bluetooth_headset_wideband(&bluetooth)?2:1);put32(identity_frame+8,state);
     put32(identity_frame+12,r==1?(uint32_t)copied:0);
     put64(identity_frame+16,board.session.epoch);put64(identity_frame+24,board.session.generation);
     memcpy(identity_frame+32,board.session.sid_evidence,32);
@@ -160,7 +160,7 @@ static void repeated_exchange(const uint8_t request[16])
         const struct bluetooth_recognition_snapshot *v=&value.result;
         put64(identity_frame+64,v->firmware);put64(identity_frame+72,v->uart);put64(identity_frame+80,v->acl);put64(identity_frame+88,v->audio);
         put64(identity_frame+96,value.ticket);put64(identity_frame+104,value.first_sample);
-        put32(identity_frame+112,v->bytes);put32(identity_frame+116,v->input_samples);put32(identity_frame+120,v->output_samples);
+        put32(identity_frame+112,v->bytes);put32(identity_frame+116,v->input_samples);put32(identity_frame+120,v->output_samples);put32(identity_frame+124,v->reserved);
         memcpy(identity_frame+128,v->pcm_sha256,32);memcpy(identity_frame+160,v->wav_sha256,32);memcpy(identity_frame+192,v->text_sha256,32);
         put64(identity_frame+248,value.first_acquired);put64(identity_frame+256,value.last_acquired);
         if(copied)memcpy(identity_frame+272,text,copied);

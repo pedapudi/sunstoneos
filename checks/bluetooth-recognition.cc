@@ -54,6 +54,7 @@ extern "C" int bluetooth_headset_copy(bluetooth_application *p,unsigned kind,uin
     std::memcpy(out,pcm.data()+offset,bytes);*copied=bytes;return 1;
 }
 // Finite fixture selects mode1; repeated-only entry points are unreachable.
+extern "C" int bluetooth_headset_wideband(const bluetooth_application *){return 0;}
 extern "C" int bluetooth_headset_repeated(const bluetooth_application *){return 0;}
 extern "C" int bluetooth_headset_segment_bind(bluetooth_application *,void *){assert(false);return -1;}
 extern "C" int bluetooth_headset_segment_copy(bluetooth_application *,uint64_t,uint32_t,size_t,uint8_t[1024],size_t *,bluetooth_segment_snapshot *){assert(false);return -1;}

@@ -2,6 +2,7 @@
 extern "C" {
 #include "headset.h"
 #include "pcm.h"
+#include "msbc.h"
 #include "a733_storage_digest.h"
 }
 #include "../mimus/recorded.h"
@@ -71,7 +72,7 @@ void recognize(void *)
             vTaskDelay(1);
         }
         if(repeated)capture=segment.capture;
-        if(result!=1||!live()||!capture.bytes||(capture.bytes&1)||capture.bytes>sizeof(retained.pcm)||capture.loss_packets){failed();}
+        if(result!=1||!live()||capture.state<1||capture.state>(bluetooth_headset_wideband(retained.app)?2u:1u)||!capture.bytes||(capture.bytes&1)||capture.bytes>sizeof(retained.pcm)||capture.loss_packets){failed();}
         const bluetooth_pcm_snapshot identity=capture;
         const bluetooth_segment_snapshot segment_identity=segment;
         for(uint32_t offset=0;offset<identity.bytes;){
@@ -87,7 +88,9 @@ void recognize(void *)
         if(repeated&&bluetooth_headset_segment_ack(retained.app,segment_identity.ticket)!=1){failed();}
         retained.used=0;
     size_t wav_bytes=0;
-    if(bluetooth_pcm_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes)!=1||!live()||!model_hash(0)||!model_hash(1)){
+    int converted=identity.state==2?bluetooth_pcm16_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes):
+        bluetooth_pcm_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes);
+    if(converted!=1||!live()||!model_hash(0)||!model_hash(1)){
         failed();
     }
     std::span<const uint8_t> inputs[3]={
@@ -102,7 +105,8 @@ void recognize(void *)
     retained.snapshot.firmware=identity.firmware;retained.snapshot.uart=identity.uart;
     retained.snapshot.acl=identity.acl;retained.snapshot.audio=identity.audio;
     retained.snapshot.bytes=retained.used;retained.snapshot.input_samples=identity.bytes/2;
-    retained.snapshot.output_samples=identity.bytes;
+    retained.snapshot.output_samples=identity.state==2?identity.bytes/2:identity.bytes;
+    retained.snapshot.reserved=bluetooth_headset_wideband(retained.app)?identity.state:0;
     std::memcpy(retained.snapshot.pcm_sha256,identity.sha256,32);
     storage_digest_bytes(retained.wav,wav_bytes,retained.snapshot.wav_sha256);
     storage_digest_bytes(retained.log,retained.used,retained.snapshot.text_sha256);
@@ -136,6 +140,9 @@ extern "C" int bluetooth_recognition_start(bluetooth_application *app,const blue
     for(unsigned i=0;i<2;++i)if(!models->bytes[i]||models->bytes[i]>BLUETOOTH_MODEL_SLOT)return 0;
     retained.app=app;retained.models=*models;retained.deadline=deadline;
     runtime_smp_init();runtime_init();
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+    if(bluetooth_headset_wideband(app)&&bluetooth_msbc_init()!=1)return 0;
+#endif
     retained.owner=xTaskCreateStatic(recognize,"headset-mimus",16384,nullptr,3,retained.stack,&retained.task);
     return retained.owner!=nullptr&&(bluetooth_headset_repeated(app)!=1||bluetooth_headset_segment_bind(app,retained.owner)==1);
 }

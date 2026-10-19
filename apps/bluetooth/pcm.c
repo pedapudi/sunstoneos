@@ -17,3 +17,15 @@ int bluetooth_pcm_wav(const uint8_t *pcm,size_t bytes,uint8_t *out,size_t capaci
         put16(out+44+2*at,a);put16(out+46+2*at,(a+b)/2);}
     *written=44+2*bytes;return 1;
 }
+
+/* Already decoded wideband PCM enters the unchanged16k recorded engine. */
+int bluetooth_pcm16_wav(const uint8_t *pcm,size_t bytes,uint8_t *out,size_t capacity,size_t *written)
+{
+    if(!bytes||(bytes&1)||bytes>48000||capacity<44+bytes||
+       !disjoint(pcm,bytes,out,capacity)||!disjoint(pcm,bytes,written,sizeof(*written))||
+       !disjoint(out,capacity,written,sizeof(*written)))return -1;
+    memcpy(out,"RIFF",4);put32(out+4,(uint32_t)(36+bytes));memcpy(out+8,"WAVEfmt ",8);
+    put32(out+16,16);put16(out+20,1);put16(out+22,1);put32(out+24,16000);put32(out+28,32000);
+    put16(out+32,2);put16(out+34,16);memcpy(out+36,"data",4);put32(out+40,(uint32_t)bytes);
+    memcpy(out+44,pcm,bytes);*written=44+bytes;return 1;
+}
