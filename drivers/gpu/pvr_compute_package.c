@@ -7,20 +7,27 @@ unsigned pvr_compute_package_temps(const struct pvr_compute_package *p)
 int pvr_compute_package_valid(const struct pvr_compute_package *p)
 {
     if(!p||(uintptr_t)p%_Alignof(struct pvr_compute_package)||
-       p->magic!=PVR_COMPUTE_PACKAGE_MAGIC||p->version!=1||p->bytes!=sizeof(*p)||p->profile!=1||
+       p->magic!=PVR_COMPUTE_PACKAGE_MAGIC||p->bytes!=sizeof(*p)||
+       !((p->version==1&&p->profile==1)||(p->version==2&&p->profile==2))||
        p->bvnc!=PVR_FW_A733_BVNC||!p->code_bytes||p->code_bytes>PVR_COMPUTE_PACKAGE_CODE||
        (p->code_bytes&3)||p->input_bytes<4||p->input_bytes>PVR_COMPUTE_PACKAGE_INPUT||
        !p->output_bytes||p->output_bytes>PVR_COMPUTE_PACKAGE_OUTPUT||(p->output_bytes&3)||
        !p->count||word(p->input)!=p->count||p->entry_offset||p->scratch||p->spilled_temps||
-       p->unsupported||p->local_size[0]!=32||p->local_size[1]!=1||p->local_size[2]!=1||p->reserved0||
-       p->precomp[1]>4||p->precomp[2]||p->precomp[3]||p->precomp[4]||p->precomp[7]||
+       p->unsupported||p->local_size[0]!=32||p->local_size[1]!=1||p->local_size[2]!=1||
+       p->precomp[1]>(p->profile==2?6:4)||p->precomp[2]||p->precomp[3]||p->precomp[4]||p->precomp[7]||
        ((unsigned)p->precomp[5]|(unsigned)p->precomp[6]<<8)!=p->code_bytes/4)return 0;
     /* DOUTU uses a six-bit count of four-register temporary blocks. */
     if((pvr_compute_package_temps(p)+3)/4>63)return 0;
     unsigned source=0,compiler=0;
     for(unsigned i=0;i<32;++i){source|=p->source_digest[i];compiler|=p->compiler_digest[i];}
     if(!source||!compiler)return 0;
-    if(p->reserved||p->input_header_bytes<4||p->input_header_bytes>p->input_bytes||
+    if(p->profile==1) {
+        if(p->dispatch_count||p->tile_elements)return 0;
+    } else if(p->tile_elements!=PVR_COMPUTE_DISPATCH_LANES||
+        p->count>PVR_COMPUTE_DISPATCH_ELEMENTS||
+        p->dispatch_count!=(p->count+PVR_COMPUTE_DISPATCH_LANES-1)/PVR_COMPUTE_DISPATCH_LANES||
+        !p->dispatch_count||p->dispatch_count>PVR_COMPUTE_DISPATCH_MAX)return 0;
+    if(p->input_header_bytes<4||p->input_header_bytes>p->input_bytes||
        !p->input_element_bytes||!p->output_element_bytes||
        p->count>(p->input_bytes-p->input_header_bytes)/p->input_element_bytes||
        p->count>p->output_bytes/p->output_element_bytes||

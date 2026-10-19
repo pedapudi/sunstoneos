@@ -13,6 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for x in ('evidence','mesa-source','mesa-build'):p.add_argument('--'+x,type=Path,required=True)
+    p.add_argument('--profile',type=int,choices=(1,2),default=1)
     a=p.parse_args();out=a.evidence.resolve()
     spec=importlib.util.spec_from_file_location('package_compile',ROOT/'apps/gpu-program/compile.py')
     tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(tool)
@@ -40,7 +41,8 @@ def main():
     results=[]
     for kernel in ('affine','add'):
         directory=out/kernel
-        for count in (1,37,127):
+        counts=(1,33,992 if kernel=='affine' else 511) if a.profile==2 else (1,37,127)
+        for count in counts:
             if kernel=='affine':
                 words=[count,17,0xfffffff0]+[i*31 for i in range(count)]
                 expected=[(x*17+0xfffffff0)&0xffffffff for x in words[3:]]
@@ -57,9 +59,15 @@ def main():
                 commands.append(run([str(out/('package-'+binary)),str(pkg),str(expect)],f'{kernel}-{count}-{binary}'))
             results.append({'kernel':kernel,'count':count,'package_sha256':hashlib.sha256(raw).hexdigest(),
               'expected_sha256':hashlib.sha256(expect.read_bytes()).hexdigest()})
+    if a.profile==2:
+        for binary in ('native','reference'):
+            commands.append(run([str(out/('package-'+binary)),str(out/'affine/package-992.bin'),str(out/'affine/expected-992.bin'),'1'],'heap-limit-'+binary))
+        oldcase=Path.home()/'.cache/sunstoneos/evidence/gpu-program-submission-20261019/affine'
+        for binary in ('native','reference'):
+            commands.append(run([str(out/('package-'+binary)),str(oldcase/'package-37.bin'),str(oldcase/'expected-37.bin')],'legacy-profile-'+binary))
     files=[ROOT/x for x in inputs]+[ROOT/'checks/pvr-compute-package.c',ROOT/'checks/pvr-compute-package.py',ROOT/'include/pvr_compute_package.h',ROOT/'include/pvr_compute_job.h']
     manifest={'scope':'Real Mesa code/PDS/CDM bytes; modeled firmware timelines/numerical writes, no USC execution',
       'commands':commands,'cases':results,'inputs':{str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in files}}
     (out/'package-check.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('PASS six package cases: two compiler-produced programs, count bounds, copied modeled output and upstream PDS/CDM bytes')
+    print('PASS six selected profile',a.profile,'cases: two compiler products, bounded copied output and upstream PDS/CDM bytes')
 if __name__=='__main__':main()

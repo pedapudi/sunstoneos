@@ -31,8 +31,9 @@ def upstream_binary(build,out):
     if len(arrays)!=1:raise ValueError('Unexpected upstream program count')
     return b''.join(struct.pack('<I',int(x,16)) for x in re.findall(r'0x[0-9a-fA-F]+',arrays[0])),command
 
-def compile_program(source,mesa,build,out,ninja):
+def compile_program(source,mesa,build,out,ninja,profile=1):
     """The supplied source requires a trusted reviewer; syntax is not a sandbox."""
+    if profile not in (1,2):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
     out.mkdir(parents=True,exist_ok=True)
     original=(mesa/'src/imagination/pco/uscgen/pco_clc.c').read_bytes()
@@ -49,7 +50,26 @@ def compile_program(source,mesa,build,out,ninja):
               m->cs.shmem.count,m->cs.zero_shmem,m->cs.global_shmem,
               m->common.uses.point_sampler,m->common.uses.ia_sampler);
 '''
-    patched=original.decode().replace(anchor,anchor+export)
+    scan=r'''
+   sunstone_vtxin_mask = 0;
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic) continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic != nir_intrinsic_load_vtxin_pco) continue;
+            if (!nir_src_is_const(intr->src[0])) { sunstone_vtxin_mask = 0xffffffffu; continue; }
+            unsigned first = nir_src_as_uint(intr->src[0]);
+            unsigned width = intr->def.num_components;
+            if (first >= 32 || width > 32-first || width == 32) { sunstone_vtxin_mask = 0xffffffffu; continue; }
+            sunstone_vtxin_mask |= ((1u << width)-1u) << first;
+         }
+      }
+   }
+'''
+    patched=original.decode().replace('static pco_shader *build_shader(', 'static unsigned sunstone_vtxin_mask;\nstatic pco_shader *build_shader(')
+    patched=patched.replace('   pco_postprocess_nir(ctx, nir, data);', '   pco_postprocess_nir(ctx, nir, data);'+scan)
+    patched=patched.replace(anchor,anchor+export+'\n            fprintf(stderr,"SUNSTONE_VTXIN_MASK %u\\n",sunstone_vtxin_mask);\n')
     (out/'pco_clc_metadata.c').write_text(patched)
     entries=json.loads((build/'compile_commands.json').read_text())
     entry=next(e for e in entries if e['file'].endswith('/pco_clc.c'))
@@ -73,7 +93,11 @@ def compile_program(source,mesa,build,out,ninja):
     lines=re.findall(r'^SUNSTONE_META (.*)$',err,re.M)
     if len(lines)!=1:raise ValueError('Require exactly one common-profile entrypoint')
     meta=list(map(int,lines[0].split()))
-    if meta[2:10]!=[0]*8 or meta[10:13]!=[32,1,1] or any(meta[13:]) or meta[1]>4 or (meta[0]+3)//4>63:
+    masks=re.findall(r'^SUNSTONE_VTXIN_MASK (\d+)$',err,re.M)
+    if len(masks)!=1:raise ValueError('Missing explicit input-register use metadata')
+    explicit_mask=int(masks[0])
+    if profile==2 and explicit_mask!=63:raise ValueError('Profile2 requires exactly six explicit input registers')
+    if meta[2:10]!=[0]*8 or meta[10:13]!=[32,1,1] or any(meta[13:]) or meta[1]>(6 if profile==2 else 4) or (meta[0]+3)//4>63:
         raise ValueError('Unsupported compiler metadata: '+str(meta))
     arrays=re.findall(r'static const uint32_t \w+\[\d+\] = \{(.*?)\};',(out/'kernel.c').read_text(),re.S)
     if len(arrays)!=1:raise ValueError('Require exactly one common binary')
@@ -85,7 +109,7 @@ def compile_program(source,mesa,build,out,ninja):
     if upstream!=blob:raise ValueError('Instrumented compiler changed USC bytes')
     (out/'program.bin').write_bytes(blob)
     (out/'source.cl').write_bytes(source.read_bytes())
-    manifest={'schema':'sunstone-pco-profile-v1','mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
+    manifest={'schema':'sunstone-pco-profile-v'+str(profile),'profile':profile,'explicit_vtxin_mask':explicit_mask,'abi_vtxins':6 if profile==2 else 4,'mesa_revision':MESA,'source_sha256':digest(source.read_bytes()),
       'spirv_sha256':digest((out/'kernel.spv').read_bytes()),'program_sha256':digest(blob),'metadata':meta,
       'compiler_sha256':digest((out/'pco_clc_metadata').read_bytes()),
       'upstream_compiler_sha256':digest((build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
@@ -96,12 +120,17 @@ def compile_program(source,mesa,build,out,ninja):
 
 def package(program,manifest,input_data,output_bytes,input_header_bytes,input_element_bytes,output_element_bytes):
     m=json.loads(Path(manifest).read_text());blob=Path(program).read_bytes();data=Path(input_data).read_bytes()
-    if m['schema']!='sunstone-pco-profile-v1' or m['mesa_revision']!=MESA or digest(blob)!=m['program_sha256']:raise ValueError('Program identity differs')
+    profile=m.get('profile',1)
+    if profile not in (1,2) or m['schema']!='sunstone-pco-profile-v'+str(profile) or m['mesa_revision']!=MESA or digest(blob)!=m['program_sha256']:raise ValueError('Program identity differs')
     if len(data)<4 or len(data)>INPUT or not 0<output_bytes<=3968 or output_bytes%4:raise ValueError('Invalid data bounds')
     meta=m['metadata']
     if len(meta)!=18 or meta[2:10]!=[0]*8 or meta[10:13]!=[32,1,1] or any(meta[13:]):raise ValueError('Unsupported profile')
-    header=struct.pack('<4IQ8I4I',0x50435650,1,8288,1,BVNC,len(blob)-8,len(data),output_bytes,struct.unpack_from('<I',data)[0],0,0,0,0,32,1,1,0)
-    header+=blob[:8]+bytes.fromhex(m['source_sha256'])+bytes.fromhex(m['compiler_sha256'])+struct.pack('<4I',input_header_bytes,input_element_bytes,output_element_bytes,0)
+    if blob[:2]!=bytes(meta[:2]) or meta[1]>(6 if profile==2 else 4) or (meta[0]+3)//4>63:raise ValueError('Compiler header/resource metadata differs')
+    count=struct.unpack_from('<I',data)[0]
+    groups=(count+31)//32 if profile==2 else 0
+    if profile==2 and (count>992 or m.get('explicit_vtxin_mask')!=63 or m.get('abi_vtxins')!=6):raise ValueError('Unsupported dispatch extent or register ABI')
+    header=struct.pack('<4IQ8I4I',0x50435650,profile,8288,profile,BVNC,len(blob)-8,len(data),output_bytes,struct.unpack_from('<I',data)[0],0,0,0,0,32,1,1,groups)
+    header+=blob[:8]+bytes.fromhex(m['source_sha256'])+bytes.fromhex(m['compiler_sha256'])+struct.pack('<4I',input_header_bytes,input_element_bytes,output_element_bytes,32 if profile==2 else 0)
     count=struct.unpack_from('<I',data)[0]
     if not count or input_header_bytes<4 or input_element_bytes<1 or output_element_bytes<1 or len(data)!=input_header_bytes+count*input_element_bytes or output_bytes!=count*output_element_bytes:raise ValueError('Caller data violates trusted element bounds')
     return header+blob[8:]+bytes(CODE-(len(blob)-8))+data+bytes(INPUT-len(data))
@@ -110,9 +139,10 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)
     c=sub.add_parser('compile')
     for x in ('source','mesa','build','output','ninja'):c.add_argument('--'+x,type=Path,required=True)
+    c.add_argument('--profile',type=int,choices=(1,2),default=1)
     b=sub.add_parser('package')
     for x in ('program','manifest','input','output'):b.add_argument('--'+x,type=Path,required=True)
     for x in ('output-bytes','input-header-bytes','input-element-bytes','output-element-bytes'):b.add_argument('--'+x,type=int,required=True)
     a=p.parse_args()
-    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja)
+    if a.operation=='compile':compile_program(a.source,a.mesa,a.build,a.output,a.ninja,a.profile)
     else:a.output.write_bytes(package(a.program,a.manifest,a.input,a.output_bytes,a.input_header_bytes,a.input_element_bytes,a.output_element_bytes))

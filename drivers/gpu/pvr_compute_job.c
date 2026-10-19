@@ -23,11 +23,14 @@
 #include "pvr_compute_job.h"
 #include <string.h>
 #include "pvr_compute_probe.inc"
+_Static_assert(PVR_COMPUTE_DISPATCH_MAX*128u+64u<=4096u-64u,"PDS data, code and trailing fetch space");
+_Static_assert(PVR_COMPUTE_DISPATCH_MAX*28u+32u<=4096u-64u,"CDM dispatch/fence/terminate guard");
 _Static_assert(sizeof(probe_usc)==PVR_COMPUTE_JOB_USC_BYTES,"USC probe size");
 const uint32_t pvr_compute_job_bytes[PVR_JOB_REGIONS]={320,128,64,4096,64,256,64,262144};
 size_t pvr_compute_job_region_bytes(const struct pvr_compute_job_config *c,unsigned i)
 {
     if(i>=PVR_JOB_REGIONS)return 0;
+    if(c->package&&c->package->profile==2&&i==PVR_JOB_PDS)return PVR_COMPUTE_DISPATCH_PDS_BYTES;
     if(c->package&&(i==PVR_JOB_USC||i==PVR_JOB_INPUT||i==PVR_JOB_OUTPUT))return 4096;
     return pvr_compute_job_bytes[i];
 }
@@ -159,6 +162,35 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     /* Fence: eight maximum packed one-instance groups, PDS dependency, shared free. */
     put32(cdm,28,(1u<<2)|(1u<<1)|1u);put32(cdm,32,b|(1u<<2)|(1u<<1));
     put32(cdm,36,b+16);put32(cdm,52,8u<<27);put32(cdm,56,2u<<30);
+    if(c->package&&c->package->profile==2) {
+        const struct pvr_compute_package *p=c->package;
+        uint64_t task=(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|
+            ((uint64_t)((pvr_compute_package_temps(p)+3)/4)<<35);
+        static const uint32_t code[]={0xc1100001u,0xdb000000u,0xc1080001u,
+            0xf0020001u,0xf0060201u,0xf00a0401u,0xfc000602u};
+        /* Replace legacy data/code. All31 slots and shared code fit one page. */
+        clear(pds,c->buffers[PVR_JOB_PDS].bytes);
+        clear(cdm,c->buffers[PVR_JOB_CDM].bytes);
+        words(pds,PVR_COMPUTE_DISPATCH_PDS_CODE,code,7);
+        for(unsigned group=0;group<p->dispatch_count;++group) {
+            unsigned first=group*PVR_COMPUTE_DISPATCH_LANES;
+            unsigned count=p->count-first;
+            if(count>PVR_COMPUTE_DISPATCH_LANES)count=PVR_COMPUTE_DISPATCH_LANES;
+            size_t slot=(size_t)group*PVR_COMPUTE_DISPATCH_PDS_SLOT,stream=(size_t)group*28;
+            put32(pds,slot,(uint32_t)(input>>32));put32(pds,slot+4,(uint32_t)input);put32(pds,slot+8,2);
+            put32(pds,slot+16,(uint32_t)(output>>32));put32(pds,slot+20,(uint32_t)output);put32(pds,slot+24,0x4002);
+            /* Mesa H32/L32 constant order: even USC register gets low half. */
+            put32(pds,slot+32,count);put32(pds,slot+36,first);put32(pds,slot+40,0x80008002u);
+            put64(pds,slot+48,task);
+            put32(cdm,stream,(2u<<12)|(5u<<2)|(1u<<1));
+            put32(cdm,stream+4,a+(uint32_t)slot);
+            put32(cdm,stream+8,a+PVR_COMPUTE_DISPATCH_PDS_CODE);
+            put32(cdm,stream+24,31u<<18);
+        }
+        size_t fence=(size_t)p->dispatch_count*28;
+        put32(cdm,fence,(1u<<2)|(1u<<1)|1u);put32(cdm,fence+4,b|(1u<<2)|(1u<<1));
+        put32(cdm,fence+8,b+16);put32(cdm,fence+24,8u<<27);put32(cdm,fence+28,2u<<30);
+    }
     if(c->package) {
         memcpy(c->buffers[PVR_JOB_INPUT].cpu,c->package->input,c->package->input_bytes);
         for(unsigned i=0;i<1024;++i)put32(c->buffers[PVR_JOB_OUTPUT].cpu,4*i,

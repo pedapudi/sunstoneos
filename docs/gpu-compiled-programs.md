@@ -23,29 +23,73 @@ padding. The output has a 64-byte leading guard and guarded unused trailing byte
 All program/input mappings are GPU read-only; output permits GPU writes. Existing
 context state also permits GPU writes. Firmware memory stays outside the workload VM.
 
-The Programmable Data Sequencer supplies two 64-bit arguments in four unified
-registers: input address in registers zero and one, output address in registers
-two and three. Input starts with a little-endian unsigned 32-bit element count.
+The Programmable Data Sequencer supplies the input address in unified registers
+zero and one and the output address in registers two and three. Version two also
+supplies the first element index in register four and the tile count in register
+five. Input starts with a little-endian unsigned 32-bit element count.
 The package declares input header bytes, input bytes per element and output bytes
 per element. The native validator requires complete count-derived extents without
 overflow. Trusted source review must establish that those declarations describe
 the program's actual accesses.
 
-The supported launch contains one group of 32 lanes. A lane can process successive
-elements with a stride of 32. Programs cannot require shared memory, barriers,
-atomics, textures, scratch storage, spills or external USC library calls. Entry
-offset must be zero. General workgroup geometry, additional argument layouts,
-concurrent work, broader mappings and graphics remain required functionality.
+The package version and profile identify the register and dispatch ABI. The
+8,288-byte package and 8,944-byte session envelope retain their sizes.
+
+| Version/profile | Input registers | Dispatch geometry |
+| --- | --- | --- |
+| One | Two pointers in four registers | One 32-lane workgroup; a lane can loop over elements |
+| Two | Two pointers and first-index/tile-count in six registers | One through 31 direct dispatches, each containing one 32-lane workgroup |
+
+Version two partitions at most 992 elements. Dispatch `g` receives first index
+`32*g` and `min(32, count-32*g)` valid elements. A lane computes its global element
+index by adding the first index to its instance number. It must reject lanes
+outside the tile count. The resulting output intervals partition the declared
+elements without overlap, including a partial final tile. The supplied kernels
+also check the full input count before each access.
+
+The planner validates the exact input and output extents, positive dispatch
+count, count-derived number of groups and a fixed tile width of 32. Version two
+stores dispatch count in the header word at byte 68 and tile width at byte 156;
+version one requires both words to remain zero. All other resource requirements
+remain explicit. Programs cannot require shared memory, barriers, atomics,
+textures, scratch storage, spills or external USC library calls. Entry offset
+must be zero. A single dispatch containing multiple workgroups, general geometry,
+additional argument layouts, concurrent jobs, broader mappings and graphics
+remain required functionality.
+
+Each dispatch has an immutable PDS data slot. The pinned three-constant generator
+emits 80 data bytes and 28 code bytes, including the conditional prelude. Data
+slots round up to 128 bytes. Shared code occupies a 64-byte slot at offset 3,968,
+followed by 64 zero bytes. Thus the existing 4 KiB PDS page holds 31 data slots
+and shared code. Logical PDS extent grows from 128 bytes to the complete page;
+the native mapping and publication cover that complete extent. The existing
+88-page workload reservation requires no additional page.
+
+The CDM stream contains one 28-byte kernel per dispatch, then the existing
+28-byte final fence kernel and four-byte termination. Its largest form occupies
+900 bytes. Termination stays outside the final 64-byte page guard defined by
+Mesa's `cdm.xml`. One firmware compute command and one timeline UPDATE enclose
+the complete stream. Partial group completion cannot expose output: acquisition
+requires the final timeline sequence and intact guards.
+
+Mesa's DOUTW constants use H32/L32 storage order, while the even input register
+receives the low half. The tile pair therefore packs tile count in the high half
+and first index in the low half. The native bytes at PDS slot offsets 32 and 36
+contain tile count and first index respectively.
 
 The package preserves Mesa's eight-byte `pco_precomp_data` header. Its instruction
 length, temporary registers, input registers, coefficients and shared registers
 must agree with the exported compiler metadata. The compiler can report zero
-allocated input registers for explicit input-register intrinsics; this ABI still
-supplies four registers. Coefficients and shared registers must be zero.
+allocated input registers for explicit input-register intrinsics. The host exports
+the actual register-use mask after NIR lowering and requires precisely registers
+zero through five for version two. Its ABI reserves all six despite the raw
+allocation count. The original compiler header remains unchanged. Coefficients
+and shared registers must be zero.
 
 Temporary registers use the upstream DOUTU encoding: round up to four-register
 blocks and encode the six-bit block count at bit 35. Four pointer registers use
-one 16-byte CDM unified allocation unit. Native PDS and CDM bytes match the pinned
+one 16-byte CDM unified allocation unit; six registers use two units. Native PDS
+and CDM bytes match the pinned
 Mesa generators for both checked programs. The conditional PDS prelude and final
 fence remain; they do not add support for barriers inside a kernel.
 
@@ -64,23 +108,24 @@ No runtime compiler or filesystem is required. Existing MIT notices remain intac
 
 The host [compiler tool](../apps/gpu-program/compile.py) adds metadata export to a
 private copy of the pinned `pco_clc` source. Compilation passes are unchanged.
-It exports the final `pco_data`, rejects unsupported requirements and records the
+It exports the final `pco_data` and lowered NIR input-register use, rejects
+unsupported requirements and records the
 actual compiler executable, source, SPIR-V, USC and command identities. Its raw
 outputs and instrumented source stay outside the repository. Use explicit cache
 paths for Mesa source/build, Ninja and the output directory:
 
 ```sh
 python3 apps/gpu-program/compile.py compile \
-  --source shaders/pvr_vector_add.cl --mesa "$MESA_SOURCE" \
+  --profile 2 --source shaders/pvr_vector_add_dispatch.cl --mesa "$MESA_SOURCE" \
   --build "$MESA_BUILD" --ninja "$NINJA" --output "$PROGRAM_BUILD"
 python3 apps/gpu-program/compile.py package \
   --program "$PROGRAM_BUILD/program.bin" \
   --manifest "$PROGRAM_BUILD/manifest.json" --input "$INPUT" \
-  --output-bytes 508 --input-header-bytes 4 --input-element-bytes 8 \
+  --output-bytes 132 --input-header-bytes 4 --input-element-bytes 8 \
   --output-element-bytes 4 --output "$PACKAGE"
 ```
 
-The example expects 127 elements. Vector addition stores the count followed by
+The example expects 33 elements in two dispatches. Vector addition stores the count followed by
 two unsigned 32-bit vectors. The separate affine program stores count, factor,
 bias and one vector. Arithmetic wraps modulo 2^32. These are validation consumers;
 the runtime contains no program-name or executable-hash allowlist.
@@ -109,19 +154,23 @@ entry, recovery and ownership evidence; the host helpers do not establish it.
 ## Selected evidence
 
 Evidence resides in
-`~/.cache/sunstoneos/evidence/gpu-program-submission-20261019/`.
-The compiler emits 328 USC bytes with 12 temporary registers for affine arithmetic
-and 400 bytes with 13 temporary registers for vector addition. Both report the
-supported workgroup and no unsupported memory or synchronization requirements.
+`~/.cache/sunstoneos/evidence/gpu-dispatch-geometry-20261019/`.
+Version two emits 264 USC bytes for affine arithmetic and 320 for vector addition.
+Both use nine temporary registers and report the required six-register mask,
+32-lane workgroup and no unsupported memory or synchronization requirements.
+Both binaries match output from the unchanged pinned compiler.
 
-Six sanitizer/model cases cover both programs at counts one, 37 and 127. Every
-case matches upstream PDS/CDM bytes and returns the modeled device-written output.
-Count/extent and unsupported-register refusals pass. A damaged guard retains the
-job. Native FreeRTOS composition covers publication, owner-only access, timeline
-completion and paged copied output for 127 elements. These models supply GPU
-writes; they do not execute USC or establish physical cache visibility.
+Six sanitizer/model cases cover both programs at one and 33 elements, plus
+992 affine elements and 511 vector-add elements. Every case compares complete
+PDS/CDM pages with upstream generators and returns modeled device-written output.
+A near-limit heap layout and a legacy package also pass. Invalid geometry,
+capacity, extent and register-mask cases are refused. A damaged guard retains
+the job. Native FreeRTOS composition covers full-page PDS mapping/publication,
+owner-only access, final timeline completion and paged copied output for all
+992 elements. These models supply GPU writes; they do not execute USC or
+establish physical cache visibility.
 
-Host checks bind both packages to the same ELF, reject missing source review and
+Host checks bind both two-dispatch packages to the same ELF, reject missing source review and
 changed provenance, preserve complete copied envelopes across the actual linked
 BSS-clear bounds, and decode paged output. The native image links with the actual
 reserved-memory, GPU and USB providers. No board access or benchmarks ran.

@@ -119,6 +119,23 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
     if(word(command,4)!=(PVR_CCB_MAGIC|101u))return firmware_fixture_kick(ctx,off,value);
     callback(ctx);configASSERT(off==0xb00&&!value&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&get(&published));
+#ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
+    if(compute_service_case==12&&fixture_package.profile==2) {
+        const struct pvr_mips_buffer *pds=&computation.buffers[PVR_JOB_PDS];
+        unsigned last=fixture_package.dispatch_count-1,first=last*32;
+        unsigned count=fixture_package.count-first;if(count>32)count=32;
+        configASSERT(pds->page_count==1&&pds->storage.bytes==4096&&job_config.buffers[PVR_JOB_PDS].bytes==4096);
+        const unsigned char *data=pds->storage.cpu;
+        configASSERT(word(data+last*128+32,4)==count&&word(data+last*128+36,4)==first);
+        configASSERT(word(data+PVR_COMPUTE_DISPATCH_PDS_CODE,4)==0xc1100001u);
+        unsigned mapping=0;
+        for(unsigned i=0;i<computation.map_count;++i)if(computation.maps[i].address==job_config.buffers[PVR_JOB_PDS].gpu) {
+            configASSERT(computation.maps[i].physical==pds->pages[0]&&computation.maps[i].bytes==4096&&
+                computation.maps[i].page_shift==12&&computation.maps[i].flags==PVR_GPU_VM_READ_ONLY);++mapping;
+        }
+        configASSERT(mapping==1);
+    }
+#endif
     configASSERT(word(command+8,4)==job_config.firmware_context);
     unsigned char *ring=(unsigned char *)computation.firmware[3].storage.cpu+compute.client.cursor-184;
     configASSERT(word(ring,4)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u));
