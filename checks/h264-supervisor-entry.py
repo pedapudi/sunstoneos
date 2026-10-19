@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check H.264 capture policy through the real supervisor, stopping before access."""
+"""Check a capture caller through the real supervisor, stopping before access."""
 import argparse
 import ast
 import importlib.util
@@ -14,8 +14,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fel', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--caller', type=Path,
+                        default=Path('tools/check-a733-h264-supervised.py'))
+    parser.add_argument('--case', action='append', choices=('actual', 'overlong', 'unknown'))
     args = parser.parse_args()
-    source = ROOT / 'tools/check-a733-h264-supervised.py'
+    source = ROOT / args.caller
     spec = importlib.util.spec_from_file_location('h264_supervisor_entry', source)
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
@@ -40,9 +43,12 @@ def main():
     settings = SimpleNamespace(fel=args.fel, evidence=unused)
     cases = []
     for name, seconds, key, accepted in (
-            ('actual-H264-caller', policy['capture_seconds'], policy['result_key'], True),
-            ('overlong-H264-capture', 60, policy['result_key'], False),
-            ('unknown-result-key', policy['capture_seconds'], 'unknown_result', False)):
+            ('actual', policy['capture_seconds'], policy['result_key'], True),
+            ('overlong', 180 if policy['result_key'] == 'mimus_result' else 60,
+             policy['result_key'], False),
+            ('unknown', policy['capture_seconds'], 'unknown_result', False)):
+        if args.case and name not in args.case:
+            continue
         reached.clear()
         try:
             host.supervisor.run_session(settings, unused, {}, ready, forbidden, forbidden,
@@ -58,11 +64,11 @@ def main():
         assert not unused.exists()
         cases.append({'case': name, 'accepted_to_readiness': accepted})
     args.output.write_text(json.dumps({'passed': True, 'physical_access': False,
-        'fel_sha256': host.supervisor.digest(args.fel), 'caller_policy': policy,
+        'fel_sha256': host.supervisor.digest(args.fel), 'caller': str(source), 'caller_policy': policy,
         'cases': cases, 'scope': 'Actual capture-policy and FEL-identity checks. '
         'Readiness callback stops before queue checks, evidence-directory creation '
         'or USB access; no transport, native execution or physical qualification.'}, indent=2) + '\n')
-    print('PASS actual H264 supervisor entry and capture-bound refusals')
+    print('PASS supervisor entry:', source, [case['case'] for case in cases])
 
 
 if __name__ == '__main__':

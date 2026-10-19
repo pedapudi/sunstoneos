@@ -144,6 +144,10 @@ If setup fails, preserve completed cases, fix the cause and resume only affected
 or unexecuted work. Model hardware effects explicitly; do not present injected
 GPU outputs, simulated NPU results or emulated interrupts as physical operation.
 Host capture must match the frozen native producer's mode and result layout.
+For a new supervised caller, check its actual `run_session` entry policy as well
+as its capture callback. Direct callback fixtures missed unsupported result keys
+for H.264 and DSI. Reuse `checks/h264-supervisor-entry.py --caller <path> --case actual`
+to stop at readiness before queue or device access; do not replay unchanged cases.
 
 Hand off changed behavior, frozen artifacts, checks and their limits, unresolved
 physical prerequisites, and the smallest next board procedure. Use existing
