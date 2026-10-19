@@ -1,32 +1,38 @@
 # Current work
 
-The corrected complete eight-core image produced no native USB result on the
-original board. Its single refusal-report read timed out after the observation
-window, and device communication stopped. Scheduler execution remains
-unobserved; this result does not locate the failure. Evidence:
-`smp-secure-pmr-20261018/full-image/runtime/`. Original USB instance `003:115`
-on port `3-1` is quarantined. Runner PID `20961`, coordinator PID `20885`, exec
-session `21236` and queue claim
-`4add2b8d90d571b07560a36153e6cd1b5e631831ee52f1ce6f5506abecab0bc0`
-retain ownership. Manual power removal was requested; verify the exact live
-process and a new instance before recovery. Do not repeat this image unchanged.
+Both boards have completed user-confirmed power removal and reconnection. USB
+is their only power source. The original board on port `3-1` is now `003:118`;
+the second on `3-3` is `003:117`. Each answered the A733 ROM identity request,
+and reconnect permissions remain present. The old retained runners and their
+coordinators have stopped. Both failed queue claims are closed and both queues
+resumed. Evidence: `usb-only-recovery-20261018/recovery.json`. Cold DDR
+initialization and current launch admission remain prerequisites for native execution.
 
-The first single-core GPU attempt on the second board also produced no native
-USB result. After the observation window, its sole refusal-report read timed
-out. GPU initialization and computation remain unobserved; this does not locate
-the failure or establish a shared cause with multicore. Instance `003:116` on
-port `3-3` is quarantined. Runner PID `39986`, coordinator PID `39981`, exec
-session `26661` and claim
-`828d27d68a57bd1ebf0b844bc03acb2fd5808b00b7e2f422dedcd519118166cb`
-retain ownership. Evidence:
-`gpu-single-core-20261018/physical-candidate-116/runtime/`. Both boards now need
-confirmed power removal before reuse. Do not repeat either image unchanged.
-Root owns common startup diagnosis. The GPU worker found that the compute
-client can start GPU OPEN after PMIC readiness while USB is still starting.
-A GPU fault sets the shared fatal flag, which can stop USB before enumeration.
-The worker is correcting this application ordering so a missing USB result can
-be distinguished from a later GPU failure. This source finding does not establish
-the physical failure's cause; shared faults must still stop affected services.
+The preceding complete eight-core image and first single-core GPU image both
+produced no native USB result. Each sole refusal-report read timed out, and
+communication stopped. Scheduler execution, GPU initialization and GPU computation
+remain unobserved. These results do not locate either failure or establish a
+shared cause. Preserve `smp-secure-pmr-20261018/full-image/runtime/` and
+`gpu-single-core-20261018/physical-candidate-116/runtime/`; do not repeat either
+image unchanged.
+
+The integrated GPU application now waits for a complete pending-status USB IN
+transfer before opening the GPU. Eleven focused application cases passed and
+the frozen image received independent review. Evidence:
+`gpu-usb-ordering-20261018/handoff.json`. This improves failure observation;
+it does not establish the previous failure's cause. Hardware validation remains
+outstanding. Root owns common startup and multicore diagnosis.
+
+The new boot-CPU cache diagnostic passes its instruction checks for EL3 cache
+adoption, exact restoration and retention on restoration failure. It reuses the
+accepted primary preparation prefix. Evidence:
+`primary-cache-probe-20261018/software.json`. Host-runner integration and physical
+execution remain outstanding.
+
+Host USB power capacity and voltage under load are unmeasured. The board manual
+recommends 5 V / 3 A; this is a supply rating, not measured consumption. See
+[power](power.md) before interpreting a missing result as a software fault or
+power failure.
 
 The preceding returning diagnostic established timer and peer interrupt delivery
 on all seven secondary cores, coherent exchange on its single shared page,
@@ -49,8 +55,7 @@ checks are reused. Warm launcher preparation preceded the failed full-image atte
 additional DDR training occurred.
 
 Physical boot-CPU participation, general task-context handling and eight-core
-FreeRTOS scheduling remain outstanding. The failed full observer retains
-CPU, RAM and USB ownership and requires manual power removal.
+FreeRTOS scheduling remain outstanding. The failed full observer has been released after confirmed power removal.
 The returning diagnostic's cleanup covers SGI0/PPI30 and a single shared page;
 it does not qualify general peripheral interrupt or OS shutdown.
 

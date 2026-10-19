@@ -64,3 +64,27 @@ References are the [pinned board sources](sources.md): the bootloader's
 `include/sunxi_power/pmu_axp8191.h`, `drivers/sunxi_power/pmu_axp8191.c`,
 `include/sunxi_i2c.h`, and `drivers/i2c/sunxi_i2c.c`; the kernel's
 `ccu-sun60iw2-r.c`, `pinctrl-sun60iw2-r.c`, and board device tree.
+
+
+## Host USB supply remains unqualified under load
+
+The user confirmed that USB is the only power source for both attached boards.
+Unplugging that cable therefore removes their external power. Both boards answered
+new ROM identity requests after the confirmed reconnection; the recovery evidence
+is `usb-only-recovery-20261018/recovery.json`.
+
+The [board manual V1.0](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view)
+lists a 5 V / 3 A supply and recommends a high-quality adapter and cable. Its
+section 2.12 also cautions that computer USB power can be unstable with additional
+peripherals. The pinned local text is
+`~/.cache/sunstoneos/sources/board-documents/manual-v1.0.txt`.
+
+The host ports' available current, cable voltage drop and board input voltage
+under CPU or accelerator load have not been measured. The ROM descriptor's
+300 mA value is a descriptor declaration, not a current measurement or proof
+of available supply capacity. PMIC selector reads likewise do not measure rail
+stability. Supply limitation is a plausible contributor to startup failures;
+current evidence establishes no such cause. Prefer one useful voltage observation
+or a controlled comparison with a verified 5 V / 3 A source over repeated stress
+runs. Any alternate supply arrangement must preserve USB data and avoid feeding
+power back into the host.
