@@ -43,7 +43,10 @@ def main():
     for name in ('build', 'bundle', 'model', 'survey', 'fel', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--case', action='append')
+    parser.add_argument('--task-switch', action='store_true')
     a = parser.parse_args()
+    host = module('task_profile_host', ROOT/'tools'/(
+        'all-core-task-switch-host.py' if a.task_switch else 'all-core-first-task-host.py'))
     a.output.mkdir(parents=True, exist_ok=bool(a.case))
     manifest = json.loads((a.build/'manifest.json').read_text())
     host.load(a.build, a.bundle/'image.elf', manifest)
@@ -52,9 +55,9 @@ def main():
     assert host.digest(model_report) == instruction['report_sha256']
     raw = model_report.read_bytes()
     assert host.decode(raw, raw[32:48], manifest)['first_task_entry_completed']
-    evidence = {'success': a.model, **{case: a.model.parent/(case+'.json')
-                for case in ('wrong-task-argument', 'restore-el3')}}
-    proof = {'schema': 'a733-all-core-first-task-software-v1', 'physical_access': False,
+    instruction_cases = ('wrong-task-argument',) if a.task_switch else ('wrong-task-argument','restore-el3')
+    evidence = {'success': a.model, **{case: a.model.parent/(case+'.json') for case in instruction_cases}}
+    proof = {'schema': host.SOFTWARE_SCHEMA if a.task_switch else 'a733-all-core-first-task-software-v1', 'physical_access': False,
         'manifest_sha256': host.digest(a.build/'manifest.json'),
         'host_sources': {n: host.digest(ROOT/n) for n in host.HOST_SOURCES},
         'instruction_evidence': {case: {'path': str(path.resolve()), 'sha256': host.digest(path)}
@@ -72,10 +75,11 @@ def main():
         if case in host.CASES[:3]:
             assert shared.run_case(a, case, fixture, transform(raw))
         elif case == 'changed-input-refused':
-            for field in ('reservations', 'first_task'):
+            for field in ('reservations', 'first_task')+(('task_switch',) if a.task_switch else ()):
                 changed = json.loads((a.build/'manifest.json').read_text())
                 if field == 'reservations': changed[field][-1][2] -= 8
-                else: changed[field]['writable_interval'][1] -= 4096
+                elif field == 'first_task': changed[field]['writable_interval'][1] -= 4096
+                else: changed[field]['worker_body'] = True
                 try: host.load(a.build, a.bundle/'image.elf', changed)
                 except ValueError: pass
                 else: raise AssertionError('Changed owned-memory scope accepted')
@@ -84,7 +88,8 @@ def main():
                 'incomplete-primary-refused': ((0xa00, 2), (0x2000, 2), (0x2800, 2), (0x3028, 9279)),
                 'incomplete-participant-refused': ((512+6*256+216, 0), (0x3000+6*64, 2),
                     (0x3000+6*64+40, 9279), (0x2800+6*256, 2)),
-                'wrong-task-context-refused': tuple((0x3200+core*64+offset, 1 if offset in (32, 48) else 0)
+                'wrong-task-context-refused': tuple((0x3200+core*64+offset,
+                    (core ^ 1) if a.task_switch and offset == 48 else 1 if offset in (32, 48) else 0)
                     for core in range(8) for offset in (0, 8, 16, 24, 32, 40, 48, 56)),
                 'wrong-saved-frame-refused': tuple((0x3a00+core*256+offset, 99)
                     for core in range(8) for offset in (0, 8, 16, 24, 32, 40, 48, 56, 248)),

@@ -27,21 +27,23 @@ GEOMETRY = {
 }
 
 
-def task_context(core):
+def task_context(core, task_switch=False):
+    if task_switch:
+        return 0x41241498+core*168, (0x41201498+(core+1)*16384-8) & ~15
     tcb = 0x41288618 if core == 0 else 0x412896c0+(core-1)*168
     stack = 0x412886c0 if core == 0 else 0x41289b58+(core-1)*4096
     return tcb, (stack+4096-8) & ~15
 
 
-def decode(raw, nonce, manifest):
+def decode(raw, nonce, manifest, task_switch=False):
     hooks = manifest['hooks']
     result = base.decode(raw, nonce, hooks['el1_smc_return'], first_task=True)
     epoch, deadline = result['epoch'], result['startup_deadline']
     entries = []
     for core in range(8):
-        tcb, stack = task_context(core)
+        tcb, stack = task_context(core, task_switch)
         record = struct.unpack_from('<8Q', raw, 0x3200+core*64)
-        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0, tcb, 0, 0x30d41805),
+        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0, tcb, core if task_switch else 0, 0x30d41805),
                 'First-task context, publication or SCTLR differs.')
         saved = struct.unpack_from('<32Q', raw, 0x3a00+core*256)
         require(saved[:8] == (hooks['el1_observe_checkpoint']+4, 0x4124b000+core*32768,
@@ -56,6 +58,9 @@ def decode(raw, nonce, manifest):
     result.update(first_task_entry_completed=True, task_contexts=entries,
                   owned_writable_interval=[0x41200000, 0x41291000],
                   task_bodies_executed=False, workload_scheduling_qualified=False)
+    if task_switch:
+        result.update(task_switch_completed=True, task_bodies_executed=True,
+                      idle_bodies_executed=True, worker_bodies_executed=False)
     return result
 
 
@@ -63,8 +68,9 @@ probe = SimpleNamespace(NATIVE=base.probe.NATIVE, REPORT=base.probe.REPORT, deco
 initial_report = base.initial_report
 
 
-def load(build, image, manifest):
-    frozen, dram = base.cache.local.identity.load(build, image, manifest, first_task=True)
+def load(build, image, manifest, task_switch=False):
+    frozen, dram = base.cache.local.identity.load(build, image, manifest,
+                                                  first_task=True, task_switch=task_switch)
     require(manifest.get('first_task') == {
         'physical_eligible': False, 'writable_interval': [0x41200000, 0x41291000],
         'cache_lines_per_core': 9280, 'task_bodies': False, 'timer_and_sgi_workload': False,
@@ -73,9 +79,11 @@ def load(build, image, manifest):
     with image.open('rb') as stream:
         elf = ELFFile(stream)
         symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
-        for name, expected in GEOMETRY.items():
+        geometry = {'worker': (0x41001280,372), 'tasks': (0x41241498,2688),
+                    'stacks': (0x41201498,262144)} if task_switch else GEOMETRY
+        for name, expected in geometry.items():
             require([(s['st_value'], s['st_size']) for s in symbols if s.name == name] == [expected],
-                    'Idle task layout changed: '+name)
+                    'Task layout changed: '+name)
         data, bss = (elf.get_section_by_name(n) for n in ('.data', '.bss'))
         require(data['sh_addr'] == 0x41200000 and data['sh_addr']+data['sh_size'] <= 0x41201000 and
                 bss['sh_addr'] == 0x41201000 and bss['sh_addr']+bss['sh_size'] == 0x41290d10,

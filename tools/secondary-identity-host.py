@@ -62,13 +62,14 @@ def initial_report(nonce):
     return primary.initial_report(nonce)+bytes(0x900)
 
 
-def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False):
+def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False, task_switch=False):
+    first_task = first_task or task_switch
     pre_scheduler = pre_scheduler or first_task
     coherent = coherent or interrupts or pre_scheduler
     cached = cached or coherent
     local = local or cached
     report=(builder.REPORT[0],0x5100 if pre_scheduler else 0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else builder.REPORT
-    require(manifest.get('schema') == ('a733-all-core-first-task-probe-v1' if first_task else 'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
+    require(manifest.get('schema') == ('a733-all-core-task-switch-probe-v1' if task_switch else 'a733-all-core-first-task-probe-v1' if first_task else 'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
             'Wrong secondary identity profile.')
     names = ('boot/a733/secondary-identity-probe.c','boot/a733/secondary-identity-probe.S',
@@ -130,6 +131,11 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
             (n['prvIdleTask'],0xa9be7bfd,builder.branch(n['prvIdleTask'],hooks['identity_first_task_el0'])),
             (n['prvPassiveIdleTask'],0xd4000d21,builder.branch(n['prvPassiveIdleTask'],hooks['identity_first_task_el0'])),
             (n['FreeRTOS_SWI_Handler'],0xa9bf07e0,builder.branch(n['FreeRTOS_SWI_Handler'],hooks['identity_first_task_svc']))]
+        if task_switch:
+            first_patches=first_patches[:3]+[
+                (n['a733_observe_service_start'],0xa9bf7bfd,0xd65f03c0),
+                (n['worker'],0xa9bc7bfd,builder.branch(n['worker'],hooks['identity_first_task_el0'])),
+                first_patches[-1]]
     for item in base['payloads']:
         data = bytearray(frozen[item['name']])
         if item['address'] <= target < item['address']+len(data):

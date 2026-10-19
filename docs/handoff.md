@@ -26,8 +26,11 @@ owned-memory cleaning and matched return pass; a wrong worker argument retains
 all cores before cleanup. Evidence: `all-core-task-switch-20261018/`, accepted
 bundle `build-no-observer/`. The frozen image's higher-priority USB observer is
 suppressed in this CPU-only diagnostic. Worker bodies and timer/SGI workloads
-remain excluded. Host report validation and root review are required before any
-future physical use; the current runner does not admit this new schema.
+remain excluded. Nine host cases and root source review now pass. The runner
+validates worker contexts, return frames and memory bounds, restores saved RAM
+on completed return, and retains transport failures. Evidence: `host/software.json`
+and `host-root-review.json` in the same directory. Physical use still requires
+fresh board admission and available manual recovery; no test is queued.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;

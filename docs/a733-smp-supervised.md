@@ -1516,9 +1516,12 @@ All eight idle yields and worker selections pass, followed by the complete
 worker argument retains all cores without cache cleanup or shutdown. Evidence:
 `all-core-task-switch-20261018/software-no-observer.json` and
 `wrong-task-argument.json`; accepted bundle: `build-no-observer/` in that directory.
-These are modeled instruction results. Host report validation, root review and
-physical qualification remain required. The physical runner rejects the new
-schema until its corresponding host support is implemented.
+Nine host cases also pass with the actual runner and modeled FEL transport. They
+cover worker contexts, saved return frames, owned-memory bounds, RAM restoration
+and failure retention. Evidence: `host/software.json` in the same directory.
+The host validates the exact constructor/worker patches and frozen task geometry.
+Root source review passes; fresh board admission and physical qualification
+remain required. No board test is queued while manual recovery is unavailable.
 
 ## All eight CPUs complete the production barrier and atomic increments
 
