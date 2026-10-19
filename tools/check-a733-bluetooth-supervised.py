@@ -21,8 +21,10 @@ PRODUCT='sunstoneos Bluetooth HCI'
 SERIAL='sunstoneos-a733-bluetooth'
 
 
-def capture(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,segments=2):
+def capture(exchange,session,profile,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,segments=2,pcm=None,build_id=None):
     preparation.profile_check(profile,session)
+    if len(profile)>=752 and struct.unpack_from('<I',profile,624)[0] in (4,5):
+        return capture_playback(exchange,session,profile,evidence,record,save,deadline,pcm,build_id,now,pause)
     if len(profile)==832 and struct.unpack_from('<I',profile,624)[0] in (2,3):
         return capture_repeated(exchange,session,profile,evidence,record,save,deadline,segments,now,pause)
     if len(profile)>=752:
@@ -186,24 +188,106 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
     raise supervisor.CaptureWindowExpired('Repeated headset exhausted query budget.')
 
 
-def capture_device(device,same,deadline,session,profile,evidence,record,save,segments=2):
+def capture_playback(exchange,session,profile,evidence,record,save,deadline,pcm,build_id,now=time.monotonic,pause=time.sleep):
+    require(pcm is not None and 0<len(pcm)<=2400*256 and len(pcm)%2400==0 and build_id,'Bounded PCM and frozen build identity required.')
+    mode=struct.unpack_from('<I',profile,624)[0];periods=len(pcm)//2400
+    record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved',caller_pcm_sha256=hashlib.sha256(pcm).hexdigest(),caller_pcm_bytes=len(pcm));save()
+    supervisor.durable_frame(evidence/'caller-pcm.bin',pcm)
+    queries=0;next_ticket=1;offset=0;sealed=False;results=[];transcripts=[];lifetime=None;last_status=None;capture_failure=False;capture_lifetime=None
+    def query(op,ticket=0,start=0,payload=b''):
+        nonlocal queries,lifetime,last_status
+        require(now()<deadline and queries<16384,'Playback query/deadline budget expired.');queries+=1
+        frame=exchange(struct.pack('<BBHIQ',0x81,op,len(payload),start,ticket)+payload,min(500,max(1,int((deadline-now())*1000))))
+        supervisor.durable_frame(evidence/f'playback-{queries:05}.bin',frame)
+        value=decoder.decode_playback(frame,session,profile)
+        require(value['build_id']==build_id and value['op']==op,'Playback build/operation identity differs.')
+        require(value['state']!=2 and (value['outcome']!=3 or (op in (1,2) and value['sealed'])),'Playback retained failure or rejected operation.')
+        if value['state']==1:
+            current=tuple(value[k] for k in ('firmware','uart','acl','audio','codec','rate'))
+            require(lifetime is None or current==lifetime,'Playback lifetime changed.')
+            require(capture_lifetime is None or current==capture_lifetime,'Playback/capture lifetime differs.');lifetime=current
+        last_status=value;return value
+    def drain_result(value):
+        if value['state']!=1:return value
+        ticket=value['ticket'];require(ticket==len(results)+1 and ticket<=periods,'Playback result ticket differs.')
+        require(value['sha256']==hashlib.sha256(pcm[(ticket-1)*2400:ticket*2400]).hexdigest(),'Playback PCM identity differs.')
+        results.append(value);return query(3,ticket)
+    def transcripts_step():
+        if mode!=5:return None
+        nonlocal queries,capture_failure,capture_lifetime
+        require(now()<deadline and queries<16384,'Duplex transcript budget expired.');queries+=1
+        frame=exchange(struct.pack('<BBHIQ',0x80,0,0,0,0),500)
+        supervisor.durable_frame(evidence/f'duplex-{queries:05}.bin',frame)
+        value,data=decoder.decode_repeated(frame,session,profile,0)
+        require(not(value['state']==3 and not value['flags']),'Duplex capture authorization/identity failed; output retained.')
+        capture_failure=capture_failure or value['state']==3 or bool(value['flags']&~3)
+        if value['ticket']:
+            ticket=value['ticket'];require(ticket==len(transcripts)+1 and value['codec']==2,'Duplex transcript codec/ticket differs.')
+            current=tuple(value[k] for k in ('firmware','uart','acl','audio','codec','sample_rate'))
+            require((lifetime is None or current==lifetime) and (capture_lifetime is None or current==capture_lifetime),'Duplex playback/capture lifetime differs.');capture_lifetime=current
+            identity={k:v for k,v in value.items() if k not in ('state','copied','returned','published','consumed','flags','disconnected','finished')}
+            text=bytearray()
+            while len(text)<value['bytes'] or not value['bytes']:
+                count=min(1024,value['bytes']-len(text));queries+=1
+                require(now()<deadline and queries<16384,'Duplex transcript copy budget expired.')
+                frame=exchange(struct.pack('<BBHIQ',0x80,1,count,len(text),ticket),500)
+                supervisor.durable_frame(evidence/f'duplex-{queries:05}.bin',frame)
+                copied,part=decoder.decode_repeated(frame,session,profile,len(text))
+                require({k:v for k,v in copied.items() if k not in ('state','copied','returned','published','consumed','flags','disconnected','finished')}==identity,'Duplex copied transcript changed.')
+                require(len(part)==count,'Duplex transcript copy extent differs.');text.extend(part)
+                if not value['bytes']:break
+            require(hashlib.sha256(text).hexdigest()==value['text_sha256'],'Duplex transcript digest differs.')
+            queries+=1;frame=exchange(struct.pack('<BBHIQ',0x80,2,0,0,ticket),500)
+            supervisor.durable_frame(evidence/f'duplex-{queries:05}.bin',frame)
+            decoder.decode_repeated(frame,session,profile,0)
+            supervisor.durable_frame(evidence/f'duplex-transcript-{ticket:03}.txt',text);transcripts.append(value)
+        return value
+    try:
+        for _ in range(16384):
+            value=drain_result(query(0))
+            sealed=sealed or bool(value['sealed'])
+            if next_ticket<=periods and not sealed and value['free_slots']:
+                period=pcm[(next_ticket-1)*2400:next_ticket*2400]
+                if offset<2400:
+                    part=period[offset:offset+1024];answer=query(1,next_ticket,offset,part)
+                    if answer['outcome']==1:offset+=len(part)
+                else:
+                    answer=query(2,next_ticket,payload=hashlib.sha256(period).digest())
+                    if answer['outcome']==1:next_ticket+=1;offset=0
+            elif next_ticket>periods and not sealed:query(4);sealed=True
+            capture=transcripts_step()
+            if last_status['disconnected'] and len(results)==last_status['accepted'] and (mode!=5 or (capture and capture['finished'] and capture['published']==capture['consumed']==len(transcripts))):
+                failed=any(r['flags'] for r in results) or capture_failure or last_status['accepted']!=periods
+                outcome={'periods':results,'transcripts':transcripts,'status':last_status,'scope':'Caller PCM consumed/encoded and controller buffers accounted; no headset-rendering or wire-drain claim.'}
+                record.update(bluetooth_result='observed-failure' if failed else 'observed-success',durable_result=outcome)
+                try:save()
+                except BaseException:record['bluetooth_result']='unobserved';record.pop('durable_result',None);raise
+                return outcome
+            pause(.005)
+    except BaseException:
+        record['bluetooth_result']='unobserved';record.pop('durable_result',None);raise
+    raise supervisor.CaptureWindowExpired('Playback query budget exhausted.')
+
+
+def capture_device(device,same,deadline,session,profile,evidence,record,save,segments=2,pcm=None,build_id=None):
     def exchange(packet,timeout):
         same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete Bluetooth request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'Bluetooth capture deadline expired after write.')
-        if len(profile)==832 and struct.unpack_from('<I',profile,624)[0] in (2,3):
+        if len(profile)>=752 and struct.unpack_from('<I',profile,624)[0] in (2,3,4,5):
             output=bytearray();extent=None;empty=0
             while extent is None or len(output)<extent:
                 same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'Repeated Bluetooth response deadline expired.')
                 part=bytes(device.read(0x81,1296,timeout=min(timeout,remaining)))
                 if not part:empty+=1;require(empty<=16,'Repeated Bluetooth empty-transfer budget expired.');continue
                 output.extend(part);require(len(output)<=1296,'Repeated Bluetooth response overflow.')
-                if extent is None and len(output)>=272:
+                if extent is None and packet[0]==0x81 and len(output)>=332:extent=332
+                if extent is None and packet[0]!=0x81 and len(output)>=272:
                     count=struct.unpack_from('<I',output,12)[0];require(count<=1024,'Repeated transcript response too large.');extent=272+count
                 require(extent is None or len(output)<=extent,'Repeated Bluetooth response overflow.')
             return bytes(output)
         return bytes(device.read(0x81,1232 if len(profile)==832 else 1184 if len(profile)==752 else 177,timeout=min(timeout,remaining)))
-    return capture(exchange,session,profile,evidence,record,save,deadline,segments=segments)
+    return capture(exchange,session,profile,evidence,record,save,deadline,segments=segments,pcm=pcm,build_id=build_id)
 
 
 def source_files():
@@ -286,19 +370,24 @@ def claimed(database,test_id,owner,bundle,prepared):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--pcm',type=Path,help='Runtime mono S16LE16k input, a nonempty multiple of2400bytes; playback/duplex modes only')
     parser.add_argument('--segments',type=int,default=2,help='Mode2 transcript target before capture cancellation,1..32')
     parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release Bluetooth resources.')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];profile=frozen['profile.bin'];template=frozen['session-template.bin']
+    pcm=args.pcm.read_bytes() if args.pcm else None
+    mode=struct.unpack_from('<I',profile,624)[0] if len(profile)>=752 else 0
+    require((mode in (4,5))==(pcm is not None),'Caller PCM is required exactly for playback/duplex profiles.')
+    if pcm is not None:require(0<len(pcm)<=2400*256 and len(pcm)%2400==0,'Caller PCM must contain1..256 complete2400byte periods.')
     evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):
         preparation.board.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),evidence,True)
         require(admission['identity']==identity and admission['port']==port,'Bluetooth entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,profile,args.evidence,record,save,args.segments),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,profile,args.evidence,record,save,args.segments,pcm,prepared['build_id']),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='bluetooth_result',
         source_files=source_files(),description='Supervised native Bluetooth; retain every resource until whole-board power removal')
 

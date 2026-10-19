@@ -7,5 +7,6 @@ int bluetooth_msbc_init(void);
 /* Feed one copied transparent byte.1 yields240 bytes of S16LE16k PCM;0 pending;
  * -1 framing/sequence/codec loss. HCI status loss is checked by the caller. */
 int bluetooth_msbc_byte(uint8_t,uint64_t,uint8_t[240],uint64_t *);
+int bluetooth_msbc_encode(const uint8_t[240],uint8_t[60]);
 int bluetooth_msbc_silence(uint8_t[60]);
 #endif

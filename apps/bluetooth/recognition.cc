@@ -134,6 +134,16 @@ extern "C" void platform_puts(const char *text)
 }
 extern "C" void platform_hex(uint64_t value)
 {static const char hex[]="0123456789abcdef";char text[17];for(unsigned i=0;i<16;++i)text[i]=hex[(value>>(60-4*i))&15];text[16]=0;platform_puts(text);}
+extern "C" int bluetooth_playback_runtime_start(bluetooth_application *app)
+{
+    if(!app||!bluetooth_headset_wideband(app)||bluetooth_headset_repeated(app)||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    runtime_smp_init();runtime_init();
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+    return bluetooth_msbc_init()==1;
+#else
+    return 0;
+#endif
+}
 extern "C" int bluetooth_recognition_start(bluetooth_application *app,const bluetooth_recognition_profile *models,uint64_t deadline)
 {
     if(!app||!models||retained.app||!deadline||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;

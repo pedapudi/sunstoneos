@@ -1,16 +1,17 @@
 # Bluetooth headset audio over HCI
 
 The synchronous audio worker binds an established Hands-Free Profile (HFP)
-audio-gateway session to SCO or eSCO transport. It exchanges signed 16-bit,
-8 kHz PCM samples through standard HCI commands and H4 UART packets. CVSD is
-the radio codec. The implementation is host-model work; controller acceptance,
-headset interoperability and microphone capture require physical qualification.
+audio-gateway session to SCO or eSCO transport. It exchanges signed 16-bit
+8 kHz PCM for CVSD, or transparent H2-framed mSBC with copied 16 kHz PCM, through
+standard HCI commands and H4 UART packets. Native integration has source, codec
+and modeled-controller evidence; controller acceptance, headset interoperability,
+capture and playback require physical qualification.
 
 The Orange Pi is the audio gateway and the headset is the hands-free device.
 HFP 1.9 §4.11 permits an audio connection without an active call. Audio admission
 requires the actual AG service-level connection, retained RFCOMM/L2CAP/ACL
 identity and a current security provider. It does not change call or service
-indicators. Pairing, keys and encryption remain required platform work.
+indicators. The existing security owner must establish pairing, keys and encryption.
 
 ## Controller configuration precedes every connection
 
@@ -168,3 +169,13 @@ one bounded supervised session. Two input slots and exact transcript delivery
 acknowledgments provide backpressure; capture stops on backlog or loss. This
 application extension keeps the existing CVSD negotiation and disconnect path.
 Physical capture and wideband mSBC remain unqualified.
+
+The native mSBC application supports caller-supplied mono S16LE 16 kHz playback
+and simultaneous repeated capture/recognition. Two bounded copied input periods
+feed the existing codec and HCI owner. Caller consumption, local UART completion,
+controller-buffer release and disconnect flushing remain separate observations;
+none establishes headset rendering. Playback-only releases and counts incoming
+audio. Duplex preserves accepted capture/transcript ownership when backpressure
+stops admission. See the [native application contract](bluetooth-native.md#caller-pcm-playback-and-duplex)
+for input, result, cancellation and rate limits. Physical playback and duplex
+operation remain unqualified.

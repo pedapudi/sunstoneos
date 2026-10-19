@@ -71,7 +71,7 @@ endif()
       list(APPEND bluetooth_sbc_inputs "${SUNSTONE_BT_SBC_DIR}/${name}")
     endforeach()
     list(APPEND bluetooth_sbc_inputs "${bluetooth_root}/apps/bluetooth/msbc-source.json")
-    set(bluetooth_sbc_sources "${bluetooth_root}/apps/bluetooth/msbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c")
+    set(bluetooth_sbc_sources "${bluetooth_root}/apps/bluetooth/msbc.c" "${bluetooth_root}/apps/bluetooth/playback.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc.c" "${SUNSTONE_BT_SBC_DIR}/sbc/sbc_primitives.c")
     list(APPEND bluetooth_manifest_recognition --msbc-inputs "${bluetooth_root}/apps/bluetooth/msbc-source.json")
     endif()
     set(bluetooth_recognition_sources ${bluetooth_sbc_sources}

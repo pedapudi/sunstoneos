@@ -14,14 +14,17 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--build',type=Path,required=True)
 p.add_argument('--setup-only',action='store_true')
+p.add_argument('--playback',action='store_true',help='New runtime caller PCM composition only')
 p.add_argument('--msbc',action='store_true',help='Build the new actual mSBC stack composition')
 p.add_argument('--repeated',action='store_true',help='Build only the new repeated headset composition')
 p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal'])
-a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+p.add_argument('--case',action='append',choices=['success','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication'])
+a=p.parse_args();
+if a.playback:a.msbc=True;a.recognition_profile=True
+out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 cache=Path('/home/sunil/.cache/sunstoneos');security=a.build/'bluetooth-application/security'
 reference=cache/'evidence/bluetooth-native-20261017/composition'
 cc='/usr/bin/clang-21';commands=[];executing_cases=False
@@ -45,10 +48,13 @@ if a.repeated:
 if a.msbc:
     sbc=cache/'sources/bluetooth-msbc'
     common+=['-I'+str(sbc),'-DSBC_HIGH_PRECISION=1','-DSUNSTONE_BLUETOOTH_MSBC=1']
-    sources+=['apps/bluetooth/msbc.c',str(sbc/'sbc/sbc.c'),str(sbc/'sbc/sbc_primitives.c')]
+    sources+=['apps/bluetooth/playback.c','apps/bluetooth/msbc.c',str(sbc/'sbc/sbc.c'),str(sbc/'sbc/sbc_primitives.c')]
+if a.playback:
+    sources[sources.index('checks/bluetooth-msbc.c')]='checks/bluetooth-playback.c'
+    sources.remove('apps/bluetooth/playback.c')
 def run(name,cmd):
     cmd=list(map(str,cmd));commands.append(cmd)
-    r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','ASAN_OPTIONS':'halt_on_error=1'})
+    r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','ASAN_OPTIONS':'halt_on_error=1','SUNSTONE_DUPLEX_PCM':str(out/'duplex-copied.pcm')})
     log=out/(name+'.log')
     if log.exists():
         prior=out/'prior'/hashlib.sha256(log.read_bytes()).hexdigest()/log.name;prior.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(log,prior)

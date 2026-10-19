@@ -15,6 +15,9 @@
 #include "result.h"
 #ifdef SUNSTONE_BLUETOOTH_HEADSET
 #include "headset.h"
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+#include "playback.h"
+#endif
 #endif
 extern struct bluetooth_application bluetooth;
 const uint8_t *tud_descriptor_device_cb(void)
@@ -25,6 +28,15 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  size_t n=strlen(names[i]);value[0]=(uint16_t)(0x0300+2*n+2);for(size_t j=0;j<n;++j)value[j+1]=(uint8_t)names[i][j];return value;}
 static uint8_t identity_frame[1296];
 static unsigned identity_bytes,identity_sent,identity_transferred;
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+static uint64_t playback_transfer,playback_delivered;
+static unsigned playback_payload_used,playback_payload_bytes;
+static uint8_t playback_request[16],playback_payload[1024];
+static uint64_t playback_request_deadline;
+static unsigned playback_header_active;
+static void playback_exchange(const uint8_t[16]);
+static void playback_ingest(void);
+#endif
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
 static uint64_t transcript_transfer,transcript_delivered;
 static unsigned transcript_offset,transcript_bytes,transcript_delivered_bytes;
@@ -87,23 +99,51 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
         transcript_transfer=0;
     }
 #endif
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+    if(playback_transfer){playback_delivered=playback_transfer;playback_transfer=0;}
+#endif
     identity_bytes=0;
  }}
 static void identity_exchange(void)
 {
     if(identity_bytes){identity_sent+=tud_vendor_write(identity_frame+identity_sent,identity_bytes-identity_sent);tud_vendor_flush();return;}
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+    if(playback_header_active&&a733_smp_counter()/24>=playback_request_deadline)stop();
+    if(playback_payload_bytes){playback_ingest();return;}
+#endif
     if(!tud_vendor_available())return;
     unsigned available=tud_vendor_available();
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
-    if(bluetooth_headset_repeated(&bluetooth)==1){
+    if(bluetooth_headset_repeated(&bluetooth)==1
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+       ||bluetooth_playback_mode(&bluetooth)
+#endif
+    ){
         static uint8_t request[16];static unsigned used;
         if(!used){if(tud_vendor_read(request,1)!=1)stop();used=1;--available;
             /* Keep the original one-byte identification query available. */
             if(!request[0]){used=0;goto identification;}
+            #ifdef SUNSTONE_BLUETOOTH_MSBC
+            if(bluetooth_playback_mode(&bluetooth)){
+                if(request[0]!=0x81&&(request[0]!=0x80||bluetooth.profile->headset.mode!=5))stop();
+                playback_header_active=1;uint64_t now=a733_smp_counter()/24;playback_request_deadline=now+bluetooth.profile->frame_timeout_us;
+                if(playback_request_deadline>bluetooth.deadline)playback_request_deadline=bluetooth.deadline;
+            }else
+#endif
             if(request[0]!=0x80)stop();}
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+        if(bluetooth_playback_mode(&bluetooth)&&a733_smp_counter()/24>=playback_request_deadline)stop();
+#endif
         unsigned n=16-used;if(n>available)n=available;
         if(n){unsigned got=tud_vendor_read(request+used,n);if(!got||got>n)stop();used+=got;}
-        if(used<16)return;used=0;repeated_exchange(request);return;
+        if(used<16)return;used=0;
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+        playback_header_active=0;
+#endif
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+        if(request[0]==0x81){playback_exchange(request);return;}
+#endif
+        repeated_exchange(request);return;
     }
 #endif
 #ifdef SUNSTONE_BLUETOOTH_HEADSET
@@ -170,5 +210,62 @@ static void repeated_exchange(const uint8_t request[16])
     put32(identity_frame+240,source.flags);put32(identity_frame+244,source.disconnected);
     put32(identity_frame+264,done==1);put32(identity_frame+268,op==1?offset:0);
     identity_sent=identity_transferred=0;identity_bytes=272+(r==1?(unsigned)copied:0);
+}
+#endif
+
+#ifdef SUNSTONE_BLUETOOTH_MSBC
+extern const unsigned char a733_smp_build_id[32];
+static void playback_response(unsigned op,int outcome)
+{
+    struct bluetooth_playback_result r={0};struct bluetooth_playback_status s={0};
+    int state=bluetooth_playback_copy(&bluetooth,&r,&s);
+    if(state<0){memset(&r,0,sizeof(r));memset(&s,0,sizeof(s));playback_transfer=0;playback_delivered=0;}
+    memset(identity_frame,0,sizeof(identity_frame));
+    put32(identity_frame,0x50505442);put32(identity_frame+4,1);put32(identity_frame+8,state<0?2:state);
+    put32(identity_frame+12,outcome<0?3:outcome?1:2);
+    put64(identity_frame+16,board.session.epoch);put64(identity_frame+24,board.session.generation);
+    memcpy(identity_frame+32,board.session.sid_evidence,32);
+    if(state==1){
+        put64(identity_frame+64,r.firmware);put64(identity_frame+72,r.uart);put64(identity_frame+80,r.acl);put64(identity_frame+88,r.audio);
+        put64(identity_frame+96,r.ticket);put64(identity_frame+104,r.encoded_samples);put64(identity_frame+112,r.submitted_bytes);
+        put64(identity_frame+120,r.uart_packets);put64(identity_frame+128,r.released_packets);put64(identity_frame+136,r.flushed_packets);put64(identity_frame+144,r.not_sent_packets);
+        memcpy(identity_frame+152,r.sha256,32);put32(identity_frame+184,r.flags);put32(identity_frame+188,r.codec);playback_transfer=r.ticket;
+    }
+    put32(identity_frame+192,16000);put32(identity_frame+196,BLUETOOTH_PLAYBACK_BYTES);
+    put64(identity_frame+200,s.accepted);put64(identity_frame+208,s.acknowledged);put64(identity_frame+216,s.silence_frames);
+    put64(identity_frame+224,s.discarded_packets);put64(identity_frame+232,s.discarded_bytes);put64(identity_frame+240,s.loss_packets);
+    put32(identity_frame+248,s.sealed);put32(identity_frame+252,s.cancelled);put32(identity_frame+256,s.disconnected);put32(identity_frame+260,s.free_slots);
+    put64(identity_frame+264,s.silence_uart);put64(identity_frame+272,s.silence_released);put64(identity_frame+280,s.silence_flushed);put64(identity_frame+288,s.silence_not_sent);
+    memcpy(identity_frame+296,a733_smp_build_id,32);put32(identity_frame+328,op);
+    identity_sent=identity_transferred=0;identity_bytes=332;
+}
+static int playback_apply(const uint8_t request[16],const uint8_t *payload)
+{
+    unsigned op=request[1];uint64_t ticket=repeated_u64(request+8);
+    unsigned offset=request[4]|(unsigned)request[5]<<8|(unsigned)request[6]<<16|(unsigned)request[7]<<24;
+    size_t n=request[2]|(unsigned)request[3]<<8;
+    if(op==1)return bluetooth_playback_write(&bluetooth,ticket,offset,payload,n);
+    if(op==2)return bluetooth_playback_commit(&bluetooth,ticket,payload);
+    if(op==3){if(ticket!=playback_delivered)return -1;int r=bluetooth_playback_ack(&bluetooth,ticket);if(r==1)playback_delivered=0;return r;}
+    if(op==4||op==5)return bluetooth_playback_end(&bluetooth,op==5);
+    return 1;
+}
+static void playback_ingest(void)
+{
+    if(a733_smp_counter()/24>=playback_request_deadline)stop();
+    unsigned n=playback_payload_bytes-playback_payload_used;if(n>tud_vendor_available())n=tud_vendor_available();
+    if(n){unsigned got=tud_vendor_read(playback_payload+playback_payload_used,n);if(!got||got>n)stop();playback_payload_used+=got;}
+    if(playback_payload_used==playback_payload_bytes){playback_payload_bytes=0;playback_response(playback_request[1],playback_apply(playback_request,playback_payload));}
+}
+static void playback_exchange(const uint8_t request[16])
+{
+    unsigned op=request[1],n=request[2]|(unsigned)request[3]<<8;
+    uint32_t offset=request[4]|(uint32_t)request[5]<<8|(uint32_t)request[6]<<16|(uint32_t)request[7]<<24;
+    uint64_t ticket=repeated_u64(request+8);
+    if(!bluetooth_playback_mode(&bluetooth)||op>5||n>1024||
+       (op==1&&(!n||!ticket))||(op==2&&(n!=32||offset||!ticket))||
+       (op!=1&&op!=2&&(n||offset))||(op==3&&!ticket)||((op==0||op==4||op==5)&&ticket))stop();
+    if(n){memcpy(playback_request,request,16);playback_payload_used=0;playback_payload_bytes=n;playback_ingest();return;}
+    playback_response(op,playback_apply(request,NULL));
 }
 #endif

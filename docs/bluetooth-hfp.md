@@ -186,3 +186,12 @@ one bounded supervised session. Two input slots and exact transcript delivery
 acknowledgments provide backpressure; capture stops on backlog or loss. This
 application extension keeps the existing CVSD negotiation and disconnect path.
 Physical capture and wideband mSBC remain unqualified.
+
+The optional native caller-PCM modes require a confirmed mSBC selection and reuse
+the existing transparent eSCO connection. They encode actual 16 kHz PCM with the
+pinned libsbc implementation; silence and caller audio share encoder history and
+H2 sequencing. They do not reinterpret 16 kHz input after a CVSD selection.
+Playback-only and capture/recognition duplex use the same authenticated HFP/HCI
+owner. [Their copied-input contract](bluetooth-native.md#caller-pcm-playback-and-duplex)
+retains the distinction between controller credits, disconnect flushing and
+unqualified acoustic delivery.

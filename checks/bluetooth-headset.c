@@ -118,7 +118,12 @@ static void wire_outputs(void)
         else {assert(p[0]==3);head=4;if(wire.tn-output_cursor<head)return;n=p[3];}
         if(wire.tn-output_cursor<head+n)return;
         if(p[0]==1)command_reply(get16(p+1),p+4,n);
-        else {uint8_t credits[]={1,p[1],(uint8_t)(p[2]&15),1,0};event(&wire,0x13,credits,5);if(p[0]==2){
+        else {uint8_t credits[]={1,p[1],(uint8_t)(p[2]&15),1,0};
+#ifdef BLUETOOTH_CHECK_PLAYBACK
+            if(p[0]==3)playback_observe(p+4,n);
+            if(p[0]!=3||!playback_hold_credits)
+#endif
+            event(&wire,0x13,credits,5);if(p[0]==2){
             if((p[2]>>4)==2){assert(!assembled_bytes&&n>=4);assembled_total=get16(p+5)+4;}
             else assert((p[2]>>4)==1&&assembled_bytes);
             assert(n<=sizeof(assembled)-assembled_bytes);memcpy(assembled+assembled_bytes,p+5,n);assembled_bytes+=n;
@@ -157,14 +162,18 @@ static void setup(void)
 #elif defined(BLUETOOTH_CHECK_REPEATED)
     profile.headset.mode=2;
 #endif
+#ifdef BLUETOOTH_CHECK_PLAYBACK
+    profile.headset.mode=playback_fixture_mode;profile.headset.samples=1200;
+    if(playback_fixture_mode==4){profile.version=2;profile.bytes=752;}
+#endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,60000000,digest));
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
     assert(app.radio_config.deadline_us==30000000&&app.session_config.bootstrap_deadline==30000000&&app.hci_deadline==35000000&&app.deadline==59990000);
     assert(stage_deadline(&app,48000000)==40000000&&stage_deadline(&app,59500000)==40000000);
-    profile.recognition.sha256[0][0]^=1;storage_digest_bytes(&profile,profile.bytes,digest);
+    if(profile.version==3){profile.recognition.sha256[0][0]^=1;storage_digest_bytes(&profile,profile.bytes,digest);
     assert(!bluetooth_profile_valid(&profile,digest));profile.recognition.sha256[0][0]^=1;
-    storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));
+    storage_digest_bytes(&profile,profile.bytes,digest);assert(bluetooth_profile_valid(&profile,digest));}
 #endif
     scheduler=taskSCHEDULER_RUNNING;current_task=owner;bootstrap_ready=1;
 }

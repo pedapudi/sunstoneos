@@ -33,7 +33,10 @@ static void close_audio(void)
     assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);for(unsigned n=0;n<8;++n)assert(pump()>=0);
     assert(!atomic_load(&voice.segment_disconnected));const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(DONE);
 }
-int main(int argc,char **argv)
+#ifndef BLUETOOTH_MSBC_FIXTURE_ENTRY
+#define BLUETOOTH_MSBC_FIXTURE_ENTRY main
+#endif
+int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
 {
     assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");msbc_no_cap=!strcmp(argv[1],"no-capability");
     msbc_bad_bcs=!strcmp(argv[1],"bad-bcs");msbc_fallback=!strcmp(argv[1],"fallback");msbc_refuse=!strcmp(argv[1],"command-refusal");
@@ -68,3 +71,9 @@ int main(int argc,char **argv)
     if(speech){assert(!fclose(out));char path[4096];snprintf(path,sizeof(path),"%s.snapshots.bin",argv[3]);FILE *f=fopen(path,"wb");assert(f&&fwrite(snapshots,1,sizeof(snapshots),f)==sizeof(snapshots)&&!fclose(f));}
     puts("PASS actual BAC/BCS→transparent eSCO→fragmented H2/libsbc→owned16k PCM→exact ACK/confirmed close");return 0;
 }
+#ifndef BLUETOOTH_CHECK_PLAYBACK
+/* The legacy capture fixture never enters caller-PCM critical sections. Keep
+ * the new optional owner's link dependencies explicit and fail if it does. */
+void vPortEnterCritical(void){assert(0);}
+void vPortExitCritical(void){assert(0);}
+#endif

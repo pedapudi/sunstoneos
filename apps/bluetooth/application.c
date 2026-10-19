@@ -55,6 +55,7 @@ int board_application_start(void)
     int ready=bluetooth_application_init(&bluetooth,p,&providers.shared,bluetooth_chip_id(),
         owner,&board.watchdog_state,board.session.session_start_ticks/24,board.session.deadline_us,board.session.sid_evidence);
 #ifdef SUNSTONE_BLUETOOTH_RECOGNITION
+    if(ready&&p->version==2&&p->headset.mode==4)ready=bluetooth_playback_runtime_start(&bluetooth);
     if(ready&&p->version==3)
         ready=bluetooth_recognition_start(&bluetooth,&p->recognition,bluetooth.deadline);
 #endif

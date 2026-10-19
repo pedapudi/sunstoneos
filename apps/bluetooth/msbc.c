@@ -19,6 +19,13 @@ int bluetooth_msbc_init(void)
         sbc_finish(&codec.decoder);sbc_finish(&codec.encoder);return 0;}
     codec.silence[0]=1;codec.ready=1;return 1;
 }
+int bluetooth_msbc_encode(const uint8_t pcm[240],uint8_t out[60])
+{
+    if(!codec.ready||!pcm||!out)return 0;ssize_t bytes=0;
+    if(sbc_encode(&codec.encoder,pcm,240,out+2,57,&bytes)!=240||bytes!=57)return 0;
+    out[0]=1;out[1]=sequence[codec.tx_sequence];out[59]=0;
+    codec.tx_sequence=(codec.tx_sequence+1)&3;return 1;
+}
 int bluetooth_msbc_silence(uint8_t out[60])
 {
     if(!codec.ready||!out)return 0;

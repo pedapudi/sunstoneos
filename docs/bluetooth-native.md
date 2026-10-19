@@ -553,7 +553,7 @@ recognition engine remain unchanged. Full-ring backpressure stops before a raw
 byte can overwrite accepted PCM. Accepted slots and delivery-owned transcripts
 survive an orderly capture stop. Security revocation denies further publication.
 
-The reverse audio direction sends valid encoded silence with its own H2
+In capture-only mode 3, the reverse direction sends valid encoded silence with its own H2
 sequence. Its 60-byte backing remains stable until all fragments have entered
 SCO-owned copied packets. Controller credits and actual local H4 completion
 remain independent of this application buffer. Cancellation may truncate audio;
@@ -590,3 +590,100 @@ effects are modeled. Physical headset operation, transparent eSCO support,
 receive-service bounds and recognition within the session deadline remain
 unqualified. The speech stimuli originate from existing converted recordings;
 these checks establish codec integration, not acoustic wideband quality.
+
+### Caller PCM playback and duplex
+
+The optional mSBC image also accepts runtime caller PCM. Headset mode 4 uses the
+752-byte version-2 profile for playback without a recognizer task or model
+upload. The selected image still links the existing Mimus/newlib dependencies;
+mode 4 initializes runtime allocation and the codec without starting recognition.
+Mode 5 uses the 832-byte version-3 profile for playback alongside repeated
+capture and recognition. Both require actual mSBC negotiation and the pinned
+wideband provider. They reject a CVSD selection before consuming caller PCM;
+the capture-only mode 3 retains its explicit CVSD fallback policy.
+
+Caller audio is mono signed 16-bit little-endian PCM at 16 kHz. Each period has
+2400 bytes, or 1200 samples. The USB task copies contiguous fragments into one
+of two private slots. A complete period and matching SHA-256 commit transfer
+ownership to the Bluetooth task. A partial upload cannot reach the encoder.
+Commit publication and owner closure use the existing kernel critical section.
+The existing privileged USB and Bluetooth tasks perform these operations; the
+recognizer retains its existing privilege and copied-input boundary.
+
+The Bluetooth task feeds each 120-sample frame through the pinned libsbc encoder
+and prepends the existing H2 sequence. It retains each encoded frame and fragment
+offset while the SCO pool is busy. Eight private associations bind SCO packet
+serials to caller periods. Period results distinguish encoded samples, submitted
+encoded bytes, fully submitted H4/UART packets, controller-buffer releases, flushed
+packets and packets never sent. The task records a terminal packet disposition
+before releasing that exact SCO record. A skipped observation of the intermediate
+SENT state cannot omit UART accounting: RETIRED and FLUSHED also imply complete
+local UART submission. Here submission means every H4 byte was accepted by the
+UART service; it does not mean an empty FIFO or UART-wire completion.
+
+A period stays immutable until all its associated packets are terminal. Its
+result remains owned until the USB task has delivered the whole copied response
+and receives the exact ticket acknowledgment. Early, stale and duplicate
+acknowledgments cannot free an input slot. Full slots return backpressure without
+overwriting accepted data. Initial buffering requires one committed period;
+until it arrives, and during subsequent input gaps, the owner encodes zero PCM
+through the same encoder and H2 sequence. These silence frames and their packet
+dispositions have separate counters and never count as caller samples.
+
+Playback-only continues servicing and releasing incoming synchronous packets,
+counting discarded packets, bytes and status loss. Duplex uses the existing two
+copied capture slots and delivery-owned transcript log. Capture backlog or loss
+seals playback admission and stops both directions; accepted playback results
+and authenticated copied transcripts remain available after orderly closure.
+Security revocation denies their publication and retains the session. The host
+stops uploading after sealing, drains the accepted caller prefix and reports
+unaccepted input or loss as failure.
+
+The existing 38-second admission cutoff and 40-second synchronous-close budget
+bound both new modes within the overall session deadline. END seals input and
+waits for accepted period accounting before requesting disconnect; it does not
+wait for USB result ACKs. CANCEL abandons unencoded samples and unsent encoded
+frame tails, then uses the existing disconnect protocol after any partial H4
+frame finishes. Cancellation before audio setup retains pending setup resources
+without claiming a disconnect. A deadline or stalled transport cannot synthesize
+controller completion or release uncertain ownership.
+
+Core 5.4 Vol 4 Part E sections 4.1 and 7.7.19 define packet completion as controller
+buffer reuse. It may follow transmission or flushing, or precede transmission if
+the controller moves data to other storage. Section 4.3 requires outstanding
+packets to be treated as flushed after the matched successful disconnect event.
+Neither this event nor a completed-packet credit establishes headset rendering
+or final serial-wire drain. Physical AIC8800 transparent eSCO operation and audio
+rendering remain unqualified. Caller playback at other rates/codecs, broader
+Bluetooth audio modes and graceful wire-drained completion remain outstanding.
+
+The private runtime exchange adds discriminator `0x81`; the existing `0x80`
+transcript exchange is unchanged. A 16-byte little-endian request contains
+`u8 discriminator`, `u8 operation`, `u16 payload_bytes`, `u32 offset` and
+`u64 ticket`. Operations are STATUS 0, WRITE 1, COMMIT 2, ACK 3, END 4 and CANCEL 5.
+WRITE carries at most 1024 bytes; COMMIT carries the 32-byte PCM digest. Requests
+are serialized with bounded partial-header and payload deadlines. Responses have
+332 bytes and bind the build, original session, link generations, actual codec,
+period ticket and digest. Result ACK is permitted only after actual USB transfer
+completion. The host option `--pcm` supplies one to 256 complete periods and
+preserves the original bytes with its result evidence.
+
+| Response byte offset | Fields, in order |
+| --- | --- |
+| 0 | `u32` magic `0x50505442`, version 1, period state, operation outcome |
+| 16 | `u64` session epoch, session generation; 32-byte profile digest |
+| 64 | `u64` firmware, UART, ACL, audio generations and period ticket |
+| 104 | `u64` encoded samples, submitted bytes, UART packets, released packets, flushed packets, not-sent packets |
+| 152 | 32-byte period PCM digest |
+| 184 | `u32` period flags, codec, rate, period bytes |
+| 200 | `u64` accepted periods, acknowledged periods, silence frames, discarded RX packets, discarded RX bytes, RX loss packets |
+| 248 | `u32` sealed, canceled, disconnected, free slots |
+| 264 | `u64` silence UART packets, released packets, flushed packets, not-sent packets |
+| 296 | 32-byte build identity; `u32` echoed operation at offset 328 |
+
+Period state 0 is pending, 1 has an immutable result, and 2 denies publication.
+Operation outcomes are 1 accepted, 2 busy and 3 rejected. Period flags distinguish
+cancellation (bit 0) from flushed/not-sent packets (bit 1). Unencoded samples and
+unsubmitted encoded tails remain visible through the encoded/submitted counts.
+Authorization failure zeros period and status fields rather than exposing old
+results. Empty slots after sealing do not grant new upload permission.

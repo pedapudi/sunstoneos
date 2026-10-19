@@ -93,8 +93,8 @@ def decode_repeated(frame,session,profile,offset=0):
     def require(ok,message):
         if not ok:raise ValueError(message)
     mode=struct.unpack_from('<I',profile,624)[0] if len(profile)==832 else 0
-    require(mode in (2,3),'Repeated headset profile required.')
-    require(272<=len(frame)<=1296 and struct.unpack_from('<II',frame)==(0x53525442,2 if mode==3 else 1),'Repeated Bluetooth frame/version differs.')
+    require(mode in (2,3,5),'Repeated headset profile required.')
+    require(272<=len(frame)<=1296 and struct.unpack_from('<II',frame)==(0x53525442,2 if mode in (3,5) else 1),'Repeated Bluetooth frame/version differs.')
     state,count=struct.unpack_from('<2I',frame,8)
     require(state<=3 and count<=1024 and len(frame)==272+count and
             struct.unpack_from('<2Q',frame,16)==struct.unpack_from('<2Q',session,24) and
@@ -105,10 +105,10 @@ def decode_repeated(frame,session,profile,offset=0):
     flags,disconnected=struct.unpack_from('<2I',frame,240)
     first_acquired,last_acquired=struct.unpack_from('<2Q',frame,248)
     finished,returned=struct.unpack_from('<2I',frame,264)
-    require((mode==3 or not reserved) and flags<=31 and disconnected<=1 and finished<=1 and consumed<=published and
+    require((mode in (3,5) or not reserved) and flags<=31 and disconnected<=1 and finished<=1 and consumed<=published and
             (not finished or disconnected) and returned==offset,'Repeated Bluetooth status or reserved field differs.')
     if ticket:
-        codec=reserved if mode==3 else 1
+        codec=reserved if mode in (3,5) else 1
         require(codec in (1,2),'Repeated Bluetooth codec differs.')
         samples=struct.unpack_from('<I',profile,720)[0]
         require(all((firmware,uart,acl,audio)) and ticket<=consumed and
@@ -117,7 +117,31 @@ def decode_repeated(frame,session,profile,offset=0):
                 offset<=total and count<=total-offset and state in (1,3),'Repeated transcript metadata differs.')
         require(all(any(frame[n:n+32]) for n in (128,160,192)),'Repeated transcript digests missing.')
     else:require(not count and not any(frame[64:224]) and not any(frame[248:264]),'Unpublished transcript metadata leaked.')
-    return {'codec':reserved if mode==3 and ticket else 1 if ticket else 0,'sample_rate':16000 if reserved==2 else 8000 if ticket else 0,'state':state,'firmware':firmware,'uart':uart,'acl':acl,'audio':audio,'ticket':ticket,'first_sample':first,
+    return {'codec':reserved if mode in (3,5) and ticket else 1 if ticket else 0,'sample_rate':16000 if reserved==2 else 8000 if ticket else 0,'state':state,'firmware':firmware,'uart':uart,'acl':acl,'audio':audio,'ticket':ticket,'first_sample':first,
             'bytes':total,'input_samples':inputs,'output_samples':outputs,'pcm_sha256':frame[128:160].hex(),
             'wav_sha256':frame[160:192].hex(),'text_sha256':frame[192:224].hex(),'published':published,'consumed':consumed,
             'flags':flags,'disconnected':disconnected,'finished':finished,'first_acquired':first_acquired,'last_acquired':last_acquired},frame[272:]
+
+
+def decode_playback(frame,session,profile):
+    """Decode copied caller-PCM accounting; controller release is not rendering."""
+    def require(ok,message):
+        if not ok:raise ValueError(message)
+    require(len(profile)>=752 and struct.unpack_from('<I',profile,624)[0] in (4,5),'Caller playback profile required.')
+    require(len(frame)==332 and struct.unpack_from('<2I',frame)==(0x50505442,1),'Playback response geometry differs.')
+    state,outcome=struct.unpack_from('<2I',frame,8)
+    require(state<=2 and outcome in (1,2,3),'Playback response state differs.')
+    require(struct.unpack_from('<2Q',frame,16)==struct.unpack_from('<2Q',session,24) and frame[32:64]==session[320:352] and frame[32:64]==hashlib.sha256(profile).digest(), 'Playback session identity differs.')
+    # Session offsets follow the existing board session, not the response layout.
+    firmware,uart,acl,audio,ticket,encoded,submitted,uart_packets,released,flushed,not_sent=struct.unpack_from('<11Q',frame,64)
+    flags,codec,rate,period=struct.unpack_from('<4I',frame,184)
+    accepted,acked,silence,discarded_packets,discarded_bytes,loss=struct.unpack_from('<6Q',frame,200)
+    sealed,cancelled,closed,free=struct.unpack_from('<4I',frame,248)
+    silence_uart,silence_released,silence_flushed,silence_not_sent=struct.unpack_from('<4Q',frame,264)
+    op=struct.unpack_from('<I',frame,328)[0]
+    require(rate==16000 and period==2400 and flags<=3 and codec in (0,2) and op<=5 and sealed<=1 and cancelled<=1 and closed<=1 and acked<=accepted and accepted-acked<=2 and ((state==2 and not any(frame[200:296])) or (state!=2 and free==2-(accepted-acked))),'Playback counters/format differ.')
+    if state==1:
+        require(all((firmware,uart,acl,audio,ticket)) and codec==2 and ticket==acked+1 and encoded<=1200 and encoded%120==0 and submitted<=encoded//120*60 and released+flushed==uart_packets,'Playback period ownership differs.')
+        require(flags or (encoded==1200 and submitted==600 and not flushed and not not_sent),'Incomplete PCM reported successful.')
+    else:require(not any(frame[64:192]),'Pending/fault response exposed mutable period fields.')
+    return dict(state=state,outcome=outcome,op=op,firmware=firmware,uart=uart,acl=acl,audio=audio,ticket=ticket,encoded_samples=encoded,submitted_bytes=submitted,uart_packets=uart_packets,released_packets=released,flushed_packets=flushed,not_sent_packets=not_sent,sha256=frame[152:184].hex(),flags=flags,codec=codec,rate=rate,period_bytes=period,accepted=accepted,acknowledged=acked,silence_frames=silence,discarded_packets=discarded_packets,discarded_bytes=discarded_bytes,loss_packets=loss,sealed=sealed,cancelled=cancelled,disconnected=closed,free_slots=free,silence_uart=silence_uart,silence_released=silence_released,silence_flushed=silence_flushed,silence_not_sent=silence_not_sent,build_id=frame[296:328].hex())

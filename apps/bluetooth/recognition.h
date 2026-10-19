@@ -24,6 +24,7 @@ int bluetooth_recognition_segment_copy(struct bluetooth_application *,uint64_t,u
     uint8_t out[1024],size_t *,struct bluetooth_repeated_snapshot *);
 int bluetooth_recognition_segment_ack(struct bluetooth_application *,uint64_t);
 int bluetooth_recognition_finished(struct bluetooth_application *);
+int bluetooth_playback_runtime_start(struct bluetooth_application *);
 int bluetooth_recognition_start(struct bluetooth_application *,const struct bluetooth_recognition_profile *,uint64_t deadline);
 int bluetooth_recognition_live(struct bluetooth_application *);
 int bluetooth_recognition_output(struct bluetooth_application *,const void *,size_t);
