@@ -12,7 +12,7 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=
 helper=e/'layout-helper.py'
 spec=importlib.util.spec_from_file_location('layout',helper);layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
 image=layout.Image(e/'build/probe.elf')
-variants=['advance-one','advance-two','day-rollover','gate-off','irq-enabled','irq-pending','irq-active','invalid-source','invalid-calendar','inherited-event','deadline','no-advance','source-changed']
+variants=['advance-one','advance-two','day-rollover','gate-off','irq-enabled','irq-pending','irq-active','invalid-source','invalid-calendar','inherited-event','deadline','no-advance','source-changed','counter-frequency','write-attempt']
 cases=[]
 for variant in variants:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x06000000);u.mem_map(0x40000000,0x04000000)
@@ -43,7 +43,7 @@ for variant in variants:
   # Execute actual counter initialization/conversion/monotonic checks. Only
   # architectural register observations are supplied by this fixture.
   if kind in (0xd5384240,0xd53be000,0xd53be020):
-   v=4 if kind==0xd5384240 else 24000000 if kind==0xd53be000 else state['time']*24
+   v=4 if kind==0xd5384240 else (25000000 if variant=='counter-frequency' else 24000000) if kind==0xd53be000 else state['time']*24
    if kind==0xd53be020:state['time']+=1
    u.reg_write(UC_ARM64_REG_X0+reg,v);u.reg_write(UC_ARM64_REG_PC,address+4);return
   name=hooks.get(address)
@@ -55,6 +55,11 @@ for variant in variants:
    state['task']=args[0];ret(0x43000000)
   elif name=='vTaskStartScheduler':
    assert state['task'];state['scheduler']=True;u.reg_write(UC_ARM64_REG_PC,state['task']);u.reg_write(UC_ARM64_REG_X0,0)
+   if variant=='write-attempt':
+    # Execute the real linked refusing callback before entering the client.
+    # The persistent invariant counter must prevent normal-result publication.
+    u.reg_write(UC_ARM64_REG_PC,image.address('write_reg',unit='/apps/rtc-returning/main.c'));u.reg_write(UC_ARM64_REG_LR,state['task'])
+    u.reg_write(UC_ARM64_REG_X0+1,0x14);u.reg_write(UC_ARM64_REG_X0+2,1)
   elif name=='vTaskDelay':
    assert args[0]==1
    state['delays']+=1;state['time']+=1600000 if variant=='deadline' else 1000;ret()
@@ -71,7 +76,22 @@ for variant in variants:
  length=int.from_bytes(u.mem_read(0x42000018,8),'little');text=bytes(u.mem_read(0x42000100,length)).decode()
  assert state['task'] and state['scheduler'] and not state['writes'] and length<16127
  success=variant in ('advance-one','advance-two','day-rollover')
- assert state['exit']==(0 if success else 1),(variant,text)
+ assert state['exit']==(1 if variant=='write-attempt' else 0),(variant,text)
+ if variant=='write-attempt':
+  assert 'FAIL unexpected RTC write request' in text and 'COMPLETE native RTC read-only result' not in text and 'PASS native RTC' not in text,text
+ else:
+  assert 'COMPLETE native RTC read-only result' in text,text
+  outcome=0 if success else 1
+  assert f'RTC_READ_OUTCOME=0x{outcome:016x}' in text,text
+  assert ('RTC_READ_LABEL=COHERENT_SUCCESS' if success else 'RTC_READ_LABEL=CONTROLLED_NEGATIVE') in text,text
+  assert ('PASS native RTC coherent read progression' in text)==success,text
+  assert 'RTC_READ_REASON=' in text,text
+ if variant in ('gate-off','irq-enabled','irq-pending','irq-active'):
+  assert 'RTC_READ_OBSERVED_MASK=0x0000000000000001' in text,text
+ if variant=='invalid-source':assert 'RTC_READ_OBSERVED_MASK=0x0000000000000007' in text,text
+ if variant=='invalid-calendar':assert 'RTC_READ_DAY=0x0000000000000000' in text,text
+ if variant=='counter-frequency':
+  assert not state['reads'] and 'RTC_READ_OBSERVED_MASK=0x0000000000000000' in text and 'RTC_READ_REASON=counter init' in text,text
  if success:
   assert 'PASS native RTC coherent read progression' in text and 1100000<=state['time']-1000000<1500000,(variant,text)
   expected=1 if variant=='advance-one' else 2
@@ -87,6 +107,6 @@ for variant in variants:
   u.emu_start(image.address('write_reg',unit='/apps/rtc-returning/main.c'),0x43fff000,count=100)
   assert u.reg_read(UC_ARM64_REG_X0)==0 and not state['writes']
  (e/(variant+'.log')).write_text(text)
- cases.append({'name':variant,'passed':True,'exit':state['exit'],'elapsed_modeled_us':state['time']-1000000,'delays':state['delays'],'mmio_reads':len(state['reads']),'mmio_writes':state['writes'],'log_bytes':length})
+ cases.append({'name':variant,'passed':True,'exit':state['exit'],'operation_outcome':None if variant=='write-attempt' else 0 if success else 1,'elapsed_modeled_us':state['time']-1000000,'delays':state['delays'],'mmio_reads':len(state['reads']),'mmio_writes':state['writes'],'log_bytes':length})
 result={'passed':True,'physical_access':False,'scope':'Actual linked kernel_main task creation, finite RTC task, production counter conversion/checks and production RTC open/coherent-read instructions. Scheduler calls, architectural register observations and MMIO device values modeled; no physical timing, scheduling, oscillator accuracy, ROM return or full RTC service qualification. Unchanged monitor checks reused.','elf_sha256':hashlib.sha256((e/'build/probe.elf').read_bytes()).hexdigest(),'checker_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'layout_helper_sha256':hashlib.sha256(helper.read_bytes()).hexdigest(),'cases':cases}
 (e/'check-result.json').write_text(json.dumps(result,indent=2)+'\n');print(f'{len(cases)} focused linked RTC cases passed')

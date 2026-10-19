@@ -12,13 +12,31 @@ static StackType_t stack[2048];
 static struct a733_counter_clock clock;
 static struct a733_rtc rtc;
 static uint64_t deadline;
-static unsigned step;
+static unsigned step,write_attempts,observed_mask;
+static uint32_t observed_bus,observed_control,observed_status,observed_day,observed_hms;
 static void report(const char *name,uint64_t value)
 {platform_puts(name);platform_hex(value);platform_puts("\n");}
+static _Noreturn void terminal(unsigned outcome,const char *reason)
+{
+    /* All RTC stores are refused by write_reg. An unexpected request to write
+     * is a client invariant failure, not an admitted controlled result. */
+    if(write_attempts){platform_puts("FAIL unexpected RTC write request\n");platform_exit(1);}
+    if(!outcome)platform_puts("PASS native RTC coherent read progression\n");
+    report("RTC_READ_OUTCOME=",outcome);
+    platform_puts(outcome?"RTC_READ_LABEL=CONTROLLED_NEGATIVE\n":"RTC_READ_LABEL=COHERENT_SUCCESS\n");
+    platform_puts("RTC_READ_REASON=");platform_puts(reason);platform_puts("\n");
+    report("step=",step);report("driver state=",rtc.state);
+    report("RTC_READ_OBSERVED_MASK=",observed_mask);
+    report("RTC_READ_BUS=",observed_bus);report("RTC_READ_SOURCE_CONTROL=",observed_control);
+    report("RTC_READ_SOURCE_STATUS=",observed_status);report("RTC_READ_DAY=",observed_day);
+    report("RTC_READ_HMS=",observed_hms);
+    platform_puts("COMPLETE native RTC read-only result\n");
+    platform_exit(0);
+}
 static _Noreturn void failed(const char *name)
 {
     platform_puts("INCOMPLETE RTC read: ");platform_puts(name);platform_puts("\n");
-    report("step=",step);report("driver state=",rtc.state);platform_exit(1);
+    terminal(1,name);
 }
 #define REQUIRE(value,name) do {if(!(value))failed(name);} while(0)
 static int now(void *context,uint64_t *value)
@@ -35,10 +53,14 @@ static int read_reg(void *context,uint32_t offset,uint32_t *value)
 {
     if(context!=&rtc||!value||offset>0x50||(offset&3)||!timely()||!quiet())return 0;
     *value=mmio_read(0x07090000+offset);
+    if(offset==0){observed_control=*value;observed_mask|=2;}
+    else if(offset==4){observed_status=*value;observed_mask|=4;}
+    else if(offset==0x10){observed_day=*value;observed_mask|=8;}
+    else if(offset==0x14){observed_hms=*value;observed_mask|=16;}
     return timely();
 }
 static int write_reg(void *context,uint32_t offset,uint32_t value)
-{(void)context;(void)offset;(void)value;return 0;}
+{(void)context;(void)offset;(void)value;++write_attempts;return 0;}
 static uint64_t seconds(const struct a733_rtc_time *time)
 {return (uint64_t)time->day*86400+time->hour*3600+time->minute*60+time->second;}
 static void reading(const char *name,const struct a733_rtc_time *time)
@@ -59,7 +81,7 @@ static void probe(void *unused)
     /* Gate status is accessible independently of the RTC aperture. Never
      * release reset, enable the gate, or read a gated RTC block. */
     REQUIRE(timely(),"preflight deadline");
-    uint32_t bus=mmio_read(0x0701020c);
+    uint32_t bus=mmio_read(0x0701020c);observed_bus=bus;observed_mask|=1;
     REQUIRE((bus&0x10001)==0x10001,"RTC bus unavailable");
     REQUIRE(timely()&&quiet(),"IRQ228 not quiescent");
     step=2;
@@ -87,8 +109,7 @@ static void probe(void *unused)
     report("second counter us=",second_counter);reading("second",&second);
     report("calendar advance seconds=",after-before);
     REQUIRE(timely()&&quiet(),"publication deadline/IRQ");
-    platform_puts("PASS native RTC coherent read progression\n");
-    platform_exit(0);
+    terminal(0,"coherent progression");
 }
 void vApplicationStackOverflowHook(TaskHandle_t handle,char *name)
 {(void)handle;platform_panic(name,0);}
