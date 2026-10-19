@@ -418,10 +418,28 @@ No native USB service appeared within the capture window. The one permitted
 refusal-report read timed out, and communication stopped. No computed output
 was received. This result does not establish whether execution reached GPU
 initialization; it also does not identify a shared cause with the multicore
-failure. The runner and board claim remain retained until confirmed complete
-power removal. Do not repeat this image without a concrete correction or a
+failure. The first attempt was released after confirmed power removal. Do not repeat
+a failed image without a concrete correction or a
 narrower diagnostic supported by the failure evidence.
 
 The frozen bundle, admission and result are preserved under
 `gpu-single-core-20261018/physical-candidate-116/`. The executable remains the
 reviewed image above; no build or accepted software check was repeated.
+
+
+## Corrected session and earlier USB status still produce no physical result
+
+The corrected image waits for a completed USB pending-status transfer before
+opening the GPU. The corrected session masks the NSI configuration and uses
+its observed 400 MHz MBUS rate. Eleven affected application cases and four
+frozen-provider admission cases passed; unchanged arithmetic and startup
+checks were reused.
+
+A supervised attempt with fresh DDR, PMIC, clock, CPU-OFF and DMA observations
+still produced no native USB response. The sole refusal-report read timed out,
+and communication stopped. The runner retains all resources pending confirmed
+power removal. This result does not establish whether provider or GPU
+initialization began. Evidence:
+`gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
+A narrower shared-startup observation or concrete correction must precede another
+full launch. Performance measurement remains deferred.

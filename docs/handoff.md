@@ -9,21 +9,27 @@ restored saved DRAM. Evidence: `reconnect-20261018-120/` and
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
-The second board returned to responsive ROM as `003:125` on port `3-3` after
-fresh DDR preparation, two RAM-page comparisons, the startup survey and the
-returning PMIC read. Evidence: `second-board-cold-122-20261018/`.
-Its first NPU attempt on instance `119` produced no native
-USB frames; the sole refusal-report read timed out. NPU initialization and
-computation remain unobserved. The user removed its USB power and reconnected it.
-The old runner and coordinator stopped, the failed claim closed, and a new A733
-ROM identity response passed. No further user action is pending. Evidence:
-`npu-single-core-20261018/physical-candidate/runtime/session.json` and
-`second-board-recovery-122-20261018/recovery.json`.
-Cold and warm preparation are complete. The returning cache-disable helper and
-final launcher survey passed. All seven secondaries are OFF; fresh GPU/DMA and
-common accelerator configuration reads restored scratch and left ROM responsive.
-Evidence: `second-board-cold-122-20261018/{cache-off,survey-after-cache-off/runtime,cpu-gpu-state,accelerator-state/npu-state}/`.
-Reuse the DDR lifetime from `122` for the corrected GPU launch.
+The second board is retained after the corrected GPU attempt on port `3-3`,
+instance `003:125`, identity `[7,2842,1097084,0,0]`. No native USB response appeared;
+the sole refusal-report read timed out. Communication stopped. Runner PID
+`103238` and coordinator PID `103174` remain live under exec session `57330` and
+claim `6b67147c454304fd0a169e3641575f8ee878612e59b06aa0200d4d62bf312fac`
+in `board-tests-3-3.sqlite3`. Evidence:
+`gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
+The user has been asked to remove this board's sole USB power and reconnect it.
+Do not release ownership until confirmed power removal, a new instance and
+termination of these exact processes. No further command to instance `125` is permitted.
+
+Fresh cold DDR, PMIC, warm cache preparation and configuration reads passed
+before that attempt under `second-board-cold-122-20261018/`. Those observations
+support the attempted bundle; they will not transfer across power removal.
+The corrected masked fabric and USB-before-GPU ordering did not produce an
+observable result. A narrower shared single-core startup diagnostic or concrete
+new correction must precede another full accelerator launch. Root owns shared
+startup diagnosis; the worker audits device admission and observation only.
+
+The preceding NPU failure on `119` was recovered and closed before this attempt.
+Recovery evidence is under `second-board-recovery-122-20261018/`.
 
 The attempted NPU session used normalized fabric words and 200/600/400 MHz rates.
 The previous GPU session contained an NSI bit rejected by its USB provider;
@@ -31,13 +37,16 @@ the corrected GPU candidate removes that bit and derives the MBUS rate from
 observed configuration. Four focused calls into the frozen GPU ELF pass under
 `gpu-usb-ordering-20261018/physical-candidate-119/fabric-admission-result.json`.
 This identifies an input defect; the physical failure stage remains unknown.
-The GPU candidate needs new board observations and ownership review after recovery.
+The corrected candidate was attempted on `125`; its failure also remains unlocated.
 
 The NPU USB reporting correction is integrated. Ten affected native cases and
 independent review pass; 123 repository compiler inputs match the frozen image.
 Evidence: `npu-usb-terminal-20261018/handoff.json` and `integration.json`.
 USB retains independent counter, registry, lock, owner and lifetime checks while
 permitting terminal NPU failure frames. This is not a physical failure diagnosis.
+The actual host validator accepted its offline software package under
+`npu-usb-terminal-20261018/host-preparation/`. Physical authority remains unset;
+no replacement session or launch bundle exists.
 
 The first board also completed a read-only boot-CPU GIC observation under
 `primary-gic-state-121-20261018/`. Its redistributor is powered and awake, with
