@@ -61,6 +61,10 @@ Use existing build dependencies and a small evidence record before introducing
 new caching infrastructure. Missing dependency information prevents reuse only
 for checks affected by that uncertainty.
 
+Do not rebuild solely to synchronize comment-only source changes with a passing
+image. Record the changed source hashes and why the edit does not affect generated
+code; retain the image's original inputs.
+
 A runner may skip a preserved passing case only when its artifact identity
 matches. Reusing a result across different images requires an explicit comparison
 of the affected inputs and behavior; the case name alone is insufficient.
