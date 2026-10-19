@@ -239,3 +239,37 @@ ambiguous observation history. Modeled registers, DMA writes and cache effects
 do not establish physical device ordering. Earlier finite, duplex and USB
 transfer/ACK evidence remains applicable. Root's CPU maintenance review and the
 focused device review are preserved with the compiled inputs.
+
+## Finite playback accepts an explicit final lease
+
+`DMA_SERVICE_PERIOD_END` appends operation 8 without changing request layout.
+For this operation only, `request.timeout` contains the nonzero valid frame count
+of the exact `period_ticket` returned by GET. END accepts only finite TX, validates
+multiplication and allocation bounds, and requires a committed queued prefix with
+no later queued payload. It changes no state on refusal. Existing operations and
+cyclic playback retain their contracts.
+
+The worker builds a private immutable segment prefix before submitting the final
+DMA transfer. Its byte count is `valid_frames * plan.frame_bytes`; the authenticated
+catalogue allocation remains retained in full. Package completion still follows
+the existing DMA ownership-ending protocol. Final period accounting uses that
+prefix, and subsequent PUT operations release leases without scheduling refill.
+
+After final DMA ownership ends, the worker leaves TX enabled and polls FIFO state
+within the existing operation deadline. A FIFO-empty observation enters
+`A733_I2S_INPUT_ENDED`, which maps to retained service COMPLETE. It does not release
+shared clocks or pins, disable the serializer, or admit CLOSE/REAP. FIFO errors,
+invalid free counts and expired observations retain failure. Explicit CANCEL may
+truncate output and uses the existing stop protocol; duplex peer control bits
+remain preserved.
+
+The A733 User Manual V1.00, section 17.1.8.7, defines FSTA bits 23:16 as free TX
+FIFO entries; 128 means the FIFO is empty. Section 17.1.8.11 counts samples written
+into that FIFO. Neither establishes final serializer-bit completion. The pinned
+Linux `snd_sunxi_i2s.c` at commit
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, lines 1516–1544, flushes the FIFO and
+resets TXCNT while stopping. Its delay and FIFO-empty loop do not establish
+lossless wire drain. The DMAengine STOP/synchronize operations end DMA ownership,
+not serializer activity. The cached source hashes and sections are retained in
+the file-playback evidence. Complete physical file playback remains unqualified;
+cyclic RX's undocumented device-ordering gap also remains open.

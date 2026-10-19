@@ -238,14 +238,72 @@ def capture_runtime(exchange,session,evidence,record,save,deadline,pcm,periods=8
     raise supervisor.CaptureWindowExpired('Runtime PCM query budget exhausted.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction,capture_samples=None,repeated_periods=8,runtime_pcm=None,runtime_periods=8):
+def capture_runtime_file(exchange,session,evidence,record,save,deadline,pcm,*,now=time.monotonic,pause=time.sleep):
+    """Observe exact file memory consumption and FIFO empty, retaining wire ownership."""
+    require(len(session)==552 and struct.unpack_from('<I',session,208)[0]==6,'Runtime PCM session required.')
+    require(pcm and len(pcm)%2==0 and len(pcm)<=260*4096,'File must contain bounded whole mono S16 frames.')
+    total=len(pcm)//2;periods=(total+2047)//2048;sequence=0;queries=0;previous=(0,0,0);sealed=False
+    target=evidence/'runtime-file-s16le-16000-mono.bin';supervisor.durable_frame(target,pcm)
+    record.update(i2s_retention='whole-board-power-removal',i2s_result='unobserved');save()
+    def query(op,value=0):
+        nonlocal queries,previous
+        require(now()<deadline,'Runtime file deadline expired.')
+        packet=struct.pack('<III',op,value&0xffffffff,value>>32)
+        if op==6:packet+=pcm[(value-1)*4096:value*4096]
+        frame=exchange(packet,min(1000,max(1,int((deadline-now())*1000))))
+        queries+=1;path=evidence/f'i2s-file-{queries:04}.bin';supervisor.durable_frame(path,frame)
+        require(len(frame)==160 and struct.unpack_from('<II',frame)==(0x53493241,5),'File response extent/version differs.')
+        state,operation,payload,capacity=struct.unpack_from('<4I',frame,8)
+        accepted,committed,consumed=struct.unpack_from('<3Q',frame,72)
+        credits,flags,idle,result=struct.unpack_from('<4I',frame,96)
+        declared,accepted_frames=struct.unpack_from('<2Q',frame,112)
+        eof,fifo,retained,wire,stopped,reserved=struct.unpack_from('<6I',frame,128)
+        require(state<=3 and operation==op and not payload and capacity==4096 and
+                struct.unpack_from('<2Q',frame,24)==struct.unpack_from('<2Q',session,24) and
+                frame[40:72]==hashlib.sha256(session).digest() and declared==total and
+                not reserved and not any(frame[152:160]) and not wire and not stopped and
+                credits<=4 and flags<=1 and idle<=1 and eof<=1 and fifo<=1 and retained==fifo and
+                result in ((1,2) if op==6 else (1,) if op in (7,8) else (0,)) and
+                accepted<=periods and accepted_frames==min(total,accepted*2048) and
+                consumed<=committed<=accepted_frames and
+                all(a>=b for a,b in zip((accepted,committed,consumed),previous)) and
+                accepted==(value if op==6 and result==1 else sequence), 'File response binding/accounting differs.')
+        previous=(accepted,committed,consumed)
+        record.setdefault('i2s_frames',[]).append({'path':path.name,'sha256':digest(path),'operation':op});save()
+        return dict(state=state,accepted=accepted,committed=committed,consumed=consumed,credits=credits,
+                    flags=flags,idle=idle,result=result,eof=eof,fifo=fifo,retained=retained,entry=record['i2s_frames'][-1])
+    value=query(7,total)
+    for _ in range(8192):
+        require(value['state']!=3 and not value['flags'],'Runtime file failed; resources remain retained.')
+        if sequence<periods and value['credits']:
+            value=query(6,sequence+1)
+            if value['result']==1:sequence+=1
+        elif sequence==periods and not sealed:
+            value=query(8,total);sealed=True
+        else:value=query(0)
+        if value['state']==2:
+            require(sealed and value['accepted']==periods and value['committed']==value['consumed']==total and
+                    value['eof']==value['fifo']==value['retained']==value['idle']==1,'File completion lacks exact retained accounting.')
+            record['runtime_pcm_output']={k:value[k] for k in ('accepted','committed','consumed','eof','fifo','retained')}
+            record['runtime_pcm_output'].update(scope='input-consumed-fifo-empty-wire-unknown',wire_drain_established=False,
+                input_sha256=digest(target),input_path=target.name)
+            record['i2s_result']='observed-success';record['durable_result']=value['entry']
+            try:save()
+            except BaseException:
+                record['i2s_result']='unobserved';record.pop('durable_result',None);record.pop('runtime_pcm_output',None);raise
+            return
+        pause(min(.001,max(0,deadline-now())))
+    raise supervisor.CaptureWindowExpired('Runtime file query budget exhausted.')
+
+
+def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction,capture_samples=None,repeated_periods=8,runtime_pcm=None,runtime_periods=8,runtime_file=False):
     serial=[0]
     def exchange(packet,timeout):
         same();require(time.monotonic()<deadline,'I2S deadline before write.')
         require(device.write(0x02,packet,timeout=timeout)==len(packet) and
-                (len(packet)==4108 if direction==6 and struct.unpack_from('<I',packet)[0]==6 else len(packet)==12),
+                (12<len(packet)<=4108 and (len(packet)-12)%2==0 if runtime_file and struct.unpack_from('<I',packet)[0]==6 else len(packet)==4108 if direction==6 and struct.unpack_from('<I',packet)[0]==6 else len(packet)==12),
                 'Incomplete I2S request.')
-        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 128 if direction>=3 else 96 if direction==2 else 72;extent=base+4096;part=0;header=False;empty=0
+        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 160 if direction==6 and runtime_file else 128 if direction>=3 else 96 if direction==2 else 72;extent=base+4096;part=0;header=False;empty=0
         while len(frame)<extent:
             same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'I2S deadline during response.')
             raw=bytes(device.read(0x81,extent-len(frame),timeout=min(timeout,remaining)))
@@ -259,6 +317,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direc
                 header=True;size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized I2S response.');extent=base+size
                 require(len(frame)<=extent,'I2S response exceeds header extent.')
         return bytes(frame)
+    if direction==6 and runtime_file:return capture_runtime_file(exchange,session,evidence,record,save,deadline,runtime_pcm)
     if direction==6:return capture_runtime(exchange,session,evidence,record,save,deadline,runtime_pcm,runtime_periods)
     if direction>=3:return capture_repeated(exchange,session,evidence,record,save,deadline,repeated_periods)
     return capture(exchange,session,evidence,record,save,deadline,pcm=pcm,direction=direction,capture_samples=capture_samples,now=time.monotonic,pause=time.sleep)
@@ -329,6 +388,7 @@ def main(argv=None):
     for name in ('bundle', 'fel', 'evidence', 'database'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--runtime-pcm',type=Path,help='Raw caller S16LE mono16kHz PCM, including four guard periods')
+    parser.add_argument('--runtime-file',action='store_true',help='Declare a complete nonempty PCM file; observe DMA/FIFO accounting with wire ownership retained')
     parser.add_argument('--runtime-periods',type=int,default=8,help='Runtime PCM memory-consumed periods before cancellation,1..256')
     parser.add_argument('--repeated-periods',type=int,default=8,help='Completed periods before orderly cancellation in repeated mode,1..256')
     parser.add_argument('--claim', required=True)
@@ -344,7 +404,10 @@ def main(argv=None):
     if args.runtime_pcm:
         with args.runtime_pcm.open('rb') as source:runtime_pcm=source.read(260*4096+1)
     require((prepared['direction']==6)==(runtime_pcm is not None),'Runtime PCM input is required only for direction6.')
-    if runtime_pcm is not None:
+    require(not args.runtime_file or runtime_pcm is not None,'--runtime-file requires --runtime-pcm.')
+    if runtime_pcm is not None and args.runtime_file:
+        require(bool(runtime_pcm) and len(runtime_pcm)%2==0 and len(runtime_pcm)<=260*4096,'Runtime PCM file extent invalid.')
+    elif runtime_pcm is not None:
         require(1<=args.runtime_periods<=256 and len(runtime_pcm)%4096==0 and
                 (args.runtime_periods+4)*4096<=len(runtime_pcm)<=260*4096,'Runtime PCM extent/guard periods invalid.')
     _,_,identity,layout,pcm=preparation.image_data(data['image.elf'])
@@ -358,7 +421,7 @@ def main(argv=None):
     return supervisor.run_session(args, bundle, prepared,
         lambda: claimed(args.database, args.claim, args.owner, bundle,prepared), validate_entry,
         lambda device, same, deadline, record, save: capture_device(
-            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction'],capture_samples=prepared.get('capture_samples'),repeated_periods=args.repeated_periods,runtime_pcm=runtime_pcm,runtime_periods=args.runtime_periods),
+            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction'],capture_samples=prepared.get('capture_samples'),repeated_periods=args.repeated_periods,runtime_pcm=runtime_pcm,runtime_periods=args.runtime_periods,runtime_file=args.runtime_file),
         product='sunstoneos native I2S', serial='sunstoneos-a733-i2s',
         bcd_device=0x0100, capture_seconds=59, result_key='i2s_result',
         source_files=source_files(), description='Supervised native I2S; retain all resources until whole-board power removal')

@@ -82,11 +82,12 @@ static void repeated_exchange(uint32_t operation,uint32_t offset,uint32_t bytes)
 }
 /* Version4: one exact period follows op6/sequence-low/sequence-high. USB owns
  * unpublished copied input only; it never calls the DMA service or a provider. */
-static unsigned pcm_upload_active,pcm_upload_bytes,pcm_upload_ok;
+static unsigned pcm_upload_active,pcm_upload_bytes,pcm_upload_ok,pcm_upload_extent,pcm_file_response;
 static uint64_t pcm_upload_sequence,pcm_upload_deadline;
 static void pcm_response(unsigned operation,unsigned upload_result)
 {
- memset(response,0,128);put32(response,0x53493241);put32(response+4,4);
+ unsigned file=pcm_file_response||atomic_load_explicit(&app.runtime.file_mode,memory_order_acquire);
+ memset(response,0,file?160:128);put32(response,0x53493241);put32(response+4,file?5:4);
  put32(response+8,atomic_load_explicit(&app.result,memory_order_acquire));
  put32(response+12,operation);put32(response+20,4096);
  put64(response+24,app.admitted.epoch);put64(response+32,app.admitted.generation);
@@ -99,19 +100,27 @@ static void pcm_response(unsigned operation,unsigned upload_result)
  put32(response+100,atomic_load_explicit(&app.runtime.flags,memory_order_acquire));
  put32(response+104,atomic_load_explicit(&app.runtime.drained,memory_order_acquire));
  put32(response+108,upload_result);
- response_sent=response_transferred=0;response_bytes=128;
+ if(file){
+  uint64_t total=app.runtime.file_frames,head=atomic_load_explicit(&app.runtime.head,memory_order_acquire);
+  put64(response+112,total);put64(response+120,head>total/I2S_RUNTIME_FRAMES?total:head*I2S_RUNTIME_FRAMES);
+  put32(response+128,atomic_load_explicit(&app.runtime.eof,memory_order_acquire));
+  unsigned done=atomic_load_explicit(&app.runtime.file_done,memory_order_acquire);
+  put32(response+132,done);put32(response+136,done);
+  put32(response+144,atomic_load_explicit(&app.runtime.stopped,memory_order_acquire));
+ }
+ response_sent=response_transferred=0;response_bytes=file?160:128;
 }
 static void pcm_ingest(void)
 {
  if(a733_smp_counter()>=pcm_upload_deadline)stop();
  unsigned available=tud_vendor_available();if(!available)return;
- uint8_t fragment[512];unsigned n=4096-pcm_upload_bytes;
+ uint8_t fragment[512];unsigned n=pcm_upload_extent-pcm_upload_bytes;
  if(n>sizeof(fragment))n=sizeof(fragment);if(n>available)n=available;
  unsigned got=tud_vendor_read(fragment,n);if(!got||got>n)stop();
  if(pcm_upload_ok){int r=i2s_runtime_upload(pcm_upload_sequence,pcm_upload_bytes,fragment,got);
   if(r<0)stop();if(!r)pcm_upload_ok=0;}
  pcm_upload_bytes+=got;
- if(pcm_upload_bytes==4096){
+ if(pcm_upload_bytes==pcm_upload_extent){
   if(!pcm_upload_ok)i2s_runtime_upload_discard();
   pcm_upload_active=0;pcm_response(6,pcm_upload_ok?1:2);
  }
@@ -129,10 +138,16 @@ static void exchange(void)
  if(request_bytes<sizeof(request))return;request_bytes=0;
  uint32_t op=get32(request),offset=get32(request+4),bytes=get32(request+8);
  if(app.admitted.direction==I2S_RUNTIME_DIRECTION){
+  if(op==7||op==8){
+   pcm_file_response=1;
+   uint64_t frames=(uint64_t)offset|((uint64_t)bytes<<32);
+   pcm_response(op,(op==7?i2s_runtime_begin(frames):i2s_runtime_end(frames))?1:3);return;
+  }
   if(op==6){
    pcm_upload_sequence=(uint64_t)offset|((uint64_t)bytes<<32);
    uint64_t head=atomic_load_explicit(&app.runtime.head,memory_order_acquire),now=a733_smp_counter();
    if(!pcm_upload_sequence||head>=UINT64_MAX/I2S_RUNTIME_FRAMES||pcm_upload_sequence!=head+1||now>UINT64_MAX-24000000)stop();
+   pcm_upload_extent=i2s_runtime_upload_bytes(pcm_upload_sequence);if(!pcm_upload_extent)stop();
    pcm_upload_deadline=now+24000000;pcm_upload_bytes=0;
    pcm_upload_ok=i2s_runtime_credits()!=0;pcm_upload_active=1;return;
   }

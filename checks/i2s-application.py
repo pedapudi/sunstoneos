@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--freertos', type=Path, required=True)
     parser.add_argument('--tinyusb', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--file-only',action='store_true',help='Run file EOF native USB/client ownership cases only')
     parser.add_argument('--runtime-only',action='store_true',help='Run runtime PCM native USB/client ownership cases only')
     parser.add_argument('--cyclic-only',action='store_true',help='Run changed cyclic copied RX, immutable TX and final-count client branches only')
     parser.add_argument('--native-build',type=Path,help='Reuse this already-built native image for cyclic-only cases')
@@ -85,7 +86,7 @@ def main():
         toolchain.write_text(f'set(SUNSTONE_LLD "{linker}" CACHE FILEPATH "")\ninclude("{source}/cmake/aarch64-clang.cmake")\nset(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_ASM_COMPILER "{compiler}")\n')
     build = a.native_build.resolve() if a.native_build else out/'build'
     if a.native_build:
-        assert a.cyclic_only or a.runtime_only, '--native-build requires focused cyclic/runtime cases'
+        assert a.cyclic_only or a.runtime_only or a.file_only, '--native-build requires focused cyclic/runtime cases'
     else:
         run('configure',['cmake','-S',source/'apps/i2s','-B',build,f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',
         f'-DFREERTOS_DIR={out}/dependencies/freertos',f'-DTINYUSB_DIR={out}/dependencies/tinyusb',
@@ -100,7 +101,7 @@ def main():
     commands = json.loads((build/'compile_commands.json').read_text())
     for unit in commands:
         p = Path(unit['file']);dependencies[str(p.resolve())]=sha(p)
-    if a.runtime_only:
+    if a.runtime_only or a.file_only:
         spec=importlib.util.spec_from_file_location('i2s_runtime_dependencies',source/'tools/evidence-snapshot.py')
         inventory=importlib.util.module_from_spec(spec);spec.loader.exec_module(inventory)
         dependencies,linked_commands,linked_records=inventory.collect_dependencies(build,'sunstone-a733-i2s')
@@ -128,7 +129,7 @@ def main():
             ('output',['checks/i2s-application-output.c','apps/i2s/client.c','drivers/storage/storage_digest.c'],
             [None]*3+['duplex-usb-completion-counts'])]
     repeated_session=None
-    if a.repeated_only or a.cyclic_only or a.runtime_only:
+    if a.repeated_only or a.cyclic_only or a.runtime_only or a.file_only:
         spec=importlib.util.spec_from_file_location('i2s_repeated_prepare',source/'apps/i2s/prepare.py')
         preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
         _,_,identity,layout,pcm=preparation.image_data(image.read_bytes())
@@ -137,7 +138,7 @@ def main():
         def put(name,value):
             f=layout['fields'][name];data=value if isinstance(value,bytes) else value.to_bytes(f['size'],'little')
             assert len(data)==f['size'];raw[f['offset']:f['offset']+f['size']]=data
-        for name,value in {'version':1,'bytes':layout['size'],'direction':6 if a.runtime_only else 5,'dma.service_channels':1 if a.runtime_only else 3,
+        for name,value in {'version':1,'bytes':layout['size'],'direction':6 if a.runtime_only or a.file_only else 5,'dma.service_channels':1 if a.runtime_only or a.file_only else 3,
                 'dma.allowed.desired_cpu':3,'dma.allowed.route_change_mask':3,'image':identity,
                 'pcm':hashlib.sha256(pcm).digest()}.items():put(name,value)
         preparation.session_profile(bytes(raw),layout,identity,pcm)
@@ -151,11 +152,15 @@ def main():
     if a.cyclic_only:
         cases=[('cyclic-client',['checks/i2s-repeated-client.c','apps/i2s/client.c']+common,
             [None]*8+['cyclic-copied-rx-client','cyclic-immutable-tx-aggregate-progress','cyclic-duplex-final-drain-count'])]
-    if a.runtime_only:
+    if a.runtime_only or a.file_only:
         cases=[('runtime-client',['checks/i2s-runtime-client.c','apps/i2s/client.c']+common,
             ['runtime-distinct-input-refill','runtime-partial-unpublished','runtime-backpressure-no-overwrite',
              'runtime-stale-sequence-refused','runtime-pending-status-before-put','runtime-closure-during-publication',
              'runtime-cancel-pending-get','runtime-service-failure-drain','runtime-partial-upload-deadline'])]
+    if a.file_only:
+        cases=[('file-client',['checks/i2s-file-client.c','apps/i2s/client.c']+common,
+            ['file-two-full-one-frame-eof-cancel','file-zero-refused','file-early-eof-refused',
+             'file-partial-tail-unpublished','file-sealed-input-immutable','file-sealed-failure-retained'])]
     for label,names,labels in cases:
         if 'apps/i2s/client.c' in names:
             names=names+['apps/i2s/runtime.c','checks/i2s-application-critical.c']
@@ -171,7 +176,9 @@ def main():
             symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
         for mode,case in enumerate(labels):
             if case is None:continue
-            if steps.get(case,{}).get('exit')==0:continue
+            if steps.get(case,{}).get('exit')==0:
+                assert steps[case].get('fixture_sha256')==sha(executable), 'Saved case identity differs; select new evidence output'
+                continue
             uc=Uc(UC_ARCH_ARM64,UC_MODE_ARM);pages=set()
             for address,data,size in segments:
                 for page in range(address&~4095,(address+size+4095)&~4095,4096):
@@ -185,13 +192,14 @@ def main():
             uc.hook_add(UC_HOOK_INTR,stop)
             uc.emu_start(symbols['i2s_check_run'],0,count=3000000)
             result=int.from_bytes(uc.mem_read(symbols['i2s_check_result'],4),'little')
-            steps[case]={'exit':0 if result==1 else result or -1,'result':result,'pc':uc.reg_read(UC_ARM64_REG_PC)}
+            steps[case]={'exit':0 if result==1 else result or -1,'result':result,'pc':uc.reg_read(UC_ARM64_REG_PC),'fixture_sha256':sha(executable)}
             steps_path.write_text(json.dumps(steps,indent=2)+'\n');assert result==1,(case,result)
-    if a.repeated_only or a.cyclic_only or a.runtime_only:
+    if a.repeated_only or a.cyclic_only or a.runtime_only or a.file_only:
         (out/'result.json').write_text(json.dumps({'image_sha256':sha(image),
             'image_build_id':(build/'i2s-application/build-id.txt').read_text().strip(),
             'steps':steps,'physical':False},indent=2)+'\n')
-        print('PASS runtime PCM native USB/client ownership, publication, cancellation and failure cases' if a.runtime_only else
+        print('PASS file EOF native USB/client exact tail, retained completion and refusal cases' if a.file_only else
+              'PASS runtime PCM native USB/client ownership, publication, cancellation and failure cases' if a.runtime_only else
               'PASS cyclic native client RX copy, aggregate immutable TX and final drain counts' if a.cyclic_only else
               'PASS repeated native I2S image, owned copied-ring reuse, cancellation/drain and USB delivery acknowledgments')
         return
@@ -254,7 +262,7 @@ endforeach()
         for name in dep.read_text().replace('\\\n',' ').split(':',1)[1].split():
             p=Path(name)
             if p.is_file():dependencies[str(p.resolve())]=sha(p)
-    if a.runtime_only:
+    if a.runtime_only or a.file_only:
         spec=importlib.util.spec_from_file_location('i2s_runtime_dependencies',source/'tools/evidence-snapshot.py')
         inventory=importlib.util.module_from_spec(spec);spec.loader.exec_module(inventory)
         dependencies,linked_commands,linked_records=inventory.collect_dependencies(build,'sunstone-a733-i2s')

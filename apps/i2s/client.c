@@ -95,7 +95,13 @@ static int duplex_step(void)
 int i2s_client_step(void)
 {
  unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
- if(result==2)return 1;if(result==3)return -1;
+ if(result==2){
+  if(app.session.direction==I2S_RUNTIME_DIRECTION&&
+     atomic_load_explicit(&app.runtime.file_done,memory_order_acquire)&&
+     atomic_load_explicit(&app.cancel,memory_order_acquire)&&
+     !atomic_load_explicit(&app.runtime.stopped,memory_order_acquire))return i2s_runtime_step();
+  return 1;
+ }if(result==3)return -1;
  if(!i2s_live(NULL))return fault();
  if(!atomic_load_explicit(&app.audio_ready,memory_order_acquire)){
   if(app.session.direction<3&&atomic_load_explicit(&app.cancel,memory_order_acquire))return fault();

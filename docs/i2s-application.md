@@ -328,8 +328,9 @@ the caller's runtime data; the host preserves that data and its SHA256 separatel
 
 The format is signed 16-bit little-endian PCM, one channel at 16 kHz. Each
 4,096-byte period contains 2,048 frames. The selected native plan has two memory
-bytes per frame, despite its two 32-bit wire slots. A caller supplies complete
-periods; the application does not resample, insert silence or create padding.
+bytes per frame, despite its two 32-bit wire slots. The default prefix protocol accepts complete
+periods; the file protocol below also accepts a final short period. The application
+does not resample, insert silence or create padding.
 
 USB copies input into four private slots. One serialized upload fills the next
 unpublished slot. The complete period is published with release ordering; the
@@ -419,3 +420,60 @@ The separate source inspection in
 `~/.cache/sunstoneos/evidence/i2s-playback-drain-20261019/` records why the pinned
 manual and Linux stop path do not establish graceful wire drain. Cyclic RX's
 undocumented package/write/cursor ordering gap remains unchanged.
+
+### Complete file input retains unknown serial completion
+
+Direction 6 also accepts a nonempty caller file with explicit end of input. The
+supervised host selects this protocol with `--runtime-file --runtime-pcm FILE`.
+Input remains mono signed S16LE at 16 kHz: two memory bytes per frame. The last
+period may contain one through 2,048 frames. No guard period or padding is added.
+The default prefix-and-cancel protocol above remains version 4.
+
+Requests retain the three-word header. Operation 7 declares the total frame count
+as low and high 32-bit words before any upload. Operation 6 then carries successive
+periods, with the final payload length derived from that declaration. Operation 8
+seals input only after every declared byte is accepted. It repeats the declared
+frame count. Zero declarations, excess frames, early or duplicate EOF, and writes
+after sealing are refused. A partial final payload remains unpublished.
+
+The audio task owns every DMA lease. It commits ordinary periods with PUT, then
+holds the final lease until explicit EOF. Its END request carries the exact ticket
+and final valid frame count. A short file starts after that lease is committed;
+longer files retain four-period priming. Subsequent consumed leases return without
+refill. A failed final transfer follows failure accounting rather than retrying
+GET indefinitely. Backpressure and the original session deadline remain bounded.
+
+Version 5 responses contain 160 bytes. The original version 4 fields through byte
+111 retain their meaning, except byte 108 also reports declaration/EOF acceptance
+as one or refusal as three. The frame counts at bytes 80 and 88 include only valid
+final frames. Additional little-endian fields are:
+
+| Offset | Field | Width |
+| --- | --- | --- |
+| 112 | Declared file frames | 64 bits |
+| 120 | Fully accepted file frames | 64 bits |
+| 128 | Input sealed | 32 bits |
+| 132 | Final DMA completion followed by observed FIFO empty | 32 bits |
+| 136 | Resources retained after file accounting | 32 bits |
+| 140 | Serial-wire completion established; always zero | 32 bits |
+| 144 | Explicit cancellation completed | 32 bits |
+| 148 | Reserved zero | 96 bits |
+
+Normal EOF reaches response state two only after every declared frame has a
+collected memory-consumed period and the FIFO reports 128 free entries. The host
+requires matching accepted, committed and consumed counts, sealed input, FIFO
+empty and retained resources. Its durable scope is
+`input-consumed-fifo-empty-wire-unknown`. This result does not qualify complete
+physical playback. The source contract does not establish when the serializer
+finishes its last sample. TX, master clock, pins, catalogue and buffers therefore
+remain owned. CLOSE and REAP refuse this retained state. An explicit later CANCEL
+uses the existing stop operation and may truncate serial output.
+
+The offline file checks exercise two 4,096-byte periods and a two-byte tail through
+the actual native runtime, service, DMA controller, memory/cache and audio/pin
+providers. Register progress is modeled. The final BUSY state persists for four
+post-disable reads; no final consumption is published during that interval.
+Separate compiled client/USB cases cover EOF and failure ownership. The host
+checks consume the actual compiled response producer. Evidence is preserved in
+`~/.cache/sunstoneos/evidence/i2s-file-playback-20261019/`. No physical access or
+wire-continuity qualification accompanies these results.

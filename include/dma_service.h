@@ -17,7 +17,8 @@
 enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S, DMA_SERVICE_I2S_STREAM };
 enum dma_service_operation { DMA_SERVICE_STATUS, DMA_SERVICE_OPEN, DMA_SERVICE_SUBMIT,
     DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE,
-    DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT };
+    DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT,
+    DMA_SERVICE_PERIOD_END }; /*8: finite TX only; timeout is valid tail frames. */
 enum dma_service_result { DMA_SERVICE_OK, DMA_SERVICE_INVALID, DMA_SERVICE_DENIED,
     DMA_SERVICE_BUSY, DMA_SERVICE_FAULT };
 enum dma_service_phase { DMA_SERVICE_CLOSED, DMA_SERVICE_OPENING, DMA_SERVICE_READY,
@@ -28,8 +29,8 @@ enum dma_service_outcome { DMA_SERVICE_NO_RESULT, DMA_SERVICE_COMPLETE,
 struct dma_service_request {
     enum dma_service_operation operation;
     unsigned job; /* Index in private startup table; selects its fixed channel. */
-    uint64_t timeout; /* SUBMIT: per-period DMA ticks. I2S OPEN/CLOSE: microseconds. Otherwise zero. */
-    uint64_t period_ticket; /* PERIOD_PUT only; exact ticket returned by GET. */
+    uint64_t timeout; /* SUBMIT: per-period DMA ticks. I2S OPEN/CLOSE: microseconds. END: valid final frames (nonzero). Otherwise zero. */
+    uint64_t period_ticket; /* PERIOD_PUT/END: exact ticket returned by GET. */
 };
 struct dma_service_reply {
     uint64_t ticket, job_ticket;

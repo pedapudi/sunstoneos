@@ -66,3 +66,12 @@ foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS C
 endforeach()
 target_include_directories(i2s-runtime-model PRIVATE apps/i2s platform/a733-smp-cached)
 set_target_properties(i2s-runtime-model PROPERTIES SUFFIX ".elf")
+
+add_executable(i2s-file-model EXCLUDE_FROM_ALL ${i2s_cyclic_sources}
+ checks/i2s-runtime-provider.c apps/i2s/runtime.c)
+foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS COMPILE_DEFINITIONS)
+ get_target_property(i2s_file_property i2s-runtime-model ${property})
+ set_property(TARGET i2s-file-model PROPERTY ${property} "${i2s_file_property}")
+endforeach()
+target_compile_definitions(i2s-file-model PRIVATE I2S_FILE_CHECK=1)
+set_target_properties(i2s-file-model PROPERTIES SUFFIX ".elf")

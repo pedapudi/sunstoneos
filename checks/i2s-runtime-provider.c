@@ -3,10 +3,13 @@
 #include "i2s-stream.c"
 #undef kernel_main
 #include "../apps/i2s/application.h"
+#ifndef I2S_FILE_CHECK
+#define I2S_FILE_CHECK 0
+#endif
 struct i2s_application app;
 static _Alignas(4096) uint8_t pcm_pool[5*4096];
 static uint8_t pcm_device[4][4096],fragment[512];
-static unsigned completed_pcm;
+static unsigned completed_pcm,final_busy_reads;
 int i2s_live(void *p){(void)p;return 1;}
 void i2s_fail(void *p){(void)p;configASSERT(0);}
 int i2s_request(enum dma_service_operation op,uint64_t timeout,uint64_t ticket)
@@ -18,12 +21,17 @@ static void pcm_advance(void)
 {
  if(live && get(&requested)){
   set(&requested,0);const struct a733_dma_transfer *t=service.controller.channels[0].transfer;
-  configASSERT(t && t->count==1 && t->segments[0].bytes==4096 && (ir[28/4]&128) && (ir[0]&4));
+  configASSERT(t && t->count==1 && t->segments[0].bytes==(completed_pcm==2&&I2S_FILE_CHECK?2u:4096u) && (ir[28/4]&128) && (ir[0]&4));
   unsigned slot=(unsigned)(((uintptr_t)t->mappings[0].cpu-(uintptr_t)pcm_pool-4096)/4096);
-  configASSERT(slot<4);for(unsigned i=0;i<4096;++i)configASSERT(pcm_device[slot][i]==0x31+completed_pcm);
-  ++completed_pcm;ir[40/4]+=2048;dma[di(0,0x38)]|=4;live=0;
+  configASSERT(slot<4);for(unsigned i=0;i<t->segments[0].bytes;++i)configASSERT(pcm_device[slot][i]==0x31+completed_pcm);
+  ++completed_pcm;ir[40/4]+=t->segments[0].bytes/2;dma[di(0,0x38)]|=4;live=0;
  }
- if(!dma[di(0,0)]&&get(&drain_enabled))dma[0x30/4]&=~1u;
+ if(!dma[di(0,0)]&&get(&drain_enabled)){
+  if(I2S_FILE_CHECK&&completed_pcm==3&&(dma[0x30/4]&1)&&final_busy_reads++<4){
+   configASSERT(atomic_load(&app.runtime.consumed)==4096&&!atomic_load(&app.runtime.file_done));return;
+  }
+  dma[0x30/4]&=~1u;
+ }
 }
 static uint32_t pcm_dma_read(void *p,uintptr_t at)
 {(void)p;privileged();pcm_advance();return dma[(at-D)/4];}
@@ -37,27 +45,46 @@ static void pcm_cache(void *p,enum a733_dma_cache op,void *cpu,size_t bytes)
 {
  (void)p;privileged();a733_dma_native_operations.cache(&native,op,cpu,bytes);
  uintptr_t at=(uintptr_t)cpu,first=(uintptr_t)pcm_pool+4096;
- if(at>=first && at<first+4*4096){configASSERT(op==A733_DMA_CLEAN && bytes==4096 && !live);
+ if(at>=first && at<first+4*4096){configASSERT(op==A733_DMA_CLEAN && (bytes==4096 || (I2S_FILE_CHECK&&bytes==64)) && !live);
   memcpy(pcm_device[(at-first)/4096],cpu,bytes);}
+}
+static int pcm_read_reg(void *p,uintptr_t at,uint32_t *out)
+{
+ if(I2S_FILE_CHECK&&at==A733_I2S0_BASE+24&&completed_pcm==3&&!(dma[0x30/4]&1)){
+  (void)p;locked();inc(&io_count);*out=128u<<16;return 1;
+ }
+ return read_reg(p,at,out);
 }
 static int pcm_prepared(void *p,uintptr_t base,uint16_t channels)
 {return p==&parent&&base==D&&channels==1&&a733_audio_parent_ready(&parent);}
 static void pcm_client(void *unused)
 {
- (void)unused;while(!get(&peer_stage))vTaskDelay(1);unsigned uploaded=0;
+ (void)unused;while(!get(&peer_stage))vTaskDelay(1);unsigned uploaded=0,refusals=0;
+ if(I2S_FILE_CHECK)configASSERT(i2s_runtime_begin(4097));
  for(unsigned n=0;n<2000;++n){
-  if(uploaded<12&&i2s_runtime_credits()){
+  if(uploaded<(I2S_FILE_CHECK?3u:12u)&&i2s_runtime_credits()){
    memset(fragment,0x31+uploaded,sizeof(fragment));
-   for(unsigned off=0;off<4096;off+=512)configASSERT(i2s_runtime_upload(uploaded+1,off,fragment,512)==1);
+   unsigned bytes=i2s_runtime_upload_bytes(uploaded+1);
+   for(unsigned off=0;off<bytes;off+=512){unsigned n=bytes-off<512?bytes-off:512;configASSERT(i2s_runtime_upload(uploaded+1,off,fragment,n)==1);}
    ++uploaded;
   }
+  if(I2S_FILE_CHECK&&uploaded==3&&!atomic_load(&app.runtime.eof))configASSERT(i2s_runtime_end(4097));
   if(live&&n%16==0)set(&requested,1);
-  if(atomic_load(&app.runtime.consumed)>=8*2048)atomic_store(&app.cancel,1);
+  if(!I2S_FILE_CHECK&&atomic_load(&app.runtime.consumed)>=8*2048)atomic_store(&app.cancel,1);
   int r=i2s_runtime_step();
+  if(I2S_FILE_CHECK&&app.runtime.held&&!refusals){
+   uint64_t ticket=app.runtime.held;
+   configASSERT(request(DMA_SERVICE_PERIOD_END,0,0,ticket).result==DMA_SERVICE_INVALID);
+   configASSERT(request(DMA_SERVICE_PERIOD_END,0,2049,ticket).result==DMA_SERVICE_INVALID);
+   configASSERT(request(DMA_SERVICE_PERIOD_END,0,1,ticket+1).result==DMA_SERVICE_INVALID);
+   configASSERT(!service.channels[0].stream.input_ended);refusals=1;
+  }
   if(r){configASSERT(r==1&&atomic_load(&app.result)==2&&atomic_load(&app.runtime.drained)==1);
-   configASSERT(completed_pcm>=8 && atomic_load(&app.runtime.consumed)==8*2048);
+   configASSERT(I2S_FILE_CHECK?(completed_pcm==3&&final_busy_reads>=5&&atomic_load(&app.runtime.consumed)==4097&&atomic_load(&app.runtime.committed)==4097&&atomic_load(&app.runtime.file_done)):(completed_pcm>=8 && atomic_load(&app.runtime.consumed)==8*2048));
+   if(I2S_FILE_CHECK){configASSERT(service.channels[0].stream.status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5);
+    configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY&&request(DMA_SERVICE_CLOSE,0,100000,0).result==DMA_SERVICE_BUSY);}
    configASSERT(bindings[0].pin_lease.id && service.channels[0].holds_buffers);
-   platform_puts("PASS runtime caller PCM actual providers, distinct periods, exact completed refill and retained cancellation\n");platform_exit(0);}
+   platform_puts(I2S_FILE_CHECK?"PASS file PCM actual providers two full periods and one frame, exact memory/FIFO accounting and retained EOF\n":"PASS runtime caller PCM actual providers, distinct periods, exact completed refill and retained cancellation\n");platform_exit(0);}
   vTaskDelay(1);
  }
  configASSERT(0);
@@ -68,7 +95,7 @@ void kernel_main(void)
  ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);ccu[0x280/4]=0xf8047f00;
  ccu[0x191c/4]=0x60006;ccu[0x199c/4]=0x60000;dma[0x34/4]=3;dma[di(0,8)]=0x41000000;
  configASSERT(a733_clock_leases_init(&clocks,clock_now,NULL)&&a733_platform_locks_init(&locks,clock_now,NULL));
- const struct a733_audio_operations backend={.enter=enter,.leave=leave,.now_us=clock_now,.read=read_reg,.write=write_reg};
+ const struct a733_audio_operations backend={.enter=enter,.leave=leave,.now_us=clock_now,.read=pcm_read_reg,.write=write_reg};
  configASSERT(a733_audio_leases_init(&audio,&clocks,7,&backend,NULL));
  configASSERT(a733_audio_parent_init(&parent,&audio.operations,&audio,0,100000));
  struct a733_pins_operations pops={enter,leave,clock_now,read_reg,write_reg};configASSERT(a733_pins_init(&pins,&pops,NULL,A733_PINS_PB_MASK));

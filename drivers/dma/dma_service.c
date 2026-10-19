@@ -102,6 +102,7 @@ static void stream_state(struct dma_service_channel *c)
     case A733_I2S_PREPARING:case A733_I2S_ACTIVE:c->phase=DMA_SERVICE_RUNNING;break;
     case A733_I2S_STOPPING:c->phase=DMA_SERVICE_DRAINING;break;
     case A733_I2S_CLOSING:c->phase=DMA_SERVICE_CLOSING;break;
+    case A733_I2S_INPUT_ENDED:c->phase=DMA_SERVICE_RESULT;c->outcome=DMA_SERVICE_COMPLETE;break;
     case A733_I2S_CANCELED:c->phase=DMA_SERVICE_RESULT;c->outcome=DMA_SERVICE_CANCELED;break;
     case A733_I2S_FAILED:c->phase=DMA_SERVICE_RESULT;c->outcome=DMA_SERVICE_FAILED;break;
     default:c->phase=DMA_SERVICE_RECOVERY;break;
@@ -154,7 +155,7 @@ static enum dma_service_result stream_execute(struct dma_service *s,
             if(result!=A733_I2S_INVALID && result!=A733_I2S_CONFLICT)c->job_ticket=m->ticket;
             break;
         case DMA_SERVICE_CANCEL:
-            if(c->phase!=DMA_SERVICE_RUNNING && c->phase!=DMA_SERVICE_READY)return DMA_SERVICE_BUSY;
+            if(c->phase!=DMA_SERVICE_RUNNING && c->phase!=DMA_SERVICE_READY&&c->stream.status!=A733_I2S_INPUT_ENDED)return DMA_SERVICE_BUSY;
             result=a733_i2s_stream_cancel(&c->stream);break;
         case DMA_SERVICE_PERIOD_GET: {
             int got=a733_i2s_stream_get(&c->stream,period);
@@ -163,6 +164,10 @@ static enum dma_service_result stream_execute(struct dma_service *s,
         case DMA_SERVICE_PERIOD_PUT: {
             int put=a733_i2s_stream_put(&c->stream,r->period_ticket);
             stream_state(c);return put==1?DMA_SERVICE_OK:put==0?DMA_SERVICE_INVALID:DMA_SERVICE_FAULT;
+        }
+        case DMA_SERVICE_PERIOD_END: {
+            int put=a733_i2s_stream_end(&c->stream,r->period_ticket,r->timeout);
+            stream_state(c);return put==1?DMA_SERVICE_OK:DMA_SERVICE_INVALID;
         }
         case DMA_SERVICE_REAP:
             if(!a733_i2s_stream_reap(&c->stream))return DMA_SERVICE_BUSY;
@@ -183,15 +188,16 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
     struct a733_i2s_period *period)
 {
     const struct dma_service_request *r=&m->request;
-    if ((unsigned)r->operation > DMA_SERVICE_PERIOD_PUT || r->job >= s->job_count) return DMA_SERVICE_INVALID;
+    if ((unsigned)r->operation > DMA_SERVICE_PERIOD_END || r->job >= s->job_count) return DMA_SERVICE_INVALID;
     if (!(s->clients[m->client].jobs & (UINT32_C(1)<<r->job))) return DMA_SERVICE_DENIED;
     struct dma_service_private_job *j=&s->jobs[r->job];
     struct dma_service_channel *c=&s->channels[j->channel];
     if(c->stream.self==&c->stream && c->stream.status==A733_I2S_RECOVERY)stream_state(c);
     int timed=r->operation == DMA_SERVICE_SUBMIT ||
         (j->kind != DMA_SERVICE_RAM && (r->operation == DMA_SERVICE_OPEN || r->operation == DMA_SERVICE_CLOSE));
-    if (timed ? !duration(r->timeout) : r->timeout != 0) return DMA_SERVICE_INVALID;
-    if(r->operation==DMA_SERVICE_PERIOD_PUT ? !r->period_ticket : r->period_ticket!=0)return DMA_SERVICE_INVALID;
+    if(r->operation==DMA_SERVICE_PERIOD_END){if(!r->timeout)return DMA_SERVICE_INVALID;}
+    else if (timed ? !duration(r->timeout) : r->timeout != 0) return DMA_SERVICE_INVALID;
+    if((r->operation==DMA_SERVICE_PERIOD_PUT||r->operation==DMA_SERVICE_PERIOD_END) ? !r->period_ticket : r->period_ticket!=0)return DMA_SERVICE_INVALID;
     if(j->kind!=DMA_SERVICE_I2S_STREAM && r->operation>DMA_SERVICE_CLOSE)return DMA_SERVICE_INVALID;
     if (r->operation == DMA_SERVICE_STATUS)
         return c->phase == DMA_SERVICE_RECOVERY ? DMA_SERVICE_FAULT : DMA_SERVICE_OK;

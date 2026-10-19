@@ -55,6 +55,7 @@ struct a733_i2s_stream {
     struct a733_dma_controller *dma;
     const struct a733_dma_transfer *catalogue;
     struct a733_dma_transfer active;
+    struct a733_dma_segment active_segment; /* Finite private prefix, immutable while DMA owns it. */
     struct a733_i2s_stream_slot slots[A733_I2S_STREAM_PERIODS];
     uint64_t deadline, time, timeout, generation, frames, bridge_deadline;
     enum a733_i2s_status status, outcome;
@@ -62,6 +63,8 @@ struct a733_i2s_stream {
     uint64_t reported, raw_next, cyclic_since, cyclic_observed_us;
     struct a733_i2s_period snapshot_result;
     unsigned snapshot_state, cyclic_started;
+    unsigned input_ended, end_slot, end_frames;
+    uint64_t fifo_deadline;
     _Alignas(64) unsigned char snapshot[4096];
 };
 enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,
@@ -86,6 +89,12 @@ int a733_i2s_stream_get(struct a733_i2s_stream *, struct a733_i2s_period *);
 /* Read-only CPU staging lease after CAPTURED_COPY GET, never raw DMA memory. */
 int a733_i2s_stream_copy(const struct a733_i2s_stream *,uint64_t,void *,size_t);
 int a733_i2s_stream_put(struct a733_i2s_stream *, uint64_t ticket);
+/* Commit exactly the final finite TX lease. valid_frames is nonzero and at most
+ * this catalogue period's capacity. No later PUT commits payload; those PUTs
+ * return completed/unused leases only. INPUT_ENDED proves DMA ownership ended
+ * and FIFO empty was observed, not serializer completion. TX/clock/pin/catalogue
+ * leases remain held; REAP/CLOSE require explicit potentially truncating cancel. */
+int a733_i2s_stream_end(struct a733_i2s_stream *,uint64_t ticket,uint64_t valid_frames);
 /* Terminal REAP is allowed only after actual drain and every client PUT;
  * discards unclaimed periods, but preserves the whole catalogue reservation. */
 int a733_i2s_stream_reap(struct a733_i2s_stream *);

@@ -5,7 +5,7 @@ enum { CTL=0,FMT0=4,FMT1=8,ISTA=12,FCTL=20,FSTA=24,ICTL=28,
     CLK=36,TXCNT=40,RXCNT=44,CHCFG=48,TXSEL=52,TXMAP0=68,TXMAP1=72,
     RXSEL=100,RXMAP0=104,RXMAP1=108,RXMAP2=112,RXMAP3=116 };
 enum { FREE,QUEUED,DEVICE,DONE,CLIENT };
-enum { ACQUIRE,CONFIGURE,FLUSH,ACTIVE,DRAIN,PUBLISH,STOP,CLOSE };
+enum { ACQUIRE,CONFIGURE,FLUSH,ACTIVE,DRAIN,PUBLISH,STOP,CLOSE,EOF_FIFO };
 #define IO(s) ((s)->profile.operations.io)
 #define COOKIE(s) ((s)->profile.cookie)
 static int tx(const struct a733_i2s_stream *s) {return s->profile.direction==A733_I2S_TRANSMIT;}
@@ -203,7 +203,9 @@ static enum a733_i2s_status arm(struct a733_i2s_stream *s)
         s->stage=ACTIVE;s->status=A733_I2S_ACTIVE;return s->status;
     }
     if(s->slots[i].state!=(tx(s)?QUEUED:FREE))return stop(s,A733_I2S_FAILED);
-    s->active=(struct a733_dma_transfer){s->catalogue->descriptors,&s->catalogue->segments[i],1,
+    s->active_segment=s->catalogue->segments[i];
+    if(s->input_ended&&i==s->end_slot)s->active_segment.bytes=s->end_frames*s->plan.frame_bytes;
+    s->active=(struct a733_dma_transfer){s->catalogue->descriptors,&s->active_segment,1,
         &s->catalogue->mappings[i],1};
     s->active.descriptors.cpu=(unsigned char *)s->active.descriptors.cpu+i*64;
     s->active.descriptors.bus+=i*64;s->active.descriptors.bytes=64;
@@ -226,7 +228,7 @@ enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *s,uint64_t ti
     if(!valid(s) || s->status!=A733_I2S_READY || !timeout || timeout>INT64_MAX)return A733_I2S_INVALID;
     if(s->duplex && (!s->peer || (s->peer->status!=A733_I2S_READY &&
         s->peer->status!=A733_I2S_ACTIVE && s->peer->status!=A733_I2S_PREPARING)))return A733_I2S_CONFLICT;
-    if(tx(s) && (s->slots[0].state!=QUEUED || s->slots[1].state!=QUEUED))return A733_I2S_CONFLICT;
+    if(tx(s) && (s->slots[0].state!=QUEUED || (s->slots[1].state!=QUEUED&&!(s->input_ended&&s->end_slot==0))))return A733_I2S_CONFLICT;
     if(tx(s) && s->profile.cyclic)for(unsigned n=0;n<s->count;++n)
         if(s->slots[n].state!=QUEUED)return A733_I2S_CONFLICT;
     int h=health(s);if(h<0)return fault(s);if(!h)return A733_I2S_CONFLICT;
@@ -246,13 +248,23 @@ static enum a733_i2s_status publish(struct a733_i2s_stream *s)
     if(status&errors(s))return stop(s,A733_I2S_FAILED);
     if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
     struct a733_i2s_stream_slot *slot=&s->slots[s->current];
-    unsigned frames=s->catalogue->segments[s->current].bytes/s->plan.frame_bytes;
+    unsigned frames=s->active_segment.bytes/s->plan.frame_bytes;
     if(s->frames>UINT64_MAX-frames)return fault(s);
     slot->result=(struct a733_i2s_period){.slot=s->current,.first_frame=s->frames,
         .frames=frames,.counter=counter,.observed_before_us=slot->result.observed_before_us,
         .observed_after_us=s->time,.kind=tx(s)?A733_I2S_TX_MEMORY_CONSUMED:A733_I2S_CAPTURED};
     slot->state=DONE;s->frames+=frames;s->next=(s->current+1)%s->count;
+    unsigned final=s->input_ended&&s->current==s->end_slot;
     s->current=A733_I2S_STREAM_PERIODS;
+    if(final){
+        /* DMA's existing completion/drain contract has returned this allocation.
+         * Leave the serial direction running. FIFO space is an observation,
+         * not a serializer fence, and does not authorize release. */
+        if(s->time>UINT64_MAX-s->profile.operation_us)return fault(s);
+        if(s->priming){if(!control(s,1|4))return fault(s);s->priming=0;}
+        s->fifo_deadline=s->time+s->profile.operation_us;s->stage=EOF_FIFO;
+        return s->status;
+    }
     return arm(s);
 }
 static int cyclic_frames(struct a733_i2s_stream *s)
@@ -339,6 +351,16 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         if(s->current<s->count)s->slots[s->current].state=FREE;
         s->current=A733_I2S_STREAM_PERIODS;s->deadline=0;return s->status=s->outcome;
     }
+    if(s->stage==EOF_FIFO){
+        uint32_t status,fs;
+        if(s->time>=s->fifo_deadline||a733_dma_owns(s->dma,&s->active))return fault(s);
+        if(!rd(s,ISTA,&status)||!rd(s,FSTA,&fs)||!now(s))return fault(s);
+        if((status&errors(s))||s->time>=s->fifo_deadline)return fault(s);
+        unsigned free=(fs>>16)&255;if(free>128)return fault(s);
+        s->deadline=0;
+        if(free==128)return s->status=A733_I2S_INPUT_ENDED;
+        return s->status;
+    }
     if(s->stage==ACTIVE) {
         uint32_t status,fs;
         if(!rd(s,ISTA,&status) || !rd(s,FSTA,&fs))return fault(s);
@@ -361,17 +383,22 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         uint64_t before=s->time;
         if(!rd(s,FSTA,&fs))return fault(s);
         unsigned available=tx(s)?128-((fs>>16)&255):64-(fs&127);
-        if(available>128 || available<2)return stop(s,A733_I2S_FAILED);
+        if(available>128)return stop(s,A733_I2S_FAILED);
+        if(s->input_ended&&s->current==s->end_slot){
+            s->bridge_deadline=0;s->slots[s->current].result.observed_before_us=before;s->stage=DRAIN;
+        }else{
+        if(available<2)return stop(s,A733_I2S_FAILED);
         uint64_t us=((uint64_t)(available-1)*1000000)/(s->profile.format.rate_hz*s->profile.format.channels);
         if(!us || before>UINT64_MAX-us)return stop(s,A733_I2S_FAILED);
         s->bridge_deadline=before+us;s->slots[s->current].result.observed_before_us=before;
         s->stage=DRAIN;
+        }
     }
     if(s->stage==DRAIN) {
         enum a733_dma_control_status d=a733_dma_poll(s->dma,s->channel);
         if(!now(s) || d==A733_DMA_RECOVERY)return fault(s);
         if(d==A733_DMA_STOPPING) {
-            if(s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
+            if(s->bridge_deadline&&s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
             s->deadline=0;return s->status;
         }
         if(d!=A733_DMA_COMPLETE || a733_dma_owns(s->dma,&s->active))return stop(s,A733_I2S_FAILED);
@@ -384,7 +411,7 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
 enum a733_i2s_status a733_i2s_stream_cancel(struct a733_i2s_stream *s)
 {
     if(!valid(s))return s?s->status:A733_I2S_INVALID;
-    if(s->status!=A733_I2S_PREPARING && s->status!=A733_I2S_ACTIVE && s->status!=A733_I2S_READY)return s->status;
+    if(s->status!=A733_I2S_PREPARING && s->status!=A733_I2S_ACTIVE && s->status!=A733_I2S_READY && s->status!=A733_I2S_INPUT_ENDED)return s->status;
     int h=health(s);if(h<0)return fault(s);if(!h)return A733_I2S_CONFLICT;
     enum a733_i2s_status r=stop(s,A733_I2S_CANCELED);
     if(r!=A733_I2S_RECOVERY)s->deadline=0;
@@ -394,7 +421,7 @@ int a733_i2s_stream_get(struct a733_i2s_stream *s,struct a733_i2s_period *out)
 {
     if(!valid(s) || !out)return -1;
     if(s->status!=A733_I2S_READY && s->status!=A733_I2S_ACTIVE &&
-        s->status!=A733_I2S_FAILED && s->status!=A733_I2S_CANCELED)return 0;
+        s->status!=A733_I2S_FAILED && s->status!=A733_I2S_CANCELED && s->status!=A733_I2S_INPUT_ENDED)return 0;
     int h=health(s);if(h<0){fault(s);return -1;}if(!h)return 0;
     if(s->profile.cyclic && s->status!=A733_I2S_READY) {
         if(tx(s)) {
@@ -442,10 +469,28 @@ int a733_i2s_stream_put(struct a733_i2s_stream *s,uint64_t ticket)
         s->snapshot_state=FREE;return 1;
     }
     for(unsigned i=0;i<s->count;++i)if(s->slots[i].state==CLIENT && s->slots[i].result.ticket==ticket) {
-        s->slots[i].state=tx(s) && (s->status==A733_I2S_READY || s->status==A733_I2S_ACTIVE ||
+        s->slots[i].state=tx(s) && !s->input_ended && (s->status==A733_I2S_READY || s->status==A733_I2S_ACTIVE ||
             s->status==A733_I2S_PREPARING)?QUEUED:FREE;return 1;
     }
     return 0;
+}
+int a733_i2s_stream_end(struct a733_i2s_stream *s,uint64_t ticket,uint64_t frames)
+{
+    if(!valid(s)||!ticket||!tx(s)||s->profile.cyclic||s->input_ended||!frames||
+       !s->plan.frame_bytes||frames>UINT32_MAX/s->plan.frame_bytes||
+       (s->status!=A733_I2S_READY&&s->status!=A733_I2S_ACTIVE&&s->status!=A733_I2S_PREPARING))return 0;
+    unsigned slot=s->count;
+    for(unsigned i=0;i<s->count;++i)if(s->slots[i].state==CLIENT&&s->slots[i].result.ticket==ticket){slot=i;break;}
+    if(slot==s->count||frames>s->catalogue->segments[slot].bytes/s->plan.frame_bytes)return 0;
+    /* Commit the tail of the currently queued logical prefix, never abandon
+     * a later queued payload or allow an uncommitted hole before the tail. */
+    unsigned first=s->current<s->count?(s->current+1)%s->count:s->next;
+    unsigned i=first;
+    while(i!=slot){if(s->slots[i].state!=QUEUED)return 0;i=(i+1)%s->count;}
+    i=(slot+1)%s->count;
+    unsigned stop=s->current<s->count?s->current:first;
+    while(i!=stop){if(s->slots[i].state==QUEUED||s->slots[i].state==DEVICE)return 0;i=(i+1)%s->count;}
+    s->input_ended=1;s->end_slot=slot;s->end_frames=(unsigned)frames;s->slots[slot].state=QUEUED;return 1;
 }
 int a733_i2s_stream_reap(struct a733_i2s_stream *s)
 {
