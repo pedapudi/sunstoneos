@@ -86,6 +86,21 @@ session supports one frame of at most 4096 input bytes. Broader formats, repeate
 decoding and physical pixel/confinement/drain qualification remain outstanding.
 Parser evidence under `h264-stream-20261018/final-frozen/` was reused.
 
+JPEG now accepts a supplied baseline YCbCr420 image and returns copied pixels
+with parsed dimensions. Complete input authentication precedes decoder resource
+acquisition; an independent pixel reference is optional. Geometry, upload,
+native copy, session and host checks pass under `jpeg-runtime-input-20261018/`.
+Integration preserves the accepted image and 424 compiled inputs; the only
+current-source difference is an unrelated H.264 API comment. Physical pixel
+correctness and confinement remain unqualified.
+
+Crypto now accepts bounded SHA-256 and AES-128 ECB requests with private copied
+input, deferred engine construction and request-bound output. Native, sanitizer,
+admission and host checks pass under `crypto-runtime-input-20261018/`; all 414
+compiled inputs match integration. Review resolved key-cleanup races and bounded
+handling of empty USB fragments. Physical engine operation, secure access and
+drain remain unqualified. Both integrations reused accepted checks.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:
@@ -1032,14 +1047,12 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Finish runtime input delivery for JPEG and crypto. Separate workers own
-   their private applications and checks in `jpeg-runtime-input` and
-   `crypto-runtime-input` worktrees. H.264 runtime input is integrated.
-   JPEG must accept a supplied supported
-   image and return copied pixels and dimensions. Crypto must accept bounded
-   SHA-256 or AES-128 ECB requests and return request-bound results. Preserve
-   private input ownership, generation checks and retained uncertain operations.
-   Numerical qualification remains distinct from accepting ordinary input.
+1. Extend UART interrupt service and repeated I2S streaming in separate
+   `uart-irq` and `i2s-cyclic` worktrees. Workers must first identify the pinned
+   source sequence and ownership requirements. UART work excludes DMA; I2S work
+   owns any coordinated audio/DMA changes. Preserve bounded buffers, completion
+   before reuse and retained uncertainty. CPU/startup changes remain root-owned.
+   H.264, JPEG and crypto runtime input delivery is integrated.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
    outside these workers' scope unless a concrete dependency requires a

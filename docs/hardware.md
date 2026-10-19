@@ -972,6 +972,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A nonconstant diagnostic now has an exact CPU-decoded reference and integrated
   native copy/layout and host checks. Its sparse-coefficient oracle does not
   establish general JPEG numerical conformance. Physical decoding remains untested.
+  Runtime JPEG upload now accepts supplied baseline YCbCr420 images within
+  bounded input and padded-plane capacities, authenticates them before decoder
+  acquisition, and returns copied pixels with parsed dimensions. Optional
+  independent reference pixels support qualification. Partial-block geometry,
+  immutable input, native copy and fragmented host capture checks pass under
+  `jpeg-runtime-input-20261018/`. Each retained session decodes one image;
+  repeated operation and physical conformance remain outstanding.
   The complete JPEG session is now copied and verified against its admitted
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
@@ -1022,6 +1029,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   this application. Startup now binds the private session to the admitted digest;
   USB failure revokes board liveness before parking. The affected image and
   focused binding/failure checks pass without repeating arithmetic checks.
+  Caller-supplied SHA-256 and AES-128 ECB requests are now integrated, with private
+  authenticated input, deferred engine construction and request-bound copied
+  output. Focused native, sanitizer, admission and host checks pass under
+  `crypto-runtime-input-20261018/`. Messages are bounded to 2048 bytes; AES requires
+  a positive multiple of 16 bytes. Each retained session accepts one request.
+  Optional output references do not replace physical numerical qualification.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
