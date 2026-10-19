@@ -16,7 +16,9 @@ supervisor=module('storage_read_capture_supervisor',ROOT/'tools/check-a733-smp-s
 preparation=module('storage_read_capture_preparation',ROOT/'apps/storage-read/prepare.py')
 decoder=module('storage_read_capture_decoder',ROOT/'apps/storage-read/observe.py')
 require,digest=supervisor.require,supervisor.digest
-PREREQUISITES={'supervised-ram-recovery','storage-read-supervised-software'}
+SOFTWARE_PREREQUISITE='storage-read-supervised-software'
+SOFTWARE_SCHEMA='a733-storage-read-supervised-software-v2'
+PREREQUISITES={'supervised-ram-recovery',SOFTWARE_PREREQUISITE}
 PRODUCT='sunstoneos native SD0 read'
 SERIAL='sunstoneos-a733-storage-read'
 
@@ -154,7 +156,7 @@ def software_sources():
 
 
 def validate_software(value,prepared):
-    require(value.get('schema')=='a733-storage-read-supervised-software-v2' and value.get('physical_access') is False and
+    require(value.get('schema')==SOFTWARE_SCHEMA and value.get('physical_access') is False and
             all(value.get(k) is True for k in ('session_binding','read_only_trace','revocation_retention','host_capture')),
             'SD0 read software evidence is incomplete.')
     for key,name in [('image','image.elf'),('launcher','launch.bin')]:
@@ -181,7 +183,7 @@ def claimed(database,test_id,owner,bundle,prepared):
         path,data=reference_bytes(refs['supervised-ram-recovery'])
         require(path==(bundle/'admission.json').resolve() and hashlib.sha256(data).hexdigest()==prepared['files']['admission.json'],
                 'Reviewed entry differs from the initially admitted SD0 read entry.')
-        _,data=reference_bytes(refs['storage-read-supervised-software']);validate_software(json.loads(data),prepared)
+        _,data=reference_bytes(refs[SOFTWARE_PREREQUISITE]);validate_software(json.loads(data),prepared)
         covered={}
         for value in submission['artifacts']:
             path,data=reference_bytes(value);covered[path]=hashlib.sha256(data).hexdigest()

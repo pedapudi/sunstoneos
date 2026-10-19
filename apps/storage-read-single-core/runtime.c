@@ -23,7 +23,7 @@ __attribute__((used,retain)) const uint64_t rtc_single_core_geometry[4]={UINT64_
 #elif defined(SUNSTONE_NPU_SINGLE_CORE)
 __attribute__((used,retain)) const uint64_t npu_single_core_geometry[4]={UINT64_C(0x415337334e505331),1,sizeof(struct npu_session),20};
 #else
-__attribute__((used,retain)) const uint64_t storage_read_single_core_geometry[4]={UINT64_C(0x4153373353444331),1,880,60};
+__attribute__((used,retain)) const uint64_t storage_read_single_core_geometry[4]={UINT64_C(0x4153373353444331),1,STORAGE_READ_SESSION_BYTES,60};
 #endif
 struct a733_cached_runtime a733_cached_runtime[1];
 extern const struct a733_smp_contract *sd_single_core_contract(void);

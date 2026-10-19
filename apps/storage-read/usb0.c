@@ -31,7 +31,13 @@ const uint8_t *tud_descriptor_configuration_cb(uint8_t i){return i?NULL:tud_spee
 const uint8_t *tud_descriptor_other_speed_configuration_cb(uint8_t i)
 {static uint8_t other[sizeof(hs)];if(i)return NULL;memcpy(other,tud_speed_get()==TUSB_SPEED_HIGH?fs:hs,sizeof(hs));other[1]=TUSB_DESC_OTHER_SPEED_CONFIG;return other;}
 const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
-{(void)language;static uint16_t out[64];static const char *const text[]={"","sunstoneos","sunstoneos native SD0 read","sunstoneos-a733-storage-read","Capture"};
+{(void)language;static uint16_t out[64];static const char *const text[]={"","sunstoneos",
+#ifdef SUNSTONE_EMMC_READ
+ "sunstoneos native eMMC read","sunstoneos-a733-emmc-read",
+#else
+ "sunstoneos native SD0 read","sunstoneos-a733-storage-read",
+#endif
+ "Capture"};
  if(!i){out[0]=0x0304;out[1]=0x0409;return out;}if(i>=5)return NULL;size_t n=strlen(text[i]);out[0]=(uint16_t)(0x0300|2*n+2);for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;}
 
 /* One host command and one copied response at a time. USB-owned bytes remain

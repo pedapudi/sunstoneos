@@ -8,7 +8,12 @@ int board_application_pins(struct a733_pin_handoff *pins)
 {
  const struct storage_read_session *s=storage_read_admitted_session();
  if(!pins||!s||memcmp(&s->board,&board.admitted_session,sizeof(s->board)))return 0;
- pins->authorized[A733_PIN_F]|=0x7f;return 1;
+#ifdef SUNSTONE_EMMC_READ
+ pins->authorized[A733_PIN_C]|=UINT32_C(0x1ef63);
+#else
+ pins->authorized[A733_PIN_F]|=0x7f;
+#endif
+ return 1;
 }
 int board_application_start(void)
 {

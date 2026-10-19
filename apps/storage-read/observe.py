@@ -11,8 +11,8 @@ def read_request(first,blocks,request_id):
 def cancel_request(ticket):
     if not 0<ticket<2**64:raise ValueError('Invalid SD0 cancellation ticket')
     return struct.pack('<BBHIQQQ',3,2,32,0,ticket,0,0)
-def decode(raw,session,expected=None):
-    if len(session)!=880 or struct.unpack_from('<3Q',session,592)!=(0x4153373352444131,2,880):raise ValueError('Wrong SD0 session geometry')
+def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_bytes=880):
+    if len(session)!=session_bytes or struct.unpack_from('<3Q',session,592)!=(session_magic,2,session_bytes):raise ValueError('Wrong SD0 session geometry')
     if len(raw)<HEADER:raise ValueError('Truncated SD0 record')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
     if (magic,version)!=(0x44524453,2) or status not in range(5):raise ValueError('Wrong SD0 record')

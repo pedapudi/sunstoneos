@@ -4,7 +4,7 @@
 #include "a733_storage_digest.h"
 #include <string.h>
 struct storage_read_application storage_read;
-__attribute__((used,retain)) const uint64_t storage_read_geometry[5]={A733_STORAGE_READ_SESSION_MAGIC,880,288,4096,2};
+__attribute__((used,retain)) const uint64_t storage_read_geometry[5]={A733_STORAGE_READ_SESSION_MAGIC,STORAGE_READ_SESSION_BYTES,288,4096,2};
 static uint64_t limit(void){return board.session.deadline_us-10000;}
 static int memory(uintptr_t a,size_t bytes,uint8_t attributes,uint8_t shareability)
 {
@@ -20,7 +20,14 @@ static int memory(uintptr_t a,size_t bytes,uint8_t attributes,uint8_t shareabili
 }
 static int mappings(void)
 {
- static const uintptr_t a[]={0x04020000,0x04020200,0x02002d00,0x02002d0c,0x02002500,0x02002580,0x02002588,
+#ifdef SUNSTONE_EMMC_READ
+ uintptr_t controller=0x04022000+storage_read.session.emmc_host*0x1000;
+ if(!memory(controller,0x304,0,2)||!memory(0x02000040,0x34,0,2)||
+    !memory(0x07090160,4,0,2))return 0;
+#else
+ if(!memory(0x04020000,0x304,0,2))return 0;
+#endif
+ static const uintptr_t a[]={0x02002d00,0x02002d0c,0x02002500,0x02002580,0x02002588,
  0x020000f0,0x02000344,0x03400118,0x03400218,0x03400318};
  for(unsigned i=0;i<sizeof(a)/sizeof(a[0]);++i)if(!memory(a[i],1,0,2))return 0;
  return memory((uintptr_t)storage_read.borrowed,sizeof(storage_read.borrowed),0xff,3);
@@ -40,14 +47,19 @@ static int construct(void)
  storage_read.deadline=now+storage_read.session.identify_us;
  storage_read.config=(struct a733_mmc_platform_config){.owner=storage_read.session.owner,
  .handoff=storage_read.session.authority,.topology=board.session.topology,
- .deadline_us=storage_read.deadline,.lifetime_deadline_us=limit(),.kind=SUNXI_MMC_SD,
+ .deadline_us=storage_read.deadline,.lifetime_deadline_us=limit(),
+#ifdef SUNSTONE_EMMC_READ
+ .kind=SUNXI_MMC_EMMC,.emmc_host=storage_read.session.emmc_host,
+#else
+ .kind=SUNXI_MMC_SD,
+#endif
  .voltage_mask=storage_read.session.voltage_mask};
  memcpy(storage_read.config.fabric,board.session.fabric,sizeof(storage_read.config.fabric));
  memcpy(storage_read.config.fabric_hz,board.session.fabric_hz,sizeof(storage_read.config.fabric_hz));
  memcpy(storage_read.config.expected,storage_read.session.expected,sizeof(storage_read.session.expected));
  memcpy(storage_read.config.desired,storage_read.session.desired,sizeof(storage_read.session.desired));
- if(!a733_mmc_platform_native_init(&storage_read.native,&providers.shared.locks,storage_read.handle,
- SUNXI_MMC_SD,admit,&storage_read))return 0;
+ if(!a733_mmc_platform_native_init_selected(&storage_read.native,&providers.shared.locks,storage_read.handle,
+ storage_read.config.kind,storage_read.config.emmc_host,admit,&storage_read))return 0;
  return a733_mmc_platform_init(&storage_read.platform,&storage_read.config,&storage_read.native.operations,
  &storage_read.native,&providers.shared.clocks,&providers.shared.pins,&providers.shared.rails,&providers.shared.pmic);
 }

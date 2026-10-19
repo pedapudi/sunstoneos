@@ -18,6 +18,21 @@ require=base.require
 SCHEMA='a733-storage-read-supervised-bundle-v2'
 CONTRACT_MAGIC=0x4153373352444331
 REQUEST_MAGIC=0x4153373352444c31
+SESSION_MAGIC=0x4153373352444131
+SESSION_BYTES=880
+SESSION_DEFINE=[]
+PROFILES={'sunstone-a733-storage-read':'storage-read-supervised-v2',
+          'sunstone-a733-storage-read-single-core':'storage-read-single-core-supervised-v2'}
+SINGLE_CORE_TARGET='sunstone-a733-storage-read-single-core'
+SINGLE_CORE_BYTES=880
+AUTHORITY_PREFIX='a733-storage-read-'
+ENTRY_SCHEMA='a733-storage-read-supervised-entry-v2'
+REQUIRED_FACTS={
+ 'initial':[],
+ 'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
+ 'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],
+ 'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
+ 'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}
 
 def inherited_mux(raw):
     functions=list(raw[792:813:3])
@@ -48,7 +63,7 @@ def embedded_reference(image,session):
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image has no symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
-    expected=struct.pack('<5Q',0x4153373352444131,880,288,4096,2)
+    expected=struct.pack('<5Q',SESSION_MAGIC,SESSION_BYTES,288,4096,2)
     for name,body in [('storage_read_geometry',expected)]:
         require(name in symbols,'Missing immutable SD0 geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong SD0 geometry size.')
@@ -65,14 +80,13 @@ def image_manifest_check(manifest,image,session=None):
     """Bind a supported execution profile to the actual immutable ELF startup."""
     import io
     from elftools.elf.elffile import ELFFile
-    profiles={'sunstone-a733-storage-read':'storage-read-supervised-v2',
-              'sunstone-a733-storage-read-single-core':'storage-read-single-core-supervised-v2'}
+    profiles=PROFILES
     target=manifest.get('target')
     require(target in profiles and manifest.get('execution_profile')==profiles[target] and
             manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),
             'Tested STORAGE_READ image manifest required.')
     if session is not None:
-        require(struct.unpack_from('<I',session,532)[0]==1 or target=='sunstone-a733-storage-read-single-core',
+        require(struct.unpack_from('<I',session,532)[0]==1 or target==SINGLE_CORE_TARGET,
                 'ROM USB0 takeover requires the single-core SD0 image.')
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image symbols absent.')
@@ -91,24 +105,24 @@ def image_manifest_check(manifest,image,session=None):
            int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
     require(len(parts)==1,'Single-core SD0 geometry must be immutable/file-backed.')
     offset=first-int(parts[0]['p_vaddr'])
-    require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373353444331,1,880,60),
+    require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373353444331,1,SINGLE_CORE_BYTES,60),
             'Single-core SD0 geometry differs.')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,880)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,SESSION_BYTES)
     return request,bytes(contract)
 
 def build_launcher(out,clang,lld):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
-    text=text.replace('0x4153373353554c33','0x4153373352444c31').replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
+    text=text.replace('0x4153373353554c33',hex(REQUEST_MAGIC)).replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
     text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==A733_BOARD_SESSION_ADDRESS && CONTRACT->reserved[1]==sizeof(struct storage_read_session)')
     text=text.replace('20*A733_SMP_COUNTER_HZ','60*A733_SMP_COUNTER_HZ')
     (out/'storage_read-launch-base.c').write_text(text)
     for name,path in [('launch.c',ROOT/'apps/storage-read/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('storage_read_session.h',ROOT/'apps/storage-read/storage_read_session.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h'),('a733_pins.h',ROOT/'include/a733_pins.h')]:shutil.copy2(path,out/name)
-    flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
+    flags=SESSION_DEFINE+['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
     for command in commands:
@@ -138,7 +152,7 @@ def initial_policy(fact):
 
 def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-storage-read-supervised-entry-v2','Wrong STORAGE_READ admission schema.')
+    require(record.get('schema')==ENTRY_SCHEMA,'Wrong STORAGE_READ admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
     cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
     for key,offset in [('initial',632),('memory',664),('supplies',696),('topology',728),('supervision',760)]:
@@ -147,7 +161,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             require(not frozen,'Missing frozen STORAGE_READ evidence.');cache[str(path)]=path.read_bytes()
         data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'STORAGE_READ evidence differs.')
         fact=json.loads(data)
-        require(fact.get('schema')=='a733-storage-read-'+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
+        require(fact.get('schema')==AUTHORITY_PREFIX+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
         if key=='initial':
             initial_policy(fact)
             if inherited_mux(raw)==2:
@@ -155,11 +169,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                     fact.get('rom_jtag_handoff_authorized') is True and
                     fact.get('jtag_debug_clients_excluded') is True,
                     'Reviewed ROM JTAG handoff and excluded debug clients required.')
-        required={'initial':[],
-            'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
-            'supplies':['dcdc1_dc1sw2_3300000_cldo5_1800000','source_qualified_settling','pf_domain_3300','no_voltage_writers'],
-            'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
-            'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}[key]
+        required=REQUIRED_FACTS[key]
         require(all(fact.get(k) is True for k in required),'Required STORAGE_READ physical fact absent.')
     if struct.unpack_from('<I',raw,532)[0]==2:
         # The existing platform reference is retained by board.validate_admission.
