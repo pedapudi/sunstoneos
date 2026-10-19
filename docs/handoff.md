@@ -68,8 +68,11 @@ Its first-fault report identifies a value mismatch at `0x04100040`: mask `0x700`
 expected zero, observed `0x29940`. The USB provider reports zero attempted and
 completed writes. All four PMIC snapshots matched and were reaped; no native USB
 exchange began. Source investigation identifies an inherited device-session bit
-rejected by the current guard. The USB worker is preparing the correction and
-focused review. No unchanged retry is authorized. Evidence:
+rejected by the earlier guard. The integrated correction permits that bit,
+requires the ROM device role and rejects host request/mode. Independent DMA
+guards remain. Affected checks and focused review pass; the changed sources
+match integration under `usb-rom-session-20261018/`. Physical takeover remains
+unqualified. No unchanged retry is authorized. Failure evidence:
 `usb-first-fault-20261018/physical-064/runtime/session.json` and `kernel.log`.
 Saved RAM was not restored across power removal.
 

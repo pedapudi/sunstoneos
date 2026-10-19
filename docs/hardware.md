@@ -1016,7 +1016,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   any USB-controller writes. It rejects the inherited value `0x29940` at
   `0x04100040` under mask `0x700`. All four PMIC snapshots matched and were reaped;
   no USB exchange began. Source investigation identifies a device-session bit
-  rejected by the current guard; its correction and review are pending.
+  rejected by the earlier guard. The integrated correction allows device SESSION
+  while requiring device role, excluding host request/mode and retaining DMA
+  checks. Affected checks and focused review pass under `usb-rom-session-20261018/`;
+  physical takeover and quiescence remain unqualified.
   Evidence: `usb-first-fault-20261018/physical-064/runtime/`. User-confirmed power
   removal recovered the board, and the retained processes and failed claim are
   closed. This does not qualify the native USB composition.
