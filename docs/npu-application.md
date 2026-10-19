@@ -454,3 +454,43 @@ is bounded to 19 seconds. Success requires two distinct matched jobs and both
 copied outputs. Stop communication after the first transport failure. Keep every
 resource until confirmed removal of all board power sources, including after
 success. Physical translation, provider state and NPU inference remain unresolved.
+
+
+## Application clock admission and physical candidate
+
+The current NPU image also validates the normalized reference in the
+application's private acquisition callback. Its shared NPU/PLL drivers already
+contained the normalized-reference correction; the application callback retained
+an older DCXO24/equal-factor restriction. It now uses the same reference decoder
+and PERI0 control policy as the canonical NPU provider. PERI0 bit 24 is permitted;
+input-divider bit 1 remains a refusal.
+
+The current frozen image is
+`~/.cache/sunstoneos/evidence/npu-single-core-20261018/reference-refresh/image.elf`,
+SHA-256 `e12d3031854a39c22a829a5e6b2fdca5d2bd44145ec5622b4c1cbbc251519452`.
+Only the application clock object and generated build identity differ; 68 linked
+objects remain identical. The compiler closure still covers 177 inputs and 70
+objects. Current shared startup sources produce the same effective NPU translation
+units after inactive RTC, board and thermal branches are removed. Six focused
+actual-image acquisition cases cover normalized reference acceptance, unstable or
+incorrect reference refusal and the retained M1-divider refusal using the recorded
+200/600/600 MHz fabric. Mutex, scheduler, counter and register responses remain
+modeled; no PLL write, startup replay or inference runs. Focused review accepts
+the correction. Existing model, reference, retained startup and host-capture
+evidence is reused.
+
+The cache-only physical candidate under `physical-candidate/` references actual
+second-board observations and keeps every root authorization unset. The PMIC
+supply probe already captured enabled DCDC2, selector 30 and its normal-page
+identity, supporting programmed 800 mV under reviewed continuity. No additional
+PMIC selector read is requested for that lifetime. Missing NPU-specific input is
+one bounded batch of 21 CCU/PCK-gate words. Two NPU PCK-domain words may be read
+only if its gate is enabled and access is established. The batch selects the
+supported enabled-retune or live-enable profile; unsupported domain/PLL combinations
+remain blockers. It never reads the NPU command aperture or touches storage.
+
+The coordinator's retained GPU attempt invalidates `003:116` as a future NPU
+launch target. Confirm full power removal after that attempt, then establish the
+actual new instance, DDR/cache state and required ownership before finalizing an
+NPU package. Historical observations remain historical. The candidate does not
+substitute the earlier software-only NPU fixture for physical admission.

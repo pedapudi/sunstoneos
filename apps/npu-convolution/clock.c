@@ -1,4 +1,5 @@
 #include "clock.h"
+#include "a733_clock_reference.h"
 #include "a733_npu_platform_native.h"
 #define CCU UINT32_C(0x02002000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -52,14 +53,13 @@ static int parent_read(struct npu_application_clock *p,unsigned off,uint32_t *ou
 static int parents(struct npu_application_clock *p,a733_clock_mask_t shared)
 {
     uint32_t osc,ref,pll,a,b,automatic,status;
-    if(!read_reg(p,0x07090160,&osc) || (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3) ||
-       !parent_read(p,0,&ref) || (ref&0xf8000000)!=0xf8000000)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if(n<80 || n>116 || n!=m)return 0;
+    if(!read_reg(p,0x07090160,&osc) || !parent_read(p,0,&ref) ||
+       !a733_clock_ref24_valid(osc,ref))return 0;
+    unsigned n;
     if(!(shared&A733_CLOCK_PERI0))return 1;
     /* Same fixed parent policy as the local startup controller, checked here
      * before PLL writes. The local controller checks it again before use. */
-    if(!parent_read(p,0xa0,&pll) || (pll&0xfe000000)!=0xfe000000 || (pll&(BIT(24)|BIT(1))) ||
+    if(!parent_read(p,0xa0,&pll) || (pll&0xfe000000)!=0xfe000000 || (pll&BIT(1)) ||
        !parent_read(p,0xa8,&a) || (a&BIT(31)) || !parent_read(p,0xac,&b) || (b&BIT(27)) ||
        !parent_read(p,0x1908,&automatic) || !parent_read(p,0x1988,&status))return 0;
     n=((pll>>8)&255)+1;if(n<53 || n>105)return 0;
