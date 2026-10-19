@@ -57,7 +57,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
 
 
 def capture_device(device,same,deadline,session,evidence,record,save,upload,reference=None,stream_frames=None,stream_manifest=None):
-    if struct.unpack_from('<Q',session,600)[0]==2:
+    if struct.unpack_from('<Q',session,600)[0] in (2,3):
         require(stream_frames is not None and stream_manifest is not None,'VGA frozen frame inputs required.')
         return preparation.stream_module().capture_device(device,same,deadline,session,evidence,record,save,stream_manifest,stream_frames,supervisor.durable_frame)
     # Bounded upload has no decoder access until the native commit publishes it.
@@ -77,7 +77,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,upload,refe
 
 def source_files():
     return [('h264-host-tool.py',Path(__file__)),('h264-preparation.py',Path(preparation.__file__)),
-        ('h264-decoder.py',Path(decoder.__file__)),('h264-stream.py',ROOT/'apps/h264/stream.py'),('board-preparation.py',Path(preparation.board.__file__)),
+        ('h264-decoder.py',Path(decoder.__file__)),('h264-stream.py',ROOT/'apps/h264/stream.py'),('h264-fullhd.py',ROOT/'apps/h264/fullhd.py'),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 

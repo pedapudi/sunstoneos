@@ -7,6 +7,7 @@
 #include "device_memory_pool.h"
 #include "../board/application.h"
 #include "stream.h"
+#include "a733_storage_digest.h"
 struct h264_application {
     struct a733_h264_session session;
     struct a733_h264_input supplied;
@@ -31,6 +32,10 @@ struct h264_application {
     struct a733_h264_job job;
     uint32_t *table;
     unsigned stage,copy_step,refill_step;
+#ifdef SUNSTONE_H264_FULLHD
+    unsigned copy_plane,copy_row;
+    struct storage_digest copy_hash;
+#endif
     atomic_uint result,completed;
     uint8_t payload[A733_H264_PICTURES][A733_H264_OUTPUT_BYTES],digest[A733_H264_PICTURES][32];
 };

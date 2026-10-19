@@ -8,6 +8,12 @@ import struct
 import time
 ROOT=Path(__file__).resolve().parents[2]
 WIDTH,HEIGHT,FRAME_BYTES,INPUT_LIMIT,FRAME_LIMIT=640,480,460800,524288,256
+def profile(version=2):
+    require(version in (2,3),'Unsupported stream session version.')
+    return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=4194304,header_bytes=192,response_version=4,name='fullhd1920x1080-idr-p') if version==3 else dict(width=WIDTH,height=HEIGHT,frame_bytes=FRAME_BYTES,input_limit=INPUT_LIMIT,header_bytes=160,response_version=3,name='vga640x480-idr-p')
+
+def session_profile(session):return profile(struct.unpack_from('<Q',session,600)[0])
+
 M,F,Q,A=0x4d363248,0x46363248,0x51363248,0x41363248
 
 def require(ok,message):
@@ -16,25 +22,26 @@ def require(ok,message):
 def header(magic,ordinal,session,aux=0):
     return struct.pack('<4I2Q',magic,1,ordinal,aux,*struct.unpack_from('<2Q',session,24))
 
-def descriptors(manifest):
+def descriptors(manifest,version=2):
+    limits=profile(version)
     require(0<len(manifest)<=256*96 and len(manifest)%96==0,'Invalid VGA manifest size.')
     result=[];previous=0
     for ordinal,offset in enumerate(range(0,len(manifest),96)):
         d=manifest[offset:offset+96];n,oracle,number,reserved=struct.unpack_from('<4I',d)
-        require(0<n<=INPUT_LIMIT and oracle in (0,FRAME_BYTES) and number<=15 and
+        require(0<n<=limits['input_limit'] and oracle in (0,limits['frame_bytes']) and number<=15 and
             (number==0 or (ordinal>0 and number==previous+1)) and not reserved and
             any(d[16:48]) and any(d[48:80])==bool(oracle) and not any(d[80:]),'Invalid VGA descriptor.')
         result.append(dict(ordinal=ordinal,input_bytes=n,oracle_bytes=oracle,frame_num=number,input_hash=d[16:48],oracle_hash=d[48:80]));previous=number
     return result
 
 def manifest_upload(session,manifest):
-    descriptors(manifest)
-    require(struct.unpack_from('<Q',session,600)[0]==2 and not any(session[800:832]) and
+    descriptors(manifest,struct.unpack_from('<Q',session,600)[0])
+    require(struct.unpack_from('<Q',session,600)[0] in (2,3) and not any(session[800:832]) and
         hashlib.sha256(manifest).digest()==session[768:800],'VGA manifest/session mismatch.')
     return header(M,len(manifest)//96,session,len(manifest))+manifest
 
 def frame_upload(session,manifest,ordinal,data,oracle=None):
-    rows=descriptors(manifest);require(0<=ordinal<len(rows),'VGA frame ordinal out of range.');d=rows[ordinal]
+    rows=descriptors(manifest,struct.unpack_from('<Q',session,600)[0]);require(0<=ordinal<len(rows),'VGA frame ordinal out of range.');d=rows[ordinal]
     require(len(data)==d['input_bytes'] and hashlib.sha256(data).digest()==d['input_hash'],'VGA input changed.')
     oracle=b'' if oracle is None else oracle
     require(len(oracle)==d['oracle_bytes'] and (not oracle or hashlib.sha256(oracle).digest()==d['oracle_hash']),'VGA oracle changed.')
@@ -58,57 +65,61 @@ def split_clip(data):
         else:require(kind in (6,9),'Unsupported NAL in VGA input.')
     require(0<len(frames)<=FRAME_LIMIT,'VGA picture count exceeds bound.');return frames
 
-def prepare_inputs(clip,output,reference=None):
+def prepare_inputs(clip,output,reference=None,version=2):
+    limits=profile(version);frame_bytes=limits['frame_bytes']
     frames=split_clip(Path(clip).read_bytes());pixels=Path(reference).read_bytes() if reference else None
-    require(pixels is None or len(pixels)==len(frames)*FRAME_BYTES,'VGA oracle length differs.')
+    require(pixels is None or len(pixels)==len(frames)*frame_bytes,'VGA oracle length differs.')
     out=Path(output);out.mkdir(exist_ok=False);manifest=bytearray()
     for i,(number,data) in enumerate(frames):
-        require(len(data)<=INPUT_LIMIT,'VGA access unit exceeds bound.');(out/f'frame-{i:03}.h264').write_bytes(data)
-        oracle=pixels[i*FRAME_BYTES:(i+1)*FRAME_BYTES] if pixels else b''
+        require(len(data)<=limits['input_limit'],'VGA access unit exceeds bound.');(out/f'frame-{i:03}.h264').write_bytes(data)
+        oracle=pixels[i*frame_bytes:(i+1)*frame_bytes] if pixels else b''
         if oracle:(out/f'frame-{i:03}.yu12').write_bytes(oracle)
         manifest+=struct.pack('<4I',len(data),len(oracle),number,0)+hashlib.sha256(data).digest()+(hashlib.sha256(oracle).digest() if oracle else bytes(32))+bytes(16)
     (out/'manifest.bin').write_bytes(manifest)
-    (out/'inputs.json').write_text(json.dumps(dict(profile='vga640x480-idr-p',pictures=len(frames),manifest_sha256=hashlib.sha256(manifest).hexdigest(),oracle=bool(pixels)),indent=2)+'\n')
+    (out/'inputs.json').write_text(json.dumps(dict(profile=limits['name'],pictures=len(frames),manifest_sha256=hashlib.sha256(manifest).hexdigest(),oracle=bool(pixels)),indent=2)+'\n')
     return bytes(manifest)
 
-def validate_inputs(directory,manifest):
+def validate_inputs(directory,manifest,version=2):
     root=Path(directory);frames=[]
-    for d in descriptors(manifest):
+    for d in descriptors(manifest,version):
         i=d['ordinal'];data=(root/f'frame-{i:03}.h264').read_bytes()
         oracle=(root/f'frame-{i:03}.yu12').read_bytes() if d['oracle_bytes'] else None
         # Epoch/generation are irrelevant to immutable file validation.
-        dummy=bytearray(856);struct.pack_into('<Q',dummy,600,2);dummy[768:800]=hashlib.sha256(manifest).digest()
+        dummy=bytearray(856);struct.pack_into('<Q',dummy,600,version);dummy[768:800]=hashlib.sha256(manifest).digest()
         frame_upload(dummy,manifest,i,data,oracle);frames.append((data,oracle))
     return frames
 
 def decode(raw,session,manifest,ordinal,oracle=None):
-    require(len(raw)>=160 and struct.unpack_from('<2I',raw)==(0x34363248,3),'Invalid VGA response.')
-    status,n=struct.unpack_from('<2I',raw,8);require(status in (0,1,2,3) and n==(FRAME_BYTES if status==1 else 0) and len(raw)==160+n,'Invalid VGA payload length.')
-    d=descriptors(manifest)[ordinal]
-    require(raw[16:32]==session[24:40] and raw[32:64]==session[768:800] and raw[64:96]==d['input_hash'],'VGA response identity differs.')
+    limits=session_profile(session);head=limits['header_bytes'];frame_bytes=limits['frame_bytes']
+    require(len(raw)>=head and struct.unpack_from('<2I',raw)==(0x34363248,limits['response_version']),'Invalid stream response.')
+    status,n=struct.unpack_from('<2I',raw,8);require(status in (0,1,2,3) and n==(frame_bytes if status==1 else 0) and len(raw)==head+n,'Invalid stream payload length.')
+    d=descriptors(manifest,struct.unpack_from('<Q',session,600)[0])[ordinal]
+    require(raw[16:32]==session[24:40] and raw[32:64]==session[768:800] and raw[64:96]==d['input_hash'],'Stream response identity differs.')
     index,count,number,poc,width,height,kind,terminal=struct.unpack_from('<8I',raw,128)
-    require((index,count,number,poc,width,height,kind)==(ordinal,len(manifest)//96,d['frame_num'],2*d['frame_num'],640,480,0 if d['frame_num'] else 2) and terminal<=2,'VGA picture metadata differs.')
-    require((status==1 and hashlib.sha256(raw[160:]).digest()==raw[96:128]) or (status!=1 and not any(raw[96:128])),'VGA copied-output digest differs.')
-    if status==1 and oracle is not None:require(raw[160:]==oracle,'VGA qualification pixel mismatch.')
+    require((index,count,number,poc,width,height,kind)==(ordinal,len(manifest)//96,d['frame_num'],2*d['frame_num'],limits['width'],limits['height'],0 if d['frame_num'] else 2) and terminal<=2,'Stream picture metadata differs.')
+    if head==192:require(struct.unpack_from('<8I',raw,160)==(1920,1088,1920,960,0,0,0,8),'Full-HD coded/crop/stride metadata differs.')
+    require((status==1 and hashlib.sha256(raw[head:]).digest()==raw[96:128]) or (status!=1 and not any(raw[96:128])),'Stream copied-output digest differs.')
+    if status==1 and oracle is not None:require(len(oracle)==frame_bytes and raw[head:]==oracle,'Stream qualification pixel mismatch.')
     return dict(status=status,picture_index=index,picture_count=count,frame_num=number,poc=poc,width=width,height=height,terminal=terminal,oracle_verified=status==1 and oracle is not None,sha256=raw[96:128].hex() if status==1 else None)
 
 def capture_device(device,same,deadline,session,evidence,record,save,manifest,frames,durable):
-    require(len(frames)==len(descriptors(manifest)),'VGA capture requires every sealed frame input.')
+    limits=session_profile(session);head=limits['header_bytes'];frame_bytes=limits['frame_bytes']
+    require(len(frames)==len(descriptors(manifest,struct.unpack_from('<Q',session,600)[0])),'VGA capture requires every sealed frame input.')
     def timeout():
         same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'VGA capture deadline expired.');return min(500,remaining)
     def write(packet):
         for offset in range(0,len(packet),512):
             part=packet[offset:offset+512];require(device.write(2,part,timeout=timeout())==len(part),'Short VGA request write.')
     def response(ordinal,oracle):
-        write(header(Q,ordinal,session));raw=bytearray();needed=160;reads=0
+        write(header(Q,ordinal,session));raw=bytearray();needed=head;reads=0
         while len(raw)<needed:
-            reads+=1;require(reads<=2*(160+FRAME_BYTES),'VGA response fragment budget exhausted.')
+            reads+=1;require(reads<=2*(head+frame_bytes),'VGA response fragment budget exhausted.')
             part=bytes(device.read(0x81,min(4096,needed-len(raw)),timeout=timeout()));require(len(part)<=needed-len(raw),'Invalid VGA response fragment.')
             # TinyUSB can emit ZLPs after full endpoint packets, including the
             # previous response's final payload. Deadline/budget still apply.
             if not part:continue
             raw+=part
-            if len(raw)==160:needed=160+struct.unpack_from('<I',raw,12)[0];require(needed in (160,160+FRAME_BYTES),'VGA response exceeds bound.')
+            if len(raw)==head:needed=head+struct.unpack_from('<I',raw,12)[0];require(needed in (head,head+frame_bytes),'VGA response exceeds bound.')
         value=decode(bytes(raw),session,manifest,ordinal,oracle);return bytes(raw),value
     write(manifest_upload(session,manifest));record['h264_retention']='whole-board-power-removal';save()
     for ordinal,(data,oracle) in enumerate(frames):
@@ -120,8 +131,8 @@ def capture_device(device,same,deadline,session,evidence,record,save,manifest,fr
         require(result['status'] in (1,2),'VGA pending or retired output cannot complete capture.')
         durable(evidence/f'h264-{ordinal:03}.bin',raw)
         if result['status']==1:
-            name=f'output-{ordinal:03}.yu12';durable(evidence/name,raw[160:]);timeout()
-            record.setdefault('copied_h264_pictures',[]).append(dict(path=name,bytes=FRAME_BYTES,**result));save()
+            name=f'output-{ordinal:03}.yu12';durable(evidence/name,raw[head:]);timeout()
+            record.setdefault('copied_h264_pictures',[]).append(dict(path=name,bytes=frame_bytes,**result));save()
             # The durable copied result is independent of the decoder's retained reference.
             write(header(A,ordinal,session)+raw[96:128])
         else:
@@ -131,4 +142,5 @@ def capture_device(device,same,deadline,session,evidence,record,save,manifest,fr
 if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--reference',type=Path)
-    a=p.parse_args();prepare_inputs(a.input,a.output,a.reference)
+    p.add_argument('--profile',choices=('vga','fullhd'),default='vga')
+    a=p.parse_args();prepare_inputs(a.input,a.output,a.reference,3 if a.profile=='fullhd' else 2)

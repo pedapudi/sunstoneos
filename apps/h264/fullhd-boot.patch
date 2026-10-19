@@ -1,0 +1,45 @@
+--- boot-h264.c
++++ boot-fullhd.c
+@@ -3,9 +3,19 @@
+ #endif
+ #include "cached.h"
+ #include "session.h"
++#include "fullhd-boot.h"
+ #include "a733_cpu_continue.h"
+ #include <stddef.h>
+-static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
++static struct h264_fullhd_boot_contract h264_admission __attribute__((section(".bss.a733_smp_monitor")));
++#define admission h264_admission.base
++const struct h264_fullhd_boot_contract *h264_fullhd_boot_record(const struct a733_smp_contract *c)
++{
++    if(c!=&admission)return NULL;
++    const volatile uint64_t *live=(const void *)A733_SMP_CONTRACT_ADDRESS;
++    const uint64_t *copy=(const void *)&h264_admission;
++    for(unsigned i=0;i<sizeof(h264_admission)/8;++i)if(live[i]!=copy[i])return NULL;
++    return &h264_admission;
++}
+ static struct a733_cpu_start power[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static struct a733_cpu_entry owners[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static unsigned targets[7] __attribute__((section(".bss.a733_smp_monitor")));
+@@ -63,8 +73,8 @@
+ {
+     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
+     volatile const uint64_t *in=(const volatile uint64_t *)source;
+-    uint64_t *out=(uint64_t *)&admission;
+-    for(unsigned i=0;i<sizeof(admission)/8;++i)out[i]=in[i];
++    uint64_t *out=(uint64_t *)&h264_admission;
++    for(unsigned i=0;i<sizeof(h264_admission)/8;++i)out[i]=in[i];
+     barrier();
+     if(!boot_state() || !a733_smp_contract_valid(&admission,a733_smp_counter()) ||
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+@@ -79,8 +89,8 @@
+     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
+     RESULT->generation=admission.generation;RESULT->start_counter=a733_smp_counter();
+     RESULT->status=UINT64_MAX;RESULT->stage=1;
+-    extern int board_session_prepare(const struct a733_smp_contract *);
+-    if(!board_session_prepare(&admission))a733_smp_stop(3,0x30c);
++    extern int h264_fullhd_board_prepare(const struct a733_smp_contract *);
++    if(!h264_fullhd_board_prepare(&admission))a733_smp_stop(3,0x30c);
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif

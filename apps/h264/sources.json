@@ -72,7 +72,8 @@
     "parser_adaptation": "Restricted syntax/field order with bounded software bit reads replacing CedarC GetBits callbacks; no CedarC runtime library linked.",
     "register_source": "cedrus_h264.c:cedrus_set_params,cedrus_write_frame_list,_cedrus_write_ref_list,cedrus_skip_bits; CedarC H264ConfigureRefFrameRegister/H264ConfigureRefListRegister and A733 instructions corroborate field positions.",
     "license": "CedarC GNU LGPL version2 notices retained in adaptation; Cedrus GPL-2.0-or-later.",
-    "lifetime": "Fixed VGA input and two reference/output/MV slots with persistent context scratch. Cedrus successful job completion supports healthy input refill; CedarC sliding-window marking retires the previous reference after its consumer completes. Private copied-output ACK ownership is separate. No fault reuse, unmapping, reclamation or physical drain qualification."
+    "lifetime": "Fixed VGA input and two reference/output/MV slots with persistent context scratch. Cedrus successful job completion supports healthy input refill; CedarC sliding-window marking retires the previous reference after its consumer completes. Private copied-output ACK ownership is separate. No fault reuse, unmapping, reclamation or physical drain qualification.",
+    "fullhd": "Same parser/controller/application; coded 1920x1088 with canonical bottom crop to 1920x1080. Cedrus internal SRAM width branch and effective A733 H264MallocFrmBuffer corroborate external-scratch choice; CedarC field MV formula corroborated by pinned A733 instructions. Existing extended WB/NC providers, fixed reference pool, immutable retained CPU ledger and bounded visible-row copying."
   },
   "host-oracle": {
     "execution": "Host only. libx264 encodes Baseline IDR and IDR+P clips with predicted macroblocks; FFmpeg decodes independent YUV420p references and traces parsed syntax. Neither is linked or loaded on FreeRTOS.",

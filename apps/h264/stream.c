@@ -28,7 +28,7 @@ static int manifest_valid(struct h264_stream *s)
     for(unsigned i=0;i<s->count;++i){
         const uint8_t *d=h264_stream_descriptor(s,i);
         uint32_t n=h264_stream_u32(d),oracle=h264_stream_u32(d+4),f=h264_stream_u32(d+8);
-        if(!n||n>A733_H264_VGA_INPUT_BYTES||(oracle&&oracle!=A733_H264_VGA_OUTPUT_BYTES)||
+        if(!n||n>H264_STREAM_INPUT_BYTES||(oracle&&oracle!=H264_STREAM_OUTPUT_BYTES)||
            f>15||(!i&&f)||(i&&f&&f!=previous+1)||h264_stream_u32(d+12)||
            !present(d+16,32)||(present(d+48,32)!=(oracle!=0))||present(d+80,16))return 0;
         previous=f;
@@ -39,7 +39,8 @@ int h264_stream_feed(struct h264_stream *s,const struct a733_h264_session *sessi
     int (*clock)(void *,uint64_t *),void *context,uint64_t deadline,const uint8_t *p,size_t n)
 {
     uint64_t now;
-    if(!s||!session||session->version!=2||!clock||!p||!n||n>4096||!deadline||
+    if(!h264_stream_storage_valid())return fail(s);
+    if(!s||!session||session->version!=H264_STREAM_SESSION_VERSION||!clock||!p||!n||n>4096||!deadline||
        clock(context,&now)!=1||now>=deadline||!session->authority||!session->board.epoch||
        !session->board.generation||!present(session->fixture,32)||present(session->reference,32))return fail(s);
     if(!s->authority){s->epoch=session->board.epoch;s->generation=session->board.generation;
@@ -91,7 +92,7 @@ int h264_stream_feed(struct h264_stream *s,const struct a733_h264_session *sessi
         const uint8_t *d=h264_stream_descriptor(s,s->argument);uint8_t hash[32];size_t config;
         struct a733_h264_picture picture;
         storage_digest_bytes(s->input,s->input_bytes,hash);
-        if(memcmp(hash,d+16,32)||!a733_h264_parse_vga(s->input,s->input_bytes,h264_stream_u32(d+8),&picture,&config))return fail(s);
+        if(memcmp(hash,d+16,32)||!a733_h264_parse_stream(H264_STREAM_PROFILE,s->input,s->input_bytes,h264_stream_u32(d+8),&picture,&config))return fail(s);
         storage_digest_bytes(s->input,config,hash);
         if(s->config_set&&memcmp(hash,s->config_hash,32))return fail(s);
         if(s->oracle_bytes){storage_digest_bytes(s->oracle,s->oracle_bytes,hash);if(memcmp(hash,d+48,32))return fail(s);}
@@ -118,12 +119,12 @@ int h264_stream_take(struct h264_stream *s)
 }
 int h264_stream_authorized(const struct h264_stream *s,const struct a733_h264_run *r)
 {
-    return s&&r&&atomic_load_explicit(&s->manifest_ready,memory_order_acquire)&&
+    return h264_stream_storage_valid()&&s&&r&&atomic_load_explicit(&s->manifest_ready,memory_order_acquire)&&
         !atomic_load_explicit(&s->failed,memory_order_acquire)&&
         atomic_load_explicit(&s->au_state,memory_order_acquire)==2&&
         r->picture_index==s->active&&r->frame_bytes==s->input_bytes&&
-        r->job.profile==A733_H264_VGA_STREAM&&r->job.input==s->input&&
-        r->job.input_bytes==A733_H264_VGA_INPUT_BYTES&&
+        r->job.profile==H264_STREAM_PROFILE&&r->job.input==s->input&&
+        r->job.input_bytes==H264_STREAM_INPUT_BYTES&&
         !memcmp(&r->picture,&s->picture,sizeof(r->picture));
 }
 int h264_stream_complete(struct h264_stream *s)

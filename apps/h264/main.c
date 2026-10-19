@@ -18,6 +18,7 @@ int board_application_start(void)
     h264.session=*source;
     if(!a733_h264_session_valid(&h264.session)||
        memcmp(h264.session.board.image,a733_smp_build_id,32))return 0;
+    if(!h264_stream_storage_init(h264.session.owner))return 0;
     h264.handle=xTaskCreateStatic(h264_task,"h264",4096,NULL,4,h264.stack,&h264.task);
     return h264.handle!=NULL;
 }

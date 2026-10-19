@@ -1,13 +1,158 @@
 # Native H.264 bounded decoding profiles
 
-The native application has two profiles in the same firmware: the retained
-48-by-32 single/two-picture mode and a 640-by-480 mode that streams prepared
-access units through a fixed pool. That mode starts with an instantaneous
-decoding refresh (IDR) picture and supports following inter-predicted P pictures.
-Both execute decoding on the video
-engine (VE) and expose copied planar YU12 output. Neither profile establishes
-physical codec qualification. Broader profiles, reference patterns, dimensions
-and unbounded live ingestion remain required work.
+The native application decodes bounded progressive Baseline IDR/P clips on the
+video engine (VE) and exposes copied planar YU12 output. The default build retains
+the 48-by-32 single/two-picture profile and 640-by-480 streaming profile. A separate
+full-HD build selects 1920-by-1080 visible output with the existing extended memory
+providers. These builds share the parser, controller and application. None
+establishes physical codec qualification. High profile, CABAC, B pictures, broader
+reference patterns and dimensions, other codecs, and unmanifested live ingestion
+remain required work.
+
+## Full-HD streaming and extended memory
+
+`SUNSTONE_H264_FULLHD=ON` selects session version 3 and a private 288-byte boot
+contract. It accepts progressive 8-bit 4:2:0 Baseline level 4.0. The coded picture
+is 1920 by 1088: 120 by 68 macroblocks. The SPS must specify cropping with zero
+left, right and top offsets and bottom offset 4. Each vertical crop unit covers
+two luma rows, so the visible picture has 1080 rows. Other crop configurations are
+rejected. The manifest authenticates at most 256 complete Annex B access units,
+each at most 4 MiB, before decoder access. SPS/PPS identity, one reference,
+default list 0, POC type 2, four frame-number bits, IDR resets and unsupported
+syntax restrictions match the VGA streaming profile below.
+
+The engine keeps all 1088 coded rows in each reference. Y and chroma strides are
+1920 and 960 bytes. Each reference holds 2,088,960 Y bytes and 1,044,480 chroma
+bytes; Cr starts after 522,240 coded Cb bytes. The primary stride register is
+`0x03c00780`, and completion requires exactly 8,160 decoded macroblocks. Copied
+output contains only the visible rows: 2,073,600 Y bytes and 518,400 bytes for each
+chroma plane, totaling 3,110,400 bytes. Its 192-byte version-4 response header
+reports both visible and coded geometry, strides and crop rows. The copy callback
+handles at most 32 rows per invocation, checks guards, status, faults and liveness
+around the copy, and publishes only after the final hash and fault scan. A partial
+copy remains private after failure.
+
+### Source-defined storage and hardware format
+
+Pinned Cedrus `cedrus_h264.c:369–382,593–616` uses internal deblocking and
+intra-prediction SRAM for widths up to 2048. The effective A733
+`H264MallocFrmBuffer` instructions at `0x13a5c–0x13a84` require external buffers
+for older engine IDs or widths above 2048. The admitted A733 IDs and width 1920
+therefore do not require additional external deblocking/intra-prediction spans.
+This decision uses both source and the pinned effective A733 implementation.
+
+The CedarC motion-vector formula and effective A733 instructions at
+`0x134a0–0x134fc` require `ALIGN(120 * ceil(68/2) * 32, 1024)` bytes per field:
+131,072 bytes. Each picture reserves 262,144 bytes for its two field pointers.
+Cedrus picture scratch uses `18*4096 + 1088*2*64 = 212992` bytes inside a
+217,088-byte guarded capacity. Neighbor scratch uses 49,152 bytes with 16 KiB
+alignment. The full coded picture, including cropped rows, remains the reference;
+visible copying does not shorten any device extent. Source pins and notices are
+recorded in `apps/h264/sources.json`.
+
+The existing 16 MiB uncached pool supplies the following fixed IOVA layout.
+The generic IOMMU policy is unchanged; six spans fit three existing 4 MiB windows.
+
+| IOVA | Capacity | Device access |
+| --- | --- | --- |
+| `0x10000000` | One 4,194,304-byte input | Read |
+| `0x10401000` | Two 2,088,960-byte Y slots | Read/write |
+| `0x10801000` | Two 1,044,480-byte chroma slots | Read/write |
+| `0x10a00000` | 217,088-byte picture scratch | Read/write |
+| `0x10a36000` | Two 262,144-byte MV slots | Read/write |
+| `0x10abc000` | 49,152-byte neighbor scratch | Read/write |
+
+The actual allocator needs 11,358,208 uncached bytes, including the 32 KiB table,
+alignment, prefixes and guards. It validates each capacity and alignment before
+publication. Four private write-back allocations need 13,533,184 page-rounded
+bytes: one 4 MiB upload, one optional-oracle buffer and two copied outputs. Their
+ledger leases enter RETAINED state before scheduler release and pointer
+publication; that ledger never changes during the session. AU/output atomics
+control CPU payload access separately. This avoids concurrent allocator-ledger
+updates during USB validation. No private write-back buffer receives a device
+mapping. Partial allocation failure retains acquired extents and publishes no
+provider access.
+
+Reference retirement, healthy input refill and copied-output ACK remain separate
+transitions, as described below. The full-HD build preserves the same failure
+retention and two-output backpressure rules. Optional reference pixels are a
+qualification oracle supplied by the validation client. Normal decoding returns
+actual copied bytes and metadata without asserting numerical qualification.
+
+### Startup contract and qualification boundary
+
+The build uses existing `link-devices.ld` memory providers: write-back
+`0x48000000..0x78000000` and uncached `0x78000000..0x79000000`. The complete
+288-byte live boot record is compared before application effects. Its protected
+copy survives BSS clearing. A synchronous local 224-byte view serves only the
+existing board session validator; the original protected 288-byte record reaches
+extended-memory admission. Both sealed 856-byte session copies survive physical
+session-page changes. The session page at `0x41f00000` is outside BSS and retained
+copies. The full-HD launcher binds the session, entry evidence and pool ranges.
+
+The inherited board-derived multicore startup and extended-memory mapping scans
+remain physical prerequisites. GPU single-core evidence does not qualify this
+startup. Host checks stop before shared cached preparation, GIC programming or
+secondary execution. Modeled admission of 200,704 pages establishes no physical
+startup duration. Initial isolation, recovery and full power removal requirements
+remain those of the existing device admission; no caller supplies drain authority.
+No image may reclaim mappings or storage after uncertain completion.
+
+### Full-HD evidence scope
+
+The full-HD evidence directory is
+`~/.cache/sunstoneos/evidence/h264-fullhd-20261019`. Its independent libx264
+six-picture clip crosses an IDR boundary; FFmpeg supplies visible pixels and
+syntax traces. Parser checks validate the actual SPS crop and coded geometry,
+including malformed crop and oversize refusals. The actual generated AArch32
+launcher and private EL3 sealing checks validate the 288-byte contract and both
+session copies. The sealing check stops at shared cached preparation. Root's
+`root-startup-layout-review.json` preserves the source and linked placement
+review for image `b48123e301ec40ae4ec104e58d4c57b347e619b6a0a62a82263e0d0fe491a643`.
+No shared startup or physical memory scan executes in these checks.
+
+The composed native check executes the linked allocator, page tables, parser,
+controller, guarded crop/copy/hash loop and serializer. Its modeled boundaries
+include power, admission readiness, device translation, IOMMU fault responses,
+USB and device pixel writes. The model supplies coded padding separately from
+the independent visible reference. Therefore copied output verifies crop offsets,
+Cr addressing and byte integrity without qualifying physical device arithmetic,
+DMA confinement, reference visibility or timing. The accepted VGA image and all
+unaffected VGA evidence remain unchanged.
+
+`native-inline-read-boundary/result.json` records six completed pictures, two
+copied-output slots, ACK backpressure, wrong ordinal/digest refusal, native
+provider length/ordinal refusal, one-page-short uncached allocation refusal and
+a retained later failure after 64 private Y rows. Normal mode checks one copied
+picture with oracle qualification false. The model explicitly supplies device
+translation and physical completion reads because the compiled full-HD copy
+inlines its load helper. Harness stack/scratch disjointness is asserted against
+the linked pool ranges before allocation. Earlier setup/model-only failures are
+retained separately; no native image change resulted.
+
+`a733-fullhd-reference.json` compares primary format/stride and repeated-IDR POCs
+against the pinned A733 instructions. Native MV spacing is checked against the
+source-backed formula separately; retained frame-helper traces are not an
+independent comparison of every SRAM field. `host-capture/result.json` covers
+normal/qualification producer bundles and exact 192-byte-header/payload/ZLP
+capture. Its ACK handler checks that copied bytes and the saved output record
+already exist before acknowledgment. A later failure preserves earlier outputs.
+Physical admission and transport are modeled; the actual separately checked
+launcher bytes are reused. `closure-comparison.json` binds all 434 unchanged
+compiled inputs. The final freeze preserves those inputs, 171 linked objects,
+configuration, tools, source reviews and results; later shared-tree changes do
+not silently replace the accepted image's inputs.
+
+The original host capture checks bypassed two host entry guards. The actual VGA
+launcher fix has separate evidence below. The shared supervisor also omitted
+`h264_result` from its result allowlist, so public H.264 invocation refused before
+transport. Commit `70650ed` corrects that allowlist. Maintained
+`checks/h264-supervisor-entry.py` reaches a readiness sentinel through actual
+`run_session` with the caller policy and reviewed FEL digest: a 59-second H.264
+result is admitted; 60-second and unknown-result requests refuse. Evidence is
+`h264-supervisor-entry-20261019/result.json` and `frozen/manifest.json`. This check
+performs no queue, USB or FEL execution. Decoder and launcher evidence is
+unaffected by this host-only correction.
 
 ## VGA streaming with a fixed retained pool
 

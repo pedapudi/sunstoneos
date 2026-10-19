@@ -11,6 +11,10 @@
 #define A733_H264_VGA_OUTPUT_BYTES 460800u
 #define A733_H264_VGA_MV_FIELD_BYTES 19456u
 #define A733_H264_VGA_MV_SLOT_BYTES 40960u
+#define A733_H264_FULLHD_INPUT_BYTES 4194304u
+#define A733_H264_FULLHD_OUTPUT_BYTES 3110400u
+#define A733_H264_FULLHD_MV_FIELD_BYTES 131072u
+#define A733_H264_FULLHD_MV_SLOT_BYTES 262144u
 /* Historical PCM fixture length, not a stream admission bound. */
 #define A733_H264_SLICE_BYTES 2320u
 #define A733_H264_OUTPUT_BYTES 2304u
@@ -22,7 +26,7 @@
 enum a733_h264_buffer { A733_H264_INPUT, A733_H264_Y, A733_H264_C,
     A733_H264_PICTURE_INFO, A733_H264_MV, A733_H264_NEIGHBOR, A733_H264_BUFFERS };
 struct a733_h264_span { uint64_t iova, bytes; };
-enum a733_h264_profile { A733_H264_LEGACY, A733_H264_VGA_STREAM };
+enum a733_h264_profile { A733_H264_LEGACY, A733_H264_VGA_STREAM, A733_H264_FULLHD_STREAM };
 struct a733_h264_job {
     const uint8_t *input;
     size_t input_bytes;
@@ -42,6 +46,7 @@ struct a733_h264_picture {
     uint32_t width, height, slice_offset, slice_bytes, header_bits;
     uint32_t sps, pps, shs, shs2, qp;
     uint32_t frame_num, poc, slice_type;
+    uint32_t visible_width,visible_height,crop_left,crop_top,crop_right,crop_bottom;
 };
 struct a733_h264_sequence {
     uint32_t count;
@@ -55,6 +60,8 @@ int a733_h264_parse(const uint8_t *, size_t, struct a733_h264_picture *);
 /* VGA AUs repeat identical SPS/PPS before one IDR/P slice; frame_num0..15.
  * config_bytes returns the immutable SPS/PPS prefix for exact comparison. */
 int a733_h264_parse_vga(const uint8_t *,size_t,unsigned,
+    struct a733_h264_picture *,size_t *config_bytes);
+int a733_h264_parse_stream(enum a733_h264_profile,const uint8_t *,size_t,unsigned,
     struct a733_h264_picture *,size_t *config_bytes);
 struct a733_h264_ops {
     int (*now_us)(void *, uint64_t *);
@@ -111,4 +118,7 @@ int a733_h264_poll(struct a733_h264_run *);
 int a733_h264_vga_begin(struct a733_h264_run *,const struct a733_h264_ops *,void *,
     const struct a733_h264_job *,size_t frame_bytes,uint64_t deadline_us);
 int a733_h264_vga_next(struct a733_h264_run *,size_t frame_bytes,unsigned frame_num);
+int a733_h264_stream_begin(struct a733_h264_run *,const struct a733_h264_ops *,void *,
+    const struct a733_h264_job *,size_t frame_bytes,uint64_t deadline_us);
+int a733_h264_stream_next(struct a733_h264_run *,size_t frame_bytes,unsigned frame_num);
 #endif

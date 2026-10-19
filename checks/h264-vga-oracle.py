@@ -27,7 +27,7 @@ def main():
         plans=[]
         for i,f in enumerate(slices):
             r=subprocess.run([a.parser,out/f'qualification/frame-{i:03}.h264',str(f['frame_num'][2])],capture_output=True,text=True);assert r.returncode==0,(i,r.stderr)
-            plan=list(map(int,r.stdout.split()));assert plan[:2]==[640,480] and plan[10:]==[f['frame_num'][2],2*f['frame_num'][2],f['slice_type'][2]%5]
+            plan=list(map(int,r.stdout.split()));assert plan[:2]==[640,480] and plan[10:13]==[f['frame_num'][2],2*f['frame_num'][2],f['slice_type'][2]%5]
             assert plan[4]==max(start+bits for key,(start,bits,value) in f.items() if key in ('slice_qp_delta','disable_deblocking_filter_idc','slice_alpha_c0_offset_div2','slice_beta_offset_div2'))
             plans.append(plan)
         (out/'parser-oracle.json').write_text(json.dumps(dict(passed=True,physical_access=False,plans=plans,ffmpeg_fields=slices),indent=2)+'\n')
