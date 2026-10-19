@@ -104,7 +104,7 @@ def session_profile(raw,layout,identity,pcm):
     require(len(raw)==layout['size'] and struct.unpack_from('<3Q',raw)==(0x4153373341555331,2 if transcribe else 1,len(raw)),'Invalid native I2S session')
     values={k:number(raw,layout,k) for k in ['epoch','generation','lease','direction','audio_cold','shared.identity','shared.pmic.owner','shared.pmic.identity','shared.pmic.startup_deadline','shared.usb.owner','shared.usb.handoff','shared.usb.deadline_us','dma.allowed.owner','dma.allowed.handoff','dma.allowed.deadline_us','dma.controller','dma.evidence','dma.established','dma.owned_channels','dma.service_channels']}
     epoch,generation,lease=(values[k] for k in ('epoch','generation','lease'))
-    require(all((epoch,generation,lease)) and values['direction']<=2 and values['audio_cold']<=1,'I2S session identities/direction differ')
+    require(all((epoch,generation,lease)) and values['direction']<=5 and values['audio_cold']<=1,'I2S session identities/direction differ')
     require(field(raw,layout,'image')==identity and field(raw,layout,'pcm')==hashlib.sha256(pcm).digest(),'I2S image/recorded PCM binding differs')
     require(all(any(field(raw,layout,k)) for k in ('evidence','memory','recovery')),'I2S prerequisite digests missing')
     require(values['shared.identity']==values['shared.pmic.identity']==values['shared.usb.handoff']==generation and
@@ -112,7 +112,7 @@ def session_profile(raw,layout,identity,pcm):
     require(not any(values[k] for k in ('shared.pmic.startup_deadline','shared.usb.deadline_us','dma.allowed.deadline_us')),'Uploaded I2S provider deadlines are forbidden')
     owners=[values[k] for k in ('shared.pmic.owner','shared.usb.owner','dma.allowed.owner')]
     require(all(owners) and len(set(owners))==3,'Conflicting I2S owners')
-    require(values['dma.established']==0x5f and values['dma.owned_channels']==0xffff and values['dma.service_channels']==(3 if values['direction']==2 else 1) and values['dma.controller']==0x04601000,'I2S supervised DMA ownership differs')
+    require(values['dma.established']==0x5f and values['dma.owned_channels']==0xffff and values['dma.service_channels']==(3 if values['direction']%3==2 else 1) and values['dma.controller']==0x04601000,'I2S supervised DMA ownership differs')
     require(field(raw,layout,'dma.allowed.fabric')==field(raw,layout,'shared.usb.fabric') and field(raw,layout,'dma.allowed.rate_hz')==field(raw,layout,'shared.usb.rate_hz'),'I2S DMA/USB fabric profiles differ')
     profile={k:values[k] for k in ('epoch','generation','lease','direction','audio_cold')}
     if transcribe:

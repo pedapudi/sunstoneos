@@ -9,14 +9,14 @@ int i2s_session_valid(const struct i2s_session *s)
 {
  if(!s||s->magic!=I2S_SESSION_MAGIC||s->version!=I2S_SESSION_VERSION||s->bytes!=sizeof(*s)||
     !s->epoch||!s->generation||!s->lease||!present(s->image,32)||!present(s->evidence,32)||
-    !present(s->memory,32)||!present(s->recovery,32)||s->direction>2||s->audio_cold>1||
+    !present(s->memory,32)||!present(s->recovery,32)||s->direction>5||s->audio_cold>1||
     memcmp(s->pcm,i2s_recorded_pcm_digest,32)||s->shared.identity!=s->generation||
     s->shared.pmic.identity!=s->generation||s->shared.usb.handoff!=s->generation||
     s->shared.pmic.startup_deadline||s->shared.usb.deadline_us||s->dma.allowed.deadline_us||
     !s->dma.allowed.owner||s->dma.allowed.owner==s->shared.pmic.owner||
     s->dma.allowed.owner==s->shared.usb.owner||s->dma.allowed.handoff!=s->lease||
     s->dma.evidence!=s->lease||s->dma.established!=A733_DMA_HANDOFF_SUPERVISED||
-    s->dma.owned_channels!=0xffff||s->dma.service_channels!=(s->direction==2?3:1)||s->dma.controller!=0x04601000||
+    s->dma.owned_channels!=0xffff||s->dma.service_channels!=(s->direction%3==2?3:1)||s->dma.controller!=0x04601000||
     memcmp(s->dma.allowed.fabric,s->shared.usb.fabric,sizeof(s->dma.allowed.fabric))||
     memcmp(s->dma.allowed.rate_hz,s->shared.usb.rate_hz,sizeof(s->dma.allowed.rate_hz)))return 0;
 #ifdef SUNSTONE_I2S_TRANSCRIBE

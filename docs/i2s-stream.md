@@ -147,3 +147,21 @@ failure retention with an idle or active peer. Results and exact inputs are
 preserved under `~/.cache/sunstoneos/evidence/i2s-duplex-20261018/`. These checks
 establish software behavior; physical audio timing and operation remain
 unqualified.
+
+## Repeated application use and cyclic DMA gap
+
+The native application now repeatedly consumes and returns completed periods
+through this service; see [the application protocol](i2s-application.md#repeated-streaming).
+Its four copied capture slots require complete USB delivery and an exact ticket
+acknowledgment before reuse. Slow consumers stop the stream through the existing
+cancel/drain protocol, retaining unread copies and any client-held DMA period.
+The underlying finite-period completion and cache ownership rules are unchanged.
+
+This is repeated streaming, not hardware-linked cyclic DMA. In the pinned Linux
+reference, `sunxi-dma.c` lines 1087–1198 build a closed descriptor chain, while
+lines 758–770 report package interrupts with the channel still active.
+`pcm_dmaengine.c` lines 148–174 use that cyclic path. A package notification alone
+does not establish the exclusive CPU ownership or DMA drain required by this
+service. Safe linked-ring ownership, FIFO scheduling gaps, physical continuity
+and final wire drain remain outstanding qualification work. No package interrupt
+has been substituted for the existing completion/drain proof.

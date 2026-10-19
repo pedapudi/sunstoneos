@@ -120,23 +120,84 @@ def capture_transcript(exchange,session,evidence,record,save,deadline,pcm,*,now=
     raise supervisor.CaptureWindowExpired('I2S transcription query budget exhausted.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction,capture_samples=None):
+def capture_repeated(exchange,session,evidence,record,save,deadline,periods=8,*,now=time.monotonic,pause=time.sleep):
+    require(1<=periods<=256,'Repeated I2S host period limit must be1..256.')
+    direction=struct.unpack_from('<I',session,208)[0];require(direction in (3,4,5),'Repeated I2S profile required.')
+    mask=3 if direction==5 else 1
+    record.update(i2s_retention='whole-board-power-removal',i2s_result='unobserved');save()
+    copied=0;first=0;last_ticket=0;sequence=0;stopping=False;failure=False;terminal_seen=False;previous=(0,0,0,0);output=bytearray()
+    def query(op,offset=0,count=0,ticket=0):
+        nonlocal sequence,previous,failure,terminal_seen
+        require(now()<deadline,'Repeated I2S deadline expired.')
+        packet=struct.pack('<III',op,ticket&0xffffffff,ticket>>32) if op==5 else struct.pack('<III',op,offset,count)
+        frame=exchange(packet,min(500,max(1,int((deadline-now())*1000))))
+        sequence+=1;path=evidence/f'i2s-repeated-{sequence:04}.bin';supervisor.durable_frame(path,frame)
+        entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),'operation':op}
+        record.setdefault('i2s_frames',[]).append(entry);save()
+        value=decoder.decode_repeated(frame,session,op,offset,count,ticket)
+        require(now()<deadline,'Repeated I2S response arrived after deadline.')
+        require(value['rx_frames']>=previous[0] and value['tx_frames']>=previous[1] and
+                value['drained']&previous[2]==previous[2] and value['flags']&previous[3]==previous[3],
+                'Repeated I2S observations regressed.')
+        previous=(value['rx_frames'],value['tx_frames'],value['drained'],value['flags'])
+        failure=failure or value['state']==3 or bool(value['flags'])
+        terminal_seen=terminal_seen or value['state'] in (2,3);return value,entry
+    for _ in range(8192):
+        # Only a query issued after terminal publication proves an empty backlog.
+        stopped_before_query=terminal_seen
+        value,entry=query(0 if direction==4 else 4,count=0 if direction==4 else 4096)
+        had_period=bool(value['ticket'])
+        if had_period:
+            require(value['ticket']==last_ticket+1 and value['first_frame']==first and len(value['payload'])==4096,
+                    'Repeated I2S copied stream skipped or repeated a period.')
+            # A durable complete copy precedes the exact copied-buffer ACK.
+            path=evidence/f'period-{value["ticket"]:04}.bin';supervisor.durable_frame(path,value['payload'])
+            record.setdefault('copied_periods',[]).append({'path':path.name,'ticket':value['ticket'],
+                'first_frame':first,'sha256':hashlib.sha256(value['payload']).hexdigest()});save()
+            output.extend(value['payload']);first+=value['frames'];copied+=1;last_ticket=value['ticket']
+            value,entry=query(5,ticket=last_ticket)
+        enough=(direction==4 or copied>=periods) and (direction==3 or value['tx_frames']>=periods*2048)
+        if not stopping and (enough or failure):
+            value,entry=query(2);stopping=True
+        if stopped_before_query and value['state'] in (2,3) and not had_period:
+            require(stopping and value['drained']==mask,'Repeated I2S stopped without complete terminal drain.')
+            require(failure or enough,'Repeated I2S stopped before requested work.')
+            info={'rx_frames':value['rx_frames'],'tx_frames':value['tx_frames'],'drained':value['drained'],
+                  'flags':value['flags'],'copied_periods':copied,'wire_drain_established':False}
+            if direction!=4:
+                target=evidence/'pcm-s16le-16000-mono.bin';supervisor.durable_frame(target,output)
+                info.update(path=target.name,bytes=len(output),sha256=digest(target))
+            require(now()<deadline,'Repeated I2S durable output exceeded deadline.')
+            record['copied_i2s_output']=info;record['durable_result']=entry.copy()
+            record['i2s_result']='observed-failure' if failure else 'observed-success'
+            try:save()
+            except BaseException:
+                record['i2s_result']='unobserved';record.pop('durable_result',None);record.pop('copied_i2s_output',None);raise
+            return
+        pause(min(.001,max(0,deadline-now())))
+    raise supervisor.CaptureWindowExpired('Repeated I2S query budget exhausted.')
+
+
+def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direction,capture_samples=None,repeated_periods=8):
     serial=[0]
     def exchange(packet,timeout):
         same();require(time.monotonic()<deadline,'I2S deadline before write.')
         require(device.write(0x02,packet,timeout=timeout)==12,'Incomplete I2S request.')
-        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 96 if direction==2 else 72;extent=base+4096;part=0;header=False
+        serial[0]+=1;frame=bytearray();base=144 if struct.unpack_from('<I',packet)[0]==3 else 128 if direction>=3 else 96 if direction==2 else 72;extent=base+4096;part=0;header=False;empty=0
         while len(frame)<extent:
             same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'I2S deadline during response.')
             raw=bytes(device.read(0x81,extent-len(frame),timeout=min(timeout,remaining)))
             part+=1;path=evidence/f'i2s-fragment-{serial[0]:03}-{part:03}.bin';supervisor.durable_frame(path,raw)
             record.setdefault('i2s_fragments',[]).append({'path':path.name,'sha256':hashlib.sha256(raw).hexdigest()});save()
-            require(0<len(raw)<=extent-len(frame),'Invalid I2S fragment extent.')
+            require(len(raw)<=extent-len(frame),'Invalid I2S fragment extent.')
+            if not raw:
+                empty+=1;require(empty<=16,'I2S empty-fragment budget exhausted.');continue
             frame.extend(raw)
             if not header and len(frame)>=72:
                 header=True;size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized I2S response.');extent=base+size
                 require(len(frame)<=extent,'I2S response exceeds header extent.')
         return bytes(frame)
+    if direction>=3:return capture_repeated(exchange,session,evidence,record,save,deadline,repeated_periods)
     return capture(exchange,session,evidence,record,save,deadline,pcm=pcm,direction=direction,capture_samples=capture_samples,now=time.monotonic,pause=time.sleep)
 
 
@@ -204,6 +265,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('bundle', 'fel', 'evidence', 'database'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--repeated-periods',type=int,default=8,help='Completed periods before orderly cancellation in repeated mode,1..256')
     parser.add_argument('--claim', required=True)
     parser.add_argument('--owner', required=True)
     parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
@@ -224,7 +286,7 @@ def main(argv=None):
     return supervisor.run_session(args, bundle, prepared,
         lambda: claimed(args.database, args.claim, args.owner, bundle,prepared), validate_entry,
         lambda device, same, deadline, record, save: capture_device(
-            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction'],capture_samples=prepared.get('capture_samples')),
+            device, same, deadline, session, args.evidence, record, save,pcm=pcm,direction=prepared['direction'],capture_samples=prepared.get('capture_samples'),repeated_periods=args.repeated_periods),
         product='sunstoneos native I2S', serial='sunstoneos-a733-i2s',
         bcd_device=0x0100, capture_seconds=59, result_key='i2s_result',
         source_files=source_files(), description='Supervised native I2S; retain all resources until whole-board power removal')

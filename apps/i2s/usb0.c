@@ -36,6 +36,8 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
  * then payload. One request remains in flight until the device reports TX. */
 static uint8_t response[4240],request[12];
 static unsigned response_bytes,response_sent,response_transferred,request_bytes;
+static uint64_t delivered_ticket;
+static unsigned delivered_offset,delivered_count;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 static uint32_t get32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 void tud_mount_cb(void){}
@@ -45,8 +47,39 @@ void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 {(void)buffer;(void)bytes;if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {if(interface||bytes>response_sent-response_transferred)stop();response_transferred+=bytes;
- if(response_transferred==response_bytes&&response_sent==response_bytes)response_bytes=0;}
+ if(response_transferred==response_bytes&&response_sent==response_bytes){
+  if(delivered_ticket&&!i2s_repeated_delivered(delivered_ticket,delivered_offset,delivered_count))stop();
+  delivered_ticket=0;response_bytes=0;
+ }}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
+static void put64(uint8_t *p,uint64_t value)
+{put32(p,(uint32_t)value);put32(p+4,(uint32_t)(value>>32));}
+static void repeated_exchange(uint32_t operation,uint32_t offset,uint32_t bytes)
+{
+ struct i2s_repeated_period period={0};unsigned count=0;uint64_t acknowledged=0;
+ if(operation==4){
+  if(app.admitted.direction%3==1||offset>4096||bytes>4096-offset)stop();
+  int got=i2s_repeated_copy(offset,bytes,response+128,&period);if(got<0)stop();
+  if(got){count=bytes;delivered_ticket=period.ticket;delivered_offset=offset;delivered_count=bytes;}
+ }else if(operation==5){
+  acknowledged=(uint64_t)offset|((uint64_t)bytes<<32);
+  if(!i2s_repeated_ack(acknowledged))stop();offset=bytes=0;
+ }else if(operation==0||operation==2){
+  if(offset||bytes)stop();if(operation==2)atomic_store_explicit(&app.cancel,1,memory_order_release);
+ }else stop();
+ unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
+ put32(response,0x53493241);put32(response+4,3);put32(response+8,result);put32(response+12,offset);
+ put32(response+16,count);put32(response+20,4096);
+ put64(response+24,app.admitted.epoch);put64(response+32,app.admitted.generation);
+ storage_digest_bytes(&app.admitted,sizeof(app.admitted),response+40);
+ put64(response+72,operation==5?acknowledged:period.ticket);put64(response+80,period.first_frame);
+ put32(response+88,period.frames);put32(response+92,period.counter);
+ put64(response+96,atomic_load_explicit(&app.repeated.rx_frames,memory_order_acquire));
+ put64(response+104,atomic_load_explicit(&app.repeated.tx_frames,memory_order_acquire));
+ put32(response+112,atomic_load_explicit(&app.repeated.drained,memory_order_acquire));
+ put32(response+116,atomic_load_explicit(&app.repeated.flags,memory_order_acquire));put64(response+120,0);
+ response_sent=response_transferred=0;response_bytes=128+count;
+}
 static void exchange(void)
 {
  if(response_bytes){unsigned n=tud_vendor_write(response+response_sent,response_bytes-response_sent);
@@ -56,6 +89,7 @@ static void exchange(void)
  request_bytes+=tud_vendor_read(request+request_bytes,available);
  if(request_bytes<sizeof(request))return;request_bytes=0;
  uint32_t op=get32(request),offset=get32(request+4),bytes=get32(request+8);
+ if(app.admitted.direction>=3){repeated_exchange(op,offset,bytes);return;}
 #ifdef SUNSTONE_I2S_TRANSCRIBE
  if(op==3){
   if(bytes>4096||offset>I2S_RECOGNITION_LOG||bytes>I2S_RECOGNITION_LOG-offset)stop();

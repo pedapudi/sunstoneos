@@ -55,11 +55,42 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--frame',type=Path,required=True)
     parser.add_argument('--session',type=Path,required=True)
-    parser.add_argument('--operation',type=int,choices=(0,1,2,3),required=True)
+    parser.add_argument('--operation',type=int,choices=(0,1,2,3,4,5),required=True)
     parser.add_argument('--offset',type=int,default=0);parser.add_argument('--count',type=int,default=0)
+    parser.add_argument('--ticket',type=int,default=0)
     parser.add_argument('--pcm-bytes',type=int,default=16384);parser.add_argument('--samples',type=int)
     a=parser.parse_args()
-    result=decode_transcript(a.frame.read_bytes(),a.session.read_bytes(),a.offset,a.count,a.samples) if a.operation==3 else decode(a.frame.read_bytes(),a.session.read_bytes(),a.operation,a.offset,a.count,a.pcm_bytes)
+    session=a.session.read_bytes()
+    result=decode_repeated(a.frame.read_bytes(),session,a.operation,a.offset,a.count,a.ticket) if len(session)>=216 and struct.unpack_from('<I',session,208)[0]>=3 else decode_transcript(a.frame.read_bytes(),session,a.offset,a.count,a.samples) if a.operation==3 else decode(a.frame.read_bytes(),session,a.operation,a.offset,a.count,a.pcm_bytes)
     payload=result.pop('payload');result['payload_sha256']=hashlib.sha256(payload).hexdigest()
     print(json.dumps(result,indent=2))
+
+
+def decode_repeated(frame,session,operation,offset=0,count=0,ticket=0):
+    if len(session)!=552 or struct.unpack_from('<3Q',session)!=(0x4153373341555331,1,552):
+        raise ValueError('Invalid admitted repeated I2S session')
+    direction=struct.unpack_from('<I',session,208)[0]
+    if direction not in (3,4,5) or operation not in (0,2,4,5):raise ValueError('Invalid repeated I2S operation')
+    if operation==4:
+        if direction==4 or not 0<=offset<=4096 or not 0<=count<=4096-offset:raise ValueError('Invalid repeated period read')
+    elif offset or count or (operation==5 and not 0<ticket<2**64):raise ValueError('Invalid repeated I2S control request')
+    if len(frame)<128:raise ValueError('Short repeated I2S frame')
+    magic,version,state,actual,size,total,epoch,generation=struct.unpack_from('<6I2Q',frame)
+    if (magic,version,total,epoch,generation)!=(0x53493241,3,4096,*struct.unpack_from('<2Q',session,24)) or state not in (0,1,2,3):
+        raise ValueError('Repeated I2S identity/state mismatch')
+    if actual!=offset or frame[40:72]!=hashlib.sha256(session).digest():raise ValueError('Repeated I2S session/offset mismatch')
+    period,first,frames,counter,rx,tx,drained,flags,reserved=struct.unpack_from('<QQIIQQIIQ',frame,72)
+    mask=3 if direction==5 else 1
+    if reserved or drained&~mask or flags&~3 or (state==2 and (drained!=mask or flags)):
+        raise ValueError('Repeated I2S terminal drain mismatch')
+    if (direction==3 and tx) or (direction==4 and rx) or rx%2048 or tx%2048:
+        raise ValueError('Repeated I2S completed frame mismatch')
+    if operation==4 and period:
+        if frames!=2048 or first%2048 or first+frames>rx or size!=count:raise ValueError('Repeated copied-period extent mismatch')
+    elif size or first or frames or counter or period!=(ticket if operation==5 else 0):
+        raise ValueError('Unexpected repeated I2S period metadata')
+    if len(frame)!=128+size:raise ValueError('Repeated I2S response extent mismatch')
+    return dict(state=state,ticket=period,first_frame=first,frames=frames,counter=counter,
+                rx_frames=rx,tx_frames=tx,drained=drained,flags=flags,payload=frame[128:])
+
 if __name__=='__main__':main()

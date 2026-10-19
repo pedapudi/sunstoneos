@@ -34,7 +34,7 @@ apply_build_patch("${i2s_build}/boot-supervised.c" "${storage_build}/boot.c"
  "${i2s_root}/platform/a733-smp-supervised/boot.patch")
 apply_build_patch("${i2s_build}/boot.c" "${i2s_build}/boot-supervised.c" "${i2s_root}/apps/i2s/boot.patch")
 list(APPEND i2s_sources "${i2s_build}/boot.c" "${i2s_build}/recorded.c")
-foreach(source IN ITEMS apps/i2s/main.c apps/i2s/admission.c apps/i2s/snapshot.c apps/i2s/client.c apps/i2s/usb0.c
+foreach(source IN ITEMS apps/i2s/main.c apps/i2s/admission.c apps/i2s/snapshot.c apps/i2s/client.c apps/i2s/repeated.c apps/i2s/usb0.c
  platform/a733/memory_reservations.c runtime/device_memory_pool.c platform/a733/dma_pool_session.c
  platform/a733/dma_startup.c platform/a733/dma_native.c drivers/dma/dma_memory.c
  drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c drivers/dma/a733_dma_platform.c

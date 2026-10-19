@@ -240,3 +240,75 @@ review found no unresolved correctness defects. Exact sources, dependencies,
 images and results are preserved under
 `~/.cache/sunstoneos/evidence/i2s-duplex-20261018/`. No physical launch is queued;
 external audio devices and physical duplex continuity remain unqualified.
+
+## Repeated streaming
+
+Session directions 3, 4 and 5 select repeated capture, playback and duplex,
+respectively. They retain the 552-byte version 1 session and use the same
+providers, two-channel duplex binding and admitted lifetime as finite modes.
+Transcription remains receive-only and finite. Playback repeats the embedded PCM
+periods; it does not accept arbitrary live playback data.
+
+The audio task returns DMA periods only after the existing service reports actual
+capture or transmit-memory completion. Capture first copies a completed 4,096-byte
+period into one of four private slots. Each slot contains 2,048 mono frames and
+remains immutable until the serialized USB consumer has delivered its complete
+contents and accepted an acknowledgment for its exact 64-bit ticket. Slot
+publication and reuse use release/acquire ordering between the two tasks.
+
+A full copied ring stops new reuse and starts the existing cancellation protocol;
+it never overwrites unread samples. The completed period that detected the full
+ring remains client-held without being copied or returned. Transmit underrun or
+another service failure also stops the pair. Cancellation observes each configured
+direction's terminal result and buffer hold before publishing its drain bit.
+Catalogues, leases and uncopied periods remain retained. Previously copied slots
+can still be read and acknowledged after orderly cancellation or a drained device
+failure, while the admitted session remains live. An uncertain failure retains
+resources and cannot claim a terminal drain.
+
+Repeated USB responses use version 3 with a 128-byte header. Requests remain
+three little-endian 32-bit words. Operation 4 reads an offset and count from the
+current copied period; operation 5 acknowledges its ticket, encoded as low and
+high words. Operations 0 and 2 report status and request cancellation. A queued
+response or a partial read cannot authorize reuse: the USB transfer callback must
+report completion of the entire copied period before operation 5 succeeds.
+Early, stale, duplicate and foreign tickets are refused.
+
+The first 72 response bytes retain the existing identity and session digest.
+The remaining fields are little-endian:
+
+| Offset | Field | Width |
+| --- | --- | --- |
+| 72 | Copied-period ticket, or acknowledged ticket | 64 bits |
+| 80 | First frame of copied period | 64 bits |
+| 88 | Copied-period frame count | 32 bits |
+| 92 | Raw capture counter | 32 bits |
+| 96 | Observed completed capture frames | 64 bits |
+| 104 | Observed completed playback frames | 64 bits |
+| 112 | Drained-direction mask | 32 bits |
+| 116 | Failure flags: 1 copied-ring overrun, 2 service failure | 32 bits |
+| 120 | Reserved zero | 64 bits |
+
+Completion counters count periods obtained from the service, including a captured
+period retained when the copied ring fills. They do not imply that all completed
+DMA periods were copied or delivered. In duplex mode, drain bits 0 and 1 describe
+capture and playback; single-direction modes use bit 0. State 2 means orderly
+cancellation with all configured directions drained. State 3 reports failure;
+the host must also inspect the drain mask before claiming a completed stop.
+
+The supervised host defaults to eight periods, accepts a target of 1 through
+256, and requires both direction counts for duplex. It saves each copied period
+before acknowledging it, then cancels and drains any copied backlog. Failure
+flags remain sticky while that backlog is collected. Completion requires an empty
+GET issued after a previous response established terminal state, so a last
+publication cannot be missed. Empty USB transfers are
+bounded per response. The session deadline still bounds the operation.
+
+The native image links, eight ownership cases and two USB delivery cases pass.
+Producer-derived host frames exercise 64-bit tickets, both-direction accounting,
+partial and duplicate ACK refusal, canceled and failed backlog, failure before
+drain, durable copy before ACK, malformed metadata and bounded empty USB reads.
+Inputs and results are preserved in
+`~/.cache/sunstoneos/evidence/i2s-repeated-20261018/`. Existing finite and duplex
+provider evidence remains applicable. These results establish software ownership
+and protocol behavior, not physical audio continuity or wire drain.

@@ -2,6 +2,7 @@
 """Build the native i2s image and exercise its application boundaries."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import shlex
@@ -24,6 +25,7 @@ def main():
     parser.add_argument('--freertos', type=Path, required=True)
     parser.add_argument('--tinyusb', type=Path, required=True)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--repeated-only',action='store_true',help='Run repeated client ownership and actual USB acknowledgment cases only')
     parser.add_argument('--duplex-only',action='store_true',help='Run changed duplex client and two-catalogue constructor cases only')
     parser.add_argument('--wav',type=Path,required=True)
     parser.add_argument('--qemu',type=Path,required=True)
@@ -114,9 +116,31 @@ def main():
             [None]*5+['duplex-client-completions','duplex-missing-tx-retention','duplex-cancel-both']),
             ('output',['checks/i2s-application-output.c','apps/i2s/client.c','drivers/storage/storage_digest.c'],
             [None]*3+['duplex-usb-completion-counts'])]
+    repeated_session=None
+    if a.repeated_only:
+        spec=importlib.util.spec_from_file_location('i2s_repeated_prepare',source/'apps/i2s/prepare.py')
+        preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
+        _,_,identity,layout,pcm=preparation.image_data(image.read_bytes())
+        pinned=Path.home()/'.cache/sunstoneos/evidence/i2s-binding-20261018/cases/nominal-session.bin'
+        raw=bytearray(pinned.read_bytes()[:layout['size']])
+        def put(name,value):
+            f=layout['fields'][name];data=value if isinstance(value,bytes) else value.to_bytes(f['size'],'little')
+            assert len(data)==f['size'];raw[f['offset']:f['offset']+f['size']]=data
+        for name,value in {'version':1,'bytes':layout['size'],'direction':5,'dma.service_channels':3,
+                'dma.allowed.desired_cpu':3,'dma.allowed.route_change_mask':3,'image':identity,
+                'pcm':hashlib.sha256(pcm).digest()}.items():put(name,value)
+        preparation.session_profile(bytes(raw),layout,identity,pcm)
+        repeated_session=bytes(raw);(out/'repeated-session.bin').write_bytes(repeated_session)
+        (out/'repeated-session-source.json').write_text(json.dumps({'source':str(pinned),'sha256':sha(pinned),'image_sha256':sha(image),'physical':False},indent=2)+'\n')
+        common=['apps/i2s/repeated.c','apps/i2s/admission.c','drivers/storage/storage_digest.c',str(build/'i2s-application/recorded.c')]
+        cases=[('repeated-client',['checks/i2s-repeated-client.c','apps/i2s/client.c']+common,
+                ['repeated-rx-wrap','repeated-tx-wrap','repeated-duplex-wrap','slow-consumer-drained-retention',
+                 'tx-underrun-drain','cancel-races-terminal','cancel-preserves-copied-backlog','pending-get-collected-before-cancel']),
+               ('repeated-usb',['checks/i2s-repeated-usb.c','apps/i2s/client.c']+common,['usb-full-delivery-before-ack','usb-partial-delivery-before-ack'])]
     for label,names,labels in cases:
+        if 'apps/i2s/client.c' in names and 'apps/i2s/repeated.c' not in names:names=names+['apps/i2s/repeated.c']
         executable=out/(label+'.elf')
-        run(label+'-build',flags+[source/name for name in names]+[source/'runtime/memory.c',
+        run(label+'-build',flags+[source/name for name in names]+[source/'runtime/memory.c',source/'runtime/memmove.c',
             '-nostdlib',f'-fuse-ld={linker}','-Wl,-Ttext=0x41000000',
             '-Wl,-e,i2s_check_run','-Wl,--gc-sections','-o',executable])
         with executable.open('rb') as f:
@@ -133,6 +157,7 @@ def main():
                     if page not in pages:uc.mem_map(page,4096);pages.add(page)
                 uc.mem_write(address,data)
             uc.mem_map(0x41f00000,0x1000);uc.mem_map(0x50000000,0x10000);uc.mem_map(0x02002000,0x2000)
+            if repeated_session is not None:uc.mem_write(0x41f00000,repeated_session)
             uc.mem_map(0x02532000,0x1000);uc.mem_map(0x07090000,0x1000)
             uc.reg_write(UC_ARM64_REG_SP,0x5000f000);uc.reg_write(UC_ARM64_REG_X0,mode)
             def stop(machine,interrupt,unused):machine.emu_stop()
@@ -141,6 +166,12 @@ def main():
             result=int.from_bytes(uc.mem_read(symbols['i2s_check_result'],4),'little')
             steps[case]={'exit':0 if result==1 else result or -1,'result':result,'pc':uc.reg_read(UC_ARM64_REG_PC)}
             steps_path.write_text(json.dumps(steps,indent=2)+'\n');assert result==1,(case,result)
+    if a.repeated_only:
+        (out/'result.json').write_text(json.dumps({'image_sha256':sha(image),
+            'image_build_id':(build/'i2s-application/build-id.txt').read_text().strip(),
+            'steps':steps,'physical':False},indent=2)+'\n')
+        print('PASS repeated native I2S image, owned copied-ring reuse, cancellation/drain and USB delivery acknowledgments')
+        return
     # Actual native pool/service constructors; no scheduling or A733 MMIO.
     project=out/'pool-project';project.mkdir(exist_ok=True)
     pool_build=out/'pool-build';pool_link=project/'link.ld'

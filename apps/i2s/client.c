@@ -2,7 +2,7 @@
 #include <string.h>
 static int fault(void)
 {atomic_store_explicit(&app.result,3,memory_order_release);return -1;}
-static int request(enum dma_service_operation operation,uint64_t timeout,uint64_t period)
+int i2s_request(enum dma_service_operation operation,uint64_t timeout,uint64_t period)
 {
  if(!app.pending){
   struct dma_service_request r={.operation=operation,.job=app.job,.timeout=timeout,.period_ticket=period};
@@ -32,31 +32,31 @@ static int duplex_step(void)
  case 0:
   atomic_store_explicit(&app.result,1,memory_order_release);
   app.job=app.duplex_opened;
-  r=request(DMA_SERVICE_OPEN,100000,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_OPEN,100000,0);if(r<0)return fault();if(!r)return 0;
   app.duplex_stage=1;return 0;
  case 1:
-  r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
   if(app.reply.phase==DMA_SERVICE_OPENING)return 0;
   if(app.reply.phase!=DMA_SERVICE_READY)return fault();
   if(++app.duplex_opened<2){app.duplex_stage=0;return 0;}
   app.job=1;app.duplex_stage=2;return 0;
  case 2:{
-  r=request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
   struct a733_i2s_period p=app.reply.period;
   if(p.kind!=A733_I2S_TX_FILL || p.slot!=app.primed || p.frames!=I2S_PERIOD_BYTES/2 || !p.ticket)return fault();
   app.playback_held=p.ticket;
   memcpy(app.playback_memory[p.slot],i2s_recorded_pcm+p.slot*I2S_PERIOD_BYTES,I2S_PERIOD_BYTES);
   app.duplex_stage=3;return 0;}
  case 3:
-  r=request(DMA_SERVICE_PERIOD_PUT,0,app.playback_held);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_PUT,0,app.playback_held);if(r<0)return fault();if(!r)return 0;
   app.duplex_stage=++app.primed==I2S_PERIODS?4:2;return 0;
  case 4:
-  r=request(DMA_SERVICE_SUBMIT,24000000,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_SUBMIT,24000000,0);if(r<0)return fault();if(!r)return 0;
   if(app.job==1){app.job=0;return 0;}
   app.duplex_direction=0;app.duplex_stage=5;return 0;
  case 5:{
   app.job=j;
-  r=request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
   struct a733_i2s_period p=app.reply.period;
   unsigned n=j?app.playback_periods:app.periods;
   if(p.slot>=I2S_PERIODS || p.frames!=I2S_PERIOD_BYTES/2 || !p.ticket ||
@@ -75,14 +75,14 @@ static int duplex_step(void)
   }
   app.duplex_stage=6;return 0;}
  case 6:
-  r=request(DMA_SERVICE_PERIOD_PUT,0,j?app.playback_held:app.held_period);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_PUT,0,j?app.playback_held:app.held_period);if(r<0)return fault();if(!r)return 0;
   app.duplex_direction^=1;app.duplex_stage=5;return 0;
  case 8:
   app.job=j;
-  r=request(DMA_SERVICE_CANCEL,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_CANCEL,0,0);if(r<0)return fault();if(!r)return 0;
   app.duplex_stage=9;return 0;
  case 9:
-  r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
   if(app.reply.phase==DMA_SERVICE_DRAINING || app.reply.phase==DMA_SERVICE_RUNNING)return 0;
   if(app.reply.phase!=DMA_SERVICE_RESULT || app.reply.outcome!=DMA_SERVICE_CANCELED || !app.reply.holds_buffers)return fault();
   app.duplex_drained|=1u<<j;
@@ -98,11 +98,12 @@ int i2s_client_step(void)
  if(result==2)return 1;if(result==3)return -1;
  if(!i2s_live(NULL))return fault();
  if(!atomic_load_explicit(&app.audio_ready,memory_order_acquire)){
-  if(atomic_load_explicit(&app.cancel,memory_order_acquire))return fault();
+  if(app.session.direction<3&&atomic_load_explicit(&app.cancel,memory_order_acquire))return fault();
   int prepared=i2s_prepare_audio();if(prepared<0)return fault();return 0;
  }
  if(atomic_load_explicit(&app.dma.state,memory_order_acquire)==A733_DMA_POOL_FAILED)return fault();
  if(atomic_load_explicit(&app.dma.state,memory_order_acquire)!=A733_DMA_POOL_READY)return 0;
+ if(app.session.direction>=3)return i2s_repeated_step();
  if(app.session.direction==2)return duplex_step();
  /* Finish collecting each copied reply before selecting cancellation. A ticket
   * timeout never authorizes abandoning an in-flight request or period lease. */
@@ -113,15 +114,15 @@ int i2s_client_step(void)
  switch(app.stage){
  case 0:
   atomic_store_explicit(&app.result,1,memory_order_release);
-  r=request(DMA_SERVICE_OPEN,100000,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_OPEN,100000,0);if(r<0)return fault();if(!r)return 0;
   app.stage=1;return 0;
  case 1:
-  r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
   if(app.reply.phase==DMA_SERVICE_OPENING)return 0;
   if(app.reply.phase!=DMA_SERVICE_READY)return fault();
   app.stage=app.session.direction?2:4;return 0;
  case 2:
-  r=request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
   if(app.reply.period.kind!=A733_I2S_TX_FILL||app.reply.period.slot>=I2S_PERIODS||
      app.reply.period.frames!=I2S_PERIOD_BYTES/2||!app.reply.period.ticket)return fault();
   app.held_period=app.reply.period.ticket;
@@ -131,13 +132,13 @@ int i2s_client_step(void)
  case 3:
   /* app.reply changes only after collection; preserve the held period ticket
    * while the copied PUT request is in flight. */
-  r=request(DMA_SERVICE_PERIOD_PUT,0,app.held_period);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_PUT,0,app.held_period);if(r<0)return fault();if(!r)return 0;
   app.stage=++app.primed==I2S_PERIODS?4:2;return 0;
  case 4:
-  r=request(DMA_SERVICE_SUBMIT,24000000,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_SUBMIT,24000000,0);if(r<0)return fault();if(!r)return 0;
   app.stage=5;return 0;
  case 5:{
-  r=request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_GET,0,0);if(r<0)return fault();if(!r)return 0;
   struct a733_i2s_period p=app.reply.period;
   if(p.slot>=I2S_PERIODS||p.frames!=I2S_PERIOD_BYTES/2||!p.ticket||
      p.first_frame!=(uint64_t)app.periods*(I2S_PERIOD_BYTES/2)||
@@ -148,13 +149,13 @@ int i2s_client_step(void)
   memcpy(app.output+app.output_bytes,app.period_memory[p.slot],bytes);app.output_bytes+=bytes;
   app.held_period=p.ticket;++app.periods;app.stage=app.output_bytes==total?7:6;return 0;}
  case 6:
-  r=request(DMA_SERVICE_PERIOD_PUT,0,app.held_period);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_PERIOD_PUT,0,app.held_period);if(r<0)return fault();if(!r)return 0;
   app.stage=5;return 0;
  case 7:
-  r=request(DMA_SERVICE_CANCEL,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_CANCEL,0,0);if(r<0)return fault();if(!r)return 0;
   app.stage=8;return 0;
  case 8:
-  r=request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
+  r=i2s_request(DMA_SERVICE_STATUS,0,0);if(r<0)return fault();if(!r)return 0;
   if(app.reply.phase==DMA_SERVICE_DRAINING||app.reply.phase==DMA_SERVICE_RUNNING)return 0;
   if(app.reply.phase!=DMA_SERVICE_RESULT||app.reply.outcome!=DMA_SERVICE_CANCELED||!app.reply.holds_buffers)
    return fault();

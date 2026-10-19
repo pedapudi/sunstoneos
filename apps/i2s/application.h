@@ -3,8 +3,10 @@
 #include "session.h"
 #include "boot.h"
 #include "a733_audio_leases.h"
+#include "repeated.h"
 struct i2s_application {
  struct i2s_session admitted,session;
+ struct i2s_repeated repeated;
  struct a733_native_usb shared;
  struct a733_dma_pool_session dma;
  struct a733_audio_leases leases;
@@ -36,4 +38,5 @@ int i2s_client_step(void);
 int i2s_prepare_audio(void);
 int i2s_output(unsigned,void *,unsigned);
 unsigned i2s_output_bytes(void);
+int i2s_request(enum dma_service_operation,uint64_t,uint64_t);
 #endif

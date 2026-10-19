@@ -9,6 +9,7 @@ static unsigned counts[2],cancelled_jobs,delayed_get;
 static struct dma_service_request queued;
 static unsigned sent,consumed,fill,mode,put_count,cancelled,drain_observations;
 static uint64_t tick=240;
+void i2s_fail(void *v){(void)v;atomic_store(&app.fatal,1);}
 int i2s_live(void *v){(void)v;return tick<app.deadline*24;}
 int i2s_prepare_audio(void){atomic_store(&app.audio_ready,1);return 1;}
 void vTaskDelay(TickType_t ticks){(void)ticks;}
