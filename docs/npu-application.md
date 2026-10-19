@@ -585,3 +585,19 @@ finite transport, copying and restoration evidence is reused. Two affected
 monitor composition cases accept a matching receipt and refuse pending interrupt
 97 before route restoration; unchanged cache and ROM-tail evidence is reused.
 Physical interrupt delivery, inference and return remain unqualified.
+
+## Live inputs for the fixed selected model
+
+The [runtime application](../apps/npu-runtime/README.md) accepts same-shape inputs
+through the existing retained single-core USB task. Each request uses the original
+convolution input publication, matched completion, copied output and REAP path.
+The caller can repeat with different bytes, then request healthy CLOSE and local
+shutdown while USB remains available for the terminal copied result. Model and
+shape stay fixed; an output oracle is optional and checked on the host.
+
+The explicit profile is `npu-runtime-single-core-supervised-v1`, with runtime
+and IRQ flags enabled and finite return disabled. Existing monitor, dispatcher,
+route and interrupt service sources are unchanged. The original finite returning
+profiles keep their two-fixture client and ROM-return behavior. Runtime input
+ownership, wire fields and focused evidence are documented with the application.
+No physical inference or interrupt qualification is established by these checks.

@@ -210,3 +210,10 @@ Architecture registers, translation/cache effects, service replies and produced
 output are modeled. Injected reference output checks copying, lifetime and result
 verification; it does not execute numerical inference. No peripheral MMIO or board
 communication occurred. Earlier fixed-model and constituent checks were reused.
+
+The [live runtime client](../apps/npu-runtime/README.md) now supplies arbitrary
+same-shape inputs to that unchanged selected model and copies numerical output
+through this API. Its USB task owns one mailbox; the designated NPU client owns
+all service calls, REAP and terminal CLOSE. The compiled-model catalogue and
+memory/publication policy remain unchanged. Runtime input delivery does not add
+model upload, shape switching or broader operator support.

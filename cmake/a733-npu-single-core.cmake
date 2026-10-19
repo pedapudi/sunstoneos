@@ -29,6 +29,14 @@ if(A733_NPU_INTERRUPT)
  list(APPEND npsc_sources "${npsc_root}/apps/npu-interrupt/irq.c"
   "${npsc_root}/apps/npu-interrupt/irq-route.c" "${npsc_root}/drivers/gpu/gicv3_spi.c")
 endif()
+if(A733_NPU_RUNTIME_INPUT)
+ if(NOT A733_NPU_INTERRUPT OR CMAKE_C_FLAGS MATCHES "SUNSTONE_NPU_FINITE_RETURN")
+  message(FATAL_ERROR "Runtime input requires retained single-core IRQ profile")
+ endif()
+ list(REMOVE_ITEM npsc_sources "${npsc_root}/apps/npu-convolution/main.c" "${npsc_build}/usb_service.c")
+ list(APPEND npsc_sources "${npsc_root}/apps/npu-runtime/main.c"
+  "${npsc_root}/apps/npu-runtime/runtime.c" "${npsc_root}/apps/npu-runtime/usb.c")
+endif()
 list(REMOVE_DUPLICATES npsc_sources)
 set_source_files_properties("${npsc_root}/drivers/npu/npu_convolution.c" PROPERTIES
  COMPILE_DEFINITIONS "a733_npu_native_operations=a733_npu_application_operations")
@@ -44,6 +52,10 @@ set_property(TARGET a733-npu-convolution-single-core PROPERTY COMPILE_OPTIONS "$
 target_include_directories(a733-npu-convolution-single-core BEFORE PRIVATE "${npsc_app}" "${npsc_port}")
 target_include_directories(a733-npu-convolution-single-core PRIVATE ${npsc_includes} "${npsc_root}/apps/npu-convolution")
 target_compile_definitions(a733-npu-convolution-single-core PRIVATE ${npsc_definitions} GUEST=1 SUNSTONE_NPU_SINGLE_CORE=1)
+if(A733_NPU_RUNTIME_INPUT)
+ target_compile_definitions(a733-npu-convolution-single-core PRIVATE SUNSTONE_NPU_RUNTIME_INPUT=1)
+ target_include_directories(a733-npu-convolution-single-core PRIVATE "${npsc_root}/apps/npu-runtime")
+endif()
 if(A733_NPU_INTERRUPT)
  target_compile_definitions(a733-npu-convolution-single-core PRIVATE SUNSTONE_NPU_INTERRUPT=1)
 endif()
@@ -52,7 +64,7 @@ set_property(SOURCE "${npsc_shared}/monitor.c" "${npsc_shared}/runtime.c" "${nps
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,a733-npu-convolution-single-core>:${npsc_app}/boot.h>")
 # Bind every declared producer input; the frozen closure also records compiler depfiles.
 file(GLOB npsc_headers "${npsc_app}/*.h" "${npsc_root}/apps/npu-convolution/*.h" "${npsc_root}/include/*.h")
-set(npsc_inputs ${npsc_sources} ${npsc_headers} "${npsc_app}/link.ld" "${npsc_app}/CMakeLists.txt"
+set(npsc_inputs ${npsc_sources} "${npsc_root}/apps/npu-runtime/runtime.h" ${npsc_headers} "${npsc_app}/link.ld" "${npsc_app}/CMakeLists.txt"
  "${npsc_shared}/platform.patch" "${npsc_shared}/boot.h" "${npsc_shared}/cached.h"
  "${npsc_shared}/FreeRTOSConfig.h" "${npsc_app}/usb-service.patch"
  "${npsc_port}/portmacro.h" "${npsc_port}/port.c" "${CMAKE_CURRENT_LIST_FILE}")
@@ -79,9 +91,15 @@ target_link_options(a733-npu-convolution-single-core PRIVATE -nostdlib -static -
  -Wl,--defsym=__device_pool_size=2097152 -Wl,--undefined=npu_single_core_geometry
  -Wl,--undefined=a733_npu_session_layout "-Wl,-T,${npsc_app}/link.ld" "-Wl,-Map,${npsc_build}/image.map")
 set_target_properties(a733-npu-convolution-single-core PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${npsc_app}/link.ld")
+set(npsc_profile "npu-single-core-supervised-v1")
+set(npsc_workload "trusted-convolution-repeat")
+if(A733_NPU_RUNTIME_INPUT)
+ set(npsc_profile "npu-runtime-single-core-supervised-v1")
+ set(npsc_workload "runtime-input-irq")
+endif()
 set(npsc_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@npsc_build@/manifest.json" "{\"target\":\"a733-npu-convolution-single-core\",\"execution_profile\":\"npu-single-core-supervised-v1\",\"workload\":\"trusted-convolution-repeat\",\"build_id\":\"@npsc_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@npsc_build@/manifest.json" "{\"target\":\"a733-npu-convolution-single-core\",\"execution_profile\":\"@npsc_profile@\",\"workload\":\"@npsc_workload@\",\"build_id\":\"@npsc_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${npsc_manifest_script}" npsc_manifest_script @ONLY)
 file(WRITE "${npsc_build}/finish-manifest.cmake" "${npsc_manifest_script}")

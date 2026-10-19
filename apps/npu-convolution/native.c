@@ -220,7 +220,7 @@ static void bootstrap(void *argument)
             enum npu_service_result a=npu_service_activate(&app.reserved.convolution.service);
             if(a==NPU_SERVICE_OK) {
                 atomic_store_explicit(&app.ready,1,memory_order_release);
-#ifdef SUNSTONE_NPU_FINITE_RETURN
+#if defined(SUNSTONE_NPU_FINITE_RETURN) || defined(SUNSTONE_NPU_RUNTIME_INPUT)
                 for(;;) {
                     if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
                        now>=app.handoff.allowed.deadline_us)break;

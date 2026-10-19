@@ -90,8 +90,15 @@ def image_manifest_check(manifest,raw,session=None):
     target=manifest.get('target');require(target in profiles and manifest.get('final_elf')==sha(raw),
         'Exact reviewed supervised NPU image required.')
     profile=profiles[target]
+    elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
+    runtime=symbols.get('npu_runtime_geometry')
+    if runtime:
+        require(target=='a733-npu-convolution-single-core','Runtime requires single-core image.')
+        section=elf.get_section(runtime['st_shndx']);offset=runtime['st_value']-section['sh_addr']
+        require(not section['sh_flags']&1 and runtime['st_size']==32 and struct.unpack('<4Q',section.data()[offset:offset+32])==(0x415337334e505232,1,64,512),'Runtime geometry differs.')
+        profile='npu-runtime-single-core-supervised-v1'
     if target=='a733-npu-convolution-single-core':
-        require(manifest.get('execution_profile')==profile and manifest.get('workload')=='trusted-convolution-repeat',
+        require(manifest.get('execution_profile')==profile and manifest.get('workload')==('runtime-input-irq' if runtime else 'trusted-convolution-repeat'),
             'Single-core NPU manifest profile differs.')
     else:
         require(manifest.get('execution_profile',profile)==profile,'All-core NPU profile differs.')
