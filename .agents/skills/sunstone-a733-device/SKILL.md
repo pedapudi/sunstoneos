@@ -112,6 +112,12 @@ USB transfers do not establish another task's completion when its summary fields
 remain pending. Match host success to the native producer's required status and
 count fields, and preserve partial results when those conditions disagree.
 
+Trace each new register access through the complete native access policy.
+A controller adapter may allow an offset that the lower MMIO provider rejects.
+Check the complete address and peripheral base, then exercise the real provider
+in the affected case. A fixture that substitutes its read callback cannot prove
+that the native access policy admits the register.
+
 ## Validate the changed path without repeating earlier work
 
 Apply [selective validation](../../../docs/validation.md). State the changed
