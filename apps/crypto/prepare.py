@@ -15,6 +15,7 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('crypto_board_prepare',ROOT/'apps/board/prepare.py')
 vectors=module('crypto_vectors',ROOT/'apps/crypto/vectors.py')
+operation=module('crypto_operation',ROOT/'apps/crypto/request.py')
 base=board.base
 require=base.require
 SCHEMA='a733-crypto-supervised-bundle-v1'
@@ -46,10 +47,12 @@ def image_manifest_check(manifest,raw):
 def session_check(raw):
     require(len(raw)==824,'Crypto session must be824bytes.')
     require(board.session_check(raw[:592],usb_reference_modes=(1,2))==2,'Crypto requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373343524131,1,824),'Invalid crypto session extension.')
+    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373343524131 and struct.unpack_from('<Q',raw,600)[0] in (1,2) and struct.unpack_from('<Q',raw,608)[0]==824,'Invalid crypto session extension.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid crypto owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing crypto physical evidence.')
+    if struct.unpack_from('<Q',raw,600)[0]==2:
+        require(any(raw[760:792]),'Missing authenticated crypto request');return
     require(raw[760:792]==hashlib.sha256(vectors.INPUTS).digest() and raw[792:824]==hashlib.sha256(vectors.REFERENCE).digest(),'Crypto vectors differ.')
 
 def embedded_reference(image,session):
@@ -57,6 +60,7 @@ def embedded_reference(image,session):
     import io
     from elftools.elf.elffile import ELFFile
     session_check(session)
+    if struct.unpack_from('<Q',session,600)[0]==2:return None
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'Crypto image has no vector symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
@@ -114,9 +118,12 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         require(all(fact.get(k) is True for k in required),'Required CRYPTO physical fact absent.')
     return cache
 
-def prepare(image,manifest,admission,template,output,clang,lld):
+def prepare(image,manifest,admission,template,output,clang,lld,request=None):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    if struct.unpack_from('<Q',raw,600)[0]==2:
+        require(request is not None,'Caller-supplied operation required');snapshots['operation.bin']=Path(request).read_bytes();operation.decode(snapshots['operation.bin'],raw)
+    else:require(request is None,'Diagnostic session cannot accept a runtime operation')
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
@@ -170,10 +177,14 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'CRYPTO upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'CRYPTO launch contract changed.')
     p['_reference']=embedded_reference((out/'image.elf').read_bytes(),raw)
+    if struct.unpack_from('<Q',raw,600)[0]==2:
+        require('operation.bin' in p['files'],'Unsealed crypto operation');p['_operation']=(out/'operation.bin').read_bytes();operation.decode(p['_operation'],raw)
+    else:require('operation.bin' not in p['files'],'Unexpected diagnostic operation')
     p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
 
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
-    a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)
+    parser.add_argument('--request',type=Path)
+    a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.request)

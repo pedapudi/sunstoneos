@@ -4,6 +4,7 @@ import argparse,hashlib,importlib.util,json,struct
 from pathlib import Path
 p=argparse.ArgumentParser()
 for n in ('image','manifest','session','output'):p.add_argument('--'+n,type=Path,required=True)
+p.add_argument("--runtime-operation",type=Path)
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 r=Path(__file__).resolve().parents[1]
 def mod(n,p):
@@ -27,10 +28,13 @@ required={'initial':['all_secure_nonsecure_ce_clients_excluded','remote_firmware
 for key,offset in zip(required,(632,664,696,728)):
  v={**common,'schema':'a733-crypto-'+key+'-v1',**dict.fromkeys(required[key],True)}
  ref=put(key,v);raw[offset:offset+32]=bytes.fromhex(ref['sha256']);record[key]=ref
+if a.runtime_operation:
+ struct.pack_into('<Q',raw,600,2);raw[760:792]=hashlib.sha256(a.runtime_operation.read_bytes()).digest();raw[792:824]=bytes(32)
+ prep.operation.decode(a.runtime_operation.read_bytes(),raw)
 record['session_template_sha256']=hashlib.sha256(raw).hexdigest()
 template=a.output/'MODEL-session.bin';template.write_bytes(raw);admission=a.output/'MODEL-admission.json';admission.write_text(json.dumps(record,indent=2)+'\n')
 bundle=a.output/'MODEL-NOT-DEPLOYABLE-bundle'
-prepared=prep.prepare(a.image,a.manifest,admission,template,bundle,'/usr/bin/clang-21','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+prepared=prep.prepare(a.image,a.manifest,admission,template,bundle,'/usr/bin/clang-21','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21',a.runtime_operation)
 assert any(item['sha256']==model['sha256'] for item in prepared['entry_evidence'].values())
 # Bundle validation must consume retained bytes after every original condition disappears.
 for f in facts.iterdir():f.unlink()
@@ -40,6 +44,16 @@ del frozen[model['path']]
 try:prep.validate_admission(record,image_hash,record['session_template_sha256'],raw,frozen,True,'crypto-single-core-supervised-v1')
 except ValueError:pass
 else:raise AssertionError('Missing frozen condition accepted')
+if a.runtime_operation:
+ assert prepared['_reference'] is None and prepared['_operation']==a.runtime_operation.read_bytes()
+ operation=bundle/'operation.bin';original=operation.read_bytes();operation.write_bytes(original[:-1]+bytes([original[-1]^1]))
+ try:prep.validate_bundle(bundle)
+ except ValueError:pass
+ else:raise AssertionError('Changed operation accepted')
+ operation.write_bytes(original);assert prep.validate_bundle(bundle)['_operation']==original
+ (a.output/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':{'runtime-session-and-request-commitment':True,'real-arm-launcher-link':True,'package-frozen-operation-integrity':True,'frozen-authority-conditions':True},'image_sha256':image_hash},indent=2)+'\n')
+ print('PASS runtime crypto package, exact caller operation and retained admission; physical authority modeled')
+ raise SystemExit(0)
 # Reuse the accepted native crypto frame; only its new session binding changes.
 original=Path.home()/'.cache/sunstoneos/evidence/crypto-native-20261018/native/native-frame.bin'
 frame=bytearray(original.read_bytes());session=(bundle/'session.bin').read_bytes()

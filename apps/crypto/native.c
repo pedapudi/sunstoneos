@@ -51,7 +51,7 @@ static int authorize(void *v,const struct a733_ce_config *c,const struct a733_cl
 int crypto_construct(void)
 {
  if(!mappings()||!masked()||!board_live(NULL)||board.session.deadline_us<=10000)return 0;
- crypto.mutex=xSemaphoreCreateMutexStatic(&crypto.mutex_storage);if(!crypto.mutex)return 0;
+ if(!crypto.mutex)crypto.mutex=xSemaphoreCreateMutexStatic(&crypto.mutex_storage);if(!crypto.mutex)return 0;
  crypto.config=(struct a733_ce_config){.owner=crypto.session.owner,.handoff=crypto.session.authority,
  .deadline_us=deadline(),.profile=A733_CE_SHA256_AES128};
  memcpy(crypto.config.fabric,board.session.fabric,sizeof(crypto.config.fabric));
@@ -67,6 +67,23 @@ int crypto_construct(void)
 static int eligible(void *v)
 {return v==&crypto&&authorize(&crypto,&crypto.engine.controller.config,&crypto.token,crypto.engine.controller.memory)==1&&
  board_live(NULL)&&a733_smp_counter()/24<deadline();}
+/* The USB producer is the sole writer until release publication. The CE owner
+ * reads the request only after acquire, then USB can never replace it. */
+int crypto_input_live(void)
+{
+ return crypto.session.version==2&&board_live(NULL)&&a733_smp_counter()/24<deadline()&&
+ crypto.session.board.epoch==board.session.epoch&&crypto.session.board.generation==board.session.generation&&
+ !atomic_load_explicit(&crypto.result,memory_order_acquire)&&
+ !atomic_load_explicit(&crypto.input_ready,memory_order_acquire);
+}
+int crypto_accept(const void *input,size_t bytes)
+{
+ if(!crypto_input_live())return 0;
+ if(!crypto_request_copy(&crypto.run.request,&crypto.session,input,bytes))return 0;
+ crypto.run.runtime=1;memcpy(crypto.run.oracle,crypto.session.reference,32);
+ if(!crypto_input_live()){crypto_key_clear(crypto.run.request.key);return 0;}
+ atomic_store_explicit(&crypto.input_ready,1,memory_order_release);return 1;
+}
 int crypto_output_ready(void)
 {
  return board_live(NULL)&&a733_smp_counter()/24<deadline()&&
@@ -80,8 +97,21 @@ void crypto_task(void *unused)
   if(!board_live(NULL)||a733_smp_counter()/24>=deadline()){
    crypto.retaining=1;atomic_store_explicit(&crypto.result,2,memory_order_release);
   }
+  if(crypto.session.version==2&&!crypto.retaining&&!crypto.constructed){
+   if(!atomic_load_explicit(&crypto.input_ready,memory_order_acquire)){vTaskDelay(1);continue;}
+   if(!crypto_construct()){
+    crypto.retaining=1;crypto_key_clear(crypto.run.request.key);
+    atomic_store_explicit(&crypto.result,2,memory_order_release);
+   }else crypto.constructed=1;
+  }
   if(xSemaphoreTake(crypto.mutex,0)==pdTRUE){
-   if(crypto.retaining)(void)a733_ce_session_retain(&crypto.engine);
+   if(crypto.retaining){
+    if(atomic_load_explicit(&crypto.input_ready,memory_order_acquire))crypto_key_clear(crypto.run.request.key);
+    /* CPU client staging is distinct from quarantined DMA memory. Do not
+     * invoke another CE operation merely to erase this copied software key. */
+    crypto_key_clear(crypto.run.cipher.key);
+    if(crypto.engine.initialized)(void)a733_ce_session_retain(&crypto.engine);
+   }
    else if(!atomic_load_explicit(&crypto.result,memory_order_acquire)){
     int r=crypto_run_step(&crypto.run,deadline());
     if(r<0){crypto.retaining=1;atomic_store_explicit(&crypto.result,2,memory_order_release);(void)a733_ce_session_retain(&crypto.engine);}

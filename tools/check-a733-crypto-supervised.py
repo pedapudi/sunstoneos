@@ -22,25 +22,29 @@ PRODUCT='sunstoneos native CRYPTO'
 SERIAL='sunstoneos-a733-crypto'
 
 
-def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE):
+def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE,request=None):
     preparation.session_check(session)
-    require(len(reference)==160 and session[792:824]==hashlib.sha256(reference).digest(),
+    runtime=struct.unpack_from('<Q',session,600)[0]==2
+    if runtime:preparation.operation.decode(request,session)
+    else:require(len(reference)==160 and session[792:824]==hashlib.sha256(reference).digest(),
         'CRYPTO diagnostic fixture/reference differs.')
     record.update(crypto_retention='whole-board-power-removal',crypto_result='unobserved');save()
     for sequence in range(1,2401):
         require(now()<deadline,'CRYPTO capture deadline expired.')
-        frame=exchange(bytes(1),min(500,max(1,int((deadline-now())*1000))))
+        packet=b"\1"+struct.pack("<I",len(request))+request if runtime and sequence==1 else bytes(1)
+        frame=exchange(packet,min(500,max(1,int((deadline-now())*1000))))
         path=evidence/f'crypto-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest()}
         record.setdefault('crypto_frames',[]).append(entry);save()
-        result=decoder.decode(frame,session,reference);entry.update(result)
+        result=decoder.decode(frame,session,reference,request);entry.update(result)
         require(now()<deadline,'CRYPTO response arrived after capture deadline.')
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
         if result['status']==1:
-            output=evidence/'output.bin';supervisor.durable_frame(output,frame[128:])
+            output=evidence/'output.bin';supervisor.durable_frame(output,frame[144 if runtime else 128:])
             require(now()<deadline,'CRYPTO output became durable after capture deadline.')
-            record['copied_crypto_output']={'path':output.name,'bytes':160,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_crypto_output']={'path':output.name,'bytes':result['bytes'],'sha256':hashlib.sha256(frame[144 if runtime else 128:]).hexdigest()}
+            if runtime:record['copied_crypto_output'].update({k:result[k] for k in ('request_id','operation','input_bytes','oracle_checked')})
         record['crypto_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -50,18 +54,33 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('CRYPTO exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,reference=REFERENCE):
+def capture_device(device,same,deadline,session,evidence,record,save,*,reference=REFERENCE,request=None):
     def exchange(packet,timeout):
-        same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete CRYPTO request.')
-        same();remaining=int((deadline-time.monotonic())*1000)
-        require(remaining>0,'CRYPTO capture deadline expired after write.')
-        return bytes(device.read(0x81,288,timeout=min(timeout,remaining)))
-    return capture(exchange,session,evidence,record,save,deadline,reference=reference)
+        same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete CRYPTO request.')
+        base=144 if request is not None else 128;extent=base+(2048 if request is not None else 160)
+        frame=bytearray();empty_reads=0
+        while len(frame)<extent:
+            same();remaining=int((deadline-time.monotonic())*1000)
+            require(remaining>0,'CRYPTO capture deadline expired after write.')
+            part=bytes(device.read(0x81,min(512,extent-len(frame)),timeout=min(timeout,remaining)))
+            target=evidence/f'crypto-fragment-{len(record.get("crypto_fragments",[]))+1:05}.bin'
+            supervisor.durable_frame(target,part)
+            record.setdefault('crypto_fragments',[]).append({'path':target.name,'sha256':hashlib.sha256(part).hexdigest()});save()
+            require(len(part)<=extent-len(frame),'Invalid CRYPTO fragment extent.')
+            if not part:
+                empty_reads+=1;require(empty_reads<=8,'CRYPTO empty-fragment budget exhausted.');continue
+            frame.extend(part)
+            if len(frame)>=16:
+                count=struct.unpack_from('<I',frame,12)[0]
+                require(count<=(2048 if request is not None else 160),'Oversized CRYPTO output.')
+                extent=base+count;require(len(frame)<=extent,'CRYPTO output exceeds header extent.')
+        return bytes(frame)
+    return capture(exchange,session,evidence,record,save,deadline,reference=reference,request=request)
 
 
 def source_files():
     return [('crypto-host-tool.py',Path(__file__)),('crypto-preparation.py',Path(preparation.__file__)),
-        ('crypto-decoder.py',Path(decoder.__file__)),('crypto-vectors.py',Path(preparation.vectors.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
+        ('crypto-decoder.py',Path(decoder.__file__)),('crypto-vectors.py',Path(preparation.vectors.__file__)),('crypto-operation.py',Path(preparation.operation.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 
@@ -151,7 +170,7 @@ def main(argv=None):
         require(admission['identity']==identity and admission['port']==port,'CRYPTO entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference=prepared['_reference']),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference=prepared['_reference'],request=prepared.get('_operation')),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='crypto_result',
         source_files=source_files(),description='Supervised native CRYPTO; retain every resource until whole-board power removal')
 

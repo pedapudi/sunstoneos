@@ -18,7 +18,7 @@ list(REMOVE_ITEM crypto_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 apply_build_patch("${crypto_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/crypto/boot.patch")
 list(APPEND crypto_sources "${crypto_build}/boot.c")
-foreach(source IN ITEMS apps/crypto/main.c apps/crypto/native.c apps/crypto/run.c apps/crypto/vectors.c apps/crypto/usb0.c apps/crypto/admission.c apps/crypto/snapshot.c)
+foreach(source IN ITEMS apps/crypto/main.c apps/crypto/native.c apps/crypto/run.c apps/crypto/request.c apps/crypto/vectors.c apps/crypto/usb0.c apps/crypto/admission.c apps/crypto/snapshot.c)
  list(APPEND crypto_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 add_executable(sunstone-a733-crypto EXCLUDE_FROM_ALL ${crypto_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)

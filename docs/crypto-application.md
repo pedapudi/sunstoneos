@@ -1,11 +1,13 @@
-# Native SHA-256 and AES diagnostic
+# Native finite SHA-256 and AES operations
 
-The supervised crypto image composes the existing hardware crypto-engine (CE)
-clients with the native FreeRTOS board providers and copied USB output. It runs
+The supervised crypto image accepts one caller-supplied SHA-256 message or
+AES-128 ECB operation per admitted session. It composes the existing hardware
+crypto-engine (CE) clients with native FreeRTOS providers and copied USB output.
+Session version 1 retains the fixed diagnostic. It runs
 SHA-256 over `abc`, encrypts the four AES-128 ECB blocks from NIST SP800-38A
 section F.1.1, then decrypts that ciphertext. Every byte must match the fixed
 reference before success becomes visible. This diagnostic does not use TRNG,
-qualify entropy, expose a general cryptographic service or establish key erasure.
+qualify entropy, provide a persistent cryptographic service or establish key erasure.
 
 One retained CE session owns the actual singleton cacheable pool page and an
 exclusive CE token in the shared clock registry. The token also holds PERI0,
@@ -25,7 +27,9 @@ clock provisioning remains separate work.
 
 The 824-byte immutable session extends the existing USB0-only supervised board
 session. Its complete digest covers the CE owner and authority, physical evidence
-identities and fixed input/reference identities. Host preparation requires
+identities and the selected input commitment. Version 1 binds fixed input and
+reference identities. Version 2 binds a finite operation request and an optional
+output oracle. Host preparation requires
 separate reviewed records for both-world ownership, independently resolved prior
 CE DMA, boot lineage, secure-bank read permission, masked IRQ routes 200 and 201,
 private reachable cacheable RAM without aliases, stable clocks and permanent
@@ -45,7 +49,7 @@ gaps. A physical request must remain blocked until the coordinator obtains that
 evidence. Source inspection found no independent global drain primitive. Task
 status zero and reset readback cannot establish the missing predecessor handoff.
 
-The application keeps the digest, ciphertext and recovered plaintext private until
+The version-1 application keeps the digest, ciphertext and recovered plaintext private until
 all three comparisons and a final authority/deadline check pass. It then publishes
 one immutable 160-byte result using release/acquire synchronization. Any task
 failure, mismatch, stop or expiry revokes success and permits only retention
@@ -130,7 +134,7 @@ handoff; physical admission remains separately blocked.
 
 ## Independent boot-CPU image
 
-The target `sunstone-a733-crypto-single-core` runs the same fixed SHA-256/AES
+The target `sunstone-a733-crypto-single-core` runs the same finite SHA-256/AES
 application on the boot CPU. Configure the standalone
 `apps/crypto-single-core` project with the existing pinned toolchain, FreeRTOS,
 TinyUSB and board-provider dependencies, or select the crypto application from
@@ -183,3 +187,91 @@ requires the complete matching 160-byte copied result. Stop after the first
 transport failure and retain all resources until confirmed removal of every
 board power source, including after success. Physical CE execution remains
 unqualified; this independent startup does not close the existing admission gaps.
+
+## One caller-supplied request per admitted session
+
+Session version 2 keeps the 824-byte session layout. Its `fixture` field commits
+the SHA-256 digest of the exact serialized operation. Its `reference` field is
+zero for ordinary execution. A nonzero reference optionally commits the output
+SHA-256 digest for qualification. Ordinary output needs no preknown answer.
+The retained session still binds the image, epoch, generation, owners, physical
+entry evidence and lifetime before USB input is accepted.
+
+`apps/crypto/request.py` creates the finite operation from a message file and an
+optional 16-byte AES key file. SHA-256 accepts zero through 2,048 bytes. AES-128
+ECB encryption and decryption accept 16 through 2,048 bytes in complete 16-byte
+blocks. These limits match the existing CE clients. No padding, IV, authenticated
+encryption or entropy operation is introduced.
+
+The request has a 48-byte little-endian header followed by the message:
+
+| Offset | Field |
+| --- | --- |
+| 0 | 64-bit magic `0x4153373343525131` |
+| 8 | 32-bit version 1 |
+| 12 | 32-bit operation: SHA-256 1, AES encrypt 2, AES decrypt 3 |
+| 16 | Nonzero 64-bit caller request ID |
+| 24 | 32-bit input byte count |
+| 28 | Reserved 32-bit zero |
+| 32 | 16-byte AES key; all zero for SHA-256 |
+| 48 | Exact message bytes |
+
+The request tool can copy a session template to version 2, set its input
+commitment and clear its output oracle. `--oracle` supplies an expected output
+file only when qualification needs that comparison. Physical admission must
+cover the resulting template and selected image. Preparation's `--request`
+argument seals the complete operation as `operation.bin` in the existing bundle.
+Bundle validation checks its exact hash and shape against the admitted template.
+
+A USB upload consists of command byte 1, a 32-bit serialized-request length and
+the request bytes. The USB task accumulates bounded fragments in private staging.
+Every fragment and final commit require the retained current epoch, generation
+and deadline. The task copies the full operation to private owner storage before
+checking its hash and shape, then publishes it with release synchronization.
+The CE task acquires that publication before reading the request. Further uploads
+are terminal refusals and cannot replace the published bytes. Command byte zero
+continues to request status and copied output.
+
+For version 2, boot creates only the private mutex and task. Partial, malformed,
+uncommitted or expired uploads cannot acquire a CE clock token or DMA page.
+After authentication the CE owner constructs the existing native session under
+its mutex, then runs the selected finite client. This fixed USB-only image has
+one cacheable device-pool consumer; board USB uses the separate non-cacheable
+pool. No other task allocates from the CE pool during deferred construction.
+These ownership assumptions are required for the existing pool interface.
+
+AES acceptance copies the key into the existing cipher client before clearing
+the application's request-key bytes. Successful output still requires the
+client's software key-line cleanup. Terminal failure clears the owner task's
+copied CPU key staging under its mutex. Unpublished request cleanup remains with
+the USB producer. Uncertain DMA backing, clock tokens and active ownership stay
+quarantined; cleanup does not touch the DMA key line after uncertainty. Internal
+CE key-register erasure and complete removal of all external key copies remain
+unqualified.
+
+Version-2 responses use a 144-byte header. The first 32 bytes retain magic,
+version, status, output size, epoch and generation. Offsets 32, 40 and 44 contain
+the 64-bit request ID, 32-bit operation and 32-bit input size. Offsets 48, 80 and
+112 contain the request, complete retained-session and copied-output SHA-256
+digests. Success appends exactly 32 SHA-256 bytes or the admitted AES extent.
+Non-success responses carry no payload and a zero output digest. The host checks
+all identities and sizes before making output durable. It preserves partial
+bulk reads and accepts up to eight empty reads per frame within the existing
+deadline, covering TinyUSB's intervening zero-length packets.
+
+The focused software checks cover arbitrary copied input, empty and maximum
+SHA-256 requests, both AES directions and maximum extents, intermediate hash
+polling, deferred construction, upload refusal, 64-bit request identity,
+publication revocation, CPU key cleanup and optional oracle comparison. Native
+USB frames feed the host-copy tests. Diagnostic orchestration and host capture
+remain compatible. The package check uses actual linked-image identities,
+producer-derived request records and accepted provider fixture values; its
+physical authority remains explicitly modeled. Focused Astra review has no
+unresolved findings.
+
+Exact inputs, linked objects, images, frames and results are preserved at
+`~/.cache/sunstoneos/evidence/crypto-runtime-input-20261018/`. The standalone
+native target links without changing CPU startup, CE drivers, shared providers
+or entropy policy. No hardware operation or queue entry was created. CE execution,
+secure-bank access, independently resolved prior DMA and physical drain remain
+unqualified.

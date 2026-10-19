@@ -14,11 +14,13 @@ struct crypto_application {
  StaticTask_t task;
  StackType_t stack[2048];
  TaskHandle_t handle;
- atomic_uint result;
- unsigned retaining;
- uint8_t payload[160],digest[32];
+ atomic_uint result,input_ready;
+ unsigned retaining,constructed;
+ uint8_t payload[CRYPTO_INPUT_MAX],digest[32];
 };
 extern struct crypto_application crypto;
 void crypto_task(void *);
 int crypto_output_ready(void);
+int crypto_input_live(void);
+int crypto_accept(const void *,size_t);
 #endif
