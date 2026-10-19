@@ -12,7 +12,8 @@ selected model artifacts, adding `-DA733_NPU_RUNTIME_INPUT=ON` and
 The manifest profile is `npu-runtime-single-core-supervised-v1`. Existing finite
 and retained reference-comparison profiles keep their respective behavior.
 The model catalogue fixes input shape, output extent and quantization. The
-current selected convolution consumes 432 bytes and produces 400 bytes.
+selected `conv12` consumes 432 bytes and produces 400 bytes; the two-stage
+`subsample2` graph consumes 64 bytes and produces eight.
 The built-in input/reference arrays remain build-time artifact checks; runtime
 inference does not compare arbitrary output against that canned reference.
 
@@ -106,3 +107,9 @@ Astra review closed the staged-success and host validation/evidence findings.
 Root reviewed the unchanged IRQ architecture composition against the final image.
 Prior compiler, model, controller and route suites were not rerun. Physical
 numerical inference, interrupt delivery, signaling and recovery remain unqualified.
+
+
+The two-stage graph's selected native image and focused results are described in
+[the graph support record](../../docs/npu-two-stage.md). It uses this same live
+input, copied result and healthy CLOSE protocol, with one completion per complete
+graph job. Its software checks do not establish physical inference or interrupts.

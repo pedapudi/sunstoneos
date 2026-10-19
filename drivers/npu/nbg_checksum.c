@@ -55,12 +55,27 @@ static enum nbg_checksum_result directory(const unsigned char *data, size_t byte
         if (seen & bit) return NBG_CHECKSUM_INVALID;
         seen |= bit;
     }
+    /* SaveSectionBuffer in the pinned writer seeks to each section offset and
+     * accumulates only its declared payload. Alignment gaps are excluded. Keep
+     * the admitted layout canonical: ordered payloads, zero gaps, no trailer.
+     * nbg_model_open separately bounds every section and section-relative table. */
     uint32_t value = UINT32_MAX;
-    for (size_t i = start; i < bytes; ++i) {
-        int normalized = i >= sums->offset && i - sums->offset < sums->bytes &&
-                         ((i - sums->offset) & 7) >= 4;
-        value = byte(value, normalized ? 0 : data[i]);
+    size_t end = start;
+    for (uint32_t entry = 0; entry < word(data + 56); ++entry) {
+        const unsigned char *p = data + 60 + entry * 44;
+        size_t offset = word(p + 4), length = word(p + 12);
+        if (!length) continue;
+        if (offset < end) return NBG_CHECKSUM_INVALID;
+        for (size_t i = end; i < offset; ++i)
+            if (data[i]) return NBG_CHECKSUM_INVALID;
+        for (size_t i = offset; i < offset + length; ++i) {
+            int normalized = i >= sums->offset && i - sums->offset < sums->bytes &&
+                             ((i - sums->offset) & 7) >= 4;
+            value = byte(value, normalized ? 0 : data[i]);
+        }
+        end = offset + length;
     }
+    if (end != bytes) return NBG_CHECKSUM_INVALID;
     struct nbg_checksum check = {word(data + 12), ~value};
     if (check.stored == check.computed) {
         for (uint32_t at = 0; at < sums->bytes; at += 8) {

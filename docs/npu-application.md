@@ -3,7 +3,7 @@
 The native application combines a retained boot monitor, a permanent NPU memory
 reservation, the PMIC provider, NPU startup and the trusted compiled-model client.
 The supervised build supports either the cached eight-core startup or an
-independent image running on the boot CPU. Build-time selection chooses one of the three reviewed models in
+independent image running on the boot CPU. Build-time selection chooses one of the four reviewed models in
 [the registration catalogue](npu-convolution.md). The client copies the selected
 input into private buffers, waits for matched completion, copies and compares
 the output, and successfully reaps the job before submitting a second input.

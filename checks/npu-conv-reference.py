@@ -45,8 +45,10 @@ def main():
     expected = np.load(str(path("expected.npy")), allow_pickle=False)
     raw_input = np.load(str(path("input.npy")), allow_pickle=False)
     _, channels, height, width = expected.shape
-    input_width = raw_input.shape[-1]
-    in_name = f"input_2_out0_1_3_{input_width}_{input_width}"
+    matches = list((root / "float-reference").glob("iter_0_input_*_out0_*.tensor"))
+    require(len(matches) == 1, "expected exactly one saved input tensor")
+    in_name = matches[0].name[len("iter_0_"):-len(".tensor")]
+    input_quant_name = "@" + in_name.split("_out0_")[0] + ":out0"
     out_name = f"attach_output_out0_0_out0_1_{channels}_{height}_{width}"
     require(np.array_equal(tensor("float-reference", in_name, raw_input.shape), raw_input),
             "floating-point input preprocessing changed values")
@@ -79,7 +81,7 @@ def main():
                   max_code_difference=0, max_float_error=float(np.max(np.abs(difference))),
                   rms_float_error=float(np.sqrt(np.mean(difference * difference))),
                   nbg_version=hex(version), target=hex(target), nbg_bytes=len(model),
-                  input_quantization=quant["@input_2:out0"], output_quantization=output_quant,
+                  input_quantization=quant[input_quant_name], output_quantization=output_quant,
                   physical_access=False, native_loader_execution=False, inputs=identities)
     with args.report.open("x") as output:
         output.write(json.dumps(report, indent=2) + "\n")

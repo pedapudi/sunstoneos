@@ -51,7 +51,7 @@ struct npu_convolution {
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
- * accepts only the three reviewed complete UINT8 compiled models in the private
+ * accepts only the reviewed complete UINT8 compiled models in the private
  * catalogue. Select once for the context lifetime; no runtime upload or switch.
  * Six buffers have exact sizes 4K,4K,512K,4K,4K,512K and roles READ,READ,
  * COMMAND,READ,WRITE,BOOTSTRAP. CPU/PA/device ranges must be exclusive and

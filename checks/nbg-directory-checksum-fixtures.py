@@ -13,7 +13,11 @@ import zlib
 
 
 def normalized(data):
-    value = bytearray(data[632:])
+    count = struct.unpack_from("<I", data, 56)[0]
+    value = bytearray()
+    for i in range(count):
+        offset, length = struct.unpack_from("<QQ", data, 64 + i * 44)
+        value.extend(data[offset:offset + length])
     for at in (860, 868, 876):
         value[at - 632:at - 628] = bytes(4)
     return value
@@ -54,11 +58,13 @@ def main():
         offset, = struct.unpack_from('<I', gap, at)
         struct.pack_into('<I', gap, at, offset + 64)
     struct.pack_into('<I', gap, 12, zlib.crc32(normalized(gap)))
-    zero = bytearray(original + bytes(4))
+    zero = bytearray(original)
+    zero[-4:] = bytes(4)
     struct.pack_into('<I', zero, 16, len(zero))
     struct.pack_into('<I', zero, 12, 0)
     zero[-4:] = solve_suffix(normalized(zero))
     assert zlib.crc32(normalized(zero)) == 0
+    struct.pack_into('<I', zero, 876, zlib.crc32(zero[1856:]))
     args.output.mkdir(parents=True, exist_ok=False)
     rows = []
     for filename, data in [('gap.nb', gap), ('zero.nb', zero)]:

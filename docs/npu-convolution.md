@@ -1,13 +1,15 @@
 # Trusted compiled convolution registration and ownership
 
 The native registration component admits a privileged build-time catalogue of
-three compiled UINT8 convolutions. Model selection occurs before the scheduler
+four compiled UINT8 convolution graphs. Model selection occurs before the scheduler
 starts and remains fixed for that context's lifetime. Applications copy inputs,
 submit repeated inference requests, collect matching completion, copy results and
 explicitly reap each job. Physical NPU execution remains unqualified.
 
-All entries target `0x1000003b` and use NBG format `0x20000`, one neural operation,
-a 3×3 convolution without padding, and unit stride. Tensor order below is NCHW:
+All entries target `0x1000003b` and use NBG format `0x20000`. The first three
+contain one 3×3 convolution without padding and with unit stride. The fourth
+contains two 3×3 stride-two convolutions, each with one-cell padding and ReLU.
+Tensor order below is NCHW:
 batch, channel, height, width.
 
 | Catalogue entry | Input | Output | Model bytes | Input/output bytes |
@@ -15,10 +17,14 @@ batch, channel, height, width.
 | `conv8` | `1×3×8×8` | `1×2×6×6` | 1,928 | 192 / 72 |
 | `conv10` | `1×3×10×10` | `1×2×8×8` | 1,928 | 300 / 128 |
 | `conv12` | `1×3×12×12` | `1×4×10×10` | 2,056 | 432 / 400 |
+| `subsample2` | `1×1×8×8` | `1×2×2×2` | 2,720 | 64 / 8 |
 
 [The catalogue](../tools/npu-models.json) records complete model/input/reference
 identities, exact tensor dimensions and quantization, coefficient bytes and SRAM
-requirements. The native table also fixes those model identities and metadata.
+requirements, neural-operation and relocation counts, and command-body size.
+The native table independently fixes those model identities and metadata.
+The [two-stage graph](npu-two-stage.md) uses internal SRAM for its intermediate
+tensor and requires no external working pool or extra reservation.
 Each accepted model passes the existing decoder, checksums and assembler policy
 before native mappings are constructed. Other models, formats and operation
 sequences are refused. Neither a caller-supplied hash nor a checksum adds an entry.

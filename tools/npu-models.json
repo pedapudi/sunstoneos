@@ -44,7 +44,11 @@
         108
       ],
       "vip_sram_bytes": 101120,
-      "coeff_bytes": 256
+      "coeff_bytes": 256,
+      "nn_operations": 1,
+      "descriptor_patches": 3,
+      "state_patches": 1,
+      "command_body_bytes": 80
     },
     {
       "name": "conv10",
@@ -89,7 +93,11 @@
         106
       ],
       "vip_sram_bytes": 101376,
-      "coeff_bytes": 256
+      "coeff_bytes": 256,
+      "nn_operations": 1,
+      "descriptor_patches": 3,
+      "state_patches": 1,
+      "command_body_bytes": 80
     },
     {
       "name": "conv12",
@@ -134,7 +142,60 @@
         122
       ],
       "vip_sram_bytes": 101376,
-      "coeff_bytes": 384
+      "coeff_bytes": 384,
+      "nn_operations": 1,
+      "descriptor_patches": 3,
+      "state_patches": 1,
+      "command_body_bytes": 80
+    },
+    {
+      "name": "subsample2",
+      "model": {
+        "bytes": 2720,
+        "sha256": "6110a0d5a6146cd31473c217060ec2ae875025f25a39fa993476c5912d6a8544"
+      },
+      "input": {
+        "bytes": 64,
+        "sha256": "6289b247de4373b0fa652d93fd7517858ea1efda80835070fce817f2a1fa8081"
+      },
+      "reference": {
+        "bytes": 8,
+        "sha256": "221a10548793f361f43362a7ece35d95dad5f5fae00253dae1c37dc73dba965d"
+      },
+      "input_tensor": [
+        4,
+        8,
+        8,
+        1,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        1015054465,
+        127
+      ],
+      "output_tensor": [
+        4,
+        2,
+        2,
+        2,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        991171604,
+        0
+      ],
+      "vip_sram_bytes": 101376,
+      "coeff_bytes": 512,
+      "nn_operations": 2,
+      "descriptor_patches": 8,
+      "state_patches": 2,
+      "command_body_bytes": 104
     }
   ]
 }

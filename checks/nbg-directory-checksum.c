@@ -19,11 +19,16 @@ static void put(unsigned char *p, uint32_t value)
 static uint32_t primary(const unsigned char *data, size_t bytes)
 {
     uint32_t value = UINT32_MAX;
-    for (size_t i = 632; i < bytes; ++i) {
-        if (!((i >= 860 && i < 864) || (i >= 868 && i < 872) || (i >= 876 && i < 880)))
-            value ^= data[i];
-        for (unsigned bit = 0; bit < 8; ++bit)
-            value = (value >> 1) ^ ((value & 1) ? 0xedb88320u : 0);
+    (void)bytes;
+    for (unsigned entry = 0; entry < word(data + 56); ++entry) {
+        size_t offset = word(data + 64 + entry * 44);
+        size_t length = word(data + 72 + entry * 44);
+        for (size_t i = offset; i < offset + length; ++i) {
+            if (!((i >= 860 && i < 864) || (i >= 868 && i < 872) || (i >= 876 && i < 880)))
+                value ^= data[i];
+            for (unsigned bit = 0; bit < 8; ++bit)
+                value = (value >> 1) ^ ((value & 1) ? 0xedb88320u : 0);
+        }
     }
     return ~value;
 }

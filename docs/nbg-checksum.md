@@ -46,18 +46,22 @@ and consecutive 44-byte directory records starting at byte 60. Other placements
 can pass structural decoding but have no established checksum coverage and are
 refused by the verifier.
 
-The primary CRC covers every byte after the directory, including payload gaps
-and trailing bytes. Each checksum-value word in the section-checksum table is
-treated as zero; the section-type words remain included. The verifier then checks
-every listed section against its stored CRC. The table must be nonempty, name
-distinct present sections, and exclude itself. A repaired primary CRC cannot
-conceal a failure in a listed section checksum.
+The primary CRC covers the concatenation of declared section payloads in emitted
+directory order. Alignment gaps are excluded. Each checksum-value word in the
+section-checksum table is treated as zero; section-type words remain included.
+The verifier then checks every listed section against its stored CRC. The table
+must be nonempty, name distinct present sections, and exclude itself. Repairing
+the primary CRC cannot conceal a failure in a listed section checksum.
 
-The [directory reference](nbg-directory.md) establishes this rule from the compiler
-writer and the pinned convolution. Its primary value is `0xe5e19256`; all three
-listed section values also match. The writer updates its running CRC when emitting
-alignment padding. A synthetic 64-byte payload gap matches zlib and the native
-verifier; a compiler-generated padded directory model remains untested.
+The [directory reference](nbg-directory.md) establishes the coverage from the
+pinned compiler writer and two emitted artifacts, including the padded
+[two-stage graph](npu-two-stage.md). Native admission additionally requires
+ascending nonempty payload offsets, zero uncovered gaps and no trailing bytes.
+These are conservative native layout restrictions; the CRC does not protect
+excluded bytes. The decoder independently bounds nonoverlapping sections and
+section-relative tables. The assembler obtains descriptor and coefficient bytes
+only through those declared, checked sections, so gap bytes cannot become loaded
+payload through a file-relative offset.
 
 Header and directory bytes are **outside checksum coverage**. A structurally valid
 changed target ID still passes checksum verification. Target compatibility,
@@ -75,6 +79,8 @@ failing pair: the primary checksum first, then section checksums in table order.
 Invalid input leaves the result unchanged. These checks cannot establish whether
 an arbitrary pointer names readable memory. A stored zero is compared normally;
 zero never disables verification. Generated zero-CRC cases cover both formats.
+The directory zero-CRC fixture changes bytes within the final declared payload
+and repairs its listed section CRC; it does not append untracked bytes.
 
 The implementation processes each byte with two four-bit table steps. It reserves
 64 bytes of read-only table storage and uses no heap, mutable static state,
@@ -93,24 +99,24 @@ file, unaligned input, 64 corruption cases, and 18 invalid-input cases. This che
 was repeated because the byte-update helper and version dispatch changed. The
 existing isolated SDK CRC comparison was reused.
 
-One directory ASan/UBSan check passed the compiled convolution, a synthetic
-payload gap, and a synthetic zero-primary-CRC file. It covers 36 corruption
-cases and thirteen invalid-input cases, including repaired-primary corruption,
-zeroed section checksums, duplicate or absent section references, malformed
-metadata, output aliasing, and unsupported metadata placement. Assembly now has
-separate profile checks; the obsolete blanket-refusal assertion was removed
-from the checksum check when directory assembly was implemented.
+The original directory ASan/UBSan result covers corruption, repaired-primary
+section corruption, duplicate references, metadata bounds and output aliasing.
+Its synthetic whole-tail gap and appended zero-CRC assumptions were superseded
+by the pinned writer's declared-payload coverage. The fixture producer now uses
+that coverage and creates zero CRC inside a declared payload.
 
-[nbg-directory-checksum-fixtures.py](../checks/nbg-directory-checksum-fixtures.py)
-uses Python zlib to generate the synthetic cases. It solves 32 linear CRC bit
-equations for a four-byte suffix that makes the primary CRC zero. These are
-checksum fixtures, not compiler-generated executable models. The sanitizer check
-is [nbg-directory-checksum.c](../checks/nbg-directory-checksum.c).
+[nbg-directory-padding.c](../checks/nbg-directory-padding.c) passes fifteen
+focused ASan/UBSan cases: the actual padded graph, prior emitted model, corrected
+synthetic gap and zero CRC, nonzero gap endpoints, trailer, reordered payloads,
+overlap, coefficient-relative escape, independently corrupted payloads after
+primary repair, and the actual two-operation assembly requirements. Unchanged
+fixed-format and controller checks were reused. Current results and exact inputs
+are in `~/.cache/sunstoneos/evidence/npu-two-stage-20261019/`.
 
-The current AArch64 verifier contains 1,128 bytes of text and read-only data,
+The earlier AArch64 verifier contained 1,128 bytes of text and read-only data,
 no writable static data, and one external reference to `nbg_model_open`. Its
 SHA-256 is `8915adbe2297ac15dc6e0b87750add313b175f965722809a7a82b86f51de2b60`.
-Its frame occupies 528 bytes. The directory path adds the decoder's 944-byte
+Its recorded frame occupied 528 bytes. The directory path adds the decoder's 944-byte
 open-to-tensor path, totaling 1,472 bytes before memory-helper stack use.
 The isolated target is `nbg-checksum`. Host links now require `nbg_model.c` too.
 
@@ -124,7 +130,6 @@ and CRC semantics remain unchanged.
 
 The separate [convolution loader capture](nbg-conv-loader.md) records SDK preparation
 for the newly verified model. It stops before device submission and supplies
-allocation and command evidence now matched by native assembly. No board
-request, kernel rebuild, compiler run, or numerical simulator run occurred.
+allocation and command evidence now matched by native assembly. That loader capture stopped before device submission.
 Descriptor access bounds, SRAM routing, command admission, and physical inference
 remain outstanding.

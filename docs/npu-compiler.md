@@ -171,5 +171,15 @@ the declared cases; their consolidation did not rerun compiler work.
 
 These results authenticate the selected build-time artifacts and reproduce their
 allocation preparation. They do not establish physical memory confinement or
-numerical inference on the board. The native catalogue remains limited to its
-three reviewed complete models.
+numerical inference on the board. The native catalogue also includes the [two-stage convolution/ReLU graph](npu-two-stage.md).
+Each entry remains a reviewed complete artifact.
+
+## Two convolution and activation stages
+
+[The two-stage fixture](../tools/npu-two-stage-fixture.py) produces two padded,
+stride-two Conv2D/ReLU stages. Run the same pipeline with `--two-stage` after the
+new output directory. Its pinned output contains two NN operations and preserves
+an internal SRAM intermediate tensor. The [graph support record](npu-two-stage.md)
+records the emitted resources, checksum alignment rule, numerical comparison,
+SDK preparation and native runtime coverage. Existing model entries retain their
+accepted identities and interpretation.

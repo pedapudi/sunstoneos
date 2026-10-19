@@ -52,6 +52,7 @@ struct supported_model {
     unsigned char digest[32];
     uint32_t model_bytes,input_bytes,output_bytes,vip_sram_bytes,coeff_bytes;
     uint32_t input[12],output[12];
+    uint32_t nn_operations,descriptor_patches,state_patches,command_body_bytes;
 };
 /* Only privileged build-time catalogue entries are executable input. The table
  * fixes descriptor/control/coefficients together; CRC or caller hashes cannot
@@ -130,11 +131,12 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     static const uint32_t sizes[]={4096,4096,0,524288,4096,4096};
     struct nbg_tensor input,output;
     if(m->header.version!=0x20000 || m->header.target!=0x1000003b ||
-       m->header.core_count!=1 || m->header.operation_count!=2 ||
+       m->header.core_count!=1 || m->header.operation_count!=v->nn_operations+1 ||
        m->header.nn_bytes!=192 || m->header.pool_bytes || m->header.axi_sram_bytes ||
        m->header.vip_sram_bytes!=v->vip_sram_bytes || v->vip_sram_bytes>0x80000 ||
-       m->sections[NBG_COEFF].bytes!=v->coeff_bytes || p->nn_operations!=1 ||
-       p->descriptor_patches!=3 || p->state_patches!=1 || p->command_body_bytes!=80 ||
+       m->sections[NBG_COEFF].bytes!=v->coeff_bytes || p->nn_operations!=v->nn_operations ||
+       p->descriptor_patches!=v->descriptor_patches || p->state_patches!=v->state_patches ||
+       p->command_body_bytes!=v->command_body_bytes ||
        !nbg_model_tensor(m,NBG_INPUT,0,&input) || !nbg_model_tensor(m,NBG_OUTPUT,0,&output) ||
        !tensor_profile(&input,v->input,v->input_bytes) ||
        !tensor_profile(&output,v->output,v->output_bytes))return 0;

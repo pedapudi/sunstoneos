@@ -72,9 +72,17 @@ over the complete file with the header checksum zeroed does not match.
 The compiler's writer initializes a running CRC, writes the header and directory
 without updating it, then updates it as section payloads are emitted. It stores
 that accumulated value in the header before filling the section-checksum values.
-This ordering explains the observed normalization. The inspected writer also
-updates the CRC when emitting alignment padding. The current fixture contains
-no padding, so a padded model remains necessary evidence for general support.
+This ordering explains the observed normalization. The section writer at
+`0x2229e0` loads the declared file offset at `0x222a2b`, then writes and checksums
+only the declared payload length at `0x222b48`–`0x222b74`. Seeking past an
+alignment gap does not include that gap in the CRC.
+
+The compiled two-stage graph supplies a padded artifact: bytes 2084–2111 are
+zero padding before its 64-byte-aligned coefficients. Concatenating declared
+payloads in emitted directory order, with checksum values normalized, gives
+its stored CRC `0xe864f719`. Including the gap gives `0xa44bd11c` and does not
+match. All three independent section CRCs also match. Its full identity and
+SDK preparation are recorded in [the graph support document](npu-two-stage.md).
 
 The section checksums independently match their payloads:
 
