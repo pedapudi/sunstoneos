@@ -38,6 +38,6 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('model', 'input', 'reference', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
-    p.add_argument('--execution-family',choices=('nn','sh-nt'))
+    p.add_argument('--execution-family',choices=('nn','sh-nt','nn-pool'))
     a = p.parse_args()
     prepare(a.model, a.input, a.reference, a.output, a.execution_family)

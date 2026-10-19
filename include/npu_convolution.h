@@ -5,7 +5,14 @@
 #include "nbg_assembly.h"
 
 #define NPU_CONVOLUTION_MODEL_BYTES 1928u /* Baseline artifact only. */
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+#if !defined(SUNSTONE_NPU_LARGE_GRAPH)
+#error "NN pool graph requires the large retained profile"
+#endif
+#define NPU_CONVOLUTION_MODEL_CAPACITY 1048576u
+#else
 #define NPU_CONVOLUTION_MODEL_CAPACITY 8192u
+#endif
 #define NPU_CONVOLUTION_IO_CAPACITY 512u
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
 #define NPU_CONVOLUTION_INPUT_CAPACITY 524288u

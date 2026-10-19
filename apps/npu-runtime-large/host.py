@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded chunked FP32 input and copied output for the fixed SH/NT graph."""
+"""Bounded raw tensor input and copied output for fixed large NPU graphs."""
 import hashlib
 import struct
 import time
@@ -47,8 +47,8 @@ def decode(frame,sequence,prepared,request_id):
 
 
 def validate_inputs(inputs,oracles,model):
-    if model.get('family')!='sh-nt' or not inputs or len(inputs)>16 or any(len(x)!=model['input']['bytes'] for x in inputs):
-        raise ValueError('Inputs must match the fixed SH/NT graph')
+    if model.get('family') not in ('sh-nt','nn-pool') or not inputs or len(inputs)>16 or any(len(x)!=model['input']['bytes'] for x in inputs):
+        raise ValueError('Inputs must match the fixed selected graph')
     if oracles and (len(oracles)!=len(inputs) or any(len(x)!=model['reference']['bytes'] for x in oracles)):
         raise ValueError('Optional oracle extent differs')
 

@@ -250,6 +250,58 @@
       "ppu_bytes": 512,
       "shader_operations": 1,
       "nt_operations": 3
+    },
+    {
+      "name": "shufflenet-v2-published",
+      "family": "nn-pool",
+      "model": {
+        "bytes": 964224,
+        "sha256": "fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f"
+      },
+      "input": {
+        "bytes": 150528,
+        "sha256": "d38c22c2007db314572c9ddfeb513a9f3d11ec99e8deec0f65bc91481502f1b9"
+      },
+      "reference": {
+        "bytes": 2,
+        "sha256": "06eb7d6a69ee19e5fbdf749018d3d2abfa04bcbd1365db312eb86dc7169389b8"
+      },
+      "input_tensor": [
+        4,
+        224,
+        224,
+        3,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        998277249,
+        0
+      ],
+      "output_tensor": [
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        0,
+        2,
+        987041363,
+        128
+      ],
+      "vip_sram_bytes": 518144,
+      "coeff_bytes": 892608,
+      "nn_operations": 125,
+      "descriptor_patches": 534,
+      "state_patches": 125,
+      "command_body_bytes": 3056,
+      "pool_bytes": 1092352,
+      "description": "Complete published target-matched SDK graph; raw UINT8 output class mapping unknown."
     }
   ]
 }

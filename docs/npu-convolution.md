@@ -154,10 +154,12 @@ The initial platform profile uses inherited 492 MHz/800 mV settings. Unsuitable
 inherited PLL state still requires cold provisioning. A general descriptor
 verifier is unnecessary for this immutable privileged entry once all access
 routes are constrained; the trusted catalogue does not admit arbitrary models.
-Runtime upload, hot switching, concurrent models, larger allocations, working
-pools, other operators and generalized graph support remain unsupported. The
-current private input/output API has a 512-byte capacity per tensor. These limits
-do not establish complete NPU or mimus accelerator support.
+Runtime executable-model upload, hot switching, concurrent models and generalized
+graph admission remain unsupported. The small profile retains a 512-byte tensor
+API. Separate retained profiles support the authenticated SH/NT graph and the
+[complete published weight-bearing NN graph](npu-complete-nn.md), including
+external working memory and chunked caller data. These implemented profiles do
+not establish complete NPU or mimus accelerator support.
 Export physical output before reset. Post-reset DRAM retention is not a qualified
 result channel.
 

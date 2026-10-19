@@ -6,7 +6,13 @@ struct npu_runtime_slot npu_runtime;
 uint8_t npu_runtime_input[524288] __attribute__((section(".npu_graph_input"),aligned(64)));
 uint8_t npu_runtime_output[262144] __attribute__((section(".npu_graph_output"),aligned(64)));
 __attribute__((used,retain)) const uint64_t npu_runtime_geometry[6]={
- NPU_RUNTIME_FRAME,2,64,NPU_RUNTIME_CHUNK,522240,262144};
+ NPU_RUNTIME_FRAME,2,64,NPU_RUNTIME_CHUNK,
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+ 150528,2
+#else
+ 522240,262144
+#endif
+};
 static uint64_t last_id,last_time,read_offset;
 static unsigned received,delivered,chunk_remaining,read_requested,finishing;
 static uint32_t get32(const uint8_t *p)

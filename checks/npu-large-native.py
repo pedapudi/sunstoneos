@@ -38,7 +38,7 @@ class Machine(graph.Machine):
  def __init__(self,image,oracles):
   self.trace=[];self.returns={};self.polls=0;self.delays=0;self.phase='constructor';self.cache=[];self.scheduler=1;self.task=1
   super().__init__(image,oracles);self.max_tx=512
-  self.traced={image.address(n):n for n in ('nbg_model_open','nbg_sh_nt_requirements','a733_npu_native_init')}
+  self.traced={image.address(n):n for n in ('nbg_model_open','nbg_sh_nt_requirements','a733_npu_native_init') if image.symbols.get(n)}
   for name in ('aarch64_device_cache','xTaskGetCurrentTaskHandle','npu_service_send'):
    self.hooks[image.address(name)]=name
   self.interesting=set(self.hooks)|set(self.traced)|{0x43fff000,image.address('a733_observe_privileged'),image.address('a733_observe_digest')}
@@ -66,6 +66,9 @@ class Machine(graph.Machine):
    assert a[0]==1;self.delays+=1;self.ret();self.u.emu_stop()
   elif name=='tud_vendor_n_read':
    count=min(a[2],len(self.incoming),512);self.u.mem_write(a[1],bytes(self.incoming[:count]));del self.incoming[:count];self.ret(count)
+  elif name=='digest':
+   assert 0<a[1]<=1048576
+   self.u.mem_write(a[2],hashlib.sha256(self.data(a[0],a[1])).digest());self.ret()
   elif at==self.image.address('a733_observe_digest'):
    self.u.mem_write(a[2],hashlib.sha256(self.data(a[0],a[1])).digest());self.ret()
   else:super().code(cpu,at,size,unused)

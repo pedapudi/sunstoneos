@@ -149,7 +149,21 @@ static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size
 static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     const struct supported_model *v)
 {
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+    static const uint32_t sizes[]={24576,892928,1093632,524288,151552,4096};
+    struct nbg_tensor input,output;
+    if(v->family!=2 || m->header.version!=0x1001e || m->header.target!=0x1000003b ||
+       m->header.operation_count!=126 || m->header.pool_bytes!=1092352 ||
+       m->header.vip_sram_bytes!=518144 || v->vip_sram_bytes!=518144 ||
+       m->sections[NBG_COEFF].bytes!=892608 || v->coeff_bytes!=892608 ||
+       p->nn_operations!=125 || p->descriptor_patches!=534 || p->state_patches!=125 ||
+       p->command_body_bytes!=3056 || v->nn_operations!=125 || v->descriptor_patches!=534 ||
+       v->state_patches!=125 || v->command_body_bytes!=3056 ||
+       !nbg_model_tensor(m,NBG_INPUT,0,&input)||!nbg_model_tensor(m,NBG_OUTPUT,0,&output)||
+       !tensor_profile(&input,v->input,v->input_bytes)||!tensor_profile(&output,v->output,v->output_bytes))return 0;
+    for(unsigned i=0;i<6;++i)if(p->buffers[i].allocation_bytes!=sizes[i])return 0;
+    return 1;
+#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     static const uint32_t sizes[]={4096,4096,1048576,524288,524288,266240};
     if(v->family!=1 || v->nn_operations!=3 || v->descriptor_patches!=6 ||
        v->state_patches!=6 || v->command_body_bytes!=656 ||
@@ -195,7 +209,12 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
        overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.arena,v.arena_bytes) ||
        overlap((uintptr_t)v.arena,v.arena_bytes,(uintptr_t)v.model,v.model_bytes) ||
        overlap((uintptr_t)config,sizeof(*config),(uintptr_t)v.arena,v.arena_bytes))return 0;
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+    static const size_t sizes[]={24576,892928,524288,151552,4096,524288,1093632,0};
+    static const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
+        A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP,
+        A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_READ};
+#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     static const size_t sizes[]={4096,0,524288,524288,266240,524288,1048576,4096};
     static const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
         A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP,
@@ -208,7 +227,13 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct a733_npu_buffer *b=&v.buffers[i];
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
-        if(i==NPU_CONVOLUTION_COEFF){
+        if(i==
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+            NPU_CONVOLUTION_PPU
+#else
+            NPU_CONVOLUTION_COEFF
+#endif
+        ){
             if(b->cpu||b->physical||b->bytes||b->device||b->role!=A733_NPU_BUFFER_READ)return 0;
             continue;
         }
@@ -231,7 +256,7 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     c->output_bytes=models[selected].output_bytes;
     struct nbg_model model;struct nbg_assembly_plan plan;
     if(nbg_model_open(c->model,c->model_bytes,&model)!=NBG_DECODE_OK ||
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_LARGE_GRAPH) && !defined(SUNSTONE_NPU_NN_POOL_GRAPH)
        !nbg_sh_nt_requirements(&model,&plan)
 #else
        !nbg_assembly_requirements(&model,&plan)
@@ -256,7 +281,13 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
         }
     }
     struct nbg_assembly_buffer buffers[NBG_ALLOCATION_COUNT]={0};
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+    static const unsigned slots[]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_COEFF,NPU_CONVOLUTION_POOL,
+        NPU_CONVOLUTION_COMMAND,NPU_CONVOLUTION_INPUT,NPU_CONVOLUTION_OUTPUT};
+    for(unsigned i=0;i<6;++i)buffers[i]=(struct nbg_assembly_buffer){
+        (void *)c->buffers[slots[i]].cpu,c->buffers[slots[i]].bytes,c->buffers[slots[i]].device};
+    if(!nbg_assemble(&model,buffers,&plan) ||
+#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     static const unsigned slots[]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_PPU,NPU_CONVOLUTION_POOL,
         NPU_CONVOLUTION_COMMAND,NPU_CONVOLUTION_INPUT,NPU_CONVOLUTION_OUTPUT};
     for(unsigned i=0;i<6;++i)buffers[i]=(struct nbg_assembly_buffer){

@@ -605,3 +605,7 @@ No physical inference or interrupt qualification is established by these checks.
 The separate [fixed FP32 relative-attention shift profile](npu-relative-shift.md)
 adds authenticated SH/NT execution, an external working pool and chunked live
 input/output in a retained single-core IRQ application.
+
+The [complete published NN graph profile](npu-complete-nn.md) uses the same
+retained IRQ owner for a fixed 125-operation weight-bearing network with an
+external working pool and bounded copied UINT8 caller data.

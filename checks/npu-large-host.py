@@ -37,7 +37,7 @@ def main():
     struct.pack_into('<5Q',frame,128,24000000,24000024,0 if state==host.CLOSED else rid,self.jobs,self.jobs+1)
     if state==host.DONE:
      frame[168:200]=hashlib.sha256(inputs[rid-1]).digest();frame[200:232]=hashlib.sha256(outputs[rid-1]).digest();struct.pack_into('<3Q',frame,232,len(outputs[rid-1]),offset,len(chunk));frame[256:256+len(chunk)]=chunk
-   struct.pack_into('<3Q',frame,776,522240,self.received,self.delivered);self.delivered+=len(chunk);frame[992:]=hashlib.sha256(frame[:992]).digest();self.pending=struct.pack('<4I',host.MAGIC,seq,0x80000034,1024)+frame
+   struct.pack_into('<3Q',frame,776,model['input']['bytes'],self.received,self.delivered);self.delivered+=len(chunk);frame[992:]=hashlib.sha256(frame[:992]).digest();self.pending=struct.pack('<4I',host.MAGIC,seq,0x80000034,1024)+frame
    return len(data)
   def read(self,ep,n,timeout):
    assert ep==0x81

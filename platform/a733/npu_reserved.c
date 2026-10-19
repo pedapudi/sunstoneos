@@ -44,7 +44,15 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
     struct npu_convolution_config config = {.model = model, .model_bytes = model_bytes,
         .register_cpu = registers, .register_physical = 0x03600000,
         .fatal = fatal, .fatal_cookie = cookie};
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+    static const size_t bytes[]={24576,892928,524288,151552,4096,524288,1093632,0};
+    static const uint32_t device[]={0xe0000000,0xe0007000,0xe01ee000,0xe026f000,0xe0295000,
+        0xe0297000,0xe00e2000,0};
+    static const size_t offsets[]={0,0x6000,0x1eb000,0x26b000,0x290000,0x291000,0xe0000,0};
+    static const enum a733_npu_buffer_role role[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
+        A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP,
+        A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_READ};
+#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     static const size_t bytes[]={4096,0,524288,524288,266240,524288,1048576,4096};
     static const uint32_t device[]={0xe0000000,0,0xe0105000,0xe0186000,0xe0207000,
         0xe0249000,0xe0004000,0xe0002000};
@@ -69,7 +77,9 @@ struct npu_convolution *a733_npu_reserved_prepare(struct a733_npu_reserved *s,
             extent.physical + offset, bytes[i], device[i], role[i]};
         offset += bytes[i];
     }
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
+    offset=0x311000;
+#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
     offset=0x2c3000;
 #endif
     config.arena = (void *)(extent.cpu + offset);
