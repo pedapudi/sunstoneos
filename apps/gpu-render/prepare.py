@@ -112,9 +112,11 @@ def image_manifest_check(manifest,image,session=None):
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
     marker=symbols.get('gpu_single_core_geometry')
     if target=='sunstone-a733-gpu-render':
-        require(marker is None,'Single-core GPU image requires its own execution profile.')
+        require(marker is None and manifest.get('workload')=='fixed-clear',
+                'Single-core GPU image requires its own execution profile.')
         return
-    require(manifest.get('workload')=='fixed-arithmetic-repeat' and marker is not None and marker[1]==32 and
+    workload=manifest.get('workload')
+    require(workload in ('fixed-arithmetic-repeat','shared-usb-pending') and marker is not None and marker[1]==32 and
             symbols.get('sd_single_core_entry',(0,))[0]==int(elf.header['e_entry']) and
             not any(symbols.get(name,(0,))[0] for name in
                 ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','monitor_reset')),
@@ -126,6 +128,18 @@ def image_manifest_check(manifest,image,session=None):
     offset=first-int(parts[0]['p_vaddr'])
     require(parts[0].data()[offset:offset+size]==struct.pack('<4Q',0x4153373347505331,1,592,60),
             'Single-core GPU geometry differs.')
+    transport=symbols.get('gpu_transport_only_marker')
+    if workload=='fixed-arithmetic-repeat':
+        require(transport is None,'Transport-only image cannot claim GPU computation.')
+    else:
+        require(transport is not None and transport[1]==16,'Transport-only image marker absent.')
+        first,size=transport
+        parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
+               int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
+        require(len(parts)==1,'Transport-only marker must be immutable/file-backed.')
+        offset=first-int(parts[0]['p_vaddr'])
+        require(parts[0].data()[offset:offset+size]==struct.pack('<2Q',0x4750555553423031,1),
+                'Transport-only marker differs.')
 
 def build_launcher(output,clang,lld):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()

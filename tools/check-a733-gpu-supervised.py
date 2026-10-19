@@ -37,13 +37,16 @@ def bundle_bytes(bundle, prepared, name):
 
 def capture(exchange, session, evidence, record, save, deadline,
             now=time.monotonic, pause=time.sleep, workload='fixed-clear'):
-    """Copy verified output; only valid pending replies permit another query."""
-    require(workload in ('fixed-clear', 'fixed-arithmetic-repeat'), 'Unsupported GPU workload.')
-    compute = workload == 'fixed-arithmetic-repeat'
+    """Copy verified GPU output or one complete diagnostic transport frame."""
+    require(workload in ('fixed-clear', 'fixed-arithmetic-repeat', 'shared-usb-pending'), 'Unsupported GPU workload.')
+    transport = workload == 'shared-usb-pending'
+    compute = workload != 'fixed-clear'
     chunks = 2 if compute else 64
     preparation.session_check(session)
     record['gpu_retention']='whole-board-power-removal';record['gpu_workload']=workload
     record.setdefault('gpu_result','unobserved');save()
+    if transport:
+        record['gpu_transport_result']='unobserved';save()
     epoch=struct.unpack_from('<Q',session,24)[0]
     pixels=bytearray();chunk=0
     for sequence in range(1,305):
@@ -57,6 +60,14 @@ def capture(exchange, session, evidence, record, save, deadline,
         require(len(frame)>=40,'Short GPU response.')
         state=decoder.decode_compute(frame,chunk,epoch) if compute else decoder.decode(frame[:40],chunk,epoch)
         require(now()<deadline,'GPU response arrived after capture deadline.')
+        if transport:
+            require(state==0 and len(frame)==40,'Transport-only image must report pending without output.')
+            record['gpu_transport_result']='observed-success';record['durable_result']=entry.copy()
+            try:save()
+            except BaseException:
+                record['gpu_transport_result']='unobserved';record.pop('durable_result',None)
+                raise
+            return
         if state==2:
             require(len(frame)==40,'Failed GPU response includes output.')
             record['gpu_result']='observed-failure';save();return
@@ -188,11 +199,12 @@ def main(argv=None):
     prepared['_prepared_sha256']=hashlib.sha256(prepared_bytes).hexdigest()
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     prepared['_sizes']={name:len(bundle_bytes(bundle,prepared,name)) for name in prepared['files']}
-    require_embedded_firmware(bundle_bytes(bundle,prepared,'image.elf'))
     # Protocol selection is bound to the exact initially frozen manifest bytes.
     manifest = json.loads(bundle_bytes(bundle, prepared, 'image-input-manifest.json'))
     workload = manifest.get('workload', 'fixed-clear')
-    require(workload in ('fixed-clear', 'fixed-arithmetic-repeat'), 'Unsupported GPU workload.')
+    require(workload in ('fixed-clear', 'fixed-arithmetic-repeat', 'shared-usb-pending'), 'Unsupported GPU workload.')
+    if workload!='shared-usb-pending':
+        require_embedded_firmware(bundle_bytes(bundle,prepared,'image.elf'))
     admission = json.loads(bundle_bytes(bundle, prepared, 'admission.json'))
     session = bundle_bytes(bundle, prepared, 'session.bin')
     template_hash = hashlib.sha256(bundle_bytes(bundle, prepared, 'session-template.bin')).hexdigest()
@@ -211,7 +223,8 @@ def main(argv=None):
         lambda device, same, deadline, record, save: capture_device(
             device, same, deadline, session, args.evidence, record, save, workload=workload),
         product='sunstoneos native GPU', serial='sunstoneos-a733-gpu',
-        bcd_device=0x0100, capture_seconds=59, result_key='gpu_result',
+        bcd_device=0x0100, capture_seconds=59,
+        result_key='gpu_transport_result' if workload=='shared-usb-pending' else 'gpu_result',
         source_files=source_files(), description='Supervised native GPU; retain all resources until whole-board power removal')
 
 

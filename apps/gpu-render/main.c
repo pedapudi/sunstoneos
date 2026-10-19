@@ -5,6 +5,9 @@
 #include "a733_maintenance_watchdog_internal.h"
 #include <string.h>
 struct gpu_application app;
+#ifdef SUNSTONE_GPU_TRANSPORT_ONLY
+const uint64_t gpu_transport_only_marker[2]={UINT64_C(0x4750555553423031),1};
+#endif
 extern const unsigned char gpu_firmware[],gpu_firmware_end[];
 static _Noreturn void park(void){for(;;)vTaskDelay(1);}
 int gpu_application_live(void *unused)
@@ -147,6 +150,12 @@ void a733_smp_diagnostic_start(void)
 #endif
         if(!app.handles[i])platform_panic("GPU tasks",4);}
     if(!a733_native_usb_bind(&app.shared,app.handles[0],app.handles[1]))platform_panic("GPU USB bind",5);
+#ifdef SUNSTONE_GPU_TRANSPORT_ONLY
+    /* Keep the real PMIC/USB tasks and pending-response protocol. The client
+     * parks before OPEN; no GPU platform, firmware or worker is constructed. */
+    __asm__ volatile("" :: "r"(gpu_transport_only_marker) : "memory");
+    atomic_store_explicit(&app.preparation_failed,1,memory_order_release);
+#else
     if(!a733_gpu_platform_native_init(&app.native,&app.shared.locks.callbacks)||
        !a733_gpu_platform_init(&app.power,&app.shared.gpu,7,&app.native.operations,&app.native))platform_panic("GPU platform",6);
     struct a733_pmic_lifetime lifetime;
@@ -171,5 +180,6 @@ void a733_smp_diagnostic_start(void)
         atomic_store_explicit(&app.result,2,memory_order_release);
         if(app.service.worker)vTaskSuspend(app.service.worker);
     }
+#endif
     vTaskStartScheduler();platform_panic("GPU scheduler returned",9);
 }
