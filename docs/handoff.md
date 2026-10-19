@@ -182,6 +182,28 @@ remain distinct from the internally consistent frozen image; future builds must
 compile affected consumers together. Physical transparent eSCO, headset capture,
 playback/duplex, receive-service bounds and session timing remain unqualified.
 
+[Caller PCM playback and duplex](bluetooth-native.md#caller-pcm-playback-and-duplex)
+are implemented for mono 16 kHz signed 16-bit little-endian PCM through mSBC.
+Playback-only starts
+no recognizer; duplex combines playback with repeated capture and the unchanged
+recognizer. Both require negotiated mSBC before consuming caller audio. Two
+private 2,400-byte period slots remain immutable through terminal packet
+accounting, complete USB result delivery and exact ticket acknowledgment.
+Backpressure preserves accepted data; END seals admission, and CANCEL can truncate
+audio. HCI credits and matched disconnect account for controller buffers, not
+headset rendering or serial-wire drain.
+Seven composed cases and eight native operation cases retain their earlier ELF
+`36bfa257…`. Final ELF `388f9f93…` adds exact profile-version guards, covered by
+its separate profile-gates case. Five objects changed and 221 remain unchanged;
+`bluetooth-pcm-duplex-20261019/profile-gate-delta.json` preserves that boundary.
+The final-image case covers version admission and copied PCM commit only.
+Root verifies 800 inputs, 226 objects and six archives against revision
+`3138e7e`, with no compiled-source delta, under
+`bluetooth-pcm-duplex-20261019/root-integration.json`. Controller/radio behavior,
+transport timing, scheduling and USB effects are modeled. Physical playback,
+capture/duplex, audible output, wider rates/codecs and wire-drained completion
+remain unqualified or required work.
+
 Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
 and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
@@ -597,7 +619,8 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue Bluetooth playback implementation. Standalone DSI scanout, the fixed
+1. Preserve the accepted Bluetooth caller-PCM playback/duplex image and its
+   scoped evidence. Standalone DSI scanout, the fixed
    complete NN graph, full-HD H.264, repeated GPU drawing, fixed NPU
    shader/neural-transpose large tensors, optional mSBC recognition, native VGA
    streaming, direct Gen1 BOT and the combined recorded-recognition/storage

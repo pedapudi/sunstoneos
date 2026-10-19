@@ -960,6 +960,27 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remain distinct from the internally consistent frozen image; future builds must
   compile affected consumers together. Physical transparent eSCO, headset capture,
   playback/duplex, receive-service bounds and session timing remain unqualified.
+  [Caller PCM playback and duplex](bluetooth-native.md#caller-pcm-playback-and-duplex)
+  are implemented for mono 16 kHz signed 16-bit little-endian PCM through mSBC.
+  Playback-only starts
+  no recognizer; duplex combines playback with repeated capture and the unchanged
+  recognizer. Both require negotiated mSBC before consuming caller audio. Two
+  private 2,400-byte period slots remain immutable through terminal packet
+  accounting, complete USB result delivery and exact ticket acknowledgment.
+  Backpressure preserves accepted data; END seals admission, and CANCEL can truncate
+  audio. HCI credits and matched disconnect account for controller buffers, not
+  headset rendering or serial-wire drain.
+  Seven composed cases and eight native operation cases retain their earlier ELF
+  `36bfa257…`. Final ELF `388f9f93…` adds exact profile-version guards, covered by
+  its separate profile-gates case. Five objects changed and 221 remain unchanged;
+  `bluetooth-pcm-duplex-20261019/profile-gate-delta.json` preserves that boundary.
+  The final-image case covers version admission and copied PCM commit only.
+  Root verifies 800 inputs, 226 objects and six archives against revision
+  `3138e7e`, with no compiled-source delta, under
+  `bluetooth-pcm-duplex-20261019/root-integration.json`. Controller/radio behavior,
+  transport timing, scheduling and USB effects are modeled. Physical playback,
+  capture/duplex, audible output, wider rates/codecs and wire-drained completion
+  remain unqualified or required work.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
