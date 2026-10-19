@@ -99,7 +99,7 @@ static struct a733_display_handoff_config config(void)
 }
 static void prepare_sources(void)
 {
-    memset(&n,0,sizeof(n));memset(&m,0,sizeof(m));m.now=1;n.setup=1;n.pck=1;
+    memset(&n,0,sizeof(n));memset(&m,0,sizeof(m));m.now=1;n.setup=1;n.pck=1;n.osc=0x10000002;
     n.ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);
     n.ccu[0xa0/4]=0xfe000000u|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
     n.ccu[0x2e0/4]=0xf4000000u|(99u<<8)|(3u<<16);
@@ -160,6 +160,7 @@ static enum display_scanout_state run_handoff(void)
     for(unsigned i=0;r==DISPLAY_SCANOUT_PENDING && i<5000;++i)r=a733_display_handoff_poll(&handoff);
     return r;
 }
+#ifndef DISPLAY_NATIVE_REUSE
 int main(void)
 {
     prepare_sources();restore_sources();
@@ -205,3 +206,5 @@ int main(void)
     puts("prepublication refusal and postpublication deadline with BUSY retention preserve the only live token");
     free(register_checkpoint);return 0;
 }
+
+#endif

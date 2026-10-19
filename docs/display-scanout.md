@@ -137,20 +137,64 @@ diagnostics. No rollback, retry, automatic stop, reset, buffer retirement, or
 lease release follows a failure. Later polls of a terminal state make no
 callbacks. The platform must retain reservations even if the client times out.
 
-## Production bindings remain explicit dependencies
+## Native ownership binds clocks, retained memory and controller access
 
-The coordinator requires actual providers; it does not supply an alternate
-clock registry or fabricate hardware completion. The shared CCU/reset binding
-must acquire the DE, VO0, LCD1, DSI1, PHY, PLL-parent, and fabric domains through
-the common registry and register mutex. Panel pins and rails require the
-selected panel's concrete platform configuration.
+The native owner API in `include/a733_display_native.h` composes the existing
+media-clock and display-PLL ownership handoff with a concrete framebuffer
+provider. `a733_display_native_init()` accepts the actual completed media-clock,
+display-PLL and display IOMMU controllers. Preparation publishes the existing
+common clock token through `a733_display_handoff`; it creates no second clock
+registry. The original producers and their PCK lease remain retained.
 
-The existing DMA-controller memory policy cannot establish DE ownership or
-IOVA reachability. A DE memory binding must authenticate the actual IOMMU
-master route, mapping and allocator generations, aliases, cache visibility,
-and burst bounds. An independent DE transaction-drain mechanism remains
-unresolved. Cold display-PLL provisioning and electrical panel qualification
-also remain required before physical use.
+The caller supplies two distinct DEVICE-owned allocations from the existing
+memory pool: an immutable XRGB8888 frame and its 32 KiB IOMMU tables. The
+request describes the complete frame allocation. The binding authenticates
+allocation generations and exact extents, the display master's active READ-only
+IOMMU span, every table word, and each CPU page's uncached translation. It
+checks the actual tables and allocator before publication and each admission.
+The image owner must exclude CPU aliases and writers throughout the session.
+A fault retains both allocations; there is no return to CPU ownership.
+
+Ordered native controller accesses use the common platform register mutex and
+verify Device mappings. The binding admits the existing DE, LCD1, VO0 selector,
+DSI1, PHY1 and selected host CCU windows. An uncertain access retains the mutex.
+One designated privileged FreeRTOS task calls prepare, poll and request through
+the native API. The private build fragment `cmake/a733-dsi-native.cmake` adds
+these sources to an existing admitted native image.
+
+The image must supply authenticated initial isolation and drain, stable supplies,
+remote-writer exclusion, analog-profile provenance and a selected panel's real
+power, reset and command-controller sequence. No selected panel, qualified cold
+PLL profile or complete standalone DSI launch image is provided. These inputs
+remain physical prerequisites; neither register reads nor numeric generations
+establish them. The shared retained IOMMU provider must keep all other masters
+excluded for the complete session.
+
+The native binding supplies no DE drain or output-quiescence proof. A STOP
+request disables DSI and DE, then faults at the independent DE-drain phase with
+LCD1, clocks, framebuffer and tables retained. It cannot reach successful stop,
+release memory, or authorize another session. Physical signaling, panel reception,
+and safe transaction/output drain remain unqualified. No MIPI display is attached
+and the panel remains undecided.
+
+## Native provider validation uses the actual producers
+
+`checks/display-native.py` reuses the media-clock/PLL producer fixture and links
+the actual allocator, IOMMU tables, handoff, coordinator and leaf controllers.
+Its ASan/UBSan model passed preparation and start, refusal of an invalid CPU
+mapping before publication, and refusal of a changed live IOMMU mapping before
+DE arming. Unsupported drain preserved active LCD1 and retained both memory
+allocations. Wrong-task admission had no effects. An uncertain native write
+retained the common mutex; terminal polling made no further MMIO accesses.
+Native register accesses, CPU translation, mutexes and the panel are modeled;
+these results do not establish physical operation.
+
+The provider core and native MMIO adapter compiled for freestanding AArch64.
+The adapter used the existing FreeRTOS headers and configured cached-port
+headers. The exact commands, dependencies, results and objects are preserved in
+`~/.cache/sunstoneos/evidence/display-native-20261018/final/`; the immutable
+snapshot is its sibling `snapshot/`. Existing leaf and ownership-publication
+evidence was reused. No hardware access or performance measurement occurred.
 
 ## Validation exercises the composed implementations once
 
