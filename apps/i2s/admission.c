@@ -9,7 +9,7 @@ int i2s_session_valid(const struct i2s_session *s)
 {
  if(!s||s->magic!=I2S_SESSION_MAGIC||s->version!=I2S_SESSION_VERSION||s->bytes!=sizeof(*s)||
     !s->epoch||!s->generation||!s->lease||!present(s->image,32)||!present(s->evidence,32)||
-    !present(s->memory,32)||!present(s->recovery,32)||s->direction>5||s->audio_cold>1||
+    !present(s->memory,32)||!present(s->recovery,32)||s->direction>6||s->audio_cold>1||
     memcmp(s->pcm,i2s_recorded_pcm_digest,32)||s->shared.identity!=s->generation||
     s->shared.pmic.identity!=s->generation||s->shared.usb.handoff!=s->generation||
     s->shared.pmic.startup_deadline||s->shared.usb.deadline_us||s->dma.allowed.deadline_us||

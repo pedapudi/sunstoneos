@@ -4,8 +4,9 @@ The dedicated `sunstone-a733-i2s` image connects the existing I2S0 stream servic
 to actual DMA0 startup, native clock and pin providers, linker-owned memory and
 USB0 observation. One launch selects receive, transmit, or simultaneous receive and transmit at
 16 kHz with one 16-bit PCM channel and two 32-bit wire slots. No microphone or
-playback device is physically qualified. Cyclic DMA and final-wire drain remain
-required capabilities outside this profile.
+playback device is physically qualified. Runtime direction 6 accepts caller PCM
+through USB and refills finite DMA leases. Final serial-wire drain remains
+unqualified; cancellation can truncate queued output.
 
 Primary preparation reserves one descriptor page and four disjoint period pages
 from the existing singleton memory pool. Each period carries 4,096 payload bytes.
@@ -315,3 +316,106 @@ Inputs and results are preserved in
 `~/.cache/sunstoneos/evidence/i2s-repeated-20261018/`. Existing finite and duplex
 provider evidence remains applicable. These results establish software ownership
 and protocol behavior, not physical audio continuity or wire drain.
+
+## Runtime PCM uses copied input and finite TX leases
+
+Session direction 6 selects runtime playback. It retains the 552-byte version 1
+session, one DMA channel and four period pages. Directions 0 through 5 keep their
+existing protocols. Direction 4 is immutable cyclic replay; direction 6 refills
+CPU-owned periods through the finite stream API. The session's recorded-PCM
+digest still identifies the embedded development fixture. It does not identify
+the caller's runtime data; the host preserves that data and its SHA256 separately.
+
+The format is signed 16-bit little-endian PCM, one channel at 16 kHz. Each
+4,096-byte period contains 2,048 frames. The selected native plan has two memory
+bytes per frame, despite its two 32-bit wire slots. A caller supplies complete
+periods; the application does not resample, insert silence or create padding.
+
+USB copies input into four private slots. One serialized upload fills the next
+unpublished slot. The complete period is published with release ordering; the
+audio task uses acquire ordering before reading it. That task alone owns DMA
+service requests. It obtains `TX_FILL`, copies input into the corresponding DMA
+allocation and returns the exact lease ticket with PUT. After four committed
+periods it starts playback. Each subsequent `TX_MEMORY_CONSUMED` grants a new
+CPU lease for refill. A completed memory transfer never implies serial output
+completion.
+
+Returning a copied input slot after its CPU copy allows another upload. It does
+not return the DMA allocation. The DMA lease remains held until its exact PUT.
+A pending service reply is collected under its original operation before the
+client selects another request, even when new input or cancellation arrives.
+A missing input period remains unavailable to DMA. The client retains its lease
+and observes service status; the finite stream stops on missing committed storage,
+FIFO errors or deadlines. No unread copied input or leased DMA buffer is silently
+overwritten.
+
+### Version 4 accepts one sequenced period per upload
+
+All requests begin with three little-endian 32-bit words. Operation 0 requests
+status and operation 2 requests cancellation; both remaining words must be zero.
+Operation 6 carries the next 64-bit input sequence as low and high words, followed
+by exactly 4,096 payload bytes. Sequences start at one and must increase by one.
+One request remains in flight until its response transfer completes.
+
+A partial upload stays unpublished and must finish within one second. USB accepts
+fragmented headers and payloads. A full copied ring causes the complete upload
+to be discarded through a bounded scratch buffer; the response reports BUSY and
+does not advance the sequence. The caller may retry that sequence after credit
+returns. Stale sequences, malformed extents and expired partial uploads retain
+the failed session. Closure racing publication discards the unpublished period
+and preserves the terminal status path.
+
+Responses are 128 bytes with magic `0x53493241` and version 4. Bytes 24 through
+71 retain epoch, generation and the immutable session digest. The payload count
+at byte 16 is zero; byte 20 contains the fixed period size, 4,096. Byte 12 echoes
+the operation. Remaining fields are little-endian:
+
+| Offset | Field | Width |
+| --- | --- | --- |
+| 72 | Last fully accepted input sequence | 64 bits |
+| 80 | Frames committed through successful PUT | 64 bits |
+| 88 | Frames observed in `TX_MEMORY_CONSUMED` replies | 64 bits |
+| 96 | Free copied-input slots, from zero through four | 32 bits |
+| 100 | Sticky service-failure flag | 32 bits |
+| 104 | Observed terminal DMA-stop flag | 32 bits |
+| 108 | Upload result: zero for status, one accepted, two BUSY/discarded | 32 bits |
+| 112 | Reserved zero | 128 bits |
+
+The response state at byte 8 is zero before work, one while active, two after
+orderly cancellation or three on failure. A terminal state without the DMA-stop
+flag does not establish drain. Memory-consumed frames count only collected
+service completions. They can be lower than all transfers that occurred before
+cancellation. Catalogues, copied input and held leases remain retained until the
+admitted recovery procedure; this mode does not release them to another client.
+
+The existing supervised host accepts `--runtime-pcm` and `--runtime-periods`.
+The raw file must contain the requested prefix plus four caller-provided guard
+periods, with at most 260 periods total. The host uploads successive periods
+according to credit and exact acceptance, then cancels once the requested prefix
+has memory completions. Guard periods keep refill ahead of that prefix. They may
+be truncated by cancellation; the host does not claim the entire file reached
+the wire. It preserves input, responses, counts and failure/drain status before
+reporting a result. No FINISH or WIRE_DRAINED operation exists.
+
+### Offline runtime input evidence
+
+`~/.cache/sunstoneos/evidence/i2s-runtime-pcm-20261019/` preserves the actual
+native link, nine compiled USB/client cases, eight host cases using the compiled
+USB metadata producer, and an actual FreeRTOS/provider composition. The provider
+sequence consumes eight distinct periods through refills and retains resources
+after cancellation. It checks the selected plan's two-byte memory frame size.
+
+The USB/client cases cover partial publication, full-ring refusal, stale input,
+a pending STATUS during input arrival, closure during publication, cancellation
+with a pending GET, service failure and the partial-upload deadline. Host cases
+cover input/session binding, memory-count bounds, failure/drain reporting and
+malformed or undurable results. An injected audio-progress interleaving verifies
+that the compiled USB producer reads consumed frames before committed frames,
+so its counter bounds remain consistent. Register, DMA, USB transport and cache effects
+are modeled. These results establish software behavior, not physical audio,
+cache visibility, finite FIFO scheduling bounds or serial-wire completion.
+
+The separate source inspection in
+`~/.cache/sunstoneos/evidence/i2s-playback-drain-20261019/` records why the pinned
+manual and Linux stop path do not establish graceful wire drain. Cyclic RX's
+undocumented package/write/cursor ordering gap remains unchanged.

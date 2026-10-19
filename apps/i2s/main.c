@@ -79,7 +79,7 @@ void a733_smp_diagnostic_start(void)
  struct a733_audio_operations backend={.enter=enter,.leave=leave,.now_us=now,.read=read_reg,.write=write_reg};
  if(!a733_audio_leases_init(&app.leases,&app.shared.clocks,s->dma.allowed.owner,&backend,&app)||
     !a733_audio_parent_init(&app.parent,&app.leases.operations,&app.leases,s->audio_cold,app.deadline))platform_panic("I2S audio",6);
- unsigned direction=s->direction%3,duplex=direction==2;
+ unsigned direction=s->direction==I2S_RUNTIME_DIRECTION?1:s->direction%3,duplex=direction==2;
  struct a733_pin_request pins[]={{5,s->inherited[0],{3,0,0}},{6,s->inherited[1],{3,0,0}},
   {duplex?8u:direction?7u:8u,s->inherited[2],{3,0,0}},{7,s->inherited[3],{3,0,0}}};
  int bound=duplex?a733_i2s_platform_duplex_init(&app.binding,&app.parent,&app.shared.pins,&app.leases,
@@ -90,7 +90,7 @@ void a733_smp_diagnostic_start(void)
  for(unsigned j=0;j<(duplex?2u:1u);++j){
   app.stream[j].stream=(struct a733_i2s_stream_profile){{24576000,16000,0,16,32,1,0},
    a733_i2s_platform_stream_operations(),&app.binding,
-   duplex?(j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE):(enum a733_i2s_direction)direction,10000,s->direction>=3};
+   duplex?(j?A733_I2S_TRANSMIT:A733_I2S_RECEIVE):(enum a733_i2s_direction)direction,10000,s->direction>=3&&s->direction<=5};
   app.stream[j].duplex=duplex;
  }
  struct a733_dma_pool_config config={&s->dma,&app.shared.counter,&app.shared.clocks,&app.shared.locks,

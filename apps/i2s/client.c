@@ -103,6 +103,7 @@ int i2s_client_step(void)
  }
  if(atomic_load_explicit(&app.dma.state,memory_order_acquire)==A733_DMA_POOL_FAILED)return fault();
  if(atomic_load_explicit(&app.dma.state,memory_order_acquire)!=A733_DMA_POOL_READY)return 0;
+ if(app.session.direction==I2S_RUNTIME_DIRECTION)return i2s_runtime_step();
  if(app.session.direction>=3)return i2s_repeated_step();
  if(app.session.direction==2)return duplex_step();
  /* Finish collecting each copied reply before selecting cancellation. A ticket

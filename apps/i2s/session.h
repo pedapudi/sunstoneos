@@ -23,7 +23,7 @@
 struct i2s_session {
  uint64_t magic,version,bytes,epoch,generation,lease;
  uint8_t image[32],evidence[32],memory[32],recovery[32],pcm[32];
- /* 0..2 finite RX/TX/duplex; 3..5 repeated RX/TX/duplex. */
+ /* 0..2 finite RX/TX/duplex; 3..5 cyclic RX/TX/duplex;6 runtime finite TX. */
  uint32_t direction,audio_cold;
  struct a733_native_usb_config shared;
  struct a733_dma_handoff dma;

@@ -80,15 +80,66 @@ static void repeated_exchange(uint32_t operation,uint32_t offset,uint32_t bytes)
  put32(response+116,atomic_load_explicit(&app.repeated.flags,memory_order_acquire));put64(response+120,0);
  response_sent=response_transferred=0;response_bytes=128+count;
 }
+/* Version4: one exact period follows op6/sequence-low/sequence-high. USB owns
+ * unpublished copied input only; it never calls the DMA service or a provider. */
+static unsigned pcm_upload_active,pcm_upload_bytes,pcm_upload_ok;
+static uint64_t pcm_upload_sequence,pcm_upload_deadline;
+static void pcm_response(unsigned operation,unsigned upload_result)
+{
+ memset(response,0,128);put32(response,0x53493241);put32(response+4,4);
+ put32(response+8,atomic_load_explicit(&app.result,memory_order_acquire));
+ put32(response+12,operation);put32(response+20,4096);
+ put64(response+24,app.admitted.epoch);put64(response+32,app.admitted.generation);
+ storage_digest_bytes(&app.admitted,sizeof(app.admitted),response+40);
+ put64(response+72,atomic_load_explicit(&app.runtime.head,memory_order_acquire));
+ uint64_t consumed=atomic_load_explicit(&app.runtime.consumed,memory_order_acquire);
+ uint64_t committed=atomic_load_explicit(&app.runtime.committed,memory_order_acquire);
+ put64(response+80,committed);put64(response+88,consumed);
+ put32(response+96,i2s_runtime_credits());
+ put32(response+100,atomic_load_explicit(&app.runtime.flags,memory_order_acquire));
+ put32(response+104,atomic_load_explicit(&app.runtime.drained,memory_order_acquire));
+ put32(response+108,upload_result);
+ response_sent=response_transferred=0;response_bytes=128;
+}
+static void pcm_ingest(void)
+{
+ if(a733_smp_counter()>=pcm_upload_deadline)stop();
+ unsigned available=tud_vendor_available();if(!available)return;
+ uint8_t fragment[512];unsigned n=4096-pcm_upload_bytes;
+ if(n>sizeof(fragment))n=sizeof(fragment);if(n>available)n=available;
+ unsigned got=tud_vendor_read(fragment,n);if(!got||got>n)stop();
+ if(pcm_upload_ok){int r=i2s_runtime_upload(pcm_upload_sequence,pcm_upload_bytes,fragment,got);
+  if(r<0)stop();if(!r)pcm_upload_ok=0;}
+ pcm_upload_bytes+=got;
+ if(pcm_upload_bytes==4096){
+  if(!pcm_upload_ok)i2s_runtime_upload_discard();
+  pcm_upload_active=0;pcm_response(6,pcm_upload_ok?1:2);
+ }
+}
 static void exchange(void)
 {
  if(response_bytes){unsigned n=tud_vendor_write(response+response_sent,response_bytes-response_sent);
   response_sent+=n;tud_vendor_flush();return;}
+ if(pcm_upload_active){pcm_ingest();return;}
  unsigned available=tud_vendor_available();if(!available)return;
- if(available>sizeof(request)-request_bytes)stop();
+ if(available>sizeof(request)-request_bytes){
+  if(app.admitted.direction!=I2S_RUNTIME_DIRECTION)stop();available=sizeof(request)-request_bytes;
+ }
  request_bytes+=tud_vendor_read(request+request_bytes,available);
  if(request_bytes<sizeof(request))return;request_bytes=0;
  uint32_t op=get32(request),offset=get32(request+4),bytes=get32(request+8);
+ if(app.admitted.direction==I2S_RUNTIME_DIRECTION){
+  if(op==6){
+   pcm_upload_sequence=(uint64_t)offset|((uint64_t)bytes<<32);
+   uint64_t head=atomic_load_explicit(&app.runtime.head,memory_order_acquire),now=a733_smp_counter();
+   if(!pcm_upload_sequence||head>=UINT64_MAX/I2S_RUNTIME_FRAMES||pcm_upload_sequence!=head+1||now>UINT64_MAX-24000000)stop();
+   pcm_upload_deadline=now+24000000;pcm_upload_bytes=0;
+   pcm_upload_ok=i2s_runtime_credits()!=0;pcm_upload_active=1;return;
+  }
+  if((op!=0&&op!=2)||offset||bytes)stop();
+  if(op==2)atomic_store_explicit(&app.cancel,1,memory_order_release);
+  pcm_response(op,0);return;
+ }
  if(app.admitted.direction>=3){repeated_exchange(op,offset,bytes);return;}
 #ifdef SUNSTONE_I2S_TRANSCRIBE
  if(op==3){
