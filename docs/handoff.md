@@ -10,6 +10,8 @@ report validation, final root review and physical execution remain outstanding.
 The builder patches the exact previously demonstrated ELF, including the EL0 WFE
 permission correction. It suppresses timer/SGI generation and intercepts the first
 task instruction, so it does not establish workload scheduling.
+The additional `all-writer-cleanup.json` check passes with writes prohibited from
+every CPU and exception level after cleaning begins, including EL3 restoration.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;

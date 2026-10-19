@@ -1474,6 +1474,10 @@ The invalid-task-argument case retains all CPUs without cleaning or claiming
 return. The failed-EL3-restoration case retains the affected secondary after
 cleaning. The successful checker is preserved by its exact hash; adding the
 negative cases did not require another normal run.
+An additional normal-path check rejects writes by any CPU at any exception level
+after the first cache-clean operation. It passes through EL3 restoration and
+secondary shutdown, covering a broader writer set than the original EL1 checks.
+That result is preserved as `all-core-first-task-20261018/all-writer-cleanup.json`.
 
 This profile remains explicitly ineligible for physical execution. Host report
 validation, final root review and a frozen board proposal are still required.

@@ -43,6 +43,8 @@ class FirstTask(barrier.AllCore):
         return r['currentel'] < 12 and bool(r['scr_el3'] & 1)
 
     def memory(self, u, access, address, size, value, core):
+        if access == UC_MEM_WRITE and 0x41200000 <= address < 0x41291000:
+            assert not any(self.cleaned.values()), 'Any CPU/EL wrote owned RAM after cleanup began'
         # Same implemented-priority semantics as a733-supervised-scheduler.py.
         # The port probes one priority byte during xPortStartScheduler.
         for r in self.rdist:
