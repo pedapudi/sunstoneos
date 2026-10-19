@@ -86,7 +86,9 @@ static void usb_task(void *unused)
 void a733_observe_service_start(void)
 {
     snapshot.start=a733_smp_counter();
-    configASSERT(xTaskCreateStaticAffinitySet(usb_task,"observe",2048,NULL,4,task_stack,&task_state,1));
+    /* Share time with background work; status polling must not outrank the
+     * diagnostic workers. Preemption and equal-priority time-slicing are on. */
+    configASSERT(xTaskCreateStaticAffinitySet(usb_task,"observe",2048,NULL,1,task_stack,&task_state,1));
 }
 void a733_observe_freeze(void)
 {

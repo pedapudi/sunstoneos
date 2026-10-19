@@ -1284,3 +1284,21 @@ identity `[7,2770,1097074,0,0]`; the runner exits and its claim closes as passed
 No reconnect is needed. General context saving, boot-CPU workload participation,
 SPI/LPI shutdown, broader runtime memory cleanup and eight-core FreeRTOS scheduling
 remain outstanding.
+
+## Complete scheduler model with secure priority handling
+
+The full supervised image initializes the Secure priority mask before entering
+Nonsecure EL1. Its instruction model implements the access restriction,
+priority scaling and implemented priority bits described in the reference audit.
+The observer shares priority one with background tasks, allowing the
+higher-priority diagnostic workers to finish while polling continues.
+
+Both the rejected-mask case and the complete eight-core scheduler case pass
+under `smp-secure-pmr-20261018/scheduler-observer-priority/`. Every core completes
+32 floating-point rounds, makes background progress and handles inter-core
+interrupts. CPU0 handles 333 timer ticks, and the copied snapshot validates.
+The model executes actual FreeRTOS tasks and context handlers. It substitutes
+USB controller calls and models cache, power and timing behavior; physical
+scheduling and USB capture remain unqualified. The exact image, 89 compiler
+inputs and 34 linked objects are preserved under the same evidence directory's
+`final-snapshot/`. Unchanged admission, launcher and host checks are reused.

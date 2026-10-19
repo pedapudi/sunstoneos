@@ -72,7 +72,7 @@ class Model:
         if pc==self.sym['tud_vendor_n_write']:
             count=min(127,self.r('x2'));self.tx.extend(u.mem_read(self.r('x1'),count));self.return_(count);return
         if pc==self.sym['xTaskCreateStaticAffinitySet']:
-            assert self.r('x4')==4 and self.r('x7')==1
+            assert self.r('x4')==1 and self.r('x7')==1
             assert self.r('x5')==self.sym['task_stack'] and self.r('x6')==self.sym['task_state']
             self.return_(self.sym['task_state']);return
         if pc not in self.decoded:self.decoded[pc]=next(self.dec.disasm(bytes(u.mem_read(pc,4)),pc))

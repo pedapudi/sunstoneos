@@ -10,20 +10,26 @@ restoration pass. Evidence: `secondary-interrupt-probe-20261018/physical-114/run
 The runner exited and its claim closed as passed. Current ROM is `003:115`,
 identity `[7,2770,1097074,0,0]`, on port `3-1`. No reconnect is needed.
 
-The production cached entry now initializes the Secure interrupt priority mask
-before entering Nonsecure EL1. Arm's access rules can otherwise ignore the EL1
-write. The physical diagnostic supplied this correction around the previous
-frozen ELF; the complete FreeRTOS image still needs rebuilding with it.
-The dedicated interrupt model now represents Secure mask restrictions and
-Nonsecure priority scaling. The broader scheduling model still needs the same
-correction before its next run. Three focused instruction cases and six host
-groups pass under `secondary-interrupt-probe-20261018/`; the source audit records
-the Arm/TF-A references and GIC-600 errata scope.
+The complete FreeRTOS image now contains the Secure interrupt-mask correction.
+Its full instruction model represents Secure mask restrictions and Nonsecure
+priority scaling. Both the rejected-mask case and eight-core scheduler case
+pass under `smp-secure-pmr-20261018/scheduler-observer-priority/`. Every core
+completes 32 floating-point rounds, background work and inter-core interrupts;
+CPU0 handles 333 timer ticks. USB controller calls are substituted in this model.
 
-Boot-CPU participation, general task-context handling, broader runtime memory
-cleanup and eight-core FreeRTOS scheduling remain outstanding. Preserve DDR
-continuity and refresh warm launcher state before the next native operation.
-The demonstrated interrupt cleanup covers SGI0/PPI30 and a single shared page;
+The USB observer now shares priority one with background tasks. Its former
+priority four prevented CPU0's lower-priority diagnostic work from completing
+under the modeled timing. The workload and scheduling timing were preserved;
+only the observer priority changed. The final image and all 89 compiler inputs
+and 34 linked objects are preserved under
+`smp-secure-pmr-20261018/final-snapshot/`. Unchanged launcher, admission and host
+checks are reused. Warm launcher preparation on `003:115` is complete; no
+additional DDR training occurred.
+
+Physical boot-CPU participation, general task-context handling and eight-core
+FreeRTOS scheduling remain outstanding. The next full observer attempt retains
+CPU, RAM and USB ownership after capture and requires manual power removal.
+The returning diagnostic's cleanup covers SGI0/PPI30 and a single shared page;
 it does not qualify general peripheral interrupt or OS shutdown.
 
 The second board completed the 21-register PMIC probe and returned as `003:112`,

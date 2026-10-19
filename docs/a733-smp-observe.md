@@ -15,7 +15,7 @@ Missing or partial output leaves scheduler completion unobserved.
 ## Task ownership and privilege
 
 The existing eight-core cache-adoption and shared-atomic barriers finish before
-the primary creates the USB task. That task has priority four and affinity to
+the primary creates the USB task. That task shares background priority one and has affinity to
 core zero. The original sixteen floating-point and background tasks retain
 their priorities and checks. The primary freezes a result only after all eight
 workers complete 32 rounds, show background and SGI progress, and have no failure
