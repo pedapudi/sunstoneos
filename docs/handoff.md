@@ -1,11 +1,12 @@
 # Current work
 
-The first board is responsive on port `3-1` as `003:121`, identity
-`[7,2807,1097080,0,0]`. The user reports a 5 V / 3 A port. Cold DDR preparation
-and the returning boot-CPU cache diagnostic passed. The diagnostic adopted the
-production EL3 tables, restored the original controls, returned to ROM and
-restored saved DRAM. Evidence: `reconnect-20261018-120/` and
-`primary-cache-probe-20261018/physical-120/runtime/session.json`.
+The first board last returned responsive on port `3-1` as `003:002`, identity
+`[7,2862,1096961,0,0]`. The user reports a 5 V / 3 A port. Cold DDR preparation
+and returning boot-CPU EL3/EL1 diagnostics passed. The EL1 diagnostic completed
+production local interrupt setup and cached entry, restored controls and saved
+DRAM, and returned to ROM. It stops before EL1 interrupt delivery or scheduling.
+Evidence: `reconnect-20261018-120/` and
+`primary-el1-probe-20261018/physical-121/runtime/session.json`.
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
@@ -30,7 +31,15 @@ support the attempted bundle; they do not transfer to the recovered session.
 The corrected masked fabric and USB-before-GPU ordering did not produce an
 observable result. A narrower shared single-core startup diagnostic or concrete
 new correction must precede another full accelerator launch. Root owns shared
-startup diagnosis. The returning TWI capture observed all nine strict PMIC
+startup diagnosis. A continuous instruction check now executes the frozen GPU
+entry through monitor admission, EL1 entry, BSS clearing and platform initialization
+on the linked stacks. Its post-MMU data accesses satisfy the actual descriptors.
+Evidence: `gpu-entry-audit-20261018/continuous-entry/result.json`. Cache effects,
+registers, time and GIC behavior remain modeled; no physical startup or scheduler
+result follows from this check. The provider audit found no additional candidate
+input defect; its report is `gpu-usb-ordering-20261018/audit125-provider/pre-usb-application-audit.md`.
+GPU software construction can still stop before USB begins; an application-only
+failure-reporting correction is in progress. The returning TWI capture observed all nine strict PMIC
 baseline predicates, and each matched in the new lifetime. The probe performed
 no I2C transactions or TWI writes. This removes a candidate mismatch for the
 observed session; it does not locate the previous GPU failure. Comparison:
@@ -93,14 +102,18 @@ passes six focused cases covering report capture, RAM restoration, wrong epoch,
 changed inputs and retained failures; evidence is under that directory's `host/`.
 Physical execution passed on the first board. This establishes CPU0 EL3 cache
 adoption and restoration before GIC initialization or secondary release; combined
-startup barriers, CPU0 cached EL1 participation and full scheduling remain unobserved.
+startup barriers, CPU0 interrupt delivery and full scheduling remain unobserved.
 The optional boot-CPU local-GIC/EL1 extension builds and passes six instruction
 cases and nine host cases under `primary-el1-probe-20261018/`. It executes the
 production local controller and cached EL1 entry, then restores the primary's
 awake interrupt state. Baseline refusals before device writes and controller
 refusals with verified restoration return distinct reports. Failed restoration
-retains ownership. Physical entry and return remain untested; launch still needs
-current board admission. Root review is recorded in `primary-el1-probe-20261018/root-review.json`.
+retains ownership. Physical local setup, cached EL1 entry, control restoration,
+saved DRAM restoration and ROM return passed under
+`primary-el1-probe-20261018/physical-121/runtime/session.json`. The runner stopped
+and its claim closed as passed. CPU0 interrupt delivery, cached EL1 data stores
+and scheduling remain unqualified. Root review is recorded in
+`primary-el1-probe-20261018/root-review.json`.
 Earlier models missed implemented interrupt bits, Secure priority-mask behavior
 and security-specific cache publication. Passing modeled startup alone cannot
 justify another full image launch. A missing USB report can mean an intentional

@@ -1369,5 +1369,11 @@ controller refusal, wrong EL1 identity, local-restoration failure and cache-
 restoration failure. Nine host cases cover capture, retained transport failures,
 restoration, input binding and the distinction between returned refusal and
 successful entry. The preparation prefix executes once per instruction batch.
-Evidence is under `primary-el1-probe-20261018/`. Physical execution, interrupt
-delivery on CPU0 and FreeRTOS scheduling remain outstanding.
+Physical execution passed under
+`primary-el1-probe-20261018/physical-121/runtime/session.json`. The report confirms
+production local setup, cached EL3/EL1 entry, and restoration of translation,
+local interrupt and distributor controls. Saved DRAM restoration and responsive
+ROM return passed; the returned USB instance was `003:002`. The host runner
+stopped and its queue claim closed as passed. This interval ends before EL1
+interrupt-interface configuration and performs no EL1 data stores. CPU0 interrupt
+delivery, general task-context handling and FreeRTOS scheduling remain outstanding.

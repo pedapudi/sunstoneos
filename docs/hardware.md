@@ -100,7 +100,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   before GIC configuration and secondary release.
   CPU0 also passes production EL3 cache adoption and exact control restoration
   under `primary-cache-probe-20261018/physical-120/`. ROM return and saved DRAM
-  restoration pass; CPU0 cached EL1 participation remains unobserved.
+  restoration pass. CPU0 production local interrupt setup and cached EL1 entry
+  also pass under `primary-el1-probe-20261018/physical-121/`, followed by control
+  restoration, saved DRAM restoration and ROM return. This checkpoint precedes
+  EL1 interrupt delivery and performs no EL1 data stores or scheduling.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
