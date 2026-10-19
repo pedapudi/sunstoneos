@@ -1,0 +1,22 @@
+This finite operation delivers one non-waking RTC alarm through IRQ228 and verifies device and interrupt cleanup before normal return.
+
+It requires a fresh strict-external source/calendar admission after the separate source operation. It does not set the calendar, change the source or relax the existing driver's external-only alarm policy. The task permits only alarm target, enable, IRQ-enable and exact owned pending W1C writes. Its setup budget is 100 ms, enable budget 200 ms, wait bound approximately 1.2 seconds from client start, and total budget 1.5 seconds. The accepted monitor's two-second recovery deadline is unchanged.
+
+A device-only EL3 object wraps the existing monitor entry/exception references. It verifies CurrentEL before reading EL3 controls, requires MMU/cache-disabled Secure physical access and actual GIC security/routing controls, and captures original IRQ228 enable/pending/active state before the original global mask. It retains the original group, modifier, trigger, priority, route and disabled alarm target outside EL1-cleared BSS. EL1 never writes that record. The wrapper assigns Group1NS/level/priority 0xe0/CPU0 route only while the original IRQ is disabled and quiescent, with exact readback.
+
+A separate dispatcher wrapper masks IRQ228 and publishes an atomic notification. The existing FreeRTOS FP-safe wrapper preserves context; its IRQ port performs IAR/EOIR. The task waits for masking and deactivation, then calls production rtc_irq and finish. Only that owned completion phase permits pending status. Initial/final admission requires pending clear; inherited events are never acknowledged blindly. Success restores the exact disabled alarm target and verifies alarm disabled, IRQ output off, RTC/GIC pending clear and no active IRQ.
+
+Every configured-route exception masks IRQ228 before delegation, including timeout and fault. The old monitor only sets saved SPI enables and cannot clear a newly enabled line. On genuine normal SMC/status 0, the device wrapper independently verifies live RTC/GIC quiescence and saved-target equality before restoring its own SPI fields. Uncertain/abnormal completion does not attempt RTC cleanup or group restoration. It retains ownership and forces failure. No warm reuse is claimed for such a result.
+
+Functional qualification requires all of these observations: `RTC_ALARM_OUTCOME=0`, one actual IRQ228 notification, FIRED/seen/non-cancelled driver result, terminal time reaching target, clean target/device readback, final `RTC_ALARM_EL3_RESTORED=1`, `RTC_ALARM_EL3_RETAINED=0`, accepted monitor stage 5/status 0 and responsive ROM return. The task may print `COMPLETE native RTC alarm result` before EL3 detects a restoration failure. That marker alone is insufficient. A clean cancellation can return a negative diagnostic; it does not qualify IRQ delivery.
+
+Build and run only the focused offline cases:
+
+```
+python3 apps/rtc-source-returning/build.py --operation alarm --evidence ~/.cache/sunstoneos/evidence/rtc-alarm-returning-20261018
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/rtc-source-returning/check.py --operation alarm --evidence ~/.cache/sunstoneos/evidence/rtc-alarm-returning-20261018
+```
+
+The cases execute actual linked device hooks, task/driver, SPI helper, critical-section instructions and FP-safe dispatcher. Original monitor return, scheduler, architecture observations, IAR/EOI completion and device effects are modeled. Cases cover Secure pre-mask admission, BSS retention, actual bridge-to-task drain, clean cancellation, partial route/alarm writes, timeout/active/pending/target failures and task completion overridden by EL3 failure. Existing arithmetic, read-only and monitor suites are not replayed.
+
+No physical operation or queue access is performed by this target. The coordinator must admit current identity, DDR/cache/survey continuity, fitted source and permissions, exclusive RTC/R_CCU/osc32k and GIC ownership, other-core/remote-writer exclusion and recovery. It must first accept source outcome 0/stage 6 and independently qualify returned external source state. The copied baseline PMIC host tools are not a current executable physical package; refresh and freeze the accepted runner/import/runtime-hashed closure before admission. Expected runner text is `COMPLETE native RTC alarm result`, followed by independent outcome and final EL3/readback checks. Stop at the first transport failure. No DRAM restoration, source rollback, UTC correctness or measured oscillator accuracy is claimed.
