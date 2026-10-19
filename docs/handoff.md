@@ -162,36 +162,45 @@ EXT_CSD and copied reads. Admission/capture checks and source review pass under
 no physical qualification target. Its single-core image retains resources
 permanently and has no qualified ROM return.
 
-The H.264 decoded-macroblock counter read is corrected in the lowest native
-VE access policy. The historical frozen image below omits that permission,
-refuses before the counter load and cannot publish completed output. Earlier
-sequence composition substituted the lower read, so its passing results cover
-only those modeled paths. The actual AArch64 native-read check now passes
-counter/status access and neighboring, misaligned and null-output refusals with
-inert MMIO. Root verifies five sources, three artifacts and two tools under
-`h264-native-access-20261019/freeze/manifest.json`; results are in `final/result.json`.
-No full image has been rebuilt with this fix. The next VGA candidate must include
-it and receive its own audit; the historical candidate is not eligible for use.
-
-The implemented H.264 application accepts one uploaded IDR picture, optionally
-followed by one P picture, within an 8 KiB clip and 4 KiB per NAL unit. Pictures
-are 48 by 32 pixels in progressive Baseline format. The two-picture profile uses
-picture-order count type 2 and one default short-term reference. Decoder-context
-picture-info/neighbor scratch persists across pictures; input, output and
-motion-vector slots remain distinct. Up to two indexed immutable copied outputs
-are implemented, preserving the IDR result if P decoding fails. Earlier
-controller/provider, parser, independent syntax and host checks passed with
-device effects modeled and the lower native read substituted in sequence cases.
-Root verifies 425 frozen inputs, 166 objects, 194 sources, 786 artifacts and seven
-tools under `h264-interframes-20261019/root-integration.json`. That historical
-modeled-path image's ELF SHA-256 is
-`862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`.
-Six later USB hub dependencies differ from the integration tree; the frozen
-image retains consistent inputs/layouts but contains the native-read defect;
-it supplies no corrected full-path or current-tree rebuild evidence. Earlier unaffected parser/upload checks were reused. Physical
-reference visibility, pixels, confinement and drain remain unqualified; all
-resources remain retained. Longer clips, repeated clips and wider profiles
+The [VGA H.264 streaming application](h264-native.md) implements a finite
+prepared clip of up to 256 progressive 640-by-480 Baseline IDR/P pictures, with
+one short-term reference and at most 512 KiB per access unit. A fixed retained
+pool alternates decoder reference/output slots across GOPs. Indexed copied
+outputs require complete transmission and exact acknowledgment before their
+slots can be reused;
+uncertain completion retains every allocation. The selected ELF SHA-256 is
+`24144b2acd358a8a905f76ebc94119274589bce0a5a883992082ad20ca52ddb4`.
+It includes the decoded-macroblock counter correction and actual lower-native
+IOMMU scan/poll policy checks. Parser, independent syntax/register comparisons,
+linked refill/copy and host checks pass with device effects and pixels modeled.
+CPU translation and initial platform/IOMMU authority are also modeled.
+Root verifies 429 compiled inputs and 169 objects under
+`h264-vga-20261019/root-integration.json`. Normal-mode native evidence covers
+only the first frame with terminal status still pending.
+Newer shared USB/board layouts and memory/clock changes differ; the internally
+consistent frozen image supplies no current-tree rebuild evidence. Future
+builds must compile all affected consumers consistently.
+The launcher correction at `a939b25` accepts producer-built legacy version-1
+and VGA version-2 sessions through the actual generated AArch32 instructions
+to the modeled reset handoff. Unsupported version 3 and the preserved old
+launcher with a VGA session refuse with reason 14, restore entry state and
+perform no hardware writes. Earlier bundle checks substituted launcher creation
+and missed that guard. Evidence: `h264-launcher-20261019/result.json` and
+`freeze/manifest.json`. The native ELF above is unchanged and was not rebuilt.
+Prepared VGA bundles must use this corrected launcher; older frozen bundles
+remain incompatible. Root verifies 15 compiled launcher inputs and 69 frozen
+files under `h264-launcher-20261019/root-integration.json`. The later board
+workload-6 preparation branch does not change private H.264 launcher construction.
+System registers, counter values and MMIO are modeled; these checks establish
+neither AArch64 startup nor a physical launch. Physical preparation and recovery
 remain required.
+Physical reference visibility, pixels, confinement, timing and fault drain remain
+unqualified. Allocation reclamation, unmanifested live input, wider profiles,
+multiple references/slices and other required codec modes remain outstanding.
+The legacy small-picture profile remains implemented. Historical ELF
+`862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`
+omits the counter-read permission and cannot publish completed output; its
+substituted-read compositions retain only their historical modeled-path scope.
 
 JPEG now accepts a supplied baseline YCbCr420 image and returns copied pixels
 with parsed dimensions. Complete input authentication precedes decoder resource
@@ -243,8 +252,23 @@ profiles retain workloads 0–3. Root verifies 414 inputs, 162 objects, 23 sourc
 Allocated runtime bytes match the accepted route-case image apart from build
 identity, so accepted checks were reused. Earlier images retain their own frozen
 inputs. Hub/TT signaling, power, IRQ, DMA and drain remain physically unqualified;
-Type-C VBUS cutoff does not remove external hub power. SuperSpeed, bus-powered
-budgets and wider hub/class support remain required.
+Type-C VBUS cutoff does not remove external hub power. Bus-powered budgets
+and wider hub/class support remain required.
+
+The [SuperSpeed Gen1 storage profile](usb2-host.md#one-direct-gen1-storage-device-uses-comb0)
+is implemented for one directly attached BOT device. Supervised workload 6 uses
+the source-backed COMB0 PHY path, actual TinyUSB enumeration/MSC and xHCI contexts,
+then copies one read-only LBA 0 sector through USB0. It refuses USB2 fallback.
+Twenty focused compositions, two affected USB2 cases, linked publication/host
+checks and focused review pass with hardware effects modeled. Root verifies
+435 compiled inputs and 163 objects under
+`usb-host-superspeed-20261019/root-integration.json`;
+the original frozen inputs remain authoritative across later memory-provider
+changes. Admission requires an authenticated source of at least 900 mA and
+image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
+physical admission record exists. Physical link operation, source capacity,
+DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs/HID,
+Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
 
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
@@ -322,6 +346,22 @@ Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return rema
 unqualified for both accelerators. Existing device checks were reused.
 Root GPU host source review also passes; all 18 host sources match the preserved
 bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
+The [native triangle application](gpu-render.md) implements one caller-selected
+triangle-list draw per session, with 3–126 copied vertices and a copied 64-by-64
+RGBA8 framebuffer. Trusted compiled vertex/fragment shaders and actual
+programmable data sequencer (PDS),
+primitive and paired geometry/fragment commands use the existing native owners.
+Both acquired timelines precede guarded pixel copies. Compiler/reference,
+native service, linked application/host and retry checks pass with firmware
+replies, GPU writes and USB effects modeled. Evidence:
+`gpu-triangle-draw-20261019/root-integration.json` verifies 217 inputs and 86 objects;
+its frozen image remains authoritative across newer shared clock/memory changes.
+Root binary comparison supports scoped reuse of the earlier two-scene checks;
+the changed client ordering has a separate final-image case.
+Physical rasterization and cache visibility remain unqualified. Repeated drawing
+is in development; indices, textures, blending, depth/stencil, wider rendering
+and context disposal remain required.
+
 Caller-selected GPU compute programs are integrated. A sealed session fixes a
 trusted host-compiled program and initial copied input; the same executable supports
 both checked array kernels. Bounded multi-dispatch now supports up to 31 direct
@@ -450,15 +490,18 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue GPU triangle drawing, USB SuperSpeed storage and VGA H.264 stream
-   implementation. Repeated Bluetooth capture and recognition are integrated
-   offline; physical operation and session timing remain unqualified. Implement
+1. Continue repeated GPU drawing, source-backed full-HD H.264 implementation
+   and standalone DSI application assessment.
+   One triangle draw, native VGA streaming and direct Gen1 BOT are implemented
+   offline, within their frozen evidence scopes. Repeated Bluetooth capture and
+   recognition are integrated offline; physical operation and session timing
+   remain unqualified. Implement
    the approved mSBC profile and native NPU shader/neural-transpose large-tensor
    graph path. The NPU work adds functional operator and external-memory coverage;
    it does not replace or optimize mimus. Bounded GPU workgroup grids, the fixed
    two-stage NPU graph, GPU/NPU live input and USB hub modes for one device or combined
-   HID/storage are integrated offline. The H.264 native-read source correction
-   still needs a newly audited full image.
+   HID/storage are integrated offline. The VGA image includes the native-read
+   correction, and its separately corrected launcher passes modeled admission.
    Preserve each image's complete frozen inputs and accepted audit scope.
    I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
    with physical RX admission blocked by the documented completion/reuse ordering
