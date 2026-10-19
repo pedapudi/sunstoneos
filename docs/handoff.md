@@ -11,6 +11,23 @@ session `21236` and queue claim
 retain ownership. Manual power removal was requested; verify the exact live
 process and a new instance before recovery. Do not repeat this image unchanged.
 
+The first single-core GPU attempt on the second board also produced no native
+USB result. After the observation window, its sole refusal-report read timed
+out. GPU initialization and computation remain unobserved; this does not locate
+the failure or establish a shared cause with multicore. Instance `003:116` on
+port `3-3` is quarantined. Runner PID `39986`, coordinator PID `39981`, exec
+session `26661` and claim
+`828d27d68a57bd1ebf0b844bc03acb2fd5808b00b7e2f422dedcd519118166cb`
+retain ownership. Evidence:
+`gpu-single-core-20261018/physical-candidate-116/runtime/`. Both boards now need
+confirmed power removal before reuse. Do not repeat either image unchanged.
+Root owns common startup diagnosis. The GPU worker found that the compute
+client can start GPU OPEN after PMIC readiness while USB is still starting.
+A GPU fault sets the shared fatal flag, which can stop USB before enumeration.
+The worker is correcting this application ordering so a missing USB result can
+be distinguished from a later GPU failure. This source finding does not establish
+the physical failure's cause; shared faults must still stop affected services.
+
 The preceding returning diagnostic established timer and peer interrupt delivery
 on all seven secondary cores, coherent exchange on its single shared page,
 clean shutdown and ROM return. Those results remain valid for their scope.
@@ -43,7 +60,7 @@ Addresses `0x03006244`, `0x03006248` and `0x0300624c` returned `0x66961102`,
 `0x19689689` and `0x00000496`. The probe programs no fuses or thermal registers.
 Evidence: `thermal-sid-shadow-20261018/runtime/`. Runner PID `28797` exited
 successfully and is absent; exec session `22934` is terminal and its queue claim
-closed as passed. No reconnect is needed for this board.
+closed as passed. This successful probe preceded the retained GPU failure above.
 
 This establishes calibration-shadow accessibility in the thermal driver's
 security state. The existing decoder accepts these words: the encoded factory reference is
@@ -52,7 +69,8 @@ acquisition and interrupts remain outstanding. Earlier PMIC reads established en
 DCDC2 programmed to 800 mV and CLDO3 programmed to 1.8 V; they did not measure
 analog stability. The unchanged thermal image is prepared under
 `thermal-clock-reference-20261018/physical-candidate-adopt-116/`. Preserve DDR
-continuity; refresh warm launcher state only for the selected next operation.
+continuity only within the recorded powered lifetime. The later GPU attempt now
+requires power removal and fresh board preparation before another launch.
 
 The SID probe reused fourteen accepted monitor/platform/FreeRTOS objects and
 compiled only its new payload. Its focused model and source review passed.
@@ -733,40 +751,24 @@ observations.
    Preserve the inserted card's contents. The separate maintenance image needs
    card/range ownership, protected backups and its qualified watchdog procedure;
    it is not the first discovery path.
-4. The GPU single-core compute application is integrated for validation
-   independently of SMP. Twelve startup cases, nine package/admission cases and
-   eight USB/profile cases pass; focused review accepted the frozen image.
-   All 175 preserved source inputs match integration. Evidence is under
-   `gpu-single-core-20261018/`. Preparation of the second-board launch inputs
-   is in progress; no physical GPU execution result exists. A second-board
-   read under `gpu-clock-read-20261018/` observes GPU clock and reset/bus words
-   both zero, with scratch restoration and normal same-instance return.
-   The additional DCDC4 read passes under `gpu-supply-probe-20261018/runtime/`:
-   enable register `0x10` is `0xff`, voltage register `0x15` is `0x9e`, and its
-   seven-bit selector 30 programs 800 mV. ROM returns as `003:101`; the process
-   and claim close. The runner validates the explicit DDR-to-ROM-return chain
-   against the current survey and live instance. The frozen GPU candidate is now
-   reconciled to `003:101` under `gpu-single-core-20261018/physical-candidate/`.
-   All requested raw clock and supply samples are present; no additional PMIC
-   read or rebuild is needed. Current entry state, image-specific cache/writer
-   exclusion, trusted power history and takeover/recovery authority remain
-   unresolved. Successful execution of the modified PMIC probe remains positive
-   second-board evidence.
-   Establish actual power,
-   memory and recovery admission for the integrated GPU,
-   NPU, codec, RTC and thermal applications. Their internal operations can advance
-   without camera, display or microphone accessories. Retained buffers do not
-   establish completed device writes or permit resource reuse. The larger memory
-   profile supplies capacity; physical exclusion, coherence and device mappings
-   remain required. Camera capture separately requires the actual module and wiring.
+4. The GPU single-core image has completed its first physical attempt, with no
+   native USB result and a failed refusal-report read. Its frozen image,
+   reset-held entry review, actual board admission and failed session are under
+   `gpu-single-core-20261018/physical-candidate-116/`. Source-qualified DCDC4
+   settling and current launcher checks preceded execution; no DDR retraining
+   or software-test replay occurred. Historical GPU/DMA drain remains unknown.
+   Preserve the retained ownership recorded above. The next attempt needs a
+   concrete correction or a narrower diagnostic that distinguishes startup,
+   application admission and USB observation. GPU computation remains unproven.
+
 The independent single-core NPU convolution image is integrated and reviewed.
-Eleven startup/provider cases, seven host cases and six comparisons of unchanged
-SD/GPU preprocessing pass under `npu-single-core-20261018/`. Integration matches
-145 distinct repository inputs and reuses the frozen ELF and external compiled
-inputs without rebuilding or replaying tests. The startup restores interrupt
-masking after FreeRTOS static task construction. Physical NPU inference remains
-pending actual supply, memory, DMA, USB and recovery admission. The preserved
-software fixture bundle is never a deployable admission record.
+Its application clock checks now accept the supported normalized 24 MHz
+reference and PERI0 settings observed on the second board. Six focused cases
+execute the final ELF's clock acquisition path; 68 linked objects are unchanged.
+Evidence is under `npu-single-core-20261018/reference-refresh/`. Existing startup,
+model and host evidence is reused. Physical inference still needs post-recovery
+board preparation, NPU-specific clock/power observations and actual memory,
+DMA, USB and recovery admission. Software fixture records are not deployable.
 
 5. Complete every remaining path in the [hardware matrix](hardware.md), including
    USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,

@@ -393,3 +393,23 @@ scheduling or all-core coherence. Actual DDR exclusion, supported settled GPU
 power, initial GPU isolation, ROM USB takeover authority, and successful numerical
 execution remain unqualified. Every outcome retains the complete lifetime until
 confirmed whole-board power removal.
+
+## First physical compute attempt produced no native result
+
+The single-core compute image was launched once on the second board from ROM
+instance `003:116`. Current launcher checks passed after the returning cache-off
+helper. Root reviewed the completed predecessor history, reset-held GPU/DMA
+baseline, ROM PIO takeover, full memory ownership and source-qualified DCDC4
+settling. Historical power removal and global transaction drain remained unknown.
+
+No native USB service appeared within the capture window. The one permitted
+refusal-report read timed out, and communication stopped. No computed output
+was received. This result does not establish whether execution reached GPU
+initialization; it also does not identify a shared cause with the multicore
+failure. The runner and board claim remain retained until confirmed complete
+power removal. Do not repeat this image without a concrete correction or a
+narrower diagnostic supported by the failure evidence.
+
+The frozen bundle, admission and result are preserved under
+`gpu-single-core-20261018/physical-candidate-116/`. The executable remains the
+reviewed image above; no build or accepted software check was repeated.

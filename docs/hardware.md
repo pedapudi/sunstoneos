@@ -459,13 +459,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
   of SMP. Its startup, packaging and USB profile checks pass; all 175 frozen
-  source inputs match integration. Physical execution remains untested.
+  source inputs match integration. The first physical single-core attempt produced
+  no native USB result; its refusal-report read timed out. GPU initialization and
+  computation remain unobserved. Evidence:
+  `gpu-single-core-20261018/physical-candidate-116/runtime/`. The board remains
+  retained until confirmed power removal; do not repeat the image unchanged.
   The second board's GPU clock and reset/bus registers both read zero under
   `gpu-clock-read-20261018/`, satisfying that current-state prerequisite.
   A returning 20-register PMIC probe also observes DCDC4 enabled with selector
   30, the programmed 800 mV setting, under `gpu-supply-probe-20261018/`.
   This is a register observation rather than a voltage measurement. Supply
-  settling/ownership and initial isolation admission remain outstanding.
+  settling and exclusive ownership were reviewed for the first attempt. Its
+  reset-held baseline does not establish historical transaction drain or safe
+  resource reclamation.
   A sanitizer check covers bounds, guards,
   malformed-image refusal, and buffer aliasing; staged allocations match an
   independent ELF reader. Native [MIPS preparation](gpu-mips.md) also builds
@@ -757,7 +763,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and physical qualification remain outstanding.
   No MIPI camera is connected; physical capture qualification awaits a module.
 
-- NPU: **implemented** offline [page-table construction](npu-mmu.md), with host
+- NPU: The application clock admission now accepts the board's normalized
+  reference and recorded PERI0 settings. Six focused final-image cases pass
+  under `npu-single-core-20261018/reference-refresh/`; unchanged startup and
+  inference evidence is reused. Physical NPU computation remains unobserved.
+  **Implemented** offline [page-table construction](npu-mmu.md), with host
   translation and permission checks. The [controller core](npu-controller.md)
   passes host startup, completion, cancellation, and retained-fault checks.
   The [memory policy](npu-memory.md) passes host integration for private mappings,
