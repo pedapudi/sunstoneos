@@ -18,8 +18,8 @@ is `0x401c`, source status is zero and the prescaler is `0x0f`. Calibration
 configuration is `0x7a000000` (normal RC selected), and oscillator control
 `0x983fb0f7` has RC enabled. Two coherent reads about 1.1 seconds apart observe
 the calendar advance from 01:45:16 to 01:45:17 on day 1. No RTC register is
-written. The client reports success, and the monitor returns normally with
-restored RAM and responsive ROM. Evidence:
+written. The client reports success, and the monitor returns normally to
+responsive ROM. The kernel runner does not restore prior DRAM contents. Evidence:
 `rtc-rc-readonly-20261018/physical/observation.json`.
 This establishes read progression only. The inherited calendar is not the
 current date; absolute time, clock accuracy, alarms and retention remain

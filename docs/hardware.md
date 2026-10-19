@@ -229,7 +229,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - RTC and watchdog: **tested** coherent RTC reads in inherited normal RC mode,
   with source control `0x401c`, status zero and prescaler `0x0f`. Two reads about
   1.1 seconds apart show one second of calendar progression. No RTC register
-  is written; restored RAM and responsive ROM return pass. Absolute time,
+  is written; monitor completion and responsive ROM return pass. The kernel
+  runner does not restore prior DRAM contents. Absolute time,
   accuracy, alarms and retention remain unqualified. Evidence:
   `rtc-rc-readonly-20261018/physical/observation.json`.
   Separate finite source-selection and alarm applications pass twelve and

@@ -25,9 +25,11 @@ def expected_memory(epoch):
     return bytes(page+state)
 
 
-def decode(raw, nonce, smc_return):
-    result = cache.decode(raw, nonce, smc_return, pre_scheduler=True)
+def decode(raw, nonce, smc_return, first_task=False):
+    result = cache.decode(raw, nonce, smc_return, pre_scheduler=True, first_task=first_task)
     require(result['cached_entry_completed'], 'Every secondary must finish cached execution.')
+    observed_sctlr = 0x30d41805 if first_task else 0x30d01805
+    clean_lines = 9280 if first_task else 192
     binding = (result['epoch'], result['startup_deadline'])
     local = struct.unpack_from('<64Q', raw, 0xa00)
     require(local[:3] == (3, *binding) and local[3] == 26 and not local[4] and local[5] > 0 and
@@ -47,19 +49,20 @@ def decode(raw, nonce, smc_return):
     require(el1[:3] == (3, *binding) and el1[4:6] == tuple(result['el1_after']) and
             0x42000000 <= el1[3] < 0x421f0000 and not el1[3] & 15,
             'Primary EL1 entry inherited different preparation.')
-    require(el1[9:23] == (0x733, 4, 0x30d01805, 0x200803019, 0x421f4000, 0x44ff00, 0,
+    require(el1[9:23] == (0x733, 4, observed_sctlr, 0x200803019, 0x421f4000, 0x44ff00, 0,
             0x4124b000, 0, 24000000, 0x81000000, 0, 0x5e000733, smc_return) and
             el1[23] & 0x3ff == 0x3c5 and el1[29:] == (0, 8, 12) and
             el1[24:29] == el1[4:9], 'Primary EL1/SMC observation or restoration differs.')
     for core in range(8):
         require(struct.unpack_from('<8Q', raw, 0x3000+core*64) ==
-                (3, core, result['epoch'], 1, 256, 192, 255, 0),
+                (3, core, result['epoch'], 1, 256, clean_lines, 255, 0),
                 'Production pre-scheduler result or cache cleanup incomplete.')
-    require(raw[0x3200:] == expected_memory(result['epoch']),
-            'Physical shared memory differs from completed production startup.')
+    if not first_task:
+        require(raw[0x3200:] == expected_memory(result['epoch']),
+                'Physical shared memory differs from completed production startup.')
     result.update(primary_cached_entry_completed=True, primary_local_gic_restored=True,
                   production_pre_scheduler_completed=True, participants=8, atomic_increments=256,
-                  cache_lines_cleaned_per_core=192, shared_memory_published_to_poc=True)
+                  cache_lines_cleaned_per_core=clean_lines, shared_memory_published_to_poc=True)
     return result
 
 

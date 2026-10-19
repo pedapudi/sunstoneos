@@ -5,8 +5,9 @@ Actual FreeRTOS task construction and initial context restoration reach the idle
 task on every CPU. Each CPU records its task context, joins the completion barrier
 and cleans all 9,280 lines in the complete owned writable interval before return.
 Invalid task arguments and failed EL3 restoration retain the session. Evidence:
-`all-core-first-task-20261018/`. This profile is explicitly offline-only; host
-report validation, final root review and physical execution remain outstanding.
+`all-core-first-task-20261018/`. Nine host cases now pass, including actual runner return/retention behavior and
+rejection of incorrect task contexts, saved frames and owned-memory bounds.
+Final root review and physical execution remain outstanding; no task body runs.
 The builder patches the exact previously demonstrated ELF, including the EL0 WFE
 permission correction. It suppresses timer/SGI generation and intercepts the first
 task instruction, so it does not establish workload scheduling.
@@ -21,8 +22,9 @@ compiled-input comparisons reuse those results without repeating them. Evidence:
 `npu-supply-returning-20261018/integration.json` and
 `gpu-returning-integration-20261018/frozen/integration.json`.
 None has new physical execution evidence. The NPU finite inference adapter still
-needs shared retained-session and memory-cleanup integration; the GPU worker is
-preparing the corresponding device adapter. USB observation/return is the next
+needs shared retained-session and memory-cleanup integration; the GPU finite adapter is also integrated. Both device adapters stop their
+workers and park PMIC outside active requests before the final task critical
+section. Shared monitor, timer, memory and retained-session integration remains. USB observation/return is the next
 shared peripheral test candidate. Thermal and ADC retain configuration and leases;
 ADC additionally requires electrical admission for the fitted input dividers.
 Separate RTC source initialization and external-source alarm applications are
@@ -82,15 +84,19 @@ The second board last returned responsive on port `3-3` as `003:056`, identity
 was `0x401c`, status zero, prescaler `0x0f`, calibration configuration
 `0x7a000000` and oscillator control `0x983fb0f7`: normal RC mode with RC enabled.
 Two coherent reads 1,100,773 microseconds apart observed one second of calendar
-advancement. Outcome zero and the progression marker passed; restored RAM,
-monitor status zero and responsive ROM return also passed. No RTC register was
+advancement. Outcome zero, the progression marker, monitor status zero and
+responsive ROM return passed. The kernel runner did not restore prior DRAM
+contents; this result does not establish memory restoration. No RTC register was
 written. The runner exited and its claim closed as passed. Evidence:
 `rtc-rc-readonly-20261018/physical/observation.json`. No reconnect is needed.
 Read progression is established; accuracy, absolute time, alarms and retention
 remain open. The integrated source and alarm applications await physical admission.
 
 Second-board DDR continuity is cold126 → register capture127 → PMIC009 → RTC011
-→ RTC056. Refresh current056 launcher state before another native test; do not retrain DDR.
+→ RTC056. Current056 launcher/cache preparation and fourteen CCU reads pass
+under `usb-returning-20261018/warm-056/` and `fabric-056/`. USB selector zero
+and reset-held DMA0 pass under `entry-056/`; no DMA aperture was accessed.
+Do not retrain DDR. The bounded USB package awaits final root admission.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:

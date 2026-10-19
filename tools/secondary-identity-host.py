@@ -62,12 +62,13 @@ def initial_report(nonce):
     return primary.initial_report(nonce)+bytes(0x900)
 
 
-def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False):
+def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False):
+    pre_scheduler = pre_scheduler or first_task
     coherent = coherent or interrupts or pre_scheduler
     cached = cached or coherent
     local = local or cached
     report=(builder.REPORT[0],0x5100 if pre_scheduler else 0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else builder.REPORT
-    require(manifest.get('schema') == ('a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
+    require(manifest.get('schema') == ('a733-all-core-first-task-probe-v1' if first_task else 'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1') and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
             'Wrong secondary identity profile.')
     names = ('boot/a733/secondary-identity-probe.c','boot/a733/secondary-identity-probe.S',
@@ -76,7 +77,7 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
-    if pre_scheduler:names+=('boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
+    if pre_scheduler:names+=('boot/a733/all-core-first-task-probe.S' if first_task else 'boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
     elif coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
     require(manifest['sources'] == {n:digest(ROOT/n) for n in names}, 'Identity source changed.')
@@ -119,6 +120,16 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
     frozen['overlay.bin'] = bytes(overlay)
     payloads = []
     target = manifest['native_symbols']['a733_cpu_secondary_continue']
+    first_patches=[]
+    if first_task:
+        n=manifest['native_symbols']
+        first_patches=[
+            (n['a733_cached_enter_el1']+0xac,0xaa0203f9,0xb26e0059),
+            (n['a733_smp_primary_el1'],0xa9bd7bfd,builder.branch(n['a733_smp_primary_el1'],n['a733_smp_diagnostic_start'])),
+            (n['platform_tick_setup'],0xd538d088,0xd65f03c0),
+            (n['prvIdleTask'],0xa9be7bfd,builder.branch(n['prvIdleTask'],hooks['identity_first_task_el0'])),
+            (n['prvPassiveIdleTask'],0xd4000d21,builder.branch(n['prvPassiveIdleTask'],hooks['identity_first_task_el0'])),
+            (n['FreeRTOS_SWI_Handler'],0xa9bf07e0,builder.branch(n['FreeRTOS_SWI_Handler'],hooks['identity_first_task_svc']))]
     for item in base['payloads']:
         data = bytearray(frozen[item['name']])
         if item['address'] <= target < item['address']+len(data):
@@ -135,10 +146,16 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
                     replacement = builder.branch(address,hooks[hook])
                     patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
                     struct.pack_into('<I',data,offset,replacement)
+        for address,original,replacement in first_patches:
+            if item['address'] <= address < item['address']+len(data):
+                offset=address-item['address']
+                require(struct.unpack_from('<I',data,offset)[0]==original,'First-task displaced word differs.')
+                struct.pack_into('<I',data,offset,replacement)
+                patches.append({'address':address,'original':original,'replacement':replacement,'space':'native'})
         require(bytes(data) == (build/item['name']).read_bytes(), 'Native payload has an unreviewed change.')
         frozen[item['name']] = bytes(data)
         payloads.append(dict(item,sha256=hashlib.sha256(data).hexdigest()))
-    require(len(patches) == (4 if cached else 2) and manifest['patches'] == patches and manifest['payloads'] == payloads,
+    require(len(patches) == (10 if first_task else 4 if cached else 2) and manifest['patches'] == patches and manifest['payloads'] == payloads,
             'Patch or payload inventory differs.')
     return frozen, dram+[('identity-report',*report)]
 

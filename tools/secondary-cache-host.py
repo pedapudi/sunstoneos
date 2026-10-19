@@ -13,7 +13,9 @@ HOST_SOURCES=local.HOST_SOURCES+('tools/secondary-cache-host.py',)
 MODEL_SOURCES=('checks/secondary-cache-probe.py',)+local.MODEL_SOURCES
 
 
-def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False):
+def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False,first_task=False):
+    require(not first_task or pre_scheduler, "First task requires all-core report.")
+    observed_sctlr=0x30d41805 if first_task else 0x30d01805
     result=local.decode(raw,nonce,cached=True,coherent=coherent,interrupts=interrupts,pre_scheduler=pre_scheduler)
     require(not any(raw[0x1c00:0x2000]) and (pre_scheduler or
             not any(raw[0x2000:0x2100]) and not any(raw[0x2800:0x2900])),
@@ -38,7 +40,7 @@ def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=Fa
                 'Cached EL1 entry incomplete or has different prepared controls.')
         require(0x42006000+core*4096<=el1[3]<0x42006000+(core+1)*4096 and not el1[3]&15,
                 'Saved EL3 stack does not belong to the target.')
-        require(el1[9:23]==(0x733,4,0x30d01805,0x200803019,0x421f4000,0x44ff00,0,
+        require(el1[9:23]==(0x733,4,observed_sctlr,0x200803019,0x421f4000,0x44ff00,0,
                 0x41243000+(core+1)*32768,core,24000000,0x81000000|(core<<8),0,0x5e000733,smc_return) and
                 el1[23]&0x3ff==0x3c5 and el1[29:]==(0,8,12),
                 'EL1 cached observation or SMC return differs.')
