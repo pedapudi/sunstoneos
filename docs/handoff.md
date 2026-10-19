@@ -1,12 +1,31 @@
 # Current work
 
-Both boards have completed user-confirmed power removal and reconnection. USB
-is their only power source. The original board on port `3-1` is now `003:118`;
-the second on `3-3` is `003:117`. Each answered the A733 ROM identity request,
-and reconnect permissions remain present. The old retained runners and their
-coordinators have stopped. Both failed queue claims are closed and both queues
-resumed. Evidence: `usb-only-recovery-20261018/recovery.json`. Cold DDR
-initialization and current launch admission remain prerequisites for native execution.
+The first board is responsive on port `3-1` as `003:121`, identity
+`[7,2807,1097080,0,0]`. The user reports a 5 V / 3 A port. Cold DDR preparation
+and the returning boot-CPU cache diagnostic passed. The diagnostic adopted the
+production EL3 tables, restored the original controls, returned to ROM and
+restored saved DRAM. Evidence: `reconnect-20261018-120/` and
+`primary-cache-probe-20261018/physical-120/runtime/session.json`.
+Reuse that DDR lifetime; refresh warm launcher state before the next native test.
+Recovery must remove every connected power source.
+
+The second board is responsive on port `3-3` as `003:122`, identity
+`[7,2811,1097081,0,0]`. Its first NPU attempt on instance `119` produced no native
+USB frames; the sole refusal-report read timed out. NPU initialization and
+computation remain unobserved. The user removed its USB power and reconnected it.
+The old runner and coordinator stopped, the failed claim closed, and a new A733
+ROM identity response passed. No further user action is pending. Evidence:
+`npu-single-core-20261018/physical-candidate/runtime/session.json` and
+`second-board-recovery-122-20261018/recovery.json`.
+Fresh cold preparation is required before another native launch.
+
+The attempted NPU session used normalized fabric words and 200/600/400 MHz rates.
+The previous GPU session contained an NSI bit rejected by its USB provider;
+the corrected GPU candidate removes that bit and derives the MBUS rate from
+observed configuration. Four focused calls into the frozen GPU ELF pass under
+`gpu-usb-ordering-20261018/physical-candidate-119/fabric-admission-result.json`.
+This identifies an input defect; the physical failure stage remains unknown.
+The GPU candidate needs new board observations and ownership review after recovery.
 
 The preceding complete eight-core image and first single-core GPU image both
 produced no native USB result. Each sole refusal-report read timed out, and
@@ -26,8 +45,12 @@ outstanding. Root owns common startup and multicore diagnosis.
 The new boot-CPU cache diagnostic passes its instruction checks for EL3 cache
 adoption, exact restoration and retention on restoration failure. It reuses the
 accepted primary preparation prefix. Evidence:
-`primary-cache-probe-20261018/software.json`. Host-runner integration and physical
-execution remain outstanding.
+`primary-cache-probe-20261018/software.json`. The integrated host runner also
+passes six focused cases covering report capture, RAM restoration, wrong epoch,
+changed inputs and retained failures; evidence is under that directory's `host/`.
+Physical execution passed on the first board. This establishes CPU0 EL3 cache
+adoption and restoration before GIC initialization or secondary release; combined
+startup barriers, CPU0 cached EL1 participation and full scheduling remain unobserved.
 
 Host USB power capacity and voltage under load are unmeasured. The board manual
 recommends 5 V / 3 A; this is a supply rating, not measured consumption. See

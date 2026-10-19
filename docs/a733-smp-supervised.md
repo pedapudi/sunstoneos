@@ -1310,3 +1310,34 @@ Evidence: `smp-secure-pmr-20261018/full-image/runtime/`. Full scheduling remains
 unobserved; no fault location can be inferred from the missing report. The
 Secure priority correction and modeled scheduling success do not establish the
 cause of this physical failure.
+
+
+## Boot-CPU cache adoption and restoration pass physically
+
+The new diagnostic extends the accepted primary-preparation path with the actual
+production EL3 cache-enable helpers on CPU0. It stops before GIC initialization
+or secondary release, restores the changed controls and returns to ROM. Its stack
+and report use Secure Device memory; the observed instruction path makes no dirty
+Normal-memory stores while caching is enabled. This bounded restoration does not
+implement general OS cache shutdown.
+
+The instruction check executes the original preparation once and reuses that
+state for a restoration-readback failure. Normal adoption and exact restoration
+pass; the injected failure retains execution without reset. Six host cases cover
+the expanded report, RAM restoration, wrong startup epoch, changed reservation,
+transport failure and missing ROM return.
+
+Physical execution on the first board passed with the production EL3 cache tables.
+The report confirms exact SCTLR, TCR, TTBR, MAIR and SCR restoration. ROM returned
+as `003:121`, and saved DRAM restoration passed. Evidence:
+`primary-cache-probe-20261018/physical-120/runtime/session.json`.
+This result does not establish CPU0 cached EL1 execution, combined startup
+barriers or eight-core FreeRTOS scheduling.
+
+Sources are `boot/a733/primary-cache-probe.S`,
+`tools/prepare-primary-cache-probe.py`, `tools/primary-cache-host.py` and the existing
+`tools/run-native-startup-probe.py`. Checks are `checks/primary-cache-probe.py`
+and `checks/primary-cache-host.py`. Evidence resides under
+`~/.cache/sunstoneos/evidence/primary-cache-probe-20261018/`; the previously accepted
+primary preparation and frozen production ELF are referenced by hash. No native
+runtime image was rebuilt for this diagnostic.

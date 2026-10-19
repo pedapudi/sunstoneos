@@ -98,6 +98,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   restoration. ROM returns as `003:109` after saved DRAM restoration; evidence
   is under `primary-publication-probe-20261018/physical-108/`. This result ends
   before GIC configuration and secondary release.
+  CPU0 also passes production EL3 cache adoption and exact control restoration
+  under `primary-cache-probe-20261018/physical-120/`. ROM return and saved DRAM
+  restoration pass; CPU0 cached EL1 participation remains unobserved.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;

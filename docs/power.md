@@ -68,10 +68,12 @@ References are the [pinned board sources](sources.md): the bootloader's
 
 ## Host USB supply remains unqualified under load
 
-The user confirmed that USB is the only power source for both attached boards.
-Unplugging that cable therefore removes their external power. Both boards answered
-new ROM identity requests after the confirmed reconnection; the recovery evidence
-is `usb-only-recovery-20261018/recovery.json`.
+The second board remains powered only by host USB. The user reports that the
+first board is now connected to a 5 V / 3 A port, and its host data connection
+works. Its boot-CPU cache diagnostic returned successfully. The precise current
+supply arrangement and voltage under load remain unverified; recovery must
+remove every source powering that board. Connection evidence is under
+`first-board-independent-power-20261018/connection-5v3a.json`.
 
 The [board manual V1.0](https://drive.google.com/file/d/1R1MC9erKTztd87GvJ_UFE132x6KgPATe/view)
 lists a 5 V / 3 A supply and recommends a high-quality adapter and cable. Its
