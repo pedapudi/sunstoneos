@@ -733,7 +733,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor source
   difference adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor
   source/object identities remain authoritative without active GPU monitor or
-  structure changes. Optional [runtime input](gpu-compiled-programs.md#runtime-input-in-one-session)
+  structure changes.
+  The [workgroup-grid profile](gpu-compiled-programs.md#a-real-workgroup-grid)
+  now submits one direct dispatch over a bounded 1D or 2D grid of at most 31
+  workgroups and 992 logical elements. Trusted compiler-generated programs use
+  32-lane local shapes, workgroup IDs and counts, and reject padded lanes.
+  Transpose and horizontal-neighbor kernels pass compiler/reference and native
+  application checks, including two changing inputs, copied results and CLOSE;
+  GPU arithmetic and writes are modeled. Root verifies 215 compiled inputs,
+  85 objects, 178 sources and 50 artifacts under
+  `gpu-workgroup-grid-20261019/root-integration.json`. The sole current-source
+  exception at integration `dfedc52` is an unused board workload selector change;
+  frozen inputs and the original modeled image remain authoritative. Preserved
+  image equivalence, recorded in `root-reuse-frozen/manifest.json` under that
+  directory, supports reuse of accepted checks. Physical execution remains
+  unqualified.
+  Optional [runtime input](gpu-compiled-programs.md#runtime-input-in-one-session)
   now replaces copied same-shape input after acquired prior completion, with
   exact-sequence copied READ and healthy device CLOSE. Program/geometry/mappings
   stay fixed. Native service and linked owner/mailbox/parser/host checks pass
@@ -745,7 +760,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `dma-header-integration/root-integration.json`. Load-segment equivalence apart
   from build identity supports reuse of accepted checks; later shared-header
   changes do not invalidate this frozen candidate.
-  General dispatch geometry, shape/program replacement, graphics, concurrency,
+  Wider dispatch geometry, shape/program replacement, graphics, concurrency,
   physical computation and mimus acceleration remain required. The accepted
   fixed-workload returning profile is preserved separately.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
@@ -1028,13 +1043,26 @@ implementation is **planned**. Partial results apply only to the stated scope:
   the complete compiled model, private allocations and commands before startup
   and publication. Copied inputs, matching output completion and explicit result
   reaping pass focused emulator checks. The output bytes are modeled, so these
-  checks do not establish inference. Registration now accepts three reviewed
+  checks do not establish inference. Initial registration accepts three reviewed
   compiler artifacts with different tensor sizes, selected before scheduling
   and fixed for the context lifetime. The native application runs two successive
   jobs and publishes both completion identities and up to 400 result bytes.
   Two additional compiler/simulator cases match CPU references; focused native
   construction, result and failure checks pass with modeled device output under
   `npu-models-20261018/`. The software-validation image is not deployable.
+  The [two-stage NPU graph](npu-two-stage.md) is implemented as another fixed
+  catalogue selection. It consumes 64 UINT8 input bytes and produces eight output
+  bytes through two convolution stages, each fused with ReLU. Intermediate data
+  stays in internal SRAM; one completion covers the complete graph job. Independent
+  CPU/simulator references and native construction checks pass. The linked runtime
+  application handles two changing inputs, copied results, REAP and CLOSE with
+  service responses and NPU output modeled. Root verifies 186 compiled inputs and
+  74 objects under `npu-two-stage-20261019/root-integration.json` at integration
+  `7cddb66`; the sole source difference is a verified API comment, requiring no
+  rebuild. The frozen ELF is
+  `651e1c7688c82bfc028ecdab6bca23d2d6d8a2305f3dd2c282ec36d036c76f4c`.
+  Physical inference, SRAM confinement and interrupt delivery remain unqualified;
+  this graph does not run or replace unchanged mimus.
   Arbitrary model uploads, runtime switching, other operators and mimus
   acceleration remain outstanding. The [native memory session](npu-reserved.md)
   now reserves one linker-owned allocation for all six buffers and private

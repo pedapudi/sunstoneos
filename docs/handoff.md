@@ -271,6 +271,20 @@ Load-segment equivalence apart from build identity supports reuse of accepted
 checks. Later shared-header changes do not invalidate this frozen candidate.
 The fixed returning profiles remain separate.
 
+The [two-stage NPU graph](npu-two-stage.md) is implemented as another fixed
+catalogue selection. It consumes 64 UINT8 input bytes and produces eight output
+bytes through two convolution stages, each fused with ReLU. Intermediate data
+stays in internal SRAM; one completion covers the complete graph job. Independent
+CPU/simulator references and native construction checks pass. The linked runtime
+application handles two changing inputs, copied results, REAP and CLOSE with
+service responses and NPU output modeled. Root verifies 186 compiled inputs and
+74 objects under `npu-two-stage-20261019/root-integration.json` at integration
+`7cddb66`; the sole source difference is a verified API comment, requiring no
+rebuild. The frozen ELF is
+`651e1c7688c82bfc028ecdab6bca23d2d6d8a2305f3dd2c282ec36d036c76f4c`.
+Physical inference, SRAM confinement and interrupt delivery remain unqualified;
+this graph does not run or replace unchanged mimus.
+
 The corrected GPU returning composition is integrated. It publishes private and
 device data through Nonsecure EL1 mappings before SMC, then completes final stack
 cleanup before reset. Root source review and 25 selective modeled cases pass;
@@ -294,6 +308,20 @@ pass with device writes modeled; focused review is closed. Evidence is under
 and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor difference
 adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor source and object
 remain authoritative; no active GPU monitor or structure change is present.
+The [workgroup-grid profile](gpu-compiled-programs.md#a-real-workgroup-grid)
+now submits one direct dispatch over a bounded 1D or 2D grid of at most 31
+workgroups and 992 logical elements. Trusted compiler-generated programs use
+32-lane local shapes, workgroup IDs and counts, and reject padded lanes.
+Transpose and horizontal-neighbor kernels pass compiler/reference and native
+application checks, including two changing inputs, copied results and CLOSE;
+GPU arithmetic and writes are modeled. Root verifies 215 compiled inputs,
+85 objects, 178 sources and 50 artifacts under
+`gpu-workgroup-grid-20261019/root-integration.json`. The sole current-source
+exception at integration `dfedc52` is an unused board workload selector change;
+frozen inputs and the original modeled image remain authoritative. Preserved
+image equivalence, recorded in `root-reuse-frozen/manifest.json` under that
+directory, supports reuse of accepted checks. Physical execution remains
+unqualified.
 Optional GPU runtime input now copies same-shape data into the existing input
 allocation after acquired preceding completion. Program, geometry and mappings
 remain fixed. Exact-sequence READ returns copied output; healthy CLOSE retires
@@ -321,7 +349,7 @@ verifying all 88 objects, 218 frozen inputs and eight unchanged linked return
 functions. Physical admission remains false. The historical two-job image
 contains the previous NEW-only check and is superseded for repeated submission;
 its publication and host evidence retain their narrower scope. Physical
-computation remains unqualified. General dispatch geometry, shape/program
+computation remains unqualified. Wider dispatch geometry, shape/program
 replacement, graphics and concurrency remain required.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document the Nonsecure publication requirement. Root retains
@@ -397,11 +425,12 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue GPU grid dispatch and repeated Bluetooth capture implementation.
-   Prepare the NPU multioperator proposal and research the USB SuperSpeed source
-   contract; these extensions remain in progress. Bounded H.264 IDR/P code,
-   GPU/NPU live input and USB hub modes for one device or combined HID/storage
-   are integrated offline.
+1. Continue GPU triangle drawing, USB SuperSpeed storage, repeated Bluetooth
+   capture and VGA H.264 stream implementation. Assess the NPU execution paths
+   needed by unchanged mimus operators. Bounded GPU workgroup grids, the fixed two-stage
+   NPU graph, GPU/NPU live input and USB hub modes for one device or combined
+   HID/storage are integrated offline. The H.264 native-read source correction
+   still needs a newly audited full image.
    Preserve each image's complete frozen inputs and accepted audit scope.
    I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
    with physical RX admission blocked by the documented completion/reuse ordering
@@ -410,7 +439,7 @@ historical evidence; they do not authorize a new session.
    their complete frozen source closures, including SD and UART images that
    predate the latest shared USB layout. Preserve the accepted fixed-workload GPU
    returning profile; its passed root delta review supplies no physical admission.
-   General GPU geometry, graphics and concurrency remain required.
+   Wider GPU geometry, graphics and concurrency remain required.
    CPU/startup changes remain root-owned. Preserve both cards.
 2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
    checks when their relevant inputs match. Keep shared drivers and startup
