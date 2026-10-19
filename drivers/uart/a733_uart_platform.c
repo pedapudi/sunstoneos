@@ -135,6 +135,7 @@ static int uart_address(struct a733_uart_platform *s,uintptr_t a,unsigned writin
     switch (a-s->uart.plan.base) {
     case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:return 1;
     case 0x14:case 0x18:case 0x7c:return !writing;
+    case 0x88:case 0x8c:return s->route.port==2;
     default:return 0;
     }
 }

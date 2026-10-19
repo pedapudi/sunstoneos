@@ -46,6 +46,7 @@ struct a733_uart {
     uint64_t deadline, last_now;
     enum a733_uart_state state;
     uint32_t ier, errors;
+    unsigned dma_owned, dma_requests;
 };
 /* Errors retain LSR bits 1..4 (overrun, parity, framing, break) and bit 7
  * (an error remains in RX FIFO). Per-byte status accompanies received data. */
@@ -89,5 +90,17 @@ int a733_uart_interrupt(struct a733_uart *, struct a733_uart_byte *, size_t,
  * DRAINED permits the external owner to reset/release; it is not restoration
  * of inherited console state. GIC acknowledgement remains external. */
 int a733_uart_drain(struct a733_uart *, uint64_t deadline);
+/* UART2 finite DMA lease, same exclusive owner as FIFO/IRQ calls. prepare
+ * requires both DMA channels stopped; requests starts only after both active.
+ * FIFO/IRQ service refuses while leased. status samples aggregate LSR only,
+ * never RBR: DMA cannot preserve per-byte error flags. stop disables/readbacks
+ * requests but preserves the lease. release requires externally proved DMA
+ * channel quiescence and true TEMT/RX-empty/USR-idle. All uncertainty retains.
+ * Return READY, FAULT or -1 for invalid calls; release returns 0 while draining.
+ * The caller retains both DMA buffers until release, copy and matched REAP. */
+int a733_uart_dma_prepare(struct a733_uart *,uint64_t deadline);
+int a733_uart_dma_requests(struct a733_uart *,unsigned enabled,uint64_t deadline);
+int a733_uart_dma_status(struct a733_uart *,uint64_t deadline);
+int a733_uart_dma_release(struct a733_uart *,unsigned channels_quiet,uint64_t deadline);
 
 #endif

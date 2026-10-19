@@ -11,8 +11,8 @@
 static unsigned publications,ok=1;
 static const struct uart_session *expected;
 int a733_cpu_coherence_publish(uint64_t a,uint64_t n,uint64_t d)
-{assert(a&&n==840&&d==24000100);assert(!memcmp((void *)(uintptr_t)a,expected,832));
- const unsigned *receipt=(void *)(uintptr_t)(a+832);assert(receipt[0]==1&&receipt[1]==1);++publications;return ok;}
+{assert(a&&n==sizeof(struct uart_session)+8&&d==24000100);assert(!memcmp((void *)(uintptr_t)a,expected,sizeof(struct uart_session)));
+ const unsigned *receipt=(void *)(uintptr_t)(a+sizeof(struct uart_session));assert(receipt[0]==1&&receipt[1]==1);++publications;return ok;}
 int main(int argc,char **argv)
 {
  assert(argc==2);struct uart_session s;FILE *f=fopen(argv[1],"rb");assert(f&&fread(&s,1,sizeof(s),f)==sizeof(s)&&fgetc(f)==EOF&&!fclose(f));
@@ -30,7 +30,7 @@ int main(int argc,char **argv)
   assert(!uart_session_prepare(&c)&&!uart_admitted_session());assert(publications==(test==2));
   memcpy(mapped,&s,sizeof(s));ok=1;assert(!uart_session_prepare(&c));_exit(0);
  }int status;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));}
- assert(uart_session_prepare(&c)&&publications==1);memset(mapped,0,832);
+ assert(uart_session_prepare(&c)&&publications==1);memset(mapped,0,sizeof(s));
  assert(!memcmp(uart_admitted_session(),&s,sizeof(s))&&!uart_session_prepare(&c));
  puts("PASS actual complete session/contract validators, full digest refusals, retained copy and receipt publication");
 }

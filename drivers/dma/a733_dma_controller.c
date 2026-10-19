@@ -78,7 +78,10 @@ static int fifo_conflict(const struct a733_dma_transfer *a, const struct a733_dm
             for (size_t j = 0; j < b->count; ++j) {
                 const struct a733_dma_endpoint *other[] = {&b->segments[j].source, &b->segments[j].destination};
                 for (unsigned o = 0; o < 2; ++o)
-                    if (other[o]->request && overlaps(ends[e]->address, ends[e]->width,
+                    /* Read and write FIFOs may share one MMIO address (UART RBR/
+                     * THR). Each direction still needs independent native port
+                     * admission; two readers or two writers remain exclusive. */
+                    if (e == o && other[o]->request && overlaps(ends[e]->address, ends[e]->width,
                                                      other[o]->address, other[o]->width)) return 1;
             }
             if (fifo_memory_conflict(ends[e], b)) return 1;

@@ -18,7 +18,7 @@ struct uart_application {
  atomic_uint result,failed,pending,irq_fault,notifications;
  unsigned masked,armed,tx_irqs,rx_irqs,other_irqs;
  unsigned stage;size_t sent,received;uint64_t deadline;
- uint8_t tx[32],rx[32],status[32],payload[144],digest[32],session_digest[32];
+ unsigned payload_bytes;uint8_t tx[32],rx[32],status[32],payload[144],digest[32],session_digest[32];
 };
 static struct uart_application uart;
 static uint64_t clock_us;

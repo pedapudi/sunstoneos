@@ -37,7 +37,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==1:
             output=evidence/'output.bin';supervisor.durable_frame(output,frame[128:])
             require(now()<deadline,'UART output became durable after capture deadline.')
-            record['copied_uart_output']={'path':output.name,'bytes':144,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_uart_output']={'path':output.name,'bytes':len(frame)-128,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
         record['uart_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -52,7 +52,28 @@ def capture_device(device,same,deadline,session,evidence,record,save):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete UART request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'UART capture deadline expired after write.')
-        return bytes(device.read(0x81,272,timeout=min(timeout,remaining)))
+        # Preserve each bounded transport fragment before requesting another.
+        # Result storage remains private and immutable until the native sender
+        # receives all completions; no DMA buffer crosses this boundary.
+        frame=bytearray();expected=None
+        sequence=len(record.get('uart_frames',[]))+1
+        for fragment in range(36):
+            same();remaining=int((deadline-time.monotonic())*1000)
+            require(remaining>0,'UART fragment deadline expired.')
+            limit=512 if expected is None else min(512,expected-len(frame))
+            part=bytes(device.read(0x81,limit,timeout=min(timeout,remaining)))
+            path=evidence/f'uart-{sequence:03}-fragment-{fragment:02}.bin'
+            supervisor.durable_frame(path,part)
+            record.setdefault('uart_fragments',[]).append({'path':path.name,'sha256':hashlib.sha256(part).hexdigest()});save()
+            require(part and len(part)<=limit and len(frame)+len(part)<=2272,'Invalid UART fragment extent.')
+            frame.extend(part)
+            if expected is None and len(frame)>=128:
+                count=struct.unpack_from('<I',frame,12)[0]
+                require(count<=2144,'UART payload exceeds copied bound.');expected=128+count
+            if expected is not None:
+                require(len(frame)<=expected,'UART response exceeds declared extent.')
+                if len(frame)==expected:return bytes(frame)
+        raise ValueError('UART response exhausted bounded fragment budget.')
     return capture(exchange,session,evidence,record,save,deadline)
 
 
@@ -96,7 +117,8 @@ def software_sources():
 
 def validate_software(value,prepared):
     require(value.get('schema')=='a733-uart-supervised-software-v1' and value.get('physical_access') is False and
-            all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','native_composition','irq_service')),
+            all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','native_composition',
+                'dma_service' if preparation.dma_mode(prepared['_frozen']['session.bin']) else 'irq_service')),
             'UART software evidence is incomplete.')
     for key,name in [('image','image.elf'),('launcher','launch.bin')]:
         _,data=reference_bytes(value[key])

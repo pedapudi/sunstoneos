@@ -2,10 +2,14 @@
 
 The native UART controller implements bounded configuration, FIFO receive and
 transmit, automatic RTS/CTS flow control, line-error reporting and interrupt
-service. Host checks and an AArch64 compile pass. Physical serial operation,
+service and a finite UART2 DMA lease. Host checks and an AArch64 compile pass. Physical serial operation,
 Bluetooth HCI transport and platform resource binding remain unqualified on hardware.
 The [platform binding](uart-platform.md) implements real clock/pin ownership,
 local gate/reset control and a native adapter for polling or deferred IRQ service.
+The [finite DMA application](uart-application.md#finite-dma-transfers) uses DMA0
+request 16 with bounded caller inputs up to 1024 bytes. Software checks execute
+the actual driver, native MMIO policy, DMA service/controller and copied result.
+Physical UART DMA remains unqualified.
 This document is for driver and platform developers.
 
 ## Controller profiles follow the manual

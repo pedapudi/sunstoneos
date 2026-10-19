@@ -133,3 +133,65 @@ CPU at configured priority, qualified inherited startup and a reviewed
 independent recovery procedure.
 These conditions remain accessory- and board-dependent; no launch-admitted
 physical bundle is claimed.
+
+## Finite DMA transfers
+
+The optional `SUNSTONE_UART_DMA=ON` profile exchanges caller-supplied 1–1024-byte
+inputs through UART2 and the existing DMA0 service. A passive PB0-to-PB1 wire is
+required for the copied echo comparison. The default IRQ application retains its
+832-byte session and version-2 observation format. DMA uses a 1952-byte session
+and version-3 observations; neither format admits the other profile.
+
+The DMA session contains the existing 800-byte board/UART prefix, a zero-padded
+1024-byte input and a 128-byte pointer-free DMA authority record. The record
+binds the shared fabric configuration, complete DMA0 ownership, service channels
+0 and 1, startup timeout and independent evidence. All fields use explicit
+little-endian widths. `apps/uart/dma-session.py` copies an existing board/UART
+template and caller input; `prepare.py` requires image-bound authority for the
+exact configuration and input. Producing these records establishes no physical
+prerequisites. The authenticated session is copied before provider construction.
+
+One UART task owns both the port and the DMA client slot. The existing privileged
+DMA worker owns DMA registers and cache operations. Four permanently reserved
+pages hold RX/TX descriptors and RX/TX data. Each descriptor transfers the logical
+input length with byte-wide accesses and single-access bursts. The native FIFO
+policy admits only UART2 address `0x02502000`, request 16 and the appropriate read
+or write direction. The buffers and every callback remain private for the
+retained board session; no USB response exposes their addresses.
+
+The task disables UART DMA requests, selects mode-1 FIFO handshaking and starts
+RX channel 0 before TX channel 1. It enables requests only after both exact jobs
+report active. Completion requires both DMA queue-end results, controller stop
+and RX cache invalidation. The task then disables requests with readback and
+waits for TX FIFO and shifter empty, RX FIFO empty and UART idle. It copies and
+compares the input-length echo while both service reservations remain held.
+Only then does it REAP and CLOSE both channels and perform the existing UART
+reset, gate removal, pin restoration and clock release. The DMA0 parent clock
+lease and four-page allocation remain reserved for the board lifetime.
+
+DMA consumes RBR without a corresponding LSR read for every byte. This profile
+reports aggregate observed line errors and rejects any observed overrun, parity,
+framing, break or FIFO error. It cannot claim per-byte error coverage. A DMA
+queue-end result alone establishes neither wire completion nor safe UART reset.
+Known-live failures gate requests and attempt bounded channel cancellation and
+stop before retaining shared clock state. Authority loss or an incomplete stop
+retains uncertain hardware and all allocations; it never permits reuse.
+
+A successful payload contains 96 metadata bytes followed by the exact TX and RX
+spans. The complete copied USB frame is `224 + 2*N` bytes, at most 2272 bytes.
+Metadata includes both job tickets, completion outcomes, released-channel mask,
+request-disable and drain predicates. Reserved bytes are zero. Version, session
+identity, declared extent and payload digest bind every response. Native storage
+remains immutable through USB completion; host capture preserves each fragment
+before requesting another and validates the assembled frame before publication.
+
+The A733 manual's DMA request table assigns UART2 RX and TX request 16. Sections
+18.10.7.1–2 describe mode-1 handshaking, HSK, FIFO and HALT setup. The pinned
+Linux UART DMA adapter configures byte-wide, single-access RX/TX transfers and
+separates DMA TX consumption from UART completion. Its cyclic RX policy is not
+used by this finite application. The exact source is pinned as
+`a733-sunxi-uart-ng-dma-c` in `sources.lock.json`.
+
+Physical UART DMA, external wiring, DMA visibility and sustained multicore
+scheduling remain unqualified. Offline instruction checks model device, cache,
+RTOS and provider effects; they do not establish those physical conditions.

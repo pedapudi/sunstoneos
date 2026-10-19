@@ -58,7 +58,13 @@ int uart_construct(void)
  atomic_init(&uart.pending,0);atomic_init(&uart.irq_fault,0);atomic_init(&uart.notifications,0);
  uart.irq=(struct gicv3_spi){0x03400000,36};uart.masked=1;uart.deadline=start+uart.session.operation_timeout_us;
  uart.config=(struct a733_uart_platform_config){.owner=uart.session.owner,.handoff=uart.session.authority,
- .startup_deadline_us=uart.deadline,.route=A733_UART2_PB,.deferred_irq=1,.format={2,8,2,0,0,24000000,115200,2000}};
+ .startup_deadline_us=uart.deadline,.route=A733_UART2_PB,.deferred_irq=
+#ifdef SUNSTONE_UART_DMA
+ 0,
+#else
+ 1,
+#endif
+.format={2,8,2,0,0,24000000,115200,2000}};
  for(unsigned i=0;i<2;++i){
   uart.config.expected[i]=(struct a733_pin_config){uart.session.expected[i][0],uart.session.expected[i][1],uart.session.expected[i][2]};
   uart.config.desired[i]=(struct a733_pin_config){uart.session.desired[i][0],uart.session.desired[i][1],uart.session.desired[i][2]};}
@@ -66,6 +72,11 @@ int uart_construct(void)
  memcpy(uart.tx,uart.session.tx,sizeof(uart.tx));
  storage_digest_bytes(&uart.session,sizeof(uart.session),uart.session_digest);
  uart.operations=(struct a733_uart_platform_ops){now,current,authorize,enter,leave,retain,read_register,write_register};
- return a733_uart_platform_init(&uart.platform,&uart.config,&uart.operations,&uart,
- &providers.shared.clocks,&providers.shared.pins);
+ if(!a733_uart_platform_init(&uart.platform,&uart.config,&uart.operations,&uart,
+ &providers.shared.clocks,&providers.shared.pins))return 0;
+#ifdef SUNSTONE_UART_DMA
+ return uart_dma_construct();
+#else
+ return 1;
+#endif
 }

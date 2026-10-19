@@ -24,10 +24,15 @@ FACTS={
  'clocks':['stable_sysclk24m_ref_osc_apb_uart','uart2_gate_off_reset_asserted','no_autonomous_clock_reset_writers'],
  'supervision':['independent_watchdog_recovery_reviewed','whole_board_power_removal','no_reuse','one_attempt']}
 
+def dma_mode(raw):return len(raw)==1952
+
+def execution_profile(raw):return 'uart-dma-supervised-v2' if dma_mode(raw) else 'uart-supervised-v1'
+
 def session_check(raw):
-    require(len(raw)==832,'UART session must be832bytes.')
+    require(len(raw) in (832,1952),'UART session must be832 or1952bytes.')
+    dma=dma_mode(raw);maximum=1024 if dma else 32;end=800+maximum
     require(board.session_check(raw[:592])==2,'UART requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373355414131,1,832),'Invalid UART session.')
+    require(struct.unpack_from('<3Q',raw,592)==(0x4153373355414131,2 if dma else 1,len(raw)),'Invalid UART session.')
     owner,authority,timeout=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456) and
         250000<=timeout<=10000000,'Invalid UART ownership or operation bound.')
@@ -39,15 +44,24 @@ def session_check(raw):
         require(function==2 and pull<=2 and drive<=3,'Invalid UART2 PB configuration.')
     require(raw[774:780]==bytes(6) and raw[786:792]==bytes(6),'Unused UART pins must be zero.')
     tx,rx=struct.unpack_from('<2I',raw,792)
-    require(1<=tx<=32 and rx==tx and raw[800+tx:832]==bytes(32-tx),'Invalid bounded UART request.')
+    require(1<=tx<=maximum and rx==tx and raw[800+tx:end]==bytes(maximum-tx),'Invalid bounded UART request.')
+    if dma:
+        fabric_rates=struct.unpack_from('<6I',raw,1824)
+        require(fabric_rates==struct.unpack_from('<6I',raw,488),'DMA fabric differs from common board authority.')
+        owner2,handoff,controller,evidence=struct.unpack_from('<4Q',raw,1872)
+        established,owned,service,timeout2=struct.unpack_from('<IHHQ',raw,1904)
+        require(owner2 and owner2 not in (owner,*struct.unpack_from('<2Q',raw,456)) and handoff and evidence==handoff and
+            controller==0x04601000 and established==0x5f and (owned,service)==(0xffff,3) and
+            250000<=timeout2<=timeout and any(raw[1920:1952]),'Invalid DMA ownership/bound.')
+        require(struct.unpack_from('<I',raw,1868)[0]<=1,'Invalid DMA cold/adopt profile.')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,832)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,len(raw))
     return request,bytes(contract)
 
-def build_launcher(out,clang,lld):
+def build_launcher(out,clang,lld,dma=False):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
     text=text.replace('0x4153373353554c33','0x4153373355414c31').replace('REQUEST[1]==3','REQUEST[1]==2').replace('CONTRACT->version==3','CONTRACT->version==2')
@@ -56,6 +70,7 @@ def build_launcher(out,clang,lld):
     (out/'uart-launch-base.c').write_text(text)
     for name,path in [('launch.c',ROOT/'apps/uart/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('uart_session.h',ROOT/'apps/uart/uart_session.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h')]:shutil.copy2(path,out/name)
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
+    if dma:flags+=['-DSUNSTONE_UART_DMA=1']
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
     for command in commands:
@@ -82,6 +97,19 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             tx,rx=struct.unpack_from('<2I',raw,792)
             require(fact.get('request_hex')==raw[800:800+tx].hex() and fact.get('response_bytes')==rx,'Exact loopback request authority differs.')
         if key=='electrical':require(isinstance(fact.get('circuit_description'),str) and fact['circuit_description'].strip(),'Passive loopback circuit authority absent.')
+    if dma_mode(raw):
+        item=record['dma'];path=Path(item['path']);require(path.is_absolute(),'DMA evidence path must be absolute.')
+        if str(path) not in cache:
+            require(not frozen,'Missing frozen DMA evidence.');cache[str(path)]=path.read_bytes()
+        data=cache[str(path)];identity=hashlib.sha256(data)
+        require(identity.digest()==raw[1920:1952] and identity.hexdigest()==item['sha256'],'DMA authority differs.')
+        fact=json.loads(data)
+        require(fact.get('schema')=='a733-uart-dma-authority-v1' and fact.get('identity')==record['identity'] and
+            fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True and
+            fact.get('configuration_hex')==raw[1824:1920].hex(),'DMA authority is not bound to exact image/configuration.')
+        require(all(fact.get(k) is True for k in ('cpu_dma0_users_stopped','remote_mcu_users_stopped',
+            'other_fifo_producers_stopped','prior_bus_writes_drained','irq143_owned_masked_inactive',
+            'manual_power_removal_retains_all_dma_resources','four_private_dma_pages_exclusive')),'DMA physical prerequisite absent.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
@@ -89,7 +117,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-uart' and mf.get('execution_profile')=='uart-supervised-v1' and mf.get('final_elf')==ih,'Tested UART image manifest required.')
+    require(mf.get('target')=='sunstone-a733-uart' and mf.get('execution_profile')==execution_profile(raw) and mf.get('final_elf')==ih,'Tested UART image manifest required.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
@@ -98,7 +126,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
     raw[48:80]=identity
-    build_launcher(out,clang,lld)
+    build_launcher(out,clang,lld,dma_mode(raw))
     uploads=[]
     for i,segment in enumerate(segments):
         if segment['data']:
@@ -119,7 +147,7 @@ def validate_bundle(bundle):
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'UART bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'UART image changed.')
     manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-uart' and manifest.get('execution_profile')=='uart-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'UART image manifest differs.')
+    require(manifest.get('target')=='sunstone-a733-uart' and manifest.get('execution_profile')==execution_profile((out/'session.bin').read_bytes()) and manifest.get('final_elf')==p['image_sha256'],'UART image manifest differs.')
     sizes={name:(out/name).stat().st_size for name in p['files']}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'UART protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'UART initial report backing changed.')

@@ -1302,6 +1302,12 @@
     "sha256": "29237c6c3497c6f1dfd7b850d7b8596030e1d7d99a728cff79436ec1fb084fda",
     "git_blob": "23df5642543b19ea1d721a0124ba89d7a93f9a3e"
   },
+  "a733-sunxi-uart-ng-dma-c": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng-dma.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "5fe652a0a4c8e08e3f27310e6b09504ee2ce281c56d3de0886de2f24e04c6f57",
+    "archive": "uart/sunxi-uart-ng-dma.c"
+  },
   "a733-sunxi-uart-ng-h": {
     "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng.h",

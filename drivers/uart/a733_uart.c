@@ -151,7 +151,7 @@ static int service(struct a733_uart *u, struct a733_uart_byte *rx, size_t rn,
     if (!u || !budget || budget > 256 || !deadline ||
         !buffers_ok(u, rx, rn, tx, tn, r)) return -1;
     if (u->state == A733_UART_FAULT) return u->state;
-    if (u->state != A733_UART_READY) return -1;
+    if (u->state != A733_UART_READY || u->dma_owned) return -1;
     *r = (struct a733_uart_result){0}; r->cause = 1;
     u->deadline = deadline;
     if (irq) {
@@ -204,7 +204,7 @@ int a733_uart_tx_irq(struct a733_uart *u,unsigned enabled,uint64_t deadline)
 {
     if (!u || enabled>1 || !deadline) return -1;
     if (u->state==A733_UART_FAULT) return u->state;
-    if (u->state!=A733_UART_READY) return -1;
+    if (u->state!=A733_UART_READY || u->dma_owned) return -1;
     u->deadline=deadline;
     uint32_t ier=(u->ier&~2u)|(enabled?2u:0u);
     if (!write_reg(u,IER,ier)) return u->state;
@@ -218,9 +218,61 @@ int a733_uart_drain(struct a733_uart *u, uint64_t deadline)
 {
     if (!u || !deadline) return -1;
     if (u->state == A733_UART_FAULT) return u->state;
-    if (u->state != A733_UART_READY) return -1;
+    if (u->state != A733_UART_READY || u->dma_owned) return -1;
     u->deadline = deadline; u->state = A733_UART_DRAINING;
     if (!write_reg(u, IER, 0)) return u->state;
     u->ier = 0;
     return u->state;
+}
+
+/* A733 manual 18.10.7: mode1, byte-wide handshake, both DMA requests gated.
+ * FCR is write-only (the same read address is IIR), so do not read it back. */
+int a733_uart_dma_prepare(struct a733_uart *u,uint64_t deadline)
+{
+    uint32_t v;
+    if(!u || !deadline || u->plan.base!=0x02502000 ||
+       u->state!=A733_UART_READY || u->dma_owned)return -1;
+    u->deadline=deadline;u->dma_owned=1;
+    if(!write_reg(u,0x8c,0) || !read_reg(u,0x8c,&v))return u->state;
+    if(v){fault(u);return u->state;}
+    if(!write_reg(u,IER,0) || !write_reg(u,0x88,0xe5) ||
+       !write_reg(u,FCR,9) || !write_reg(u,HALT,0xc2))return u->state;
+    u->ier=0;u->dma_requests=0;
+    if(!read_reg(u,0x88,&v))return u->state;
+    if(v!=0xe5){fault(u);return u->state;}
+    if(!read_reg(u,HALT,&v))return u->state;
+    if(v!=0xc2)fault(u);
+    return u->state;
+}
+int a733_uart_dma_requests(struct a733_uart *u,unsigned enabled,uint64_t deadline)
+{
+    uint32_t v;
+    if(!u || !deadline || enabled>1 || !u->dma_owned || u->state!=A733_UART_READY)return -1;
+    u->deadline=deadline;
+    if(!write_reg(u,0x8c,enabled?3:0) || !read_reg(u,0x8c,&v))return u->state;
+    if(v!=(enabled?3u:0u)){fault(u);return u->state;}
+    u->dma_requests=enabled;return u->state;
+}
+int a733_uart_dma_status(struct a733_uart *u,uint64_t deadline)
+{
+    uint32_t v;
+    if(!u || !deadline || !u->dma_owned || u->state!=A733_UART_READY)return -1;
+    u->deadline=deadline;
+    if(read_reg(u,LSR,&v))u->errors|=v&ERRORS;
+    return u->state;
+}
+int a733_uart_dma_release(struct a733_uart *u,unsigned quiet,uint64_t deadline)
+{
+    uint32_t lsr,v;
+    if(!u || !deadline || quiet!=1 || !u->dma_owned || u->dma_requests ||
+       u->state!=A733_UART_READY)return -1;
+    u->deadline=deadline;
+    if(!read_reg(u,0x8c,&v))return u->state;
+    if(v){fault(u);return u->state;}
+    if(!read_reg(u,LSR,&lsr))return u->state;
+    u->errors|=lsr&ERRORS;
+    if(!read_reg(u,USR,&v))return u->state;
+    if((lsr&0x41)!=0x40 || (v&9) || !(v&4))return 0;
+    /* Keep handshake registers until reset: requests remain disabled. */
+    u->dma_owned=0;return u->state;
 }

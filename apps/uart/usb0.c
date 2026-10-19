@@ -59,15 +59,15 @@ static void uart_exchange(void)
     uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
     unsigned result=atomic_load_explicit(&uart.result,memory_order_acquire);
     if(result==1&&!uart_output_ready())result=2;
-    put32(uart_response,0x31545255);put32(uart_response+4,2);put32(uart_response+8,result);
-    put32(uart_response+12,result==1?UART_OUTPUT_BYTES:0);
+    put32(uart_response,0x31545255);put32(uart_response+4,UART_WIRE_VERSION);put32(uart_response+8,result);
+    put32(uart_response+12,result==1?uart.payload_bytes:0);
     put32(uart_response+16,(uint32_t)board.session.epoch);put32(uart_response+20,(uint32_t)(board.session.epoch>>32));
     put32(uart_response+24,(uint32_t)board.session.generation);put32(uart_response+28,(uint32_t)(board.session.generation>>32));
     memcpy(uart_response+32,uart.session_digest,32);if(result==1)memcpy(uart_response+64,uart.digest,32);else memset(uart_response+64,0,32);
-    if(result==1){memset(uart_response+96,0,32);memcpy(uart_response+128,uart.payload,UART_OUTPUT_BYTES);}
+    if(result==1){memset(uart_response+96,0,32);memcpy(uart_response+128,uart.payload,uart.payload_bytes);}
     else memset(uart_response+96,0,32);
     if(result==1&&!uart_output_ready()){result=2;put32(uart_response+8,2);put32(uart_response+12,0);memset(uart_response+64,0,64);}
-    uart_response_sent=uart_response_transferred=0;uart_response_bytes=result==1?sizeof(uart_response):128;
+    uart_response_sent=uart_response_transferred=0;uart_response_bytes=result==1?128+uart.payload_bytes:128;
 }
 void board_usb0_task(void *unused)
 {

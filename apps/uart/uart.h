@@ -4,6 +4,9 @@
 #include "../board/application.h"
 #include "a733_uart_platform_native.h"
 #include "gicv3_spi.h"
+#ifdef SUNSTONE_UART_DMA
+#include "dma.h"
+#endif
 struct uart_application {
  struct uart_session session;
  struct a733_uart_platform platform;
@@ -17,7 +20,8 @@ struct uart_application {
  unsigned stage;
  size_t sent,received;
  uint64_t deadline;
- uint8_t tx[32],rx[32],status[32],payload[UART_OUTPUT_BYTES],digest[32],session_digest[32];
+ unsigned payload_bytes;
+ uint8_t tx[UART_TRANSFER_MAX],rx[UART_TRANSFER_MAX],status[32],payload[UART_OUTPUT_BYTES],digest[32],session_digest[32];
 };
 extern struct uart_application uart;
 void uart_application_irq(void);

@@ -1,3 +1,4 @@
+option(SUNSTONE_UART_DMA "Finite UART2 byte DMA instead of IRQ FIFO" OFF)
 if(SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
 endif()
@@ -31,6 +32,16 @@ list(APPEND uart_sources "${uart_build}/boot.c" "${uart_build}/platform.c"
 foreach(source IN ITEMS apps/uart/main.c apps/uart/native.c apps/uart/irq.c apps/uart/run.c apps/uart/usb0.c apps/uart/admission.c apps/uart/snapshot.c)
  list(APPEND uart_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
+if(SUNSTONE_UART_DMA)
+ foreach(source IN ITEMS apps/uart/dma.c platform/a733/dma_startup.c platform/a733/dma_native.c
+ drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
+ drivers/dma/a733_dma_platform.c drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c
+ drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c
+ drivers/audio/a733_i2s.c drivers/audio/a733_i2s_stream.c)
+  list(APPEND uart_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
+ endforeach()
+endif()
+list(REMOVE_DUPLICATES uart_sources)
 add_executable(sunstone-a733-uart EXCLUDE_FROM_ALL ${uart_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
 # The inherited board source list contains real radio dependencies. Preserve its
 # normal compile/link properties; garbage collection removes inactive services.
@@ -44,6 +55,9 @@ target_include_directories(sunstone-a733-uart BEFORE PRIVATE "${SUNSTONE_SOURCE_
 target_include_directories(sunstone-a733-uart PRIVATE ${uart_includes})
 target_compile_definitions(sunstone-a733-uart PRIVATE ${uart_definitions}
  SUNSTONE_BOARD_APPLICATION=1 A733_SMP_CONTRACT_MAGIC=0x4153373355414331ULL A733_SMP_RESULT_MAGIC=0x4153373355415231ULL)
+if(SUNSTONE_UART_DMA)
+ target_compile_definitions(sunstone-a733-uart PRIVATE SUNSTONE_UART_DMA=1)
+endif()
 if(uart_links)
  target_link_libraries(sunstone-a733-uart PRIVATE ${uart_links})
 endif()
@@ -55,7 +69,11 @@ set(uart_inputs ${uart_sources} ${uart_headers} ${board_inputs}
  "${SUNSTONE_SOURCE_ROOT}/apps/uart/platform.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES uart_inputs)
-set(uart_identity "native-uart2-deferred-irq;supervised60;pb0-pb1-passive-loopback;8n1-115200;IRQ36;closed;${CMAKE_C_COMPILER_VERSION}")
+set(uart_profile "uart-supervised-v1")
+if(SUNSTONE_UART_DMA)
+ set(uart_profile "uart-dma-supervised-v2")
+endif()
+set(uart_identity "${uart_profile};native-uart2;supervised60;pb0-pb1-passive-loopback;8n1-115200;IRQ36;closed;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS uart_inputs)
  file(SHA256 "${input}" uart_hash)
  string(APPEND uart_identity "${uart_hash}")
@@ -72,7 +90,7 @@ target_link_options(sunstone-a733-uart PRIVATE -nostdlib -static -Wl,--gc-sectio
 set_target_properties(sunstone-a733-uart PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
 set(uart_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@uart_build@/manifest.json" "{\"target\":\"sunstone-a733-uart\",\"execution_profile\":\"uart-supervised-v1\",\"build_id\":\"@uart_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@uart_build@/manifest.json" "{\"target\":\"sunstone-a733-uart\",\"execution_profile\":\"@uart_profile@\",\"build_id\":\"@uart_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${uart_manifest_script}" uart_manifest_script @ONLY)
 file(WRITE "${uart_build}/finish-manifest.cmake" "${uart_manifest_script}")

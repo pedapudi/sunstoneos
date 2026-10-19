@@ -6,10 +6,10 @@
 int uart_session_valid(const struct uart_session *s)
 {
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
- s->magic!=A733_UART_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
+ s->magic!=A733_UART_SESSION_MAGIC||s->version!=UART_SESSION_VERSION||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
  s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||
  s->operation_timeout_us<250000||s->operation_timeout_us>10000000||
- !s->tx_bytes||s->tx_bytes>32||s->rx_bytes!=s->tx_bytes||
+ !s->tx_bytes||s->tx_bytes>UART_TRANSFER_MAX||s->rx_bytes!=s->tx_bytes||
  !present(s->initial,32)||!present(s->electrical,32)||!present(s->clocks,32)||!present(s->supervision,32))return 0;
  for(unsigned i=0;i<2;++i){
   struct a733_pin_config e={s->expected[i][0],s->expected[i][1],s->expected[i][2]};
@@ -19,6 +19,16 @@ int uart_session_valid(const struct uart_session *s)
  }
  for(unsigned i=2;i<4;++i)for(unsigned j=0;j<3;++j)if(s->expected[i][j]||s->desired[i][j])return 0;
  for(unsigned i=s->tx_bytes;i<sizeof(s->tx);++i)if(s->tx[i])return 0;
+#ifdef SUNSTONE_UART_DMA
+ const struct uart_dma_authority *d=&s->dma;
+ if(!d->owner || d->owner==s->owner || d->owner==s->board.pmic_owner ||
+ d->owner==s->board.usb0_owner || !d->handoff || d->evidence!=d->handoff ||
+ d->controller!=0x04601000 || d->established!=0x5f ||
+ d->owned_channels!=0xffff || d->service_channels!=3 || d->cold>1 ||
+ d->startup_timeout_us<250000 || d->startup_timeout_us>s->operation_timeout_us ||
+ !present(d->authority,32))return 0;
+ for(unsigned i=0;i<3;++i)if(d->fabric[i]!=s->board.fabric[i] || d->rate_hz[i]!=s->board.fabric_hz[i])return 0;
+#endif
  return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)

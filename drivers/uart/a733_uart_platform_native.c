@@ -78,8 +78,9 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     if (!access_allowed(n,a,1)) return 0;
     uintptr_t base=n->port<7 ? UINT32_C(0x02500000)+n->port*0x1000u : UINT32_C(0x07080000)+(n->port-7)*0x1000u;
     if (a>=base && a<=base+0xa4) {
-        if (v>255 || (a==base+0xa4 && (v&~7u)) ||
-            (a==base+8 && v!=1 && v!=7) || (a==base+0x10 && v!=0 && v!=0x22)) return 0;
+        if (v>255 || (a==base+0xa4 && (v&~7u) && !(n->port==2 && v==0xc2)) ||
+            (a==base+8 && v!=1 && v!=7 && !(n->port==2 && v==9)) || (a==base+0x10 && v!=0 && v!=0x22) ||
+            (a==base+0x88 && v!=0xe5) || (a==base+0x8c && v!=0 && v!=3)) return 0;
     } else if (a>=UINT32_C(0x03400000) && a<UINT32_C(0x03410000)) {
         unsigned intid=n->port<7 ? 34+n->port : 233+n->port-7;
         if (v!=(UINT32_C(1)<<(intid%32))) return 0;

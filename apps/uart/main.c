@@ -3,7 +3,12 @@
 #include "boot.h"
 #include <string.h>
 int board_application_task_privileged(void (*entry)(void *),void *context)
-{return !context&&entry==uart_task;}
+{
+#ifdef SUNSTONE_UART_DMA
+ if(dma_service_task_privileged(entry,context))return 1;
+#endif
+ return !context&&entry==uart_task;
+}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
  const struct uart_session *s=uart_admitted_session();

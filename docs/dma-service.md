@@ -29,7 +29,13 @@ one EL1 bootstrap task and activates the service after platform readiness.
 Until activation, client sends fail and the worker performs no device callbacks.
 
 A job fixes its DMA channel, transfer segments, complete mappings and descriptor
-allocation. RAM jobs admit only RAM-to-RAM transfers. An I2S job additionally
+allocation. RAM jobs admit only RAM-to-RAM transfers. Finite FIFO jobs require
+one fixed, independently admitted peripheral endpoint and direction throughout
+the chain. They use the same bounded controller completion, cancellation, held
+result and REAP contract. The sole peripheral owner gates requests and proves
+wire drain before releasing its peripheral. UART2 uses this path for simultaneous
+RX/TX; opposite read/write FIFOs may share an MMIO address, while two readers or
+two writers remain exclusive. An I2S job additionally
 supplies a trusted format and platform callback profile. Profiles for I2S0
 must use one DMA channel. Clients select job indices; they cannot supply
 addresses, callbacks, controller pointers or channel authority in requests.

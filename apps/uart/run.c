@@ -1,3 +1,4 @@
+#ifndef SUNSTONE_UART_DMA
 #include "uart.h"
 #include "boot.h"
 #include "a733_storage_digest.h"
@@ -22,6 +23,7 @@ static int publish(void)
  memcpy(uart.payload+64,uart.rx,32);memcpy(uart.payload+96,uart.status,32);
  uint32_t interrupts[]={atomic_load_explicit(&uart.notifications,memory_order_acquire),uart.tx_irqs,uart.rx_irqs,uart.other_irqs};
  memcpy(uart.payload+128,interrupts,sizeof(interrupts));
+ uart.payload_bytes=sizeof(uart.payload);
  storage_digest_bytes(uart.payload,sizeof(uart.payload),uart.digest);
  if(!uart_live()||observed>=uart.deadline||!uart.tx_irqs||!uart.rx_irqs||
  interrupts[0]!=uart.tx_irqs+uart.rx_irqs+uart.other_irqs)return failure();
@@ -96,3 +98,5 @@ int uart_step(void)
 }
 void uart_task(void *context)
 {(void)context;for(;;){uart_step();vTaskDelay(1);}}
+
+#endif

@@ -20,6 +20,7 @@ static inline int a733_uart_platform_native_address(unsigned port,uintptr_t a,un
         switch (a-uart) {
         case 0:case 4:case 8:case 0xc:case 0x10:case 0xa4:return 1;
         case 0x14:case 0x18:case 0x7c:return !writing;
+        case 0x88:case 0x8c:return port==2;
         default:return 0;
         }
     }

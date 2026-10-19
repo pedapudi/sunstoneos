@@ -7,6 +7,8 @@ enum { SERVICE_ACTIVE, SERVICE_WAITING, SERVICE_CHECKING, SERVICE_RETAINED };
 static void worker(void *);
 BaseType_t dma_service_task_privileged(TaskFunction_t entry, void *argument)
 { return creating_worker && entry == worker && argument == instance ? pdTRUE : pdFALSE; }
+static int direct(enum dma_service_kind k)
+{ return k==DMA_SERVICE_RAM || k==DMA_SERVICE_FIFO; }
 static int duration(uint64_t value) { return value && value <= INT64_MAX; }
 static int overlap(uint64_t a, uint64_t bytes, uint64_t b, uint64_t other)
 { return a < b+other && b < a+bytes; }
@@ -35,7 +37,7 @@ static int conflict(const struct a733_dma_transfer *a,const struct a733_dma_tran
 static int job_valid(const struct dma_service_job *j,const struct dma_service *s,uint16_t channels)
 {
     const struct a733_dma_transfer *t=&j->transfer;
-    if ((j->kind != DMA_SERVICE_RAM && j->kind != DMA_SERVICE_I2S && j->kind != DMA_SERVICE_I2S_STREAM) || j->channel >= A733_DMA_CHANNELS ||
+    if ((j->kind != DMA_SERVICE_RAM && j->kind != DMA_SERVICE_I2S && j->kind != DMA_SERVICE_I2S_STREAM && j->kind != DMA_SERVICE_FIFO) || j->channel >= A733_DMA_CHANNELS ||
         !(channels & (1u<<j->channel)) || !t->segments || !t->mappings ||
         !t->count || t->count > DMA_SERVICE_SEGMENTS ||
         !t->mapping_count || t->mapping_count > DMA_SERVICE_MAPPINGS ||
@@ -56,6 +58,15 @@ static int job_valid(const struct dma_service_job *j,const struct dma_service *s
         const struct a733_dma_segment *segment=&t->segments[i];
         if (!segment->bytes) return 0;
         if (j->kind == DMA_SERVICE_RAM && (segment->source.request || segment->destination.request)) return 0;
+        if(j->kind==DMA_SERVICE_FIFO){
+            const struct a733_dma_segment *first=&t->segments[0];
+            if(!!segment->source.request==!!segment->destination.request ||
+               !!segment->source.request!=!!first->source.request)return 0;
+            const struct a733_dma_endpoint *fifo=segment->source.request?&segment->source:&segment->destination;
+            const struct a733_dma_endpoint *initial=first->source.request?&first->source:&first->destination;
+            if(fifo->address!=initial->address || fifo->request!=initial->request ||
+               fifo->width!=initial->width || fifo->burst!=initial->burst)return 0;
+        }
     }
     return 1;
 }
@@ -194,7 +205,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
     struct dma_service_channel *c=&s->channels[j->channel];
     if(c->stream.self==&c->stream && c->stream.status==A733_I2S_RECOVERY)stream_state(c);
     int timed=r->operation == DMA_SERVICE_SUBMIT ||
-        (j->kind != DMA_SERVICE_RAM && (r->operation == DMA_SERVICE_OPEN || r->operation == DMA_SERVICE_CLOSE));
+        (!direct(j->kind) && (r->operation == DMA_SERVICE_OPEN || r->operation == DMA_SERVICE_CLOSE));
     if(r->operation==DMA_SERVICE_PERIOD_END){if(!r->timeout)return DMA_SERVICE_INVALID;}
     else if (timed ? !duration(r->timeout) : r->timeout != 0) return DMA_SERVICE_INVALID;
     if((r->operation==DMA_SERVICE_PERIOD_PUT||r->operation==DMA_SERVICE_PERIOD_END) ? !r->period_ticket : r->period_ticket!=0)return DMA_SERVICE_INVALID;
@@ -205,7 +216,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
     if (r->operation == DMA_SERVICE_OPEN) {
         if (c->phase != DMA_SERVICE_CLOSED) return DMA_SERVICE_BUSY;
         c->owner=m->client; c->profile=r->job;
-        if (j->kind == DMA_SERVICE_RAM) {
+        if (direct(j->kind)) {
             enum a733_dma_control_status d=a733_dma_claim(&s->controller,j->channel);
             if (d != A733_DMA_CONTROL_OK) { closed(c); return DMA_SERVICE_BUSY; }
             c->phase=DMA_SERVICE_READY;
@@ -232,7 +243,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
                 s->jobs[other->job].kind==DMA_SERVICE_I2S_STREAM)) return DMA_SERVICE_BUSY;
         }
         c->holds_buffers=1; c->job=r->job; c->job_ticket=m->ticket;
-        if (j->kind == DMA_SERVICE_RAM) {
+        if (direct(j->kind)) {
             enum a733_dma_control_status status=a733_dma_submit(&s->controller,j->channel,&j->transfer,r->timeout);
             if (status == A733_DMA_INVALID || status == A733_DMA_CONFLICT) {
                 c->holds_buffers=0; c->job=DMA_SERVICE_NO_JOB; c->job_ticket=0;
@@ -251,7 +262,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
     }
     case DMA_SERVICE_CANCEL:
         if (c->phase != DMA_SERVICE_RUNNING) return DMA_SERVICE_BUSY;
-        if (j->kind == DMA_SERVICE_RAM) dma_state(c,a733_dma_cancel(&s->controller,j->channel));
+        if (direct(j->kind)) dma_state(c,a733_dma_cancel(&s->controller,j->channel));
         else { (void)a733_i2s_cancel(&c->capture); i2s_state(c); }
         break;
     case DMA_SERVICE_REAP:
@@ -263,7 +274,7 @@ static enum dma_service_result execute(struct dma_service *s,const struct dma_se
         break;
     case DMA_SERVICE_CLOSE:
         if (c->phase != DMA_SERVICE_READY || c->holds_buffers) return DMA_SERVICE_BUSY;
-        if (j->kind == DMA_SERVICE_RAM) {
+        if (direct(j->kind)) {
             if (a733_dma_release(&s->controller,j->channel) != A733_DMA_CONTROL_OK) c->phase=DMA_SERVICE_RECOVERY;
             else closed(c);
         } else {

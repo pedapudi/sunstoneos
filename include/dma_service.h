@@ -14,7 +14,7 @@
 #define DMA_SERVICE_STACK_WORDS 4096u
 #define DMA_SERVICE_NO_JOB DMA_SERVICE_JOBS
 
-enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S, DMA_SERVICE_I2S_STREAM };
+enum dma_service_kind { DMA_SERVICE_RAM, DMA_SERVICE_I2S, DMA_SERVICE_I2S_STREAM, DMA_SERVICE_FIFO };
 enum dma_service_operation { DMA_SERVICE_STATUS, DMA_SERVICE_OPEN, DMA_SERVICE_SUBMIT,
     DMA_SERVICE_CANCEL, DMA_SERVICE_REAP, DMA_SERVICE_CLOSE,
     DMA_SERVICE_PERIOD_GET, DMA_SERVICE_PERIOD_PUT,
@@ -43,6 +43,9 @@ struct dma_service_reply {
 };
 /* Metadata is copied at initialization; pointed-to RAM allocations remain
  * reserved/pinned for service lifetime. RAM jobs prohibit FIFO requests.
+ * FIFO jobs require one fixed FIFO endpoint and direction throughout a finite
+ * transfer; native port policy authenticates its request, width and burst.
+ * FIFO producer request gating and final wire drain belong to its sole client.
  * I2S profiles for one physical controller must use one fixed DMA channel. */
 struct dma_service_protected {
     uintptr_t cpu;
