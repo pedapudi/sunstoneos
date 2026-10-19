@@ -90,6 +90,15 @@ changed inputs and retained failures; evidence is under that directory's `host/`
 Physical execution passed on the first board. This establishes CPU0 EL3 cache
 adoption and restoration before GIC initialization or secondary release; combined
 startup barriers, CPU0 cached EL1 participation and full scheduling remain unobserved.
+The optional boot-CPU local-GIC/EL1 extension is being implemented and is not
+ready for physical execution. Before launch, root must finish the executed-path
+review and affected instruction/host checks, including refusal and cleanup paths.
+Earlier models missed implemented interrupt bits, Secure priority-mask behavior
+and security-specific cache publication. Passing modeled startup alone cannot
+justify another full image launch. A missing USB report can mean an intentional
+software park as well as an exception or stalled access; record that distinction
+when choosing the next diagnostic.
+
 The root-only next-interval review is preserved under
 `primary-cache-probe-20261018/next-primary-el1-review.json`. The secondary EL1
 diagnostic cannot be reused on CPU0 unchanged: it explicitly rejects core 0 and
