@@ -68,7 +68,10 @@ endforeach()
 # Each role keeps the component's own configuration and logical port0. Namespace
 # the common TinyUSB exports in the host objects; device and host tasks never
 # touch one another's stack state or owner-dependent time implementation.
+apply_build_patch("${board_build}/hub-native.c" "${TINYUSB_DIR}/src/host/hub.c"
+  "${board_root}/drivers/usb/host/hub.patch")
 set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
+  "${board_build}/hub-native.c"
   "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/host/usbh.c"
   "${TINYUSB_DIR}/src/class/msc/msc_host.c"
   "${TINYUSB_DIR}/src/class/hid/hid_host.c")
@@ -80,7 +83,7 @@ target_compile_options(a733-board-usb2-host PRIVATE -include "${board_root}/apps
 target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/usb/host"
   "${board_root}/apps/board" "${board_root}/platform/a733-smp-cached"
   "${board_root}/include" "${board_root}/runtime/include" "${FREERTOS_DIR}/include"
-  "${storage_base}" "${TINYUSB_DIR}/src")
+  "${storage_base}" "${TINYUSB_DIR}/src" "${TINYUSB_DIR}/src/host")
 file(GLOB board_tcp_sources "${SUNSTONE_TCP_DIR}/source/*.c")
 # DNS runs in the IP task; use its actual nonblocking socket internals.
 set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
@@ -104,7 +107,8 @@ list(REMOVE_ITEM board_all_sources "$<TARGET_OBJECTS:a733-board-usb2-host>")
 file(GLOB_RECURSE board_external_headers "${SUNSTONE_TCP_DIR}/source/*.h" "${SUNSTONE_RSN_DIR}/src/*.h"
   "${SUNSTONE_NETWORK_C_HEADERS}/*.h")
 set(board_inputs ${board_all_sources} ${board_external_headers} ${board_host_sources} ${storage_inputs}
-  "${board_root}/apps/board/boot.patch" "${CMAKE_CURRENT_LIST_FILE}")
+  "${board_root}/apps/board/boot.patch" "${board_root}/drivers/usb/host/hub.patch"
+  "${TINYUSB_DIR}/src/host/hub.c" "${CMAKE_CURRENT_LIST_FILE}")
 file(GLOB board_headers "${board_root}/apps/board/*.h")
 list(APPEND board_inputs ${board_headers})
 list(REMOVE_DUPLICATES board_inputs)

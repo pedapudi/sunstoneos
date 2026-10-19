@@ -2,7 +2,8 @@
 
 The USB2 host implementation connects the A733 DWC3/xHCI controller to TinyUSB
 and copied read-only storage and HID input APIs. It supports one directly attached
-high-speed mass-storage device or one low-, full- or high-speed HID interface.
+high-speed mass-storage device or one low-, full- or high-speed HID interface,
+directly or behind one admitted high-speed USB2 hub.
 The storage profile uses one configuration, interface 0, alternate 0, two bulk
 endpoints and LUN 0. Storage configuration descriptors must contain the standard
 32-byte configuration/interface/endpoint sequence. Blocks must be 512 bytes.
@@ -29,6 +30,10 @@ PMIC, power-domain and Type-C providers before writing private state. Providers
 and their private backing remain at fixed addresses. Their native adapters must
 share the actual register mutex, counter and resource managers supplied by boot.
 One designated FreeRTOS task owns the host stack and all application calls.
+Two typed device records keep independent input/output contexts, EP0 stages,
+address metadata and endpoint rings. One command ring and event ring remain
+controller-owned. Six endpoint ring/bounce page pairs, two context pairs and up
+to eight scratch pages occupy 112 KiB of the retained 128 KiB reservation.
 
 The platform acquires exclusive USB2 ownership, bit 66 in the shared clock
 registry. It also holds OSC, REF, PERI0, FABRIC, SERDES_COMMON and
@@ -86,8 +91,10 @@ Address Device operation preserves default address 0; SET_ADDRESS performs the
 actual address command and maps the stack's logical address to the hardware
 slot. Retiring TinyUSB's address 0 metadata preserves that same assigned slot.
 Normal control Setup, Data and Status stages each use their source-defined
-transfer-descriptor completion. Opening bulk endpoints does not make them usable
-until Configure Endpoint completes.
+transfer-descriptor completion. Opening endpoints does not make them usable
+until Configure Endpoint completes. Actual hardware slot IDs are independent
+of TinyUSB logical addresses; completion matching checks both the slot and its
+owned pending TRB. Retiring address 0 applies separately to each device.
 
 The host controller driver (HCD) validates descriptor length, type and structure before passing a data
 completion to TinyUSB. Device and configuration probes must agree with their
@@ -178,6 +185,81 @@ wire session remains unchanged; internal native layouts include new typed
 periodic/HID metadata and require recompiling their embedding consumers.
 Earlier frozen images remain tied to their original compiled layouts.
 
+## One external hub connects one downstream application device
+
+The native path links the pinned TinyUSB hub driver. It admits one directly
+attached high-speed USB2 hub with one to seven ports and one downstream device:
+a low-, full- or high-speed HID interface, or the existing high-speed MSC profile.
+The single application device and hub use separate TinyUSB address ranges:
+with `CFG_TUH_DEVICE_MAX=1` and `CFG_TUH_HUB=1`, the leaf uses logical address 1
+and the hub uses address 2. Physical xHCI slots are bound from actual Enable Slot
+completions and are never inferred from those logical addresses.
+
+A high-speed hub uses a transaction translator (TT) for low/full-speed traffic.
+Hub device descriptors must declare the single-TT or multi-TT high-speed
+protocol. Configuration descriptors must contain one interface and one interrupt
+IN endpoint: 25 bytes for single-TT, or 41 bytes for the canonical two-alternate
+multi-TT layout. Both alternates must declare the same endpoint, packet size and
+interval. The nine-byte class hub descriptor declares one to seven ports, bounded
+power/overcurrent modes and the source-defined transaction-translator think time.
+The port limit matches the pinned driver's one-byte status-change transfer.
+Nested hubs, another connected leaf, richer configurations and additional hub
+interfaces close the entire session. Multiple concurrent application devices
+remain required work.
+
+The hub must declare self power, report current self-powered status through the
+standard device GET_STATUS, and report a present local supply with no overcurrent
+through class hub GET_STATUS. Bus-powered hub budgeting is not implemented.
+These descriptor/status observations do not measure electrical power or establish
+that a particular accessory is safe. Physical admission still needs a suitable
+self-powered hub, its supply and the reviewed board/Type-C source path.
+
+A narrow patch to the actual pinned hub class sets the hub-descriptor request's
+complete type/index value to `0x2900` and inserts both initial power-status reads.
+The hub class still owns port power, reset, change-bit requests, status parsing
+and child enumeration. The adapter validates every response before its callback.
+It publishes the first hub status TD only after the final successful port-power
+status stage plus `bPwrOn2PwrGood` in two-millisecond units. The existing owner
+clock and absolute deadline govern that delay; no additional timer service exists.
+
+The hub's first Configure Endpoint command sets Hub, Number of Ports, TT Think
+Time and Multi-TT fields and verifies their completed output context. The actual
+SET_INTERFACE status must complete before multi-TT metadata is admitted. The
+child uses TinyUSB's reset-derived bus information to bind the selected hub,
+port and observed speed. Its Address Device context contains that route string,
+root port and, for low/full speed, the parent Hub Slot ID, TT port and active
+Multi-TT selection. No child is enabled before the hub context completion.
+These fields follow xHCI 1.2 sections 4.5.2 and 6.2.2.
+
+Descriptor callbacks queue copied hub metadata only. The owner applies it after
+the core callback returns and before TinyUSB consumes the queued completion.
+This preserves the core's prohibition on reentrant API calls. TinyUSB's existing
+control queue serializes hub and leaf requests; each physical device retains
+its own descriptor probes and configuration prefix.
+
+Hub interrupt status uses private bounce DMA and a validated one-byte copied
+completion. Port status binds the first connected port for the lifetime. Removal,
+a second connected port, suspend, overcurrent, failed transfers, an unexpected
+slot/TRB or malformed status prevents further callbacks and caller-output copy.
+Both slots and the whole DMA parent remain retained. Type-C VBUS shutdown does
+not prove that a self-powered hub or its downstream ports lost external power.
+There is no hub detach/reuse or device replacement path.
+
+The application continues to return one copied sector or four raw HID reports.
+Its wire/session layout and host decoding are unchanged. HID metadata identifies
+the actual leaf address, speed, interface and endpoint. The frame alone does not
+identify a parent hub; parent topology requires separate controller or qualification evidence.
+
+Focused sanitizer checks use actual TinyUSB hub/HID/MSC parsing and callbacks,
+the xHCI rings and the existing shared providers. They cover downstream MSC,
+all three HID speeds, multi-TT low speed, port 7, power/descriptor/context
+refusals, detach, another leaf, overcurrent, stall, nested hubs and wrong-slot
+completion. Direct-device compatibility and the existing interrupt profile use
+selected affected cases. The native supervised IRQ image links every changed
+embedding. Linked owner and copied host-capture checks use that same image;
+source/hardware/kernel boundaries remain explicit. Evidence is retained under
+`~/.cache/sunstoneos/evidence/usb-host-hub-20261019/`.
+
 ## CPU interrupts wake the existing host owner
 
 The supervised board build can select `SUNSTONE_BOARD_USB2_IRQ=ON`.
@@ -262,15 +344,17 @@ a HID result; `--hid-output` writes its decoded records.
 
 ## Required wider modes and physical qualification
 
-The implementation supports the bounded interrupt-IN HID profile below. It
-refuses low/full-speed mass storage, hubs, interrupt OUT, high-bandwidth periodic
+The implementation supports the bounded storage, HID and hub profiles above. It
+refuses low/full-speed mass storage, deeper or bus-powered hubs, multiple leaves,
+interrupt OUT, high-bandwidth periodic
 transfers, isochronous endpoints, SuperSpeed, nonstandard speed-ID tables, more than eight
 scratchpads and richer mass-storage configurations. Endpoint-stall recovery is
 not implemented; devices that stall GET_MAX_LUN are retained rather than using
 the usual fallback. These are implementation limits, not claims that the board
 cannot support those modes.
 
-Further required work includes wider xHCI endpoint modes, physical interrupt qualification,
+Further required work includes wider xHCI endpoint modes, physical interrupt
+qualification,
 USB2 device/OTG roles, SuperSpeed COMB0 routing and orientation, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain and repeated
 attachment. DisplayPort lane ownership must be coordinated with display users.
@@ -297,7 +381,10 @@ The original xHCI core follows the Intel xHCI 1.2 specification, including
 sections 4.6, 4.9, 4.10, 4.11.2.2, 5.4, 5.5, 6.2, 6.4 and 6.5. TinyUSB revision
 `d668b0abb7219b9ce324fa88d46604bb9e869973` supplies actual host enumeration and
 mass-storage and HID class code under its existing MIT license. Downloaded sources and
-raw evidence stay outside the repository. The focused runner snapshots its
+raw evidence stay outside the repository. The hub adaptation follows the
+[USB-IF USB2.0 specification](https://www.usb.org/document-library/usb-20-specification),
+sections 9.4 and 11.23–11.24; its base PDF and bundle identities are pinned in
+`sources.lock.json`. The focused runner snapshots its
 inputs and preserves each executable, compiler command and result.
 
 ## Software evidence covers enumeration and retained failures
@@ -354,5 +441,6 @@ admission, the exposed TYPEC24 data connector, an electrically suitable adapter,
 a supported directly attached HID device and a way to produce known reports.
 VBUS shutdown, device enumeration, report timing and observed report contents
 remain physically unqualified. Both microSD cards remain preserved. Broader
-speed/class support, hubs, isochronous transfers, SuperSpeed, physical CPU
+speed/class support, broader hub topologies and power budgets, isochronous
+transfers, SuperSpeed, physical CPU
 interrupt delivery and safe detach/reuse remain required work.

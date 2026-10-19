@@ -101,7 +101,9 @@ static int write32(void *cookie,uint32_t off,uint32_t v)
     int allowed=op&&(off==op||off==op+4||off==op+0x38||
         (h->usb2_port&&off==op+0x400+16*(h->usb2_port-1)));
     allowed|=rt&&(off==rt+0x20||off==rt+0x24||off==rt+0x28);
-    allowed|=db&&(off==db||(h->slot&&off==db+4*h->slot));
+    allowed|=db&&off==db;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        allowed|=db&&h->devices[i].slot&&off==db+4*h->devices[i].slot;
     if(!allowed)return 0;
     __asm__ volatile("dsb sy":::"memory");*(volatile uint32_t *)(uintptr_t)(0x06a00000u+off)=v;
     __asm__ volatile("dsb sy":::"memory");return 1;

@@ -10,7 +10,7 @@
 #define CFG_TUH_ENABLED 1
 #define CFG_TUD_ENABLED 0
 #define CFG_TUH_DEVICE_MAX 1
-#define CFG_TUH_HUB 0
+#define CFG_TUH_HUB 1
 #define CFG_TUH_MSC 1
 #define CFG_TUH_HID 1
 #define CFG_TUH_HID_EPIN_BUFSIZE 64

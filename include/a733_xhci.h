@@ -9,6 +9,7 @@
 #define A733_XHCI_RING_TRBS 16u
 #define A733_XHCI_EVENT_TRBS 32u
 #define A733_XHCI_ENDPOINTS 3u
+#define A733_XHCI_DEVICES 2u
 
 enum a733_xhci_result { A733_XHCI_PENDING,A733_XHCI_READY,A733_XHCI_BUSY,
     A733_XHCI_INVALID,A733_XHCI_RETAINED };
@@ -39,7 +40,19 @@ struct a733_xhci_endpoint {
     unsigned number,address,packet,index,cycle,opened,configured,pending;
     unsigned kind,direction,length,aborted,transfer_type,interval; /* pending:0 idle,1 queued,2 on ring. */
 };
-/* One direct USB2 device, EP0 and two bulk or interrupt endpoints. Only the owning
+/* One root device and one child behind an admitted HS hub. Each retains its
+ * own EP0, contexts and data rings; command/event rings remain controller-owned. */
+struct a733_xhci_device {
+    uint8_t *input,*device;
+    uint64_t input_pa,device_pa,deadline;
+    unsigned slot,address,pending_address,hardware_address,port_ready,speed;
+    unsigned control_stage,control_length,control_in,evaluate_pending,address_status;
+    unsigned configure_pending,command_mask,zero_retired,parent,parent_port;
+    unsigned hub,hub_ports,hub_ttt,hub_mtt,hub_configured;
+    uint8_t setup[8];
+    struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
+};
+/* Each device has EP0 and two bulk or interrupt endpoints. Only the owning
  * task calls this API. The private NC parent and every object stay at their
  * original addresses; no reinitialization or memory release exists.
  * Control stages use independent actual Setup/Data/Status TD completions.
@@ -52,19 +65,17 @@ struct a733_xhci {
     struct device_memory_lease memory;
     struct device_memory_extent extent;
     struct a733_xhci_trb *commands,*events;
-    uint8_t *input,*device,*dcbaa,*erst,*scratch;
-    uint64_t command_pa,event_pa,input_pa,device_pa,dcbaa_pa,erst_pa;
+    uint8_t *dcbaa,*erst,*scratch;
+    uint64_t command_pa,event_pa,dcbaa_pa,erst_pa;
     uint64_t generation,deadline,lifetime_deadline,last_now,command_deadline,command_pointer;
     unsigned phase,failed,announced,removed,operational,runtime,doorbell;
     unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
-    unsigned command_index,command_cycle,event_index,event_cycle,command_kind,slot;
-    unsigned pending_address,address,port_reset,port_ready,connected,control_stage,control_length,control_in;
-    unsigned configure_needed,configure_pending,evaluate_pending,ep0_packet,address_status,stop_endpoint;
-    unsigned slot_type,command_mask,hardware_address,publication,notifying,port_power_control;
+    unsigned command_index,command_cycle,event_index,event_cycle,command_kind,command_device,default_device;
+    unsigned port_reset,connected;
+    unsigned slot_type,publication,notifying,port_power_control;
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;
-    uint8_t setup[8];
-    struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
+    struct a733_xhci_device devices[A733_XHCI_DEVICES];
 };
 
 /* Called after the actual USB2 platform is prepared, before publishing DMA
@@ -72,8 +83,8 @@ struct a733_xhci {
  * lease; init validates it and permanently transfers the parent to DEVICE.
  * Capability limits are observed before populating any hardware context.
  * Initial support uses standard USB2 protocol speed IDs, one direct high-speed
- * device or directly attached FS/LS HID, with no streams, hubs or
- * isochronous endpoints. Unsupported modes remain staged work.
+ * device, directly attached FS/LS HID, or one HS hub and one downstream leaf.
+ * Streams, deeper hubs and isochronous endpoints remain unsupported.
  * Callbacks are bounded and non-reentrant; notice may enqueue a notification
  * but must not call any core API. All scalar offsets are relative to xHCI.
  */
@@ -94,6 +105,13 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *);
 int a733_xhci_interrupt_start(struct a733_xhci *);
 int a733_xhci_interrupt_begin(struct a733_xhci *);
 int a733_xhci_interrupt_finish(struct a733_xhci *);
+/* Owner supplies actual TinyUSB bus topology after hub reset/status. No child
+ * can be bound before the parent hub Configure Endpoint completion. */
+int a733_xhci_bind_child(struct a733_xhci *,unsigned parent,unsigned port,unsigned speed,uint64_t deadline);
+int a733_xhci_mark_hub(struct a733_xhci *,unsigned address);
+int a733_xhci_hub_configure(struct a733_xhci *,unsigned address,unsigned ports,unsigned ttt,unsigned mtt);
+int a733_xhci_retire_zero(struct a733_xhci *);
+unsigned a733_xhci_device_speed(const struct a733_xhci *,unsigned address);
 int a733_xhci_reset_port(struct a733_xhci *,uint64_t deadline);
 int a733_xhci_port_connected(const struct a733_xhci *);
 int a733_xhci_open(struct a733_xhci *,unsigned address,unsigned endpoint,

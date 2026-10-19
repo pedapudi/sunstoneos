@@ -2569,5 +2569,13 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/host/xhci.h",
     "archive": "usb-host-irq/xhci.h",
     "sha256": "88f1bd7ff2374d37ffcf924c826774c34bbd60d3a604dd70d6d9c1f6b501af45"
+  },
+  "usb2-base-specification-bundle": {
+    "url": "https://www.usb.org/sites/default/files/usb_20_20250603.zip",
+    "revision": "USB 2.0, 27 April 2000; USB-IF bundle 3 June 2025",
+    "archive": "usb-host-hub/usb_20_20250603.zip",
+    "sha256": "5fe9c53c04033818af396e8852b3acbca5c3a76ba92fab549fd81cd0ea7b3692",
+    "base_pdf_member": "usb_20_20250603/usb_20_20240927/usb_20_20240927/usb_20.pdf",
+    "base_pdf_sha256": "d39698a33486c399124af92bd02e4f978fd9a836b5cf4e52e6e4633eb1d89f61"
   }
 }

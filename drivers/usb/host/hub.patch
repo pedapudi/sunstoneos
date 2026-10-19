@@ -1,0 +1,54 @@
+--- hub.c
++++ hub-native.c
+@@ -249,6 +249,8 @@
+ // Set Configure
+ //--------------------------------------------------------------------+
+ static void config_set_port_power (tuh_xfer_t* xfer);
++static void config_device_power(tuh_xfer_t* xfer);
++static void config_hub_power(tuh_xfer_t* xfer);
+ static void config_port_power_complete (tuh_xfer_t* xfer);
+ static void config_get_hub_descriptor(tuh_xfer_t* xfer);
+ 
+@@ -279,7 +281,7 @@
+       .direction = TUSB_DIR_IN
+     },
+     .bRequest = HUB_REQUEST_GET_DESCRIPTOR,
+-    .wValue   = 0,
++    .wValue   = 0x2900,
+     .wIndex   = 0,
+     .wLength  = sizeof(hub_desc_cs_t)
+   };
+@@ -305,9 +307,30 @@
+ 
+   // May need to GET_STATUS
+ 
+-  // Set Port Power to be able to detect connection, starting with port 1
+-  uint8_t const hub_port = 1;
+-  hub_port_set_feature(daddr, hub_port, HUB_FEATURE_PORT_POWER, config_port_power_complete, 0);
++  // Observe current self power before changing downstream power controls.
++  const tusb_control_request_t request = {
++    .bmRequestType = 0x80, .bRequest = TUSB_REQ_GET_STATUS, .wLength = 2
++  };
++  xfer->setup = &request;
++  xfer->buffer = p_epbuf->ctrl_buf;
++  xfer->complete_cb = config_device_power;
++  TU_ASSERT(tuh_control_xfer(xfer), );
++}
++
++static void config_device_power(tuh_xfer_t* xfer) {
++  TU_ASSERT(XFER_RESULT_SUCCESS == xfer->result, );
++  const tusb_control_request_t request = {
++    .bmRequestType = 0xa0, .bRequest = HUB_REQUEST_GET_STATUS, .wLength = 4
++  };
++  xfer->setup = &request;
++  xfer->complete_cb = config_hub_power;
++  TU_ASSERT(tuh_control_xfer(xfer), );
++}
++
++static void config_hub_power(tuh_xfer_t* xfer) {
++  TU_ASSERT(XFER_RESULT_SUCCESS == xfer->result, );
++  // The HCD validates both power responses before either callback runs.
++  hub_port_set_feature(xfer->daddr, 1, HUB_FEATURE_PORT_POWER, config_port_power_complete, 0);
+ }
+ 
+ static void config_port_power_complete (tuh_xfer_t* xfer) {

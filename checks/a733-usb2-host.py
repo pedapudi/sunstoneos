@@ -56,11 +56,11 @@ def main():
         'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c',
         'runtime/device_memory_pool.c']]
     units += [a.typec/'drivers/usb/a733_typec.c', a.twi/'drivers/i2c/a733_twi.c']
-    units += [tiny/u for u in ['tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c','class/hid/hid_host.c']]
+    units += [tiny/u for u in ['host/hub.c','tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c','class/hid/hid_host.c']]
     native = [root/u for u in ['drivers/usb/a733_usb2_platform.c','drivers/usb/a733_usb2_native.c',
         'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c']]
     paths = set(units+native+[Path(__file__).resolve(),root/'checks/a733-pmic.c',core_source,core_header,
-        a.typec/'include/a733_typec.h',a.twi/'include/a733_twi.h',root/'drivers/usb/host/tusb_config.h'])
+        a.typec/'include/a733_typec.h',a.twi/'include/a733_twi.h',root/'drivers/usb/host/tusb_config.h',root/'drivers/usb/host/hub.patch'])
     for directory in [root/'include',root/'runtime/include',root/'platform/a733',freertos,a.port]:
         paths.update(directory.glob('*.h'))
     paths.update(tiny.rglob('*.h'))
@@ -80,6 +80,9 @@ def main():
         assert json.loads((out/'inputs.json').read_text()) == hashes
     else:
         (out/'inputs.json').write_text(json.dumps(hashes, indent=2)+'\n')
+    # Compile the actual pinned hub class with the reviewed narrow adaptation.
+    hub_source=saved(tiny/'host/hub.c');hub_native=out/'hub-native.c'
+    subprocess.run(['patch','--silent','--output',str(hub_native),str(hub_source),str(saved(root/'drivers/usb/host/hub.patch'))],check=True)
     report_path = out/'steps.json'
     steps = json.loads(report_path.read_text()) if a.resume and report_path.exists() else {}
     def run(label, command):
@@ -134,10 +137,10 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
 '''
     (out/'reference.c').write_text(ref)
     includes = [saved(root/'drivers/usb/host'),saved(root/'include'),saved(a.typec/'include'),
-        saved(a.twi/'include'),saved(root/'checks'),saved(tiny)]
+        saved(a.twi/'include'),saved(root/'checks'),saved(tiny),saved(tiny/'host')]
     flags = [compiler,'-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function',
         '-fsanitize=address,undefined','-fno-omit-frame-pointer']+['-I'+str(i) for i in includes]
-    run('host-build',flags+[saved(u) for u in units]+[out/'mapping.c',out/'reference.c','-o',out/'composed'])
+    run('host-build',flags+[hub_native if u==tiny/'host/hub.c' else saved(u) for u in units]+[out/'mapping.c',out/'reference.c','-o',out/'composed'])
     loaded = subprocess.check_output(['ldd', str(out/'composed')], text=True)
     libraries = {}
     for line in loaded.splitlines():
@@ -148,7 +151,7 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
     cases=['admission','read','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach']
     cases=a.cases or cases
     for case in cases:
-        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case in ('hid-fs','hid-ls','hid-hs') else [])])
+        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])
     native_flags=[compiler,'--target=aarch64-none-elf','-march=armv8-a','-mstrict-align','-mgeneral-regs-only',
         '-std=gnu11','-O2','-g','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin',
         '-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1','-DINCLUDE_xSemaphoreGetMutexHolder=1']

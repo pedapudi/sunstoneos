@@ -36,9 +36,9 @@ static int fault(struct a733_xhci *x)
 {
     if(x->failed)return 0;
     x->failed=1;x->connected=0;
-    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){x->endpoints[i].caller=NULL;x->endpoints[i].aborted=1;}
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j)for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){x->devices[j].endpoints[i].caller=NULL;x->devices[j].endpoints[i].aborted=1;}
     (void)device_memory_retain(x->pool,x->memory);
-    if(x->announced&&!x->removed){x->removed=1;notify(x,A733_XHCI_REMOVE,x->address,0,0,2);}
+    if(x->announced&&!x->removed){x->removed=1;notify(x,A733_XHCI_REMOVE,x->devices[0].address,0,0,2);}
     return 0;
 }
 /* BUSY is retryable only before a bounded operation begins. A failed guard
@@ -66,10 +66,17 @@ static int barrier(struct a733_xhci *x)
 {return checked(x)&&x->ops.barrier(x->context)==1&&checked(x);}
 static unsigned dci(unsigned address)
 {return (address&15)?2*(address&15)+!!(address&128):1;}
-static struct a733_xhci_endpoint *endpoint(struct a733_xhci *x,unsigned address)
+static struct a733_xhci_device *device_address(struct a733_xhci *x,unsigned address)
 {
-    if(!(address&15))return &x->endpoints[0];
-    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(x->endpoints[i].opened&&x->endpoints[i].address==address)return &x->endpoints[i];
+    if(!x||x->self!=x||address>127)return NULL;
+    if(!address)return x->default_device<A733_XHCI_DEVICES&&!x->devices[x->default_device].zero_retired?&x->devices[x->default_device]:NULL;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address)return &x->devices[i];
+    return NULL;
+}
+static struct a733_xhci_endpoint *endpoint(struct a733_xhci_device *d,unsigned address)
+{
+    if(!(address&15))return &d->endpoints[0];
+    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].opened&&d->endpoints[i].address==address)return &d->endpoints[i];
     return NULL;
 }
 static int layout(struct a733_xhci *x)
@@ -80,16 +87,21 @@ static int layout(struct a733_xhci *x)
     x->commands=(void *)(p+4096);x->command_pa=base+4096;
     x->events=(void *)(p+8192);x->event_pa=base+8192;
     x->erst=p+12288;x->erst_pa=base+12288;
-    x->input=p+16384;x->input_pa=base+16384;
-    x->device=p+20480;x->device_pa=base+20480;
     x->scratch=p+12352;
     put64(x->erst,x->event_pa);put32(x->erst+8,A733_XHCI_EVENT_TRBS);
-    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+49152+4096*i);}
+    if(x->scratchpads){put64(x->dcbaa,base+12352);for(unsigned i=0;i<x->scratchpads;++i)put64(x->scratch+8*i,base+81920+4096*i);}
     x->command_cycle=x->event_cycle=1;
-    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i) {
-        struct a733_xhci_endpoint *e=&x->endpoints[i];
-        e->ring=(void *)(p+24576+4096*i);e->ring_pa=base+24576+4096*i;
-        e->bounce=p+36864+4096*i;e->bounce_pa=base+36864+4096*i;e->cycle=1;
+    /* Six private endpoint rings/bounce pages, two input/output context pairs
+     * and eight scratch pages occupy112KiB, within the retained128KiB parent. */
+    for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+        struct a733_xhci_device *d=&x->devices[j];
+        d->input=p+16384+8192*j;d->input_pa=base+16384+8192*j;
+        d->device=p+20480+8192*j;d->device_pa=base+20480+8192*j;
+        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+            unsigned n=j*A733_XHCI_ENDPOINTS+i;struct a733_xhci_endpoint *e=&d->endpoints[i];
+            e->ring=(void *)(p+32768+4096*n);e->ring_pa=base+32768+4096*n;
+            e->bounce=p+57344+4096*n;e->bounce_pa=base+57344+4096*n;e->cycle=1;
+        }
     }
     return barrier(x);
 }
@@ -110,60 +122,71 @@ static int ring(struct a733_xhci *x,struct a733_xhci_trb *trbs,uint64_t pa,unsig
     if(at==A733_XHCI_RING_TRBS-2){*index=0;*cycle=c^1u;}else *index=at+1;
     return barrier(x);
 }
-static int command(struct a733_xhci *x,unsigned kind,uint32_t flags)
+static int command(struct a733_xhci *x,struct a733_xhci_device *d,unsigned kind,uint32_t flags)
 {
     if(x->command_kind)return 0;
-    x->command_kind=kind;x->command_deadline=x->deadline;
+    x->command_kind=kind;x->command_device=(unsigned)(d-x->devices)+1;x->command_deadline=x->deadline;
     if(!ring(x,x->commands,x->command_pa,&x->command_index,&x->command_cycle,
-       kind==C_ENABLE?0:x->input_pa,0,TYPE(kind)|flags,&x->command_pointer))return 0;
+       kind==C_ENABLE?0:d->input_pa,0,TYPE(kind)|flags,&x->command_pointer))return 0;
     return wr(x,x->doorbell,0);
 }
-static void ep_context(struct a733_xhci *x,struct a733_xhci_endpoint *e)
+static void ep_context(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
 {
-    uint8_t *p=x->input+(e->number+1)*x->context_bytes;
+    uint8_t *p=d->input+(e->number+1)*x->context_bytes;
     unsigned type=e->number==1?4:e->transfer_type==3?7:e->direction?6:2;
     if(e->transfer_type==3)put32(p,e->interval<<16);
     put32(p+4,(e->packet<<16)|(type<<3)|(3u<<1));
     put64(p+8,(e->ring_pa+16*e->index)|e->cycle);
     put32(p+16,e->number==1?8:e->transfer_type==3?(e->packet<<16)|e->packet:4096);
 }
-static void address_context(struct a733_xhci *x)
+static void address_context(struct a733_xhci *x,struct a733_xhci_device *d)
 {
-    memset(x->input,0,33*x->context_bytes);put32(x->input+4,3);
-    uint8_t *slot=x->input+x->context_bytes;
-    put32(slot,(1u<<27)|(x->speed<<20));put32(slot+4,x->usb2_port<<16);
-    x->endpoints[0].number=1;x->endpoints[0].packet=x->speed==3?64:8;ep_context(x,&x->endpoints[0]);
+    memset(d->input,0,33*x->context_bytes);put32(d->input+4,3);
+    uint8_t *slot=d->input+x->context_bytes;
+    put32(slot,(1u<<27)|(d->speed<<20)|d->parent_port);put32(slot+4,x->usb2_port<<16);
+    if(d->parent&&d->speed!=3){
+        struct a733_xhci_device *parent=&x->devices[0];
+        put32(slot,get32(slot)|(parent->hub_mtt?BIT(25):0));
+        put32(slot+8,d->parent|(d->parent_port<<8));
+    }
+    d->endpoints[0].number=1;d->endpoints[0].packet=d->speed==3?64:8;ep_context(x,d,&d->endpoints[0]);
 }
-static int configure(struct a733_xhci *x)
+static int configure(struct a733_xhci *x,struct a733_xhci_device *d)
 {
     if(!barrier(x))return 0;
     /* Copy the four defined Slot Context words only. Hardware-private tail
      * words in 32/64-byte output contexts remain zero in the input context. */
-    memset(x->input,0,33*x->context_bytes);memcpy(x->input+x->context_bytes,x->device,16);
+    memset(d->input,0,33*x->context_bytes);memcpy(d->input+x->context_bytes,d->device,16);
     unsigned mask=0,maximum=1;
     for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i) {
-        struct a733_xhci_endpoint *e=&x->endpoints[i];
+        struct a733_xhci_endpoint *e=&d->endpoints[i];
         if(!e->opened)continue;if(e->number>maximum)maximum=e->number;
-        if(!e->configured){mask|=BIT(e->number);ep_context(x,e);}
+        if(!e->configured){mask|=BIT(e->number);ep_context(x,d,e);}
     }
-    if(!mask)return 0;
-    put32(x->input+4,mask|1);uint8_t *slot=x->input+x->context_bytes;
+    if(!mask&&(!d->hub||d->hub_configured))return 0;
+    put32(d->input+4,mask|1);uint8_t *slot=d->input+x->context_bytes;
     put32(slot,(get32(slot)&~UINT32_C(0xf8000000))|(maximum<<27));
-    x->command_mask=mask;x->configure_pending=1;
-    return command(x,C_CONFIGURE,x->slot<<24);
+    if(d->hub){
+        if(!d->hub_ports)return 0;
+        put32(slot,get32(slot)|BIT(26)|(d->hub_mtt?BIT(25):0));
+        put32(slot+4,(get32(slot+4)&0xffffffu)|(d->hub_ports<<24));
+        put32(slot+8,(get32(slot+8)&~(3u<<16))|(d->hub_ttt<<16));
+    }
+    d->command_mask=mask;d->configure_pending=1;
+    return command(x,d,C_CONFIGURE,d->slot<<24);
 }
-static int submit_endpoint(struct a733_xhci *x,struct a733_xhci_endpoint *e)
+static int submit_endpoint(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
 {
     if(e->kind==T_ADDRESS_STATUS) {
-        if(!x->address_status||!checked(x))return 0;
-        unsigned ep=e->address;e->pending=0;e->caller=NULL;x->control_stage=CONTROL_IDLE;
-        x->address=x->pending_address;x->pending_address=0;x->address_status=0;
+        if(!d->address_status||!checked(x))return 0;
+        unsigned ep=e->address;e->pending=0;e->caller=NULL;d->control_stage=CONTROL_IDLE;
+        d->address=d->pending_address;d->pending_address=0;d->address_status=0;
         notify(x,A733_XHCI_TRANSFER,0,ep,0,0);return 1;
     }
     uint64_t parameter=e->bounce_pa;uint32_t control=TYPE(e->kind)|IOC,status=e->length;
     if(e->kind==T_SETUP) {
-        parameter=(uint64_t)get32(x->setup)|((uint64_t)get32(x->setup+4)<<32);
-        control|=BIT(6)|(x->control_length?(x->control_in?3u:2u)<<16:0);status=8;
+        parameter=(uint64_t)get32(d->setup)|((uint64_t)get32(d->setup+4)<<32);
+        control|=BIT(6)|(d->control_length?(d->control_in?3u:2u)<<16:0);status=8;
     } else if(e->kind==T_STATUS) {parameter=0;status=0;control|=e->direction?BIT(16):0;}
     else {
         if(e->direction)control|=BIT(2);
@@ -171,15 +194,17 @@ static int submit_endpoint(struct a733_xhci *x,struct a733_xhci_endpoint *e)
     }
     e->pending=2;
     if(!ring(x,e->ring,e->ring_pa,&e->index,&e->cycle,parameter,status,control,&e->pending_trb))return 0;
-    return wr(x,x->doorbell+x->slot*4,e->number);
+    return wr(x,x->doorbell+d->slot*4,e->number);
 }
 static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
 {
     unsigned slot=event->control>>24,number=(event->control>>16)&31,code=event->status>>24,residual=event->status&0xffffff;
     uint64_t pointer=(uint64_t)event->parameter_lo|((uint64_t)event->parameter_hi<<32);
-    if((event->control&BIT(2))||slot!=x->slot)return 0;
+    struct a733_xhci_device *d=NULL;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)d=&x->devices[i];
+    if((event->control&BIT(2))||!slot||!d)return 0;
     struct a733_xhci_endpoint *e=NULL;
-    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(x->endpoints[i].number==number&&x->endpoints[i].pending==2)e=&x->endpoints[i];
+    for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].number==number&&d->endpoints[i].pending==2)e=&d->endpoints[i];
     if(!e||e->pending_trb!=pointer||e->aborted)return 0;
     if(code!=1&&code!=13)return 0; /* Stall/halt/reset recovery remains retained. */
     unsigned requested=e->kind==T_SETUP?8:e->length;
@@ -190,10 +215,10 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
         if(!outside(x,e->caller,e->length)||!checked(x))return 0;
         memcpy(e->caller,e->bounce,bytes);
     }
-    unsigned ep=e->address,address=x->address;
-    if(e->kind==T_SETUP){x->control_stage=x->control_length?CONTROL_DATA:CONTROL_STATUS;ep=0;}
-    else if(e->kind==T_DATA)x->control_stage=CONTROL_STATUS;
-    else if(e->kind==T_STATUS)x->control_stage=CONTROL_IDLE;
+    unsigned ep=e->address,address=d->address;
+    if(e->kind==T_SETUP){d->control_stage=d->control_length?CONTROL_DATA:CONTROL_STATUS;ep=0;}
+    else if(e->kind==T_DATA)d->control_stage=CONTROL_STATUS;
+    else if(e->kind==T_STATUS)d->control_stage=CONTROL_IDLE;
     e->caller=NULL;e->pending=0;e->pending_trb=0;
     notify(x,A733_XHCI_TRANSFER,address,ep,bytes,0);return 1;
 }
@@ -201,30 +226,37 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
 {
     uint64_t pointer=(uint64_t)event->parameter_lo|((uint64_t)event->parameter_hi<<32);
     unsigned slot=event->control>>24,kind=x->command_kind;
-    if(!kind||pointer!=x->command_pointer||(event->status>>24)!=1||!slot||slot>x->cap_slots||
-       (kind!=C_ENABLE&&slot!=x->slot))return 0;
+    if(!x->command_device||x->command_device>A733_XHCI_DEVICES)return 0;
+    struct a733_xhci_device *d=&x->devices[x->command_device-1];
+    if(!kind||pointer!=x->command_pointer||(event->status>>24)!=1||!slot||slot>x->cap_slots||slot>A733_XHCI_DEVICES||
+       (kind!=C_ENABLE&&slot!=d->slot))return 0;
     x->command_kind=0;x->command_pointer=0;
     if(kind==C_ENABLE) {
-        if(slot!=1)return 0;x->slot=slot;put64(x->dcbaa+8*slot,x->device_pa);x->port_ready=2;return 1;
+        for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].slot==slot)return 0;d->slot=slot;put64(x->dcbaa+8*slot,d->device_pa);d->port_ready=2;return 1;
     }
     if(!barrier(x))return 0;
-    unsigned slot_state=get32(x->device+12)>>27;
+    unsigned slot_state=get32(d->device+12)>>27;
     if(kind==C_ADDRESS) {
-        if(!x->pending_address){if(slot_state!=1)return 0;x->port_ready=3;x->endpoints[0].configured=1;return 1;}
-        unsigned assigned=get32(x->device+12)&255;
+        if(!d->pending_address){if(slot_state!=1)return 0;d->port_ready=3;d->endpoints[0].configured=1;return 1;}
+        unsigned assigned=get32(d->device+12)&255;
         if(slot_state!=2||!assigned||assigned>127)return 0;
-        x->hardware_address=assigned;x->address_status=1;x->control_stage=CONTROL_STATUS;
-        x->endpoints[0].pending=0;notify(x,A733_XHCI_TRANSFER,0,0,8,0);return 1;
+        d->hardware_address=assigned;d->address_status=1;d->control_stage=CONTROL_STATUS;
+        d->endpoints[0].pending=0;notify(x,A733_XHCI_TRANSFER,0,0,8,0);return 1;
     }
     if(kind==C_EVALUATE){
-        if(!x->evaluate_pending||slot_state!=2||
-           (get32(x->device+x->context_bytes+4)>>16)!=x->endpoints[0].packet)return 0;
-        x->evaluate_pending=0;return 1;
+        if(!d->evaluate_pending||slot_state!=2||
+           (get32(d->device+x->context_bytes+4)>>16)!=d->endpoints[0].packet)return 0;
+        d->evaluate_pending=0;return 1;
     }
     if(kind==C_CONFIGURE) {
         if(slot_state!=3)return 0;
-        for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(x->command_mask&BIT(x->endpoints[i].number))x->endpoints[i].configured=1;
-        x->configure_pending=0;x->command_mask=0;return 1;
+        if(d->hub){
+            if(!(get32(d->device)&BIT(26))||!!(get32(d->device)&BIT(25))!=d->hub_mtt||
+               (get32(d->device+4)>>24)!=d->hub_ports||((get32(d->device+8)>>16)&3)!=d->hub_ttt)return 0;
+            d->hub_configured=1;
+        }
+        for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(d->command_mask&BIT(d->endpoints[i].number))d->endpoints[i].configured=1;
+        d->configure_pending=0;d->command_mask=0;return 1;
     }
     return 0;
 }
@@ -247,6 +279,7 @@ static int event_step(struct a733_xhci *x)
 }
 static int port(struct a733_xhci *x)
 {
+    struct a733_xhci_device *d=&x->devices[0];
     uint32_t v,offset=x->operational+0x400+(x->usb2_port-1)*16;
     if(!rd(x,offset,&v)||(v&BIT(3)))return 0;
     if(!(v&1)){if(x->announced)return 0;x->connected=0;return 1;}
@@ -265,8 +298,8 @@ static int port(struct a733_xhci *x)
         if(v&BIT(4))return 1;
         unsigned speed=(v>>10)&15;
         if(!(v&BIT(1))||speed<1||speed>3||(v&UINT32_C(0x1e0)))return 0;
-        if(x->speed&&x->speed!=speed)return 0;x->speed=speed;
-        x->port_reset=3;x->port_ready=1;
+        if(x->speed&&x->speed!=speed)return 0;x->speed=d->speed=speed;
+        x->port_reset=3;d->port_ready=1;
     }else if(x->port_reset==3&&((v>>10)&15)!=x->speed)return 0;
     return 1;
 }
@@ -326,10 +359,14 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
     if(!owner(x))return A733_XHCI_INVALID;if(x->failed)return A733_XHCI_RETAINED;
     if(x->phase==P_ACTIVE) {
         x->deadline=x->lifetime_deadline;
-        if(x->port_reset&&x->port_ready<3&&x->reset_deadline<x->deadline)x->deadline=x->reset_deadline;
+        if(x->port_reset&&x->devices[0].port_ready<3&&x->reset_deadline<x->deadline)x->deadline=x->reset_deadline;
         if(x->command_kind&&x->command_deadline<x->deadline)x->deadline=x->command_deadline;
-        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if((x->endpoints[i].pending||(i&&x->endpoints[i].opened&&!x->endpoints[i].configured))&&
-            x->endpoints[i].deadline<x->deadline)x->deadline=x->endpoints[i].deadline;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            struct a733_xhci_device *d=&x->devices[j];
+            if(d->port_ready&&d->port_ready!=3&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
+            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if((d->endpoints[i].pending||(i&&d->endpoints[i].opened&&!d->endpoints[i].configured))&&
+                d->endpoints[i].deadline<x->deadline)x->deadline=d->endpoints[i].deadline;
+        }
     }
     int live=guard(x,x->deadline);if(!live)return A733_XHCI_BUSY;if(live<0)goto failed;
     uint32_t v;
@@ -352,7 +389,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
     case P_ERST_BASE:if(!wr64(x,x->runtime+0x30,x->erst_pa))goto failed;x->phase=P_ERDP;break;
     case P_ERDP:if(!wr64(x,x->runtime+0x38,x->event_pa))goto failed;x->phase=P_IMAN;break;
     case P_IMAN:if(!wr(x,x->runtime+0x20,1))goto failed;x->phase=P_CONFIG;break;
-    case P_CONFIG:if(!wr(x,x->operational+0x38,1))goto failed;x->phase=P_RUN;break;
+    case P_CONFIG:if(!wr(x,x->operational+0x38,x->cap_slots<2?1:2))goto failed;x->phase=P_RUN;break;
     case P_RUN:if(!wr(x,x->operational,1))goto failed;x->phase=P_RUNNING;break;
     case P_RUNNING:
         if(!rd(x,x->operational+4,&v)||(v&(BIT(2)|BIT(12))))goto failed;if(v&1)break;x->phase=P_POWER;break;
@@ -368,32 +405,71 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(x->failed)goto failed;
         if(!x->irq_mode||x->irq_service){int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
         if(x->command_kind)break;
-        if(x->port_ready==1){if(!command(x,C_ENABLE,x->slot_type<<16))goto failed;x->port_ready=4;break;}
-        if(x->port_ready==2){address_context(x);if(!command(x,C_ADDRESS,(x->slot<<24)|BIT(9)))goto failed;x->port_ready=4;break;}
-        if(x->port_ready!=3)break;
-        if(x->endpoints[0].pending==1&&x->pending_address&&!x->address_status) {
-            address_context(x);if(!command(x,C_ADDRESS,x->slot<<24))goto failed;x->endpoints[0].pending=2;break;
-        }
-        if(x->evaluate_pending){
-            memset(x->input,0,33*x->context_bytes);put32(x->input+4,BIT(1));
-            ep_context(x,&x->endpoints[0]);
-            if(!command(x,C_EVALUATE,x->slot<<24))goto failed;break;
-        }
-        for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(x->endpoints[i].opened&&!x->endpoints[i].configured) {
-            if(!x->address||!configure(x))goto failed;goto done;
-        }
-        for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(x->endpoints[i].pending==1) {
-            if(!submit_endpoint(x,&x->endpoints[i]))goto failed;break;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            struct a733_xhci_device *d=&x->devices[j];
+            if(d->port_ready==1){if(!command(x,d,C_ENABLE,x->slot_type<<16))goto failed;d->port_ready=4;goto done;}
+            if(d->port_ready==2){address_context(x,d);if(!command(x,d,C_ADDRESS,(d->slot<<24)|BIT(9)))goto failed;d->port_ready=4;goto done;}
+            if(d->port_ready!=3)continue;
+            if(d->endpoints[0].pending==1&&d->pending_address&&!d->address_status){
+                address_context(x,d);if(!command(x,d,C_ADDRESS,d->slot<<24))goto failed;d->endpoints[0].pending=2;goto done;
+            }
+            if(d->evaluate_pending){
+                memset(d->input,0,33*x->context_bytes);put32(d->input+4,BIT(1));ep_context(x,d,&d->endpoints[0]);
+                if(!command(x,d,C_EVALUATE,d->slot<<24))goto failed;goto done;
+            }
+            if(!d->hub||d->hub_ports){
+                for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].opened&&!d->endpoints[i].configured){
+                    if(!d->address||!configure(x,d))goto failed;goto done;
+                }
+            }
+            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].pending==1&&d->endpoints[i].configured){
+                if(!submit_endpoint(x,d,&d->endpoints[i]))goto failed;goto done;
+            }
         }
         break;
     default:goto failed;
     }
-done:return x->phase==P_ACTIVE&&x->port_ready==3?A733_XHCI_READY:A733_XHCI_PENDING;
+done:return x->phase==P_ACTIVE&&x->devices[0].port_ready==3?A733_XHCI_READY:A733_XHCI_PENDING;
 failed:fault(x);return A733_XHCI_RETAINED;
+}
+int a733_xhci_bind_child(struct a733_xhci *x,unsigned parent,unsigned port_number,unsigned speed,uint64_t deadline)
+{
+    if(!owner(x)||x->failed||x->cap_slots<2||!port_number||port_number>7||speed<1||speed>3||
+       deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+    struct a733_xhci_device *hub=&x->devices[0],*d=&x->devices[1];
+    if(hub->address!=parent||!hub->hub_configured||port_number>hub->hub_ports||hub->speed!=3||!hub->zero_retired)return 0;
+    if(d->port_ready)return x->default_device==1&&!d->zero_retired&&d->parent==hub->slot&&d->parent_port==port_number&&d->speed==speed;
+    d->parent=hub->slot;d->parent_port=port_number;d->speed=speed;d->deadline=deadline;d->port_ready=1;x->default_device=1;return 1;
+}
+int a733_xhci_mark_hub(struct a733_xhci *x,unsigned address)
+{
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||x->failed||d!=&x->devices[0]||d->speed!=3||d->hub_ports)return 0;
+    d->hub=1;return 1;
+}
+int a733_xhci_hub_configure(struct a733_xhci *x,unsigned address,unsigned ports,unsigned ttt,unsigned mtt)
+{
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||x->failed||!d||!d->hub||!address||!ports||ports>7||ttt>3||mtt>1||d->hub_ports||guard(x,x->deadline)!=1)return 0;
+    d->hub_ports=ports;d->hub_ttt=ttt;d->hub_mtt=mtt;return 1;
+}
+int a733_xhci_retire_zero(struct a733_xhci *x)
+{
+    struct a733_xhci_device *d=device_address(x,0);
+    if(!owner(x)||x->failed||!d||!d->address||!d->hardware_address||d->pending_address||d->address_status||d->control_stage||d->endpoints[0].pending)return 0;
+    d->zero_retired=1;return 1;
+}
+unsigned a733_xhci_device_speed(const struct a733_xhci *x,unsigned address)
+{
+    if(!x||x->self!=x||x->failed)return 0;
+    if(!address)return x->default_device<A733_XHCI_DEVICES?x->devices[x->default_device].speed:0;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)if(x->devices[i].address==address)return x->devices[i].speed;
+    return 0;
 }
 int a733_xhci_reset_port(struct a733_xhci *x,uint64_t deadline)
 {
-    if(!owner(x)||x->failed||x->phase!=P_ACTIVE||!x->connected||x->port_reset||x->slot||
+    struct a733_xhci_device *d=x?&x->devices[0]:NULL;
+    if(!owner(x)||x->failed||x->phase!=P_ACTIVE||!x->connected||x->port_reset||d->slot||
        deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
     x->port_reset=1;x->reset_deadline=deadline;return 1;
 }
@@ -401,68 +477,72 @@ int a733_xhci_port_connected(const struct a733_xhci *x)
 {return x&&x->self==x&&!x->failed&&x->connected;}
 int a733_xhci_open(struct a733_xhci *x,unsigned address,unsigned ep,unsigned type,unsigned packet,uint64_t deadline)
 {
-    if(!owner(x)||x->failed||!x->connected||address!=x->address||ep&~0x8fu||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||x->failed||!x->connected||address!=d->address||ep&~0x8fu||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
     if(!(ep&15)) {
-        if(type||ep||x->endpoints[0].pending||x->evaluate_pending||
-           (x->speed==2&&packet!=8)||(x->speed==3&&packet!=8&&packet!=64)||
-           (x->speed==1&&packet!=8&&packet!=16&&packet!=32&&packet!=64))return 0;
-        unsigned actual=x->speed==3?64:packet;
-        if(address&&actual!=x->endpoints[0].packet)x->evaluate_pending=1;
-        x->endpoints[0].opened=1;x->endpoints[0].packet=actual;x->endpoints[0].number=1;return 1;
+        if(type||ep||d->endpoints[0].pending||d->evaluate_pending||
+           (d->speed==2&&packet!=8)||(d->speed==3&&packet!=8&&packet!=64)||
+           (d->speed==1&&packet!=8&&packet!=16&&packet!=32&&packet!=64))return 0;
+        unsigned actual=d->speed==3?64:packet;
+        if(address&&actual!=d->endpoints[0].packet)d->evaluate_pending=1;
+        d->endpoints[0].opened=1;d->endpoints[0].packet=actual;d->endpoints[0].number=1;return 1;
     }
-    if(!address||type!=2||packet!=512||x->speed!=3)return 0;
-    struct a733_xhci_endpoint *e=endpoint(x,ep);
+    if(!address||type!=2||packet!=512||d->speed!=3)return 0;
+    struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==type&&!e->aborted;
-    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!x->endpoints[i].opened) {
-        e=&x->endpoints[i];e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
+    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened) {
+        e=&d->endpoints[i];e->opened=1;e->transfer_type=type;e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=!!(ep&128);e->deadline=deadline;return 1;
     }
     return 0;
 }
 int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     unsigned packet,unsigned interval,uint64_t deadline)
 {
-    if(!owner(x)||x->failed||!x->connected||!address||address!=x->address||
-       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(x->speed==2?8u:64u)||
-       !interval||interval>(x->speed==3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
+       ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(d->speed==2?8u:64u)||
+       !interval||interval>(d->speed==3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
     unsigned encoded;
-    if(x->speed==3)encoded=interval-1;
+    if(d->speed==3)encoded=interval-1;
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
-    struct a733_xhci_endpoint *e=endpoint(x,ep);
+    struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;
-    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!x->endpoints[i].opened){
-        e=&x->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
+    for(unsigned i=1;i<A733_XHCI_ENDPOINTS;++i)if(!d->endpoints[i].opened){
+        e=&d->endpoints[i];e->opened=1;e->transfer_type=3;e->interval=encoded;
         e->number=dci(ep);e->address=ep;e->packet=packet;e->direction=1;e->deadline=deadline;return 1;
     }
     return 0;
 }
 int a733_xhci_setup(struct a733_xhci *x,unsigned address,const uint8_t setup[8],uint64_t deadline)
 {
-    if(!owner(x)||x->failed||!outside(x,setup,8)||address!=x->address||!x->endpoints[0].opened||
-       x->control_stage!=CONTROL_IDLE||x->endpoints[0].pending||deadline>x->lifetime_deadline)return 0;
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||x->failed||!outside(x,setup,8)||address!=d->address||!d->endpoints[0].opened||
+       d->control_stage!=CONTROL_IDLE||d->endpoints[0].pending||deadline>x->lifetime_deadline)return 0;
     uint8_t copied[8];memcpy(copied,setup,8);unsigned length=copied[6]|(unsigned)copied[7]<<8;
     if(length>A733_XHCI_TRANSFER_BYTES||guard(x,deadline)!=1)return 0;
     unsigned set_address=copied[0]==0&&copied[1]==5;
-    if(set_address&&(address||length||copied[3]||copied[4]||copied[5]||!copied[2]||copied[2]>127||x->pending_address))return 0;
+    if(set_address&&(address||length||copied[3]||copied[4]||copied[5]||!copied[2]||copied[2]>127||d->pending_address))return 0;
     /* No other form of SET_ADDRESS may reach the physical setup ring. */
     if(copied[1]==5&&(copied[0]&0x60)==0&&!set_address)return 0;
-    memcpy(x->setup,copied,8);x->control_length=length;x->control_in=!!(copied[0]&128);x->control_stage=CONTROL_SETUP;
-    if(set_address)x->pending_address=copied[2];
-    struct a733_xhci_endpoint *e=&x->endpoints[0];e->address=0;e->length=8;e->kind=T_SETUP;e->direction=0;e->pending=1;e->deadline=deadline;
+    memcpy(d->setup,copied,8);d->control_length=length;d->control_in=!!(copied[0]&128);d->control_stage=CONTROL_SETUP;
+    if(set_address)d->pending_address=copied[2];
+    struct a733_xhci_endpoint *e=&d->endpoints[0];e->address=0;e->length=8;e->kind=T_SETUP;e->direction=0;e->pending=1;e->deadline=deadline;
     return 1;
 }
 int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t *buffer,unsigned bytes,uint64_t deadline)
 {
-    if(!owner(x)||x->failed||address!=x->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||x->failed||address!=d->address||ep&~0x8fu||bytes>A733_XHCI_TRANSFER_BYTES||
        (bytes&&!outside(x,buffer,bytes))||deadline>x->lifetime_deadline)return 0;
-    struct a733_xhci_endpoint *e=endpoint(x,ep);
+    struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(!e||!e->opened||e->pending||e->aborted||guard(x,deadline)!=1)return 0;
     unsigned direction=!!(ep&128),kind=T_NORMAL;
     if(!(ep&15)) {
-        if(x->control_stage==CONTROL_DATA) {
-            if(bytes!=x->control_length||direction!=x->control_in)return 0;kind=T_DATA;
-        } else if(x->control_stage==CONTROL_STATUS) {
-            unsigned status_in=x->control_length?!x->control_in:1;
-            if(bytes||direction!=status_in)return 0;kind=x->address_status?T_ADDRESS_STATUS:T_STATUS;
+        if(d->control_stage==CONTROL_DATA) {
+            if(bytes!=d->control_length||direction!=d->control_in)return 0;kind=T_DATA;
+        } else if(d->control_stage==CONTROL_STATUS) {
+            unsigned status_in=d->control_length?!d->control_in:1;
+            if(bytes||direction!=status_in)return 0;kind=d->address_status?T_ADDRESS_STATUS:T_STATUS;
         } else return 0;
     }
     if(bytes&&!direction)memcpy(e->bounce,buffer,bytes);
@@ -471,8 +551,9 @@ int a733_xhci_transfer(struct a733_xhci *x,unsigned address,unsigned ep,uint8_t 
 }
 int a733_xhci_abort(struct a733_xhci *x,unsigned address,unsigned ep)
 {
-    if(!owner(x)||address!=x->address||ep&~0x8fu)return 0;
-    struct a733_xhci_endpoint *e=endpoint(x,ep);
+    struct a733_xhci_device *d=device_address(x,address);
+    if(!owner(x)||!d||address!=d->address||ep&~0x8fu)return 0;
+    struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(!e||!e->pending)return 1;e->caller=NULL;e->aborted=1;fault(x);return 1;
 }
 void a733_xhci_lost(struct a733_xhci *x)

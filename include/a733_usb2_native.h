@@ -5,7 +5,7 @@
 #include "a733_xhci.h"
 struct a733_platform_locks;
 #define A733_USB2_HID_REPORT_BYTES 64u
-enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID };
+enum a733_usb2_device_kind { A733_USB2_DEVICE_NONE,A733_USB2_DEVICE_MSC,A733_USB2_DEVICE_HID,A733_USB2_DEVICE_HUB };
 /* Raw completed interrupt input, not a desktop keyboard/mouse event. Zero or
  * short reports retain their actual lengths; no boot-report semantics inferred. */
 struct a733_usb2_hid_report {
@@ -20,6 +20,18 @@ struct a733_usb2_hid {
     uint64_t deadline,sequence;
     uint8_t *pending_buffer;
     uint8_t descriptor[256],copied[A733_USB2_HID_REPORT_BYTES];
+};
+struct a733_usb2_descriptor {
+    unsigned kind,device_probe,configuration_probe,string_bytes,string_id,string_language;
+    uint8_t device_prefix[8],configuration_prefix[9];
+};
+struct a733_usb2_hub {
+    unsigned present,address,protocol,endpoint,packet,interval,ports,ttt,power_good_2ms;
+    unsigned mark_pending,mark_address,configure_pending;
+    unsigned device_power,local_power,alt_selected,powered_mask,selected_port;
+    unsigned status_deferred,status_requested,status_bytes;
+    uint64_t power_good_deadline;
+    uint8_t *status_buffer;
 };
 struct a733_usb2_native {
     struct a733_usb2_native *self;
@@ -36,13 +48,15 @@ struct a733_usb2_native {
     uint64_t last_now,read_deadline;
     enum a733_usb2_device_kind kind;
     struct a733_usb2_hid hid;
+    struct a733_usb2_hub hub;
+    struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
     unsigned initialized,core_started,stack_started,failed,address,mounted,
-        read_pending,read_complete,read_failed,address_zero_closed;
+        read_pending,read_complete,read_failed;
     uint32_t blocks,block_bytes,bot_tag,bot_total,bot_received;
     unsigned bot_phase,bot_opcode,bot_stage,bot_endpoint,bot_requested,bot_status;
     uint8_t *bot_buffer,*control_buffer;
-    unsigned control_bytes,device_probe,configuration_probe,string_bytes,string_id,string_language;
-    uint8_t control_setup[8],device_prefix[8],configuration_prefix[9];
+    unsigned control_bytes,control_address,control_device;
+    uint8_t control_setup[8];
     _Alignas(64) uint8_t sector[512];
 };
 /* Privileged boot constructor, EL1 before the scheduler. Reserve a permanent
