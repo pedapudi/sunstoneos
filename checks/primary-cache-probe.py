@@ -9,6 +9,7 @@ import struct
 from pathlib import Path
 from unicorn import UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC
+from unicorn import arm64_const as registers
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,9 +32,14 @@ class Probe(parent.Probe):
         assert self.cache_manifest['primary_manifest']['sha256'] == probe.digest(primary/'manifest.json')
         self.el1 = self.cache_manifest.get('el1', False)
         self.interrupts = self.cache_manifest.get('interrupts', False)
+        self.context = self.cache_manifest.get('context', False)
+        self.context_pages = {self.symbols['a733_cpu_el1_stacks'], self.symbols['a733_cpu_el1_stacks']+0x7000, self.symbols['ullPortInterruptNestings'] & ~4095}
+        self.context_dirty = set(); self.context_cleaned = set(); self.context_stores = []
+        self.context_entries = 0; self.context_returns = 0; self.irq_registers = None
+        self.late_delivery = False
         self.secure_pmr = 0
         self.delivered = []
-        assert self.cache_manifest['sources'] == {name: probe.digest(ROOT/name) for name in probe.sources(self.el1, self.interrupts)}
+        assert self.cache_manifest['sources'] == {name: probe.digest(ROOT/name) for name in probe.sources(self.el1, self.interrupts, self.context)}
         for item in self.cache_manifest['payloads']:
             data = (bundle/item['name']).read_bytes()
             assert probe.digest(bundle/item['name']) == item['sha256']
@@ -57,10 +63,31 @@ class Probe(parent.Probe):
                                 ttbr0_el1=0xace000, ttbr1_el1=0x135000, mair_el1=0x1234)
         self.original_mmio = copy.deepcopy(self.mmio)
 
+    def saved_irq_registers(self):
+        u = self.cpus[0]
+        ids = [getattr(registers, 'UC_ARM64_REG_X'+str(n)) for n in range(31)]
+        ids += [getattr(registers, 'UC_ARM64_REG_Q'+str(n)) for n in range(32)]
+        ids += [registers.UC_ARM64_REG_SP, registers.UC_ARM64_REG_FPCR, registers.UC_ARM64_REG_FPSR]
+        return [u.reg_read(n) for n in ids]
+
+    def exception(self, core, level, address, *args, **kwargs):
+        if self.context and kwargs.get('irq', False):
+            assert self.irq_registers is None, 'Unexpected nested IRQ'
+            self.irq_registers = self.saved_irq_registers()
+            self.context_entries += 1
+        return super().exception(core, level, address, *args, **kwargs)
+
     def memory(self, u, access, address, size, value, core):
         write = access == UC_MEM_WRITE
         if self.suffix and self.el1:
             if self.regs[0]['currentel'] == 4:
+                if self.context and 0x41200000 <= address < 0x42000000:
+                    assert address & ~4095 in self.context_pages and (address+size-1) & ~4095 in self.context_pages, ('Unowned context access', hex(address), size)
+                    if write:
+                        assert not self.context_cleaned, 'Context store after cache cleaning'
+                        self.context_stores.append((address, size))
+                        self.context_dirty.update(range(address & ~63, (address+size+63) & ~63, 64))
+                    return
                 if self.interrupts and address < 0x41000000:
                     assert address in (0x03460000, 0x03470100, 0x03470180, 0x03470200,
                                        0x03470280, 0x03470300, 0x0347041c), hex(address)
@@ -122,8 +149,28 @@ class Probe(parent.Probe):
             return
         ins = next(self.decoder.disasm(bytes(u.mem_read(address, 4)), address))
         op, args = ins.mnemonic, ins.op_str.split(', ')
+        if self.context:
+            if address == self.cache_manifest['hooks']['primary_context_begin'] and self.fault == 'unexpected-yield':
+                u.mem_write(self.symbols['ullPortYieldRequired'], struct.pack('<Q', 1))
+            if address == self.cache_manifest['hooks']['primary_context_clean'] and self.fault == 'cleanup-deadline':
+                self.clock = self.reg(core, 'x22') + 1
+            if op == 'dc' and args[0] == 'civac':
+                line = self.reg(core, args[1])
+                assert self.regs[0]['currentel'] == 4 and line % 64 == 0 and line & ~4095 in self.context_pages
+                self.context_cleaned.add(line); self.context_dirty.discard(line)
+            if op == 'eret' and self.regs[0]['currentel'] == 4 and self.irq_registers is not None:
+                if self.fault == 'context-corruption' and not self.context_returns:
+                    u.reg_write(registers.UC_ARM64_REG_Q7, u.reg_read(registers.UC_ARM64_REG_Q7) ^ 1)
+                else:
+                    assert self.saved_irq_registers() == self.irq_registers, 'Production IRQ changed interrupted registers'
+                self.context_returns += 1; self.irq_registers = None
+            if op == 'smc':
+                assert not self.context_dirty, 'Dirty Normal-memory lines on SMC return'
+                assert len(self.context_cleaned) == 192, 'Owned context pages not completely cleaned'
         if self.interrupts:
             m = self.regs[0]
+            if address == self.cache_manifest['hooks']['primary_irq_delivery_stop']:
+                self.late_delivery = True
             if op == 'mrs' and args[1] == 'cntpct_el0' and m['currentel'] == 4:
                 self.clock += 1000
             if m['currentel'] == 4 and m['cntp_ctl_el0'] & 3 == 1 and self.clock >= m['cntp_cval_el0'] and self.irq_active[0] != 30:
@@ -170,7 +217,8 @@ class Probe(parent.Probe):
             self.returned = True
             u.emu_stop()
             return
-        hidden = set(self.pending[0]) if self.interrupts and self.fault == 'missing-irqs' else set()
+        hidden = set(self.pending[0]) if self.interrupts and (self.fault == 'missing-irqs' or
+            self.fault == 'late-irqs' and not self.late_delivery) else set()
         if hidden: self.pending[0].clear()
         parent.publication.model.Machine.instruction(self, u, address, size, core)
         self.pending[0].update(hidden)
@@ -231,6 +279,8 @@ def check_el1(args, machine):
              'cleanup-readback', 'cache-restoration-failure')
     if machine.interrupts:
         names = ('success', 'baseline-refusal', 'missing-irqs', 'unexpected-irq', 'cleanup-pending', 'secure-mask-refusal')
+    if machine.context:
+        names = ('success', 'baseline-refusal', 'missing-irqs', 'late-irqs', 'context-corruption', 'cleanup-deadline', 'unexpected-yield')
     for name in names:
         if name != 'success':
             ram, regs, context = machine.post_prepare
@@ -243,6 +293,9 @@ def check_el1(args, machine):
             machine.mmio_writes = []; machine.cache_writes = []
             machine.pending[0].clear(); machine.irq_active[0] = None
             machine.secure_pmr = 0; machine.delivered = []
+            machine.context_dirty.clear(); machine.context_cleaned.clear(); machine.context_stores = []
+            machine.context_entries = machine.context_returns = 0; machine.irq_registers = None
+            machine.late_delivery = False
             if machine.interrupts: machine.clock = 1000000
             machine.fault = name
             machine.inject_cache_restore_fault = name == 'cache-restoration-failure'
@@ -255,23 +308,28 @@ def check_el1(args, machine):
         path = args.output.parent/('report-'+name+'.bin'); path.write_bytes(raw)
         record = {'case': name, 'pass': True, 'returned': machine.returned, 'retained': machine.retained,
                   'EL1': machine.el1_seen, 'SMC': machine.smc_seen, 'report_sha256': probe.digest(path)}
-        if name in ('success', 'baseline-refusal', 'group-refusal', 'missing-irqs'):
+        if name in ('success', 'baseline-refusal', 'group-refusal', 'missing-irqs', 'late-irqs'):
             assert machine.returned and not machine.retained, (name, machine.trace[-10:])
             result = probe.decode(raw, machine.nonce, machine.cache_manifest)
-            assert result['primary_cached_el1_completed'] == (name in ('success', 'missing-irqs'))
+            assert result['primary_cached_el1_completed'] == (name in ('success', 'missing-irqs', 'late-irqs'))
             assert machine.mmio_writes[-2:] == [(0x08001004, 4, 0x20), (0x08001008, 4, 0)]
             if name == 'baseline-refusal': assert len(machine.mmio_writes) == 2
             else:
                 for address in (0x03400000, *range(0x03400104, 0x03400124, 4), 0x03460014,
                                 0x03470080, 0x03470d00, 0x03470c04, 0x03470400, 0x03470100):
                     assert machine.mmio[address] == machine.original_mmio[address], hex(address)
-            if name in ('success', 'missing-irqs'): assert machine.el1_seen and machine.smc_seen and machine.cache_writes
+            if name in ('success', 'missing-irqs', 'late-irqs'): assert machine.el1_seen and machine.smc_seen and machine.cache_writes
             else: assert not machine.el1_seen and not machine.smc_seen
             if machine.interrupts:
-                assert result['primary_interrupts_completed'] == (name == 'success')
+                assert result['primary_interrupts_completed'] == (name in ('success', 'late-irqs'))
                 assert not machine.pending[0] and machine.irq_active[0] is None
                 assert machine.mmio[0x0347041c] == machine.original_mmio[0x0347041c]
-                if name == 'success': assert sorted(machine.delivered) == [0, 30]
+                if name in ('success', 'late-irqs'): assert sorted(machine.delivered) == [0, 30]
+                if machine.context and name != 'baseline-refusal':
+                    assert result['primary_context_completed'] == (name in ('success', 'late-irqs'))
+                    assert machine.context_entries == machine.context_returns == (2 if name in ('success', 'late-irqs') else 0)
+                    assert machine.context_stores and len(machine.context_cleaned) == 192 and not machine.context_dirty
+                    record['context'] = {'entries': machine.context_entries, 'returns': machine.context_returns, 'stores': len(machine.context_stores), 'cleaned_lines': len(machine.context_cleaned)}
                 if name == 'missing-irqs': assert not machine.delivered and result['interrupt_outcome'] == 1
             record['result'] = result
         else:
@@ -284,7 +342,7 @@ def check_el1(args, machine):
         cases.append(record)
         (args.output.parent/('case-'+name+'.json')).write_text(json.dumps(record, indent=2)+'\n')
         print('PASS primary EL1 '+name, flush=True)
-    args.output.write_text(json.dumps({'physical_access': False, 'el1': True, 'interrupts': machine.interrupts,
+    args.output.write_text(json.dumps({'physical_access': False, 'el1': True, 'interrupts': machine.interrupts, 'context': machine.context,
         'native_sha256': probe.digest(args.image), 'manifest_sha256': probe.digest(args.bundle/'manifest.json'),
         'sources': {n: probe.digest(ROOT/n) for n in ('checks/primary-cache-probe.py',
                    'checks/primary-publication-probe.py', 'checks/a733-supervised-publication.py',

@@ -20,6 +20,7 @@ primary_irq_vectors:
 .section .text.primary_irq_probe,"ax"
 .global primary_irq_probe, primary_irq_handler, primary_irq_park
 .global primary_irq_delivery_stopped
+.global primary_irq_delivery_stop
 .type primary_irq_probe,%function
 primary_irq_probe:
     mov x12, x30
@@ -45,7 +46,12 @@ primary_irq_probe:
     mrs x17, cntp_cval_el0
     add x13, x24, #0x10000
     ldr w14, [x13, #0x41c]
+#ifdef SUNSTONE_PRIMARY_CONTEXT
+    bl primary_context_begin
+    ldr x0, =probe_context_vectors
+#else
     adr x0, primary_irq_vectors
+#endif
     msr vbar_el1, x0
     isb
     msr icc_ctlr_el1, xzr
@@ -93,6 +99,10 @@ primary_irq_probe:
     isb
     msr daifclr, #2
 .Lwait_delivery:
+#ifdef SUNSTONE_PRIMARY_CONTEXT
+    ldr x0, =probe_production_el1_stacks
+    ldp x25, x26, [x0]
+#endif
     cmp x25, #1
     b.ne .Ltime
     cmp x26, #1
@@ -107,7 +117,20 @@ primary_irq_probe:
 .Lreceived:
     mov x27, #0
 .Lstop:
+primary_irq_delivery_stop:
     msr daifset, #2
+#ifdef SUNSTONE_PRIMARY_CONTEXT
+    ldr x0, =probe_production_el1_stacks
+    ldp x25, x26, [x0]
+#endif
+    // Delivery can finish between the deadline check and masking IRQs.
+    // Decide from the final counters after no handler can change them.
+    cmp x25, #1
+    b.ne .Ldisable
+    cmp x26, #1
+    b.ne .Ldisable
+    mov x27, #0
+.Ldisable:
     msr cntp_ctl_el0, xzr
     isb
     msr icc_igrpen1_el1, xzr
@@ -162,6 +185,16 @@ primary_irq_delivery_stopped:
     cmp x0, x16
     b.ne primary_irq_park
 .Lreturn:
+#ifdef SUNSTONE_PRIMARY_CONTEXT
+    cmp x27, #2
+    b.ne .Lcontext_finish
+    mov x23, #0
+    mov x24, #0
+    b .Lcontext_return
+.Lcontext_finish:
+    bl primary_context_finish
+.Lcontext_return:
+#endif
     ret x12
 .size primary_irq_probe,.-primary_irq_probe
 

@@ -19,6 +19,8 @@ REPORT = (0x42018000, 0x2100)
 EL1_REPORT = (0x42018000, 0x2900)
 IRQ_REPORT = (0x42018000, 0x2940)
 IRQ_SOURCES = ('boot/a733/primary-interrupt-probe.S',)
+CONTEXT_REPORT = (0x42018000, 0x2960)
+CONTEXT_SOURCES = ('boot/a733/primary-context-probe.S',)
 EXTENSION = 0x41020800
 SOURCES = ('boot/a733/primary-cache-probe.S', 'boot/a733/native-el3-cache-probe.S',
            'tools/prepare-primary-cache-probe.py')
@@ -26,18 +28,18 @@ SOURCES = ('boot/a733/primary-cache-probe.S', 'boot/a733/native-el3-cache-probe.
 EL1_SOURCES = ('boot/a733/primary-local-cache-probe.c', 'boot/a733/secondary-distributor-probe.c',
                'boot/a733/secondary-local-probe.h', 'boot/a733/native-el1-cache-probe.S',
                'include/a733_cpu_continue.h', 'include/a733_cpu_entry.h', 'include/a733_cpu_start.h')
-HOOK_PREFIXES = ('primary_cache_', 'primary_local_', 'primary_irq_', 'native_el', 'el1_')
+HOOK_PREFIXES = ('primary_cache_', 'primary_local_', 'primary_irq_', 'primary_context_', 'native_el', 'el1_')
 
 
-def sources(el1, interrupts=False):
-    return SOURCES + (EL1_SOURCES if el1 else ()) + (IRQ_SOURCES if interrupts else ())
+def sources(el1, interrupts=False, context=False):
+    return SOURCES + (EL1_SOURCES if el1 else ()) + (IRQ_SOURCES if interrupts else ()) + (CONTEXT_SOURCES if context else ())
 
 
 def report_spec(manifest):
-    return IRQ_REPORT if manifest.get('interrupts', False) else EL1_REPORT if manifest.get('el1', False) else REPORT
+    return CONTEXT_REPORT if manifest.get('context', False) else IRQ_REPORT if manifest.get('interrupts', False) else EL1_REPORT if manifest.get('el1', False) else REPORT
 
 
-def native_aliases(el1):
+def native_aliases(el1, context=False):
     result = {'probe_production_allow_ns_code': 'a733_cached_allow_ns_code',
               'probe_production_enable_el3': 'a733_cpu_coherence_enable_el3',
               'probe_production_el3_root': 'a733_cached_el3_l1'}
@@ -47,6 +49,10 @@ def native_aliases(el1):
                       probe_production_el1_stacks='a733_cpu_el1_stacks')
         result.update({n: n for n in ('a733_cpu_index', 'a733_cpu_continue_init',
                                     'a733_cpu_continue_poll', 'memset')})
+    if context:
+        result.update(probe_context_vectors='a733_cached_el1_vectors',
+                      probe_context_nesting='ullPortInterruptNestings',
+                      probe_context_yield='ullPortYieldRequired')
     return result
 
 
@@ -56,11 +62,12 @@ def branch(address, target):
     return 0x14000000 | ((displacement // 4) & 0x3ffffff)
 
 
-def patch_points(symbols):
+def patch_points(symbols, context=False):
     entry = symbols['a733_cached_enter_el1'] + 0x144
     vector = symbols['a733_cached_el3_vectors'] + 8 * 128 + 4
     return ((entry, 0xd518cc9f, 'el1_observe_checkpoint'),
-            (vector, branch(vector, symbols['a733_cached_el3_fault']), 'el1_return_checkpoint'))
+            (vector, branch(vector, symbols['a733_cached_el3_fault']), 'el1_return_checkpoint')) + (
+                ((symbols['vApplicationIRQHandler'], 0xa9be7bfd, 'primary_context_dispatch'),) if context else ())
 
 
 def patch_payloads(frozen, payloads, points, hooks):
@@ -104,6 +111,7 @@ def decode(raw, nonce, manifest=None):
                           epoch=local[1], startup_deadline=local[2], local_refusal=True,
                           local_phase=local[3], local_error=local[4], local_writes=local[5])
             if interrupts: result['primary_interrupts_completed'] = False
+            if manifest.get('context', False): result['primary_context_completed'] = False
             return result
     values = struct.unpack_from('<20Q', raw, 0x2000)
     require(values[0] == 3 and values[1] and values[2] > result['counter_before'] and
@@ -148,6 +156,12 @@ def decode(raw, nonce, manifest=None):
             result.update(primary_interrupts_completed=irq[3] == 0,
                           timer_interrupts=irq[1], self_interrupts=irq[2],
                           interrupt_outcome=irq[3], pending_before_cleanup=irq[4])
+            if manifest.get('context', False):
+                context = struct.unpack_from('<4Q', raw, 0x2940)
+                expected = (3, 0, 0, 0) if irq[3] == 2 else (3, 192, 1, 0)
+                require(context == expected, 'Incomplete production IRQ context cleanup.')
+                result.update(primary_context_completed=irq[3] == 0, context_cache_lines=context[1],
+                              context_register_checks=bool(context[2]))
     return result
 
 
@@ -161,9 +175,10 @@ def decode_distributor(raw, deadline):
 
 def prepare(args):
     require(all(p.is_file() for p in (args.clang, args.lld, args.objcopy)), 'Compiler, linker and objcopy paths must exist before building.')
-    interrupts = getattr(args, 'interrupts', False)
+    context = getattr(args, 'context', False)
+    interrupts = getattr(args, 'interrupts', False) or context
     el1 = getattr(args, 'el1', False) or interrupts
-    report = IRQ_REPORT if interrupts else EL1_REPORT if el1 else REPORT
+    report = CONTEXT_REPORT if context else IRQ_REPORT if interrupts else EL1_REPORT if el1 else REPORT
     parent_path = args.primary/'manifest.json'
     parent = json.loads(parent_path.read_text())
     frozen, reservations = primary.load(args.primary, args.image, parent)
@@ -173,7 +188,7 @@ def prepare(args):
         elf = ELFFile(stream)
         symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()
                    if s['st_shndx'] != 'SHN_UNDEF'}
-        aliases = {name: symbols[target] for name, target in native_aliases(el1).items()}
+        aliases = {name: symbols[target] for name, target in native_aliases(el1, context).items()}
     require(all(report[0]+report[1] <= a or a+n <= report[0]
                 for name, a, n in reservations if name != 'primary-report'),
             'Expanded report overlaps native storage.')
@@ -201,13 +216,16 @@ def prepare(args):
         units += [(EL1_SOURCES[0], 'local.o'), (EL1_SOURCES[1], 'distributor.o'),
                   ('boot/a733/native-el1-cache-probe.S', 'el1.o')]
     if interrupts: units.append((IRQ_SOURCES[0], 'interrupts.o'))
+    if context: units.append((CONTEXT_SOURCES[0], 'context.o'))
     for source, name in units:
         commands.append([args.clang, '--target=aarch64-none-elf', '-march=armv8-a',
-            '-DSUNSTONE_SECONDARY_CACHE=1', '-mgeneral-regs-only', '-O2', '-ffreestanding',
+            '-DSUNSTONE_SECONDARY_CACHE=1',
+            *([] if source in CONTEXT_SOURCES else ['-mgeneral-regs-only']), '-O2', '-ffreestanding',
             '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections',
             '-Wall', '-Wextra', '-Werror', '-I', ROOT/'include', '-I', ROOT/'boot/a733',
             *(['-DSUNSTONE_PRIMARY_EL1=1', '-DSUNSTONE_PROBE_EL1_CACHE=1'] if el1 else []),
             *(['-DSUNSTONE_PRIMARY_INTERRUPTS=1'] if interrupts else []),
+            *(['-DSUNSTONE_PRIMARY_CONTEXT=1'] if context else []),
             '-c', ROOT/source, '-o', args.output/name])
     commands += [[args.lld, '-T', link, '--gc-sections',
         *[f'--defsym={name}={value:#x}' for name, value in aliases.items()],
@@ -229,12 +247,12 @@ def prepare(args):
     overlay += (args.output/'cache.bin').read_bytes()
     (args.output/'overlay.bin').write_bytes(overlay)
     payload_data, payloads, patches = patch_payloads(frozen, parent['payloads'],
-                                                    patch_points(symbols) if el1 else (), hooks)
+                                                    patch_points(symbols, context) if el1 else (), hooks)
     for name, data in payload_data.items():
         (args.output/name).write_bytes(data)
     manifest = {'schema': 'a733-primary-cache-probe-v1', 'physical_access': False,
-        'native_sha256': NATIVE, 'el1': el1, 'interrupts': interrupts, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
-        'sha256': digest(parent_path)}, 'sources': {name: digest(ROOT/name) for name in sources(el1, interrupts)},
+        'native_sha256': NATIVE, 'el1': el1, 'interrupts': interrupts, 'context': context, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
+        'sha256': digest(parent_path)}, 'sources': {name: digest(ROOT/name) for name in sources(el1, interrupts, context)},
         'native_symbols': aliases, 'hooks': hooks, 'parent_hooks': parent['hooks'],
         'patch': {'address': address, 'original': original, 'replacement': replacement},
         'overlay': {**parent['overlay'], 'sha256': digest(args.output/'overlay.bin')},
@@ -250,4 +268,5 @@ if __name__ == '__main__':
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument("--el1", action="store_true", help="Include local GIC setup, cached EL1 entry and restoration")
     parser.add_argument("--interrupts", action="store_true", help="Include bounded CPU0 timer/self-SGI delivery and cleanup")
+    parser.add_argument("--context", action="store_true", help="Exercise production IRQ register save/restore and owned cached-data cleanup")
     prepare(parser.parse_args())

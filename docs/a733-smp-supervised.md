@@ -1404,3 +1404,40 @@ interrupt, one self-directed interrupt, no pending interrupt before cleanup,
 restored controls and saved DRAM, and responsive ROM return. The runner exited
 and its claim closed. This establishes CPU0 interrupt delivery through the
 dedicated handler; production task-context handling and scheduling remain unqualified.
+
+## Production IRQ saves and cached stack cleanup pass on CPU0
+
+The builder's `--context` option extends the returning interrupt diagnostic with
+the frozen FreeRTOS vector and IRQ handler. It replaces only the application
+callback, which otherwise requires initialized scheduler state. The bounded
+callback records timer/self-interrupt counts and requires nesting one with no
+pending task switch. Native register saves, nesting updates and the non-switching
+return execute unchanged. No task or secondary CPU starts.
+
+The physical checks compare nine general-register patterns, all 32 vector
+registers, FP control/status and SP after delivery. Original vector and FP state
+restore before cleanup. The instruction model additionally compares all 31
+general registers at each IRQ return. The handler writes the last CPU0 stack
+page and the port's nesting-state page; the first stack page holds counters and
+saved FP state. All three pages are exclusively owned for this interval.
+
+After masking interrupts, the diagnostic refreshes the final delivery counts.
+This covers a handler that completes after the deadline decision but before
+masking. The previous cleanup then disables and drains the two owned interrupts.
+After the final Normal-memory store, DSB SY precedes linewise Nonsecure DC CIVAC
+for all 192 lines in the three pages. Another DSB SY completes cleaning before
+SMC and cache disable. An expired cleanup deadline retains the pages.
+
+Seven instruction cases cover normal delivery, baseline refusal, missed delivery,
+late delivery, corrupted vector state, expired cleanup and unexpected task-switch
+state. Twelve host cases cover report capture, restoration, input identities and
+incomplete context proof. Unchanged native code and completed overlay objects
+were reused; the delivery-race correction rebuilt only the affected IRQ object.
+
+Physical execution passes under
+`primary-context-probe-20261018/physical-005/runtime/session.json`. Both interrupts,
+register checks, all 192 cache-line operations, local/distributor restoration,
+translation restoration and saved DRAM restoration pass. ROM returns responsive,
+and the runner exits with its claim closed. This establishes the production IRQ
+path without task selection. Complete scheduling, broader runtime memory use
+and concurrent device workloads remain outstanding.

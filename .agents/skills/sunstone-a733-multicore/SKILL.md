@@ -162,3 +162,23 @@ control restoration. Reuse its accepted evidence for unchanged inputs. Its
 runtime data. Do not generalize that assumption to a running OS or use broad
 cache discard to avoid proving ownership. The host saves both temporary table
 pages as part of the existing exclusive RAM reservation.
+
+## Separate interrupt delivery, context restoration and task selection
+
+A stackless IRQ diagnostic does not exercise the production FreeRTOS handler's
+cached stack or nesting-state writes. Trace its actual vector, saved general/FP
+state, per-core indexing and every callback before extending execution. The
+application dispatcher can depend on initialized scheduler and deadline state;
+calling it from an earlier checkpoint can fail before testing context restoration.
+A bounded diagnostic callback must not be described as the complete application.
+
+The returning production-handler interval requires no pending task switch and
+cleans all owned stack, callback and nesting-state pages through Nonsecure
+mappings before cache disable. Its success does not establish task selection or
+the full scheduler's larger write set. Derive that set from actual stores and
+complete synchronization before any CPU or ROM transition.
+
+Mask interrupts before taking final delivery counts. A handler can complete
+between a timeout decision and masking; stale counts can falsely report an
+undrained interrupt. Reconcile the final counts with pending/active state before
+classifying the result or attempting cleanup.

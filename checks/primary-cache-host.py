@@ -31,7 +31,8 @@ def main():
     el1 = manifest.get('el1', False)
     extent = host.probe.report_spec(manifest)
     interrupts = manifest.get('interrupts', False)
-    cases = host.IRQ_CASES if interrupts else host.EL1_CASES if el1 else host.CASES
+    context = manifest.get('context', False)
+    cases = host.CONTEXT_CASES if context else host.IRQ_CASES if interrupts else host.EL1_CASES if el1 else host.CASES
     reports = {}
     if el1:
         model = json.loads(args.model.read_text())
@@ -41,7 +42,7 @@ def main():
             reports[name] = path.read_bytes()
     host.load(args.build, args.bundle/'image.elf', manifest)
     proof = {'schema': 'a733-primary-cache-software-v1', 'physical_access': False,
-        'el1': el1, 'interrupts': interrupts, 'manifest_sha256': host.digest(args.build/'manifest.json'),
+        'el1': el1, 'interrupts': interrupts, 'context': context, 'manifest_sha256': host.digest(args.build/'manifest.json'),
         'host_sources': {n: host.digest(ROOT/n) for n in host.HOST_SOURCES},
         'instruction_evidence': {'path': str(args.model.resolve()), 'sha256': host.digest(args.model)},
         'host_cases': dict.fromkeys(cases, True)}
@@ -73,6 +74,8 @@ def main():
                     result[0x1a00:] = bytes(len(result)-0x1a00)
                 elif case == 'incomplete-el1-restored':
                     struct.pack_into('<Q', result, 0x2800, 2)
+                elif case == 'invalid-context-restored':
+                    struct.pack_into('<Q', result, 0x2948, 191)
                 elif case == 'invalid-interrupt-restored':
                     struct.pack_into('<Q', result, 0x2900, 2)
             return bytes(result)
@@ -91,7 +94,7 @@ def main():
             try: host.load(args.build, args.bundle/'image.elf', changed)
             except ValueError: pass
             else: raise AssertionError('Changed entry patch accepted')
-        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'invalid-interrupt-restored'):
+        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'invalid-interrupt-restored', 'invalid-context-restored'):
             sub = args.output/case
             sub.mkdir()
             harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}),

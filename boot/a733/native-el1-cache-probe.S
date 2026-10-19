@@ -145,6 +145,11 @@ el1_return_checkpoint:
     mov x16, #3
     str x16, [x19, #256]
 #endif
+#ifdef SUNSTONE_PRIMARY_CONTEXT
+    stp x23, x24, [x19, #328]
+    mov x16, #3
+    str x16, [x19, #320]
+#endif
     stp x0, x1, [x19, #72]
     stp x2, x3, [x19, #88]
     stp x4, x5, [x19, #104]
@@ -232,7 +237,8 @@ el1_return_checkpoint:
     b.ne .Lel1_refuse
     mov x16, #2
     str x16, [x19]
-    // No dirty EL1 data lines exist. Blocked walks remain in force while
+    // EL1 either made no data stores or cleaned its complete owned write set.
+    // Blocked walks remain in force while
     // disabling caches and restoring translation parameters. TCR is last.
     dsb sy
     mrs x16, sctlr_el1

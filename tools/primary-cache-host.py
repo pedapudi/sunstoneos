@@ -18,6 +18,8 @@ CASES = ('complete-return', 'transport-failure-retained', 'missing-return-retain
          'invalid-report-restored', 'changed-input-refused', 'wrong-epoch-restored')
 EL1_CASES = CASES + ('returned-local-refusal', 'incomplete-el1-restored', 'changed-entry-patch-refused')
 IRQ_CASES = EL1_CASES + ('returned-interrupt-timeout', 'invalid-interrupt-restored')
+CONTEXT_CASES = IRQ_CASES + ('invalid-context-restored',)
+CONTEXT_MODEL_CASES = ('success', 'baseline-refusal', 'missing-irqs', 'late-irqs', 'context-corruption', 'cleanup-deadline', 'unexpected-yield')
 IRQ_MODEL_CASES = ('success', 'baseline-refusal', 'missing-irqs', 'unexpected-irq', 'cleanup-pending', 'secure-mask-refusal')
 
 
@@ -27,9 +29,11 @@ def load(build, image, manifest):
             'Wrong primary cache profile.')
     el1 = manifest.get('el1', False)
     interrupts = manifest.get('interrupts', False)
+    context = manifest.get('context', False)
+    require(type(context) is bool and (not context or interrupts), 'Invalid context interval selection.')
     require(type(el1) is bool and type(interrupts) is bool and (not interrupts or el1), 'Invalid CPU interval selection.')
     report = probe.report_spec(manifest)
-    require(manifest['sources'] == {n: digest(ROOT/n) for n in probe.sources(el1, interrupts)}, 'Cache probe sources changed.')
+    require(manifest['sources'] == {n: digest(ROOT/n) for n in probe.sources(el1, interrupts, context)}, 'Cache probe sources changed.')
     parent_path = Path(manifest['primary_manifest']['path'])
     require(parent_path.is_absolute() and digest(parent_path) == manifest['primary_manifest']['sha256'],
             'Primary preparation manifest changed.')
@@ -46,7 +50,7 @@ def load(build, image, manifest):
     with image.open('rb') as stream:
         symbols = {s.name: s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()}
     require(manifest['native_symbols'] == {name: symbols[target] for name, target in
-            probe.native_aliases(el1).items()}, 'Production cache callees differ.')
+            probe.native_aliases(el1, context).items()}, 'Production cache callees differ.')
     with (build/'cache.elf').open('rb') as stream:
         hooks = {s.name: s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
                  if s.name.startswith(probe.HOOK_PREFIXES)}
@@ -68,7 +72,7 @@ def load(build, image, manifest):
             manifest['overlay'] == {**parent['overlay'], 'sha256': hashlib.sha256(actual).hexdigest()},
             'Cache overlay differs from the reviewed extension.')
     payload_data, payloads, patches = probe.patch_payloads(frozen, parent['payloads'],
-                                                         probe.patch_points(symbols) if el1 else (), hooks)
+                                                         probe.patch_points(symbols, context) if el1 else (), hooks)
     require(manifest['payloads'] == payloads and manifest['native_patches'] == patches,
             'EL1 checkpoint patches differ.')
     for name, data in payload_data.items():
@@ -83,7 +87,7 @@ def validate_software(software, manifest_hash):
             software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash,
             'Cache host evidence covers different inputs.')
     require(software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES}, 'Host implementation changed.')
-    require(software.get('host_cases') == dict.fromkeys(IRQ_CASES if software.get('interrupts', False) else EL1_CASES if software.get('el1', False) else CASES, True), 'Cache host cases are incomplete.')
+    require(software.get('host_cases') == dict.fromkeys(CONTEXT_CASES if software.get('context', False) else IRQ_CASES if software.get('interrupts', False) else EL1_CASES if software.get('el1', False) else CASES, True), 'Cache host cases are incomplete.')
     item = software['instruction_evidence']
     path = Path(item['path'])
     require(path.is_absolute() and digest(path) == item['sha256'], 'Cache instruction evidence changed.')
@@ -93,7 +97,8 @@ def validate_software(software, manifest_hash):
             model.get('sources') == {n: digest(ROOT/n) for n in MODEL_SOURCES}, 'Cache instruction inputs changed.')
     require(model.get('el1', False) == software.get('el1', False), 'Model covers another CPU interval.')
     require(model.get('interrupts', False) == software.get('interrupts', False), 'Model covers another IRQ interval.')
-    expected = IRQ_MODEL_CASES if model.get('interrupts', False) else ('success', 'baseline-refusal', 'group-refusal', 'wrong-el1-core',
+    require(model.get('context', False) == software.get('context', False), 'Model covers another context interval.')
+    expected = CONTEXT_MODEL_CASES if model.get('context', False) else IRQ_MODEL_CASES if model.get('interrupts', False) else ('success', 'baseline-refusal', 'group-refusal', 'wrong-el1-core',
                 'cleanup-readback', 'cache-restoration-failure') if model.get('el1', False) else (
                 'primary-production-cache-adoption-restored-return',
                 'cache-restoration-failure-retains-without-reset')

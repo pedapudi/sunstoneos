@@ -18,8 +18,11 @@ also pass under `primary-el1-probe-20261018/physical-121/`, with controls and sa
 DRAM restored before responsive ROM return. CPU0 timer PPI30 and self-directed
 SGI0 delivery also pass under `primary-interrupt-probe-20261018/physical-002/`,
 with disabled delivery, empty pending/active state and restored controls before
-ROM return. General task-context handling, broader runtime memory use and FreeRTOS scheduling remain
-unqualified.
+ROM return. The actual FreeRTOS IRQ handler also passes register checks, cached
+stack/nesting writes and complete owned-page cleaning under
+`primary-context-probe-20261018/physical-005/`. Its application callback is bounded
+and requests no context switch. Task selection, broader runtime memory use and
+eight-core FreeRTOS scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical

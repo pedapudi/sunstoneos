@@ -1,12 +1,14 @@
 # Current work
 
-The first board last returned responsive on port `3-1` as `003:005`, identity
-`[7,2866,1096964,0,0]`. The user reports a 5 V / 3 A port. The returning boot-CPU
-diagnostic received one timer PPI30 and one self-directed SGI0 in cached EL1.
-It disabled delivery, verified empty pending/active state, restored controls and
-saved DRAM, and returned to ROM. The process exited and its claim closed as passed.
-This interval uses a stackless handler; task-context handling and scheduling
-remain unqualified. Evidence: `primary-interrupt-probe-20261018/physical-002/runtime/session.json`.
+The first board last returned responsive on port `3-1` as `003:008`, identity
+`[7,2870,1096967,0,0]`. The user reports a 5 V / 3 A port. The returning boot-CPU
+diagnostic handled timer PPI30 and self-directed SGI0 through the actual FreeRTOS
+interrupt handler. Its general/vector register checks, cached stack and nesting
+writes, and cleaning of all 192 owned cache lines passed. It disabled delivery,
+verified empty pending/active state, restored controls and saved DRAM, and returned
+to ROM. The process exited and its claim closed as passed. Task selection and
+eight-core scheduling remain unqualified. Evidence:
+`primary-context-probe-20261018/physical-005/runtime/session.json`.
 DDR continuity begins at `reconnect-20261018-120/` and includes the preceding
 CPU0 EL3/EL1 diagnostics, returning SRAM survey and instruction-cache disable.
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
@@ -120,8 +122,9 @@ and its claim closed as passed. A later returning diagnostic also passes CPU0
 timer PPI30 and self SGI0 delivery with empty pending/active state and restored
 controls. Six instruction cases and eleven host cases cover that extension;
 physical evidence is under `primary-interrupt-probe-20261018/physical-002/`.
-Cached EL1 data stores, general task-context handling and scheduling remain
-unqualified. The preceding EL1 entry review is recorded in
+The later production-handler diagnostic also passes cached EL1 stack and nesting
+writes with complete owned-page cleaning. Task selection, broader runtime memory
+use and eight-core scheduling remain unqualified. The preceding EL1 entry review is recorded in
 `primary-el1-probe-20261018/root-review.json`.
 Earlier models missed implemented interrupt bits, Secure priority-mask behavior
 and security-specific cache publication. Passing modeled startup alone cannot
@@ -129,13 +132,15 @@ justify another full image launch. A missing USB report can mean an intentional
 software park as well as an exception or stalled access; record that distinction
 when choosing the next diagnostic.
 
-The next CPU implementation boundary is recorded under
-`primary-interrupt-probe-20261018/next-context-review.json`. The actual FreeRTOS
-interrupt handler saves general/vector registers to the cached EL1 stack and
-updates per-core nesting state. The passing stackless diagnostic does not cover
-these writes. Its application callback also cannot be reused before scheduler
-and deadline initialization. Root must bind the production handler, bounded
-callback and complete Nonsecure cleanup before another physical attempt.
+The production-handler source review and passing result are preserved under
+`primary-context-probe-20261018/`. Seven instruction cases and twelve host cases
+cover the final image. A bounded callback replaces the scheduler-dependent
+application dispatcher; the native vector, register saves, nesting updates and
+non-switching return execute unchanged. A delivery race was corrected before
+launch: final counters are read after masking interrupts, including handlers
+that finish just after the deadline decision. The next CPU boundary is actual
+task selection and combined eight-core startup, with the complete runtime write
+set cleaned before return. Do not repeat the failed full launch unchanged.
 
 Host USB power capacity and voltage under load are unmeasured. The board manual
 recommends 5 V / 3 A; this is a supply rating, not measured consumption. See
@@ -840,8 +845,8 @@ The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
 observations.
 
-1. Continue from the passing CPU0 timer/self-interrupt diagnostic to establish
-   real task-context handling and cached runtime data access. The full image
+1. Continue from the passing CPU0 production interrupt handler to establish
+   actual task selection and combined eight-core startup. The full image
    and model already include the Secure PMR correction.
    Preserve final-store synchronization and Nonsecure cache-clean completion
    for the complete write set before shutdown. The prior interrupt result does

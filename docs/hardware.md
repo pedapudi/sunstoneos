@@ -110,6 +110,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and responsive ROM return. Evidence:
   `primary-interrupt-probe-20261018/physical-002/runtime/session.json`.
   Its stackless handler does not establish general context saving or scheduling.
+  The subsequent [production-handler diagnostic](a733-smp-supervised.md) passes
+  timer/self-interrupt delivery through the actual FreeRTOS vector and IRQ handler.
+  It checks nine general registers, all 32 vector registers, FP controls and SP.
+  Cached stack/nesting writes and cleaning of all 192 lines in the three owned
+  pages pass, followed by restored controls, DRAM and ROM return. Evidence:
+  `primary-context-probe-20261018/physical-005/runtime/session.json`.
+  Its bounded application callback does not request a task switch; task selection
+  and eight-core scheduling remain unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
