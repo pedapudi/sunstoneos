@@ -129,10 +129,13 @@ justify another full image launch. A missing USB report can mean an intentional
 software park as well as an exception or stalled access; record that distinction
 when choosing the next diagnostic.
 
-The root-only next-interval review is preserved under
-`primary-cache-probe-20261018/next-primary-el1-review.json`. The secondary EL1
-diagnostic cannot be reused on CPU0 unchanged: it explicitly rejects core 0 and
-requires preceding local GIC setup and restoration suited to that core.
+The next CPU implementation boundary is recorded under
+`primary-interrupt-probe-20261018/next-context-review.json`. The actual FreeRTOS
+interrupt handler saves general/vector registers to the cached EL1 stack and
+updates per-core nesting state. The passing stackless diagnostic does not cover
+these writes. Its application callback also cannot be reused before scheduler
+and deadline initialization. Root must bind the production handler, bounded
+callback and complete Nonsecure cleanup before another physical attempt.
 
 Host USB power capacity and voltage under load are unmeasured. The board manual
 recommends 5 V / 3 A; this is a supply rating, not measured consumption. See
