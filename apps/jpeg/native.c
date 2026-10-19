@@ -51,9 +51,9 @@ static int jpeg_authority(void *v,const struct a733_video_platform_config *c,
     if(v!=&jpeg||!token)return -1;
     if(*token&&*token!=jpeg.session.authority)return -1;*token=jpeg.session.authority;
     if(!board_live(NULL)||d!=jpeg_deadline()||memcmp(c,&jpeg.config,sizeof(*c))||
-       j->input!=jpeg.input||j->file_bytes!=jpeg_fixture_bytes()||j->input_bytes!=4096||
+       j->input!=jpeg.input||j->file_bytes!=jpeg.supplied.input_bytes||j->input_bytes!=4096||
        j->input_iova!=0x10001000||j->luma_iova!=0x10005000||j->chroma_iova!=0x10009000)return -1;
-    uint8_t hash[32];storage_digest_bytes(j->input,jpeg_fixture_bytes(),hash);
+    uint8_t hash[32];storage_digest_bytes(j->input,jpeg.supplied.input_bytes,hash);
     if(memcmp(hash,jpeg.session.fixture,32))return -1;
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!jpeg_device(p))return -1;
     for(uintptr_t p=0x01c0e000;p<0x01c0f000;p+=4096)if(!jpeg_device(p))return -1;
@@ -66,7 +66,8 @@ static int jpeg_memory(void *v,uint64_t token,const struct a733_video_jpeg_job *
     const struct a733_video_jpeg *pic,uint32_t stride,uint32_t rows,uint64_t d)
 {
     (void)j;
-    if(v!=&jpeg||token!=jpeg.session.authority||d!=jpeg_deadline()||pic->width!=48||pic->height!=32||stride!=64||rows!=32)return -1;
+    if(v!=&jpeg||token!=jpeg.session.authority||d!=jpeg_deadline()||!jpeg_input_ready(&jpeg.supplied)||pic->width!=jpeg.supplied.width||pic->height!=jpeg.supplied.height||
+       stride!=jpeg.supplied.stride||rows!=jpeg.supplied.rows)return -1;
     if(!jpeg.iommu.initialized){
         struct a733_iommu_ops ops={jpeg_now,jpeg_iommu_admit,jpeg_iommu_read,jpeg_iommu_write,jpeg_publish};
         if(a733_iommu_init_decoder(&jpeg.iommu,&ops,&jpeg,&jpeg.tables)!=1||a733_iommu_open(&jpeg.iommu,d)!=1)return -1;
@@ -82,7 +83,7 @@ static int jpeg_guards(void)
         if(!device_memory_describe(jpeg.pool,jpeg.leases[a+1],&e,&state)||state!=DEVICE_MEMORY_DEVICE)return 0;
         const volatile uint8_t *p=(const void *)e.cpu;
         for(unsigned i=0;i<4096;++i)if(p[i]!=0xa5||p[8192+i]!=0xa5)return 0;
-        unsigned used=a==0?4096:a==1?2048:1024;
+        unsigned used=a==0?4096:a==1?jpeg.supplied.luma_bytes:jpeg.supplied.chroma_bytes;
         for(unsigned i=used;i<4096;++i)if(p[4096+i]!=0xa5)return 0;
     }
     return 1;
@@ -96,16 +97,20 @@ static int jpeg_copied(void *v,uint64_t token,uint64_t d)
     if(jpeg.copy_step==2){
         uint32_t final_status;
         if(jpeg_load(0x01c0e11c,&final_status)!=1||(final_status&0x0018000e)||!jpeg_guards())return -1;
-        storage_digest_bytes(jpeg.payload,2304,jpeg.digest);return 1;
+        storage_digest_bytes(jpeg.payload,jpeg.supplied.output_bytes,jpeg.digest);return 1;
     }
     uint32_t status;
     if(jpeg_load(0x01c0e11c,&status)!=1||(status&0x0018000e))return -1;
     __asm__ volatile("dsb sy":::"memory");
-    for(unsigned row=0;row<32;++row)for(unsigned col=0;col<48;++col)jpeg.payload[row*48+col]=((volatile uint8_t *)jpeg.luma)[row*64+col];
-    for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<16;++row)for(unsigned col=0;col<24;++col)
-        jpeg.payload[1536+plane*384+row*24+col]=((volatile uint8_t *)jpeg.chroma)[plane*512+row*32+col];
+    uint32_t w=jpeg.supplied.width,h=jpeg.supplied.height,stride=jpeg.supplied.stride;
+    uint32_t cw=(w+1u)/2u,ch=(h+1u)/2u,plane_bytes=jpeg.supplied.luma_bytes/4u;
+    for(unsigned row=0;row<h;++row)for(unsigned col=0;col<w;++col)
+        jpeg.payload[row*w+col]=((volatile uint8_t *)jpeg.luma)[row*stride+col];
+    for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<ch;++row)for(unsigned col=0;col<cw;++col)
+        jpeg.payload[w*h+plane*cw*ch+row*cw+col]=((volatile uint8_t *)jpeg.chroma)[plane*plane_bytes+row*(stride/2u)+col];
     __asm__ volatile("dsb sy":::"memory");
-    if(!jpeg_guards()||memcmp(jpeg.payload,jpeg_reference,2304)||!board_live(NULL))return -1;
+    if(!jpeg_guards()||!board_live(NULL)||
+       (jpeg.supplied.oracle_bytes&&memcmp(jpeg.payload,jpeg.supplied.oracle,jpeg.supplied.output_bytes)))return -1;
     if(a733_iommu_scan(&jpeg.iommu,d)!=1)return -1;
     jpeg.copy_step=2;return 0;
 }
@@ -120,7 +125,7 @@ static int jpeg_allocate(void)
         if(i==0)jpeg.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,e.bytes);uint8_t *p=(void *)(e.cpu+4096);if(i==1)jpeg.input=p;else if(i==2)jpeg.luma=p;else jpeg.chroma=p;}
     }
-    memset(jpeg.input,0,4096);memcpy(jpeg.input,jpeg_fixture,jpeg_fixture_bytes());
+    memset(jpeg.input,0,4096);memcpy(jpeg.input,jpeg.supplied.bytes,jpeg.supplied.input_bytes);
     struct a733_iommu_span spans[]={{0x10001000,(uintptr_t)jpeg.input,4096,A733_IOMMU_READ},
         {0x10005000,(uintptr_t)jpeg.luma,4096,A733_IOMMU_WRITE},{0x10009000,(uintptr_t)jpeg.chroma,4096,A733_IOMMU_WRITE}};
     if(a733_iommu_build(&jpeg.tables,jpeg.table,(uintptr_t)jpeg.table,spans,3)!=1)return 0;
@@ -164,7 +169,7 @@ static int jpeg_setup(void)
     c->pck=(struct a733_gpu_resource_lease){jpeg.power_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE};
     struct a733_video_platform_ops ops={jpeg_now,jpeg_authority,jpeg_memory,jpeg_no_drain,jpeg_enter,jpeg_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!jpeg_allocate()||!a733_video_platform_init(&jpeg.platform,c,&ops,&jpeg))return -1;
-    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg_fixture_bytes(),0x10001000,4096,0x10005000,4096,0x10009000,4096};
+    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg.supplied.input_bytes,0x10001000,4096,0x10005000,4096,0x10009000,4096};
     return a733_video_jpeg_begin_retained(&jpeg.run,a733_video_platform_jpeg_ops(),&jpeg.platform,&job,jpeg_deadline(),jpeg_retained)?1:-1;
 }
 void jpeg_task(void *unused)
@@ -173,6 +178,7 @@ void jpeg_task(void *unused)
     for(;;){
         if(!board_live(NULL)){atomic_store_explicit(&jpeg.result,2,memory_order_release);vTaskDelay(1);continue;}
         if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&jpeg.result,memory_order_acquire)){
+            if(!jpeg_input_ready(&jpeg.supplied)){vTaskDelay(1);continue;}
             int r=jpeg.stage?a733_video_jpeg_poll(&jpeg.run):jpeg_setup();
             if(r<0)atomic_store_explicit(&jpeg.result,2,memory_order_release);
             else if(!jpeg.stage&&r==1)jpeg.stage=1;

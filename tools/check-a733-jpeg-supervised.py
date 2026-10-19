@@ -17,17 +17,20 @@ preparation=module('jpeg_capture_preparation',ROOT/'apps/jpeg/prepare.py')
 decoder=module('jpeg_capture_decoder',ROOT/'apps/jpeg/observe.py')
 require,digest=supervisor.require,supervisor.digest
 PREREQUISITES={'supervised-ram-recovery','jpeg-supervised-software'}
-REFERENCE=bytes([128])*2304
-FIXTURE_SHA256='3689fc87a6594a114026b65c2e104589ae3a872188bce0cb12ae08ab92ede398'
 PRODUCT='sunstoneos native JPEG'
 SERIAL='sunstoneos-a733-jpeg'
 
 
-def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE):
+def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=None,upload=None,send_upload=None):
     preparation.session_check(session)
-    preparation.fixtures.profile_for(session[768:800].hex(),session[800:832].hex())
-    require(len(reference)==2304 and session[800:832]==hashlib.sha256(reference).digest(),
-        'JPEG diagnostic fixture/reference differs.')
+    require(upload is not None and len(upload)>=32 and send_upload is not None,'Frozen JPEG upload and sender required.')
+    magic,version,jpeg_bytes,oracle_bytes,epoch,generation=struct.unpack_from('<4I2Q',upload)
+    require((magic,version)==(0x5547504a,1) and len(upload)==32+jpeg_bytes+oracle_bytes and
+       (epoch,generation)==struct.unpack_from('<2Q',session,24),'JPEG upload identity/extent differs.')
+    require(upload==preparation.upload_bytes(upload[32:32+jpeg_bytes],reference,session),'JPEG upload digest or oracle differs.')
+    require(now()<deadline,'JPEG deadline expired before upload.')
+    send_upload(upload)
+    require(now()<deadline,'JPEG upload completed after deadline.')
     record.update(jpeg_retention='whole-board-power-removal',jpeg_result='unobserved');save()
     for sequence in range(1,2401):
         require(now()<deadline,'JPEG capture deadline expired.')
@@ -40,9 +43,9 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
         if result['status']==1:
-            output=evidence/'output.yu12';supervisor.durable_frame(output,frame[128:])
+            output=evidence/'output.yu12';supervisor.durable_frame(output,frame[decoder.HEADER:])
             require(now()<deadline,'JPEG output became durable after capture deadline.')
-            record['copied_jpeg_output']={'path':output.name,'bytes':2304,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_jpeg_output']={'path':output.name,'bytes':result['bytes'],'sha256':hashlib.sha256(frame[decoder.HEADER:]).hexdigest()}
         record['jpeg_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -52,13 +55,33 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('JPEG exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,*,reference=REFERENCE):
+def capture_device(device,same,deadline,session,evidence,record,save,*,reference=None,upload):
+    def send_upload(data):
+        for first in range(0,len(data),512):
+            same();remaining=int((deadline-time.monotonic())*1000)
+            require(remaining>0,'JPEG upload deadline expired.')
+            packet=data[first:first+512]
+            require(device.write(0x02,packet,timeout=min(500,remaining))==len(packet),'Incomplete JPEG upload.')
     def exchange(packet,timeout):
-        same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete JPEG request.')
-        same();remaining=int((deadline-time.monotonic())*1000)
-        require(remaining>0,'JPEG capture deadline expired after write.')
-        return bytes(device.read(0x81,2432,timeout=min(timeout,remaining)))
-    return capture(exchange,session,evidence,record,save,deadline,reference=reference)
+        same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete JPEG request.')
+        frame=bytearray();expected=None
+        while expected is None or len(frame)<expected:
+            same();remaining=int((deadline-time.monotonic())*1000)
+            require(remaining>0,'JPEG frame deadline expired.')
+            maximum=(decoder.HEADER+decoder.MAXIMUM if expected is None else expected)-len(frame)
+            fragment=bytes(device.read(0x81,maximum,timeout=min(timeout,remaining)))
+            path=evidence/f"fragment-{len(record.get('jpeg_fragments',[]))+1:04}.bin"
+            supervisor.durable_frame(path,fragment)
+            record.setdefault('jpeg_fragments',[]).append(dict(path=path.name,bytes=len(fragment),sha256=hashlib.sha256(fragment).hexdigest()));save()
+            require(fragment and len(fragment)<=maximum,'Incomplete JPEG fragment.')
+            frame.extend(fragment)
+            if expected is None and len(frame)>=decoder.HEADER:
+                magic,version,status,count=struct.unpack_from('<4I',frame)
+                require((magic,version)==(0x4745504a,2) and status in (0,1,2) and
+                  (0<count<=decoder.MAXIMUM if status==1 else count==0),'Invalid JPEG frame extent.')
+                expected=decoder.HEADER+count;require(len(frame)<=expected,'JPEG frame exceeds extent.')
+        return bytes(frame)
+    return capture(exchange,session,evidence,record,save,deadline,reference=reference,upload=upload,send_upload=send_upload)
 
 
 def source_files():
@@ -80,7 +103,9 @@ def freeze_bundle(bundle):
     prepared['_prepared_sha256']=hashlib.sha256(metadata).hexdigest()
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     prepared['_sizes']={name:len(data) for name,data in frozen.items()}
-    prepared['_reference']=preparation.embedded_reference(frozen['image.elf'],frozen['session.bin'])
+    preparation.embedded_reference(frozen['image.elf'],frozen['session.bin'])
+    prepared['_reference']=frozen['reference.yu12'] or None
+    prepared['_upload']=frozen['upload.bin']
     prepared['_frozen']=frozen
     return prepared
 
@@ -154,7 +179,7 @@ def main(argv=None):
         require(admission['identity']==identity and admission['port']==port,'JPEG entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference=prepared['_reference']),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,reference=prepared['_reference'],upload=prepared['_upload']),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='jpeg_result',
         source_files=source_files(),description='Supervised native JPEG; retain every resource until whole-board power removal')
 

@@ -1,12 +1,14 @@
 #ifndef SUNSTONE_JPEG_PRIVATE_H
 #define SUNSTONE_JPEG_PRIVATE_H
 #include "a733_jpeg_application.h"
+#include "input.h"
 #include "a733_video_platform.h"
 #include "a733_iommu.h"
 #include "device_memory_pool.h"
 #include "../board/application.h"
 struct jpeg_application {
     struct a733_jpeg_session session;
+    struct jpeg_input supplied;
     struct a733_video_platform platform;
     struct a733_video_jpeg_run run;
     struct a733_iommu iommu;
@@ -27,12 +29,9 @@ struct jpeg_application {
     uint32_t *table;
     unsigned stage,copy_step;
     atomic_uint result;
-    uint8_t payload[A733_JPEG_OUTPUT_BYTES],digest[32];
+    uint8_t payload[JPEG_OUTPUT_CAPACITY],digest[32];
 };
 extern struct jpeg_application jpeg;
-extern const uint8_t jpeg_fixture[],jpeg_fixture_end[],jpeg_reference[],jpeg_reference_end[];
-static inline size_t jpeg_fixture_bytes(void)
-{return (uintptr_t)jpeg_fixture_end-(uintptr_t)jpeg_fixture;}
 void jpeg_task(void *);
 void board_usb0_task(void *);
 #endif

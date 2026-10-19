@@ -34,11 +34,10 @@ const uint16_t *tud_descriptor_string_cb(uint8_t i,uint16_t language)
 {(void)language;static uint16_t out[64];static const char *const text[]={"","sunstoneos","sunstoneos native JPEG","sunstoneos-a733-jpeg","Capture"};
  if(!i){out[0]=0x0304;out[1]=0x0409;return out;}if(i>=5)return NULL;size_t n=strlen(text[i]);out[0]=(uint16_t)(0x0300|2*n+2);for(size_t j=0;j<n;++j)out[j+1]=(uint8_t)text[i][j];return out;}
 
-/* One zero-valued byte requests a coherent private result. Header128bytes:
- * LE32 magic/version/status/bytes, LE64 epoch/generation, fixture/reference/
- * copied-payload SHA256. Only status1 appends2304 verified copied Y/Cb/Cr bytes.
- * Device buffers remain DEVICE-owned; status2 carries no payload. */
-static uint8_t jpeg_response[128+A733_JPEG_OUTPUT_BYTES];
+/* One upload per lifetime, then zero-byte queries. Version2 header144bytes
+ * adds actual width, height, padded luma stride and padded rows after hashes.
+ * Only status1 appends owned active Y/Cb/Cr pixels. */
+static uint8_t jpeg_response[JPEG_RESULT_HEADER+JPEG_OUTPUT_CAPACITY];
 static unsigned jpeg_response_bytes,jpeg_response_sent,jpeg_response_transferred;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 void tud_mount_cb(void){}
@@ -50,21 +49,36 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {if(interface||bytes>jpeg_response_sent-jpeg_response_transferred)stop();jpeg_response_transferred+=bytes;
  if(jpeg_response_transferred==jpeg_response_bytes&&jpeg_response_sent==jpeg_response_bytes)jpeg_response_bytes=0;}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
+static int upload_now(void *unused,uint64_t *now)
+{(void)unused;return board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,now)==1&&board_live(NULL)?1:-1;}
 static void jpeg_exchange(void)
 {
     if(jpeg_response_bytes){unsigned n=tud_vendor_write(jpeg_response+jpeg_response_sent,jpeg_response_bytes-jpeg_response_sent);
         jpeg_response_sent+=n;tud_vendor_flush();return;}
     if(!tud_vendor_available())return;
-    uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
+    uint8_t incoming[512];size_t n;
+    if(jpeg.supplied.header_used&&!jpeg_input_ready(&jpeg.supplied)){
+        n=jpeg_input_remaining(&jpeg.supplied);if(!n)stop();
+        if(n>sizeof(incoming))n=sizeof(incoming);
+        if(n>tud_vendor_available())n=tud_vendor_available();
+    }else n=1;
+    if(tud_vendor_read(incoming,n)!=n)stop();
+    if(n!=1||incoming[0]||(jpeg.supplied.header_used&&!jpeg_input_ready(&jpeg.supplied))){
+        if(!board_live(NULL)||jpeg_input_feed(&jpeg.supplied,&jpeg.session,upload_now,NULL,
+           board.session.deadline_us-10000,incoming,n)<0||!board_live(NULL))stop();
+        return;
+    }
     unsigned result=atomic_load_explicit(&jpeg.result,memory_order_acquire);
-    put32(jpeg_response,0x4745504a);put32(jpeg_response+4,1);put32(jpeg_response+8,result);
-    put32(jpeg_response+12,result==1?A733_JPEG_OUTPUT_BYTES:0);
+    put32(jpeg_response,0x4745504a);put32(jpeg_response+4,2);put32(jpeg_response+8,result);
+    put32(jpeg_response+12,result==1?jpeg.supplied.output_bytes:0);
     put32(jpeg_response+16,(uint32_t)board.session.epoch);put32(jpeg_response+20,(uint32_t)(board.session.epoch>>32));
     put32(jpeg_response+24,(uint32_t)board.session.generation);put32(jpeg_response+28,(uint32_t)(board.session.generation>>32));
     memcpy(jpeg_response+32,jpeg.session.fixture,32);memcpy(jpeg_response+64,jpeg.session.reference,32);
-    if(result==1){memcpy(jpeg_response+96,jpeg.digest,32);memcpy(jpeg_response+128,jpeg.payload,A733_JPEG_OUTPUT_BYTES);}
+    put32(jpeg_response+128,jpeg.supplied.width);put32(jpeg_response+132,jpeg.supplied.height);
+    put32(jpeg_response+136,jpeg.supplied.stride);put32(jpeg_response+140,jpeg.supplied.rows);
+    if(result==1){memcpy(jpeg_response+96,jpeg.digest,32);memcpy(jpeg_response+JPEG_RESULT_HEADER,jpeg.payload,jpeg.supplied.output_bytes);}
     else memset(jpeg_response+96,0,32);
-    jpeg_response_sent=jpeg_response_transferred=0;jpeg_response_bytes=result==1?sizeof(jpeg_response):128;
+    jpeg_response_sent=jpeg_response_transferred=0;jpeg_response_bytes=JPEG_RESULT_HEADER+(result==1?jpeg.supplied.output_bytes:0);
 }
 void board_usb0_task(void *unused)
 {

@@ -13,7 +13,7 @@ int main(int argc,char **argv)
         .epoch=1,.generation=2,.lease=3,.topology=4,.cold_master=5,.memory_authority=6,.recovery_authority=7,
         .workload=2,.pmic_owner=10,.usb0_owner=11,.fabric_hz={24000000,24000000,24000000},
         .usb_supply_uv={3300000,3300000,1200000,900000},.usb0_cold_reference=1},
-        .magic=A733_JPEG_SESSION_MAGIC,.version=1,.bytes=sizeof(j),.owner=12,.authority=13,
+        .magic=A733_JPEG_SESSION_MAGIC,.version=2,.bytes=sizeof(j),.owner=12,.authority=13,
         .module=1,.module_hz=234000000,.iommu_gates={0x10007,0x10007},.supply_uv=800000,.supply_rail=1};
     memset(j.board.image,1,32);memset(j.board.qualification,2,32);memset(j.board.recovery,2,32);
     memset(j.board.wiring,3,32);memset(j.board.memory,4,32);memset(j.initial,5,192);
