@@ -107,6 +107,35 @@ restoration and saved DRAM all match. ROM returns as `003:115`; the runner exits
 and its queue claim closes. The result demonstrates this dedicated interrupt interval. The full FreeRTOS
 scheduler and general context-switch handler remain unqualified.
 
+## EL0 lock waits require permission to execute WFE
+
+The linked FreeRTOS `vPortRecursiveLock` executes `SEVL; WFE` and repeats
+`WFE` while another core holds the lock. The scheduler instruction inventory
+observed this path on all eight cores at EL0. Startup previously selected
+`SCTLR_EL1=0x30d01805`, leaving `nTWE` (bit 18) clear.
+
+Arm's [DDI0616A.a register description](https://documentation-service.arm.com/static/62015c6c965f7d118e3f5f4c),
+section E3.2, printed pages 391–392, specifies that a blocking EL0 WFE can trap
+with exception class `0x01` in this configuration. The first WFE after SEVL can
+complete immediately; a subsequent wait can trap. The FreeRTOS synchronous
+handler accepts SVC (`0x15`) and otherwise branches to its permanent abort loop.
+This establishes an incompatible startup policy, but does not prove that a WFE
+trap caused the earlier physical failure.
+
+Cached startup now sets `nTWE` before entering EL1. The resulting enabled
+control is `0x30d41805`. This permits the port's existing wait instruction;
+other EL0 controls remain unchanged. The scheduler check requires this permission
+at every observed EL0 WFE. It does not simulate the event register or claim
+that every WFE with `nTWE=0` traps.
+
+Evidence under `scheduler-el0-access-20261018/` includes the linked instruction
+inventory, pinned Arm document, rejection of the old image at its actual lock
+wait, and the corrected image completing 32 floating-point rounds per core,
+background work, inter-core interrupts and snapshot publication in the model.
+All eight cores reach permitted EL0 waits. No physical launch of this correction
+has occurred. Task selection, runtime memory ownership and physical scheduling
+still require their own observations.
+
 ## Power, wake and interrupt delivery have separate requirements
 
 | Boundary | Reference requirement | SunstoneOS evidence and remaining gap |

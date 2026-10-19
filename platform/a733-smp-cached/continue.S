@@ -112,7 +112,9 @@ a733_cached_enter_el1:
     msr sctlr_el2, x2
     mov x2, #0x0800
     movk x2, #0x30d0, lsl #16
-    mov x25, x2
+    // FreeRTOS recursive locks execute WFE at EL0 under contention.
+    // SCTLR_EL1.nTWE permits that wait without an EL1 trap (EC=0x01).
+    orr x25, x2, #(1 << 18)
     msr tpidr_el1, x20
     adrp x2, a733_cpu_el1_stacks
     add x2, x2, :lo12:a733_cpu_el1_stacks

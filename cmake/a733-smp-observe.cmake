@@ -32,7 +32,7 @@ list(APPEND a733_sources "${a733_build}/continue-core.c")
 file(SHA256 "${a733_root}/platform/a733-smp-cached/boot.c" observe_boot_hash)
 file(SHA256 "${a733_root}/platform/a733-smp-cached/continue.S" observe_vector_hash)
 if(NOT observe_boot_hash STREQUAL "2e7401667a2d320a268734f489722aedbb620bf8b2d96a8c791d2635136dcbe0" OR
-   NOT observe_vector_hash STREQUAL "cb568b31fb8ba5d30f20ac877996de493c9f458c73cc2968859e025d9730382a")
+   NOT observe_vector_hash STREQUAL "4a079fa75a44b37ffdea90ecd06752634707a513ec9a14e8220319b6de5c3b1a")
   message(FATAL_ERROR "Observer hooks require review against changed cached boot/vector inputs")
 endif()
 foreach(pair "boot.c|boot.patch" "continue.S|continue.patch")

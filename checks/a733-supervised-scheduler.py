@@ -19,6 +19,7 @@ class Scheduler(model.Machine):
         self.secure_pmr=[0]*8;self.refuse_secure_mask=refuse_secure_mask
         self.mask_refused=False;self.completed=False;self.usb_calls={}
         self.secure_mask_initialized=set();self.priority_probed=False
+        self.el0_wait_cores=set()
         self.regs[0].update(tcr_el3=0,ttbr0_el3=0,mair_el3=0)
         self.mmio.update({0x02050014:0,0x02050010:0,0x070501c0:0,0x070501d4:0})
         for core in (6,7):self.regs[core]['midr_el1']=0x414fd0b1
@@ -80,6 +81,12 @@ class Scheduler(model.Machine):
             self.put(core,'x0',value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR));return
         if address not in self.decoded:self.decoded[address]=next(self.decoder.disasm(bytes(u.mem_read(address,4)),address))
         ins=self.decoded[address];op,args=ins.mnemonic,ins.op_str.split(', ');r=self.regs[core]
+        if op=='wfe' and r['currentel']==0:
+            # DDI0616A.a E3.2 SCTLR_EL1.nTWE: a blocking EL0 WFE may
+            # trap with EC=1. The FreeRTOS synchronous handler accepts SVC
+            # only. Require permission independently of modeled wake events.
+            assert r['sctlr_el1']&(1<<18),('EL0 lock wait can trap',core,hex(address))
+            self.el0_wait_cores.add(core)
         if op=='msr' and args[0]=='icc_pmr_el1':
             value=self.reg(core,args[1]);ns=self.nonsecure(core) and bool(r['scr_el3']&4)
             if ns:
@@ -167,6 +174,7 @@ def main():
         'sources':{n:model.sha(ROOT/n) for n in ('checks/a733-supervised-scheduler.py','checks/a733-smp-cached.py')},
         'secure_pmr_initialized':sorted(machine.secure_mask_initialized),'priority_probe_observed':machine.priority_probed,
         'snapshot':snapshot,'usb_stubs':machine.usb_calls,'cases':{'secure-mask-refusal':True,'eight-core-scheduler':True},
+        'el0_wfe_permitted_cores':sorted(machine.el0_wait_cores),
         'limits':__doc__},indent=2)+'\n')
     print('PASS eight-core FreeRTOS FP/background/SGI/tick workload and copied snapshot',flush=True)
 if __name__=='__main__':main()

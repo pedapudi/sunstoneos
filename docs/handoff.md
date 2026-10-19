@@ -1,5 +1,17 @@
 # Current work
 
+The scheduler privilege audit identified an EL0 lock-wait defect. FreeRTOS's
+contended recursive lock executes WFE, but cached startup left SCTLR_EL1.nTWE
+clear. A blocking wait could therefore enter the synchronous exception handler,
+which permanently aborts for non-SVC exceptions. Startup now permits EL0 WFE.
+The instruction check rejects the earlier image at the lock wait; the corrected
+image completes the eight-core workload and observes permitted waits on every
+core. Evidence: `scheduler-el0-access-20261018/`; details and Arm source are in
+the [reference audit](a733-multicore-reference-audit.md#el0-lock-waits-require-permission-to-execute-wfe).
+This is a source-backed correction, not a physical failure diagnosis. No board
+operation accompanied it. The next physical diagnostic must observe task entry
+and preserve the established return path before another complete-image launch.
+
 The first board last returned responsive on port `3-1` as `003:010`, identity
 `[7,2878,1096969,0,0]`. All eight CPUs completed the frozen production
 `a733_smp_pre_scheduler` barrier and 256 lock-protected increments. Each core
