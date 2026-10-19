@@ -30,7 +30,10 @@ class Probe(parent.Probe):
         self.cache_manifest = json.loads((bundle/'manifest.json').read_text())
         assert self.cache_manifest['primary_manifest']['sha256'] == probe.digest(primary/'manifest.json')
         self.el1 = self.cache_manifest.get('el1', False)
-        assert self.cache_manifest['sources'] == {name: probe.digest(ROOT/name) for name in probe.sources(self.el1)}
+        self.interrupts = self.cache_manifest.get('interrupts', False)
+        self.secure_pmr = 0
+        self.delivered = []
+        assert self.cache_manifest['sources'] == {name: probe.digest(ROOT/name) for name in probe.sources(self.el1, self.interrupts)}
         for item in self.cache_manifest['payloads']:
             data = (bundle/item['name']).read_bytes()
             assert probe.digest(bundle/item['name']) == item['sha256']
@@ -48,6 +51,7 @@ class Probe(parent.Probe):
             self.mmio[0x03400004] = 0x7b0408
             self.mmio[0x03460014] = 0  # Observed primary is awake, unlike secondaries.
             self.mmio[0x03470200] = 0
+            self.mmio[0x0347041c] = 0
             for i in range(1, 9): self.mmio[0x03400100+4*i] = 0x10101*i
             self.regs[0].update(icc_sre_el3=9, icc_igrpen0_el1=0, icc_igrpen1_el3=0,
                                 ttbr0_el1=0xace000, ttbr1_el1=0x135000, mair_el1=0x1234)
@@ -57,7 +61,19 @@ class Probe(parent.Probe):
         write = access == UC_MEM_WRITE
         if self.suffix and self.el1:
             if self.regs[0]['currentel'] == 4:
-                assert not write and 0x41000000 <= address < 0x41200000, 'EL1 must not dirty data'
+                if self.interrupts and address < 0x41000000:
+                    assert address in (0x03460000, 0x03470100, 0x03470180, 0x03470200,
+                                       0x03470280, 0x03470300, 0x0347041c), hex(address)
+                else:
+                    assert not write and 0x41000000 <= address < 0x41200000, 'EL1 must not dirty Normal data'
+            if self.interrupts:
+                if address == 0x03470200:
+                    self.mmio[address] = sum(1 << n for n in self.pending[0])
+                if address == 0x03470300:
+                    self.mmio[address] = 0 if self.irq_active[0] is None else 1 << self.irq_active[0]
+                if write and address == 0x03470280:
+                    self.pending[0] = {n for n in self.pending[0] if not value & (1 << n)}
+
             if address < 0x41000000:
                 if write: self.mmio_writes.append((address, size, value))
                 if 0x03400000 <= address < 0x03600000:
@@ -106,6 +122,32 @@ class Probe(parent.Probe):
             return
         ins = next(self.decoder.disasm(bytes(u.mem_read(address, 4)), address))
         op, args = ins.mnemonic, ins.op_str.split(', ')
+        if self.interrupts:
+            m = self.regs[0]
+            if op == 'mrs' and args[1] == 'cntpct_el0' and m['currentel'] == 4:
+                self.clock += 1000
+            if m['currentel'] == 4 and m['cntp_ctl_el0'] & 3 == 1 and self.clock >= m['cntp_cval_el0'] and self.irq_active[0] != 30:
+                self.pending[0].add(30)
+            if address == self.cache_manifest['hooks']['primary_irq_delivery_stopped']:
+                assert m['daif'] & 0x80 and not m['cntp_ctl_el0'] and not m['icc_igrpen1_el1']
+                if self.fault == 'cleanup-pending': self.pending[0].add(9)
+            if op == 'mrs' and args[1] == 'cntp_ctl_el0' and not m['cntp_ctl_el0'] & 1:
+                self.put(core, args[0], m['cntp_ctl_el0'] | 4); u.reg_write(UC_ARM64_REG_PC, address+4); return
+            if op == 'mrs' and args[1] == 'icc_pmr_el1':
+                value = self.secure_pmr if m['currentel'] == 12 else (self.secure_pmr << 1) & 255 if self.secure_pmr & 128 else 0
+                self.put(core, args[0], value); u.reg_write(UC_ARM64_REG_PC, address+4); return
+            if op == 'msr' and args[0] == 'icc_pmr_el1':
+                value = self.reg(core, args[1])
+                if m['currentel'] == 12:
+                    self.secure_pmr = 0 if self.fault == 'secure-mask-refusal' else value & 0xf8
+                elif self.secure_pmr & 128:
+                    self.secure_pmr = ((value >> 1) | 128) & 0xf8
+                m['icc_pmr_el1'] = (self.secure_pmr << 1) & 255 if self.secure_pmr & 128 else 0
+                u.reg_write(UC_ARM64_REG_PC, address+4); return
+            if op == 'msr' and args[0] == 'icc_sgi1r_el1' and self.fault == 'unexpected-irq':
+                self.pending[0].add(17)
+            if op == 'mrs' and args[1] == 'icc_iar1_el1' and self.pending[0]:
+                self.delivered.append(min(self.pending[0]))
         if self.el1:
             m = self.regs[0]
             if op == 'wfi':
@@ -128,7 +170,10 @@ class Probe(parent.Probe):
             self.returned = True
             u.emu_stop()
             return
+        hidden = set(self.pending[0]) if self.interrupts and self.fault == 'missing-irqs' else set()
+        if hidden: self.pending[0].clear()
         parent.publication.model.Machine.instruction(self, u, address, size, core)
+        self.pending[0].update(hidden)
         if self.inject_cache_restore_fault and op == 'msr' and args[0] == 'sctlr_el3' and not self.reg(core, args[1]) & 1:
             self.regs[0]['sctlr_el3'] ^= 4
 
@@ -184,6 +229,8 @@ def check_el1(args, machine):
     cases = []
     names = ('success', 'baseline-refusal', 'group-refusal', 'wrong-el1-core',
              'cleanup-readback', 'cache-restoration-failure')
+    if machine.interrupts:
+        names = ('success', 'baseline-refusal', 'missing-irqs', 'unexpected-irq', 'cleanup-pending', 'secure-mask-refusal')
     for name in names:
         if name != 'success':
             ram, regs, context = machine.post_prepare
@@ -194,6 +241,9 @@ def check_el1(args, machine):
             machine.el3_enabled.clear(); machine.el1_enabled.clear()
             machine.returned = machine.retained = machine.el1_seen = machine.smc_seen = False
             machine.mmio_writes = []; machine.cache_writes = []
+            machine.pending[0].clear(); machine.irq_active[0] = None
+            machine.secure_pmr = 0; machine.delivered = []
+            if machine.interrupts: machine.clock = 1000000
             machine.fault = name
             machine.inject_cache_restore_fault = name == 'cache-restoration-failure'
             if name == 'baseline-refusal': machine.mmio[0x03460014] = 6
@@ -201,22 +251,28 @@ def check_el1(args, machine):
         else:
             start = machine.symbols['a733_smp_entry']
         machine.cpus[0].emu_start(start, 0, count=3000000 if name == 'success' else 100000)
-        raw = machine.read(*probe.EL1_REPORT)
+        raw = machine.read(*probe.report_spec(machine.cache_manifest))
         path = args.output.parent/('report-'+name+'.bin'); path.write_bytes(raw)
         record = {'case': name, 'pass': True, 'returned': machine.returned, 'retained': machine.retained,
                   'EL1': machine.el1_seen, 'SMC': machine.smc_seen, 'report_sha256': probe.digest(path)}
-        if name in ('success', 'baseline-refusal', 'group-refusal'):
+        if name in ('success', 'baseline-refusal', 'group-refusal', 'missing-irqs'):
             assert machine.returned and not machine.retained, (name, machine.trace[-10:])
             result = probe.decode(raw, machine.nonce, machine.cache_manifest)
-            assert result['primary_cached_el1_completed'] == (name == 'success')
+            assert result['primary_cached_el1_completed'] == (name in ('success', 'missing-irqs'))
             assert machine.mmio_writes[-2:] == [(0x08001004, 4, 0x20), (0x08001008, 4, 0)]
             if name == 'baseline-refusal': assert len(machine.mmio_writes) == 2
             else:
                 for address in (0x03400000, *range(0x03400104, 0x03400124, 4), 0x03460014,
                                 0x03470080, 0x03470d00, 0x03470c04, 0x03470400, 0x03470100):
                     assert machine.mmio[address] == machine.original_mmio[address], hex(address)
-            if name == 'success': assert machine.el1_seen and machine.smc_seen and machine.cache_writes
+            if name in ('success', 'missing-irqs'): assert machine.el1_seen and machine.smc_seen and machine.cache_writes
             else: assert not machine.el1_seen and not machine.smc_seen
+            if machine.interrupts:
+                assert result['primary_interrupts_completed'] == (name == 'success')
+                assert not machine.pending[0] and machine.irq_active[0] is None
+                assert machine.mmio[0x0347041c] == machine.original_mmio[0x0347041c]
+                if name == 'success': assert sorted(machine.delivered) == [0, 30]
+                if name == 'missing-irqs': assert not machine.delivered and result['interrupt_outcome'] == 1
             record['result'] = result
         else:
             assert machine.retained and not machine.returned
@@ -228,7 +284,7 @@ def check_el1(args, machine):
         cases.append(record)
         (args.output.parent/('case-'+name+'.json')).write_text(json.dumps(record, indent=2)+'\n')
         print('PASS primary EL1 '+name, flush=True)
-    args.output.write_text(json.dumps({'physical_access': False, 'el1': True,
+    args.output.write_text(json.dumps({'physical_access': False, 'el1': True, 'interrupts': machine.interrupts,
         'native_sha256': probe.digest(args.image), 'manifest_sha256': probe.digest(args.bundle/'manifest.json'),
         'sources': {n: probe.digest(ROOT/n) for n in ('checks/primary-cache-probe.py',
                    'checks/primary-publication-probe.py', 'checks/a733-supervised-publication.py',

@@ -1375,5 +1375,32 @@ production local setup, cached EL3/EL1 entry, and restoration of translation,
 local interrupt and distributor controls. Saved DRAM restoration and responsive
 ROM return passed; the returned USB instance was `003:002`. The host runner
 stopped and its queue claim closed as passed. This interval ends before EL1
-interrupt-interface configuration and performs no EL1 data stores. CPU0 interrupt
-delivery, general task-context handling and FreeRTOS scheduling remain outstanding.
+interrupt-interface configuration and performs no EL1 data stores. General
+task-context handling and FreeRTOS scheduling remain outstanding.
+
+The builder's `--interrupts` option includes local setup and cached EL1 entry,
+then delivers timer PPI30 and self-directed SGI0 on CPU0. It initializes the Secure
+priority mask before Nonsecure entry and installs a stackless interrupt handler.
+Delivery has a 100 ms budget with at least 100 ms reserved for cleanup. The
+handler changes no Normal-memory data and releases no secondary CPU.
+
+Cleanup disables the timer and interrupt group, synchronizes the changes and
+requires no active interrupt. A missed SGI must be observed pending before it
+can be cleared. Pending interrupts outside the two owned sources retain execution.
+The diagnostic disables both sources, clears owned pending state and verifies
+empty pending/active state. Saved timer compare, vector and priority settings
+restore before the existing local/distributor and translation cleanup.
+Disabled timer checks exclude ISTATUS, whose value is unspecified in that state.
+
+Six instruction cases cover successful delivery, baseline refusal, missed
+delivery, an unexpected interrupt, an unrelated pending interrupt during cleanup,
+and refused Secure priority-mask initialization. Eleven host cases cover capture,
+restoration, input identity and distinct incomplete-delivery reports. Existing
+entry evidence is reused; the models do not establish physical cache or bus behavior.
+
+Physical execution passes under
+`primary-interrupt-probe-20261018/physical-002/runtime/session.json`: one timer
+interrupt, one self-directed interrupt, no pending interrupt before cleanup,
+restored controls and saved DRAM, and responsive ROM return. The runner exited
+and its claim closed. This establishes CPU0 interrupt delivery through the
+dedicated handler; production task-context handling and scheduling remain unqualified.

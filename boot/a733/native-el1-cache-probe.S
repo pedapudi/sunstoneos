@@ -8,7 +8,7 @@
 .global el1_smc_return
 .type native_el1_cache_probe,%function
 native_el1_cache_probe:
-#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+#if defined(SUNSTONE_SECONDARY_INTERRUPTS) || defined(SUNSTONE_PRIMARY_INTERRUPTS)
     stp x19, x20, [sp, #-112]!
     // The frozen production entry predates Secure PMR initialization. Mirror
     // the corrected entry, saving its original value on the Device stack.
@@ -68,6 +68,9 @@ native_el1_cache_probe:
 .size native_el1_cache_probe,.-native_el1_cache_probe
 
 el1_observe_checkpoint:
+#ifdef SUNSTONE_PRIMARY_INTERRUPTS
+    bl primary_irq_probe
+#endif
 #ifdef SUNSTONE_SECONDARY_COHERENCE
     bl identity_coherence_el1
 #endif
@@ -134,6 +137,13 @@ el1_return_checkpoint:
     mov x16, #3
     dsb sy
     str x16, [x17]
+#endif
+#ifdef SUNSTONE_PRIMARY_INTERRUPTS
+    stp x25, x26, [x19, #264]
+    stp x27, x28, [x19, #280]
+    str x29, [x19, #296]
+    mov x16, #3
+    str x16, [x19, #256]
 #endif
     stp x0, x1, [x19, #72]
     stp x2, x3, [x19, #88]
@@ -258,7 +268,7 @@ el1_return_checkpoint:
     verify ttbr0_el1, 48, 208
     verify ttbr1_el1, 56, 216
     verify mair_el1, 64, 224
-#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+#if defined(SUNSTONE_SECONDARY_INTERRUPTS) || defined(SUNSTONE_PRIMARY_INTERRUPTS)
     ldr x16, [sp, #96]
     msr icc_pmr_el1, x16
     isb
@@ -274,7 +284,7 @@ el1_return_checkpoint:
     ldp x25, x26, [sp, #48]
     ldp x27, x28, [sp, #64]
     ldp x29, x30, [sp, #80]
-#ifdef SUNSTONE_SECONDARY_INTERRUPTS
+#if defined(SUNSTONE_SECONDARY_INTERRUPTS) || defined(SUNSTONE_PRIMARY_INTERRUPTS)
     ldp x19, x20, [sp], #112
 #else
     ldp x19, x20, [sp], #96

@@ -104,6 +104,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   also pass under `primary-el1-probe-20261018/physical-121/`, followed by control
   restoration, saved DRAM restoration and ROM return. This checkpoint precedes
   EL1 interrupt delivery and performs no EL1 data stores or scheduling.
+  A later CPU0 diagnostic receives one timer PPI30 and one self-directed SGI0,
+  then disables delivery and verifies empty pending/active state. Timer/vector,
+  local/distributor and translation controls restore before saved DRAM restoration
+  and responsive ROM return. Evidence:
+  `primary-interrupt-probe-20261018/physical-002/runtime/session.json`.
+  Its stackless handler does not establish general context saving or scheduling.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;

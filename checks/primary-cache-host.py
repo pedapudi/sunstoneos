@@ -30,17 +30,18 @@ def main():
     manifest = json.loads((args.build/'manifest.json').read_text())
     el1 = manifest.get('el1', False)
     extent = host.probe.report_spec(manifest)
-    cases = host.EL1_CASES if el1 else host.CASES
+    interrupts = manifest.get('interrupts', False)
+    cases = host.IRQ_CASES if interrupts else host.EL1_CASES if el1 else host.CASES
     reports = {}
     if el1:
         model = json.loads(args.model.read_text())
-        for name in ('success', 'baseline-refusal'):
+        for name in ('success', 'baseline-refusal', *(['missing-irqs'] if interrupts else [])):
             path = args.model.parent/('report-'+name+'.bin')
             assert host.digest(path) == next(c['report_sha256'] for c in model['cases'] if c['case'] == name)
             reports[name] = path.read_bytes()
     host.load(args.build, args.bundle/'image.elf', manifest)
     proof = {'schema': 'a733-primary-cache-software-v1', 'physical_access': False,
-        'el1': el1, 'manifest_sha256': host.digest(args.build/'manifest.json'),
+        'el1': el1, 'interrupts': interrupts, 'manifest_sha256': host.digest(args.build/'manifest.json'),
         'host_sources': {n: host.digest(ROOT/n) for n in host.HOST_SOURCES},
         'instruction_evidence': {'path': str(args.model.resolve()), 'sha256': host.digest(args.model)},
         'host_cases': dict.fromkeys(cases, True)}
@@ -56,7 +57,7 @@ def main():
     accepted = {}
     for case in cases:
         def report(data, dram, unused):
-            result = bytearray(reports['baseline-refusal' if case == 'returned-local-refusal' else 'success']) if el1 else bytearray(extent[1])
+            result = bytearray(reports['baseline-refusal' if case == 'returned-local-refusal' else 'missing-irqs' if case == 'returned-interrupt-timeout' else 'success']) if el1 else bytearray(extent[1])
             result[:256] = data
             if case in ('wrong-epoch-restored', 'incomplete-el1-restored'):
                 struct.pack_into('<Q', result, 24, 4)
@@ -72,6 +73,8 @@ def main():
                     result[0x1a00:] = bytes(len(result)-0x1a00)
                 elif case == 'incomplete-el1-restored':
                     struct.pack_into('<Q', result, 0x2800, 2)
+                elif case == 'invalid-interrupt-restored':
+                    struct.pack_into('<Q', result, 0x2900, 2)
             return bytes(result)
         if case == 'changed-input-refused':
             manifest = json.loads((args.build/'manifest.json').read_text())
@@ -88,11 +91,17 @@ def main():
             try: host.load(args.build, args.bundle/'image.elf', changed)
             except ValueError: pass
             else: raise AssertionError('Changed entry patch accepted')
-        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored'):
+        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'invalid-interrupt-restored'):
             sub = args.output/case
             sub.mkdir()
             harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}),
                              'invalid-report-restored', fixture, report)
+        elif case == 'returned-interrupt-timeout':
+            sub = args.output/case; sub.mkdir()
+            harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}), 'complete-return', fixture, report)
+            returned = json.loads((sub/'complete-return/runtime/session.json').read_text())['result']
+            assert returned['primary_cached_el1_completed'] and not returned['primary_interrupts_completed']
+            assert returned['interrupt_outcome'] == 1
         elif case == 'returned-local-refusal':
             sub = args.output/case; sub.mkdir()
             harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}), 'complete-return', fixture, report)

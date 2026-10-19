@@ -1,12 +1,14 @@
 # Current work
 
-The first board last returned responsive on port `3-1` as `003:002`, identity
-`[7,2862,1096961,0,0]`. The user reports a 5 V / 3 A port. Cold DDR preparation
-and returning boot-CPU EL3/EL1 diagnostics passed. The EL1 diagnostic completed
-production local interrupt setup and cached entry, restored controls and saved
-DRAM, and returned to ROM. It stops before EL1 interrupt delivery or scheduling.
-Evidence: `reconnect-20261018-120/` and
-`primary-el1-probe-20261018/physical-121/runtime/session.json`.
+The first board last returned responsive on port `3-1` as `003:005`, identity
+`[7,2866,1096964,0,0]`. The user reports a 5 V / 3 A port. The returning boot-CPU
+diagnostic received one timer PPI30 and one self-directed SGI0 in cached EL1.
+It disabled delivery, verified empty pending/active state, restored controls and
+saved DRAM, and returned to ROM. The process exited and its claim closed as passed.
+This interval uses a stackless handler; task-context handling and scheduling
+remain unqualified. Evidence: `primary-interrupt-probe-20261018/physical-002/runtime/session.json`.
+DDR continuity begins at `reconnect-20261018-120/` and includes the preceding
+CPU0 EL3/EL1 diagnostics, returning SRAM survey and instruction-cache disable.
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
@@ -38,8 +40,11 @@ Evidence: `gpu-entry-audit-20261018/continuous-entry/result.json`. Cache effects
 registers, time and GIC behavior remain modeled; no physical startup or scheduler
 result follows from this check. The provider audit found no additional candidate
 input defect; its report is `gpu-usb-ordering-20261018/audit125-provider/pre-usb-application-audit.md`.
-GPU software construction can still stop before USB begins; an application-only
-failure-reporting correction is in progress. The returning TWI capture observed all nine strict PMIC
+The GPU software-failure reporting correction is integrated. It retains allocated
+resources, suspends any created GPU worker and blocks OPEN while allowing healthy
+USB to report the construction failure. Eight focused application cases and review
+pass under `gpu-software-failure-20261018/`; physical reporting remains untested.
+The returning TWI capture observed all nine strict PMIC
 baseline predicates, and each matched in the new lifetime. The probe performed
 no I2C transactions or TWI writes. This removes a candidate mismatch for the
 observed session; it does not locate the previous GPU failure. Comparison:
@@ -111,8 +116,12 @@ refusals with verified restoration return distinct reports. Failed restoration
 retains ownership. Physical local setup, cached EL1 entry, control restoration,
 saved DRAM restoration and ROM return passed under
 `primary-el1-probe-20261018/physical-121/runtime/session.json`. The runner stopped
-and its claim closed as passed. CPU0 interrupt delivery, cached EL1 data stores
-and scheduling remain unqualified. Root review is recorded in
+and its claim closed as passed. A later returning diagnostic also passes CPU0
+timer PPI30 and self SGI0 delivery with empty pending/active state and restored
+controls. Six instruction cases and eleven host cases cover that extension;
+physical evidence is under `primary-interrupt-probe-20261018/physical-002/`.
+Cached EL1 data stores, general task-context handling and scheduling remain
+unqualified. The preceding EL1 entry review is recorded in
 `primary-el1-probe-20261018/root-review.json`.
 Earlier models missed implemented interrupt bits, Secure priority-mask behavior
 and security-specific cache publication. Passing modeled startup alone cannot
@@ -787,19 +796,21 @@ does not call. Input comparisons are under
 
 ## Next actions
 
-Rebuild the complete eight-core image with Secure PMR initialization in
-`platform/a733-smp-cached/continue.S`. The old frozen ELF under
+The complete eight-core image already includes Secure PMR initialization and the
+corrected observer priority. Its instruction model passes; the physical attempt
+under `smp-secure-pmr-20261018/full-image/runtime/` returned no result. The older
+frozen ELF used by the returning diagnostics under
 `smp-ns-publication-20261018/` has hash
 `762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
 Its returning diagnostics now establish preparation, all-secondary cached
 execution, shared-memory exchange and SGI/PPI delivery. The interrupt overlay
-supplies the PMR correction; it does not change the original ELF. Rebuilding
+supplies the PMR correction; it does not change that original ELF. Rebuilding
 changes the overlay ABI, so derive new symbol/patch bindings if another overlay
 is needed. Preserve existing successful evidence for unchanged components.
 
-The complete-image instruction model previously treated PMR as unrestricted.
-Port the Secure/Nonsecure access semantics from the dedicated interrupt model
-before using it to validate the corrected scheduling image. Review the real
+The complete-image instruction model now includes Secure/Nonsecure PMR access,
+priority scaling and implemented priority bits. Reuse its accepted evidence.
+Review the real
 context handlers and the complete runtime write set before physical execution;
 the single-page diagnostic does not establish general cache cleanup.
 
@@ -826,8 +837,9 @@ The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
 observations.
 
-1. Integrate the Secure PMR correction into the full runtime image and its
-   model, then establish boot-CPU participation and real task-context handling.
+1. Continue from the passing CPU0 timer/self-interrupt diagnostic to establish
+   real task-context handling and cached runtime data access. The full image
+   and model already include the Secure PMR correction.
    Preserve final-store synchronization and Nonsecure cache-clean completion
    for the complete write set before shutdown. The prior interrupt result does
    not establish SPI/LPI shutdown; review the applicable errata when enabling

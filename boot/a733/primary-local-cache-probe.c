@@ -135,6 +135,7 @@ int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
     report->pmr_after = pmr; report->group0_after = g0; report->group1_after = g1;
     if (pmr != report->pmr || g0 != report->group0 || g1 != report->group1) return 0;
     /* SRE and other entry-only CPU-interface controls reset in the following
-     * CPU0 RMR return, as in the returning kernel monitor. No IRQ was delivered. */
+     * CPU0 RMR return, as in the returning kernel monitor. The optional IRQ
+     * interval disables delivery and drains its owned sources before this point. */
     barrier(); report->state = ready ? 3 : 4; barrier(); return ready ? 1 : 2;
 }

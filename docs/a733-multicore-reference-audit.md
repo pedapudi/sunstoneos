@@ -15,8 +15,10 @@ delivery also pass on every secondary under
 `secondary-interrupt-probe-20261018/physical-114/`, followed by quiescence and
 restored shutdown. CPU0 production local interrupt setup and cached EL1 entry
 also pass under `primary-el1-probe-20261018/physical-121/`, with controls and saved
-DRAM restored before responsive ROM return. CPU0 interrupt delivery, general
-task-context handling, broader runtime memory use and FreeRTOS scheduling remain
+DRAM restored before responsive ROM return. CPU0 timer PPI30 and self-directed
+SGI0 delivery also pass under `primary-interrupt-probe-20261018/physical-002/`,
+with disabled delivery, empty pending/active state and restored controls before
+ROM return. General task-context handling, broader runtime memory use and FreeRTOS scheduling remain
 unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes

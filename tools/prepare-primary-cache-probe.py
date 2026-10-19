@@ -17,6 +17,8 @@ require, digest = primary.require, primary.digest
 NATIVE = primary.probe.NATIVE
 REPORT = (0x42018000, 0x2100)
 EL1_REPORT = (0x42018000, 0x2900)
+IRQ_REPORT = (0x42018000, 0x2940)
+IRQ_SOURCES = ('boot/a733/primary-interrupt-probe.S',)
 EXTENSION = 0x41020800
 SOURCES = ('boot/a733/primary-cache-probe.S', 'boot/a733/native-el3-cache-probe.S',
            'tools/prepare-primary-cache-probe.py')
@@ -24,15 +26,15 @@ SOURCES = ('boot/a733/primary-cache-probe.S', 'boot/a733/native-el3-cache-probe.
 EL1_SOURCES = ('boot/a733/primary-local-cache-probe.c', 'boot/a733/secondary-distributor-probe.c',
                'boot/a733/secondary-local-probe.h', 'boot/a733/native-el1-cache-probe.S',
                'include/a733_cpu_continue.h', 'include/a733_cpu_entry.h', 'include/a733_cpu_start.h')
-HOOK_PREFIXES = ('primary_cache_', 'primary_local_', 'native_el', 'el1_')
+HOOK_PREFIXES = ('primary_cache_', 'primary_local_', 'primary_irq_', 'native_el', 'el1_')
 
 
-def sources(el1):
-    return SOURCES + (EL1_SOURCES if el1 else ())
+def sources(el1, interrupts=False):
+    return SOURCES + (EL1_SOURCES if el1 else ()) + (IRQ_SOURCES if interrupts else ())
 
 
 def report_spec(manifest):
-    return EL1_REPORT if manifest.get('el1', False) else REPORT
+    return IRQ_REPORT if manifest.get('interrupts', False) else EL1_REPORT if manifest.get('el1', False) else REPORT
 
 
 def native_aliases(el1):
@@ -81,6 +83,7 @@ def patch_payloads(frozen, payloads, points, hooks):
 def decode(raw, nonce, manifest=None):
     manifest = manifest or {}
     el1 = manifest.get("el1", False)
+    interrupts = manifest.get('interrupts', False)
     require(len(raw) == report_spec(manifest)[1], 'Primary cache report length differs.')
     result = primary.probe.decode(raw[:256], nonce)
     spans = ((256, 0xa00), (0xc00, 0x1a00), (0x1c00, 0x2000), (0x20a0, 0x2800)) if el1 else ((256, 0x2000), (0x20a0, len(raw)))
@@ -100,6 +103,7 @@ def decode(raw, nonce, manifest=None):
             result.update(primary_cached_el3_completed=False, primary_cached_el1_completed=False,
                           epoch=local[1], startup_deadline=local[2], local_refusal=True,
                           local_phase=local[3], local_error=local[4], local_writes=local[5])
+            if interrupts: result['primary_interrupts_completed'] = False
             return result
     values = struct.unpack_from('<20Q', raw, 0x2000)
     require(values[0] == 3 and values[1] and values[2] > result['counter_before'] and
@@ -134,6 +138,16 @@ def decode(raw, nonce, manifest=None):
         require(entry[24:29] == entry[4:9], 'Primary EL1 controls were not restored.')
         result.update(primary_cached_el1_completed=True, local_gic_restored=True,
                       distributor_restored=True, el1_observed=list(entry[9:24]), local_writes=local[5])
+        if interrupts:
+            irq = struct.unpack_from('<8Q', raw, 0x2900)
+            require(irq[0] == 3 and irq[1] in (0, 1) and irq[2] in (0, 1) and
+                    irq[3] in (0, 1, 2) and not irq[4] & ~0x40000001 and
+                    irq[5:] == (0, 0, 0), 'Incomplete primary IRQ cleanup.')
+            require((irq[3] == 0) == (irq[1:3] == (1, 1)), 'IRQ outcome differs from delivery counts.')
+            require(irq[3] != 2 or irq[1:3] == (0, 0) and irq[4] == 0, 'Pre-write IRQ refusal changed state.')
+            result.update(primary_interrupts_completed=irq[3] == 0,
+                          timer_interrupts=irq[1], self_interrupts=irq[2],
+                          interrupt_outcome=irq[3], pending_before_cleanup=irq[4])
     return result
 
 
@@ -146,8 +160,10 @@ def decode_distributor(raw, deadline):
 
 
 def prepare(args):
-    el1 = getattr(args, 'el1', False)
-    report = EL1_REPORT if el1 else REPORT
+    require(all(p.is_file() for p in (args.clang, args.lld, args.objcopy)), 'Compiler, linker and objcopy paths must exist before building.')
+    interrupts = getattr(args, 'interrupts', False)
+    el1 = getattr(args, 'el1', False) or interrupts
+    report = IRQ_REPORT if interrupts else EL1_REPORT if el1 else REPORT
     parent_path = args.primary/'manifest.json'
     parent = json.loads(parent_path.read_text())
     frozen, reservations = primary.load(args.primary, args.image, parent)
@@ -184,12 +200,14 @@ def prepare(args):
     if el1:
         units += [(EL1_SOURCES[0], 'local.o'), (EL1_SOURCES[1], 'distributor.o'),
                   ('boot/a733/native-el1-cache-probe.S', 'el1.o')]
+    if interrupts: units.append((IRQ_SOURCES[0], 'interrupts.o'))
     for source, name in units:
         commands.append([args.clang, '--target=aarch64-none-elf', '-march=armv8-a',
             '-DSUNSTONE_SECONDARY_CACHE=1', '-mgeneral-regs-only', '-O2', '-ffreestanding',
             '-fno-builtin', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections',
             '-Wall', '-Wextra', '-Werror', '-I', ROOT/'include', '-I', ROOT/'boot/a733',
             *(['-DSUNSTONE_PRIMARY_EL1=1', '-DSUNSTONE_PROBE_EL1_CACHE=1'] if el1 else []),
+            *(['-DSUNSTONE_PRIMARY_INTERRUPTS=1'] if interrupts else []),
             '-c', ROOT/source, '-o', args.output/name])
     commands += [[args.lld, '-T', link, '--gc-sections',
         *[f'--defsym={name}={value:#x}' for name, value in aliases.items()],
@@ -215,8 +233,8 @@ def prepare(args):
     for name, data in payload_data.items():
         (args.output/name).write_bytes(data)
     manifest = {'schema': 'a733-primary-cache-probe-v1', 'physical_access': False,
-        'native_sha256': NATIVE, 'el1': el1, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
-        'sha256': digest(parent_path)}, 'sources': {name: digest(ROOT/name) for name in sources(el1)},
+        'native_sha256': NATIVE, 'el1': el1, 'interrupts': interrupts, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
+        'sha256': digest(parent_path)}, 'sources': {name: digest(ROOT/name) for name in sources(el1, interrupts)},
         'native_symbols': aliases, 'hooks': hooks, 'parent_hooks': parent['hooks'],
         'patch': {'address': address, 'original': original, 'replacement': replacement},
         'overlay': {**parent['overlay'], 'sha256': digest(args.output/'overlay.bin')},
@@ -231,4 +249,5 @@ if __name__ == '__main__':
     for name in ('image', 'primary', 'output', 'clang', 'lld', 'objcopy'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument("--el1", action="store_true", help="Include local GIC setup, cached EL1 entry and restoration")
+    parser.add_argument("--interrupts", action="store_true", help="Include bounded CPU0 timer/self-SGI delivery and cleanup")
     prepare(parser.parse_args())
