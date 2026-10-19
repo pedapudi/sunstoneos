@@ -148,10 +148,13 @@ functions and modes beyond these bounded applications.
   `npu-finite-host-20261018/transport-frozen/`. SRE tasks run at EL1t; cached SMP
   task/exit rules do not transfer. Stop communication after transport failure;
   retain ownership. Root retains architectural return review.
-- **DSI supervisor entry:** host-only correction `8149250` admits `dsi_result`.
+- **Supervisor entry:** host-only corrections admit DSI and UART result keys.
   The actual caller reaches a readiness sentinel before queue or device access:
   `dsi-supervisor-entry-20261019/result.json`, `frozen/manifest.json`. This
   establishes neither native startup nor hardware operation; H.264 was not rerun.
+  UART entry passes the same boundary under `uart-supervisor-entry-20261019/`.
+  Its `caller-audit.json` confirms admitted keys for all 21 existing production
+  callers, including both conditional GPU profiles; device cases were not repeated.
 - **Physical device preparation:** DSI needs a selected panel and image-bound
   electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding facts;
   model-only authority is refused. USB Gen1 has no authenticated physical source
