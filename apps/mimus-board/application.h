@@ -1,0 +1,20 @@
+#ifndef MIMUS_BOARD_APP_H
+#define MIMUS_BOARD_APP_H
+#include <stdint.h>
+#include <stddef.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+int mimus_board_live(void);
+int mimus_board_session_live(void);
+void mimus_board_host_observed(int);
+int mimus_board_export_live(void);
+void mimus_board_fail(void);
+int mimus_board_start(void);
+int mimus_board_started(void);
+void mimus_board_storage_completed(void);
+int mimus_board_copy(uint32_t,size_t,uint8_t *,size_t *,uint32_t *);
+#ifdef __cplusplus
+}
+#endif
+#endif

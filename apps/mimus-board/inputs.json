@@ -1,0 +1,4 @@
+{
+  "recorded_wav": {"name":"4515-11057-0027.wav", "bytes":114924, "sha256":"8e22df9e4b6251ffe3465de25cb0d851be53a4e7f587969d3796d59fb5bc6e2b", "sample_rate":16000, "channels":1, "samples":57440},
+  "physical_parity": "mimus-usb-parity32-20261016/case-003/parity.json"
+}
