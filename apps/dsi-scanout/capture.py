@@ -21,7 +21,7 @@ PRODUCT='sunstoneos native DSI'
 SERIAL='sunstoneos-a733-dsi'
 
 
-def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep):
+def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,expected=None):
     preparation.session_check(session)
     record.update(dsi_retention='whole-board-power-removal',dsi_result='unobserved');save()
     for sequence in range(1,2401):
@@ -35,6 +35,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==0:
             pause(min(.025,max(0,deadline-now())));continue
         if result['status']==1:
+            if expected is not None:require((result.get('sequence'),result.get('slot'))==expected,'Replay completion differs from outstanding presentation')
             output=evidence/'output.bin';supervisor.durable_frame(output,frame[128:])
             require(now()<deadline,'DSI output became durable after capture deadline.')
             record['copied_dsi_output']={'path':output.name,'bytes':256,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
@@ -47,13 +48,29 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('DSI exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save):
+def capture_device(device,same,deadline,session,evidence,record,save,frames=None,slots=(0,1,0)):
     def exchange(packet,timeout):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete DSI request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'DSI capture deadline expired after write.')
         return bytes(device.read(0x81,384,timeout=min(timeout,remaining)))
-    return capture(exchange,session,evidence,record,save,deadline)
+    if struct.unpack_from('<Q',session,600)[0]==1:
+        require(frames is None,'Ordinary scanout cannot accept replay frames')
+        return capture(exchange,session,evidence,record,save,deadline)
+    require(frames is not None and len(frames)==2 and 0<len(slots)<=256 and all(type(s)is int and s in (0,1) for s in slots),'Two frozen replay frames and bounded slot selections required')
+    def send(data):
+        for offset in range(0,len(data),512):
+            same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'Replay upload deadline expired')
+            fragment=data[offset:offset+512];require(device.write(0x02,fragment,timeout=min(500,remaining))==len(fragment),'Incomplete replay upload')
+    uploads=[preparation.profile.upload_bytes(session,slot,frames[slot]) for slot in range(2)]
+    for data in uploads:send(data)
+    for sequence,slot in enumerate(slots,1):
+        send(preparation.profile.input_header(session,2,slot,sequence));child={};directory=evidence/f'present-{sequence:03}';directory.mkdir()
+        record.setdefault('presentations',[]).append(child)
+        result=capture(exchange,session,directory,child,save,deadline,expected=(sequence,slot))
+        require(result['status']==1 and result['sequence']==sequence and result['slot']==slot,'Replay completion differs from requested presentation')
+        save()
+    record['dsi_result']='observed-success';return result
 
 
 def source_files():
@@ -106,6 +123,8 @@ def validate_software(value,prepared):
     for name,expected in prepared['_source_hashes'].items():
         _,data=reference_bytes(value['sources'][name])
         require(hashlib.sha256(data).hexdigest()==expected,'Software evidence covers another implementation: '+name)
+    if struct.unpack_from('<Q',prepared['_frozen']['session.bin'],600)[0]==2:
+        require(all(value.get(k) is True for k in ('immutable_replay','upload_cases','rcq_cases')),'Replay software evidence incomplete')
     require(value.get('evidence'),'Software result evidence is missing.')
     for item in value['evidence']:reference_bytes(item)
 
@@ -136,6 +155,7 @@ def claimed(database,test_id,owner,bundle,prepared):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--present-slot',type=int,choices=(0,1),action='append',help='Replay slot order; default0,1,0')
     parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
         help='Use the reviewed whole-board recovery plan for the retained board providers.')
@@ -147,7 +167,9 @@ def main(argv=None):
         require(admission['identity']==identity and admission['port']==port,'DSI entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,
+            frames=[frozen[f'frame{slot}.bin'] for slot in range(2)] if struct.unpack_from('<Q',session,600)[0]==2 else None,
+            slots=args.present_slot or (0,1,0)),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='dsi_result',
         source_files=source_files(),description='Supervised native DSI controller observation; board providers require whole-board power removal')
 

@@ -55,7 +55,7 @@ enum display_phase {
     DISPLAY_START_DE, DISPLAY_START_LCD, DISPLAY_START_DSI,
     DISPLAY_OBSERVE_DE, DISPLAY_OBSERVE_LCD, DISPLAY_OBSERVE_DSI,
     DISPLAY_STOP_DSI, DISPLAY_STOP_DE, DISPLAY_DRAIN_DE, DISPLAY_STOP_LCD,
-    DISPLAY_QUIET_OUTPUT
+    DISPLAY_QUIET_OUTPUT, DISPLAY_REPLAY_DE
 };
 enum display_scanout_action { DISPLAY_SCANOUT_START, DISPLAY_SCANOUT_OBSERVE, DISPLAY_SCANOUT_STOP };
 enum display_scanout_error { DISPLAY_SCANOUT_OK, DISPLAY_SCANOUT_TIME,
@@ -106,6 +106,7 @@ struct display_provider {
                     uint64_t, struct display_proof *);
     int (*quiet_output)(void *, const struct display_request *, const struct display_ownership *,
                         uint64_t, struct display_proof *);
+    int (*rcq_submit)(void *,const struct display_resource_token *,uint64_t);
 };
 struct display_scanout {
     struct display_request request;
@@ -138,6 +139,7 @@ int display_scanout_init(struct display_scanout *, const struct display_request 
                          const struct display_provider *, void *);
 /* NEW->prepare; READY->START; ACTIVE->OBSERVE/STOP. Refusal invokes no callback.
  * Deadline covers the complete requested operation, not each leaf separately. */
+int display_scanout_replay(struct display_scanout *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);
 int display_scanout_prepare(struct display_scanout *, uint64_t deadline);
 int display_scanout_request(struct display_scanout *, enum display_scanout_action, uint64_t deadline);
 /* One provider or leaf step per poll; timestamp callbacks are additional.

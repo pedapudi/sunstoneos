@@ -9,6 +9,8 @@ int dsi_live(void)
 {return dsi.admitted&&board_live(NULL)&&!atomic_load_explicit(&dsi.failed,memory_order_acquire)&&
  !atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
  !atomic_load_explicit(&providers.shared.locks.retained,memory_order_acquire)&&a733_smp_counter()/24<dsi.deadline;}
+int dsi_input_now(void *v,uint64_t *n)
+{if(v!=&dsi||!dsi_live())return 0;*n=a733_smp_counter()/24;return dsi_live();}
 static int now(void *v,uint64_t *n){return v==&dsi&&dsi_live()&&a733_counter_clock_now(&providers.shared.counter,n)==1;}
 static int enter(void *v,uint64_t deadline){return v==&dsi&&dsi_live()?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,deadline):-1;}
 static void leave(void *v){if(v==&dsi)a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);}
@@ -78,7 +80,7 @@ static int publish(void *v,uint64_t token,const void *p,size_t n,uint64_t deadli
 static int scanout_auth(void *v,const struct a733_display_native_config *c,uint64_t deadline)
 {return v==&dsi&&c==&dsi.native.config&&deadline==dsi.deadline&&authority()&&
  c->media==&dsi.media&&c->pll==&dsi.pll&&c->iommu==&dsi.iommu&&c->pool==dsi.pool&&
- c->request.owner==dsi.session.owner&&c->request.panel_id==dsi.session.panel_id&&c->request.frame.mapped_bytes==dsi_frame_bytes(&dsi.session)?1:-1;}
+ c->request.owner==dsi.session.owner&&c->request.panel_id==dsi.session.panel_id&&c->request.frame.mapped_bytes==dsi_bank_bytes(&dsi.session)?1:-1;}
 static int command_auth(void *v,unsigned controller,unsigned lanes,uint64_t lease)
 {return v==&dsi&&controller==1&&lanes==4&&lease==dsi.native.binding.resources.id&&authority()&&
  dsi.native.binding.scanout.phase==DISPLAY_PREPARE_PANEL&&dsi.native.binding.scanout.phy.state==A733_DSI_PHY_READY;}
@@ -145,16 +147,25 @@ static int setup_pins(void)
  else r=a733_pins_acquire_banked(&providers.shared.pins,dsi.session.owner,requests,dsi.session.values[DSI_PIN_COUNT],&dsi.pins,dsi.deadline);
  return r==A733_PINS_BUSY?0:r==A733_PINS_OK?1:-1;
 }
-static int allocate(void)
+static int reserve_bank(void)
 {
  dsi.pool=a733_memory_uncached_init();if(!dsi.pool)return 0;
  if(!device_memory_acquire_aligned(dsi.pool,dsi.session.owner,32768,16384,&dsi.tables,&dsi.table_extent)||
- !device_memory_acquire(dsi.pool,dsi.session.owner,dsi_frame_bytes(&dsi.session),&dsi.frame,&dsi.frame_extent))return 0;
- memset((void *)dsi.frame_extent.cpu,0,dsi.frame_extent.bytes);
+ !device_memory_acquire(dsi.pool,dsi.session.owner,dsi_bank_bytes(&dsi.session),&dsi.frame,&dsi.frame_extent))return 0;
+ memset((void *)dsi.frame_extent.cpu,0,dsi.frame_extent.bytes);return 1;
+}
+static int allocate(void)
+{
+ if(!dsi.pool&&!reserve_bank())return 0;
+ if(dsi.session.version==1){
  uint32_t *pixels=(void *)dsi.frame_extent.cpu;unsigned w=dsi.session.values[DSI_WIDTH],h=dsi.session.values[DSI_HEIGHT],stride=dsi.session.values[DSI_PITCH]/4;
  static const uint32_t colors[]={0x00ffffff,0x00ffff00,0x0000ffff,0x0000ff00,0x00ff00ff,0x00ff0000,0x000000ff,0};
  for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)pixels[y*stride+x]=colors[((uint64_t)x*8/w+dsi.session.values[DSI_SEED])&7];
- storage_digest_bytes((void *)dsi.frame_extent.cpu,dsi.frame_extent.bytes,dsi.frame_hash);
+ }
+ else if(!atomic_load_explicit(&dsi.input.committed[0],memory_order_acquire)||
+ !atomic_load_explicit(&dsi.input.committed[1],memory_order_acquire)||
+ !a733_de_replay_build((void *)(dsi.frame_extent.cpu+2*dsi_frame_bytes(&dsi.session)),0x10000000,dsi_frame_bytes(&dsi.session)))return 0;
+ storage_digest_bytes((void *)dsi.frame_extent.cpu,dsi_frame_bytes(&dsi.session),dsi.frame_hash);
  struct a733_iommu_span span={0x10000000,dsi.frame_extent.physical,dsi.frame_extent.bytes,A733_IOMMU_READ};
  struct a733_iommu_tables tables;if(a733_iommu_build(&tables,(void *)dsi.table_extent.cpu,dsi.table_extent.physical,&span,1)!=1||!barrier(&dsi))return 0;
  struct a733_iommu_ops ops={now,memory_admit,memory_read,memory_write,publish};
@@ -181,7 +192,15 @@ static int step(void)
 {
  const uint32_t *v=dsi.session.values;
  switch(dsi.stage){
- case 0:{int r=supplies();if(r!=1)return r;++dsi.stage;return 0;}
+ case 0:{
+ if(dsi.session.version==2){
+  if(!dsi.pool){if(!reserve_bank())return -1;
+   dsi.input.bank=dsi.frame_extent.cpu;dsi.input.bytes=dsi_frame_bytes(&dsi.session);dsi.input.deadline=dsi.deadline;
+   dsi.input.epoch=dsi.session.board.epoch;dsi.input.generation=dsi.session.board.generation;dsi.input.authority=dsi.session.authority;
+   atomic_store_explicit(&dsi.input.allocated,1,memory_order_release);}
+  if(!atomic_load_explicit(&dsi.input.committed[0],memory_order_acquire)||!atomic_load_explicit(&dsi.input.committed[1],memory_order_acquire))return 0;
+ }
+ int r=supplies();if(r!=1)return r;++dsi.stage;return 0;}
  case 1:{int r=setup_pins();if(r!=1)return r;++dsi.stage;return 0;}
  case 2:{struct a733_gpu_power_resources ready;enum a733_gpu_resource_result r=a733_gpu_resources_acquire(&providers.shared.gpu,(unsigned)dsi.session.pck_client,A733_GPU_RESOURCE_PCK,dsi.deadline,&dsi.pck_token,&ready);
  if(r==A733_GPU_RESOURCE_BUSY)return 0;if(r!=A733_GPU_RESOURCE_OK)return -1;
@@ -199,7 +218,7 @@ static int step(void)
  case 5:{int r=a733_iommu_poll(&dsi.iommu);if(!r)return 0;if(r!=1)return -1;
  struct display_request request;if(!dsi_request(&dsi.session,&request,0x10000000,dsi.frame_extent.cpu))return -1;
  struct a733_display_native_config c={.media=&dsi.media,.pll=&dsi.pll,.iommu=&dsi.iommu,.pool=dsi.pool,.frame=dsi.frame,.tables=dsi.tables,
- .request=request,.locks=&providers.shared.locks,.task=dsi.handle,.context=&dsi,.recovery_generation=dsi.session.recovery_generation,.now_us=now,.authorize=scanout_auth,.panel=panel};
+ .replay_frame_bytes=dsi.session.version==2?dsi_frame_bytes(&dsi.session):0,.request=request,.locks=&providers.shared.locks,.task=dsi.handle,.context=&dsi,.recovery_generation=dsi.session.recovery_generation,.now_us=now,.authorize=scanout_auth,.panel=panel};
  if(!a733_display_native_init(&dsi.native,&c)||!a733_display_native_prepare(&dsi.native,dsi.deadline))return -1;++dsi.stage;return 0;}
  case 6:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;if(r!=DISPLAY_SCANOUT_READY||!a733_display_native_request(&dsi.native,DISPLAY_SCANOUT_START,dsi.deadline))return -1;++dsi.stage;return 0;}
  case 7:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;if(r!=DISPLAY_SCANOUT_ACTIVE)return -1;++dsi.stage;return 0;}
@@ -207,8 +226,24 @@ static int step(void)
  case 9:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;if(r!=DISPLAY_SCANOUT_ACTIVE||a733_iommu_scan(&dsi.iommu,dsi.deadline)!=1)return -1;++dsi.stage;return 0;}
  case 10:{int r=a733_iommu_poll(&dsi.iommu);if(!r)return 0;if(r!=1)return -1;
  if(!atomic_load_explicit(&dsi.result,memory_order_acquire)&&!observation())return -1;
- dsi.next_observe=a733_smp_counter()/24+100000;++dsi.stage;return 0;}
- case 11:if(a733_smp_counter()/24>=dsi.next_observe){if(!a733_display_native_request(&dsi.native,DISPLAY_SCANOUT_OBSERVE,dsi.deadline))return -1;dsi.stage=9;}return 0;
+ if(dsi.session.version==2&&atomic_load_explicit(&dsi.input.request,memory_order_acquire)==2){
+ uint8_t *p=dsi.replay_result;memset(p,0,256);put32(p,0x52505344);put32(p+4,1);put32(p+8,256);put32(p+12,1);
+ put64(p+16,dsi.input.sequence);put64(p+24,dsi.input.requested_slot);put64(p+32,dsi.session.board.epoch);put64(p+40,dsi.session.board.generation);
+ put64(p+48,dsi.session.authority);put64(p+56,dsi.native.binding.scanout.de.replay_rcq_done);put64(p+64,dsi.native.binding.scanout.de.replay_frame_end);
+ memcpy(p+72,dsi.session.replay.hashes[dsi.input.requested_slot],32);memcpy(p+104,dsi.profile_hash,32);
+ put64(p+136,dsi.frame.generation);put64(p+144,dsi.tables.generation);put64(p+152,dsi_bank_bytes(&dsi.session));
+ put64(p+160,dsi_frame_bytes(&dsi.session));put64(p+168,dsi.session.panel_id);put32(p+176,dsi.native.binding.scanout.de.raw_status);put32(p+180,dsi.iommu.fault.scanned_masters);
+ if(!dsi_live())return -1;atomic_store_explicit(&dsi.input.request,3,memory_order_release);
+ }
+ dsi.next_observe=a733_smp_counter()/24+100000;dsi.stage=11;return 0;}
+ case 11:
+ if(dsi.session.version==2&&atomic_load_explicit(&dsi.input.request,memory_order_acquire)==1){
+  if(!a733_display_native_replay(&dsi.native,dsi.input.requested_slot,dsi.deadline))return -1;
+  atomic_store_explicit(&dsi.input.request,2,memory_order_release);dsi.stage=12;return 0;
+ }
+ if(a733_smp_counter()/24>=dsi.next_observe){if(!a733_display_native_request(&dsi.native,DISPLAY_SCANOUT_OBSERVE,dsi.deadline))return -1;dsi.stage=9;}return 0;
+ case 12:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;
+ if(r!=DISPLAY_SCANOUT_ACTIVE||!a733_display_native_request(&dsi.native,DISPLAY_SCANOUT_OBSERVE,dsi.deadline))return -1;dsi.stage=9;return 0;}
  default:return -1;
  }
 }

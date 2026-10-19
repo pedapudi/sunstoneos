@@ -95,6 +95,8 @@ static void application_setup(void)
  atomic_store(&providers.shared.pmic_ready,1);assert(board_application_start());
  assert(posix_memalign(&backing,16384,0x1000000)==0);assert(device_memory_pool_init(&memory_pool,(uintptr_t)backing,0x78000000,0x1000000));
 }
+
+#ifndef DSI_NATIVE_REUSE
 int main(int argc,char **argv)
 {
  assert(argc==4);FILE *f=fopen(argv[1],"rb");assert(f&&fread(&input,1,sizeof(input),f)==sizeof(input)&&!fclose(f));assert(dsi_profile_valid(&input));
@@ -107,3 +109,5 @@ int main(int argc,char **argv)
  f=fopen(argv[3],"wb");assert(f&&fwrite(dsi.observation,1,256,f)==256&&!fclose(f));}
  printf("PASS native application %s %ux%u; actual producers/PMIC/pins/IOMMU/scanout; callbacks%u; physical authority modeled\n",argv[2],input.values[3],input.values[4],calls);free(backing);return 0;
 }
+
+#endif

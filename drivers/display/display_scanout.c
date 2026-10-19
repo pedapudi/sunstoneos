@@ -60,6 +60,8 @@ static int write32(void *ctx, uintptr_t address, uint32_t v)
     struct display_scanout *s = ctx;
     return s->provider.write32(s->context, &s->ownership.resources, address, v);
 }
+static int rcq_submit(void *ctx)
+{struct display_scanout *s=ctx;return s->provider.rcq_submit?s->provider.rcq_submit(s->context,&s->ownership.resources,s->deadline):-1;}
 static int barrier(void *ctx)
 {
     struct display_scanout *s = ctx;
@@ -110,6 +112,8 @@ static int de_admit(void *ctx, const struct a733_de_config *c, enum a733_de_acti
          s->dsi.state == A733_DSI_VIDEO_READY && s->lcd.state == A733_TCON_READY) ||
         (s->phase == DISPLAY_OBSERVE_DE && a == A733_DE_OBSERVE &&
          s->dsi.state == A733_DSI_VIDEO_ACTIVE && s->lcd.state == A733_TCON_ACTIVE) ||
+        (s->phase == DISPLAY_REPLAY_DE && a == A733_DE_REPLAY &&
+         s->dsi.state == A733_DSI_VIDEO_ACTIVE && s->lcd.state == A733_TCON_ACTIVE) ||
         (s->phase == DISPLAY_STOP_DE && a == A733_DE_STOP &&
          s->dsi.state == A733_DSI_VIDEO_STOPPED && s->lcd.state == A733_TCON_ACTIVE);
     return valid && authenticate(s);
@@ -149,6 +153,12 @@ int display_scanout_request(struct display_scanout *s, enum display_scanout_acti
              a == DISPLAY_SCANOUT_OBSERVE ? DISPLAY_OBSERVE_DE : DISPLAY_STOP_DSI);
     return 1;
 }
+int display_scanout_replay(struct display_scanout *s,unsigned slot,uint64_t bytes,uint64_t deadline)
+{
+ if(!s||!s->initialized||s->entered||s->state!=DISPLAY_SCANOUT_ACTIVE||deadline<=s->last_now)return 0;
+ if(!a733_de_replay_request(&s->de,slot,bytes,deadline))return 0;
+ s->deadline=deadline;s->state=DISPLAY_SCANOUT_PENDING;phase(s,DISPLAY_REPLAY_DE);s->begun=1;return 1;
+}
 static int begin_leaf(struct display_scanout *s)
 {
     uint64_t id = s->ownership.resources.id;
@@ -170,7 +180,7 @@ static int begin_leaf(struct display_scanout *s)
         return a733_tcon_lcd_init(&s->lcd,&c,s->deadline);
     }
     case DISPLAY_PREPARE_DE: {
-        struct a733_de_config c = {.ops={de_admit,read32,write32,barrier,clock_read},.context=s,.lease=id,
+        struct a733_de_config c = {.ops={de_admit,read32,write32,barrier,clock_read,rcq_submit},.context=s,.lease=id,
             .timing=s->request.timing,.surface={s->ownership.frame.device_address,s->ownership.frame.mapped_bytes,
                                              s->ownership.frame.id,s->ownership.frame.pitch}};
         return a733_de_init(&s->de,&c,s->deadline);
@@ -255,7 +265,7 @@ static void completed(struct display_scanout *s)
     case DISPLAY_PREPARE_DE: s->state=DISPLAY_SCANOUT_READY; break;
     case DISPLAY_START_DE: phase(s,DISPLAY_START_LCD); break;
     case DISPLAY_START_LCD: phase(s,DISPLAY_START_DSI); break;
-    case DISPLAY_START_DSI: case DISPLAY_OBSERVE_DSI: s->state=DISPLAY_SCANOUT_ACTIVE; break;
+    case DISPLAY_REPLAY_DE: case DISPLAY_START_DSI: case DISPLAY_OBSERVE_DSI: s->state=DISPLAY_SCANOUT_ACTIVE; break;
     case DISPLAY_OBSERVE_DE: phase(s,DISPLAY_OBSERVE_LCD); break;
     case DISPLAY_OBSERVE_LCD: phase(s,DISPLAY_OBSERVE_DSI); break;
     case DISPLAY_STOP_DSI: phase(s,DISPLAY_STOP_DE); break;

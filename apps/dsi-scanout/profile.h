@@ -15,17 +15,20 @@ enum { DSI_STEP_GPIO=1,DSI_STEP_DELAY,DSI_STEP_PACKET };
 struct dsi_pin {uint8_t bank,pin,expected[3],desired[3],output,role,reserved[6];};
 struct dsi_step {uint8_t kind,role,type,phase;uint16_t offset,bytes;uint32_t value,reserved2;};
 struct dsi_supply {uint32_t rail,uv;};
+struct dsi_replay_profile {uint64_t magic,version,slots,frame_bytes;uint8_t hashes[2][32],reserved[416];};
+#define DSI_REPLAY_MAGIC UINT64_C(0x3150524433375341)
 struct dsi_session {
  struct a733_board_session board;
  uint64_t magic,version,bytes,owner,board_id,panel_id,authority,pll_profile_id,pll_profile_generation,
  reference_generation,rail_generation,inactive_epoch,recovery_generation,pck_client;
  uint8_t facts[4][32]; /* initial isolation, full memory, electrical/PLL, selected panel */
  uint32_t values[32];struct dsi_supply supplies[8];struct dsi_pin pins[16];
- struct dsi_step steps[DSI_STEPS];uint8_t payload[DSI_PAYLOAD],reserved[512];
+ struct dsi_step steps[DSI_STEPS];uint8_t payload[DSI_PAYLOAD];union {uint8_t reserved[512];struct dsi_replay_profile replay;};
 };
 _Static_assert(sizeof(struct dsi_session)==4096,"DSI sealed page");
 _Static_assert(offsetof(struct dsi_session,values)==832&&offsetof(struct dsi_session,payload)==2048,"DSI wire offsets");
 int dsi_profile_valid(const struct dsi_session *);
 int dsi_request(const struct dsi_session *,struct display_request *,uint64_t frame_pa,uintptr_t frame_cpu);
+uint64_t dsi_bank_bytes(const struct dsi_session *);
 uint64_t dsi_frame_bytes(const struct dsi_session *);
 #endif

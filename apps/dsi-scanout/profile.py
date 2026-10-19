@@ -1,6 +1,7 @@
 """Value-only selected-panel producer; no defaults or physical authority."""
 import hashlib,struct
 MAGIC=0x3153494433375341
+REPLAY_MAGIC=0x3150524433375341
 IDS=('owner','board_id','panel_id','authority','pll_profile_id','pll_profile_generation','reference_generation','rail_generation','inactive_epoch','recovery_generation','pck_client')
 VALUES=('pixel_hz','hs_hz','ls_hz','width','height','hsync','hback','hfront','vsync','vback','vfront','lanes','format','mode','actual_dclk_hz','pitch','initial_hs_hz','initial_ls_hz')
 ROLES={'lane':0,'power':1,'reset':2,'backlight':3}
@@ -37,6 +38,21 @@ def encode(board,profile,facts):
     for i,instruction in enumerate(instructions):struct.pack_into('<4B2H2I',raw,1280+i*16,*instruction)
     raw[2048:2048+len(payload)]=payload
     return bytes(raw)
+def replay_session(session,frames):
+    require(len(session)==4096 and struct.unpack_from('<3Q',session,592)==(MAGIC,1,4096),'Original sealed DSI value profile required')
+    require(len(frames)==2 and all(len(v)==frame_bytes(session) for v in frames),'Two complete padded copied frames required')
+    require(32768+2*frame_bytes(session)+8192<=0x1000000,'Two padded frames and RCQ pages exceed NC pool')
+    raw=bytearray(session);struct.pack_into('<Q',raw,600,2)
+    struct.pack_into('<4Q',raw,3584,REPLAY_MAGIC,1,2,frame_bytes(session));raw[3616:3680]=b''.join(hashlib.sha256(v).digest() for v in frames)
+    return bytes(raw)
+def input_header(session,op,slot,sequence):
+    require(len(session)==4096 and struct.unpack_from('<Q',session,600)[0]==2 and slot in (0,1),'Replay session/slot required')
+    require(op in (1,2) and type(sequence)is int and 0<sequence<2**64,'Invalid replay operation/sequence')
+    epoch,generation=struct.unpack_from('<2Q',session,24);authority=struct.unpack_from('<Q',session,640)[0]
+    return struct.pack('<4I5Q',0x55495344,1,op,slot,epoch,generation,authority,sequence,frame_bytes(session) if op==1 else 0)+(session[3616+32*slot:3648+32*slot] if op==1 else bytes(32))+bytes(8)
+def upload_bytes(session,slot,frame):
+    require(len(frame)==frame_bytes(session) and hashlib.sha256(frame).digest()==session[3616+slot*32:3648+slot*32],'Frame differs from admitted immutable slot')
+    return input_header(session,1,slot,slot+1)+frame
 def value_digest(session):return hashlib.sha256(session[592:704]+session[832:]).hexdigest()
 def frame_bytes(session):
     v=struct.unpack_from('<32I',session,832);return (v[15]*v[4]+v[27]+4095)&~4095
@@ -56,6 +72,8 @@ if __name__=='__main__':
     from pathlib import Path
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('board','profile','initial','memory','electrical','panel','output'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--frame',type=Path,action='append')
     a=p.parse_args();facts=[hashlib.sha256(getattr(a,k).read_bytes()).digest() for k in ('initial','memory','electrical','panel')]
     raw=encode(a.board.read_bytes(),json.loads(a.profile.read_text()),facts)
+    if a.frame:raw=replay_session(raw,[path.read_bytes() for path in a.frame])
     a.output.write_bytes(raw)

@@ -7,24 +7,30 @@ uint64_t dsi_frame_bytes(const struct dsi_session *s)
  if(used>UINT64_MAX-s->values[DSI_PADDING]-4095)return 0;
  return (used+s->values[DSI_PADDING]+4095)&~UINT64_C(4095);
 }
+uint64_t dsi_bank_bytes(const struct dsi_session *s)
+{uint64_t f=dsi_frame_bytes(s);return s->version==2?(f>UINT64_MAX/2-4096?0:2*f+8192):f;}
 int dsi_request(const struct dsi_session *s,struct display_request *r,uint64_t pa,uintptr_t cpu)
 {
  const uint32_t *v=s->values;
  struct display_request q={.owner=s->owner,.board_id=s->board_id,.panel_id=s->panel_id,
  .timing={.dsi={.pixel_hz=v[0],.hs_hz=v[1],.ls_hz=v[2],.width=v[3],.height=v[4],.hsync=v[5],.hback=v[6],.hfront=v[7],.vsync=v[8],.vback=v[9],.vfront=v[10],.lanes=v[11],.format=v[12],.mode=v[13]},.actual_dclk_hz=v[14]},
- .frame={cpu,pa,dsi_frame_bytes(s),s->board.generation,v[15]}};
+ .frame={cpu,pa,dsi_bank_bytes(s),s->board.generation,v[15]}};
  for(unsigned i=3;i<=10;++i)if(v[i]>65535)return 0;
  struct a733_de_plan p;struct a733_de_surface f={pa,q.frame.mapped_bytes,s->owner,v[15]};
  if(!a733_de_plan(&q.timing,&f,&p))return 0;*r=q;return 1;
 }
 int dsi_profile_valid(const struct dsi_session *s)
 {
- if(!s||s->magic!=DSI_PROFILE_MAGIC||s->version!=1||s->bytes!=4096||s->board.workload!=2||
+ if(!s||s->magic!=DSI_PROFILE_MAGIC||(s->version!=1&&s->version!=2)||s->bytes!=4096||s->board.workload!=2||
  !s->owner||!s->board_id||!s->panel_id||!s->authority||!s->pll_profile_id||!s->pll_profile_generation||
  !s->reference_generation||!s->rail_generation||!s->inactive_epoch||!s->recovery_generation||s->pck_client>=16||
- s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||!zero(s->reserved,sizeof(s->reserved)))return 0;
+ s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner)return 0;
  for(unsigned i=0;i<4;++i)if(zero(s->facts[i],32))return 0;
- const uint32_t *v=s->values;uint64_t z=dsi_frame_bytes(s);
+ if(s->version==1){if(!zero(s->reserved,sizeof(s->reserved)))return 0;}
+ else if(s->replay.magic!=DSI_REPLAY_MAGIC||s->replay.version!=1||s->replay.slots!=2||
+ s->replay.frame_bytes!=dsi_frame_bytes(s)||zero(s->replay.hashes[0],32)||zero(s->replay.hashes[1],32)||
+ !zero(s->replay.reserved,sizeof(s->replay.reserved)))return 0;
+ const uint32_t *v=s->values;uint64_t z=dsi_bank_bytes(s);
  if(v[DSI_TIMEOUT]<1000||v[DSI_TIMEOUT]>50000000||!z||z>UINT64_C(0x1000000)-32768||
  !v[DSI_STEP_COUNT]||v[DSI_STEP_COUNT]>DSI_STEPS||v[DSI_PAYLOAD_BYTES]>DSI_PAYLOAD||
  v[DSI_PIN_COUNT]<10||v[DSI_PIN_COUNT]>16||!v[DSI_SUPPLY_COUNT]||v[DSI_SUPPLY_COUNT]>8)return 0;

@@ -37,10 +37,18 @@ def main():
  a.evidence.mkdir(exist_ok=True);closure=a.evidence/'compiled-closure.json'
  closure.write_text(json.dumps(dict(target=target,execution_profile='dsi-single-core-supervised-v1',final_elf=sha(build/(target+'.elf')),dependencies=deps,objects=records,commands=commands,command_authority='Original CMake build.make compiler recipes expanded with their flags.make variables, plus original link.txt; no rebuild or generated CMake compilation database',feature_scope='Single-core SRE GUEST1, supervised, extended memory, DSI application. No USB host IRQ/USB3/SMP_DIAGNOSTIC capability.'),indent=2)+'\n')
  sources=set(ROOT/'apps/dsi-scanout'/name.name for name in (ROOT/'apps/dsi-scanout').iterdir() if name.is_file())|set(ROOT/'checks'/name for name in ('dsi-scanout.py','dsi-scanout-profile.c','dsi-scanout-native.c','dsi-scanout-linked.py','dsi-scanout-launch.py','dsi-scanout-host.py','dsi-scanout-freeze.py'))|{ROOT/'cmake/a733-dsi-scanout.cmake',ROOT/'docs/display-scanout.md',ROOT/'tools/evidence-snapshot.py'}
+ sources|=set((ROOT/'checks').glob('dsi-replay*'))|{ROOT/'sources.lock.json',ROOT/'docs/display-engine.md',ROOT/'checks/h264-supervisor-entry.py'}
  sources|={ROOT/n for n in ('checks/display-scanout.c','checks/display-clock-handoff.c','checks/a733-pmic.c','checks/a733-smp-supervised-launch.py','checks/usb-host-hid-native.py','apps/board/prepare.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/usb-access.py')}
  host=json.loads((a.evidence/'application/compiled-host-inputs.json').read_text())['inputs']
  for name,digest in host.items():assert sha(Path(name))==digest,name
  artifacts={Path(n) for n in host}|{Path(n) for n in deps}|set(objects)|metadata|{build/(target+'.elf'),build/'dsi-scanout/link.ld',build/'dsi-scanout/image.map',build/'CMakeCache.txt'}
+ research=Path.home()/'.cache/sunstoneos/sources/display-present-research/inputs.json'
+ if research.exists() and (ROOT/'checks/dsi-replay.py').exists():
+  artifacts|={research}|{Path(n) for n in json.loads(research.read_text())['sources']}
+ supervisor=Path.home()/'.cache/sunstoneos/evidence/dsi-supervisor-entry-20261019'
+ if supervisor.exists():artifacts|={p for p in supervisor.rglob('*') if p.is_file()}
+ gate=a.evidence/'host-image-gate.json'
+ if gate.exists():artifacts|={Path(case['image']) for case in json.loads(gate.read_text())['cases']}
  artifacts|={p for p in a.evidence.rglob('*') if p.is_file() and a.output not in p.parents and not any(part in ('frozen','final-frozen') for part in p.relative_to(a.evidence).parts)}
  command=[sys.executable,str(ROOT/'tools/evidence-snapshot.py'),'--repository',str(ROOT),'--output',str(a.output),'--note','Standalone DSI selected native image and actual original linked-object/compiler-dependency closure. Private app/launcher/seal/host evidence and root static linked-layout review only. Explicit MODEL_ONLY facts; no shared startup/GIC/device execution or physical panel qualification. Earlier failed fixture/build logs retained.']
  for path in sorted(sources):command+=['--source',str(path.relative_to(ROOT))]

@@ -17,7 +17,7 @@ foreach(source IN LISTS dsi_parent_sources)
  endif()
 endforeach()
 list(APPEND dsi_sources "${dsi_build}/monitor.c" "${dsi_build}/runtime.c")
-foreach(source main native profile session admission usb0)
+foreach(source main native profile session admission usb0 input)
  list(APPEND dsi_sources "${dsi_app}/${source}.c")
 endforeach()
 list(APPEND dsi_sources "${SUNSTONE_SOURCE_ROOT}/platform/a733/device_memory_layout.c"

@@ -129,6 +129,64 @@ static struct word write_word(const struct a733_de *d, unsigned i)
     if(w.offset==0x8010&&d->config.output==A733_DE_TV0_RGB565)w.value=0x40;
     return w;
 }
+/* DE352 RCQ: pinned de_base.h header encoding and sunxi_de.c aligned
+ * header pairs; de_top.c output1 stride0x40, stale W1C and busy submission.
+ * No CPU writes to either command page occur after bank publication. */
+static int replay_shape(uint64_t base,uint64_t f)
+{return base&&!(base&4095)&&f&&!(f&4095)&&base<=UINT64_C(0x100000000)-8192&&
+ f<=(UINT64_C(0x100000000)-base-8192)/2;}
+static void replay_words(uint32_t w[16],uint64_t base,uint64_t f,unsigned slot)
+{
+ memset(w,0,64);w[0]=(uint32_t)(base+2*f+slot*4096+32);
+ w[1]=4;w[2]=1;w[3]=OVL+0x10;w[8]=(uint32_t)(base+slot*f);
+}
+int a733_de_replay_build(void *pages,uint64_t base,uint64_t f)
+{
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f))return 0;
+ memset(pages,0,8192);for(unsigned slot=0;slot<2;++slot){uint32_t words[16];
+ replay_words(words,base,f,slot);memcpy((uint8_t *)pages+slot*4096,words,64);}return 1;
+}
+int a733_de_replay_valid(const void *pages,uint64_t base,uint64_t f)
+{
+ if(!pages||((uintptr_t)pages&4095)||!replay_shape(base,f))return 0;
+ for(unsigned slot=0;slot<2;++slot){uint32_t words[16];replay_words(words,base,f,slot);
+ const uint8_t *p=(const uint8_t *)pages+slot*4096;if(memcmp(p,words,64))return 0;
+ for(unsigned i=64;i<4096;++i)if(p[i])return 0;}return 1;
+}
+int a733_de_replay_request(struct a733_de *d,unsigned slot,uint64_t f,uint64_t deadline)
+{
+ if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||slot>1||
+ d->config.output!=A733_DE_LCD1_XRGB8888||!d->config.ops.rcq_submit||deadline<=d->last_now||
+ !replay_shape(d->config.surface.device_address,f)||f<d->plan.padded_bytes||
+ d->config.surface.mapped_bytes!=2*f+8192)return 0;
+ d->replay_slot=slot;d->replay_frame_bytes=f;d->replay_rcq_done=d->replay_frame_end=0;
+ d->deadline=deadline;d->state=A733_DE_PENDING;d->action=A733_DE_REPLAY;d->step=0;return 1;
+}
+static int replay_poll(struct a733_de *d)
+{
+ uint32_t v=0;int ok=0;void *c=d->config.context;unsigned step=d->step;
+ uint64_t header=d->config.surface.device_address+2*d->replay_frame_bytes+4096*d->replay_slot;
+ if(!step)ok=d->config.ops.admit(c,&d->config,A733_DE_REPLAY);
+ else if(step==1)ok=d->config.ops.read32(c,DE+0x8140,&v);
+ else if(step==2||step==4||step==13||step==15||step==17||step==18)ok=d->config.ops.read32(c,DE+0x8144,&v);
+ else if(step==3||step==16)ok=d->config.ops.write32(c,DE+0x8144,(d->raw_status&~13u)|(step==3?5u:1u));
+ else if(step==5)ok=d->config.ops.write32(c,DE+0x8154,(uint32_t)header);
+ else if(step==6)ok=d->config.ops.write32(c,DE+0x8158,0);
+ else if(step==7)ok=d->config.ops.write32(c,DE+0x815c,32);
+ else if(step==8||step==12)ok=d->config.ops.barrier(c);
+ else if(step==9){ok=d->config.ops.rcq_submit(c);if(ok==0)return time_ok(d);if(ok==1){d->step=12;return time_ok(d);}}
+ else if(step==14)ok=d->config.ops.read32(c,DE+OVL+0x10,&v);
+ if(ok!=1){fail(d,step?A733_DE_IO:A733_DE_AUTHORITY);return 0;}
+ if(!time_ok(d))return 0;
+ if(step==1&&!(v&1)){fail(d,A733_DE_INITIAL_STATE);return 0;}
+ if(step==2||step==15)d->raw_status=v;
+ if(step==4&&(v&5)){fail(d,A733_DE_VERIFY);return 0;}
+ if(step==13){if(!(v&4))return 1;d->replay_rcq_done=d->last_now;}
+ if(step==14&&v!=(uint32_t)(d->config.surface.device_address+d->replay_slot*d->replay_frame_bytes)){fail(d,A733_DE_VERIFY);return 0;}
+ if(step==17&&(v&1)){fail(d,A733_DE_VERIFY);return 0;}
+ if(step==18){if(!(v&1))return 1;d->raw_status=v;d->replay_frame_end=d->last_now;d->state=A733_DE_ARMED;}
+ ++d->step;return 1;
+}
 enum a733_de_state a733_de_poll(struct a733_de *d)
 {
     if (!d || !d->initialized) return A733_DE_FAULT_RETAINED;
@@ -136,6 +194,7 @@ enum a733_de_state a733_de_poll(struct a733_de *d)
     if (d->entered) { fail(d, A733_DE_REENTRY); return d->state; }
     d->entered = 1;
     if (!time_ok(d)) goto out;
+    if(d->action==A733_DE_REPLAY){(void)replay_poll(d);goto out;}
     unsigned step = d->step;
     unsigned check_count = COUNT(common) + (d->action == A733_DE_PREPARE ? COUNT(cold) : 1);
     unsigned write_count = d->action == A733_DE_PREPARE ? IMAGE_WORDS + COUNT(setup) :

@@ -26,3 +26,16 @@ int a733_display_native_read(uintptr_t a,uint32_t *out)
 {a733_display_native_barrier();*out=*(volatile const uint32_t *)a;return a733_display_native_barrier();}
 int a733_display_native_write(uintptr_t a,uint32_t value)
 {a733_display_native_barrier();*(volatile uint32_t *)a=value;return a733_display_native_barrier();}
+
+/* Pinned DE352 submit rule: no yield/interrupt between busy observation and
+ * update write. The caller owns the shared register mutex. This is one bounded
+ * transaction; idle returns pending without writing. Existing task critical
+ * primitives provide the same local exclusion as Linux local_irq_save. */
+int a733_display_native_rcq_submit(void)
+{
+ int submitted=0;taskENTER_CRITICAL();
+ uint32_t status=*(volatile const uint32_t *)(A733_DE_BASE+0x8144);
+ if(status&16){uint32_t control=*(volatile const uint32_t *)(A733_DE_BASE+0x8150);
+  *(volatile uint32_t *)(A733_DE_BASE+0x8150)=control|1u;submitted=1;}
+ a733_display_native_barrier();taskEXIT_CRITICAL();return submitted;
+}

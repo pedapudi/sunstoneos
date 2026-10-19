@@ -2597,5 +2597,23 @@
     "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/host/xhci-hub.c",
     "archive": "usb-superspeed/xhci-hub.c",
     "sha256": "1c6021fa36775dffa11a0a4907255ed88993070e57168579db5d2372dbb2902c"
+  },
+  "display-present-sunxi_drm_crtc-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_drm_crtc.c",
+    "archive": "display-present-research/sunxi_drm_crtc.c",
+    "sha256": "f3c4cb2491922081fd3699d76cc36716da06b16026bd7f41335f91556502b416"
+  },
+  "display-present-sunxi_drm_drv-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_drm_drv.c",
+    "archive": "display-present-research/sunxi_drm_drv.c",
+    "sha256": "c98cb9d8527c4fe746bf9d7cdea411b5701b86c569e1598db3246270dc797442"
+  },
+  "display-present-drm_atomic_helper-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_atomic_helper.c",
+    "archive": "display-present-research/drm_atomic_helper.c",
+    "sha256": "77a3a7c5d1a67efde5377501ecb9598ebaa557c4abe93d8dbd17da18b461593d"
   }
 }

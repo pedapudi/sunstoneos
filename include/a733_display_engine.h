@@ -25,7 +25,7 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *, const struct a733_de_surfa
  * The HDMI controller independently establishes the exact 720p60 timing. */
 enum a733_de_output { A733_DE_LCD1_XRGB8888=0, A733_DE_TV0_RGB565=1 };
 int a733_de_plan_tv0(const struct a733_de_surface *,struct a733_de_plan *);
-enum a733_de_action { A733_DE_PREPARE, A733_DE_START, A733_DE_OBSERVE, A733_DE_STOP };
+enum a733_de_action { A733_DE_PREPARE, A733_DE_START, A733_DE_OBSERVE, A733_DE_STOP, A733_DE_REPLAY };
 enum a733_de_state { A733_DE_PENDING, A733_DE_READY, A733_DE_ARMED,
     A733_DE_DISABLED_RETAINED, A733_DE_FAULT_RETAINED };
 enum a733_de_error { A733_DE_OK, A733_DE_TIME, A733_DE_IO, A733_DE_AUTHORITY,
@@ -37,6 +37,9 @@ struct a733_de_ops {
     int (*write32)(void *, uintptr_t, uint32_t);
     int (*barrier)(void *);
     int (*now_us)(void *, uint64_t *);
+    /* Optional replay: one non-preemptible busy-test/control-read/update-write.
+     * 1 submitted,0 not busy (no write),-1 uncertain. No callback waits. */
+    int (*rcq_submit)(void *);
 };
 struct a733_de_config {
     struct a733_de_ops ops;
@@ -50,6 +53,8 @@ struct a733_de {
     struct a733_de_config config;
     struct a733_de_plan plan;
     uint64_t deadline, last_now;
+    uint64_t replay_frame_bytes, replay_rcq_done, replay_frame_end;
+    unsigned replay_slot;
     uint32_t expected, raw_status;
     enum a733_de_state state;
     enum a733_de_error error;
@@ -85,4 +90,11 @@ int a733_de_request(struct a733_de *, enum a733_de_action, uint64_t deadline);
  * pixels reached a panel. OBSERVE records raw status without acknowledgement.
  * No RCQ, interrupts, vblank accounting, DMA-drain claim or buffer retirement. */
 enum a733_de_state a733_de_poll(struct a733_de *);
+/* Optional closed two-frame replay bank: [F0][F1][4KiB RCQ0][4KiB RCQ1].
+ * F is page aligned and covers the admitted padded surface. Both frames and
+ * command pages stay immutable, mapped READ and permanently owned. The queue
+ * changes only UCH3 layer0 low address; it grants no retirement or reuse. */
+int a733_de_replay_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes);
+int a733_de_replay_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes);
+int a733_de_replay_request(struct a733_de *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);
 #endif

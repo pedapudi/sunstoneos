@@ -61,6 +61,7 @@ struct a733_display_handoff {
  * initialization token and must never be used as live consumer authority.
  * This binding supplies no qualified initial analog profile or panel defaults. */
 int a733_display_handoff_init(struct a733_display_handoff *,const struct a733_display_handoff_config *);
+int a733_display_handoff_replay(struct a733_display_handoff *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);
 int a733_display_handoff_prepare(struct a733_display_handoff *,uint64_t deadline);
 int a733_display_handoff_request(struct a733_display_handoff *,enum display_scanout_action,uint64_t deadline);
 /* One scanout step, with native source/token/PCK checks first. BUSY leaves the

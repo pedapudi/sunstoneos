@@ -90,6 +90,18 @@ static int read32(void *v,const struct display_resource_token *t,uintptr_t a,uin
 {return access32(v,t,a,out,0);}
 static int write32(void *v,const struct display_resource_token *t,uintptr_t a,uint32_t value)
 {return access32(v,t,a,&value,1);}
+static int rcq_submit(void *v,const struct display_resource_token *t,uint64_t deadline)
+{
+ struct a733_display_native *n=v;uint64_t time;
+ if(!resource(n,t)||!authority(n,deadline)||n->held||a733_display_native_enter(n->config.locks,deadline)!=1)return -1;
+ n->held=1;
+ if(!now(n,&time)||time>=deadline||!a733_display_native_mapping(A733_DE_BASE+0x8144,A733_DE_BASE+0x8144,0)||
+ !a733_display_native_mapping(A733_DE_BASE+0x8150,A733_DE_BASE+0x8150,0)){retain(n);return -1;}
+ int r=a733_display_native_rcq_submit();
+ if((r!=0&&r!=1)||!now(n,&time)||time>=deadline){retain(n);return -1;}
+ a733_display_native_leave(n->config.locks);n->held=0;
+ if(!now(n,&time)||time>=deadline){retain(n);return -1;}return r;
+}
 static int barrier(void *v,const struct display_resource_token *t)
 {
     struct a733_display_native *n=v;uint64_t time,d=n->binding.scanout.deadline;
@@ -123,6 +135,9 @@ int a733_display_native_init(struct a733_display_native *n,const struct a733_dis
        c->iommu->tables.spans[0].physical!=f.physical||c->iommu->tables.spans[0].bytes!=f.bytes||
        c->iommu->tables.spans[0].access!=A733_IOMMU_READ||c->request.frame.cpu_address!=f.cpu||
        c->request.frame.mapped_bytes!=f.bytes)return 0;
+    if(c->replay_frame_bytes&&(c->replay_frame_bytes>UINT64_MAX/2-4096||
+       f.bytes!=2*c->replay_frame_bytes+8192||
+       !a733_de_replay_valid((void *)(f.cpu+2*c->replay_frame_bytes),c->request.frame.device_address,c->replay_frame_bytes)))return 0;
     const void *objects[]={n,c,c->media,c->pll,c->iommu,c->pool};
     const size_t sizes[]={sizeof(*n),sizeof(*c),sizeof(*c->media),sizeof(*c->pll),sizeof(*c->iommu),sizeof(*c->pool)};
     for(unsigned i=0;i<6;++i){
@@ -137,7 +152,7 @@ int a733_display_native_init(struct a733_display_native *n,const struct a733_dis
         .mapped_bytes=f.bytes,.pitch=c->request.frame.pitch,.cache_state=DISPLAY_CACHE_IMMUTABLE_DEVICE_READ};
     struct a733_display_handoff_config h={.media=c->media,.pll=c->pll,.request=c->request,
         .recovery_generation=c->recovery_generation,.context=n,.authorize_handoff=handoff,
-        .platform={now,0,frame,authenticate,read32,write32,barrier,panel,unsupported,unsupported}};
+        .platform={now,0,frame,authenticate,read32,write32,barrier,panel,unsupported,unsupported,rcq_submit}};
     if(!a733_display_handoff_init(&n->binding,&h))return 0;
     n->last_now=n->binding.last_now;n->self=n;n->initialized=1;return 1;
 }
@@ -152,4 +167,10 @@ enum display_scanout_state a733_display_native_poll(struct a733_display_native *
     enum display_scanout_state s=a733_display_handoff_poll(&n->binding);
     if(s==DISPLAY_SCANOUT_FAULT_RETAINED)retain(n);
     return s;
+}
+
+int a733_display_native_replay(struct a733_display_native *n,unsigned slot,uint64_t deadline)
+{
+ if(!live(n)||!n->config.replay_frame_bytes||!authority(n,deadline))return 0;
+ return a733_display_handoff_replay(&n->binding,slot,n->config.replay_frame_bytes,deadline);
 }

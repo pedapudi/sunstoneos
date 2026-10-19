@@ -112,6 +112,9 @@ static int write32(void *v,const struct display_resource_token *t,uintptr_t a,ui
     int ok=b->config.platform.write32(b->config.context,t,a,value);
     return integrity(b) && ok==1 ? 1 : fault(b);
 }
+static int rcq_submit(void *v,const struct display_resource_token *t,uint64_t deadline)
+{struct a733_display_handoff *b=v;if(!matching(b,0,t)||!b->config.platform.rcq_submit)return fault(b);
+ int r=b->config.platform.rcq_submit(b->config.context,t,deadline);return integrity(b)&&(r==0||r==1)?r:fault(b);}
 static int barrier(void *v,const struct display_resource_token *t)
 {
     struct a733_display_handoff *b=v;
@@ -161,7 +164,7 @@ int a733_display_handoff_init(struct a733_display_handoff *b,const struct a733_d
         (m->token.exclusive&(A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_DISPLL1))!=
             (A733_CLOCK_DE_SYS|A733_CLOCK_VO0|A733_CLOCK_DISPLL1) ||
         p->config.hs_hz!=c->request.timing.dsi.hs_hz || p->config.ls_hz!=c->request.timing.dsi.ls_hz) return 0;
-    static const struct display_provider provider={timestamp,resources,frame,authenticate,read32,write32,barrier,panel,drain,quiet};
+    static const struct display_provider provider={timestamp,resources,frame,authenticate,read32,write32,barrier,panel,drain,quiet,rcq_submit};
     /* Validate scanout before claiming either producer. */
     if (!display_scanout_init(&b->scanout,&c->request,&provider,b)) return 0;
     b->config=*c;b->self=b;b->media_config=m->config;b->media_ops=m->ops;b->media_cookie=m->cookie;
@@ -201,3 +204,6 @@ enum display_scanout_state a733_display_handoff_poll(struct a733_display_handoff
 failure:result=retained(b);
 out:b->entered=0;return result;
 }
+
+int a733_display_handoff_replay(struct a733_display_handoff *b,unsigned slot,uint64_t bytes,uint64_t deadline)
+{return b&&!b->entered&&integrity(b)&&display_scanout_replay(&b->scanout,slot,bytes,deadline);}

@@ -14,6 +14,7 @@ struct a733_display_native_config {
     struct a733_platform_locks *locks;
     void *task, *context;
     uint64_t recovery_generation;
+    uint64_t replay_frame_bytes; /* Zero preserves ordinary immutable-frame mode. */
     int (*now_us)(void *,uint64_t *);
     /* Image-owned admission authenticates initial isolation/drain, all remote
      * writers, supplies, panel pins/rails, qualified analog-profile provenance,
@@ -45,6 +46,7 @@ struct a733_display_native {
  * one designated EL1 task and the same register mutex as media/PLL setup.
  * Init performs no MMIO. No panel defaults, drain proof, release or retry. */
 int a733_display_native_init(struct a733_display_native *,const struct a733_display_native_config *);
+int a733_display_native_replay(struct a733_display_native *,unsigned slot,uint64_t deadline);
 int a733_display_native_prepare(struct a733_display_native *,uint64_t);
 int a733_display_native_request(struct a733_display_native *,enum display_scanout_action,uint64_t);
 enum display_scanout_state a733_display_native_poll(struct a733_display_native *);
@@ -57,4 +59,5 @@ void a733_display_native_retain(struct a733_platform_locks *);
 int a733_display_native_read(uintptr_t,uint32_t *);
 int a733_display_native_write(uintptr_t,uint32_t);
 int a733_display_native_barrier(void);
+int a733_display_native_rcq_submit(void);
 #endif

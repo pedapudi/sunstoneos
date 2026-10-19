@@ -2,8 +2,10 @@
 #define SUNSTONE_DSI_APPLICATION_H
 #include "../board/application.h"
 #include "dsi-session.h"
+#include "input.h"
 #define DSI_OBSERVATION_BYTES 256u
 struct dsi_application {
+ struct dsi_input input;uint8_t replay_result[256];
  struct dsi_session session;TaskHandle_t handle;StaticTask_t task;StackType_t stack[8192];
  atomic_uint result,failed;unsigned admitted,stage,supply_index,panel_index,packet_pending;
  uint64_t deadline,panel_wait,observed_start,observed_end,next_observe,pck_token;
@@ -17,5 +19,6 @@ struct dsi_application {
 };
 extern struct dsi_application dsi;
 int dsi_live(void);
+int dsi_input_now(void *,uint64_t *);
 void dsi_task(void *);
 #endif

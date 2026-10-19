@@ -7,7 +7,7 @@ int a733_smp_launch_prepare(void)
 {
  volatile const struct a733_board_session *s=(const void *)A733_BOARD_SESSION_ADDRESS;
  volatile const uint64_t *profile=(const void *)(A733_BOARD_SESSION_ADDRESS+592);
- ADMIT(profile[0]==UINT64_C(0x3153494433375341)&&profile[1]==1&&profile[2]==4096&&
+ ADMIT(profile[0]==UINT64_C(0x3153494433375341)&&(profile[1]==1||profile[1]==2)&&profile[2]==4096&&
  s->magic==A733_BOARD_SUPERVISED_SESSION_MAGIC&&s->version==2&&s->bytes==sizeof(*s)&&s->workload==2&&
  s->epoch==REQUEST[3]&&s->generation==REQUEST[4]&&s->lease==REQUEST[6],14);
  ADMIT(!s->minimum_reload_us&&!s->maximum_recovery_us&&!s->guard_us&&!s->reset_by_us&&

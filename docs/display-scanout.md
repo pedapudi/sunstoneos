@@ -298,3 +298,70 @@ executed in these checks. Existing provider/planner evidence remains applicable.
 A selected panel, qualified analog profile, actual rail and bank voltages,
 connector/cable verification, initial isolation, fetch-padding proof and
 supervised physical recovery remain prerequisites for a physical run.
+
+## Caller-uploaded immutable frame replay
+
+Session version 2 adds replay to the same 4096-byte DSI session and existing
+startup contract. Version 1 retains the single generated-frame behavior and its
+response format. `profile.py --frame` accepts exactly two complete padded
+XRGB8888 files, hashes them and binds their identities in the session suffix.
+Both use the selected profile's pitch and dimensions. No upload can change a
+published slot. Subsequent requests select either admitted slot repeatedly;
+a third novel frame requires a new supervised session and recovery.
+
+The replay bank is `[frame0][frame1][RCQ0][RCQ1]`, where each RCQ page is 4096
+bytes. Admission requires
+`32768 + 2 * align_up(pitch * height + fetch_padding, 4096) + 8192 <= 16777216`.
+The 32 KiB term is the separate IOMMU table allocation. With illustrative 4 KiB
+padding per frame, 1080p occupies 16,637,952 bytes in the uncached pool, leaving
+139,264 bytes; 720p occupies 7,421,952 bytes. Actual padding still needs a
+physical burst-bound qualification. The USB task uses a bounded 512-byte stack
+fragment rather than allocating another full framebuffer. Entry still requires
+the complete 784 MiB extended-memory authority.
+
+The suffix starts at byte 3584: four LE64 words contain magic
+`0x3150524433375341`, version 1, two slots and the padded bytes per frame. Two
+SHA256 hashes follow; the remaining 416 bytes are zero. These values are covered
+by the existing complete-session seal, image identity and physical fact records.
+Replay memory qualification must also establish that RCQ reads use display
+master 8 through the admitted IOVA path and that command arenas remain immutable.
+Neither source inspection nor modeled translation establishes those physical
+facts.
+
+Runtime uploads use copied 96-byte headers: LE32 magic `0x55495344`, version 1,
+operation and slot; LE64 epoch, generation, authority, sequence and payload
+bytes; a 32-byte hash and eight zero reserved bytes. Operation 1 uploads a slot
+once, with sequence `slot+1` and exactly the admitted padded frame extent.
+Operation 2 has no payload or hash and selects a committed slot using a strictly
+increasing presentation sequence. The actual codec upload convention is reused:
+each fragment is bounded by its current phase, and generation, epoch, authority,
+monotonic time and deadline remain bound through hashing and publication.
+Providers cannot start DSI scanout until both complete copies are hash-checked.
+
+A presentation follows the [DE352 RCQ protocol](display-engine.md#de352-replay-of-two-immutable-addresses),
+then the existing controller observation and IOMMU fault scan. A copied replay
+result reports sequence, slot, session/frame hashes, generations, allocation
+extents, RCQ completion and a later DE frame-end observation. USB response
+version 2 discriminates this result from the version 1 single-frame observation.
+The next request credit becomes available only after copied USB transmission
+completes. The pixel bank and command pages remain immutable throughout.
+
+`prepare.py --frame` freezes the two files in the protected bundle and rechecks
+their hashes before use. `capture.py --present-slot` specifies a bounded order
+of at most 256 selections; its default order is 0,1,0. The host sends the frozen
+uploads, issues one presentation at a time, binds each response to the outstanding
+sequence/slot and durably copies the 256-byte status. A mismatched response never
+becomes an observed success. The actual shared supervisor entry accepts
+`dsi_result`; direct capture helpers alone do not establish that integration.
+
+Focused evidence is under
+`~/.cache/sunstoneos/evidence/display-frame-present-20261019/`. Actual native
+application composition performs two copied uploads and three presentations at
+720p and 1080p. A wrong address readback retains the bank and tables. Copied-input
+checks cover immutable slots, identities, sequence, digest and commit deadlines;
+linked checks execute the serializer, completion credit and bounded RCQ submit
+helper, and real host capture preserves the copied results. Root separately
+reviews retained layout on the selected ELF. Unchanged startup, version 1 and
+provider evidence is reused. No physical display, DMA confinement, visible
+output or retirement is qualified. No panel is selected or attached. Arbitrary
+new-frame streaming and safe old-buffer recycling remain explicit requirements.

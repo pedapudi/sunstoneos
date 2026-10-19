@@ -182,3 +182,45 @@ Further profiles must cover the remaining formats, layers, channels, scalers,
 color processing, compression, dual outputs, HDMI/eDP routes, writeback, and
 other supported display modes. The immutable RGB plane is one implemented
 component of full board support.
+
+## DE352 replay of two immutable addresses
+
+The optional replay operation uses a fixed bank containing two page-rounded
+frames followed by two 4 KiB command pages. Both frames have the same format,
+pitch and dimensions. Each command page contains an aligned pair of 16-byte RCQ
+headers and a 32-byte-aligned source word. One header copies the selected frame's
+low address into UCH3 layer0 at DE offset `0x221010`; the second is inactive.
+The bank stays below a 4 GiB IOVA boundary, so the unchanged high address is zero.
+No caller supplies an arbitrary register destination or command stream.
+
+`a733_de_replay_build()` constructs these pages before publication;
+`a733_de_replay_valid()` checks every command-page byte. The native binding
+validates the canonical pages and the complete bank's immutable READ mapping.
+`a733_display_native_replay()` passes through the existing source/token handoff
+and display coordinator, preserving media-clock, PLL, PCK and framebuffer-bank
+ownership. One presentation may be pending at a time.
+
+The update follows the pinned DE352 source rather than its DE201 double-buffer
+fallback. It clears stale finish/frame-end flags using the published W1C rule,
+programs the RCQ header address and 32-byte length, and publishes those writes.
+The busy test, RCQ control read and update write form one bounded transaction
+under the shared register mutex and existing FreeRTOS critical section. A busy
+sample from an earlier task poll cannot authorize submission. Idle returns
+pending without writing. Fresh RCQ finish completes the register copy; a cleared
+and subsequently observed DE frame-end flag records a later controller frame
+boundary. Readback also checks the selected address.
+
+These observations do not prove that old framebuffer reads or read-ahead have
+drained. Neither frame nor command pages may be overwritten, unmapped or
+released. The pinned Linux CRTC code uses DE busy and RCQ completion when
+signaling page flips, but its vendor commit tail omits the vblank wait before
+old-plane cleanup. That cleanup path does not supply an independent transaction
+retirement proof. The manual's DE chapter provides no such mechanism.
+
+Replay source authority remains Linux revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`: `de_top.c`, `de_base.h`,
+`sunxi_de.c`, `sunxi_drm_crtc.c`, `sunxi_drm_drv.c` and `drm_atomic_helper.c`,
+with hashes in `sources.lock.json`. Failed admission, uncertain submission,
+readback mismatch, stale completion or deadline retains the bank and resources.
+Arbitrary new-frame streaming and safe old-buffer recycling remain required
+work, independent of this two-slot replay operation.

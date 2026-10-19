@@ -15,8 +15,10 @@ FACTS={
 'panel':('selected_panel_identified','connector_pinout_verified','cable_orientation_verified','exact_power_reset_command_sequence_qualified','pre_video_completion_sufficient','post_video_backlight_sequence_qualified','write_only_initialization_sufficient')}
 def session_check(raw):
     require(len(raw)==4096,'DSI session must be4096bytes.');require(board.session_check(raw[:592],(2,))==2,'DSI requires USB0-only mode2.')
-    require(struct.unpack_from('<3Q',raw,592)==(profile.MAGIC,1,4096),'Wrong DSI profile page')
-    require(any(raw[704:832]) and raw[3584:]==bytes(512),'Missing facts or nonzero reserved bytes')
+    require(struct.unpack_from('<Q',raw,592)[0]==profile.MAGIC and struct.unpack_from('<Q',raw,600)[0] in (1,2) and struct.unpack_from('<Q',raw,608)[0]==4096,'Wrong DSI profile page')
+    require(any(raw[704:832]),'Missing DSI facts')
+    if struct.unpack_from('<Q',raw,600)[0]==1:require(raw[3584:]==bytes(512),'Nonzero reserved bytes')
+    else:require(struct.unpack_from('<4Q',raw,3584)==(profile.REPLAY_MAGIC,1,2,profile.frame_bytes(raw)) and any(raw[3616:3648]) and any(raw[3648:3680]) and raw[3680:]==bytes(416) and 32768+2*profile.frame_bytes(raw)+8192<=0x1000000,'Replay bank geometry/hash differs')
     # The linked C validator performs exact real timing/PLL/pin/packet planning before providers.
     v=struct.unpack_from('<32I',raw,832);require(0<v[28]<=48 and v[29]<=1536 and 10<=v[30]<=16 and 0<v[31]<=8,'Profile exceeds capacities')
     profile.frame_digest(raw)
@@ -25,6 +27,8 @@ def image_manifest_check(manifest,image,session):
     e=ELFFile(io.BytesIO(image));symbols={s.name:s for s in e.get_section_by_name('.symtab').iter_symbols()}
     for name,value in {'__device_pool_start':0x48000000,'__device_pool_end':0x78000000,'__uncached_pool_start':0x78000000,'__uncached_pool_end':0x79000000,'__device_memory_profile':1}.items():require(name in symbols and int(symbols[name]['st_value'])==value,'Extended DSI linker geometry differs')
     require('sd_single_core_entry' in symbols and int(e['e_entry'])==int(symbols['sd_single_core_entry']['st_value']) and 'FreeRTOS_SGI_Handler' not in symbols,'DSI startup differs')
+    if struct.unpack_from('<Q',session,600)[0]==2:
+        require(all(name in symbols and int(symbols[name]['st_size'])>0 for name in ('dsi_input_feed','a733_display_native_replay')),'Image lacks immutable replay capability')
     s=symbols.get('dsi_application_geometry');require(s is not None and int(s['st_size'])==64,'DSI immutable marker absent')
     a=int(s['st_value']);parts=[p for p in e.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and int(p['p_vaddr'])<=a and a+64<=int(p['p_vaddr'])+int(p['p_filesz'])]
     require(len(parts)==1 and parts[0].data()[a-int(parts[0]['p_vaddr']):a-int(parts[0]['p_vaddr'])+64]==struct.pack('<8Q',profile.MAGIC,1,4096,288,256,0x78000000,0x79000000,60),'DSI marker differs');session_check(session)
@@ -43,6 +47,7 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         for ref in fact['evidence']:evidence(ref)
         if key=='initial':require(raw[80:112]==hashlib.sha256(data).digest() and fact.get('cold_master')==struct.unpack_from('<Q',raw,192)[0],'DSI initial entry differs')
         if key=='memory':require(fact.get('ranges')==[[0x48000000,0x78000000],[0x78000000,0x79000000]] and fact.get('reservation')==record['reservation'],'Complete784MiB DSI authority required')
+        if key=='memory' and struct.unpack_from('<Q',raw,600)[0]==2:require(all(fact.get(k) is True for k in ('rcq_fetches_use_display_master8','rcq_iova_path_qualified','immutable_command_arenas')),'Replay RCQ memory-path authority required')
         if key=='panel':require(isinstance(fact.get('panel_model'),str) and fact['panel_model'].strip() and fact.get('datasheet'),'Selected panel/source required');evidence(fact['datasheet'])
     return cache
 
@@ -68,9 +73,16 @@ def build_launcher(out,clang,lld):
         with (out/'launcher-build.log').open('a') as f:f.write(r.stdout+r.stderr)
         require(r.returncode==0,'DSI launcher build failed; inspect retained log')
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM')
-def prepare(image,manifest,admission,template,output,clang,lld):
+def prepare(image,manifest,admission,template,output,clang,lld,frames=None):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
-    raw=bytearray(snapshots['session-template.bin']);session_check(raw);ih=hashlib.sha256(snapshots['image.elf']).hexdigest();record=json.loads(snapshots['admission.json'])
+    raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    replay=struct.unpack_from('<Q',raw,600)[0]==2
+    require(bool(frames)==replay,'Exactly two caller frames are required only for replay sessions')
+    if replay:
+        require(len(frames)==2,'Two immutable frames required')
+        for slot,path in enumerate(frames):
+            data=Path(path).read_bytes();profile.upload_bytes(raw,slot,data);snapshots[f'frame{slot}.bin']=data
+    ih=hashlib.sha256(snapshots['image.elf']).hexdigest();record=json.loads(snapshots['admission.json'])
     image_manifest_check(json.loads(snapshots['image-input-manifest.json']),snapshots['image.elf'],raw)
     cache=validate_admission(record,ih,hashlib.sha256(raw).hexdigest(),raw)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
@@ -96,6 +108,10 @@ def validate_bundle(bundle):
     cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
     require(all(hashlib.sha256(cache[path]).hexdigest()==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen evidence changed')
     record=json.loads((out/'admission.json').read_text());validate_admission(record,p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    if struct.unpack_from('<Q',raw,600)[0]==2:
+        for slot in range(2):
+            name=f'frame{slot}.bin';require(name in p['files'],'Replay frame missing');profile.upload_bytes(raw,slot,(out/name).read_bytes())
+    else:require(not any(f'frame{slot}.bin' in p['files'] for slot in range(2)),'Ordinary DSI bundle contains replay frames')
     image_manifest_check(json.loads((out/'image-input-manifest.json').read_text()),(out/'image.elf').read_bytes(),raw)
     segments,address,identity=base.image_parts(out/'image.elf');derived=bytearray(template);struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=identity
     require(raw==derived and p['build_id']==identity.hex() and p['reservation']==record['reservation'],'DSI session derivation changed')
@@ -109,4 +125,5 @@ def validate_bundle(bundle):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
-    args=parser.parse_args();prepare(args.image,args.manifest,args.admission,args.template,args.output,args.clang,args.lld)
+    parser.add_argument('--frame',type=Path,action='append')
+    args=parser.parse_args();prepare(args.image,args.manifest,args.admission,args.template,args.output,args.clang,args.lld,args.frame)

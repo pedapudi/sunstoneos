@@ -49,23 +49,39 @@ void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 {(void)buffer;(void)bytes;if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
 {if(interface||bytes>dsi_response_sent-dsi_response_transferred)stop();dsi_response_transferred+=bytes;
- if(dsi_response_transferred==dsi_response_bytes&&dsi_response_sent==dsi_response_bytes)dsi_response_bytes=0;}
+ if(dsi_response_transferred==dsi_response_bytes&&dsi_response_sent==dsi_response_bytes){
+  if(dsi_response[4]==2&&dsi_response[8]==1)atomic_store_explicit(&dsi.input.request,0,memory_order_release);
+  dsi_response_bytes=0;}}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
 static void dsi_exchange(void)
 {
     if(dsi_response_bytes){if(dsi_response[8]==1&&!dsi_live())stop();unsigned n=tud_vendor_write(dsi_response+dsi_response_sent,dsi_response_bytes-dsi_response_sent);
         dsi_response_sent+=n;tud_vendor_flush();return;}
     if(!tud_vendor_available())return;
-    uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
+    uint8_t request;
+    if(dsi.session.version==2){
+     if(!atomic_load_explicit(&dsi.input.allocated,memory_order_acquire))return;
+     if(dsi.input.header_used||tud_vendor_available()>1){
+      uint8_t fragment[512];size_t count=dsi_input_remaining(&dsi.input);unsigned available=tud_vendor_available();
+      if(count>sizeof(fragment))count=sizeof(fragment);if(count>available)count=available;
+      if(!count||tud_vendor_read(fragment,count)!=count||dsi_input_feed(&dsi.input,&dsi.session,dsi_input_now,&dsi,fragment,count)<0){
+       atomic_store_explicit(&dsi.failed,1,memory_order_release);atomic_store_explicit(&dsi.result,2,memory_order_release);}return;
+     }
+     if(tud_vendor_read(&request,1)!=1)stop();
+     if(request){if(dsi_input_feed(&dsi.input,&dsi.session,dsi_input_now,&dsi,&request,1)<0){
+       atomic_store_explicit(&dsi.failed,1,memory_order_release);atomic_store_explicit(&dsi.result,2,memory_order_release);}return;}
+    }else if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
     unsigned result=atomic_load_explicit(&dsi.result,memory_order_acquire);
     if(result==1&&!dsi_live())result=2;
-    put32(dsi_response,0x31525344);put32(dsi_response+4,1);put32(dsi_response+8,result);
+    if(dsi.session.version==2&&result!=2)result=atomic_load_explicit(&dsi.input.request,memory_order_acquire)==3?1:0;
+    const uint8_t *payload=dsi.session.version==2?dsi.replay_result:dsi.observation;
+    put32(dsi_response,0x31525344);put32(dsi_response+4,dsi.session.version==2?2:1);put32(dsi_response+8,result);
     put32(dsi_response+12,result==1?DSI_OBSERVATION_BYTES:0);
     put32(dsi_response+16,(uint32_t)board.session.epoch);put32(dsi_response+20,(uint32_t)(board.session.epoch>>32));
     put32(dsi_response+24,(uint32_t)board.session.generation);put32(dsi_response+28,(uint32_t)(board.session.generation>>32));
-    uint8_t digest[32]={0};if(result==1)storage_digest_bytes(dsi.observation,sizeof(dsi.observation),digest);
+    uint8_t digest[32]={0};if(result==1)storage_digest_bytes(payload,256,digest);
     memcpy(dsi_response+32,dsi.profile_hash,32);if(result==1)memcpy(dsi_response+64,digest,32);else memset(dsi_response+64,0,32);
-    if(result==1){memset(dsi_response+96,0,32);memcpy(dsi_response+128,dsi.observation,DSI_OBSERVATION_BYTES);}
+    if(result==1){memset(dsi_response+96,0,32);memcpy(dsi_response+128,payload,DSI_OBSERVATION_BYTES);}
     else memset(dsi_response+96,0,32);
     if(result==1&&!dsi_live()){result=2;put32(dsi_response+8,2);put32(dsi_response+12,0);memset(dsi_response+64,0,64);}
     dsi_response_sent=dsi_response_transferred=0;dsi_response_bytes=result==1?sizeof(dsi_response):128;
