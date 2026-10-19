@@ -7,6 +7,10 @@
 #define A733_H264_INPUT_BYTES 8192u
 #define A733_H264_PICTURES 2u
 #define A733_H264_SLOT_BYTES 4096u
+#define A733_H264_VGA_INPUT_BYTES 524288u
+#define A733_H264_VGA_OUTPUT_BYTES 460800u
+#define A733_H264_VGA_MV_FIELD_BYTES 19456u
+#define A733_H264_VGA_MV_SLOT_BYTES 40960u
 /* Historical PCM fixture length, not a stream admission bound. */
 #define A733_H264_SLICE_BYTES 2320u
 #define A733_H264_OUTPUT_BYTES 2304u
@@ -18,10 +22,12 @@
 enum a733_h264_buffer { A733_H264_INPUT, A733_H264_Y, A733_H264_C,
     A733_H264_PICTURE_INFO, A733_H264_MV, A733_H264_NEIGHBOR, A733_H264_BUFFERS };
 struct a733_h264_span { uint64_t iova, bytes; };
+enum a733_h264_profile { A733_H264_LEGACY, A733_H264_VGA_STREAM };
 struct a733_h264_job {
     const uint8_t *input;
     size_t input_bytes;
     struct a733_h264_span buffers[A733_H264_BUFFERS];
+    enum a733_h264_profile profile;
 };
 /* Bounded AnnexB mode: one SPS/PPS, one IDR I and optionally one P slice.
  * Baseline8-bit4:2:0, progressive macroblock-aligned16..64 by16..32,
@@ -46,6 +52,10 @@ int a733_h264_parse_sequence(const uint8_t *,size_t,struct a733_h264_sequence *)
  * Adapted syntax/field order from pinned CedarC H264DecodeSps/Pps/SliceHeader;
  * bounded byte reader replaces its hardware GetBits callbacks. */
 int a733_h264_parse(const uint8_t *, size_t, struct a733_h264_picture *);
+/* VGA AUs repeat identical SPS/PPS before one IDR/P slice; frame_num0..15.
+ * config_bytes returns the immutable SPS/PPS prefix for exact comparison. */
+int a733_h264_parse_vga(const uint8_t *,size_t,unsigned,
+    struct a733_h264_picture *,size_t *config_bytes);
 struct a733_h264_ops {
     int (*now_us)(void *, uint64_t *);
     int (*acquire)(void *, const struct a733_h264_job *, uint64_t, uint64_t *);
@@ -76,6 +86,7 @@ struct a733_h264_run {
     uint64_t token, deadline, last_now, version;
     uint32_t identity_high, status, format;
     unsigned index, flushed, flush_bits, picture_index;
+    size_t frame_bytes;
     struct a733_h264_sequence sequence;
     struct a733_h264_picture picture;
     enum a733_h264_state state;
@@ -93,4 +104,11 @@ int a733_h264_begin(struct a733_h264_run *, const struct a733_h264_ops *, void *
 /* At most one external operation per poll, plus monotonic time checks.
  * Returns0 pending,1 immutable verified private copy,-1 retained failure. */
 int a733_h264_poll(struct a733_h264_run *);
+/* Fixed VGA pool. Input capacity is immutable; frame_bytes is the current
+ * authenticated AU length. Only COPIED permits a healthy next-frame submission.
+ * Caller retains immutable AU until COPIED and owns its refill/copy ACK protocol.
+ * No failure permits another submission, reset, unmap or allocation release. */
+int a733_h264_vga_begin(struct a733_h264_run *,const struct a733_h264_ops *,void *,
+    const struct a733_h264_job *,size_t frame_bytes,uint64_t deadline_us);
+int a733_h264_vga_next(struct a733_h264_run *,size_t frame_bytes,unsigned frame_num);
 #endif

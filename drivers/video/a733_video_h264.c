@@ -61,7 +61,7 @@ static int vui(struct bits *b)
 }
 /* Unescape and validate each complete NAL before reading syntax. The buffer is
  * bounded by the padded input allocation; never append or scan past its end. */
-static int rbsp(const uint8_t *p,size_t n,uint8_t *out,size_t *count)
+static int rbsp(const uint8_t *p,size_t n,uint8_t *out,size_t capacity,size_t *count)
 {
     size_t used=0;unsigned zeros=0;
     for(size_t i=0;i<n;++i){
@@ -70,9 +70,9 @@ static int rbsp(const uint8_t *p,size_t n,uint8_t *out,size_t *count)
             if(v==3){if(i+1==n||p[i+1]>3)return 0;zeros=0;continue;}
             if(v<3)return 0;
         }
-        out[used++]=v;zeros=v==0?zeros+1:0;
+        if(used<capacity)out[used]=v;++used;zeros=v==0?zeros+1:0;
     }
-    *count=used;return used!=0;
+    *count=used<capacity?used:capacity;return used!=0;
 }
 static size_t startcode(const uint8_t *p,size_t n,size_t at)
 {
@@ -80,7 +80,8 @@ static size_t startcode(const uint8_t *p,size_t n,size_t at)
     if(n-at>=3&&!p[at]&&!p[at+1]&&p[at+2]==1)return 3;
     return 0;
 }
-int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence *out)
+static int parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence *out,
+                          unsigned vga,unsigned frame_num,size_t *config_bytes)
 {
     struct a733_h264_picture picture={0};
     struct a733_h264_sequence sequence={0};
@@ -89,17 +90,20 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
     int32_t init_qp=0,chroma=0;
     uint8_t unescaped[A733_H264_SLOT_BYTES];
     unsigned stage=0;
-    if(!p||!out||!n||n>A733_H264_INPUT_BYTES)return 0;
+    if(!p||!out||!n||n>(vga?A733_H264_VGA_INPUT_BYTES:A733_H264_INPUT_BYTES))return 0;
     for(size_t at=0;at<n;){
         size_t prefix=startcode(p,n,at);if(!prefix)return 0;
         size_t begin=at+prefix,end=begin;
         while(end<n&&!startcode(p,n,end))++end;
         /* trailing_zero_8bits are AnnexB framing, outside the NAL payload. */
         size_t finish=end;while(finish>begin&&!p[finish-1])--finish;
-        if(finish-begin<2||finish-begin>A733_H264_SLOT_BYTES||(p[begin]&0x80))return 0;
+        if(finish-begin<2||finish-begin>(vga?A733_H264_VGA_INPUT_BYTES:A733_H264_SLOT_BYTES)||(p[begin]&0x80))return 0;
         unsigned type=p[begin]&31,ref=(p[begin]>>5)&3;
         size_t bytes;
-        if(!rbsp(p+begin+1,finish-begin-1,unescaped,&bytes))return 0;
+        if(vga&&((stage==0&&type!=7)||(stage==1&&type!=8)||
+           (stage==2&&type!=(frame_num?1u:5u))||stage==3))return 0;
+        if(type!=1&&type!=5&&finish-begin>A733_H264_SLOT_BYTES)return 0;
+        if(!rbsp(p+begin+1,finish-begin-1,unescaped,sizeof(unescaped),&bytes))return 0;
         struct bits b={unescaped,bytes,0,0};
         if(type==6&&stage<=3){
             if(ref)return 0; /* SEI metadata does not alter decoded samples. */
@@ -114,9 +118,10 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
             poc=ue(&b);if(poc==0){poc_bits=ue(&b);if(poc_bits>12)return 0;poc_bits+=4;}
             else if(poc!=2)return 0;
             refs=ue(&b);if(refs>1||get(&b,1))return 0;
-            uint32_t w=ue(&b),h=ue(&b);if(w>3||h>1)return 0;
+            uint32_t w=ue(&b),h=ue(&b);if(vga?(w!=39||h!=29):(w>3||h>1))return 0;
             if(get(&b,1)!=1)return 0;
             uint32_t direct=get(&b,1);
+            if(vga&&(!direct||poc!=2||refs!=1||frame_bits!=4))return 0;
             if(get(&b,1))return 0;
             if(get(&b,1)&&!vui(&b))return 0;
             if(!trailing(&b))return 0;
@@ -132,16 +137,17 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
             init_qp=se(&b);int32_t qs=se(&b);chroma=se(&b);
             if(init_qp < -26||init_qp>25||qs < -26||qs>25||chroma < -12||chroma>12)return 0;
             deblock=get(&b,1);uint32_t constrained=get(&b,1);redundant=get(&b,1);
+            if(vga&&(bottom||l0||l1||weighted||bipred||redundant))return 0;
             if(!trailing(&b))return 0; /* Baseline PPS has no extension. */
             picture.pps=(l0<<10)|(l1<<5)|(weighted<<4)|(bipred<<2)|(constrained<<1);
-            stage=2;
-        }else if((type==5&&stage==2)||(type==1&&stage==3)){
+            stage=2;if(config_bytes)*config_bytes=end;
+        }else if((type==5&&stage==2)||(type==1&&(stage==3||(vga&&stage==2)))){
             unsigned is_p=type==1;
             if(sequence.count>=A733_H264_PICTURES||!ref||ue(&b))return 0;
             uint32_t slice=ue(&b);
             if((is_p?(slice!=0&&slice!=5):(slice!=2&&slice!=7))||ue(&b)!=pid)return 0;
             picture.frame_num=get(&b,frame_bits);picture.slice_type=is_p?0:2;
-            if(picture.frame_num!=is_p)return 0;
+            if(picture.frame_num!=(vga?frame_num:is_p))return 0;
             if(!is_p&&ue(&b)>65535)return 0;
             picture.poc=0;
             if(poc==0){picture.poc=get(&b,poc_bits);if(bottom&&se(&b))return 0;}
@@ -155,8 +161,8 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
                 override=get(&b,1);if(override&&ue(&b))return 0;
                 if(get(&b,1))return 0; /* ref_pic_list_modification_flag_l0 */
                 if(get(&b,1))return 0; /* adaptive_ref_pic_marking_mode_flag */
-                picture.poc=2;
-            }else{get(&b,1);if(get(&b,1))return 0;}
+                picture.poc=2*picture.frame_num;
+            }else{uint32_t no_output=get(&b,1);if((vga&&no_output)||get(&b,1))return 0;}
             int32_t delta=se(&b),q=26+init_qp+delta;
             if(q<0||q>51)return 0;
             uint32_t disable=0;int32_t alpha=0,beta=0;
@@ -170,7 +176,7 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
              * and do not assert the active-reference override flag. */
             picture.shs2=(override<<12)|(disable<<8)|(((uint32_t)alpha&15)<<4)|((uint32_t)beta&15);
             picture.qp=0x1000000|(((uint32_t)chroma&63)<<16)|(((uint32_t)chroma&63)<<8)|(uint32_t)q;
-            if(picture.slice_bytes>A733_H264_SLOT_BYTES)return 0;
+            if(picture.slice_bytes>(vga?A733_H264_VGA_INPUT_BYTES:A733_H264_SLOT_BYTES))return 0;
             sequence.pictures[sequence.count++]=picture;
             stage=3;
         }else return 0;
@@ -178,6 +184,15 @@ int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence
     }
     if(stage!=3||!sequence.count)return 0;
     *out=sequence;return 1;
+}
+int a733_h264_parse_sequence(const uint8_t *p,size_t n,struct a733_h264_sequence *out)
+{return parse_sequence(p,n,out,0,0,NULL);}
+int a733_h264_parse_vga(const uint8_t *p,size_t n,unsigned frame_num,
+                        struct a733_h264_picture *out,size_t *config_bytes)
+{
+    struct a733_h264_sequence sequence;size_t config=0;
+    if(!out||!config_bytes||frame_num>15||!parse_sequence(p,n,&sequence,1,frame_num,&config)||sequence.count!=1)return 0;
+    *out=sequence.pictures[0];*config_bytes=config;return 1;
 }
 int a733_h264_parse(const uint8_t *p,size_t n,struct a733_h264_picture *out)
 {
@@ -196,12 +211,16 @@ static int read_reg(struct a733_h264_run *r,uint32_t off,uint32_t *out)
 {return live(r)==1&&r->ops.read(r->context,r->token,off,out,r->deadline)==1&&live(r)==1?1:fail(r);}
 static int write_reg(struct a733_h264_run *r,uint32_t off,uint32_t value)
 {return live(r)==1&&r->ops.write(r->context,r->token,off,value,r->deadline)==1&&live(r)==1?1:fail(r);}
-int a733_h264_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
+static int begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
                     const struct a733_h264_job *j,uint64_t d)
 {
-    static const uint64_t capacity[]={8192,8192,8192,0x21000,8192,0xc000};
+    static const uint64_t sizes[2][A733_H264_BUFFERS]={
+        {8192,8192,8192,0x21000,8192,0xc000},
+        {524288,614400,311296,0x22000,81920,0xc000}};
+    if(!j||(j->profile!=A733_H264_LEGACY&&j->profile!=A733_H264_VGA_STREAM))return 0;
+    const uint64_t *capacity=sizes[j->profile];
     if(!r||r->state!=A733_H264_NEW||!o||!j||!j->input||!d||!o->now_us||
-       !j->input_bytes||j->input_bytes>A733_H264_INPUT_BYTES||!o->acquire||!o->prepare||!o->read||!o->write||!o->copied)return 0;
+       !j->input_bytes||j->input_bytes>(j->profile?A733_H264_VGA_INPUT_BYTES:A733_H264_INPUT_BYTES)||!o->acquire||!o->prepare||!o->read||!o->write||!o->copied)return 0;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i){
         const struct a733_h264_span *s=&j->buffers[i];
         if(!s->iova||(s->iova&4095)||s->bytes!=capacity[i]||
@@ -213,6 +232,26 @@ int a733_h264_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *
     *r=(struct a733_h264_run){.ops=*o,.job=*j,.context=v,.deadline=d,.state=A733_H264_ACQUIRE};
     return 1;
 }
+int a733_h264_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
+                    const struct a733_h264_job *j,uint64_t d)
+{return j&&j->profile==A733_H264_LEGACY?begin(r,o,v,j,d):0;}
+int a733_h264_vga_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
+    const struct a733_h264_job *j,size_t bytes,uint64_t d)
+{
+    struct a733_h264_picture picture;size_t config;
+    if(!j||j->profile!=A733_H264_VGA_STREAM||j->input_bytes!=A733_H264_VGA_INPUT_BYTES||
+       !a733_h264_parse_vga(j->input,bytes,0,&picture,&config)||!begin(r,o,v,j,d))return 0;
+    r->picture=picture;r->sequence.pictures[0]=picture;r->frame_bytes=bytes;return 1;
+}
+int a733_h264_vga_next(struct a733_h264_run *r,size_t bytes,unsigned frame_num)
+{
+    struct a733_h264_picture picture;size_t config;
+    if(!r||r->job.profile!=A733_H264_VGA_STREAM||r->state!=A733_H264_COPIED)return 0;
+    if(r->picture_index>=255||(frame_num&&frame_num!=r->picture.frame_num+1)||
+       !a733_h264_parse_vga(r->job.input,bytes,frame_num,&picture,&config)||live(r)!=1)return fail(r);
+    ++r->picture_index;r->picture=picture;r->sequence.pictures[r->picture_index&1]=picture;
+    r->frame_bytes=bytes;r->index=0;r->flushed=0;r->flush_bits=0;r->state=A733_H264_CHECK;return 1;
+}
 /* Program provenance: SPS/PPS/SHS/QP/VLD and frameSRAM match the preserved
  * libawh264 instruction trace. Initial full frame-list clearing, primary-only
  * buffers and offset0/INIT/FLUSH come from Cedrus. SDROT_CTRL0 disables scaling;
@@ -221,15 +260,16 @@ int a733_h264_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *
 static int program(struct a733_h264_run *r)
 {
     const struct a733_h264_span *s=r->job.buffers;
-    uint32_t off,value,n=r->index,slot=r->picture_index;
-    uint32_t input=(uint32_t)s[A733_H264_INPUT].iova+slot*4096;
+    unsigned vga=r->job.profile==A733_H264_VGA_STREAM;
+    uint32_t off,value,n=r->index,slot=vga?(r->picture_index&1):r->picture_index;
+    uint32_t input=(uint32_t)s[A733_H264_INPUT].iova+(vga?0:slot*4096);
     static const uint32_t offsets[]={0xec,0xc4,0xc8,0x250,0x254,0x240,0x22c,0x260,
         0x24c,0x200,0x204,0x208,0x20c,0x21c,0x220,0x234,0x238,0x23c,0x230,0x2e0};
-    uint32_t values[]={r->format,512,0x00200040,
+    uint32_t values[]={r->format,vga?76800:512,vga?0x01400280:0x00200040,
         (uint32_t)s[A733_H264_PICTURE_INFO].iova,
         (uint32_t)s[A733_H264_NEIGHBOR].iova,0,0,0,slot,
         r->picture.sps,r->picture.pps,r->picture.shs,r->picture.shs2,
-        r->picture.qp,0x407,0,r->picture.slice_bytes*8,input+4095,
+        r->picture.qp,0x407,0,r->picture.slice_bytes*8,input+(vga?A733_H264_VGA_INPUT_BYTES:A733_H264_SLOT_BYTES)-1,
         (input&0x0ffffff0)|(input>>28)|0x70000000,0x400};
     unsigned count=sizeof(offsets)/sizeof(offsets[0]);
     if(n<count){off=offsets[n];value=values[n];}
@@ -237,18 +277,18 @@ static int program(struct a733_h264_run *r)
         /* Cedrus framebuffer SRAM layout. Each picture keeps independent DMA
          * extents for the entire session, including both MV fields. */
         unsigned frame=n/8,field=n%8;off=0x2e4;value=0;
-        if(frame<=slot){
+        if(vga?(frame==slot||(r->picture.frame_num&&frame==(slot^1))):(frame<=slot)){
             if(field<2)value=r->sequence.pictures[frame].poc;
-            if(field==3)value=(uint32_t)s[A733_H264_Y].iova+frame*4096;
-            if(field==4)value=(uint32_t)s[A733_H264_C].iova+frame*4096;
-            if(field==5||field==6)value=(uint32_t)s[A733_H264_MV].iova+frame*4096+(field==6?1024:0);
+            if(field==3)value=(uint32_t)s[A733_H264_Y].iova+frame*(vga?307200:4096);
+            if(field==4)value=(uint32_t)s[A733_H264_C].iova+frame*(vga?155648:4096);
+            if(field==5||field==6)value=(uint32_t)s[A733_H264_MV].iova+frame*(vga?40960:4096)+(field==6?(vga?19456:1024):0);
         }
     }else{
         n-=18*8;
         /* List0 contains one progressive IDR reference at slot0. Clear the
          * entire32-entry list so no inherited bytes can select another slot. */
         if(n>8)return 0;
-        off=n?0x2e4:0x2e0;value=n?0:0x640;
+        off=n?0x2e4:0x2e0;value=n?((vga&&r->picture.frame_num&&n==1)?(slot^1)*2:0):0x640;
     }
     if(write_reg(r,off,value)!=1)return -1;
     ++r->index;return 1;
@@ -268,8 +308,10 @@ int a733_h264_poll(struct a733_h264_run *r)
         if(result)r->state=A733_H264_HASH;
         break;}
     case A733_H264_HASH:{
-        if(!a733_h264_parse_sequence(r->job.input,r->job.input_bytes,&r->sequence)||live(r)!=1)return fail(r);
-        r->picture=r->sequence.pictures[0];
+        if(r->job.profile==A733_H264_LEGACY){
+            if(!a733_h264_parse_sequence(r->job.input,r->job.input_bytes,&r->sequence)||live(r)!=1)return fail(r);
+            r->picture=r->sequence.pictures[0];
+        }
         r->state=A733_H264_IDENTIFY;r->index=0;break;}
     case A733_H264_IDENTIFY:
         if(read_reg(r,r->index==0?0xf0:r->index==1?0xe0:0xe4,&value)!=1)return -1;
@@ -337,6 +379,7 @@ int a733_h264_poll(struct a733_h264_run *r)
         result=r->ops.copied(r->context,r->token,r->deadline);
         if((result!=0&&result!=1)||live(r)!=1)return fail(r);
         if(result){
+            if(r->job.profile==A733_H264_VGA_STREAM){r->state=A733_H264_COPIED;return 1;}
             if(++r->picture_index==r->sequence.count){r->state=A733_H264_COPIED;return 1;}
             r->picture=r->sequence.pictures[r->picture_index];
             r->index=0;r->flushed=0;r->flush_bits=0;r->state=A733_H264_CHECK;

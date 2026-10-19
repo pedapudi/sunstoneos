@@ -1,4 +1,221 @@
-# Bounded native H.264 IDR and P decoding
+# Native H.264 bounded decoding profiles
+
+The native application has two profiles in the same firmware: the retained
+48-by-32 single/two-picture mode and a 640-by-480 mode that streams prepared
+access units through a fixed pool. That mode starts with an instantaneous
+decoding refresh (IDR) picture and supports following inter-predicted P pictures.
+Both execute decoding on the video
+engine (VE) and expose copied planar YU12 output. Neither profile establishes
+physical codec qualification. Broader profiles, reference patterns, dimensions
+and unbounded live ingestion remain required work.
+
+## VGA streaming with a fixed retained pool
+
+Session version 2 selects 640-by-480 progressive Baseline 8-bit 4:2:0 pictures.
+Each access unit (AU) contains one sequence parameter set (SPS), one picture
+parameter set (PPS) and one IDR or P slice beginning at
+macroblock zero. SPS/PPS bytes must remain identical throughout the session.
+The SPS requires picture-order count (POC) type 2, four frame-number bits, one
+reference and
+`direct_8x8_inference_flag=1`. P pictures use default list 0 and reference the
+preceding completed picture. Frame numbers advance from 0 through at most 15;
+an IDR restarts them at 0. POCs are twice the frame number. This supports
+repeated groups of pictures (GOPs) without implementing frame-number wrap or
+display reordering.
+
+A session admits at most 256 pictures. Each complete Annex B access unit is
+bounded to 524,288 bytes. Every picture has 1,200 macroblocks and produces
+460,800 copied bytes: 307,200 Y bytes, 76,800 Cb bytes and 76,800 Cr bytes.
+Y and chroma strides are 640 and 320 bytes. The primary stride register is
+`0x01400280`; the primary chroma-plane length is 76,800 bytes.
+
+Weighted prediction, reference-list changes, adaptive marking, long-term
+references, nonreference pictures, B pictures, fields, multiple slices,
+cropping, CABAC and SPS/PPS changes are rejected. HRD and the other unsupported
+syntax described for the retained profile below remain unsupported. This is a
+finite prepared clip consumed incrementally; future unmanifested camera/network
+frames are not admitted. No playback rate or real-time performance is claimed.
+
+### Source-backed geometry and healthy-frame reuse
+
+Pinned Cedrus `cedrus_dst_format_set` programs planar YU12 geometry and stride.
+The original A733 `H264ConfigureFrameInfoRegister` instruction helper agrees
+with the VGA primary-format fields. Width remains below the 2,048-pixel branch
+that needs additional external deblock/intra-prediction buffers.
+The 16-bit decoded-macroblock counter can represent the required count of 1,200.
+
+Motion-vector storage follows the conservative pinned CedarC formula in
+`h264_dec.c:1207–1216`: align `40 * ceil(30/2) * 32` to 1,024 bytes per field.
+Each field occupies 19,456 bytes; the bottom-field pointer adds 19,456 bytes.
+Each picture reserves a page-rounded 40,960-byte slot. The direct-inference
+requirement prevents CedarC's doubled-storage case. Cedrus's picture-info
+formula gives `18*4096 + 480*2*64 = 135168` bytes; VGA canaries begin after
+that used extent, inside a 139,264-byte allocation. Neighbor storage remains
+49,152 bytes. Context scratch is initialized once and retained across GOPs.
+
+[Cedrus normal completion](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_hw.c#L152)
+returns successfully completed input/output jobs without resetting the engine.
+CedarC’s outer UPDATE_DATA path includes resets; Cedrus supplies the no-reset
+completion model used here.
+The pinned [CedarC reference-marking code](https://github.com/Allwinner-Homlet/H6-CedarC/blob/d92ffcb082595f0fffda45ea481cec40fe5a3a8d/vdecoder/videoengine/h264/h264_mmco.c#L419)
+derives sliding-window removal when the reference count is full. Its
+[decoder completion path](https://github.com/Allwinner-Homlet/H6-CedarC/blob/d92ffcb082595f0fffda45ea481cec40fe5a3a8d/vdecoder/videoengine/h264/h264.c#L1432)
+applies marking after completed-frame processing, then installs the current
+short-term reference. These sources
+support healthy progression through a retained pool. They do not establish
+fabric drain after a fault or authorize allocation release.
+
+The controller alternates destination slots A and B. Decoding P1 into B keeps
+A referenced; only successful completion of P1 retires A as a reference.
+P2 can then write A while referencing B. A later IDR removes the prior reference
+from the programmed frame list. Frame SRAM contains actual slot addresses,
+POCs and MV pointers; reference-list entries select the current preceding slot.
+All unused entries are cleared. No IOMMU mapping is changed between pictures.
+
+Completion still requires an exact macroblock count, no engine error or busy
+condition, both decoder-master fault scans, intact guards, copied-output checks
+and post-callback deadline/liveness checks. Only then does the controller return
+the input lease from DEVICE to CPU ownership. Before the next refill, a fresh
+non-destructive IOMMU scan must complete for masters 6 and 7. The application
+rechecks guards/liveness, refills the owned input, publishes it with the existing
+barrier and returns it to DEVICE ownership. Engine checks precede the next
+trigger. This scan observes faults; it supplies no drain authority.
+
+Reference-slot retirement, input refill and copied-output acknowledgment are
+separate transitions. Y/C/MV allocations remain device-owned. A private copied
+output remains immutable until USB transmission finishes and the client
+acknowledges its ordinal and digest. Two occupied private outputs stop the next
+decode without overwriting either result. The input, AU, tables, references,
+context scratch and unacknowledged outputs remain retained after uncertain
+completion, faults or protocol failure. No failed session accepts further frames.
+All allocations and mappings require whole-board power removal before release.
+
+### Fixed storage and runtime admission
+
+The existing 2 MiB uncached arena supplies these static I/O virtual address
+(IOVA) spans:
+
+| IOVA | Capacity | Device access |
+| --- | --- | --- |
+| `0x10000000` | One 524,288-byte padded input | Read |
+| `0x10100000` | Two 307,200-byte Y slots | Read/write |
+| `0x10200000` | Two 155,648-byte C slots | Read/write |
+| `0x10300000` | 139,264-byte picture-info scratch | Read/write |
+| `0x10400000` | Two 40,960-byte MV slots | Read/write |
+| `0x10500000` | 49,152-byte neighbor scratch | Read/write |
+
+The 32 KiB table and guarded allocations total 1,814,528 bytes before alignment
+gaps. Table and neighbor allocations require 16 KiB alignment; other allocations
+use 4 KiB alignment. The actual pool allocator must satisfy all capacities and
+alignments before publication. Exhaustion retains the session and refuses decoder
+programming. Guard pages remain unmapped; context and slot tails retain canaries.
+The CPU also owns fixed staging/oracle arrays, two copied outputs and a
+24,576-byte manifest. Their payload storage totals 1,931,264 bytes, plus bounded
+control metadata. These arrays are outside decoder mappings. No startup or
+memory-map expansion is used. Source-derived extents do not qualify physical
+burst bounds or DMA confinement.
+
+The 856-byte sealed session layout is unchanged. Version 2 binds the manifest
+SHA256 in `fixture`; `reference` must be zero. Oracle mode is explicit in each
+authenticated manifest descriptor. Each descriptor is 96 little-endian bytes:
+
+| Offset | Field |
+| --- | --- |
+| 0 | Access-unit length, 32 bits |
+| 4 | Oracle length: 0 or 460,800, 32 bits |
+| 8 | Frame number, 32 bits |
+| 12 | Zero, 32 bits |
+| 16 | Access-unit SHA256, 32 bytes |
+| 48 | Oracle SHA256, or zero when absent, 32 bytes |
+| 80 | Sixteen zero bytes |
+
+The descriptor array index is the global picture ordinal. The entire fixed
+manifest is copied, hashed and validated before any VE resource access.
+Each subsequently received AU and optional oracle is copied, authenticated,
+parsed and checked against common geometry/configuration before that AU is
+published. Future AU headers are not presumed valid from their manifest hashes.
+Partial uploads never publish provider access. Every fragment and command checks
+the current epoch, generation, authority and monotonic deadline. The provider
+binds the immutable profile/spans and each active AU's ordinal, parsed fields
+and actual length; the reusable address alone grants no authority.
+
+### Private wire protocol and copied output
+
+Every command has a 32-byte little-endian header: four 32-bit words containing
+magic, version 1, argument and auxiliary value, then epoch and generation as
+64-bit words. Commands are:
+
+| Magic | Argument / auxiliary | Body |
+| --- | --- | --- |
+| `0x4d363248` (H26M) | Count / count*96 | Manifest descriptors; once only |
+| `0x46363248` (H26F) | Ordinal / zero | Admitted AU, then optional oracle |
+| `0x51363248` (H26Q) | Ordinal / zero | None; request copied result |
+| `0x41363248` (H26A) | Ordinal / zero | Copied-output SHA256; acknowledge |
+
+A VGA response has the existing 160-byte header layout with version 3.
+The digests at offsets 32, 64 and 96 identify manifest, access unit and copied
+output. The eight words at offset 128 identify ordinal, count, frame number,
+POC, width, height, slice type and terminal state. Status 1 appends 460,800 bytes;
+0 is pending, 2 is failed and 3 means that the copied output was acknowledged.
+Pending, failed and acknowledged responses carry no payload/output digest.
+A retained copied result still has status 1 after a later failure.
+
+USB sends the header separately from payload chunks. The host reads exactly
+160 bytes, validates the bounded length, then reads that payload length. It
+tolerates endpoint zero-length packets within deadline/fragment limits. The host
+verifies metadata and copied digest, writes each result durably and only then
+sends an acknowledgment (ACK). An optional sealed oracle additionally checks every sample.
+`oracle_verified` remains false for normal output: copied integrity alone does
+not establish numerical decoder conformance. Invalid/duplicate/stale ACKs fail
+without freeing a copied result. Protocol failure leaves authenticated retained
+outputs queryable within the supervised lifetime.
+
+Use [stream.py](../apps/h264/stream.py) to split a prepared Annex B clip into
+bounded AU files and a manifest. It removes AUD/SEI metadata, repeats the common
+SPS/PPS prefix and optionally splits an independent planar reference per picture.
+Pass the resulting `manifest.bin` to [prepare.py](../apps/h264/prepare.py) with
+an admitted version 2 session template. The version 4 bundle seals every AU and
+oracle alongside manifest, image, launcher and session. The same ELF serves new
+clips through new admitted sessions. Legacy session version 1 retains bundle
+version 3 and its original upload/query/response formats.
+
+### Focused evidence and remaining physical gaps
+
+Evidence is under `~/.cache/sunstoneos/evidence/h264-vga-20261019`:
+
+- The libx264 clip has six VGA pictures, I/P/P/I/P/P, with an independent FFmpeg
+  pixel reference and syntax trace. ASan/UBSan parser checks compare header
+  fields and bounds; refusal checks use independent field positions for direct
+  inference, weighted prediction and unsupported PPS flags.
+- `a733-vga-reference.json` compares primary stride/chroma length, repeated-IDR
+  POCs and frame-SRAM fields with pinned original A733 instructions.
+- `native-refill/result.json` runs the linked parser, immutable upload protocol,
+  real allocator, IOMMU builder/validator, controller, guarded copy and serializer.
+  It covers the IDR boundary, reference alternation, copied-output backpressure
+  and ACK, wrong ordinal/digest, a late fault refusing refill without a next
+  trigger, and retained copied output after a later engine error.
+- `native-iommu-read-fixed/result.json` executes actual IOMMU scan/poll through
+  the real native read, Device-mapping predicate and ordered loads. It records
+  all 26 addresses in both banks and decoder masters 6/7, plus token/deadline/
+  range/alignment/mapping refusal and a retained observed decoder fault.
+- `host/result.json` covers exact-length/ZLP capture, durable output before ACK,
+  qualification and retained partial failure. `final-bundles/result.json` covers
+  final version 4 bundle identities. Normal copied output, legacy two-picture
+  native behavior and the single-IDR parser wrapper have focused compatibility
+  evidence. Earlier unchanged parser cases are reused.
+
+Memory-mapped I/O (MMIO) values, power/isolation facts, initial IOMMU installation, CPU
+translation facts, USB transport and device pixel writes remain modeled at the
+stated check boundaries. The lowest-read check executes the actual policy;
+its CPU translation result is supplied by the model. Injected pixels verify
+copying and protocol integrity. They do not establish physical codec arithmetic. The accepted
+pre-refill-scan image and results remain frozen under `pre-refill-scan`.
+Physical reference visibility, pixel conformance, confinement and supervised
+timing remain unqualified. Healthy-frame reuse follows the pinned decoder
+completion model; fault drain, unmapping and allocation reclamation remain
+unsupported. No physical attempt occurred.
+
+## Retained single/two-picture profile
 
 The native driver implements a bounded Annex B H.264 sequence: one IDR intra
 picture followed by an optional P picture that references the decoded IDR.
@@ -42,7 +259,7 @@ completed or failed session cannot accept another clip, reclaim its buffers or
 release its leases. Decoding the second picture uses retained resources;
 repeated clips within one session remain unsupported.
 
-## Pinned sources establish control and reference fields
+### Pinned sources establish control and reference fields
 
 The executor adapts the GPL-2.0-or-later H.264 control in
 [Linux Cedrus](https://github.com/torvalds/linux/blob/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_h264.c).
@@ -82,7 +299,7 @@ The CPU neither clears nor relocates them between IDR and P decoding. Distinct
 input, Y, C and motion-vector slots retain the producer picture's reference
 state while the P picture executes.
 
-## Providers retain the decoder and all DMA storage
+### Providers retain the decoder and all DMA storage
 
 The application reuses the video platform, shared clock and power leases,
 decoder IOMMU, uncached pool and native USB providers. A typed H.264 adapter
@@ -126,7 +343,7 @@ stride, 16 rows and a 512-byte allocation. Each private output removes padding:
 1,536 Y bytes, then 384 Cb bytes and 384 Cr bytes. Copying a later picture or
 retaining a failure cannot modify an already published private output.
 
-## Runtime upload validates the complete clip before provider access
+### Runtime upload validates the complete clip before provider access
 
 The private USB endpoint follows the bounded asset pattern: receive declared
 bytes into owned RAM, authenticate and parse them, then commit once. The
@@ -162,7 +379,7 @@ requires a zero digest. Bundle version 3 seals these files with image, launcher
 and session. Input travels through the application endpoint after enumeration,
 outside ROM image-upload spans. Host capture derives the upload from that bundle.
 
-## Completion gates sequential programming and immutable output
+### Completion gates sequential programming and immutable output
 
 Before mappings or codec programming, the executor parses the immutable clip. It checks the supported compound identity, H.264 mode, disabled framebuffer
 compression, clear video control unit enable/reset, clear LBC and timeout enable,
@@ -203,7 +420,7 @@ scans and CPU barriers do not prove either property. No allocation reclamation
 is authorized. Success and failure require whole-board power removal before
 reuse; failure of the P picture preserves the completed private IDR output.
 
-## Indexed USB output and focused evidence
+### Indexed USB output and focused evidence
 
 A query is five bytes: zero followed by a little-endian 32-bit picture index.
 The response has a 160-byte version 2 header. Its first 128 bytes contain the

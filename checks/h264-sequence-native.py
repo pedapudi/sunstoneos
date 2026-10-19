@@ -26,6 +26,7 @@ def module(name,path):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','inputs','output'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--case',choices=('nominal','normal','P-error'),help='Run only the affected selected case.')
     args=parser.parse_args();args.output.mkdir(exist_ok=False)
     cases=module('native_cases',ROOT/'checks/h264-application-cases.py')
     syms,segments,types,_,_=cases.setup(args.image,args.output,session_optional=True,fixture_optional=True)
@@ -33,7 +34,7 @@ def main():
     app=types['h264_application'];sup=types['a733_h264_input'];run=types['a733_h264_run'];base=syms['h264'];upload=base+app['supplied'];rbase=base+app['run']
     reference=(args.inputs/'reference.yuv').read_bytes();assert len(reference)==4608
     reports=[]
-    for variant in ('nominal','normal','P-error'):
+    for variant in ((args.case,) if args.case else ('nominal','normal','P-error')):
         cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);cpu.mem_map(0x40000000,0x4000000);cpu.mem_map(0x50000000,0x1000000)
         for address,data in segments:cpu.mem_write(address,data)
         mode='normal' if variant=='normal' else 'qualification'
@@ -117,7 +118,9 @@ def main():
             elif name in ('a733_iommu_scan','a733_iommu_poll'):returned(1)
         hooks=['board_live','board_fail','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','a733_usb_prepare','tud_vendor_n_available','tud_vendor_n_read','a733_counter_clock_now','a733_rail_acquire','a733_rail_poll','a733_pmic_submit','a733_pmic_result','a733_clock_acquire','a733_gpu_resources_acquire','a733_memory_uncached_init','a733_h264_platform_init','a733_video_platform_h264_ops','h264_load','a733_iommu_scan','a733_iommu_poll']
         assert all(n in syms for n in hooks),[n for n in hooks if n not in syms]
-        cpu.mem_write(OPS,struct.pack('<6Q',*[STUB+16*i for i in range(6)]));cpu.hook_add(UC_HOOK_CODE,hook)
+        cpu.mem_write(OPS,struct.pack('<6Q',*[STUB+16*i for i in range(6)]))
+        for address in {STOP,syms['vTaskDelay']}|{STUB+16*i for i in range(6)}|{syms[n] for n in hooks}:
+            cpu.hook_add(UC_HOOK_CODE,hook,begin=address,end=address)
         def invoke(name,*values):
             for reg,value in zip(REGS,values):cpu.reg_write(reg,value)
             cpu.reg_write(UC_ARM64_REG_SP,0x50ffeff0);cpu.reg_write(UC_ARM64_REG_LR,STOP);parked.clear()
@@ -169,6 +172,6 @@ def main():
         (args.output/f'{variant}-tables.bin').write_bytes(cpu.mem_read(get(base+app['table']),32768))
         reports.append(dict(case=variant,terminal=terminal,completed=get(base+app['completed'],4),triggers=triggers,table_sha256=tables[0],spans=declared,calls=calls))
     (args.output/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(args.image.read_bytes()).hexdigest(),cases=reports),indent=2)+'\n')
-    print('PASS composed native IDR+P upload, owned DMA/IOMMU, reference slots, two copies, indexed USB and retained partial failure')
+    print('PASS selected native H264 sequence cases: '+','.join(r['case'] for r in reports))
 
 if __name__=='__main__':main()

@@ -6,7 +6,8 @@
 int a733_h264_session_valid(const struct a733_h264_session *s)
 {
     return s&&a733_board_session_valid(&s->board,0)&&s->board.workload==2&&
-        s->magic==A733_H264_SESSION_MAGIC&&s->version==1&&s->bytes==sizeof(*s)&&
+        s->magic==A733_H264_SESSION_MAGIC&&(s->version==1||s->version==2)&&s->bytes==sizeof(*s)&&
+        (s->version!=2||!present(s->reference,32))&&
         s->owner&&s->owner!=s->board.pmic_owner&&s->owner!=s->board.usb0_owner&&
         s->authority&&s->pck_client<16&&s->module_hz&&s->module_hz<=720000000&&
         !(s->module&~UINT32_C(0x8700001f))&&((s->module>>24)&7)<=1&&

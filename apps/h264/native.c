@@ -9,7 +9,7 @@ static uint64_t h264_deadline(void){return board.session.deadline_us-10000;}
 static int h264_now(void *v,uint64_t *out)
 {return v==&h264&&board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,out)==1;}
 static int h264_enter(void *v,uint64_t d)
-{return v==&h264&&board_live(NULL)?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}
+{return v==&h264&&board_live(NULL)&&(h264.session.version!=2||h264_stream_authorized(&h264_stream,&h264.run))?a733_platform_lock_enter(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK,d):-1;}
 static int h264_leave(void *v)
 {if(v!=&h264)return -1;a733_platform_lock_leave(&providers.shared.locks,A733_PLATFORM_REGISTER_LOCK);return 1;}
 static int h264_device(uintptr_t address)
@@ -51,12 +51,17 @@ static int h264_authority(void *v,const struct a733_video_platform_config *c,
     if(v!=&h264||!token)return -1;
     if(*token&&*token!=h264.session.authority)return -1;*token=h264.session.authority;
     if(!board_live(NULL)||d!=h264_deadline()||memcmp(c,&h264.config,sizeof(*c))||
-       !a733_h264_input_ready(&h264.supplied)||j->input!=h264.supplied.stream||
-       j->input_bytes!=h264.supplied.stream_bytes)return -1;
+       (h264.session.version==2?!h264_stream_authorized(&h264_stream,&h264.run):
+        (!a733_h264_input_ready(&h264.supplied)||j->input!=h264.supplied.stream||
+         j->input_bytes!=h264.supplied.stream_bytes)))return -1;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i)if(j->buffers[i].iova!=h264.job.buffers[i].iova||
         j->buffers[i].bytes!=h264.job.buffers[i].bytes)return -1;
-    uint8_t hash[32];storage_digest_bytes(j->input,j->input_bytes,hash);
-    if(memcmp(hash,h264.session.fixture,32))return -1;
+    uint8_t hash[32];
+    if(h264.session.version==2){
+        if(j->profile!=A733_H264_VGA_STREAM||j->input!=h264_stream.input||j->input_bytes!=A733_H264_VGA_INPUT_BYTES)return -1;
+        storage_digest_bytes(j->input,h264_stream.input_bytes,hash);
+        if(memcmp(hash,h264_stream_descriptor(&h264_stream,h264_stream.active)+16,32))return -1;
+    }else{storage_digest_bytes(j->input,j->input_bytes,hash);if(memcmp(hash,h264.session.fixture,32))return -1;}
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!h264_device(p))return -1;
     for(uintptr_t p=0x01c0e000;p<0x01c0f000;p+=4096)if(!h264_device(p))return -1;
     uint32_t gate;
@@ -79,18 +84,25 @@ static const uint32_t capacity[]={8192,8192,8192,0x21000,8192,0xc000};
 static const unsigned slots[]={2,2,2,1,2,1};
 static const uint32_t used[]={4096,2048,1024,A733_H264_PICTURE_INFO_BYTES,2048,0xc000};
 static const uint32_t prefix[]={4096,4096,4096,4096,4096,16384};
+static const uint32_t vga_slot_capacity[]={524288,307200,155648,0x22000,40960,0xc000};
+static const uint32_t vga_capacity[]={524288,614400,311296,0x22000,81920,0xc000};
+static const uint32_t vga_slots[]={1,2,2,1,2,1};
+static const uint32_t vga_used[]={524288,307200,153600,0x21000,38912,0xc000};
+static int vga(void){return h264.session.version==2;}
 static int h264_guards(void)
 {
+    const uint32_t *cap=vga()?vga_capacity:capacity,*step=vga()?vga_slot_capacity:slot_capacity;
+    const uint32_t *limit=vga()?vga_used:used;const unsigned *count=vga()?vga_slots:slots;
     for(unsigned a=0;a<A733_H264_BUFFERS;++a){
         struct device_memory_extent e;enum device_memory_state state;
-        if(!device_memory_describe(h264.pool,h264.leases[a+1],&e,&state)||state!=DEVICE_MEMORY_DEVICE)return 0;
+        if(!device_memory_describe(h264.pool,h264.leases[a+1],&e,&state)||state!=((vga()&&a==A733_H264_INPUT&&h264.run.state==A733_H264_COPIED)?DEVICE_MEMORY_CPU:DEVICE_MEMORY_DEVICE))return 0;
         const volatile uint8_t *p=(const void *)e.cpu;
-        if(e.bytes!=prefix[a]+capacity[a]+4096||e.cpu+prefix[a]!=(uintptr_t)h264.buffers[a])return 0;
+        if(e.bytes!=prefix[a]+cap[a]+4096||e.cpu+prefix[a]!=(uintptr_t)h264.buffers[a])return 0;
         for(unsigned i=0;i<prefix[a];++i)if(p[i]!=0xa5)return 0;
-        for(unsigned slot=0;slot<slots[a];++slot)
-            for(unsigned i=prefix[a]+slot*slot_capacity[a]+used[a];
-                i<prefix[a]+(slot+1)*slot_capacity[a];++i)if(p[i]!=0xa5)return 0;
-        for(unsigned i=prefix[a]+capacity[a];i<e.bytes;++i)if(p[i]!=0xa5)return 0;
+        for(unsigned slot=0;slot<count[a];++slot)
+            for(unsigned i=prefix[a]+slot*step[a]+limit[a];
+                i<prefix[a]+(slot+1)*step[a];++i)if(p[i]!=0xa5)return 0;
+        for(unsigned i=prefix[a]+cap[a];i<e.bytes;++i)if(p[i]!=0xa5)return 0;
     }
     return 1;
 }
@@ -98,8 +110,14 @@ static int h264_copied(void *v,uint64_t token,uint64_t d)
 {
     if(v!=&h264||token!=h264.session.authority||d!=h264_deadline()||!board_live(NULL))return -1;
     unsigned picture=h264.run.picture_index;
-    if(picture>=h264.supplied.sequence.count||picture!=atomic_load_explicit(&h264.completed,memory_order_acquire))return -1;
-    uint8_t *payload=h264.payload[picture];
+    if(vga()?!h264_stream_authorized(&h264_stream,&h264.run):
+       (picture>=h264.supplied.sequence.count||picture!=atomic_load_explicit(&h264.completed,memory_order_acquire)))return -1;
+    struct h264_stream_output *out=vga()?&h264_stream.output[h264_stream.copy_slot]:NULL;
+    uint8_t *payload=vga()?out->payload:h264.payload[picture];
+    uint8_t *digest=vga()?out->digest:h264.digest[picture];
+    unsigned width=vga()?640:48,height=vga()?480:32,ystride=vga()?640:64,cstride=vga()?320:32;
+    unsigned yslot=vga()?(picture&1)*307200:picture*4096,cslot=vga()?(picture&1)*155648:picture*4096;
+    unsigned ybytes=width*height,cbytes=ybytes/4,cplane=cstride*height/2;
     if(!h264.copy_step){if(a733_iommu_scan(&h264.iommu,d)!=1)return -1;h264.copy_step=1;}
     int r=a733_iommu_poll(&h264.iommu);if(r!=1)return r;
     if(h264.iommu.fault.scanned_masters!=0xc0||!h264_guards())return -1;
@@ -107,45 +125,55 @@ static int h264_copied(void *v,uint64_t token,uint64_t d)
         uint32_t final_status;
         if(h264_load(0x01c0e228,&final_status)!=1||
            (final_status&(A733_H264_BUSY_MASK|0xe))||!h264_guards())return -1;
-        storage_digest_bytes(payload,2304,h264.digest[picture]);
+        storage_digest_bytes(payload,ybytes+2*cbytes,digest);
         h264.copy_step=0;
         return 1;
     }
     uint32_t status;
     if(h264_load(0x01c0e228,&status)!=1||(status&(A733_H264_BUSY_MASK|0xe)))return -1;
     __asm__ volatile("dsb sy":::"memory");
-    for(unsigned row=0;row<32;++row)for(unsigned col=0;col<48;++col)payload[row*48+col]=((volatile uint8_t *)(h264.luma+picture*4096))[row*64+col];
-    for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<16;++row)for(unsigned col=0;col<24;++col)
-        payload[1536+plane*384+row*24+col]=((volatile uint8_t *)(h264.chroma+picture*4096))[plane*512+row*32+col];
+    for(unsigned row=0;row<height;++row)for(unsigned col=0;col<width;++col)payload[row*width+col]=((volatile uint8_t *)(h264.luma+yslot))[row*ystride+col];
+    for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<height/2;++row)for(unsigned col=0;col<width/2;++col)
+        payload[ybytes+plane*cbytes+row*(width/2)+col]=((volatile uint8_t *)(h264.chroma+cslot))[plane*cplane+row*cstride+col];
     __asm__ volatile("dsb sy":::"memory");
-    if(!h264_guards()||(h264.supplied.oracle_bytes&&memcmp(payload,h264.supplied.oracle+picture*2304,2304))||!board_live(NULL))return -1;
+    if(!h264_guards()||(vga()?(h264_stream.oracle_bytes&&memcmp(payload,h264_stream.oracle,A733_H264_VGA_OUTPUT_BYTES)):
+       (h264.supplied.oracle_bytes&&memcmp(payload,h264.supplied.oracle+picture*2304,2304)))||!board_live(NULL))return -1;
     if(a733_iommu_scan(&h264.iommu,d)!=1)return -1;
     h264.copy_step=2;return 0;
 }
 static int h264_allocate(void)
 {
     h264.pool=a733_memory_uncached_init();if(!h264.pool)return 0;
+    const uint32_t *cap=vga()?vga_capacity:capacity,*step=vga()?vga_slot_capacity:slot_capacity;
+    const uint32_t *limit=vga()?vga_used:used;const unsigned *count=vga()?vga_slots:slots;
     for(unsigned i=0;i<1+A733_H264_BUFFERS;++i){
         struct device_memory_extent e;
-        uint64_t bytes=i?prefix[i-1]+capacity[i-1]+4096:32768;
+        uint64_t bytes=i?prefix[i-1]+cap[i-1]+4096:32768;
         uint64_t alignment=!i||i==1+A733_H264_NEIGHBOR?16384:4096;
         if(!device_memory_acquire_aligned(h264.pool,h264.session.owner,bytes,alignment,&h264.leases[i],&e))return 0;
         if(i==0)h264.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,e.bytes);h264.buffers[i-1]=(void *)(e.cpu+prefix[i-1]);
-            for(unsigned slot=0;slot<slots[i-1];++slot)
-                memset(h264.buffers[i-1]+slot*slot_capacity[i-1],0,used[i-1]);}
+            for(unsigned slot=0;slot<count[i-1];++slot)
+                memset(h264.buffers[i-1]+slot*step[i-1],0,limit[i-1]);}
     }
     h264.input=h264.buffers[A733_H264_INPUT];h264.luma=h264.buffers[A733_H264_Y];h264.chroma=h264.buffers[A733_H264_C];
     const struct a733_h264_sequence *sequence=&h264.supplied.sequence;
-    for(unsigned slot=0;slot<sequence->count;++slot){
+    for(unsigned slot=0;!vga()&&slot<sequence->count;++slot){
         const struct a733_h264_picture *p=&sequence->pictures[slot];
         memcpy(h264.input+slot*4096,h264.supplied.stream+p->slice_offset,p->slice_bytes);
     }
-    static const uint32_t iova[]={0x10001000,0x10010000,0x10014000,0x10020000,0x10068000,0x10070000};
-    struct a733_iommu_span spans[A733_H264_BUFFERS];h264.job.input=h264.supplied.stream;h264.job.input_bytes=h264.supplied.stream_bytes;
+    if(vga())memcpy(h264.input,h264_stream.input+h264_stream.picture.slice_offset,h264_stream.picture.slice_bytes);
+    static const uint32_t addresses[2][A733_H264_BUFFERS]={
+        {0x10001000,0x10010000,0x10014000,0x10020000,0x10068000,0x10070000},
+        {0x10000000,0x10100000,0x10200000,0x10300000,0x10400000,0x10500000}};
+    const uint32_t *iova=addresses[vga()];
+    struct a733_iommu_span spans[A733_H264_BUFFERS];
+    h264.job.input=vga()?h264_stream.input:h264.supplied.stream;
+    h264.job.input_bytes=vga()?A733_H264_VGA_INPUT_BYTES:h264.supplied.stream_bytes;
+    h264.job.profile=vga()?A733_H264_VGA_STREAM:A733_H264_LEGACY;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i){
-        h264.job.buffers[i]=(struct a733_h264_span){iova[i],capacity[i]};
-        spans[i]=(struct a733_iommu_span){iova[i],(uintptr_t)h264.buffers[i],capacity[i],
+        h264.job.buffers[i]=(struct a733_h264_span){iova[i],cap[i]};
+        spans[i]=(struct a733_iommu_span){iova[i],(uintptr_t)h264.buffers[i],cap[i],
             i==A733_H264_INPUT?A733_IOMMU_READ:A733_IOMMU_READ|A733_IOMMU_WRITE};
     }
     if(a733_iommu_build(&h264.tables,h264.table,(uintptr_t)h264.table,spans,A733_H264_BUFFERS)!=1)return 0;
@@ -190,13 +218,60 @@ static int h264_setup(void)
     struct a733_h264_platform_ops ops={h264_now,h264_authority,h264_memory,h264_copied,
         h264_enter,h264_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!h264_allocate()||!a733_h264_platform_init(&h264.platform,c,&ops,&h264))return -1;
-    return a733_h264_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_deadline())?1:-1;
+    return (vga()?a733_h264_vga_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_stream.input_bytes,h264_deadline()):
+        a733_h264_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_deadline()))?1:-1;
+}
+static void h264_vga_failure(void)
+{
+    h264_stream_fail(&h264_stream);atomic_store_explicit(&h264.result,2,memory_order_release);
+    if(h264.pool)for(unsigned i=0;i<1+A733_H264_BUFFERS;++i)
+        if(h264.leases[i].generation)device_memory_retain(h264.pool,h264.leases[i]);
+}
+static void h264_vga_step(void)
+{
+    if(atomic_load_explicit(&h264_stream.failed,memory_order_acquire)){h264_vga_failure();return;}
+    if(atomic_load_explicit(&h264.result,memory_order_acquire))return;
+    if(atomic_load_explicit(&h264_stream.au_state,memory_order_acquire)!=2){
+        int taken=h264_stream_take(&h264_stream);if(taken<0){h264_vga_failure();return;}if(!taken)return;
+        if(h264.stage)h264.refill_step=1;
+    }
+    if(h264.refill_step){
+        struct device_memory_allocation *input=device_memory_lookup(h264.pool,h264.leases[1]);
+        if(h264.run.state!=A733_H264_COPIED||!input||input->state!=DEVICE_MEMORY_CPU||!board_live(NULL)){h264_vga_failure();return;}
+        if(h264.refill_step==1){
+            if(!h264_guards()||a733_iommu_scan(&h264.iommu,h264_deadline())!=1){h264_vga_failure();return;}
+            h264.refill_step=2;return;
+        }
+        int scanned=a733_iommu_poll(&h264.iommu);
+        if(!scanned)return;
+        if(scanned!=1||!h264.iommu.fault.complete||h264.iommu.fault.scanned_masters!=0xc0||
+           !h264_guards()||!board_live(NULL)){h264_vga_failure();return;}
+        memset(h264.input,0,A733_H264_VGA_INPUT_BYTES);
+        memcpy(h264.input,h264_stream.input+h264_stream.picture.slice_offset,h264_stream.picture.slice_bytes);
+        __asm__ volatile("dsb sy":::"memory");input->state=DEVICE_MEMORY_DEVICE;
+        if(a733_h264_vga_next(&h264.run,h264_stream.input_bytes,h264_stream.picture.frame_num)!=1){h264_vga_failure();return;}
+        h264.refill_step=0;
+    }
+    int result=h264.stage?a733_h264_poll(&h264.run):h264_setup();
+    if(result<0){h264_vga_failure();return;}
+    if(!h264.stage){if(result==1)h264.stage=1;return;}
+    if(result==1&&h264.run.state==A733_H264_COPIED){
+        struct device_memory_allocation *input=device_memory_lookup(h264.pool,h264.leases[1]);
+        if(!board_live(NULL)||!input||input->state!=DEVICE_MEMORY_DEVICE){h264_vga_failure();return;}
+        /* Source-backed successful job completion returns this input slot to
+         * its controller. Reference/output/MV mappings remain device-owned. */
+        input->state=DEVICE_MEMORY_CPU;
+        unsigned final=h264_stream.active+1==h264_stream.count;
+        if(h264_stream_complete(&h264_stream)!=1){h264_vga_failure();return;}
+        if(final)atomic_store_explicit(&h264.result,1,memory_order_release);
+    }
 }
 void h264_task(void *unused)
 {
     (void)unused;
     for(;;){
-        if(!board_live(NULL)){atomic_store_explicit(&h264.result,2,memory_order_release);vTaskDelay(1);continue;}
+        if(!board_live(NULL)){if(vga())h264_vga_failure();else atomic_store_explicit(&h264.result,2,memory_order_release);vTaskDelay(1);continue;}
+        if(vga()){if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))h264_vga_step();vTaskDelay(1);continue;}
         if(a733_h264_input_ready(&h264.supplied)&&
            atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&!atomic_load_explicit(&h264.result,memory_order_acquire)){
             int r=h264.stage?a733_h264_poll(&h264.run):h264_setup();

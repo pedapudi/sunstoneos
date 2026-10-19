@@ -72,7 +72,7 @@
     "parser_adaptation": "Restricted syntax/field order with bounded software bit reads replacing CedarC GetBits callbacks; no CedarC runtime library linked.",
     "register_source": "cedrus_h264.c:cedrus_set_params,cedrus_write_frame_list,_cedrus_write_ref_list,cedrus_skip_bits; CedarC H264ConfigureRefFrameRegister/H264ConfigureRefListRegister and A733 instructions corroborate field positions.",
     "license": "CedarC GNU LGPL version2 notices retained in adaptation; Cedrus GPL-2.0-or-later.",
-    "lifetime": "Two independent input/output/MV DMA slots plus retained shared decoder-context scratch, static NC IOMMU mappings and no reclamation. Cedrus IRQ completion and CedarC full macroblock completion support sequential frame programming; physical A733 producer/reference visibility and fabric drain remain unqualified."
+    "lifetime": "Fixed VGA input and two reference/output/MV slots with persistent context scratch. Cedrus successful job completion supports healthy input refill; CedarC sliding-window marking retires the previous reference after its consumer completes. Private copied-output ACK ownership is separate. No fault reuse, unmapping, reclamation or physical drain qualification."
   },
   "host-oracle": {
     "execution": "Host only. libx264 encodes Baseline IDR and IDR+P clips with predicted macroblocks; FFmpeg decodes independent YUV420p references and traces parsed syntax. Neither is linked or loaded on FreeRTOS.",
@@ -93,5 +93,17 @@
     "url": "https://raw.githubusercontent.com/torvalds/linux/70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56/drivers/staging/media/sunxi/cedrus/cedrus_hw.c",
     "revision": "70dd4ee72eb2d5793c62e71c14e3aba78e5a4e56",
     "sha256": "6703d41d3a9d6f780cb62f3e4bf40871e7103ab27c503c15eafa4098d0e42734"
+  },
+  "h264.c": {
+    "url": "https://raw.githubusercontent.com/Allwinner-Homlet/H6-CedarC/d92ffcb082595f0fffda45ea481cec40fe5a3a8d/vdecoder/videoengine/h264/h264.c",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "250deaaba3deacee75a3ee8c9998c82303627ba1b34daf81d51c18366f3cb991",
+    "git_blob": "f477050fdabded502296664b5607a2543006dcd6"
+  },
+  "h264_mmco.c": {
+    "url": "https://raw.githubusercontent.com/Allwinner-Homlet/H6-CedarC/d92ffcb082595f0fffda45ea481cec40fe5a3a8d/vdecoder/videoengine/h264/h264_mmco.c",
+    "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
+    "sha256": "250ef3dfc38afad12f77dea9829963035180fbd3e099d68e30b5a4ae675f2d7c",
+    "git_blob": "77d5a1e69b85f62041a5e0bf8816b1f8ed7a8787"
   }
 }

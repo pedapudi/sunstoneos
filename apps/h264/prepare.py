@@ -15,13 +15,16 @@ board=module('h264_board_prepare',ROOT/'apps/board/prepare.py')
 base=board.base
 require=base.require
 SCHEMA='a733-h264-supervised-bundle-v3'
+VGA_SCHEMA='a733-h264-supervised-bundle-v4'
 CONTRACT_MAGIC=0x4153373348324331
 REQUEST_MAGIC=0x4153373348324c31
 
 def session_check(raw):
     require(len(raw)==856,'H.264 session must be856bytes.')
     require(board.session_check(raw[:592])==2,'H.264 requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373348324131,1,856),'Invalid H.264 session extension.')
+    magic,version,size=struct.unpack_from('<3Q',raw,592)
+    require((magic,size)==(0x4153373348324131,856) and version in (1,2) and
+        (version==1 or not any(raw[800:832])),'Invalid H.264 session extension.')
     owner,authority,client=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid H.264 owner.')
     require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)),'Missing H.264 physical or fixture evidence.')
@@ -32,6 +35,9 @@ def session_check(raw):
 def upload_bytes(session,stream,reference=None):
     """Produce one bounded upload from immutable per-session inputs."""
     session_check(session)
+    if struct.unpack_from('<Q',session,600)[0]==2:
+        require(reference is None,'VGA oracle belongs to individual manifest descriptors.')
+        return stream_module().manifest_upload(session,stream)
     require(0<len(stream)<=8192 and hashlib.sha256(stream).digest()==session[768:800],
             'AnnexB upload does not match the sealed session digest/limit.')
     oracle=any(session[800:832])
@@ -41,6 +47,10 @@ def upload_bytes(session,stream,reference=None):
                 'Independent pixel oracle differs from the sealed session.')
     return struct.pack('<4I2Q',0x55363248,2,len(stream),len(reference) if oracle else 0,
         *struct.unpack_from('<2Q',session,24))+stream+(reference or b'')
+
+def stream_module():
+    spec=importlib.util.spec_from_file_location('h264_vga_stream',ROOT/'apps/h264/stream.py')
+    value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
@@ -81,22 +91,32 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','decoder_off_reset_held','skipped_masters_physically_quiescent','remote_secure_writers_excluded','irq81_owned_masked','iommu_irqs_owned_masked'],
             'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','immutable_rom_mapping'],
             'electrical':['dcdc2_shared_800mv','ve_operating_point_qualified','stable_ve_pll'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse','one_attempt']}[key]
+            'supervision':['whole_board_power_removal','permanent_dma_retention',
+                'no_reuse_after_fault' if struct.unpack_from('<Q',raw,600)[0]==2 else 'no_reuse','one_attempt']}[key]
         require(all(fact.get(k) is True for k in required),'Required H.264 physical fact absent.')
         if key=='memory':
-            require(fact.get('iova_spans')==[[0x10001000,8192,'r'],[0x10010000,8192,'rw'],
-                [0x10014000,8192,'rw'],[0x10020000,0x21000,'rw'],[0x10068000,8192,'rw'],
-                [0x10070000,0xc000,'rw']] and fact.get('decoder_masters')==[6,7] and
+            expected_spans=([[0x10000000,524288,'r'],[0x10100000,614400,'rw'],
+                [0x10200000,311296,'rw'],[0x10300000,0x22000,'rw'],[0x10400000,81920,'rw'],[0x10500000,0xc000,'rw']]
+                if struct.unpack_from('<Q',raw,600)[0]==2 else [[0x10001000,8192,'r'],[0x10010000,8192,'rw'],
+                [0x10014000,8192,'rw'],[0x10020000,0x21000,'rw'],[0x10068000,8192,'rw'],[0x10070000,0xc000,'rw']])
+            require(fact.get('iova_spans')==expected_spans and fact.get('decoder_masters')==[6,7] and
                 fact.get('guard_pages_unmapped') is True and fact.get('source_extents_reviewed') is True,
                 'H.264 six-span, two-master, guarded memory authority differs.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,stream,reference=None):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
-    snapshots['input.h264']=Path(stream).read_bytes()
-    if reference is not None:snapshots['oracle.yuv']=Path(reference).read_bytes()
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
-    upload_bytes(raw,snapshots['input.h264'],snapshots.get('oracle.yuv'))
+    stream_path=Path(stream);is_vga=struct.unpack_from('<Q',raw,600)[0]==2
+    input_name='manifest.bin' if is_vga else 'input.h264'
+    snapshots[input_name]=stream_path.read_bytes()
+    if reference is not None:snapshots['oracle.yuv']=Path(reference).read_bytes()
+    upload_bytes(raw,snapshots[input_name],snapshots.get('oracle.yuv'))
+    if is_vga:
+        frames=stream_module().validate_inputs(stream_path.parent,snapshots[input_name])
+        for i,(data,oracle) in enumerate(frames):
+            snapshots[f'frame-{i:03}.h264']=data
+            if oracle is not None:snapshots[f'frame-{i:03}.yu12']=oracle
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
     require(mf.get('target')=='sunstone-a733-h264' and mf.get('execution_profile')=='h264-supervised-v1' and mf.get('final_elf')==ih,'Tested H.264 image manifest required.')
@@ -119,12 +139,12 @@ def prepare(image,manifest,admission,template,output,clang,lld,stream,reference=
     evidence={}
     for i,(path,data) in enumerate(cache.items()):
         name=f'evidence-{i}.bin';(out/name).write_bytes(data);evidence[path]={'name':name,'sha256':hashlib.sha256(data).hexdigest()}
-    p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
+    p=dict(schema=VGA_SCHEMA if is_vga else SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile='vga640x480-idr-p' if is_vga else None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
     base.save_json(out/'prepared.json',p);return validate_bundle(out)
 
 def validate_bundle(bundle):
-    out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong H.264 bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.h264'}
+    out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema') in (SCHEMA,VGA_SCHEMA) and p.get('physical_access') is False,'Wrong H.264 bundle.')
+    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
     require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed H.264 authority or transport input.')
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'H.264 bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'H.264 image changed.')
@@ -134,8 +154,15 @@ def validate_bundle(bundle):
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'H.264 protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'H.264 initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
+    is_vga=struct.unpack_from('<Q',raw,600)[0]==2;input_name='manifest.bin' if is_vga else 'input.h264'
+    require(p['schema']==(VGA_SCHEMA if is_vga else SCHEMA) and p.get('profile')==('vga640x480-idr-p' if is_vga else None),'H.264 bundle profile differs.')
+    require(input_name in p['files'],'Unsealed H.264 input.')
     reference=(out/'oracle.yuv').read_bytes() if 'oracle.yuv' in p['files'] else None
-    upload=upload_bytes(raw,(out/'input.h264').read_bytes(),reference)
+    upload=upload_bytes(raw,(out/input_name).read_bytes(),reference)
+    frames=stream_module().validate_inputs(out,(out/input_name).read_bytes()) if is_vga else None
+    if is_vga:
+        for i,(_,oracle) in enumerate(frames):
+            require(f'frame-{i:03}.h264' in p['files'] and (oracle is None or f'frame-{i:03}.yu12' in p['files']),'Unsealed VGA frame input.')
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'H.264 build identity changed.')
@@ -148,6 +175,7 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'H.264 upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'H.264 launch contract changed.')
     p['_upload']=upload;p['_reference']=reference
+    if is_vga:p['_stream_frames']=frames;p['_stream_manifest']=(out/input_name).read_bytes()
     p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
 
 if __name__=='__main__':

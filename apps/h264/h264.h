@@ -6,6 +6,7 @@
 #include "a733_iommu.h"
 #include "device_memory_pool.h"
 #include "../board/application.h"
+#include "stream.h"
 struct h264_application {
     struct a733_h264_session session;
     struct a733_h264_input supplied;
@@ -29,7 +30,7 @@ struct h264_application {
     uint8_t *buffers[A733_H264_BUFFERS];
     struct a733_h264_job job;
     uint32_t *table;
-    unsigned stage,copy_step;
+    unsigned stage,copy_step,refill_step;
     atomic_uint result,completed;
     uint8_t payload[A733_H264_PICTURES][A733_H264_OUTPUT_BYTES],digest[A733_H264_PICTURES][32];
 };

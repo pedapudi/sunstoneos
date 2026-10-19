@@ -56,7 +56,10 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     raise supervisor.CaptureWindowExpired('H.264 exhausted bounded pending-query budget.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save,upload,reference=None):
+def capture_device(device,same,deadline,session,evidence,record,save,upload,reference=None,stream_frames=None,stream_manifest=None):
+    if struct.unpack_from('<Q',session,600)[0]==2:
+        require(stream_frames is not None and stream_manifest is not None,'VGA frozen frame inputs required.')
+        return preparation.stream_module().capture_device(device,same,deadline,session,evidence,record,save,stream_manifest,stream_frames,supervisor.durable_frame)
     # Bounded upload has no decoder access until the native commit publishes it.
     for offset in range(0,len(upload),512):
         same();remaining=int((deadline-time.monotonic())*1000)
@@ -74,7 +77,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,upload,refe
 
 def source_files():
     return [('h264-host-tool.py',Path(__file__)),('h264-preparation.py',Path(preparation.__file__)),
-        ('h264-decoder.py',Path(decoder.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
+        ('h264-decoder.py',Path(decoder.__file__)),('h264-stream.py',ROOT/'apps/h264/stream.py'),('board-preparation.py',Path(preparation.board.__file__)),
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 
@@ -164,7 +167,7 @@ def main(argv=None):
         require(admission['identity']==identity and admission['port']==port,'H.264 entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
-        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,upload,reference),
+        lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,upload,reference,prepared.get('_stream_frames'),prepared.get('_stream_manifest')),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='h264_result',
         source_files=source_files(),description='Supervised native H.264; retain every resource until whole-board power removal')
 

@@ -21,7 +21,7 @@ list(REMOVE_ITEM h264_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 apply_build_patch("${h264_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/h264/boot.patch")
 list(APPEND h264_sources "${h264_build}/boot.c")
-foreach(source IN ITEMS apps/h264/main.c apps/h264/input.c apps/h264/native.c apps/h264/usb0.c apps/h264/admission.c apps/h264/snapshot.c
+foreach(source IN ITEMS apps/h264/main.c apps/h264/input.c apps/h264/stream.c apps/h264/stream-usb.c apps/h264/native.c apps/h264/usb0.c apps/h264/admission.c apps/h264/snapshot.c
  drivers/video/a733_video_h264.c drivers/video/a733_video_platform.c
  drivers/iommu/a733_iommu.c)
  list(APPEND h264_sources "${SUNSTONE_SOURCE_ROOT}/${source}")

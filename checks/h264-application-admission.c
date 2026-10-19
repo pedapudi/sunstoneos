@@ -20,6 +20,11 @@ int main(int argc,char **argv)
         .module=1,.module_hz=234000000,.iommu_gates={0x10007,0x10007},.supply_uv=800000,.supply_rail=1};
     memset(j.board.image,1,32);memset(j.board.qualification,2,32);memset(j.board.recovery,2,32);
     memset(j.board.wiring,3,32);memset(j.board.memory,4,32);memset(j.initial,5,192);
+    if(argc==3){
+        uint8_t manifest[256*96];FILE *input=fopen(argv[2],"rb");assert(input);
+        size_t n=fread(manifest,1,sizeof(manifest),input);assert(n&&n%96==0&&fgetc(input)==EOF&&!fclose(input));
+        j.version=2;memset(j.reference,0,32);storage_digest_bytes(manifest,n,j.fixture);
+    }
     assert(a733_h264_session_valid(&j));
     void *mapped=mmap((void *)A733_BOARD_SESSION_ADDRESS,4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
     assert(mapped==(void *)A733_BOARD_SESSION_ADDRESS);memcpy(mapped,&j,sizeof(j));
@@ -43,6 +48,6 @@ int main(int argc,char **argv)
     j.supply_rail=2;assert(!a733_h264_session_valid(&j));j.supply_rail=1;
     j.board.workload=3;assert(!a733_h264_session_valid(&j));j.board.workload=2;
     j.board.deadline_us=1;assert(!a733_h264_session_valid(&j));j.board.deadline_us=0;
-    assert(argc==2);FILE*f=fopen(argv[1],"wb");assert(f&&fwrite(&j,1,sizeof(j),f)==sizeof(j)&&!fclose(f));
+    assert(argc==2||argc==3);FILE*f=fopen(argv[1],"wb");assert(f&&fwrite(&j,1,sizeof(j),f)==sizeof(j)&&!fclose(f));
     assert(!munmap(mapped,4096));puts("H264 full-session extension/digest/rail/workload admission passed");return 0;
 }

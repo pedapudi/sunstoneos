@@ -10,7 +10,9 @@ int main(int argc,char **argv)
     struct a733_h264_sequence sequence,before;memset(&before,0xa5,sizeof(before));sequence=before;
     int result=a733_h264_parse_sequence(input,bytes,&sequence);
     if(!strcmp(argv[2],"invalid")){assert(!result&&!memcmp(&sequence,&before,sizeof(before)));return 0;}
-    assert(result);printf("%u\n",sequence.count);
+    assert(result);
+    if(sequence.count==1){struct a733_h264_picture picture;assert(a733_h264_parse(input,bytes,&picture)&&!memcmp(&picture,&sequence.pictures[0],sizeof(picture)));}
+    printf("%u\n",sequence.count);
     for(unsigned i=0;i<sequence.count;++i){
         const struct a733_h264_picture *p=&sequence.pictures[i];
         printf("%u %u %u %u %u %u %u %u %u %u %u %u %u\n",p->width,p->height,p->slice_offset,p->slice_bytes,p->header_bits,p->sps,p->pps,p->shs,p->shs2,p->qp,p->frame_num,p->poc,p->slice_type);

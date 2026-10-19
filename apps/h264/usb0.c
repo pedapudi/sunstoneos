@@ -50,13 +50,15 @@ void tud_suspend_cb(bool wake){(void)wake;}
 void tud_vendor_rx_cb(uint8_t interface,const uint8_t *buffer,uint32_t bytes)
 {(void)buffer;(void)bytes;if(interface)stop();}
 void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
-{if(interface||bytes>h264_response_sent-h264_response_transferred)stop();h264_response_transferred+=bytes;
+{if(h264.session.version==2){if(interface)stop();h264_stream_tx_complete(bytes);return;}
+ if(interface||bytes>h264_response_sent-h264_response_transferred)stop();h264_response_transferred+=bytes;
  if(h264_response_transferred==h264_response_bytes&&h264_response_sent==h264_response_bytes)h264_response_bytes=0;}
 void tud_vendor_tx_complete_cb(uint8_t interface){(void)interface;}
 static int upload_now(void *unused,uint64_t *now)
 {(void)unused;return board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,now)==1&&board_live(NULL)?1:-1;}
 static void h264_exchange(void)
 {
+    if(h264.session.version==2){h264_stream_usb();return;}
     if(h264_response_bytes){unsigned n=tud_vendor_write(h264_response+h264_response_sent,h264_response_bytes-h264_response_sent);
         h264_response_sent+=n;tud_vendor_flush();return;}
     if(!tud_vendor_available())return;
