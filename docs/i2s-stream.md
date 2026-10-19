@@ -33,17 +33,18 @@ Both profiles use the same format, callbacks and platform binding. The worker
 dispatches each channel exclusively through the stream core.
 It never polls the DMA controller independently of the I2S producer.
 
-Applications receive copied replies from the service queue. PERIOD_GET grants
-one period and a fresh generation ticket. PERIOD_PUT consumes that ticket once:
+Applications receive copied replies from the service queue. In finite mode,
+PERIOD_GET grants one period and a fresh generation ticket. PERIOD_PUT consumes
+that ticket once:
 it returns capture storage or commits immutable playback data. Applications
 finish all memory access before queuing PUT. The service refuses stale or
 repeated tickets. Reopening a cleanly closed session preserves the generation
 sequence. Task abandonment retains its periods and reservations indefinitely.
 
-Capture publishes a period only after DMA completion, verified drain, cache
+Finite capture publishes a period only after DMA completion, verified drain, cache
 acquisition, live resource checks and the final deadline check. A client-held
 period cannot be overwritten when the ring wraps. Missing free capture storage
-stops the stream with a failed result. Playback requires two committed periods
+stops the stream with a failed result. Finite playback requires two committed periods
 before start; missing committed storage at a later boundary stops it as well.
 The driver neither inserts silence nor silently drops samples.
 
