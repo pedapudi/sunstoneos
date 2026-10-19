@@ -1,679 +1,191 @@
 # Current work
 
-The user will disconnect board two and cannot reconnect either board until
-further notice. Both queues have no active physical tests. Continue offline
-implementation, instruction checks and integration; defer new hardware launches
-that could require physical recovery. Do not request another reconnect meanwhile.
+Continue in `/home/sunil/git/sunstoneos-worktrees/bringup` toward the
+[accepted goal](goal.md). Read `AGENTS.md` and the relevant device skill before
+new work. The [hardware matrix](hardware.md) remains the complete support
+inventory; component documents hold APIs, source provenance and detailed evidence.
 
-The user confirms that neither board has populated eMMC or UFS. These absent
-devices need no population probe or media qualification on the current boards.
-Preserve both microSD cards; their native storage support remains required.
+The user cannot reconnect either board until further notice. No board access or
+new hardware launch is authorized while physical recovery is unavailable. Do not
+request another reconnect. Both queues were idle at the last observation; no live
+query has been made since the announced second-board disconnection. Continue
+offline implementation and integration. Earlier identities and admission records
+supply no current authority.
 
-All eight CPUs physically reach their first FreeRTOS task context and return
-safely. The returning diagnostic executes actual task construction and initial
-context restoration, then records the idle-task pointer, stack, argument and
-exception state on each core. All cores finish before cleaning the complete
-145-page writable interval, or 9,280 cache lines per CPU. CPU0 restores its
-controls; all seven secondaries acknowledge shutdown and reach independently
-observed OFF. Saved DRAM restoration and responsive ROM return pass. Evidence:
-`all-core-first-task-20261018/physical-010/runtime/session.json`.
+Neither board has populated eMMC or UFS. Do not probe or require qualification of
+these absent devices. Preserve both microSD cards and their native support.
+No MIPI camera, display or microphone is attached. OV5640 is the first sensor
+target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
-The instruction checks, nine host cases and root review also pass. Task bodies,
-timer interrupts and application SGIs are excluded from this physical diagnostic.
-Sustained multicore scheduling remains physically unqualified. The existing
-production barrier and 256 atomic increments also
-pass in this physical attempt. Reuse these results without repeating the launch.
+## Board state and recovery
 
-An offline extension now passes actual idle-task yield, FreeRTOS context
-save/selection/restoration and pinned-worker entry on all eight cores. Complete
-owned-memory cleaning and matched return pass; a wrong worker argument retains
-all cores before cleanup. Evidence: `all-core-task-switch-20261018/`, accepted
-bundle `build-no-observer/`. The frozen image's higher-priority USB observer is
-suppressed in this CPU-only diagnostic. Worker bodies and timer/SGI workloads
-remain excluded. Nine host cases and root source review now pass. The runner
-validates worker contexts, return frames and memory bounds, restores saved RAM
-on completed return, and retains transport failures. Evidence: `host/software.json`
-and `host-root-review.json` in the same directory. Physical use still requires
-fresh board admission and available manual recovery; no test is queued.
-
-The complete returning CPU workload now passes instruction checks. Every core
-finishes 32 floating-point rounds, runs its background task and receives SGIs;
-CPU0 also services the production timer. All writers stop before interrupt
-cleanup, memory publication and matched shutdown. A damaged completed-round
-count retains the session before cleanup. That refusal check reuses the saved
-completed-workload checkpoint without repeating the worker execution. Sources,
-image and results are preserved in `all-core-task-workload-20261019/frozen/`.
-Timing and cache coherence remain modeled. Host validation now passes thirteen
-focused cases, including copied workload results, arrival epochs, task contexts,
-timer-priority restoration, saved-RAM restoration and failure retention.
-Evidence: `host-frozen/` and `host-root-review.json` in the same directory.
-Physical qualification remains outstanding; no launch is admitted.
-
-The [standalone DSI application](display-scanout.md#standalone-retained-dsi-application)
-is implemented with one privileged scanout owner and the existing PMIC, clock,
-rail, pin, media/PLL, IOMMU and USB0 providers. It builds an immutable XRGB8888
-color-bar framebuffer, starts DE1/LCD1/DSI1 and returns a copied controller
-observation. Actual producer compositions pass at 720p and 1080p; retained-fault,
-linked private seal/serializer, generated launcher and host capture checks pass
-with electrical/panel facts and hardware effects modeled. Shared startup, GIC
-and secondary execution are excluded. Root verifies 462 native inputs,
-176 objects and 195 host inputs against revision `0dcf977`, with no source delta,
-under `dsi-scanout-application-20261019/root-integration.json`.
-No panel is selected or attached. Physical preparation requires image-bound panel,
-electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding evidence;
-model-only records are refused. Visible pixels and physical scanout remain
-unqualified. Faults retain all resources; successful STOP, drain, release,
-retry, live-frame updates and wider display modes remain required.
-
-The finite UART2 header application is integrated. Actual clock/pin ownership,
-FIFO exchange, bounded drain and release produce copied USB results. Selected
-sanitizer, session and host checks pass; the native image links. All 419 compiled
-inputs and 195 preserved repository sources match during integration.
-Evidence: `uart-native-20261018/frozen/manifest.json` and `integration.json`.
-Physical loopback, electrical admission, recovery and inherited multicore startup
-remain outstanding.
-
-UART2 interrupt service is integrated. The handler masks the owned source and
-notifies its owner task; the task services receive/transmit causes before rearming.
-Success requires both receive and transmit interrupt evidence and completed
-drain. Focused sanitizer and host checks, eleven linked routing/dispatch checks,
-and source review pass. Integration matches all 423 compiled inputs and 202
-preserved repository sources. Evidence: `uart-irq-20261019/frozen/manifest.json`,
-`root/review.json` and `root-integration.json`. Accepted checks were reused.
-Physical delivery, serial operation and inherited multicore startup remain
-unqualified. DMA and broader serial modes remain required work.
-
-Simultaneous I2S capture/playback is integrated with separate DMA channels and
-period catalogues, shared clock/pin lifetime and failure propagation to both
-directions. Success requires both transfer counts and both drained results.
-Native client/pool/USB checks, composed stream checks and host capture pass;
-focused source review is complete. Evidence: `i2s-duplex-20261018/snapshot/` and
-`integration.json`. Physical audio and wire-level drain remain unqualified.
-
-Repeated I2S capture, playback and duplex are integrated. Four copied capture
-slots remain owned until complete USB delivery and matching acknowledgment.
-Cancellation preserves the copied backlog through terminal drain. Focused
-native ownership, USB completion and host checks pass; source review is closed.
-The earlier image's audit matched all 163 compiled inputs. Evidence:
-`i2s-repeated-20261018/snapshot/manifest.json`, `review.json` and
-`root-integration.json`. Accepted checks were reused.
-Fixed hardware-linked rings are now integrated for repeating TX and checked-copy
-cyclic RX/duplex. TX sources remain immutable; RX copies pass through private
-staging before the existing USB slots. Complete USB delivery and exact ACK still
-precede slot reuse. Descriptor/provider checks and three standalone-client cases
-pass; client service calls are modeled, and the native image link is separate
-evidence. Three focused review findings are resolved. Root integration verifies
-168 compiled inputs, 69 linked objects, 127 sources, 224 artifacts and four tools
-under `i2s-hardware-cyclic-20261019/root-integration.json`. Earlier unaffected
-evidence was reused within the scope recorded in `identity-reuse-clarification.json`.
-Root CPU-cache review does not establish device write completion. The manual's
-completed-package counter does not explicitly order destination writes and
-cursor updates. Cyclic RX/duplex physical admission additionally requires
-`cyclic-rx-completion-and-reuse-ordering-established`; no qualifying record
-exists. Physical continuity, DMA drain, cache visibility and wire-level drain
-remain unqualified. Runtime PCM direction 6 now accepts successive copied
-16 kHz mono S16LE periods through finite TX leases; immutable cyclic replay
-remains a separate mode. Actual provider composition consumes eight distinct
-periods. Nine standalone client/USB cases and eight host cases pass; the full
-native image is linked, not executed. Root verifies 170 inputs, 70 objects,
-131 sources, 314 artifacts and four tools against revision `0151af7` under
-`i2s-runtime-pcm-20261019/root-integration.json`, within `closure.json` scopes.
-The host supplies a requested prefix plus four guard periods, then CANCEL;
-guards may be truncated. No graceful wire drain or complete-file playback is
-established. Broader routed audio and physical qualification remain required.
-
-The [combined recorded-recognition application](../apps/mimus-board/README.md)
-is implemented in one supervised OS image with the existing PMIC, Type-C,
-USB0 and USB2 owners. The unchanged EL0 recognizer processes authenticated
-recorded input while the storage owner reads one read-only sector. Combined
-success requires the checked sector copy to complete during recognition,
-successful recognition and fresh attachment/liveness checks. USB0 returns copied
-transcript and sector data; service owners continue polling after completion.
-Root verifies all 744 compiled inputs and 202 objects, disjoint memory, input
-identity publication and the linked EL0 classifier under
-`mimus-board-20261019/root-integration.json`. The native fixture executes actual
-storage-copy and serialization instructions but injects recognition-active state
-and transcript, and models hardware and scheduling. A separate host recognizer
-check matches the historical recording's features, log probabilities and formatted
-text. These checks establish neither physical concurrent operation nor native
-scheduling or timing. Fresh image-bound DDR/model-memory admission, Type-C power,
-USB/DMA and recovery qualification remain required. The image retains all memory
-and does not replace the existing standalone mimus session.
-
-Repeated Bluetooth-headset recognition is implemented in the supervised
-CVSD profile. Two copied PCM slots feed successive bounded 8 kHz segments to
-the unchanged converter, recognizer and formatter. A private input copy precedes
-slot acknowledgment; each transcript remains immutable until complete USB
-transmission and matching host acknowledgment. Backlog, loss or cancellation
-stops capture without overwriting accepted segments. Success also requires the
-matched synchronous disconnect and all accepted transcript acknowledgments.
-Two distinct speech segments copied through the actual stack match portable
-references for features, log probabilities, frames and formatted text. Stack,
-native USB and host checks pass with controller events, scheduling and USB
-hardware modeled; focused review is closed. The recognizer remains at EL0 and
-uses the existing copied APIs and privilege wrappers.
-Evidence: `bluetooth-repeated-recognition-20261019/root-integration.json`,
-`root-native-audit.json` and `root-integration-frozen/manifest.json`. Root verifies
-the selected image's complete compiled closure and six archives at integration
-`854c1d9`. Nine newer
-USB/board source differences are classified, including changed embedded layouts;
-the frozen inputs remain authoritative and must not be mixed with newer objects.
-The original five repeated-profile USB cases use an earlier preserved image;
-the changed finished/status ordering case uses the final image, as recorded in
-`identity-reuse.json`. Physical headset operation, receive-service bounds,
-recognition within the session deadline and wideband mSBC remain unqualified.
-The selected ELF SHA-256 is
-`dbf35d7fdd756d6c1f03b75681252b09572d96176a589ecf5924a7053757417d`.
-
-The optional [mSBC profile](bluetooth-native.md#wideband-capture-through-the-existing-recognizer)
-now negotiates transparent eSCO and decodes copied 16 kHz PCM into the unchanged
-repeated recognizer. Explicit CVSD fallback retains its separate codec identity.
-Two decoded speech segments match portable recognition references; the actual
-linked codec also reproduces 96,000 PCM bytes from 400 encoded frames. Framing,
-capability/refusal, copied ownership, revocation and USB/host checks pass with
-controller/radio events, scheduling and USB effects modeled.
-Native CPU encoding/decoding uses pinned BlueZ libsbc 2.0, revision
-`8dc5d5ba381512ad5b1afa45c63ec6b0a3833244`, under LGPL-2.1-or-later.
-`apps/bluetooth/msbc-source.json` records source hashes; the freeze retains source,
-notices and relinkable objects. The default CVSD build omits this dependency.
-Root verifies the compiled closure and six archives under
-`bluetooth-msbc-20261019/root-integration.json`. Later shared USB/board layouts
-remain distinct from the internally consistent frozen image; future builds must
-compile affected consumers together. Physical transparent eSCO, headset capture,
-playback/duplex, receive-service bounds and session timing remain unqualified.
-
-[Caller PCM playback and duplex](bluetooth-native.md#caller-pcm-playback-and-duplex)
-are implemented for mono 16 kHz signed 16-bit little-endian PCM through mSBC.
-Playback-only starts
-no recognizer; duplex combines playback with repeated capture and the unchanged
-recognizer. Both require negotiated mSBC before consuming caller audio. Two
-private 2,400-byte period slots remain immutable through terminal packet
-accounting, complete USB result delivery and exact ticket acknowledgment.
-Backpressure preserves accepted data; END seals admission, and CANCEL can truncate
-audio. HCI credits and matched disconnect account for controller buffers, not
-headset rendering or serial-wire drain.
-Seven composed cases and eight native operation cases retain their earlier ELF
-`36bfa257…`. Final ELF `388f9f93…` adds exact profile-version guards, covered by
-its separate profile-gates case. Five objects changed and 221 remain unchanged;
-`bluetooth-pcm-duplex-20261019/profile-gate-delta.json` preserves that boundary.
-The final-image case covers version admission and copied PCM commit only.
-Root verifies 800 inputs, 226 objects and six archives against revision
-`3138e7e`, with no compiled-source delta, under
-`bluetooth-pcm-duplex-20261019/root-integration.json`. Controller/radio behavior,
-transport timing, scheduling and USB effects are modeled. Physical playback,
-capture/duplex, audible output, wider rates/codecs and wire-drained completion
-remain unqualified or required work.
-
-Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
-400 kHz operation or select four-bit default speed up to the card's CSD limit
-and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
-linked two-client reads, preparation and host checks pass under
-`sd-bus-modes-20261019/`. The SD image rebuilt for USB HID layouts includes
-those headers and class source consistently across all consumers. Linked SD/client,
-USB0 copied-read, moved-field liveness and host identity checks pass; focused
-review is closed. At integration revision `894051d`, the audit verified 182
-sources, 1,219 artifacts and all 411 compiled inputs under
-`sd-shared-usb-20261019/root-integration.json`.
-Its ELF SHA-256 is
-`141078f41ea22546a55117dd21245655a20162d4d09487a6647bad7ddf0a9d78`.
-The preceding image and its six later USB-input differences remain historical;
-unchanged protocol, clock and refusal evidence was reused. No card writes or
-physical qualification are established. Both microSD cards remain preserved.
-
-Native read-only eMMC access is integrated through the existing copied-client
-service. Both SDC2 and SDC3 selections pass instruction checks for identification,
-EXT_CSD and copied reads. Admission/capture checks and source review pass under
-`emmc-native-20261018/`. Both current boards lack eMMC, so this optional path has
-no physical qualification target. Its single-core image retains resources
-permanently and has no qualified ROM return.
-
-The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
-is implemented for progressive Baseline IDR/P clips with one short-term reference
-and picture-order count type 2. Its coded 1920-by-1088 references retain all rows;
-copied output removes exactly eight bottom rows for visible 1920-by-1080 YU12.
-The authenticated clip admits at most 256 access units, each bounded to 4 MiB.
-Fixed extended-memory allocations retain input, references, scratch and two
-private copied-output slots. Healthy input refill, reference retirement and
-completed-output acknowledgment remain separate; uncertainty retains every lease.
-Six-picture checks execute the actual allocator, tables, parser, controller,
-cropped copy and serializer. Independent syntax/register comparisons, private
-launcher/sealer and host capture checks pass. Device pixels, registers,
-translation, scheduling and transport are modeled; normal-mode evidence checks
-one copied picture without numerical qualification. Shared startup and secondary
-execution are not exercised. Root verifies 434 inputs and 171 objects under
-`h264-fullhd-20261019/root-integration.json`, with private startup placement review
-preserved separately. Fourteen later shared USB/clock/board source differences
-are classified; the consistent frozen image remains authoritative, and future
-builds must compile affected consumers together. The full-HD ELF SHA-256 is
-`b48123e301ec40ae4ec104e58d4c57b347e619b6a0a62a82263e0d0fe491a643`.
-Physical startup, pixels, reference visibility, confinement, timing and drain
-remain unqualified. Wider profiles/reference patterns, unmanifested input and
-allocation reclamation remain required. Existing VGA and small-picture profiles
-retain their separate accepted images and evidence.
-
-The [VGA H.264 streaming application](h264-native.md) implements a finite
-prepared clip of up to 256 progressive 640-by-480 Baseline IDR/P pictures, with
-one short-term reference and at most 512 KiB per access unit. A fixed retained
-pool alternates decoder reference/output slots across GOPs. Indexed copied
-outputs require complete transmission and exact acknowledgment before their
-slots can be reused;
-uncertain completion retains every allocation. The selected ELF SHA-256 is
-`24144b2acd358a8a905f76ebc94119274589bce0a5a883992082ad20ca52ddb4`.
-It includes the decoded-macroblock counter correction and actual lower-native
-IOMMU scan/poll policy checks. Parser, independent syntax/register comparisons,
-linked refill/copy and host checks pass with device effects and pixels modeled.
-CPU translation and initial platform/IOMMU authority are also modeled.
-Root verifies 429 compiled inputs and 169 objects under
-`h264-vga-20261019/root-integration.json`. Normal-mode native evidence covers
-only the first frame with terminal status still pending.
-Newer shared USB/board layouts and memory/clock changes differ; the internally
-consistent frozen image supplies no current-tree rebuild evidence. Future
-builds must compile all affected consumers consistently.
-The launcher correction at `a939b25` accepts producer-built legacy version-1
-and VGA version-2 sessions through the actual generated AArch32 instructions
-to the modeled reset handoff. Unsupported version 3 and the preserved old
-launcher with a VGA session refuse with reason 14, restore entry state and
-perform no hardware writes. Earlier bundle checks substituted launcher creation
-and missed that guard. Evidence: `h264-launcher-20261019/result.json` and
-`freeze/manifest.json`. The native ELF above is unchanged and was not rebuilt.
-Prepared VGA bundles must use this corrected launcher; older frozen bundles
-remain incompatible. Root verifies 15 compiled launcher inputs and 69 frozen
-files under `h264-launcher-20261019/root-integration.json`. The later board
-workload-6 preparation branch does not change private H.264 launcher construction.
-System registers, counter values and MMIO are modeled; these checks establish
-neither AArch64 startup nor a physical launch. Physical preparation and recovery
-remain required.
-The actual shared supervised runner now accepts the H.264 caller's
-`h264_result` policy with a 59-second capture bound. The entry check reaches the
-readiness callback; 60 seconds and an unknown result key are refused. Evidence:
-`h264-supervisor-entry-20261019/result.json` and `frozen/manifest.json`.
-The sentinel stops before queue checks, evidence creation or USB access; it
-establishes no transport, native execution or physical launch.
-Physical reference visibility, pixels, confinement, timing and fault drain remain
-unqualified. Allocation reclamation, unmanifested live input, wider profiles,
-multiple references/slices and other required codec modes remain outstanding.
-The legacy small-picture profile remains implemented. Historical ELF
-`862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`
-omits the counter-read permission and cannot publish completed output; its
-substituted-read compositions retain only their historical modeled-path scope.
-
-JPEG now accepts a supplied baseline YCbCr420 image and returns copied pixels
-with parsed dimensions. Complete input authentication precedes decoder resource
-acquisition; an independent pixel reference is optional. Geometry, upload,
-native copy, session and host checks pass under `jpeg-runtime-input-20261018/`.
-Integration preserves the accepted image and 424 compiled inputs; the only
-current-source difference is an unrelated H.264 API comment. Physical pixel
-correctness and confinement remain unqualified.
-
-Crypto now accepts bounded SHA-256 and AES-128 ECB requests with private copied
-input, deferred engine construction and request-bound output. Native, sanitizer,
-admission and host checks pass under `crypto-runtime-input-20261018/`; all 414
-compiled inputs match integration. Review resolved key-cleanup races and bounded
-handling of empty USB fragments. Physical engine operation, secure access and
-drain remain unqualified. Both integrations reused accepted checks.
-
-Native USB host HID input is integrated through the actual TinyUSB class and
-xHCI interrupt-IN path at low, full and high speed. The board application copies
-four reports to USB0 output without sending desktop input events. Sanitizer,
-native consumer/serializer and host checks pass; source review is closed.
-The original polling HID image's audit matched 408 compiled inputs under
-`usb-host-interrupt-20261018/root-integration.json`.
-Optional CPU interrupt completion is now integrated for the supervised board
-image through `SUNSTONE_BOARD_USB2_IRQ=ON`. CPU0 interrupt 187 masks and notifies
-the existing HID/MSC owner. That task acknowledges events, drains a bounded
-batch and checks empty/race state before rearming. Other profiles retain polling.
-Eighteen root routing/dispatch cases, ten composed device cases and owner,
-native-capture and review checks pass. The IRQ image's audit matches 413 compiled
-inputs and 161 objects, with 32 sources, 59 artifacts and three tools verified
-under `usb-host-cpu-irq-20261019/root-integration.json`. Its selected consumers
-use the new xHCI structure layouts consistently. Earlier SD, UART and other
-images remain valid with their own frozen inputs; these audits do not establish
-matching inputs at future revisions or require catch-up rebuilds. Physical
-interrupt delivery, enumeration, report timing/content, VBUS cutoff, DMA drain
-and detach/reuse remain unqualified.
-The supervised board now supports workload 4: one self-powered high-speed USB2
-hub with one low/full/high-speed HID and one high-speed MSC device together.
-The actual client copies four HID reports and one read-only sector into a joint
-payload, immutable through transmission. Both results and fresh attachment
-authority are required for success; partial failure cannot publish joint success.
-Ten focused component cases, two affected single-result branches, actual native
-client/serializer/host checks and focused review pass. Root's selector-4 route
-case passes; the existing eighteen route cases are reused. CPU0 IRQ187 service
-is unchanged; only the supervised board target admits workload 4. Derived
-profiles retain workloads 0–3. Root verifies 414 inputs, 162 objects, 23 sources,
-82 artifacts and three tools against revision `1bb08d5` under
-`usb-host-dual-leaf-20261019/root-integration.json`. The final ELF SHA-256 is
-`0e0d173658081b8b3bb802f54c4550d8b1db13c56b75009bcc37ebf490ae5de5`.
-Allocated runtime bytes match the accepted route-case image apart from build
-identity, so accepted checks were reused. Earlier images retain their own frozen
-inputs. Hub/TT signaling, power, IRQ, DMA and drain remain physically unqualified;
-Type-C VBUS cutoff does not remove external hub power. Bus-powered budgets
-and wider hub/class support remain required.
-
-The [SuperSpeed Gen1 storage profile](usb2-host.md#one-direct-gen1-storage-device-uses-comb0)
-is implemented for one directly attached BOT device. Supervised workload 6 uses
-the source-backed COMB0 PHY path, actual TinyUSB enumeration/MSC and xHCI contexts,
-then copies one read-only LBA 0 sector through USB0. It refuses USB2 fallback.
-Twenty focused compositions, two affected USB2 cases, linked publication/host
-checks and focused review pass with hardware effects modeled. Root verifies
-435 compiled inputs and 163 objects under
-`usb-host-superspeed-20261019/root-integration.json`;
-the original frozen inputs remain authoritative across later memory-provider
-changes. Admission requires an authenticated source of at least 900 mA and
-image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
-physical admission record exists. Physical link operation, source capacity,
-DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs/HID,
-Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
-
-Finite thermal, ADC and USB applications are integrated, together with healthy
-GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
-compiled-input comparisons reuse those results without repeating them. Evidence:
-`thermal-adc-returning-source-20261018/integration.json`,
-`usb-returning-20261018/integration.json`,
-`npu-supply-returning-20261018/integration.json` and
-`gpu-returning-integration-20261018/frozen/integration.json`.
-GPU and NPU finite adapters are integrated. Both stop their workers and park
-PMIC outside active requests before the final task critical section. The NPU
-returning composition is now integrated, with 26 new return checks, three
-session-retention checks and a check of the linked task privilege state.
-Evidence: `npu-finite-return-20261018/frozen/`. Its SRE tasks run at EL1t;
-the cached multicore image's EL0 exit rules do not apply. Its returned-RAM host
-runner is integrated, with validated copied outputs before full DRAM restoration
-and retained ownership after uncertain completion. Its shared transport helper
-uses a per-port lock and forbids further requests after a transport failure.
-Host evidence is under `npu-finite-host-20261018/transport-frozen/`. Final root
-physical admission remains outstanding. Root host source review is complete in
-`npu-finite-host-20261018/root-host-source-review.json`; accepted checks were
-reused. The sole changed host dependency adds an unrelated kernel observer;
-the platform-admission function used by NPU is unchanged. Frozen compiler inputs
-remain authoritative: the current USB header changes an embedded structure's
-layout, even though this NPU image does not execute USB platform functions.
-
-The optional single-core NPU interrupt profile is integrated. Bootstrap and two
-inferences complete through deferred interrupt 97 service. The ISR masks and
-notifies; one owner task acknowledges events and acquires output. Source-off
-CLOSE and verified GIC stop precede ownership release. Host success requires
-three notified completions and the stopped receipt, plus both copied outputs.
-Nine service scenarios, controller/native-client/host checks and Astra review
-pass; eighteen root routing/dispatch/monitor instruction cases pass. Integration
-verifies all 184 compiled inputs, 144 sources, 1,026 artifacts and four tools
-under `npu-interrupt-service-20261019/root-integration.json`. Physical interrupt
-delivery, inference, numerical output, shutdown and ROM return remain unqualified.
-
-The retained single-core NPU runtime application now accepts repeated live
-inputs for one selected model through SUBMIT and sequence-bound READ requests.
-The owner uses the existing input publication, matched completion, copied output
-and REAP path. Complete output transmission precedes mailbox reuse. CLOSE
-requires the IRQ-stop receipt and local gate/reset shutdown; OS/USB remain live
-and this profile does not return to ROM. Linked USB/mailbox/client and host
-checks pass with service replies and output modeled. Evidence:
-`npu-runtime-input-20261019/`. Its reconciled ELF SHA-256 is
-`063f8fce5cc975255d2f7a80c170aec5d1a28e2d9ae06fb7f9b30377857f9381`.
-Root verifies 186 compiled inputs, 74 objects, 297 sources and 329 artifacts
-against revision `5954081` under `dma-reconcile/root-integration.json`.
-Load-segment equivalence apart from build identity supports reuse of accepted
-checks. Later shared-header changes do not invalidate this frozen candidate.
-The fixed returning profiles remain separate.
-
-The [complete weight-bearing neural-network graph](npu-complete-nn.md) is implemented
-for the original published ShuffleNetV2 compiled artifact: 125 sequential NN
-operations with immutable coefficients and an external intermediate pool.
-The fixed selection accepts 150,528 UINT8 input bytes and returns two copied
-output bytes through the existing large-tensor owner protocol. One completion
-covers the complete graph; pool clearing, coefficient revalidation, complete
-output transmission and FINISH precede reuse. Two copied jobs and healthy CLOSE
-pass native allocation/table/assembly and host checks with NPU replies, IRQ,
-cache effects and transport modeled. Root verifies 189 inputs and 75 objects
-against revision `0dcf977`, with no source delta, under
-`npu-complete-nn-20261019/root-integration.json`. Its ELF SHA-256 is
-`5e578a3c8253fa00868a8d7cb7b9ca0f62a9091dfec38270feaf5be9af1ae9d1`.
-The SDK consumed two distinct input patterns, but both outputs saturated to
-`[0,255]`; class meanings are undocumented. This establishes fixed whole-graph
-software coverage, not input-sensitive classification, accuracy, physical
-inference or unchanged mimus acceleration. Broader operators, models,
-concurrency, physical confinement and numerical qualification remain required.
-
-The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
-through one shader (SH) operation and three neural-transpose (NT) operations, with an
-external intermediate pool. Four heads and 128 steps use 522,240 input bytes
-and 262,144 output bytes. Strictly ordered chunked upload, copied output and
-completed-transmission acknowledgments precede mailbox reuse; healthy CLOSE
-retires the service while retaining allocations. The wrapper clears the entire
-external pool before every job under idle ownership and publishes it through
-the existing cache policy. Two inputs through one prepared SDK network match
-all reference FP32 bits. Linked native allocation, assembly, copied protocol
-and CLOSE checks pass with NPU replies, IRQ, cache effects and transport modeled.
-Root verifies 189 inputs and 75 objects under
-`npu-relative-shift-20261019/root-integration.json`; later COMB0 clock-source
-differences do not replace the consistent frozen inputs. This fixed graph adds
-native operator/memory coverage; it does not replace or accelerate the unchanged
-mimus encoder. Physical inference, confinement and larger shapes remain required.
-
-The [two-stage NPU graph](npu-two-stage.md) is implemented as another fixed
-catalogue selection. It consumes 64 UINT8 input bytes and produces eight output
-bytes through two convolution stages, each fused with ReLU. Intermediate data
-stays in internal SRAM; one completion covers the complete graph job. Independent
-CPU/simulator references and native construction checks pass. The linked runtime
-application handles two changing inputs, copied results, REAP and CLOSE with
-service responses and NPU output modeled. Root verifies 186 compiled inputs and
-74 objects under `npu-two-stage-20261019/root-integration.json` at integration
-`7cddb66`; the sole source difference is a verified API comment, requiring no
-rebuild. The frozen ELF is
-`651e1c7688c82bfc028ecdab6bca23d2d6d8a2305f3dd2c282ec36d036c76f4c`.
-Physical inference, SRAM confinement and interrupt delivery remain unqualified;
-this graph does not run or replace unchanged mimus.
-
-The corrected GPU returning composition is integrated. It publishes private and
-device data through Nonsecure EL1 mappings before SMC, then completes final stack
-cleanup before reset. Root source review and 25 selective modeled cases pass;
-the device-specific Astra review and frozen source/object audit also pass.
-Evidence: `gpu-returning-application-20261019/ns-publication/`. Earlier EL3-only
-publication results are superseded. The GPU host adapter is integrated and
-uses the same bounded transport as NPU. Its 93 focused checks and Astra review
-pass, including copied-result validation and bounded memory restoration.
-Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return remain
-unqualified for both accelerators. Existing device checks were reused.
-Root GPU host source review also passes; all 18 host sources match the preserved
-bundle. Its record is `gpu-returning-host-20261019/root-host-source-review.json`.
-The [native triangle application](gpu-render.md) now accepts successive copied
-triangle lists in one retained session. Each frame uses 3–126 vertices and
-returns a copied 64-by-64 RGBA8 framebuffer through sequence-bound reads. Both
-previous timelines and complete output copying precede the next frame; stale
-reads and exhausted counters are refused. Paired geometry/fragment contexts
-retain their rings and alternate render-target records without clearing
-firmware-owned state. Twelve changing frames pass linked service/application,
-ring-wrap, fragmented USB and host checks; uncertain completion retains owners.
-GPU writes, firmware replies, cache visibility and transport effects are modeled.
-Root verifies 217 inputs and 86 objects under
-`gpu-repeated-draw-20261019/root-integration.json`. Later shared clock/board
-changes and three comment-only GPU headers retain their classified audit scopes;
-the original frozen image remains authoritative. Pinned compiler and shader
-evidence is reused. Physical graphics, indices, textures, blending, depth/stencil,
-wider rendering and context disposal remain required.
-
-Caller-selected GPU compute programs are integrated. A sealed session fixes a
-trusted host-compiled program and initial copied input; the same executable supports
-both checked array kernels. Bounded multi-dispatch now supports up to 31 direct
-dispatches, each containing one 32-lane workgroup, and at most 992 elements
-within the package's input/output bounds. One final firmware timeline covers
-all dispatches. Compiler-reference, sanitizer, native service and host checks
-pass with device writes modeled; focused review is closed. Evidence is under
-`gpu-dispatch-geometry-20261019/`. Integration verifies 85 objects, 169 sources
-and 66 artifacts. Of 215 compiled inputs, 214 match; the sole monitor difference
-adds inactive `SUNSTONE_NPU_INTERRUPT` branches. Frozen monitor source and object
-remain authoritative; no active GPU monitor or structure change is present.
-The [workgroup-grid profile](gpu-compiled-programs.md#a-real-workgroup-grid)
-now submits one direct dispatch over a bounded 1D or 2D grid of at most 31
-workgroups and 992 logical elements. Trusted compiler-generated programs use
-32-lane local shapes, workgroup IDs and counts, and reject padded lanes.
-Transpose and horizontal-neighbor kernels pass compiler/reference and native
-application checks, including two changing inputs, copied results and CLOSE;
-GPU arithmetic and writes are modeled. Root verifies 215 compiled inputs,
-85 objects, 178 sources and 50 artifacts under
-`gpu-workgroup-grid-20261019/root-integration.json`. The sole current-source
-exception at integration `dfedc52` is an unused board workload selector change;
-frozen inputs and the original modeled image remain authoritative. Preserved
-image equivalence, recorded in `root-reuse-frozen/manifest.json` under that
-directory, supports reuse of accepted checks. Physical execution remains
-unqualified.
-Optional GPU runtime input now copies same-shape data into the existing input
-allocation after acquired preceding completion. Program, geometry and mappings
-remain fixed. Exact-sequence READ returns copied output; healthy CLOSE retires
-the GPU while retaining USB reporting. Native service and linked mailbox/parser/
-host checks pass with hardware effects and device output modeled. Device-cache
-ordering depends on the pinned firmware's documented per-job coherency contract;
-CPU cache maintenance alone does not establish GPU-cache visibility. Evidence:
-`gpu-runtime-input-20261019/`. Its reconciled ELF SHA-256 is
-`d6b6fad18e634fc5d5cffdc791214511ccab3436b80a281f1fe464fccc460892`.
-Root verifies 215 compiled inputs, 85 objects, 172 sources and 14 artifacts
-against revision `5954081` under `dma-header-integration/root-integration.json`.
-Load-segment equivalence apart from build identity supports reuse of accepted
-checks. Later shared-header changes do not invalidate this frozen candidate.
-Fixed returning artifacts remain separate.
-The native reservation callback now permits another submission after acquired
-completion, checking owner, epoch, serial and the actual firmware timeline.
-Focused checks exercise that callback and reject stale ownership/completion.
-The corrected fixed-workload returning candidate is frozen under
-`gpu-returning-repeat-fix-20261019/`, with seven helper instruction cases and one
-normal two-job/CLOSE/provider-parking model passing. It reuses 86 of 88 objects;
-return objects and structure layouts are unchanged. Its ELF SHA-256 is
-`2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d`.
-Root source and binary review passes under `root-review.json` in that directory,
-verifying all 88 objects, 218 frozen inputs and eight unchanged linked return
-functions. Physical admission remains false. The historical two-job image
-contains the previous NEW-only check and is superseded for repeated submission;
-its publication and host evidence retain their narrower scope. Physical
-computation remains unqualified. Wider dispatch geometry, shape/program
-replacement, graphics and concurrency remain required.
-The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
-and device skill document the Nonsecure publication requirement. Root retains
-CPU and architectural return review. For the preceding adapter, all 172 NPU
-compiler inputs match. The 89 new GPU compiler inputs match; two inherited
-monitor/runtime sources have additional inactive branches, so the accepted GPU
-objects and their frozen inputs remain authoritative. Evidence:
-`npu-finite-quiescence-20261018/integration.json` and
-`gpu-finite-adapter-20261018/layout-correction/integration.json`. Thermal and ADC retain configuration and leases;
-ADC additionally requires electrical admission for the fitted input dividers.
-Separate RTC source initialization and external-source alarm applications are
-also integrated. Twelve source cases and seventeen alarm cases pass, with
-35 and 33 matching compiled inputs respectively. Evidence is in
-`rtc-source-returning-20261018/integration.json` and
-`rtc-alarm-returning-20261018/integration.json`. Source initialization needs its
-own physical admission before alarm testing. Alarm success additionally requires
-verified Secure interrupt-state restoration; a completion message is insufficient.
-
-## Observed host and device state
-
-No board access is authorized while physical recovery is unavailable. Both queues
-were idle at the last observation; no live query has been made since the user
-announced the second board would be disconnected. Historical USB instance numbers
-must not be reused as current identity or admission.
-
-The original board uses host USB port `3-1` and a separate 5 V/3 A supply.
-USB data-cable removal alone may not remove its power. Its accepted eight-core
-first-task result is identified above. Full workload execution remains deferred
-until physical recovery is available and the primary agent refreshes admission.
-
-The second board uses port `3-3`; USB was its only power source. The last confirmed
-power removal recovered instance `003:073`, identity `[7,3858,1097032,0,0]`.
-ROM version and access passed, retained processes stopped, and the failed queue
-claim closed. Evidence: `usb-first-fault-20261018/root-physical-064/recovery-073.json`.
-That recovery predates the planned disconnection. Fresh cold DDR and platform
-admission are required when the board becomes available again.
-
-The preceding USB takeover attempt returned to ROM with native status 1 before
-any USB-controller write. The guard rejected an inherited device-session bit at
-`0x04100040`. The integrated correction permits that bit while requiring device
-role, excluding host request/mode and retaining DMA checks. Affected checks and
-review pass under `usb-rom-session-20261018/`; physical takeover remains unqualified.
-Failure evidence is under `usb-first-fault-20261018/physical-064/runtime/`.
+| Board | Power and access facts | Continuation requirement |
+| --- | --- | --- |
+| Original, host port `3-1` | Separate 5 V/3 A supply; removing the USB data cable may leave power applied. Accepted eight-core first-task result is below. | Refresh identity, recovery and admission before any eventual bounded test. Full workload execution is deferred. |
+| Second, host port `3-3` | USB was its only power source. Last confirmed removal recovered `003:073`, identity `[7,3858,1097032,0,0]`; ROM/access passed, retained processes stopped and the failed claim closed. | That recovery predates the planned disconnection. Require fresh cold DDR and platform admission when available. Evidence: `usb-first-fault-20261018/root-physical-064/recovery-073.json`. |
 
 Per-port permissions, locks, queues and failure records remain independent.
-Reconnect access rules last covered ports `3-1` and `3-3` until host reboot.
-Future access must verify their state and use explicit port selection. Preserve
-both microSD cards. No MIPI camera, display or microphone is attached; OV5640 is
-the first sensor target and the DSI panel is undecided. The separate ESP32 mimus
-keyboard is unrelated; do not use it as the Orange Pi console or send desktop
+Reconnect rules last covered `3-1` and `3-3` until host reboot; future access must
+verify permissions and explicitly select the port. The separate ESP32 mimus
+keyboard is unrelated: do not use it as the Orange Pi console or send desktop
 keyboard events.
 
-## Current integration
+The preceding second-board USB takeover returned to ROM with native status 1
+before controller writes. Its guard rejected the inherited device-session bit at
+`0x04100040`. The integrated correction permits that bit while requiring device
+role, excluding host request/mode and retaining DMA checks. Software checks and
+review pass under `usb-rom-session-20261018/`; physical takeover is unqualified.
+Failure evidence: `usb-first-fault-20261018/physical-064/runtime/`.
 
-The [hardware matrix](hardware.md) records each device's implemented functions,
-software evidence and remaining physical qualification. Its component links
-identify the native APIs, dependencies and evidence for paths not summarized above.
-The [historical handoff](handoff-history-20261019.md) preserves earlier integration,
-recovery and validation records; it is not current launch authority.
+## CPU evidence and next physical decision
 
-## Reusable validation evidence
+The primary agent owns all multicore implementation, review and board testing.
+[Arm/Linux source audit](a733-multicore-reference-audit.md) and
+[startup records](a733-smp-supervised.md) preserve the architectural decisions.
 
-Raw evidence lives under `~/.cache/sunstoneos/evidence/`; paths above are relative
-to that directory. Reuse accepted checks while their relevant inputs match.
-Compiled-input audits establish applicability of prior checks, not physical
-operation. Do not rebuild or rerun merely for a commit or handoff update.
-The [reference index](reference-index.md) locates cached primary sources, and
-[validation.md](validation.md) defines selective checking and fixture requirements.
+All eight CPUs physically reach their initial FreeRTOS task context and return
+safely. Actual construction and restoration record each core's idle-task pointer,
+stack, argument and exception state. The production barrier and 256 atomic
+increments also pass. All writers finish before cleaning the 145-page writable
+interval, or 9,280 cache lines per CPU. CPU0 restores controls; all seven
+secondaries acknowledge shutdown and reach independently observed OFF. Saved
+DRAM restoration and responsive ROM return pass. Reuse
+`all-core-first-task-20261018/physical-010/runtime/session.json`.
+This physical diagnostic excludes task bodies, timer interrupts and application
+SGIs; it does not qualify sustained multicore scheduling.
 
-## Next actions
+The following extensions pass software checks only:
 
-Continue offline while the user cannot reconnect either board. No hardware
-launch is admitted. Earlier instance identifiers and preparation records are
-historical evidence; they do not authorize a new session.
+| CPU workload | Accepted scope and required preservation | Evidence |
+| --- | --- | --- |
+| Context switching | Actual idle yield, context save/selection/restoration and pinned-worker entry on all eight cores; wrong arguments retain cores. USB observer is suppressed. Worker bodies and timer/SGI work remain excluded. | `all-core-task-switch-20261018/build-no-observer/`, `host/software.json`, `host-root-review.json` in that evidence directory |
+| Full returning workload | Each core completes 32 floating-point rounds, background work and SGIs; CPU0 services the production timer. Final-writer stop, interrupt cleanup, Nonsecure memory publication and matched shutdown are reviewed. Timing/coherence remain modeled. | `all-core-task-workload-20261019/frozen/`, `host-frozen/`, `host-root-review.json` |
 
-1. Preserve the accepted Bluetooth caller-PCM playback/duplex image and its
-   scoped evidence. Standalone DSI scanout, the fixed
-   complete NN graph, full-HD H.264, repeated GPU drawing, fixed NPU
-   shader/neural-transpose large tensors, optional mSBC recognition, native VGA
-   streaming, direct Gen1 BOT and the combined recorded-recognition/storage
-   image are integrated offline within their frozen evidence scopes.
-   The NPU graph adds operator/memory coverage without replacing or optimizing
-   mimus. Physical operation and timing remain unqualified. The VGA image includes
-   the native-read correction, and its corrected launcher and supervised policy
-   pass their separate modeled checks.
-   Preserve each image's complete frozen inputs and accepted audit scope.
-   I2S runtime PCM, fixed cyclic TX and checked-copy RX/duplex are integrated,
-   with physical RX admission blocked by the documented completion/reuse ordering
-   gap. Preserve copied-slot
-   acknowledgment and cancellation-backlog rules. Reuse accepted images with
-   their complete frozen source closures, including SD and UART images that
-   predate the latest shared USB layout. Preserve the accepted fixed-workload GPU
-   returning profile; its passed root delta review supplies no physical admission.
-   Wider GPU geometry, graphics and concurrency remain required.
-   CPU/startup changes remain root-owned. Preserve both cards.
-2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
-   checks when their relevant inputs match. Keep shared drivers and startup
-   outside these workers' scope unless a concrete dependency requires a
-   coordinated change. Update the hardware matrix and existing issues.
-3. When physical recovery becomes available, the primary agent must refresh
-   board identity and admission before selecting one bounded CPU test. All eight
-   initial task contexts already pass physically. The full returning workload
-   passes instruction and host checks under `all-core-task-workload-20261019/`;
-   actual scheduling, floating-point work, timers and inter-core interrupts
-   together remain physically unqualified. Preserve the reviewed final-writer
-   barrier, Nonsecure memory publication and matched shutdown. Do not repeat
-   the earlier unobserved full launch unchanged.
-4. Resume independent device qualification only after board-specific preparation.
-   The second board needs fresh cold DDR and platform admission after its
-   disconnection. USB takeover has a source-backed device-session correction;
-   GPU and NPU have reviewed returning images and host capture. Their physical
-   operations remain unqualified. Refresh each device's clock, power, memory,
-   DMA and recovery prerequisites; software fixtures are not physical authority.
-5. Complete the remaining functions in the [hardware matrix](hardware.md),
-   including operational modes beyond the bounded applications. Preserve both
-   cards and require established recovery before persistent writes. Keep the
-   failed UFS probe and intentional watchdog expiry deferred. No MIPI camera,
-   display or microphone is attached; OV5640 is the first sensor, the DSI panel
-   remains undecided, and recorded audio supplies mimus input.
-6. Run unchanged-model mimus natively and qualify representative concurrent
-   workloads. After every required hardware function works, optimize complete
-   recognition to at most 0.05 times audio duration and investigate 0.01 times
-   as a bounded stretch target. Report loading and live latency separately.
-   Complete reproducible boot images, recovery/update procedures and physical
-   qualification before declaring the [goal](goal.md) achieved.
+The full-workload damaged-round-count refusal reuses its saved completed
+checkpoint. Host checks validate workload results, epochs, task contexts,
+timer-priority restoration, saved RAM and retained transport failure. Do not
+repeat the earlier unobserved full launch unchanged. When recovery becomes
+available, refresh board admission and select one bounded test for a concrete
+remaining question; no CPU test is currently queued.
 
-The primary agent retains all multicore implementation, review and board tests.
-The [Arm/Linux audit](a733-multicore-reference-audit.md) and
-[startup record](a733-smp-supervised.md) hold the source comparisons. The accepted
-returning CPU diagnostics use frozen ELF
-`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`;
-rebuilding it requires new symbol and patch bindings. Preserve the accepted
-artifacts instead of rebuilding them for handoff or documentation changes.
+Preserve the accepted returning CPU diagnostic ELF
+`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
+Rebuilding requires new symbol and patch bindings; documentation changes do not
+justify replacing the frozen artifact.
+
+## Integrated component status
+
+All rows below describe implemented, software-checked paths. They do not grant
+physical admission. Modeled hardware, scheduler, cache, transport and numerical
+boundaries remain those of each referenced record. Evidence paths are relative
+to `~/.cache/sunstoneos/evidence/`. The hardware matrix covers remaining onboard
+functions and modes beyond these bounded applications.
+
+| Component and canonical specification | Current scope and remaining limit | Accepted evidence |
+| --- | --- | --- |
+| [DSI scanout](display-scanout.md#standalone-retained-dsi-application) | Standalone immutable color bars and copied controller observation; actual 720p/1080p producer composition, private seal/serializer/launcher and host checks. Shared startup is unexecuted. No selected/attached panel, visible pixels or qualified electrical facts. STOP/drain/release/retry remain unsupported. | `dsi-scanout-application-20261019/root-integration.json`; earlier binding: `display-native-20261018/` |
+| [UART2](uart-application.md) | Finite FIFO exchange plus owner-task IRQ service and completed drain. Physical loopback, electrical admission, interrupts and inherited startup remain unqualified; DMA/wider modes remain required. | `uart-native-20261018/integration.json`; `uart-irq-20261019/root-integration.json` |
+| [I2S duplex/repeated service](i2s-application.md), [cyclic DMA](i2s-stream.md) | Separate TX/RX channels; copied slots survive cancellation until delivery/ACK. Fixed cyclic TX and checked-copy RX/duplex are integrated. Continuity, cache visibility and wire drain remain unqualified; RX ordering blocker is below. | `i2s-duplex-20261018/integration.json`; `i2s-repeated-20261018/root-integration.json`; `i2s-hardware-cyclic-20261019/root-integration.json` |
+| [Runtime I2S PCM](i2s-application.md) | Successive 16 kHz mono S16LE periods through finite TX leases. Actual provider composition consumes eight periods; client/USB service calls are modeled and full native linking is separate. Host prefix plus four guards ends with CANCEL, which may truncate guards. No complete-file playback/drain claim. | `i2s-runtime-pcm-20261019/root-integration.json`, `closure.json` |
+| [Combined mimus/storage](../apps/mimus-board/README.md) | Unchanged EL0 recognizer plus read-only USB sector service in one supervised image. Success requires storage copy during recognition and fresh liveness. Native fixture injects recognition-active/transcript and models hardware/scheduling; separate host recognition matches the historical recording. No physical concurrency/timing claim. | `mimus-board-20261019/root-integration.json` |
+| [Repeated Bluetooth recognition](bluetooth-native.md#repeated-headset-capture-and-recognition) | CVSD copied input and delivery-owned transcripts; unchanged recognizer remains EL0. Optional mSBC decodes 16 kHz speech through the same path. Transparent eSCO, receive bounds, acoustic quality and session timing remain physically unqualified. | `bluetooth-repeated-recognition-20261019/root-integration.json`; `bluetooth-msbc-20261019/root-integration.json` |
+| [Bluetooth caller PCM](bluetooth-native.md#caller-pcm-playback-and-duplex) | mSBC playback-only and recognition duplex; two immutable 2,400-byte periods, full USB delivery and ticket ACK before reuse. END seals admission; CANCEL can truncate audio. Credits/disconnect account for buffers, not rendering or wire drain. Image-specific case boundary is below. | `bluetooth-pcm-duplex-20261019/root-integration.json`, `profile-gate-delta.json` |
+| [Read-only SD](storage-read-application.md) | Legacy one-bit 400 kHz, four-bit default up to CSD/25 MHz, or required high speed at 50 MHz. USB-layout reconciliation was accepted at `894051d`; later headers do not invalidate that frozen image. No writes or physical mode qualification. | `sd-bus-modes-20261019/`; `sd-shared-usb-20261019/root-integration.json` |
+| [Optional eMMC reads](emmc-read-application.md) | SDC2/SDC3 identification, EXT_CSD and copied reads pass instruction/host checks. Neither current board has a qualification target. The single-core image retains resources and has no qualified ROM return. | `emmc-native-20261018/` |
+| [Full-HD H.264](h264-native.md#full-hd-streaming-and-extended-memory) | Baseline IDR/P, one reference/POC2; coded 1920×1088 retains references, copied 1920×1080 removes eight bottom rows. At most 256 AUs, 4 MiB each. Six-picture allocator/table/controller/crop/copy composition is modeled; normal mode checks one picture. Private entry checks exclude shared startup. | `h264-fullhd-20261019/root-integration.json`, `root-startup-layout-review.json` |
+| [VGA/legacy H.264](h264-native.md) | VGA admits 256 prepared 640×480 pictures, 512 KiB/AU; legacy 48×32 IDR/P remains separate. Input refill, reference retirement and copied-output ACK are distinct. Corrected launcher and supervisor-policy evidence are bounded as below. Physical pixels, reference visibility, confinement and drain remain unqualified; no reclamation. | `h264-vga-20261019/root-integration.json`; `h264-launcher-20261019/root-integration.json`; `h264-supervisor-entry-20261019/result.json` |
+| [JPEG](jpeg-application.md) | Authenticated supplied baseline YCbCr420 image and copied pixels with dimensions; independent oracle optional. Pixel correctness and confinement remain physically unqualified. | `jpeg-runtime-input-20261018/` |
+| [Crypto](crypto-application.md) | Bounded caller SHA-256/AES-128 ECB, private input and request-bound output; key-cleanup and fragment-handling review resolved. Physical engine operation, secure access and drain remain unqualified. | `crypto-runtime-input-20261018/` |
+| [USB HID/CPU IRQ](usb2-host.md) | LS/FS/HS HID copies four reports without desktop events. Supervised board option routes CPU0 INTID187 to the existing owner; other profiles poll. IRQ delivery, DMA/drain, power and attachment reuse remain unqualified. | `usb-host-interrupt-20261018/root-integration.json`; `usb-host-cpu-irq-20261019/root-integration.json` |
+| [USB hub/dual leaf](usb2-host.md) | Workload 4: one self-powered HS USB2 hub, one LS/FS/HS HID plus one HS MSC. Joint immutable output requires both results and fresh attachment. Existing IRQ187 route retained; derived profiles keep workloads 0–3. Hub/TT, power, DMA and drain remain unqualified. | `usb-host-dual-leaf-20261019/root-integration.json`; earlier single leaf: `usb-host-hub-20261019/` |
+| [USB Gen1 BOT](usb2-host.md#one-direct-gen1-storage-device-uses-comb0) | Workload 6, direct read-only LBA0, source-backed COMB0; no USB2 fallback. Requires authenticated ≥900 mA and image-bound physical route/rail/clock/source-switch evidence; none exists. Gen2, hubs/HID, streams, wider classes and safe detach/drain remain required. | `usb-host-superspeed-20261019/root-integration.json` |
+| [Thermal](thermal-application.md), [ADC](adc-application.md), [finite USB](usb.md) | Finite applications and return adapters integrated. Thermal/ADC retain configuration and leases; ADC needs fitted-divider electrical admission. Physical operations/return remain unqualified. | `thermal-adc-returning-source-20261018/integration.json`; `usb-returning-20261018/integration.json` |
+| [RTC source/alarm](rtc-application.md) | Separate source initialization and external-source alarm paths. Source admission precedes alarm use; success requires verified Secure interrupt-state restoration, not only a completion message. | `rtc-source-returning-20261018/integration.json`; `rtc-alarm-returning-20261018/integration.json` |
+| [NPU runtime/IRQ](npu-application.md), [service](npu-service.md) | Retained same-model SUBMIT/READ/copied output/REAP/CLOSE; IRQ97 owner alone acknowledges. Bootstrap plus two finite inferences require three notified completions and stopped receipt. Source-off CLOSE/GIC stop precede release; retained runtime keeps OS/USB live without ROM return. | `npu-interrupt-service-20261019/root-integration.json`; `npu-runtime-input-20261019/dma-reconcile/root-integration.json` |
+| [NPU two-stage graph](npu-two-stage.md) | Fixed two fused convolution/ReLU stages, 64 input/eight output bytes, internal SRAM and one graph completion. CPU/SDK references pass; native output/service are modeled. No mimus replacement or physical inference claim. | `npu-two-stage-20261019/root-integration.json` |
+| [NPU SH/NT graph](npu-relative-shift.md) | Fixed FP32 four-head/128-step relative shift, external pool cleared before each job, chunked copied input/output and healthy CLOSE. Two reused-network SDK outputs match FP32 bits; native replies/IRQ/cache/transport are modeled. No unchanged-encoder acceleration. | `npu-relative-shift-20261019/root-integration.json` |
+| [Complete NPU NN graph](npu-complete-nn.md) | Published 125-operation ShuffleNetV2 graph with coefficients/pool; two copied jobs and CLOSE. Both SDK input patterns saturate to `[0,255]`, with undocumented classes: no input-sensitive accuracy, physical inference or mimus acceleration claim. | `npu-complete-nn-20261019/root-integration.json` |
+| [GPU programs/live input](gpu-compiled-programs.md) | Trusted sealed program, same-shape copied input, exact-sequence READ and CLOSE. Separate multi-dispatch and true 1D/2D grid profiles admit up to 31 workgroups/992 elements with 32 lanes. Numerical execution and device-cache visibility remain modeled/unqualified. | `gpu-dispatch-geometry-20261019/`; `gpu-workgroup-grid-20261019/root-integration.json`; `gpu-runtime-input-20261019/dma-header-integration/root-integration.json` |
+| [GPU repeated drawing](gpu-render.md) | Twelve changing modeled frames exercise retained geometry/fragment rings, alternate render targets and sequence-bound copied 64×64 RGBA8 output. Both prior timelines and complete copying precede reuse. Physical graphics, wider geometry/shaders, textures, blending, depth/stencil, concurrency and context disposal remain required. | `gpu-repeated-draw-20261019/root-integration.json` |
+| [GPU returning application](gpu-application.md), [NPU returning application](npu-application.md) | Workers stop and PMIC parks before cleanup. Reviewed Nonsecure publication and matched host restoration are preserved separately from retained live-input profiles. Physical inference and ROM return remain unqualified; critical frozen scopes are below. | `gpu-returning-repeat-fix-20261019/root-review.json`; `gpu-returning-host-20261019/root-host-source-review.json`; `npu-finite-return-20261018/frozen/`; `npu-finite-host-20261018/root-host-source-review.json` |
+
+## Blockers and image-specific evidence boundaries
+
+- **I2S cyclic RX/duplex:** physical admission requires
+  `cyclic-rx-completion-and-reuse-ordering-established`; no qualifying record
+  exists. The completed-package counter does not explicitly order destination
+  writes and cursor updates. CPU-cache review alone is insufficient. Preserve
+  `i2s-hardware-cyclic-20261019/root-cache-review.json` and
+  `identity-reuse-clarification.json`; standalone-client cases model service calls.
+- **Bluetooth:** seven composed/eight native operation cases retain ELF
+  `36bfa257…`; final `388f9f93…` changes five objects for exact profile guards.
+  Its final-image case covers version admission and copied PCM commit only.
+  Earlier repeated-recognition USB cases also retain their earlier image;
+  `identity-reuse.json` binds the changed finished/status case. Pinned libsbc 2.0
+  is CPU code under LGPL-2.1-or-later; preserve source/notices/relinkable objects
+  via [the manifest](../apps/bluetooth/msbc-source.json). Default CVSD omits it.
+- **H.264:** the historical `862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`
+  omits VE counter-read permission and cannot publish completed output. Its
+  substituted-read compositions are historical only. VGA `24144b2a…` includes the
+  correction and real lower IOMMU policy checks; normal-mode evidence stops after
+  frame one with terminal status pending. Use the corrected AArch32 launcher in
+  new VGA bundles; old frozen bundles reject version 2. Launcher tests stop at
+  modeled reset handoff; the 59-second supervisor-policy sentinel stops before
+  queues, evidence creation or USB. Full-HD `b48123e3…` has separate private
+  contract/sealing evidence; neither path executes shared startup or proves pixels.
+- **GPU:** the corrected fixed-return candidate is
+  `2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d`.
+  Publish through Nonsecure EL1 mappings before SMC; earlier EL3-only publication
+  results are superseded. Root review passes; physical admission remains false.
+  The historical two-job
+  image has the NEW-only callback defect and is superseded for repeated submit.
+  Keep `gpu-returning-application-20261019/ns-publication/` and
+  `gpu-returning-host-20261019/` within their publication/host scopes. GPU-cache
+  ordering still depends on the pinned firmware's per-job contract; CPU cache
+  maintenance alone does not establish device-cache visibility.
+- **NPU returns:** preserve `npu-finite-quiescence-20261018/integration.json`,
+  `npu-supply-returning-20261018/integration.json` and
+  `npu-finite-host-20261018/transport-frozen/`. SRE tasks run at EL1t; cached SMP
+  task/exit rules do not transfer. Stop communication after transport failure;
+  retain ownership. Root retains architectural return review.
+- **DSI supervisor entry:** host-only correction `8149250` admits `dsi_result`.
+  The actual caller reaches a readiness sentinel before queue or device access:
+  `dsi-supervisor-entry-20261019/result.json`, `frozen/manifest.json`. This
+  establishes neither native startup nor hardware operation; H.264 was not rerun.
+- **Physical device preparation:** DSI needs a selected panel and image-bound
+  electrical/PLL, rail/bank-voltage, wiring, isolation and fetch-padding facts;
+  model-only authority is refused. USB Gen1 has no authenticated physical source
+  record. Type-C cutoff cannot remove an external hub's supply. Combined mimus
+  needs fresh DDR/model-memory, power, DMA and recovery admission; its injected
+  native transcript does not establish physical concurrent recognition/storage.
+
+## Continuation and evidence reuse
+
+1. Continue complete native device paths and missing modes in the hardware matrix;
+   integrate reviewed work promptly. Keep component owners' shared drivers and
+   startup untouched unless a concrete dependency requires coordination. Update
+   canonical hardware/component records and existing issues for accepted changes.
+2. Preserve each accepted ELF, full source/object closure, generated inputs and
+   evidence scope. Shared USB headers change embedded layouts even in consumers
+   whose USB host path is inactive. Audits match their named integration revision,
+   not every future HEAD. Future builds compile affected consumers consistently;
+   do not rebuild old images merely to catch up. SD `141078f4…` matched `894051d`.
+3. Reuse accepted checks while relevant inputs match; a commit, documentation edit
+   or handoff is not a rerun reason. Follow [selective validation](validation.md)
+   and the [reference index](reference-index.md). Tables above select continuation
+   records; their linked component documents preserve full evidence inventories.
+4. When physical recovery is available, the primary agent refreshes identity,
+   clock/power/memory/DMA facts and board-specific admission before one justified
+   CPU or independent device test. Preserve the final-writer barrier, Nonsecure
+   publication and matched shutdown. Fixtures supply no physical authority.
+5. Require established recovery before persistent writes. Keep intentional
+   watchdog expiry and the failed historical UFS probe deferred; absent eMMC/UFS
+   are not current qualification blockers. Preserve both cards.
+6. Qualify unchanged-model mimus and representative concurrent OS workloads.
+   After every required hardware function works, optimize complete recognition
+   to at most 0.05 times audio duration; investigate 0.01 times as a bounded stretch.
+   Report loading and live latency separately. Reproducible boot images,
+   recovery/update procedures and physical qualification remain goal requirements.
+
+The [historical handoff](handoff-history-20261019.md) preserves older integration,
+recovery and validation context; it supplies no current launch authority.
