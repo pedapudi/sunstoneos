@@ -53,6 +53,15 @@ Panel selection, analog-profile qualification and initial isolation authority
 remain outstanding. STOP retains resources because display-engine drain is
 unsupported. No standalone image or physical scanout is qualified.
 
+The finite UART2 header application is integrated. Actual clock/pin ownership,
+FIFO exchange, bounded drain and release produce copied USB results. Selected
+sanitizer, session and host checks pass; the native image links. All 419 compiled
+inputs and 195 preserved repository sources match during integration.
+Evidence: `uart-native-20261018/frozen/manifest.json` and `integration.json`.
+Physical loopback, electrical admission, recovery and inherited multicore startup
+remain outstanding. I2S simultaneous capture/playback and H.264 stream decoding
+beyond the fixed sample continue offline in separate worktrees.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:

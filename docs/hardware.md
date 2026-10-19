@@ -398,7 +398,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and pin leases, reset sequencing, GIC masking and one FreeRTOS owner task.
   Host checks and single-core/SMP native compilation pass. Twelve explicit
   routes cover all nine controllers. The [native Bluetooth application](bluetooth-native.md)
-  integrates the polled UART1 binding. Physical serial operation, platform IRQ
+  integrates the polled UART1 binding. The [finite UART2 application](uart-application.md)
+  connects actual header pin/clock ownership, FIFO exchange, bounded drain and
+  release to copied USB results. Selected sanitizer, session and host checks
+  pass, and the native image links. Evidence: `uart-native-20261018/`.
+  It requires a passive PB0/PB1 loopback and electrical admission; inherited
+  multicore startup remains physically unqualified. Physical serial operation, platform IRQ
   service, DMA and advanced modes remain outstanding.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
