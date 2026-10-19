@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Prepare or capture the exact NPU returning profile; no admission defaults."""
-import argparse,hashlib,importlib.util,io,json,os,re,shutil,struct,subprocess,sys,time,types
+import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys,types
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
@@ -10,7 +10,7 @@ original=module('finite_npu_original',ROOT/'apps/npu-convolution/prepare-supervi
 base=original.supervisor.base
 require,sha=base.require,original.sha
 PROFILE='npu-finite-return-v1';SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
-HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
+HOST_SOURCES=('apps/npu-finite/host.py','tools/a733-returning-host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 def evidence_ref(item,cache=None):
  require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid evidence reference.')
@@ -171,61 +171,21 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,save):
  restoration=backup.read_bytes();require(sha(restoration)==backup_hash,'Saved DRAM changed.');transfer(transaction,DRAM[0],restoration,evidence/'DRAM-restored.bin')
  record.update(complete=True,dirty=False,dram_restored=True,rom_usable=True,sram_restored=False,ownership_release_permitted=True);save();return result
 
+returning=module('npu_returning_transport',ROOT/'tools/a733-returning-host.py')
 def retain_failure(record,save,quarantine,error,hold=base.hold_ownership):
- if record.get('dirty') or record.get('transport_failed') or record.get('launch_attempted'):
-  try:base.stop_after_failure(record,save,quarantine,error,hold=hold)
-  finally:
-   if not record.get('launch_attempted'):hold()
-
+ return returning.retain_failure(base,record,save,quarantine,error,hold=hold)
 
 def run(args):
- bundle=args.bundle.resolve();p=validate_bundle(bundle)
- require(base.digest(args.fel)==base.FEL_HASH,'FEL executable differs from reviewed bytes.')
- admission=json.loads(p['_frozen']['admission.json']);cache={path:p['_frozen'][ref['name']] for path,ref in p['entry_evidence'].items()}
- access=module('finite_npu_access',ROOT/'tools/usb-access.py');kernel=module('finite_npu_kernel',ROOT/'tools/check-a733-kernel.py')
- sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
- usb_guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
- record={'mode':'kernel','execution_profile':PROFILE,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
- def journal():save(args.evidence/'session.json',record)
- with access.board_lock() as node:
-  access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False
-  record.update(initial_node=str(node),initial_identity=identity,port=port.name);journal()
-  def ready():
-   require(not failed,'No admission after transport failure.')
-   validate_bundle(bundle)
-   require(admission['identity']==identity and admission['port']==port.name,'Admission covers another live instance.')
-   if not record['launch_attempted']:
-    kernel.validate_platform_admission((args.ddr_evidence.read_bytes(),args.platform_survey.read_bytes()),node,identity,port.name,base.FEL_HASH,base.FEL_HASH,tuple(x.read_bytes() for x in args.warm_return))
-    covered={(v['path'],v['sha256']) for v in json.loads(cache[admission['ddr']['path']])['evidence']}
-    require(all((str(x.resolve()),sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live DDR/survey continuity is not covered by returning admission.')
-  def transaction(*arguments,pass_fds=()):
-   nonlocal failed
-   require(not failed,'A transport failure forbids all further requests.')
-   entry={'arguments':[str(x) for x in arguments]};record['transactions'].append(entry);journal()
-   try:
-    require(access.identity(node)==identity,'USB instance changed before FEL request.');access.require_rom(node)
-    result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=120 if 'read' in arguments or 'write' in arguments else 15,pass_fds=pass_fds)
-    entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr);require(result.returncode==0,'FEL request failed.')
-   except (OSError,ValueError,subprocess.TimeoutExpired) as error:
-    failed=True;entry['failure']=str(error);record['transport_failed']=True;journal();raise
-   journal();return result.stdout
-  def wait_return():
-   nonlocal node,identity
-   old=identity;deadline=time.monotonic()+30
-   while True:
-    candidate=access.session_node(config)
-    if candidate is not None and access.identity(candidate)!=old and os.access(candidate,os.R_OK|os.W_OK):break
-    require(time.monotonic()<deadline,'No new ROM instance within return window; no retry.');time.sleep(.05)
-   node=candidate;identity=access.identity(node);access.require_session(node);access.require_rom(node)
-   record.update(returned_node=str(node),returned_identity=identity,automatic_access=True);journal()
-  try:
-   ready();require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-   with usb_guard.reenumeration('sunstoneos-a733','NPU finite inference and validated RAM return',2):
-    result=run_once(transaction,wait_return,ready,bundle,p,args.evidence,record,journal)
-  except BaseException as error:
-   record['transport_failed']=failed
-   retain_failure(record,journal,lambda:access.quarantine_instance(node,'NPU returning attempt stopped; no requests or retry; root recovery required.',identity),error)
-   raise
+ kernel=module('finite_npu_kernel',ROOT/'tools/check-a733-kernel.py')
+ def admit(args,p,node,identity,port):
+  admission=json.loads(p['_frozen']['admission.json']);cache={path:p['_frozen'][ref['name']] for path,ref in p['entry_evidence'].items()}
+  require(admission['identity']==identity and admission['port']==port,'Admission covers another live instance.')
+  kernel.validate_platform_admission((args.ddr_evidence.read_bytes(),args.platform_survey.read_bytes()),node,identity,port,base.FEL_HASH,base.FEL_HASH,tuple(x.read_bytes() for x in args.warm_return))
+  covered={(v['path'],v['sha256']) for v in json.loads(cache[admission['ddr']['path']])['evidence']}
+  require(all((str(x.resolve()),sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live DDR/survey continuity is not covered by returning admission.')
+ def execute(transaction,wait_return,ready,p,record,journal):
+  return run_once(transaction,wait_return,ready,args.bundle.resolve(),p,args.evidence,record,journal)
+ result=returning.run(args,base=base,profile=PROFILE,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return')
  return 0 if result['functional_success'] else 2
 
 def main(argv=None):
