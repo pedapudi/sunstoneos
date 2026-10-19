@@ -204,6 +204,16 @@ Evidence is under `~/.cache/sunstoneos/evidence/h264-vga-20261019`:
   native behavior and the single-IDR parser wrapper have focused compatibility
   evidence. Earlier unchanged parser cases are reused.
 
+The VGA launcher accepts session versions 1 and 2. A focused check in
+`checks/h264-launcher.py` executes the actual generated AArch32 launcher with
+producer-built legacy and VGA sessions, including unsupported-version refusal.
+The earlier host and bundle checks substituted launcher construction. They did
+not cover its session-version guard; the retained earlier launcher refuses VGA
+with reason 14 before native startup. Its native ELF and decoder evidence remain
+preserved. The corrected launcher has separate evidence under
+`h264-launcher-20261019`; launcher instruction checks model system registers,
+counters and MMIO and stop before the hardware handoff.
+
 Memory-mapped I/O (MMIO) values, power/isolation facts, initial IOMMU installation, CPU
 translation facts, USB transport and device pixel writes remain modeled at the
 stated check boundaries. The lowest-read check executes the actual policy;
