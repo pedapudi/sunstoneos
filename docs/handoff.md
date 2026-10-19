@@ -114,6 +114,31 @@ The host supplies a requested prefix plus four guard periods, then CANCEL;
 guards may be truncated. No graceful wire drain or complete-file playback is
 established. Broader routed audio and physical qualification remain required.
 
+Repeated Bluetooth-headset recognition is implemented in the supervised
+CVSD profile. Two copied PCM slots feed successive bounded 8 kHz segments to
+the unchanged converter, recognizer and formatter. A private input copy precedes
+slot acknowledgment; each transcript remains immutable until complete USB
+transmission and matching host acknowledgment. Backlog, loss or cancellation
+stops capture without overwriting accepted segments. Success also requires the
+matched synchronous disconnect and all accepted transcript acknowledgments.
+Two distinct speech segments copied through the actual stack match portable
+references for features, log probabilities, frames and formatted text. Stack,
+native USB and host checks pass with controller events, scheduling and USB
+hardware modeled; focused review is closed. The recognizer remains at EL0 and
+uses the existing copied APIs and privilege wrappers.
+Evidence: `bluetooth-repeated-recognition-20261019/root-integration.json`,
+`root-native-audit.json` and `root-integration-frozen/manifest.json`. Root verifies
+the selected image's complete compiled closure and six archives at integration
+`854c1d9`. Nine newer
+USB/board source differences are classified, including changed embedded layouts;
+the frozen inputs remain authoritative and must not be mixed with newer objects.
+The original five repeated-profile USB cases use an earlier preserved image;
+the changed finished/status ordering case uses the final image, as recorded in
+`identity-reuse.json`. Physical headset operation, receive-service bounds,
+recognition within the session deadline and wideband mSBC remain unqualified.
+The selected ELF SHA-256 is
+`dbf35d7fdd756d6c1f03b75681252b09572d96176a589ecf5924a7053757417d`.
+
 Negotiated read-only SD modes are integrated. Sealed profiles retain one-bit
 400 kHz operation or select four-bit default speed up to the card's CSD limit
 and 25 MHz, or require four-bit high speed at 50 MHz. Controller/provider,
@@ -425,9 +450,11 @@ Continue offline while the user cannot reconnect either board. No hardware
 launch is admitted. Earlier instance identifiers and preparation records are
 historical evidence; they do not authorize a new session.
 
-1. Continue GPU triangle drawing, USB SuperSpeed storage, repeated Bluetooth
-   capture and VGA H.264 stream implementation. Assess the NPU execution paths
-   needed by unchanged mimus operators. Bounded GPU workgroup grids, the fixed two-stage
+1. Continue GPU triangle drawing, USB SuperSpeed storage and VGA H.264 stream
+   implementation. Repeated Bluetooth capture and recognition are integrated
+   offline; physical operation and session timing remain unqualified. Assess the
+   NPU execution paths needed by unchanged mimus operators. Bounded GPU workgroup
+   grids, the fixed two-stage
    NPU graph, GPU/NPU live input and USB hub modes for one device or combined
    HID/storage are integrated offline. The H.264 native-read source correction
    still needs a newly audited full image.

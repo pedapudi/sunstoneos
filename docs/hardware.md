@@ -893,6 +893,28 @@ implementation is **planned**. Partial results apply only to the stated scope:
   links, and one focused case verifies its retained model-configuration handoff.
   Earlier recognition results retain their original scope; inference was modeled
   in this new startup case.
+  Repeated Bluetooth-headset recognition is implemented in the supervised
+  CVSD profile. Two copied PCM slots feed successive bounded 8 kHz segments to
+  the unchanged converter, recognizer and formatter. A private input copy precedes
+  slot acknowledgment; each transcript remains immutable until complete USB
+  transmission and matching host acknowledgment. Backlog, loss or cancellation
+  stops capture without overwriting accepted segments. Success also requires the
+  matched synchronous disconnect and all accepted transcript acknowledgments.
+  Two distinct speech segments copied through the actual stack match portable
+  references for features, log probabilities, frames and formatted text. Stack,
+  native USB and host checks pass with controller events, scheduling and USB
+  hardware modeled; focused review is closed. The recognizer remains at EL0 and
+  uses the existing copied APIs and privilege wrappers.
+  Evidence: `bluetooth-repeated-recognition-20261019/root-integration.json`,
+  `root-native-audit.json` and `root-integration-frozen/manifest.json`. Root verifies
+  the selected image's complete compiled closure and six archives at integration
+  `854c1d9`. Nine newer
+  USB/board source differences are classified, including changed embedded layouts;
+  the frozen inputs remain authoritative and must not be mixed with newer objects.
+  The original five repeated-profile USB cases use an earlier preserved image;
+  the changed finished/status ordering case uses the final image, as recorded in
+  `identity-reuse.json`. Physical headset operation, receive-service bounds,
+  recognition within the session deadline and wideband mSBC remain unqualified.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
   lifetime. Host checks and native compilation pass. Its initial profile uses
