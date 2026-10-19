@@ -449,9 +449,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   readiness sentinel and a static audit of 21 production callers under
   `uart-supervisor-entry-20261019/`. These checks stop before queue/device access
   and establish no native startup or physical serial operation.
+  The [finite UART2 DMA profile](uart-application.md#finite-dma-transfers) now
+  accepts 1–1,024 caller bytes through RX channel 0 and TX channel 1, request 16.
+  Both channels must be active before UART DMA requests are enabled. Success
+  requires DMA stop, request-disable readback, true transmitter-empty (TEMT),
+  RX-empty/idle, copied echo comparison, matched REAP/CLOSE and UART release.
+  Known-live failures attempt bounded cancellation; uncertain stops retain ownership.
+  The DMA0 parent lease and allocation remain reserved for the board lifetime,
+  even after successful UART teardown. Line errors are aggregate observations,
+  not per-byte status. Linked native/provider, copied USB, host and refusal checks
+  pass with device, cache, RTOS and provider effects modeled. Root verifies
+  471 inputs and 183 objects against revision `efc1adc`, with no compiled-source
+  variance, under `uart-dma-20261019/root-integration.json`. The unchanged selected
+  ELF is `49603358…`; `root/layout-review.json` preserves its static session,
+  privilege and memory review. Physical wiring/bank voltage, DMA0 exclusion,
+  prior bus drain, cache/DMA visibility, startup and sustained scheduling remain
+  unqualified.
   It requires a passive PB0/PB1 loopback and electrical admission; inherited
   multicore startup remains physically unqualified. Physical serial and interrupt
-  operation, DMA and advanced modes remain outstanding.
+  operation and DMA remain unqualified; advanced modes remain required.
   Bluetooth and the header UART1 route share one controller.
 - SPI: **implemented** bounded [native master transfers](spi.md) for SPI0–4
   and the always-on controller. Host checks cover wire modes, FIFO completion,

@@ -85,7 +85,7 @@ functions and modes beyond these bounded applications.
 | --- | --- | --- |
 | [PCIe endpoint COPY](pcie-test-application.md) | One trusted direct `pci-epf-test` endpoint: selected BAR/iATU, 4,096-byte DMA COPY, one-shot MSI and immutable copied USB output. Hardware/scheduling are modeled. Requires endpoint-specific DMA-before-unmap and data-before-status/MSI authority; none exists yet. All resources remain retained; physical DMA/MSI, all-core startup and recovery remain unqualified. | `pcie-endpoint-20261019/root-integration.json`; `root/review.json` in that directory |
 | [DSI immutable-frame replay](display-scanout.md#caller-uploaded-immutable-frame-replay) | Two authenticated XRGB8888 uploads selected 0→1→0 through the register command queue (RCQ) at modeled 720p/1080p. Fresh RCQ completion plus later DE frame-end bind copied results; full USB delivery precedes next request. Frames/command pages stay immutable: no retirement, recycling or arbitrary new-frame streaming. No attached panel, physical pixels, electrical qualification or shared startup execution. | `display-frame-present-20261019/root-integration.json`; `root/layout-review.json` in that directory |
-| [UART2](uart-application.md) | Finite FIFO exchange plus owner-task IRQ service and completed drain. Physical loopback, electrical admission, interrupts and inherited startup remain unqualified; DMA/wider modes remain required. | `uart-native-20261018/integration.json`; `uart-irq-20261019/root-integration.json` |
+| [UART2 FIFO/IRQ/DMA](uart-application.md#finite-dma-transfers) | Finite 1–1,024-byte DMA echo: both channels active before requests; success requires stopped DMA, requests off, true TEMT/RX-empty/idle, copied echo, REAP/CLOSE and UART release. Known-live faults cancel boundedly; uncertainty retains. DMA0 parent/allocation stay owned for board lifetime. Device/cache/RTOS effects are modeled; physical wiring, DMA visibility and inherited startup remain unqualified. | `uart-dma-20261019/root-integration.json`, `root/layout-review.json`; earlier FIFO/IRQ evidence remains separate |
 | [I2S duplex/repeated service](i2s-application.md), [cyclic DMA](i2s-stream.md) | Separate TX/RX channels; copied slots survive cancellation until delivery/ACK. Fixed cyclic TX and checked-copy RX/duplex are integrated. Continuity, cache visibility and wire drain remain unqualified; RX ordering blocker is below. | `i2s-duplex-20261018/integration.json`; `i2s-repeated-20261018/root-integration.json`; `i2s-hardware-cyclic-20261019/root-integration.json` |
 | [Runtime I2S PCM/file input](i2s-application.md#complete-file-input-retains-unknown-serial-completion) | Finite TX leases accept BEGIN_FILE/END_INPUT with a short final period. Normal EOF requires exact DMA consumption and FIFO empty; wire completion is unknown. TX/GEN, clocks, pins, catalogue and buffers remain retained; REAP/CLOSE refuse. Explicit CANCEL may truncate; prefix-plus-guards mode remains separate. Native/provider and client/host checks model hardware; physical playback/drain remain unqualified. | `i2s-file-playback-20261019/root-integration.json`; earlier refills: `i2s-runtime-pcm-20261019/` |
 | [Combined mimus/storage](../apps/mimus-board/README.md) | Unchanged EL0 recognizer plus read-only USB sector service in one supervised image. Success requires storage copy during recognition and fresh liveness. Native fixture injects recognition-active/transcript and models hardware/scheduling; separate host recognition matches the historical recording. No physical concurrency/timing claim. | `mimus-board-20261019/root-integration.json` |
@@ -167,13 +167,11 @@ functions and modes beyond these bounded applications.
 
 Current implementation owners are finishing these offline changes:
 
-- UART DMA: `uart-dma-proposal` implements paired receive/transmit transfers.
-  Root static session, privilege and layout review passes for the preserved
-  candidate under `uart-dma-20261019/root/`. Transfer checks and final integration
-  remain pending; reconcile any final image changes against that review.
 - H.264: `h264-high-assess` implements High-profile decoding with bounded
-  reference pictures and reordered output. Final checks and integration remain
-  pending under `h264-high-20261019/`.
+  references and reordered output. Root static session/layout review passes for
+  unchanged candidate `ecd05003…` under
+  `h264-high-20261019/root/layout-review.json`; decoding checks and final
+  integration remain pending. Static review establishes no device execution.
 - Combined Mimus runtime: `runtime-integration-proposal` adds keyboard-controlled
   recorded recognition to the existing concurrent storage application. Reuse
   model parity and dual-leaf USB evidence; validate the changed input and ownership
