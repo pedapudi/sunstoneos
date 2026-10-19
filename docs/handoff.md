@@ -9,24 +9,36 @@ restored saved DRAM. Evidence: `reconnect-20261018-120/` and
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
-The second board is retained after the corrected GPU attempt on port `3-3`,
-instance `003:125`, identity `[7,2842,1097084,0,0]`. No native USB response appeared;
-the sole refusal-report read timed out. Communication stopped. Runner PID
-`103238` and coordinator PID `103174` remain live under exec session `57330` and
-claim `6b67147c454304fd0a169e3641575f8ee878612e59b06aa0200d4d62bf312fac`
-in `board-tests-3-3.sqlite3`. Evidence:
-`gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
-The user has been asked to remove this board's sole USB power and reconnect it.
-Do not release ownership until confirmed power removal, a new instance and
-termination of these exact processes. No further command to instance `125` is permitted.
+The second board responds to A733 boot-ROM commands on port `3-3` as
+`003:126`, identity `[7,2846,1097085,0,0]`. The user confirmed power removal
+and reconnection. Automatic USB permissions remain valid. The failed GPU
+runner and coordinator stopped; their claim is closed and the queue resumed.
+Recovery evidence: `second-board-recovery-126-20261018/recovery.json`.
+Cold DDR preparation is required before native DRAM execution.
+
+The corrected GPU attempt on the preceding instance `003:125` produced no
+native USB response. Its sole refusal-report read timed out, and communication
+stopped. Evidence: `gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
+The failure stage remains unknown; the recovered board does not authorize an
+unchanged retry.
 
 Fresh cold DDR, PMIC, warm cache preparation and configuration reads passed
 before that attempt under `second-board-cold-122-20261018/`. Those observations
-support the attempted bundle; they will not transfer across power removal.
+support the attempted bundle; they do not transfer to the recovered session.
 The corrected masked fabric and USB-before-GPU ordering did not produce an
 observable result. A narrower shared single-core startup diagnostic or concrete
 new correction must precede another full accelerator launch. Root owns shared
-startup diagnosis; the worker audits device admission and observation only.
+startup diagnosis. The device worker is preparing a returning PMIC observation
+for the strict startup predicates not covered by the successful basic probe.
+The primary-source audit found no proven incorrect address or mask. Inactive
+controller state and line sampling remain physically unverified. Evidence:
+`gpu-usb-ordering-20261018/audit125-provider/primary-predicate-audit.json`.
+
+The frozen USB provider delegates interrupt-state admission to its authority
+callback; it does not read GIC enable, pending and active bits itself. The
+shared monitor disables peripheral interrupts before provider startup. This
+corrects the earlier attempt record's description of runtime interrupt guards;
+no interrupt-related failure cause has been established.
 
 The preceding NPU failure on `119` was recovered and closed before this attempt.
 Recovery evidence is under `second-board-recovery-122-20261018/`.

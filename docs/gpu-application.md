@@ -437,9 +437,10 @@ checks were reused.
 
 A supervised attempt with fresh DDR, PMIC, clock, CPU-OFF and DMA observations
 still produced no native USB response. The sole refusal-report read timed out,
-and communication stopped. The runner retains all resources pending confirmed
-power removal. This result does not establish whether provider or GPU
-initialization began. Evidence:
+and communication stopped. Confirmed power removal and a responsive new ROM
+session permitted closing the failed runner and claim. Recovery evidence is
+`second-board-recovery-126-20261018/recovery.json`. This result does not
+establish whether provider or GPU initialization began. Attempt evidence:
 `gpu-usb-ordering-20261018/physical-candidate-125/runtime/session.json`.
 A narrower shared-startup observation or concrete correction must precede another
 full launch. Performance measurement remains deferred.
