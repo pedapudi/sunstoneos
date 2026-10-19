@@ -131,7 +131,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   secondary shutdown. Saved DRAM restoration and responsive ROM return pass.
   Evidence: `all-core-first-task-20261018/physical-010/runtime/session.json`.
   This diagnostic stops before task bodies; task switching and sustained
-  eight-core scheduling remain unqualified.
+  eight-core scheduling remain physically unqualified. The complete returning
+  workload passes instruction checks through 32 floating-point rounds per core,
+  background progress, production timer/SGI handlers and FreeRTOS switching.
+  Thirteen host cases validate copied results, context and interrupt restoration,
+  saved RAM and failure retention. Evidence: `all-core-task-workload-20261019/`.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
@@ -657,8 +661,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Host checks cover start/stop ordering, authenticated frame/resource receipts and
   retained failures; native compilation passes. Native [media clock preparation](media-clock.md)
   supplies real shared-register ownership and inherited-parent checks. Host checks
-  and native compilation pass, including finalization fault retention. Complete
-  DSI platform binding, shutdown/release, physical scanout, live frame
+  and native compilation pass, including finalization fault retention. The native
+  DSI binding connects these providers to retained framebuffer/table allocations,
+  actual IOMMU mappings and ordered controller accesses. Focused composed checks
+  and AArch64 compilation pass under `display-native-20261018/`. Panel selection,
+  analog-profile qualification and initial isolation authority remain required;
+  STOP retains resources because display-engine drain is unsupported. A standalone
+  image, shutdown/release, physical scanout, live frame
   updates, composition, additional formats and synchronization remain outstanding.
 
 - MIPI DSI: **implemented** bounded [low-power command transmission](dsi.md).

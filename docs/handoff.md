@@ -45,6 +45,14 @@ timer-priority restoration, saved-RAM restoration and failure retention.
 Evidence: `host-frozen/` and `host-root-review.json` in the same directory.
 Physical qualification remains outstanding; no launch is admitted.
 
+Native DSI scanout binding is integrated. It connects the media/PLL providers,
+retained memory allocations, actual IOMMU tables and ordered controller accesses.
+Focused composed checks, AArch64 compilation and source review pass under
+`display-native-20261018/`; accepted evidence was reused during integration.
+Panel selection, analog-profile qualification and initial isolation authority
+remain outstanding. STOP retains resources because display-engine drain is
+unsupported. No standalone image or physical scanout is qualified.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:
