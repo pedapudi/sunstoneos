@@ -1,0 +1,11 @@
+--- platform.c
++++ pcie-test-platform.c
+@@ -133,6 +133,8 @@
+ {
+     unsigned c=core();
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
++    extern void pcie_test_application_irq(void);
++    if(interrupt==185){pcie_test_application_irq();return;}
+     if(interrupt==30 && !c) {
+         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+     } else if(interrupt==0 && c<8) {

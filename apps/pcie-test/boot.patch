@@ -1,0 +1,35 @@
+--- boot-supervised.c
++++ boot-pcie_test.c
+@@ -17,6 +17,7 @@
+ }
+ static uint32_t read32(uintptr_t a) {barrier();uint32_t v=*(volatile uint32_t *)a;barrier();return v;}
+ static void write32(uintptr_t a,uint32_t v) {barrier();*(volatile uint32_t *)a=v;barrier();}
++#include "irq-route.h"
+ _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
+ {
+     __asm__ volatile("msr daifset, #15":::"memory");
+@@ -84,11 +85,14 @@
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
+-    extern int board_identity_prepare(uint64_t);
+-    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
++    extern int pcie_session_prepare(const struct a733_smp_contract *);
++    if(!pcie_session_prepare(&admission))a733_smp_stop(3,0x30b);
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
+         a733_smp_stop(3,0x308);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
++    /* Reject inherited PCIe MSI activity before the common SPI-disable sequence. */
++    if((read32(0x03400114)|read32(0x03400214)|read32(0x03400314))&(1u<<25))
++        a733_smp_stop(3,0x30d);
+     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
+     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
+     if(ctlr&(1u<<6))a733_smp_stop(2,2);
+@@ -99,6 +103,7 @@
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
++    if(!pcie_test_irq_route(mpidr))a733_smp_stop(3,0x30e);
+     for(unsigned c=1;c<8;++c) {
+         targets[c-1]=c;
+         struct a733_cpu_start_config config={.ops={power_read,power_write,power_barrier,now_us},
