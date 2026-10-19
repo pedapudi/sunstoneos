@@ -6,7 +6,10 @@ from unicorn.arm64_const import *
 import argparse
 parser=argparse.ArgumentParser(description="Actual NPU single-core admission and startup; hardware responses remain modeled.")
 for name in ('image','session','output'):parser.add_argument('--'+name,type=Path,required=True)
-args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=False)
+parser.add_argument('--usb-terminal-only',action='store_true')
+parser.add_argument('--state',type=Path)
+parser.add_argument('--resume',action='store_true')
+args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=args.resume)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/npu-convolution/prepare-supervised.py')
@@ -54,8 +57,80 @@ class Machine(shared.Machine):
   self.sysregs['tcr_el1']=0x200803519
   try:return super().translate(va,write)
   finally:self.sysregs['tcr_el1']=0x200803019
-results={}
+assert not args.resume or args.usb_terminal_only
+results=json.loads((out/'completed.json').read_text()) if args.resume else {}
 def passed(n):results[n]=True;(out/'completed.json').write_text(json.dumps(results,indent=2)+'\n')
+if args.usb_terminal_only:
+ # Reuse accepted startup solely to construct the real application/provider
+ # fixture. Only changed terminal-USB branches are cases in this invocation.
+ from elftools.elf.elffile import ELFFile
+ from elftools.dwarf.dwarf_expr import DWARFExprParser
+ assert args.state, '--state is required for the actual attempted baseline'
+ state=json.loads(args.state.read_text());registers={int(x['address'],0):int(x['value'],0) for x in state['registers']}
+ with image.open('rb') as stream:
+  dwarf=ELFFile(stream).get_dwarf_info();objects={}
+  for cu in dwarf.iter_CUs():
+   unit=cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
+   for die in cu.iter_DIEs():
+    if die.tag!='DW_TAG_variable' or 'DW_AT_location' not in die.attributes or 'DW_AT_name' not in die.attributes:continue
+    name=die.attributes['DW_AT_name'].value.decode()
+    if not ((unit.endswith('/apps/npu-convolution/native.c') and name=='app') or (unit.endswith('/npu-single-core/usb_service.c') and name=='task_state')):continue
+    ops=DWARFExprParser(dwarf.structs).parse_expr(die.attributes['DW_AT_location'].value);assert len(ops)==1
+    address=ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dwarf.get_addr(cu,ops[0].args[0])
+    fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in die.get_DIE_from_attribute('DW_AT_type').iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes}
+    objects[name]=(address,fields)
+ assert set(objects)=={'app','task_state'}
+ app,fields=objects['app'];usb_task=objects['task_state'][0]
+ def constructed():
+  m=Machine();m.call('sd_single_core_monitor_init');assert not m.parked
+  m.el=4;m.cpu.reg_write(UC_ARM64_REG_PSTATE,0x3c5);m.stop_at=e.address('kernel_main');m.finished=False;m.cpu.emu_start(e.address('_start'),0,count=3000000);assert m.finished
+  m.stop_at=e.address('a733_smp_diagnostic_start');m.call('kernel_main')
+  m.stop_at=e.address('vTaskStartScheduler');m.call('a733_smp_diagnostic_start');assert not m.parked
+  m.stop_at=None;m.write(e.address('xSchedulerRunning'),1,8);m.write(e.address('ullCriticalNesting'),0,8);m.write(e.address('ullPortInterruptNesting'),0,8)
+  m.write(e.address('pxCurrentTCB'),usb_task,8);m.cpu.reg_write(UC_ARM64_REG_PSTATE,0x345)
+  for address,value in registers.items():m.write(address,value)
+  m.write(0x04100040,0x40)
+  return m
+ def prepared(m):
+  for polls in range(512):
+   ready=m.call('npu_single_core_usb_poll');assert ready in (0,1),(polls,ready)
+   if ready:return
+   m.time+=24000
+  raise AssertionError('USB ROM takeover remained pending')
+ def frame(m,reason):
+  buffer,challenge=0x43010000,0x43011000;m.cpu.mem_write(challenge,b'x'*32)
+  assert m.call('a733_npu_application_frame',buffer,e.address('a733_observe_identity'),challenge,e.address('a733_smp_build_id'))==1
+  body=bytes(m.cpu.mem_read(buffer,1024));assert struct.unpack_from('<Q',body,16)[0]==3 and struct.unpack_from('<Q',body,832)[0]==reason
+  assert body[992:]==hashlib.sha256(body[:992]).digest()
+ if 'preparation-after-client-failure-delivers-terminal-frame' not in results:
+  m=constructed();m.write(e.address('a733_npu_application_failed'),8);prepared(m);frame(m,8);passed('preparation-after-client-failure-delivers-terminal-frame')
+ if 'prepared-usb-delivers-convolution-failure-frame' not in results:
+  m=constructed();prepared(m)
+  m.write(app+fields['reserved']+e.layouts['a733_npu_reserved']['convolution']+e.layouts['npu_convolution']['failed'],1)
+  assert m.call('npu_single_core_usb_poll')==1;frame(m,17);passed('prepared-usb-delivers-convolution-failure-frame')
+ # Shared transport uncertainty must refuse without another peripheral write.
+ for name,field,struct_name,member,value in [
+  ('counter-failed','clock','a733_counter_clock','failed',1),
+  ('registry-failed','registry','a733_clock_leases','failed',1),
+  ('register-lock-retained','locks','a733_platform_locks','retained',1),
+  ('i2c-lock-retained','locks','a733_platform_locks','retained',2),
+  ('usb-provider-fault','usb_platform','a733_usb_platform','fault',1)]:
+  if name+'-refuses-without-mmio' in results:continue
+  m=constructed();prepared(m);m.write(e.address('a733_npu_application_failed'),8)
+  m.write(app+fields[field]+e.layouts[struct_name][member],value);writes=list(m.writes)
+  assert m.call('npu_single_core_usb_poll')&0xffffffff==0xffffffff and m.writes==writes,name
+  passed(name+'-refuses-without-mmio')
+ for name in ('wrong-task','expired-session','bad-usb-evidence'):
+  if name+'-refuses-without-mmio' in results:continue
+  m=constructed();prepared(m);m.write(e.address('a733_npu_application_failed'),8)
+  if name=='wrong-task':m.write(e.address('pxCurrentTCB'),usb_task+16,8)
+  elif name=='expired-session':m.time=m.read(e.address('a733_observe_identity')+e.layouts['a733_observe_identity']['deadline'])
+  else:
+   sealed=m.call('npu_session_get');m.write(sealed+e.layouts['npu_session']['boot']+e.layouts['a733_npu_application_boot']['profile']+e.layouts['a733_npu_application_profile']['usb_evidence'],0,8)
+  writes=list(m.writes);assert m.call('npu_single_core_usb_poll')&0xffffffff==0xffffffff and m.writes==writes,name
+  passed(name+'-refuses-without-mmio')
+ (out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':results,'scope':'Changed terminal-USB branches only. Actual ELF application/provider/result frame, registry/locks and SHA. Accepted startup used only for fixture construction. CPU/system registers,counter,task and MMIO hardware effects modeled; no inference, PLL work or physical operation.'},indent=2)+'\n')
+ print('PASS terminal USB',len(results));raise SystemExit(0)
 m=Machine();m.call('sd_single_core_monitor_init');assert not m.parked
 sealed=m.call('npu_session_get');assert bytes(m.cpu.mem_read(sealed,len(raw)))==raw
 lo,hi=e.address('__npu_retained_start'),e.address('__npu_retained_end');assert lo<=sealed<sealed+len(raw)<=hi

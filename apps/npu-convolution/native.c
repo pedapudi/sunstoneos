@@ -295,12 +295,23 @@ failed:
 }
 
 #ifdef SUNSTONE_NPU_SINGLE_CORE
+static int usb_transport_live(void)
+{
+    /* A failed convolution still needs its terminal diagnostic frame. Keep
+     * USB conditional on its own authenticated lifetime and shared resources;
+     * a retained clock, register or I2C lock still forbids further USB work. */
+    return app.used && app.registry.initialized && app.locks.initialized &&
+        !atomic_load_explicit(&app.clock.failed,memory_order_acquire) &&
+        !atomic_load_explicit(&app.registry.failed,memory_order_acquire) &&
+        !atomic_load_explicit(&app.locks.retained,memory_order_acquire) &&
+        a733_npu_application_observer_admit();
+}
 static int usb_now(void *cookie,uint64_t *out)
-{return cookie==&app&&live()&&a733_counter_clock_now(&app.clock,out);}
+{return cookie==&app&&usb_transport_live()&&a733_counter_clock_now(&app.clock,out);}
 static int usb_authorize(void *cookie,const struct a733_usb_platform_config *c,const struct a733_clock_token *t)
 {
     const struct a733_npu_application_boot *b=a733_npu_application_boot_record();
-    if(cookie!=&app||!live()||!b||xTaskGetCurrentTaskHandle()!=app.usb_task||
+    if(cookie!=&app||!usb_transport_live()||!b||xTaskGetCurrentTaskHandle()!=app.usb_task||
        !a733_npu_application_observer_admit()||c->owner!=b->profile.usb_owner||
        c->handoff!=b->profile.usb_evidence||c->cold_reference!=A733_USB_ROM_DEVICE||
        c->deadline_us!=a733_observe_identity.deadline/24||
@@ -315,7 +326,7 @@ static int usb_authorize(void *cookie,const struct a733_usb_platform_config *c,c
     return 1;
 }
 static int usb_enter(void *cookie,uint64_t deadline)
-{return cookie==&app&&live()&&xTaskGetCurrentTaskHandle()==app.usb_task&&
+{return cookie==&app&&usb_transport_live()&&xTaskGetCurrentTaskHandle()==app.usb_task&&
     a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline);}
 static void usb_leave(void *cookie)
 {if(cookie!=&app)fatal(NULL);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
@@ -323,7 +334,7 @@ static void usb_retain(void *cookie)
 {if(cookie==&app)a733_platform_lock_retain(&app.locks,A733_PLATFORM_REGISTER_LOCK);a733_npu_application_fail(18);}
 int npu_single_core_usb_poll(void)
 {
-    if(!app.used||!live())return -1;
+    if(!usb_transport_live())return -1;
     if(!app.usb_task){
         app.usb_task=xTaskGetCurrentTaskHandle();
         const struct a733_npu_application_boot *b=a733_npu_application_boot_record();
