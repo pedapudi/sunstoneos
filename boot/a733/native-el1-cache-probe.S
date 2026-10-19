@@ -72,7 +72,11 @@ el1_observe_checkpoint:
     bl primary_irq_probe
 #endif
 #ifdef SUNSTONE_SECONDARY_COHERENCE
+#ifdef SUNSTONE_ALL_CORE_PRE_SCHEDULER
+    bl identity_pre_scheduler_el1
+#else
     bl identity_coherence_el1
+#endif
 #endif
     mov x0, #0x733
     mrs x1, CurrentEL
@@ -112,10 +116,12 @@ el1_return_checkpoint:
     mrs x16, mpidr_el1
     ubfx x16, x16, #8, #3
 #ifdef SUNSTONE_SECONDARY_CACHE
+#ifndef SUNSTONE_ALL_CORE_PRE_SCHEDULER
 #ifdef SUNSTONE_PRIMARY_EL1
     cbnz x16, .Lel1_park
 #else
     cbz x16, .Lel1_park
+#endif
 #endif
     ldr x19, =0x4201a800
     add x19, x19, x16, lsl #8

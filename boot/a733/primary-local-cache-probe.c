@@ -116,7 +116,9 @@ int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
         : "=r"(g0), "=r"(g1), "=r"(pmr));
     report->group0 = g0; report->group1 = g1; report->pmr = pmr;
     __asm__ volatile("msr icc_igrpen0_el1,xzr\n msr icc_igrpen1_el3,xzr\n isb" ::: "memory");
+#ifndef SUNSTONE_ALL_CORE_PRE_SCHEDULER
     if (!secondary_distributor_begin(deadline)) return 0;
+#endif
     struct a733_cpu_continue state = {0};
     struct a733_cpu_continue_config config = {.ops = {read32, read64, write32, now_us},
         .epoch = epoch, .deadline_us = deadline / 24, .mpidr = mpidr};
@@ -127,7 +129,10 @@ int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
     if (!ready && !state.error) return 0;
     report->state = 2; barrier();
     if (ready && !native_el3_cache_probe(epoch, deadline)) return 0;
-    if (!restore_local() || !secondary_distributor_restore(deadline)) return 0;
+    if (!restore_local()) return 0;
+#ifndef SUNSTONE_ALL_CORE_PRE_SCHEDULER
+    if (!secondary_distributor_restore(deadline)) return 0;
+#endif
     __asm__ volatile("msr icc_pmr_el1,%0\n msr icc_igrpen0_el1,%1\n msr icc_igrpen1_el3,%2\n isb"
         :: "r"(pmr), "r"(g0), "r"(g1) : "memory");
     __asm__ volatile("mrs %0,icc_pmr_el1\n mrs %1,icc_igrpen0_el1\n mrs %2,icc_igrpen1_el3"

@@ -14,6 +14,20 @@ CPU0 EL3/EL1 diagnostics, returning SRAM survey and instruction-cache disable.
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
+The returning all-core diagnostic is implemented and builds under
+`all-core-pre-scheduler-20261018/`. It calls the frozen production
+`a733_smp_pre_scheduler` function on all eight cores, including CPU0. This
+function implements the arrival barrier and 256 atomic-lock-protected increments
+immediately before scheduler initialization. Three instruction cases pass:
+successful completion, an incorrect increment count, and failed EL3 restoration.
+The latter two retain execution. Each participant cleans the two shared pages
+and its final stack page after every production call has returned. The model
+checks all 192 cache lines per core and rejects later Normal-memory stores.
+This diagnostic does not enable interrupt delivery or select tasks. Its host
+decoder, runner binding and physical execution remain outstanding. Reuse the
+successful instruction case; the later fixture correction only advances modeled
+time in the incorrect-count case after the production primary rejects the count.
+
 The second board responds on port `3-3` as `003:127`, identity
 `[7,2858,1097086,0,0]`, after a successful returning TWI register capture.
 Fresh DDR and launcher survey passed on cold instance `126`; preserve that
@@ -22,6 +36,17 @@ all preparation/probe processes are stopped with their claims closed.
 Evidence: `second-board-cold-126-20261018/` and
 `pmic-baseline-probe-20261018/capture-only/physical/runtime/session.json`.
 Refresh warm launcher/cache state before another native launch; do not retrain DDR.
+
+The returning native PMIC provider test is integrated from commit `8388444`.
+Its frozen image and source identities are under `pmic-provider-probe-20261018/`.
+Three linked-image cases cover one DCDC1 snapshot with request cleanup, a refusal
+before register writes, and an address NACK with retained ownership. Focused
+review found no blocking software defect. The test executes production task,
+mutex, clock, pin and PMIC adapters; earlier supply probes used legacy I2C.
+Production pin acquisition temporarily disconnects PL0/PL1 before restoring
+their I2C function. That operation remains physically unqualified. No regulator
+data is written. Fresh warm survey, powered-lifetime continuity and coordinator
+admission remain required before one supervised attempt on the second board.
 
 The corrected GPU attempt on the preceding instance `003:125` produced no
 native USB response. Its sole refusal-report read timed out, and communication
@@ -845,9 +870,10 @@ The [Arm/Linux audit](a733-multicore-reference-audit.md) and
 [startup record](a733-smp-supervised.md) retain source comparisons and earlier
 observations.
 
-1. Continue from the passing CPU0 production interrupt handler to establish
-   actual task selection and combined eight-core startup. The full image
-   and model already include the Secure PMR correction.
+1. Finish host decoding and runner binding for the implemented all-core
+   pre-scheduler diagnostic, then qualify its production barrier and lock on the
+   first board. Continue to actual task selection after that boundary is observed.
+   The full image and model already include the Secure PMR correction.
    Preserve final-store synchronization and Nonsecure cache-clean completion
    for the complete write set before shutdown. The prior interrupt result does
    not establish SPI/LPI shutdown; review the applicable errata when enabling

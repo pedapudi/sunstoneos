@@ -33,12 +33,14 @@ def cached_patch_points(native):
 
 
 def prepare(args):
+    pre_scheduler=getattr(args,"pre_scheduler",False)
     interrupts=getattr(args,"interrupts",False)
-    coherent=getattr(args,"coherent",False) or interrupts
+    require(not(pre_scheduler and interrupts),'Pre-scheduler profile keeps interrupt delivery disabled.')
+    coherent=getattr(args,"coherent",False) or interrupts or pre_scheduler
     extension=0x41020800 if interrupts else EXTENSION
     cached=getattr(args,"cached",False) or coherent
     local=getattr(args,"local",False) or cached
-    report=(REPORT[0],0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else REPORT
+    report=(REPORT[0],0x5100 if pre_scheduler else 0x4100 if coherent else 0x2f00 if cached else 0x1b00) if local else REPORT
     base=json.loads((args.primary/'manifest.json').read_text())
     frozen,reservations=primary.load(args.primary,args.image,base)
     with args.image.open('rb') as stream:
@@ -54,7 +56,16 @@ def prepare(args):
         if local:names+=('prepare_core','a733_cpu_continue_init','a733_cpu_continue_poll','a733_cached_el3_vectors')
         if cached:names+=('a733_cached_allow_ns_code','a733_cpu_coherence_enable_el3','a733_cached_el3_l1',
                           'a733_cached_enter_el1','a733_cached_el1_l1','a733_cpu_el1_stacks','a733_cached_el3_fault')
+        if pre_scheduler:names+=('a733_smp_pre_scheduler','probe_arrived','probe_count','probe_lock',
+                                 'probe_finished','probe_release')
         native={n:address(n) for n in names}
+        if pre_scheduler:
+            state=native['probe_arrived']&~4095
+            require(all(native[n]&~4095==state for n in ('probe_count','probe_lock','probe_finished','probe_release')),
+                    'Production pre-scheduler state exceeds the reviewed shared page.')
+            require(native['probe_arrived']==state and native['probe_count']==state+32 and
+                    native['probe_lock']==state+36 and native['probe_finished']==state+40 and
+                    native['probe_release']==state+72,'Production pre-scheduler state layout changed.')
     require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
     require(len(frozen['overlay.bin'])<=extension-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
@@ -76,7 +87,10 @@ def prepare(args):
     units=[(source+'.'+suffix,'identity-'+suffix+'.o') for suffix in ('c','S')]
     if local:units += [('boot/a733/secondary-local-probe.c','local.o'),('boot/a733/secondary-distributor-probe.c','distributor.o')]
     if cached:units += [('boot/a733/native-el3-cache-probe.S','el3-cache.o'),('boot/a733/native-el1-cache-probe.S','el1-cache.o')]
-    if coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
+    if pre_scheduler:
+        units += [('boot/a733/all-core-pre-scheduler-probe.S','pre-scheduler.o'),
+                  ('boot/a733/primary-local-cache-probe.c','primary-local.o')]
+    elif coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
     if interrupts:units += [('boot/a733/secondary-interrupt-probe.S','interrupt.o')]
     for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
@@ -84,6 +98,7 @@ def prepare(args):
             '-Wall','-Wextra','-Werror',*(['-DSUNSTONE_SECONDARY_LOCAL=1'] if local else []),
             *(['-DSUNSTONE_SECONDARY_CACHE=1','-DSUNSTONE_PROBE_EL1_CACHE=1'] if cached else []),
             *(['-DSUNSTONE_SECONDARY_COHERENCE=1'] if coherent else []),
+            *(['-DSUNSTONE_ALL_CORE_PRE_SCHEDULER=1'] if pre_scheduler else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -92,6 +107,10 @@ def prepare(args):
                  'el3_root':'a733_cached_el3_l1','enter_el1':'a733_cached_enter_el1',
                  'el1_root':'a733_cached_el1_l1','el1_stacks':'a733_cpu_el1_stacks'}
         symbols += [f'--defsym=probe_production_{a}={native[n]:#x}' for a,n in aliases.items()]
+    if pre_scheduler:
+        symbols += [f'--defsym=probe_production_pre_scheduler={native["a733_smp_pre_scheduler"]:#x}',
+                    f'--defsym=probe_scheduler_count={native["probe_count"]:#x}',
+                    f'--defsym=probe_scheduler_state={state:#x}']
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
     commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
@@ -141,9 +160,10 @@ def prepare(args):
     if local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                      'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
-    if coherent:names+=('boot/a733/secondary-coherence-probe.S',)
+    if pre_scheduler:names+=('boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
+    elif coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
-    manifest={'schema':'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
+    manifest={'schema':'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
@@ -151,7 +171,7 @@ def prepare(args):
         'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    print('Prepared sequential '+('timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
+    print('Prepared '+('production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
 
 if __name__=='__main__':
@@ -162,4 +182,5 @@ if __name__=='__main__':
     parser.add_argument("--cached",action="store_true",help="Include production cached EL1 entry and restored SMC return")
     parser.add_argument("--coherent",action="store_true",help="Run seven concurrent EL1 shared-memory participants before restored return")
     parser.add_argument("--interrupts",action="store_true",help="Deliver one timer PPI and peer SGI on every secondary before cleaned return")
+    parser.add_argument("--pre-scheduler",action="store_true",help="Execute the production barrier and atomic lock on all eight cores before cleaned return")
     prepare(parser.parse_args())

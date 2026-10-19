@@ -80,6 +80,12 @@ int identity_primary_run(void)
            slot->target_mode!=slot->mode || (slot->power_before&1))return 0;
 #ifdef SUNSTONE_SECONDARY_COHERENCE
     }
+#ifdef SUNSTONE_ALL_CORE_PRE_SCHEDULER
+    // The primary joins only after all seven targets have been released. The
+    // outer owner retains the distributor until CPU0 restores and targets are OFF.
+    extern int primary_local_cache_probe(uint64_t epoch, uint64_t deadline);
+    if(primary_local_cache_probe(HEADER->epoch,HEADER->deadline)!=1)return 0;
+#endif
     // All targets are released before waiting for cached shared-memory work.
     for(unsigned core=IDENTITY_FIRST_CORE;core<8;++core) {
         volatile struct identity_slot *slot=&SLOTS[core];
@@ -111,6 +117,11 @@ int identity_primary_run(void)
     const volatile uint64_t *shared=(void *)a733_cpu_el1_stacks;
     volatile uint64_t *copy=(void *)0x4201b200;
     for(unsigned i=0;i<4096/8;++i)copy[i]=shared[i];
+#ifdef SUNSTONE_ALL_CORE_PRE_SCHEDULER
+    extern unsigned char probe_scheduler_state[];
+    const volatile uint64_t *state=(void *)probe_scheduler_state;
+    for(unsigned i=0;i<4096/8;++i)copy[4096/8+i]=state[i];
+#endif
     barrier();
 #endif
     HEADER->state=2;barrier();return 1;
