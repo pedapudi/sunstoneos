@@ -23,6 +23,7 @@ digest = barrier.digest
 class FirstTask(barrier.AllCore):
     cache_lines = 9280
     task_switch = False
+    task_workload = False
 
     def restore(self, snapshot, fault):
         super().restore(snapshot, fault)
@@ -85,15 +86,16 @@ class FirstTask(barrier.AllCore):
         r = self.regs[core]
         self.recent[core].append(f'{address:#x} {op} {ins.op_str}')
         if self.task_switch and address == self.symbols['vTaskSwitchContext']:
-            assert r['currentel'] == 4 and core in self.idle_yields
+            assert r['currentel'] == 4 and (self.task_workload or core in self.idle_yields)
             self.selected.add(core)
         if r['currentel'] == 0 and self.task_switch:
             idle = self.symbols['prvIdleTask' if core == 0 else 'prvPassiveIdleTask']
             if address == idle:
                 self.idle_entries.add(core)
             if op == 'svc' and args == ['#0x69']:
-                assert core in self.idle_entries and idle <= address < idle+(44 if core == 0 else 28)
-                self.idle_yields.add(core)
+                if not self.task_workload or idle <= address < idle+(44 if core == 0 else 28):
+                    assert core in self.idle_entries and idle <= address < idle+(44 if core == 0 else 28)
+                    self.idle_yields.add(core)
             if address == self.symbols['worker']:
                 assert core in self.selected and core not in self.entries
                 assert self.reg(core, 'x0') == core and r['sctlr_el1'] == 0x30d41805
@@ -101,7 +103,7 @@ class FirstTask(barrier.AllCore):
                 stack = (self.symbols['stacks']+(core+1)*16384-8) & ~15
                 assert tcb == self.symbols['tasks']+core*168 and u.reg_read(UC_ARM64_REG_SP) == stack
                 self.entries[core] = {'pc':address, 'sp':stack, 'tcb':tcb, 'argument':core}
-            assert idle <= address < idle+(44 if core == 0 else 28) or address in (
+            assert self.task_workload or idle <= address < idle+(44 if core == 0 else 28) or address in (
                 self.symbols['worker'],self.survey_hooks['identity_first_task_el0']), {
                     'core':core,'pc':hex(address),'selected':sorted(self.selected),
                     'entries':self.entries,'trace':list(self.recent[core])}

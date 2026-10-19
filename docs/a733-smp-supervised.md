@@ -1523,6 +1523,43 @@ The host validates the exact constructor/worker patches and frozen task geometry
 Root source review passes; fresh board admission and physical qualification
 remain required. No board test is queued while manual recovery is unavailable.
 
+## The complete returning workload passes instruction checks
+
+The `--task-workload` diagnostic runs the frozen production workers for 32
+floating-point rounds on every core. It also executes the production timer and
+SGI handlers, FreeRTOS task switching and each core's background task. The
+CPU-only diagnostic suppresses the USB observer. Its completion branch replaces
+the worker's post-loop instruction; startup and worker bodies remain intact.
+
+Each completed worker waits for background-task progress and all eight arrivals
+while interrupts remain enabled. The diagnostic then stops local timer generation
+and interrupt delivery before publishing final completion. After every writer
+stops, it disables and drains only its SGI and timer interrupt. Unexpected active
+or unrelated pending interrupts prevent return. Stable results must show 32
+rounds, background progress, received SGIs and no failure on every core, plus at
+least 32 timer ticks on CPU0.
+
+The return path cleans the complete 145-page writable interval on each CPU.
+It restores the timer priority through the Secure view, where the original value
+was captured. All seven secondaries acknowledge shutdown and reach modeled OFF;
+CPU0 restores its controls before return. The instruction check observes no
+remaining pending or active interrupts and matches the original GIC state.
+
+The successful case exercises actual worker and handler instructions. A second
+case changes one completed-round count to 31 and confirms retention before
+cache cleanup, secondary shutdown or ROM return. It resumes a hash-checked
+checkpoint after all workers finish; the worker workload is not repeated.
+That checkpoint may support stop and cleanup checks only, not changes to earlier
+execution.
+
+Accepted sources, bundle, checkpoint and results are preserved under
+`all-core-task-workload-20261019/frozen/`. The original result files are
+`background/software.json` and `background/wrong-rounds.json` in the same evidence
+directory. Timing, interrupt delivery and coherent memory remain modeled; these
+counters are not physical performance measurements. Host report validation and
+physical qualification remain outstanding. No hardware launch is admitted while
+manual recovery is unavailable.
+
 ## All eight CPUs complete the production barrier and atomic increments
 
 The returning all-core diagnostic calls the frozen production

@@ -15,9 +15,9 @@ observed OFF. Saved DRAM restoration and responsive ROM return pass. Evidence:
 `all-core-first-task-20261018/physical-010/runtime/session.json`.
 
 The instruction checks, nine host cases and root review also pass. Task bodies,
-timer interrupts and application SGIs are excluded from this diagnostic. Bounded
-task execution and switching are next; sustained multicore scheduling remains
-unqualified. The existing production barrier and 256 atomic increments also
+timer interrupts and application SGIs are excluded from this physical diagnostic.
+Sustained multicore scheduling remains physically unqualified. The existing
+production barrier and 256 atomic increments also
 pass in this physical attempt. Reuse these results without repeating the launch.
 
 An offline extension now passes actual idle-task yield, FreeRTOS context
@@ -32,6 +32,16 @@ on completed return, and retains transport failures. Evidence: `host/software.js
 and `host-root-review.json` in the same directory. Physical use still requires
 fresh board admission and available manual recovery; no test is queued.
 
+The complete returning CPU workload now passes instruction checks. Every core
+finishes 32 floating-point rounds, runs its background task and receives SGIs;
+CPU0 also services the production timer. All writers stop before interrupt
+cleanup, memory publication and matched shutdown. A damaged completed-round
+count retains the session before cleanup. That refusal check reuses the saved
+completed-workload checkpoint without repeating the worker execution. Sources,
+image and results are preserved in `all-core-task-workload-20261019/frozen/`.
+Timing and cache coherence remain modeled. Host validation for this extended
+report and physical qualification are outstanding; no launch is admitted.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:
@@ -44,16 +54,25 @@ PMIC outside active requests before the final task critical section. The NPU
 returning composition is now integrated, with 26 new return checks, three
 session-retention checks and a check of the linked task privilege state.
 Evidence: `npu-finite-return-20261018/frozen/`. Its SRE tasks run at EL1t;
-the cached multicore image's EL0 exit rules do not apply. Returned-RAM host
-integration and final root admission remain outstanding. Frozen compiler inputs
+the cached multicore image's EL0 exit rules do not apply. Its returned-RAM host
+runner is integrated, with validated copied outputs before full DRAM restoration
+and retained ownership after uncertain completion. Its shared transport helper
+uses a per-port lock and forbids further requests after a transport failure.
+Host evidence is under `npu-finite-host-20261018/transport-frozen/`. Final root
+physical admission remains outstanding. Frozen compiler inputs
 remain authoritative: the current USB header changes an embedded structure's
 layout, even though this NPU image does not execute USB platform functions.
 
-Root review rejected the GPU composition's EL3 cache cleanup: with translation
-disabled, maintenance targets Secure physical addresses and cannot publish the
-application's dirty Nonsecure lines. The worker is moving publication to EL1
-before SMC and preserving final stack cleanup before reset. Existing device
-checks remain valid; the changed return path requires focused verification.
+The corrected GPU returning composition is integrated. It publishes private and
+device data through Nonsecure EL1 mappings before SMC, then completes final stack
+cleanup before reset. Root source review and 25 selective modeled cases pass;
+the device-specific Astra review and frozen source/object audit also pass.
+Evidence: `gpu-returning-application-20261019/ns-publication/`. Earlier EL3-only
+publication results are superseded. The GPU host adapter is integrated and
+uses the same bounded transport as NPU. Its 93 focused checks and Astra review
+pass, including copied-result validation and bounded memory restoration.
+Evidence: `gpu-returning-host-20261019/`. Physical inference and ROM return remain
+unqualified for both accelerators. Existing device checks were reused.
 The [publication audit](a733-multicore-reference-audit.md#publication-must-cover-the-executable-physical-address-space)
 and device skill document this requirement. Root retains CPU and architectural
 return review. For the preceding adapter, all 172 NPU

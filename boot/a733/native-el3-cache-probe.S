@@ -60,11 +60,35 @@ native_el3_cache_probe:
     mov x2, #2
     str x2, [x19]
 #ifdef SUNSTONE_PROBE_EL1_CACHE
+#ifdef SUNSTONE_TASK_WORKLOAD
+    // The scheduler writes the timer priority byte. Preserve its Secure view;
+    // a Nonsecure write cannot restore a former Secure priority encoding.
+    mrs x2, mpidr_el1
+    ubfx x2, x2, #8, #3
+    ldr x3, =0x0347041c
+    add x3, x3, x2, lsl #17
+    ldr w4, [x3]
+    str x4, [x19, #160]
+    dsb sy
+#endif
     ldr x0, [x19, #8]
     mov x1, x20
 .global native_el1_call
 native_el1_call:
     bl native_el1_cache_probe
+#ifdef SUNSTONE_TASK_WORKLOAD
+    mrs x2, mpidr_el1
+    ubfx x2, x2, #8, #3
+    ldr x3, =0x0347041c
+    add x3, x3, x2, lsl #17
+    ldr x4, [x19, #160]
+    str w4, [x3]
+    dsb sy
+    ldr w5, [x3]
+    str x5, [x19, #168]
+    cmp w5, w4
+    b.ne .Lrefuse
+#endif
 #endif
     // No dirty Normal-memory lines exist from this interval. Complete Device
     // stores before disabling M/C/I. Original control has all three clear.

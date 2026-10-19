@@ -25,7 +25,7 @@ identity_pre_scheduler_el1:
     stp x22, x23, [x0, #32]
     mrs x1, vbar_el1
     stp x24, x1, [x0, #48]
-    // Match the production CPU interface except that group delivery stays off.
+    // Match the production CPU interface. Entry-only profiles keep delivery off.
     msr icc_ctlr_el1, xzr
     msr icc_bpr1_el1, xzr
     mov x1, #255
@@ -33,6 +33,11 @@ identity_pre_scheduler_el1:
     isb
     mrs x1, icc_igrpen1_el1
     cbnz x1, identity_park
+#ifdef SUNSTONE_TASK_WORKLOAD
+    mov x1, #1
+    msr icc_igrpen1_el1, x1
+    isb
+#endif
     mov x0, x20
     mov x1, x21
     mov x2, x22
@@ -41,6 +46,59 @@ identity_pre_scheduler_el1:
     bl a733_cached_el1
     b identity_park
 .size identity_pre_scheduler_el1,.-identity_pre_scheduler_el1
+
+#ifdef SUNSTONE_TASK_WORKLOAD
+.global identity_workload_complete
+identity_workload_complete:
+    // The frozen worker reaches this branch only after all 32 FP rounds.
+    // Keep timer delivery running until every worker reaches this boundary.
+    cmp x19, #8
+    b.hs .Lworkload_park
+    ldr x0, =probe_production_el1_stacks
+    add x1, x0, #0x800
+    add x1, x1, x19, lsl #8
+    ldr x21, [x1, #24]
+    ldr x22, [x1, #32]
+.Lworkload_background:
+    // FP completion alone does not imply that a lower-priority task ran.
+    // Block this worker until its own background task has made progress.
+    ldr x0, =probe_worker_results
+    add x0, x0, x19, lsl #7
+    ldr x1, [x0, #8]
+    cbnz x1, .Lworkload_arrive
+    isb
+    mrs x1, cntpct_el0
+    cmp x1, x22
+    b.hs .Lworkload_park
+    mov x0, #2
+    bl vTaskDelay
+    b .Lworkload_background
+.Lworkload_arrive:
+    ldr x0, =probe_production_el1_stacks
+    add x0, x0, #0x400
+    add x1, x0, x19, lsl #3
+    stlr x21, [x1]
+    mov x2, #0
+.Lworkload_wait:
+    add x1, x0, x2, lsl #3
+    ldar x3, [x1]
+    cmp x3, x21
+    b.eq .Lworkload_next
+    isb
+    mrs x3, cntpct_el0
+    cmp x3, x22
+    b.hs .Lworkload_park
+    b .Lworkload_wait
+.Lworkload_next:
+    add x2, x2, #1
+    cmp x2, #8
+    b.lo .Lworkload_wait
+    mov x0, x19
+    b identity_first_task_el0
+.Lworkload_park:
+    wfe
+    b .Lworkload_park
+#endif
 
 identity_first_task_el0:
     svc #0x734
@@ -88,6 +146,15 @@ identity_first_task_svc:
     cmp x6, x7
     b.ne identity_park
     cbz x6, identity_park
+#ifdef SUNSTONE_TASK_WORKLOAD
+    // No more task execution on this CPU. Stop timer generation and delivery
+    // before publishing the final writer-completion record.
+    msr cntp_ctl_el0, xzr
+    msr cntv_ctl_el0, xzr
+    msr icc_igrpen1_el1, xzr
+    dsb sy
+    isb
+#endif
     ldr x0, =probe_production_el1_stacks
     add x8, x0, #0x800
     add x8, x8, x20, lsl #8
@@ -127,6 +194,53 @@ identity_first_task_svc:
     add x3, x3, #1
     cmp x3, #8
     b.lo .Lwait_core
+#ifdef SUNSTONE_TASK_WORKLOAD
+    // Every task/handler writer is now stopped. Drain only our SGI0/PPI30;
+    // unrelated pending or active state prevents return.
+    dsb sy
+    add x0, x24, #0x10000
+    ldr w1, =0x40000001
+    str w1, [x0, #0x180]
+    dsb sy
+.Lworkload_rwp:
+    ldr w2, [x24]
+    tbz w2, #3, .Lworkload_clear
+    isb
+    mrs x2, cntpct_el0
+    cmp x2, x22
+    b.hs identity_park
+    b .Lworkload_rwp
+.Lworkload_clear:
+    ldr w2, [x0, #0x300]
+    cbnz w2, identity_park
+    ldr w2, [x0, #0x200]
+    bic w2, w2, w1
+    cbnz w2, identity_park
+    str w1, [x0, #0x280]
+    dsb sy
+    ldr w2, [x0, #0x200]
+    cbnz w2, identity_park
+    // Inspect stable results only after all writers stopped. Preserve counts
+    // in the existing copied production-state page for host verification.
+    ldr x0, =probe_worker_results
+    mov x1, #0
+.Lworkload_result:
+    add x2, x0, x1, lsl #7
+    ldr x3, [x2]
+    cmp x3, #32
+    b.ne identity_park
+    ldp x3, x4, [x2, #8]
+    cbz x3, identity_park
+    cbz x4, identity_park
+    ldr x3, [x2, #24]
+    cbnz x3, identity_park
+    add x1, x1, #1
+    cmp x1, #8
+    b.lo .Lworkload_result
+    ldr x3, [x0, #32]
+    cmp x3, #32
+    b.lo identity_park
+#endif
     ldr x0, =probe_scheduler_count
     ldr w27, [x0]
     mov x26, #1

@@ -33,7 +33,8 @@ def cached_patch_points(native):
 
 
 def prepare(args):
-    task_switch=getattr(args,"task_switch",False)
+    task_workload=getattr(args,"task_workload",False)
+    task_switch=getattr(args,"task_switch",False) or task_workload
     first_task=getattr(args,"first_task",False) or task_switch
     pre_scheduler=getattr(args,"pre_scheduler",False) or first_task
     interrupts=getattr(args,"interrupts",False)
@@ -64,6 +65,7 @@ def prepare(args):
                               'platform_tick_setup','prvIdleTask','prvPassiveIdleTask',
                               'FreeRTOS_SWI_Handler','pxCurrentTCBs','xIdleTaskHandles')
         if task_switch:names+=('worker','tasks','stacks','vTaskSwitchContext','a733_observe_service_start')
+        if task_workload:names+=('a733_smp_core_results','vTaskDelay')
         native={n:address(n) for n in names}
         if task_switch:
             for name,expected in {'worker':(0x41001280,372),
@@ -118,6 +120,7 @@ def prepare(args):
             *(['-DSUNSTONE_ALL_CORE_PRE_SCHEDULER=1'] if pre_scheduler else []),
             *(['-DSUNSTONE_FIRST_TASK=1'] if first_task else []),
             *(['-DSUNSTONE_TASK_SWITCH=1'] if task_switch else []),
+            *(['-DSUNSTONE_TASK_WORKLOAD=1'] if task_workload else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -134,6 +137,7 @@ def prepare(args):
         symbols += [f'--defsym=probe_swi_next={native["FreeRTOS_SWI_Handler"]+4:#x}',
                     '--defsym=probe_writable_start=0x41200000','--defsym=probe_writable_end=0x41291000']
     if task_switch:symbols += [f'--defsym=probe_worker_tcbs={native["tasks"]:#x}']
+    if task_workload:symbols += [f'--defsym=probe_worker_results={native["a733_smp_core_results"]:#x}']
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
     commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
@@ -179,6 +183,14 @@ def prepare(args):
                 (native['a733_observe_service_start'],0xa9bf7bfd,0xd65f03c0),
                 (native['worker'],0xa9bc7bfd,branch(native['worker'],hooks['identity_first_task_el0'])),
                 first_patches[-1]]
+        if task_workload:
+            # Keep the real timer setup and complete worker loop. Its saved
+            # x19 still identifies the pinned core at the post-loop branch.
+            first_patches=[p for p in first_patches
+                           if p[0] not in (native['platform_tick_setup'],native['worker'],
+                                          native['a733_smp_primary_el1'])]
+            at=native['worker']+0x6c
+            first_patches.append((at,0x35000513,branch(at,hooks['identity_workload_complete'])))
     for item in base['payloads']:
         data=bytearray(frozen[item['name']]);start=item['address']
         if start<=target<start+len(data):
@@ -228,6 +240,13 @@ def prepare(args):
         manifest['task_switch']={'physical_eligible':False,'worker_body':False,
             'idle_body':True,'timer_and_sgi_workload':False,
             'pending':'Instruction execution, host report validation and root review required.'}
+    if task_workload:
+        manifest['schema']='a733-all-core-task-workload-probe-v1'
+        manifest['first_task'].update(task_bodies=True,timer_and_sgi_workload=True)
+        manifest['task_switch'].update(worker_body=True,timer_and_sgi_workload=True)
+        manifest['task_workload']={'physical_eligible':False,'rounds_per_core':32,
+            'completion_patch':native['worker']+0x6c,
+            'pending':'Returning workload instruction checks, host validation and root review required.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
@@ -243,4 +262,5 @@ if __name__=='__main__':
     parser.add_argument("--pre-scheduler",action="store_true",help="Execute the production barrier and atomic lock on all eight cores before cleaned return")
     parser.add_argument("--first-task",action="store_true",help="Offline-only actual task creation/context entry followed by matched cleanup")
     parser.add_argument("--task-switch",action="store_true",help="Offline-only idle yield and worker selection before matched cleanup")
+    parser.add_argument("--task-workload",action="store_true",help="Offline-only complete FP/timer/SGI workload before coordinated return")
     prepare(parser.parse_args())
