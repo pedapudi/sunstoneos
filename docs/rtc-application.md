@@ -12,15 +12,19 @@ USB. Cancellation follows the same ownership and restoration rules.
 The source and linked image pass focused software checks. Physical operation
 and retention remain unqualified.
 
-A separate finite returning client has now observed the controller's inherited
-clock state physically. R_CCU gate/reset-release is `0x10001`, RTC source control
-is `0x401c`, and source status is zero. The external-source adoption requirement
-refuses this state before calendar access. The client records an explicit
-negative outcome and returns normally without RTC writes. Zero calendar fields
-in its log are unobserved placeholders. Evidence:
-`rtc-returning-outcomes-20261018/physical/observation.json`.
-Clock-source support for this observed state is under source review; calendar
-progression, alarms, accuracy and retention remain physically unqualified.
+A separate finite returning client physically reads the inherited normal RC
+clock and calendar. R_CCU gate/reset-release is `0x10001`, RTC source control
+is `0x401c`, source status is zero and the prescaler is `0x0f`. Calibration
+configuration is `0x7a000000` (normal RC selected), and oscillator control
+`0x983fb0f7` has RC enabled. Two coherent reads about 1.1 seconds apart observe
+the calendar advance from 01:45:16 to 01:45:17 on day 1. No RTC register is
+written. The client reports success, and the monitor returns normally with
+restored RAM and responsive ROM. Evidence:
+`rtc-rc-readonly-20261018/physical/observation.json`.
+This establishes read progression only. The inherited calendar is not the
+current date; absolute time, clock accuracy, alarms and retention remain
+unqualified. The earlier strict external-source refusal remains valid for
+that mode, which does not accept this RC configuration.
 
 ## Sources and board prerequisites
 

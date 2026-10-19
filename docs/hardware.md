@@ -226,12 +226,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A [physical SRAM trial](watchdog.md) also passes ROM-redirect and watchdog
   reset-policy programming/restoration with the timer disabled. Timer enabling,
   expiry, and reset retention remain unqualified.
-- RTC and watchdog: a read-only physical observation establishes accessible RTC
-  bus/source registers, with gate/reset-release `0x10001`, source control `0x401c`
-  and status zero. External-source adoption refuses this state before calendar
-  access and returns normally without RTC writes. Calendar progression and alarms
-  remain unqualified; clock-source support is under review. Evidence:
-  `rtc-returning-outcomes-20261018/physical/observation.json`.
+- RTC and watchdog: **tested** coherent RTC reads in inherited normal RC mode,
+  with source control `0x401c`, status zero and prescaler `0x0f`. Two reads about
+  1.1 seconds apart show one second of calendar progression. No RTC register
+  is written; restored RAM and responsive ROM return pass. Absolute time,
+  accuracy, alarms and retention remain unqualified. Evidence:
+  `rtc-rc-readonly-20261018/physical/observation.json`.
   **Implemented** [native RTC operations](rtc-application.md)
   include coherent reads, non-waking alarms, cold-start crystal/calendar
   initialization and reusable calendar setting. One owner serializes two registered

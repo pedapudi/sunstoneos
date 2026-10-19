@@ -11,6 +11,14 @@ the [reference audit](a733-multicore-reference-audit.md#el0-lock-waits-require-p
 This is a source-backed correction, not a physical failure diagnosis. No board
 operation accompanied it. The next physical diagnostic must observe task entry
 and preserve the established return path before another complete-image launch.
+The linked first-task check now stops each CPU at its first EL0 instruction.
+All eight first enter their idle task, matching FreeRTOS's explicit initial TCB
+assignment; the FP workers run after scheduling. Evidence:
+`scheduler-el0-access-20261018/first-task-entry.json`. It observes EL1 stores in
+88 pages. The next returning diagnostic must cover the complete linker-owned
+normal writable interval `0x41200000..0x41291000` (145 pages), including task
+creation and context restoration, rather than treating observed stores as an
+exhaustive bound. Monitor and table reservations are outside that interval.
 
 The first board last returned responsive on port `3-1` as `003:010`, identity
 `[7,2878,1096969,0,0]`. All eight CPUs completed the frozen production
@@ -39,19 +47,20 @@ Earlier builds without that entry correction are not eligible for execution.
 Reuse the accepted physical barrier result; the next CPU work is task selection
 and scheduler startup, including ownership and cleaning of their larger write set.
 
-The second board last returned responsive on port `3-3` as `003:011`, identity
-`[7,2882,1096970,0,0]`, after a read-only RTC observation. R_CCU gate/reset-release
-was `0x10001`; RTC source control was `0x401c` and source status was zero.
-The production driver's external-clock requirement refused this state before
-calendar access. The explicit negative outcome returned normally through the
-accepted monitor. No RTC register was written; calendar zeros in the log are
-unobserved placeholders. The runner stopped and its claim closed as passed for
-the observation, with RTC functional qualification false. Evidence:
-`rtc-returning-outcomes-20261018/physical/observation.json`. No reconnect is needed.
-The RTC worker is checking source-backed support for the observed clock state.
+The second board last returned responsive on port `3-3` as `003:056`, identity
+`[7,3661,1097015,0,0]`, after successful read-only RTC progression. Source control
+was `0x401c`, status zero, prescaler `0x0f`, calibration configuration
+`0x7a000000` and oscillator control `0x983fb0f7`: normal RC mode with RC enabled.
+Two coherent reads 1,100,773 microseconds apart observed one second of calendar
+advancement. Outcome zero and the progression marker passed; restored RAM,
+monitor status zero and responsive ROM return also passed. No RTC register was
+written. The runner exited and its claim closed as passed. Evidence:
+`rtc-rc-readonly-20261018/physical/observation.json`. No reconnect is needed.
+Read progression is established; accuracy, absolute time, alarms and retention
+remain open. The RTC worker is preparing a source-backed alarm proposal.
 
-Second-board DDR continuity is cold126 → register capture127 → PMIC009 → RTC011.
-Refresh current011 launcher state before another native test; do not retrain DDR.
+Second-board DDR continuity is cold126 → register capture127 → PMIC009 → RTC011
+→ RTC056. Refresh current056 launcher state before another native test; do not retrain DDR.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:
