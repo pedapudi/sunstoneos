@@ -241,3 +241,14 @@ The checks execute the published PHY encoding function, exercise ownership and
 failure paths with modeled registers, and run native MMIO guards in Unicorn.
 They preserve exact executables, sources, commands and logs. No USB application,
 mimus workload, board operation or performance benchmark was repeated.
+
+## Bounded native observation and return
+
+The [finite USB diagnostic](../apps/usb-returning/README.md) composes the existing
+PMIC and USB providers with the accepted returning FreeRTOS platform. It observes
+one complete PIO response within a fixed window, parks PMIC work, masks controller
+interrupt generation, detaches, and verifies quiescence before the monitor enters
+the source-backed forced-FEL initialization path. Every resource stays retained
+through reset. Observation expiry reports a controlled negative; it does not
+establish a successful transfer. Software checks pass; physical execution of this
+composition remains pending coordinator admission.

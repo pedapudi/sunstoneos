@@ -91,7 +91,7 @@ def retain_failure(record, save, quarantine, error, helper):
                 helper.hold_ownership()
 
 
-def main(argv=None):
+def main(argv=None, observe=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fel", type=Path, required=True)
     parser.add_argument("--image", type=Path, default=CACHE / "build/qemu-virt/a733-kernel-check.bin")
@@ -226,8 +226,16 @@ def main(argv=None):
                     transaction("write", "0x42000000", args.evidence / "blank.bin")
                     record["launch_attempted"] = True
                     save()
+                    if observe is not None:
+                        record["observation_start_monotonic"] = time.monotonic()
+                        save()
                     transaction("reset64", "0x41000000")
-                    deadline = time.monotonic() + args.return_timeout
+                    deadline = (record["observation_start_monotonic"] if observe is not None
+                                else time.monotonic()) + args.return_timeout
+                    if observe is not None:
+                        # Runs under this same port lock and total return deadline.
+                        # Any transport exception enters the existing retained-failure path.
+                        observe(access, config, node_identity, deadline, record, save)
                     # Poll only host device metadata. Do not send protocol requests until
                     # the new instance exists and udev has granted access.
                     while True:
@@ -235,6 +243,16 @@ def main(argv=None):
                             candidate = access.session_node(config)
                             if (candidate is not None and access.identity(candidate) != node_identity
                                     and os.access(candidate, os.R_OK | os.W_OK)):
+                                if observe is not None:
+                                    # A native USB instance may still be detaching.
+                                    # Inspect metadata before accepting the ROM instance.
+                                    if (access.target(candidate) / "bcdDevice").read_text().strip() != "02b3":
+                                        candidate = None
+                                    if candidate is None:
+                                        if time.monotonic() >= deadline:
+                                            raise RuntimeError("ROM did not return before the total deadline.")
+                                        time.sleep(0.01)
+                                        continue
                                 break
                         except FileNotFoundError:
                             pass
