@@ -1497,6 +1497,29 @@ task switching, timer-driven preemption and sustained eight-core workloads
 remain unqualified. The next diagnostic must preserve the established return
 procedure while extending execution into task bodies and scheduling.
 
+## Idle-to-worker switching passes instruction checks
+
+The `--task-switch` diagnostic extends the returning task profile through each
+idle task's native yield and FreeRTOS context save, selection and restoration.
+Each core reaches its pinned worker with the expected task pointer, initial
+stack and core argument. A diagnostic SVC intercepts the worker before its body.
+Timer and application SGI generation remain disabled.
+
+The frozen ELF also creates a priority-four USB observer on CPU0. This diagnostic
+suppresses that service's constructor; it does not execute USB code. The first
+instruction check exposed this additional task before any board attempt. The
+accepted bundle binds the constructor patch and worker entry patch to exact
+native instructions, and validates worker stack and task-control-block geometry.
+
+All eight idle yields and worker selections pass, followed by the complete
+145-page cleanup, CPU0 restoration and matching secondary shutdown. A corrupted
+worker argument retains all cores without cache cleanup or shutdown. Evidence:
+`all-core-task-switch-20261018/software-no-observer.json` and
+`wrong-task-argument.json`; accepted bundle: `build-no-observer/` in that directory.
+These are modeled instruction results. Host report validation, root review and
+physical qualification remain required. The physical runner rejects the new
+schema until its corresponding host support is implemented.
+
 ## All eight CPUs complete the production barrier and atomic increments
 
 The returning all-core diagnostic calls the frozen production

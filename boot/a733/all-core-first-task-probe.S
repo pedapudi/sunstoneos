@@ -69,11 +69,22 @@ identity_first_task_svc:
     b.ne identity_park
     mrs x4, sp_el0
     ldr x5, [sp]
+#ifdef SUNSTONE_TASK_SWITCH
+    cmp x5, x20
+    b.ne identity_park
+#else
     cbnz x5, identity_park
+#endif
     ldr x6, =pxCurrentTCBs
     ldr x6, [x6, x20, lsl #3]
+#ifdef SUNSTONE_TASK_SWITCH
+    ldr x7, =probe_worker_tcbs
+    mov x8, #168
+    madd x7, x20, x8, x7
+#else
     ldr x7, =xIdleTaskHandles
     ldr x7, [x7, x20, lsl #3]
+#endif
     cmp x6, x7
     b.ne identity_park
     cbz x6, identity_park

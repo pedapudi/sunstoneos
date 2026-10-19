@@ -22,6 +22,7 @@ digest = barrier.digest
 
 class FirstTask(barrier.AllCore):
     cache_lines = 9280
+    task_switch = False
 
     def restore(self, snapshot, fault):
         super().restore(snapshot, fault)
@@ -33,6 +34,7 @@ class FirstTask(barrier.AllCore):
                 self.original_mmio[address] = self.mmio[address]
         self.secure_pmr = [0]*8
         self.entries = {}
+        self.idle_entries, self.idle_yields, self.selected = set(), set(), set()
         self.recent = [deque(maxlen=24) for _ in range(8)]
 
     def pages(self, core):
@@ -67,6 +69,12 @@ class FirstTask(barrier.AllCore):
                     u.mem_write(address, result.to_bytes(size, 'little'))
                 return
         if self.regs[core]['currentel'] == 0:
+            if self.task_switch and 0x41200000 <= address < 0x41291000:
+                assert address+size <= 0x41291000 and core in self.el1_enabled
+                if access == UC_MEM_WRITE:
+                    self.dirty[core].update(range(address & ~63, (address+size+63) & ~63, 64))
+                    self.changed(address, size)
+                return
             assert access != UC_MEM_WRITE and 0x41000000 <= address < 0x41200000
         return super().memory(u, access, address, size, value, core)
 
@@ -76,7 +84,28 @@ class FirstTask(barrier.AllCore):
         ins = self.decoded[address]; op, args = ins.mnemonic, ins.op_str.split(', ')
         r = self.regs[core]
         self.recent[core].append(f'{address:#x} {op} {ins.op_str}')
-        if r['currentel'] == 0:
+        if self.task_switch and address == self.symbols['vTaskSwitchContext']:
+            assert r['currentel'] == 4 and core in self.idle_yields
+            self.selected.add(core)
+        if r['currentel'] == 0 and self.task_switch:
+            idle = self.symbols['prvIdleTask' if core == 0 else 'prvPassiveIdleTask']
+            if address == idle:
+                self.idle_entries.add(core)
+            if op == 'svc' and args == ['#0x69']:
+                assert core in self.idle_entries and idle <= address < idle+(44 if core == 0 else 28)
+                self.idle_yields.add(core)
+            if address == self.symbols['worker']:
+                assert core in self.selected and core not in self.entries
+                assert self.reg(core, 'x0') == core and r['sctlr_el1'] == 0x30d41805
+                tcb = self.q(self.symbols['pxCurrentTCBs']+core*8)
+                stack = (self.symbols['stacks']+(core+1)*16384-8) & ~15
+                assert tcb == self.symbols['tasks']+core*168 and u.reg_read(UC_ARM64_REG_SP) == stack
+                self.entries[core] = {'pc':address, 'sp':stack, 'tcb':tcb, 'argument':core}
+            assert idle <= address < idle+(44 if core == 0 else 28) or address in (
+                self.symbols['worker'],self.survey_hooks['identity_first_task_el0']), {
+                    'core':core,'pc':hex(address),'selected':sorted(self.selected),
+                    'entries':self.entries,'trace':list(self.recent[core])}
+        elif r['currentel'] == 0:
             assert address in (self.symbols['prvIdleTask'], self.symbols['prvPassiveIdleTask'],
                                self.survey_hooks['identity_first_task_el0'])
             if core not in self.entries:
@@ -118,10 +147,13 @@ def main():
     for n in ('image', 'bundle', 'prefix', 'output'):
         p.add_argument('--'+n, type=Path, required=True)
     p.add_argument('--case', choices=('success','wrong-task-argument','restore-el3'), default='success')
+    p.add_argument('--task-switch', action='store_true')
     a = p.parse_args()
     machine = FirstTask(a.image, a.bundle)
+    machine.task_switch = a.task_switch
     machine.local_manifest = json.loads((a.bundle/'manifest.json').read_text())
-    assert machine.local_manifest['schema'] == 'a733-all-core-first-task-probe-v1'
+    assert machine.local_manifest['schema'] == ('a733-all-core-task-switch-probe-v1'
+        if a.task_switch else 'a733-all-core-first-task-probe-v1')
     machine.overlay = (a.bundle/'overlay.bin').read_bytes()
     meta = json.loads(a.prefix.with_suffix('.json').read_text())
     assert digest(a.prefix) == meta['snapshot_sha256']
@@ -164,7 +196,7 @@ def main():
         record = struct.unpack_from('<8Q', raw, 0x3200+c*64)
         entry = machine.entries[c]
         assert record[:4] == (machine.epoch, 1, machine.survey_hooks['identity_first_task_el0']+4, entry['sp'])
-        assert record[4] & 15 == 0 and record[5:] == (entry['tcb'], 0, 0x30d41805)
+        assert record[4] & 15 == 0 and record[5:] == (entry['tcb'], entry['argument'], 0x30d41805)
         assert machine.secure_pmr[c] == 0
     for address, value in machine.original_mmio.items():
         if 0x03400000 <= address < 0x03600000 and address & 0xffff not in (0x180, 0x280, 0x380):
@@ -176,8 +208,13 @@ def main():
         'report_sha256': digest(report), 'clean_lines_per_core': 9280, 'off': machine.stopped,
         'sources': {n: digest(ROOT/n) for n in (*barrier.SOURCES, 'checks/all-core-first-task-probe.py')},
         'limits': __doc__}
+    if a.task_switch:
+        assert machine.idle_entries == machine.idle_yields == machine.selected == set(range(8))
+        result.update(idle_yield_cores=sorted(machine.idle_yields),
+                      worker_selection_cores=sorted(machine.selected),worker_bodies_executed=False)
     a.output.write_text(json.dumps(result, indent=2)+'\n')
-    print('PASS eight first-task entries, full writable-range cleaning and matched return')
+    print('PASS eight '+('idle-to-worker switches' if a.task_switch else 'first-task entries')+
+          ', full writable-range cleaning and matched return')
 
 
 if __name__ == '__main__':

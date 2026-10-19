@@ -33,7 +33,8 @@ def cached_patch_points(native):
 
 
 def prepare(args):
-    first_task=getattr(args,"first_task",False)
+    task_switch=getattr(args,"task_switch",False)
+    first_task=getattr(args,"first_task",False) or task_switch
     pre_scheduler=getattr(args,"pre_scheduler",False) or first_task
     interrupts=getattr(args,"interrupts",False)
     require(not(pre_scheduler and interrupts),'Pre-scheduler profile keeps interrupt delivery disabled.')
@@ -62,7 +63,14 @@ def prepare(args):
         if first_task:names+=('a733_cached_el1','a733_smp_primary_el1','a733_smp_diagnostic_start',
                               'platform_tick_setup','prvIdleTask','prvPassiveIdleTask',
                               'FreeRTOS_SWI_Handler','pxCurrentTCBs','xIdleTaskHandles')
+        if task_switch:names+=('worker','tasks','stacks','vTaskSwitchContext','a733_observe_service_start')
         native={n:address(n) for n in names}
+        if task_switch:
+            for name,expected in {'worker':(0x41001280,372),
+                                  'tasks':(0x41241498,2688),
+                                  'stacks':(0x41201498,262144)}.items():
+                require([(s['st_value'],s['st_size']) for s in entries if s.name==name]==[expected],
+                        'Frozen worker layout differs: '+name)
         if first_task:
             data,bss=(elf.get_section_by_name(n) for n in ('.data','.bss'))
             require(data['sh_addr']==0x41200000 and data['sh_addr']+data['sh_size']<=0x41201000 and
@@ -109,6 +117,7 @@ def prepare(args):
             *(['-DSUNSTONE_SECONDARY_COHERENCE=1'] if coherent else []),
             *(['-DSUNSTONE_ALL_CORE_PRE_SCHEDULER=1'] if pre_scheduler else []),
             *(['-DSUNSTONE_FIRST_TASK=1'] if first_task else []),
+            *(['-DSUNSTONE_TASK_SWITCH=1'] if task_switch else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -124,6 +133,7 @@ def prepare(args):
     if first_task:
         symbols += [f'--defsym=probe_swi_next={native["FreeRTOS_SWI_Handler"]+4:#x}',
                     '--defsym=probe_writable_start=0x41200000','--defsym=probe_writable_end=0x41291000']
+    if task_switch:symbols += [f'--defsym=probe_worker_tcbs={native["tasks"]:#x}']
     return_address=base['hooks']['primary_publication_return']
     symbols.append(f'--defsym=identity_original_return_next={return_address+4:#x}')
     commands.extend([[args.lld,'-T',link,'--gc-sections',*symbols,*[args.output/name for _,name in units],
@@ -160,6 +170,15 @@ def prepare(args):
             (native['prvIdleTask'],0xa9be7bfd,branch(native['prvIdleTask'],hooks['identity_first_task_el0'])),
             (native['prvPassiveIdleTask'],0xd4000d21,branch(native['prvPassiveIdleTask'],hooks['identity_first_task_el0'])),
             (native['FreeRTOS_SWI_Handler'],0xa9bf07e0,branch(native['FreeRTOS_SWI_Handler'],hooks['identity_first_task_svc']))]
+        if task_switch:
+            # Let both idle functions execute their native yield. Intercept the
+            # selected worker before its body, after the real SVC save/select/restore.
+            first_patches=first_patches[:3]+[
+                # The frozen image also creates a higher-priority USB observer
+                # on CPU0. This CPU-only interval must not start that service.
+                (native['a733_observe_service_start'],0xa9bf7bfd,0xd65f03c0),
+                (native['worker'],0xa9bc7bfd,branch(native['worker'],hooks['identity_first_task_el0'])),
+                first_patches[-1]]
     for item in base['payloads']:
         data=bytearray(frozen[item['name']]);start=item['address']
         if start<=target<start+len(data):
@@ -204,6 +223,11 @@ def prepare(args):
         manifest['first_task']={'physical_eligible':False,'writable_interval':[0x41200000,0x41291000],
             'cache_lines_per_core':9280,'task_bodies':False,'timer_and_sgi_workload':False,
             'pending':'Instruction execution, return validation and source review required before physical use.'}
+    if task_switch:
+        manifest['schema']='a733-all-core-task-switch-probe-v1'
+        manifest['task_switch']={'physical_eligible':False,'worker_body':False,
+            'idle_body':True,'timer_and_sgi_workload':False,
+            'pending':'Instruction execution, host report validation and root review required.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
@@ -218,4 +242,5 @@ if __name__=='__main__':
     parser.add_argument("--interrupts",action="store_true",help="Deliver one timer PPI and peer SGI on every secondary before cleaned return")
     parser.add_argument("--pre-scheduler",action="store_true",help="Execute the production barrier and atomic lock on all eight cores before cleaned return")
     parser.add_argument("--first-task",action="store_true",help="Offline-only actual task creation/context entry followed by matched cleanup")
+    parser.add_argument("--task-switch",action="store_true",help="Offline-only idle yield and worker selection before matched cleanup")
     prepare(parser.parse_args())

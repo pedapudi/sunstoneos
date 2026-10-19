@@ -1,5 +1,10 @@
 # Current work
 
+The user will disconnect board two and cannot reconnect either board until
+further notice. Both queues have no active physical tests. Continue offline
+implementation, instruction checks and integration; defer new hardware launches
+that could require physical recovery. Do not request another reconnect meanwhile.
+
 All eight CPUs physically reach their first FreeRTOS task context and return
 safely. The returning diagnostic executes actual task construction and initial
 context restoration, then records the idle-task pointer, stack, argument and
@@ -15,6 +20,15 @@ task execution and switching are next; sustained multicore scheduling remains
 unqualified. The existing production barrier and 256 atomic increments also
 pass in this physical attempt. Reuse these results without repeating the launch.
 
+An offline extension now passes actual idle-task yield, FreeRTOS context
+save/selection/restoration and pinned-worker entry on all eight cores. Complete
+owned-memory cleaning and matched return pass; a wrong worker argument retains
+all cores before cleanup. Evidence: `all-core-task-switch-20261018/`, accepted
+bundle `build-no-observer/`. The frozen image's higher-priority USB observer is
+suppressed in this CPU-only diagnostic. Worker bodies and timer/SGI workloads
+remain excluded. Host report validation and root review are required before any
+future physical use; the current runner does not admit this new schema.
+
 Finite thermal, ADC and USB applications are integrated, together with healthy
 GPU CLOSE and terminal NPU CLOSE. Their focused checks and Astra reviews pass;
 compiled-input comparisons reuse those results without repeating them. Evidence:
@@ -24,7 +38,9 @@ compiled-input comparisons reuse those results without repeating them. Evidence:
 `gpu-returning-integration-20261018/frozen/integration.json`.
 GPU and NPU finite adapters are integrated. Both stop their workers and park
 PMIC outside active requests before the final task critical section. Shared
-monitor, timer, memory and retained-session integration remains. All 172 NPU
+monitor, timer, memory and retained-session integration remains. GPU and NPU
+workers now own separate app-local returning compositions offline; root retains
+CPU and shared-startup ownership. All 172 NPU
 compiler inputs match. The 89 new GPU compiler inputs match; two inherited
 monitor/runtime sources have additional inactive branches, so the accepted GPU
 objects and their frozen inputs remain authoritative. Evidence:
@@ -39,28 +55,39 @@ also integrated. Twelve source cases and seventeen alarm cases pass, with
 own physical admission before alarm testing. Alarm success additionally requires
 verified Secure interrupt-state restoration; a completion message is insufficient.
 
-The second board is recovered on port `3-3` as `003:064`, identity
-`[7,3762,1097023,0,0]`, after the user removed and reconnected USB power.
-FEL version responds and session access persists. The prior outer coordinator,
-wrapper and retained runner are stopped; their failed queue claim is closed and
-the halt is cleared. Evidence:
-`usb-returning-20261018/root-physical-056/recovery-064.json`.
-Fresh DDR initialization now passes with two matching 4 KiB RAM pages. The
-returning SRAM survey also passes every launcher prerequisite and restores its
-scratch memory. Evidence: `second-board-cold-064-20261018/`. This establishes
-initialization and sampled RAM access; complete capacity and stability remain
-unqualified. Device-specific electrical and ownership admission is still needed.
-Previous056 electrical, clock and memory observations do not transfer across the
-power cycle. Board one remains available on `3-1`.
+The second board was recovered as `003:073`, identity
+`[7,3858,1097032,0,0]`, after the user removed and reconnected its sole USB power
+source. ROM version and access pass. The retained coordinator, wrapper and runner
+are stopped, the failed queue claim is closed, and the queue halt is cleared.
+Evidence: `usb-first-fault-20261018/root-physical-064/recovery-073.json`.
+This recovery precedes the user's planned disconnection. Fresh cold DDR and
+platform admission will be required when the board is available again.
 
-The preceding bounded USB attempt returned responsive ROM as `003:063`, but
-native preparation failed with step 5, PMIC stage 4 and USB stage 19. All four
-PMIC supply snapshots matched and were reaped. The platform fault overwrites its
-original stage, so USB writes cannot be excluded from this report. No host
-exchange occurred. Source diagnosis and first-fault instrumentation are in
-progress; no unchanged retry is permitted. Evidence:
-`usb-returning-20261018/physical/runtime/session.json`. Saved diagnostic RAM
-remains under `root-physical-056/`; it was not restored across cold power loss.
+The preceding USB attempt returned to ROM as `003:071` with native status 1.
+Its first-fault report identifies a value mismatch at `0x04100040`: mask `0x700`,
+expected zero, observed `0x29940`. The USB provider reports zero attempted and
+completed writes. All four PMIC snapshots matched and were reaped; no native USB
+exchange began. Source investigation identifies an inherited device-session bit
+rejected by the current guard. The USB worker is preparing the correction and
+focused review. No unchanged retry is authorized. Evidence:
+`usb-first-fault-20261018/physical-064/runtime/session.json` and `kernel.log`.
+Saved RAM was not restored across power removal.
+
+Before this attempt, independent cold DDR initialization and two 4 KiB page
+comparisons passed on instance064. Its returning SRAM survey passed every
+launcher prerequisite and restored scratch memory. Fresh CCU/reference and
+USB-selector/DMA0 captures passed. Evidence: `second-board-cold-064-20261018/`
+and `usb-first-fault-20261018/{fabric-064,entry-064}/`. The configured AHB/NSI/MBUS
+rates were 200/600/600 MHz; these are register-derived rates, not measurements.
+This establishes initialization and sampled RAM access, not complete capacity
+or stability. The subsequent failed attempt does not permit reuse of this state.
+
+The USB BUSY correction and first-fault reporting are integrated. Thirteen
+changed-path cases and focused review pass. All 65 new compiler inputs and 31
+reused objects match their recorded inputs; all four consumers of the enlarged
+USB structures were rebuilt. Existing native and host suites were reused.
+Evidence: `usb-first-fault-20261018/integration.json`. The preceding instance063
+failure had no first-fault report, so its precise cause remains unknown.
 
 The scheduler privilege audit identified an EL0 lock-wait defect. FreeRTOS's
 contended recursive lock executes WFE, but cached startup left SCTLR_EL1.nTWE
@@ -110,7 +137,7 @@ responsive ROM return passed. The kernel runner did not restore prior DRAM
 contents; this result does not establish memory restoration. No RTC register was
 written. The runner exited and its claim closed as passed. Evidence:
 `rtc-rc-readonly-20261018/physical/observation.json`. The subsequent USB failure
-was recovered by the power cycle recorded above.
+was recovered by the earlier power cycle to064.
 Read progression is established; accuracy, absolute time, alarms and retention
 remain open. The integrated source and alarm applications await physical admission.
 
@@ -119,7 +146,8 @@ Second-board DDR continuity is cold126 → register capture127 → PMIC009 → R
 under `usb-returning-20261018/warm-056/` and `fabric-056/`. USB selector zero
 and reset-held DMA0 pass under `entry-056/`; no DMA aperture was accessed.
 The subsequent USB attempt returned a failure report. Power removal ended
-that lifetime; current064 has the independent DDR and survey evidence above.
+that lifetime. The later independent064 admission and retained071 failure are
+recorded above.
 The preceding production PMIC test completed one DCDC1 snapshot, request reap,
 client-lease release and idle-state checks with inherited settings restored.
 DCDC1 was enabled with selector `0x17`, decoded as programmed 3.3 V. Evidence:

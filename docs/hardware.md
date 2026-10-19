@@ -1010,14 +1010,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   and twenty-three host cases under `usb-returning-20261018/`. It requires a
   complete 40-byte response, parks PMIC activity, quiesces USB and returns through
   the matched ROM initialization path. All 65 newly compiled inputs match
-  integration. Its physical attempt returned responsive ROM with native status
-  1 during USB preparation, before any host exchange. All four PMIC supply
-  snapshots matched, but the original platform failure stage was overwritten.
-  USB writes and shutdown state remain unresolved. The user recovered the board
-  by removing power; the retained processes stopped and the failed claim closed.
-  No transport failure occurred. Evidence:
-  `usb-returning-20261018/physical/runtime/`. This does not qualify the native
-  USB composition or authorize an unchanged retry.
+  integration. Thirteen additional cases pass for BUSY handling and preservation
+  of the first preparation fault; all consumers of the enlarged structures were
+  rebuilt. A physical attempt with that report returns native status 1 before
+  any USB-controller writes. It rejects the inherited value `0x29940` at
+  `0x04100040` under mask `0x700`. All four PMIC snapshots matched and were reaped;
+  no USB exchange began. Source investigation identifies a device-session bit
+  rejected by the current guard; its correction and review are pending.
+  Evidence: `usb-first-fault-20261018/physical-064/runtime/`. User-confirmed power
+  removal recovered the board, and the retained processes and failed claim are
+  closed. This does not qualify the native USB composition.
 
 - USB host and Type-C: **implemented** native [source power and attachment
   control](typec.md), plus [high-speed USB2 host transfers](usb2-host.md) through

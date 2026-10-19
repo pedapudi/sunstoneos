@@ -25,8 +25,10 @@ and requests no context switch. All eight CPUs also complete the production pre-
 lock-protected increments under
 `all-core-pre-scheduler-20261018/entry-corrected/physical-008/`, followed by
 complete owned-page cleaning, restored controls and matching shutdown/OFF.
-Task selection, broader runtime memory use and
-eight-core FreeRTOS scheduling remain unqualified.
+All eight cores also physically complete FreeRTOS task construction and initial
+idle-task context restoration, followed by full writable-memory cleanup and
+restored ROM return. Evidence: `all-core-first-task-20261018/physical-010/`.
+Task switching and sustained eight-core FreeRTOS scheduling remain unqualified.
 
 This comparison is for developers changing A733 startup. It distinguishes
 architectural requirements, reference implementation choices and physical
