@@ -18,18 +18,33 @@ static int timely(struct a733_rtc *r)
 static int read_reg(struct a733_rtc *r,uint32_t o,uint32_t *v)
 {return timely(r)&&r->ops.read(r->context,o,v)==1&&timely(r);}
 static int write_reg(struct a733_rtc *r,uint32_t o,uint32_t v)
-{return timely(r)&&r->ops.write(r->context,o,v)==1&&timely(r);}
+{return !r->read_only&&r->ops.write&&timely(r)&&r->ops.write(r->context,o,v)==1&&timely(r);}
 static int fail(struct a733_rtc *r){r->state=A733_RTC_RETAINED;return 0;}
 /* Manual9.1.7.1 pp391-393: busy8/7, source1/0, crystal gate4;
  * stable auto-switch15/14 and oscillator gain3/2.9.1.7.2 status0=external. */
 static int clock_ok(struct a733_rtc *r)
 {
-    uint32_t control,status;
-    if(!read_reg(r,0,&control)||!read_reg(r,4,&status)||
-       (control&0x193)!=0x11||(status&7)!=1)return 0;
-    if(r->state!=A733_RTC_EMPTY&&
-       ((control^r->snapshot.clock_control)&0xc01f))return 0;
-    r->snapshot.clock_control=control;r->snapshot.clock_status=status;return 1;
+    uint32_t control,status,prescaler=0,calibration=0,oscillator=0;
+    if(!read_reg(r,0,&control)||!read_reg(r,4,&status))return 0;
+    unsigned source=A733_RTC_READ_EXTERNAL;
+    if((control&0x193)!=0x11||(status&7)!=1){
+        /* Manual9.1.7.1-.4: RTC_SRC=LOSC, LOSC_SRC=RC. Normal RC
+         * divides by32 and (PRESCAL[4:0]+1); do not assert a 32768Hz rate.
+         * +0x160 bit0 is RC enable. These registers share the admitted RTC
+         * aperture; the caller must establish bus accessibility first. */
+        if(!r->read_only||(control&0x183)||(status&7)||
+           !read_reg(r,0x0c,&calibration)||(calibration&1)||
+           !read_reg(r,0x08,&prescaler)||!read_reg(r,0x160,&oscillator)||!(oscillator&1))return 0;
+        source=A733_RTC_READ_RC_NORMAL;
+    }
+    if((r->state!=A733_RTC_EMPTY||(r->read_only&&r->read_source))&&
+       (((control^r->snapshot.clock_control)&0xc01f)||
+        (r->read_only&&(source!=r->read_source||
+         ((prescaler^r->prescaler)&31)||((calibration^r->calibration)&1)||
+         ((oscillator^r->oscillator)&1)))))return 0;
+    r->snapshot.clock_control=control;r->snapshot.clock_status=status;
+    r->read_source=source;r->prescaler=prescaler;r->calibration=calibration;r->oscillator=oscillator;
+    return 1;
 }
 static unsigned leap(unsigned y){return y%4==0&&(y%100!=0||y%400==0);}
 static int decode(uint32_t day,uint32_t hms,struct a733_rtc_time *out)
@@ -55,10 +70,12 @@ static int coherent(struct a733_rtc *r,struct a733_rtc_time *out)
     }
     return 0;
 }
-int a733_rtc_open(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
+static int open_rtc(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline,unsigned read_only)
 {
-    if(!r||r->state!=A733_RTC_EMPTY||!ops||!ops->now_us||!ops->read||!ops->write||!deadline)return 0;
-    r->ops=*ops;r->context=context;r->deadline=deadline;
+    if(!r||r->state!=A733_RTC_EMPTY||!ops||!ops->now_us||!ops->read||(!read_only&&!ops->write)||!deadline)return 0;
+    r->ops=*ops;r->read_only=read_only;if(read_only)r->ops.write=NULL;
+    r->read_source=0;r->prescaler=0;r->calibration=0;r->oscillator=0;
+    r->context=context;r->deadline=deadline;
     atomic_init(&r->owned,0);atomic_init(&r->irq_seen,0);atomic_init(&r->irq_fault,0);
     uint32_t pending,output;
     if(!clock_ok(r)||!read_reg(r,ENABLE,&r->saved_enable)||!read_reg(r,IRQEN,&r->saved_irq_enable)||
@@ -68,6 +85,10 @@ int a733_rtc_open(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *contex
        !coherent(r,&r->snapshot.initial))return fail(r);
     r->state=A733_RTC_READY;return 1;
 }
+int a733_rtc_open(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
+{return open_rtc(r,ops,context,deadline,0);}
+int a733_rtc_open_readonly(struct a733_rtc *r,const struct a733_rtc_ops *ops,void *context,uint64_t deadline)
+{return open_rtc(r,ops,context,deadline,1);}
 int a733_rtc_read(struct a733_rtc *r,struct a733_rtc_time *out)
 {
     if(!r||!out||(r->state!=A733_RTC_READY&&r->state!=A733_RTC_ARMED))return 0;
@@ -75,7 +96,7 @@ int a733_rtc_read(struct a733_rtc *r,struct a733_rtc_time *out)
 }
 int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
 {
-    if(!r||r->state!=A733_RTC_READY||delay<1||delay>10)return 0;
+    if(!r||r->read_only||r->state!=A733_RTC_READY||delay<1||delay>10)return 0;
     struct a733_rtc_time now,latest;
     if(!coherent(r,&now))return fail(r);
     uint64_t target=seconds(&now)+delay;
@@ -99,7 +120,7 @@ int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
 int a733_rtc_irq(struct a733_rtc *r)
 {
     uint32_t pending;
-    if(!r||!atomic_load_explicit(&r->owned,memory_order_acquire))return 0;
+    if(!r||r->read_only||!atomic_load_explicit(&r->owned,memory_order_acquire))return 0;
     if(!read_reg(r,STATUS,&pending)||!(pending&1)||
        !write_reg(r,IRQEN,r->saved_irq_enable&~UINT32_C(1))||!write_reg(r,STATUS,1)){
         atomic_store_explicit(&r->irq_fault,1,memory_order_release);return 0;
@@ -108,7 +129,8 @@ int a733_rtc_irq(struct a733_rtc *r)
 }
 int a733_rtc_finish(struct a733_rtc *r,int cancel)
 {
-    if(!r||r->state!=A733_RTC_ARMED||atomic_load_explicit(&r->irq_fault,memory_order_acquire))return r?fail(r):0;
+    if(!r||r->read_only)return 0;
+    if(r->state!=A733_RTC_ARMED||atomic_load_explicit(&r->irq_fault,memory_order_acquire))return fail(r);
     unsigned seen=atomic_load_explicit(&r->irq_seen,memory_order_acquire);
     if(!cancel&&!seen)return 0;
     uint32_t pending,en,irq,d,h;

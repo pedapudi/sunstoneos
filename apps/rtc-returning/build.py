@@ -26,8 +26,9 @@ for item in list(manifest['sources'].values())+manifest['artifacts']:
 old=json.loads((base/'commands.json').read_text());flags=old[0][:old[0].index('-MMD')]
 flags=[x.replace('/home/sunil/git/sunstoneos-worktrees/pmic-provider-probe-20261018',str(r)) for x in flags]
 commands=[];objects=[]
-for i,source in enumerate([r/'apps/rtc-returning/main.c',r/'drivers/rtc/a733_rtc.c']):
- obj=o/f'new-{i}.obj';objects.append(obj)
+for i,source in enumerate([r/'apps/rtc-returning/main.c',r/'drivers/rtc/a733_rtc.c',r/'drivers/rtc/a733_rtc_initialize.c']):
+ obj=o/f'new-{i}.obj'
+ if i<2:objects.append(obj)
  commands.append(flags+['-MD','-MF',str(obj)+'.d','-c',str(source),'-o',str(obj)])
 reused=[]
 items=json.loads((base/'reused-objects.json').read_text())
@@ -40,12 +41,18 @@ for i,item in enumerate(items):
  dest=o/f'reused-{i}.obj';shutil.copy2(source,dest);objects.append(dest)
  reused.append({'original':str(source),'path':str(dest),'sha256':digest(dest)})
 link=[old[-2][0],'--target=aarch64-none-elf',old[-2][2],'-nostdlib','-static','-Wl,--gc-sections',f'-Wl,-T,{r}/platform/a733/link.ld',f'-Wl,-Map,{b}/probe.map',*map(str,objects),'-o',str(b/'probe.elf')]
-commands += [link,[old[-1][0],'-O','binary',str(b/'probe.elf'),str(e/'probe.bin')]]
+# The policy fixture retains mutation entry points and the unchanged calendar
+# initializer solely for focused rejection checks. They are not forced into
+# the deployable returning image.
+policy=[x.replace(str(b/'probe.map'),str(b/'policy.map')).replace(str(b/'probe.elf'),str(b/'policy.elf')) for x in link]
+policy[3:3]=['-Wl,--undefined='+name for name in ('a733_rtc_open','a733_rtc_arm','a733_rtc_irq','a733_rtc_finish','a733_rtc_initialize','a733_rtc_set_calendar')]
+policy[-2:-2]=[str(o/'new-2.obj')]
+commands += [link,[old[-1][0],'-O','binary',str(b/'probe.elf'),str(e/'probe.bin')],policy]
 save('commands.json',commands);save('reused-objects.json',reused)
 for i,command in enumerate(commands):
  with (e/f'build-{i}.log').open('w') as log:
   subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,check=True)
-# Record and copy the exact compiler dependency closure for both new units.
+# Record and copy the exact compiler dependency closure for the two runtime units and check-only initializer.
 inputs=set([r/'platform/a733/link.ld',Path(__file__).resolve()])
 for dep in o.glob('new-*.obj.d'):
  text=dep.read_text().replace('\\\n',' ');inputs.update(Path(x) for x in shlex.split(text.split(':',1)[1]))
@@ -60,11 +67,11 @@ for command in commands:
   if path.is_absolute() and path.is_file() and (value.startswith('--ld-path=') or value==command[0]):
    assert digest(path)==accepted['tools'][str(path)]['sha256'],path
    tools[str(path)]={'sha256':digest(path),'resolved':str(path.resolve())}
-save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'baseline_snapshot_manifest_sha256':digest(base/'snapshot/manifest.json'),'toolchain':tools,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'physical_access':False})
+save('input-identities.json',{'repository_revision_at_build':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'new_compiler_inputs':closure,'baseline_input_records_sha256':digest(base/'input-identities.json'),'baseline_snapshot_manifest_sha256':digest(base/'snapshot/manifest.json'),'toolchain':tools,'elf_sha256':digest(b/'probe.elf'),'binary_sha256':digest(e/'probe.bin'),'policy_elf_sha256':digest(b/'policy.elf'),'physical_access':False})
 shutil.copy2(base/'input-identities.json',e/'baseline-input-identities.json')
-print(f'Built RTC returning image; {len(reused)} unchanged objects, two new units.')
+print(f'Built RTC returning image; {len(reused)} unchanged objects, two runtime units plus one check-only initializer.')
 
-for name in ('check.py','README.md'):
+for name in ('check.py','policy-check.py','README.md'):
  source=r/'apps/rtc-returning'/name
  if source.exists():shutil.copy2(source,e/name)
 shutil.copy2(r/'checks/storage-read-native.py',e/'layout-helper.py')

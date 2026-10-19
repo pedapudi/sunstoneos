@@ -12,7 +12,7 @@ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=
 helper=e/'layout-helper.py'
 spec=importlib.util.spec_from_file_location('layout',helper);layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
 image=layout.Image(e/'build/probe.elf')
-variants=['advance-one','advance-two','day-rollover','gate-off','irq-enabled','irq-pending','irq-active','invalid-source','invalid-calendar','inherited-event','deadline','no-advance','source-changed','counter-frequency','write-attempt']
+variants=['external-readonly','normal-rc-progress','normal-rc-day-zero','calibrated-rc-refusal','rc-disabled','rc-prescaler-changed','rc-source-changed','rc-calibration-selected','rc-gate-lost','rc-unused-factors-changed','rc-shared-dcxo-changed','rc-prescaler-reserved-changed','normal-rc-other-delta','gate-off']
 cases=[]
 for variant in variants:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x06000000);u.mem_map(0x40000000,0x04000000)
@@ -20,16 +20,32 @@ for variant in variants:
   if data:u.mem_write(address,data)
  u.reg_write(UC_ARM64_REG_PSTATE,5);u.reg_write(UC_ARM64_REG_CPACR_EL1,3<<20)
  state={'time':1000000,'exit':None,'reads':[],'writes':[],'delays':0,'task':None,'scheduler':False,'rtc_writes':0}
- initial=20000*86400+(86399 if variant=='day-rollover' else 0)
+ rc=variant not in ('external-readonly','gate-off')
+ initial=20000*86400
  phase=950000 if variant in ('advance-two','day-rollover') else 0
  def value(address):
   elapsed=0 if variant=='no-advance' else state['time']-1000000
   seconds=initial+(elapsed+phase)//1000000
+  if variant=='normal-rc-other-delta':seconds=initial+(elapsed+phase)*16000000//(1000000*32*32768)
   values={0x0701020c:0 if variant=='gate-off' else 0x10001,0x03400000:0x33,
    0x0340011c:16 if variant=='irq-enabled' else 0,0x0340021c:16 if variant=='irq-pending' else 0,
    0x0340031c:16 if variant=='irq-active' else 0,0x07090000:0x11,0x07090004:1,
    0x07090010:seconds//86400,0x07090014:((seconds%86400//3600)<<16)|((seconds%3600//60)<<8)|(seconds%60),
    0x07090020:0x1234,0x07090024:0x00010203,0x07090028:0,0x0709002c:0,0x07090030:0,0x07090050:0}
+  if rc:
+   values.update({0x07090000:0x401c,0x07090004:0,0x07090008:15,0x0709000c:0x7a000000,0x07090160:0x10000003})
+   if variant=='normal-rc-day-zero':values[0x07090010]=0
+   if variant=='calibrated-rc-refusal':values[0x0709000c]|=1
+   if variant=='rc-disabled':values[0x07090160]&=~1
+   if variant=='normal-rc-other-delta':values[0x07090008]=0
+   if state['delays']:
+    if variant=='rc-prescaler-changed':values[0x07090008]=14
+    if variant=='rc-source-changed':values[0x07090000]|=1;values[0x07090004]=1
+    if variant=='rc-calibration-selected':values[0x0709000c]|=1
+    if variant=='rc-gate-lost':values[0x07090160]&=~1
+    if variant=='rc-unused-factors-changed':values[0x0709000c]=0x7b000006
+    if variant=='rc-shared-dcxo-changed':values[0x07090160]=0x20ff0001
+    if variant=='rc-prescaler-reserved-changed':values[0x07090008]=0xffff000f
   if variant=='invalid-source':values[0x07090004]=0
   if variant=='source-changed' and state['delays']:values[0x07090000]=0x15
   if variant=='invalid-calendar':values[0x07090010]=0
@@ -75,7 +91,7 @@ for variant in variants:
  u.emu_start(image.address('kernel_main'),0,count=5000000)
  length=int.from_bytes(u.mem_read(0x42000018,8),'little');text=bytes(u.mem_read(0x42000100,length)).decode()
  assert state['task'] and state['scheduler'] and not state['writes'] and length<16127
- success=variant in ('advance-one','advance-two','day-rollover')
+ success=variant in ('external-readonly','normal-rc-progress','rc-unused-factors-changed','rc-shared-dcxo-changed','rc-prescaler-reserved-changed')
  assert state['exit']==(1 if variant=='write-attempt' else 0),(variant,text)
  if variant=='write-attempt':
   assert 'FAIL unexpected RTC write request' in text and 'COMPLETE native RTC read-only result' not in text and 'PASS native RTC' not in text,text
@@ -94,12 +110,17 @@ for variant in variants:
   assert not state['reads'] and 'RTC_READ_OBSERVED_MASK=0x0000000000000000' in text and 'RTC_READ_REASON=counter init' in text,text
  if success:
   assert 'PASS native RTC coherent read progression' in text and 1100000<=state['time']-1000000<1500000,(variant,text)
-  expected=1 if variant=='advance-one' else 2
+  expected=1
   assert f'calendar advance seconds=0x{expected:016x}' in text,text
   if variant=='day-rollover':assert 'day=0x0000000000004e21' in text,text
  if variant in ('gate-off','irq-enabled','irq-pending','irq-active'):
   assert not any(0x07090000<=x<=0x07090050 for x in state['reads'])
  if variant=='gate-off':assert state['reads']==[0x0701020c]
+ if variant=='external-readonly':assert not any(x in state['reads'] for x in (0x07090008,0x0709000c,0x07090160))
+ if rc and success:assert 'RTC_READ_OBSERVED_MASK=0x00000000000000ff' in text and 'RTC_READ_SOURCE_KIND=0x0000000000000002' in text,text
+ if variant=='calibrated-rc-refusal':assert 0x07090010 not in state['reads'] and 0x07090160 not in state['reads']
+ if variant=='rc-disabled':assert 0x07090010 not in state['reads']
+ if variant=='normal-rc-other-delta':assert 'RTC_READ_REASON=calendar progression' in text and 'RTC_READ_SOURCE_KIND=0x0000000000000002' in text,text
  if variant=='deadline':assert state['delays']==1 and 'wait deadline' in text
  # The actual linked callback must reject every store without an MMIO write.
  for offset in (0,0x10,0x14,0x20,0x24,0x28,0x2c,0x30,0x50):

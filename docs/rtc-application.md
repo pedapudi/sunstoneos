@@ -486,3 +486,27 @@ capture must contain the existing ten-result service demonstration. Stop after
 the first transport failure or disappearance and retain every resource until
 confirmed whole-board power removal. Software fixture bundles supply no physical
 authority.
+
+## Returning read-only source adoption
+
+The finite returning client now uses an explicit read-only driver entry. It can
+adopt a valid calendar from the external source or normal internal RC. Internal
+adoption requires enabled RC, uncalibrated selection and stable source/prescaler
+fields; it records the inherited configuration without asserting 1 Hz or accuracy.
+Calibrated RC selection is refused until its readiness contract is established.
+The existing 1.1-second client test accepts one or two observed calendar seconds;
+other actual deltas remain negative progression results with retained observations.
+
+The instance exposes no write callback, and alarm mutation APIs reject it. The
+existing source/calendar initialization APIs reject these instance ops before
+I/O. Independently retained caller ops remain separate privileged authority.
+Existing strict open, alarm and calendar-write callers retain their external-source
+policy. Source metadata stays outside the sealed 88-byte snapshot. The returning
+client adds a narrow read allowance for RTC+0x160 under its existing bus preflight
+and unchanged Device mapping; other application callback allowlists are unchanged.
+
+Focused changed-path native evidence is retained under
+`~/.cache/sunstoneos/evidence/rtc-rc-readonly-20261018/`. It models time, scheduler
+services and register values; physical RC calendar operation remains pending.
+Normal-RC alarms, calendar writes and full service, source switching, calibration,
+accuracy and retention remain required subsequent work.
