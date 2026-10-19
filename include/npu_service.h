@@ -55,10 +55,27 @@ struct npu_service_activation {
 };
 /* Private static storage. Public only so the platform can reserve it without
  * a heap. Application code must not inspect or modify these fields. */
+/* Optional single-owner IRQ binding. Callbacks run only in the worker and
+ * return 1 complete, 0 deferred, -1 retained failure. mask proves disable has
+ * propagated and no handler remains active. rearm never clears pending and is
+ * invoked inside the kernel critical section after checking latched events.
+ * stop follows successful controller CLOSE (events disabled/full idle), and
+ * proves the owned GIC source disabled, inactive and pending clear. */
+struct npu_service_irq_ops {
+    int (*mask)(void *);
+    int (*rearm)(void *);
+    int (*stop)(void *);
+};
 struct npu_service {
     struct a733_npu_controller controller;
     struct a733_npu_ops ops;
     void *cookie;
+    struct npu_service_irq_ops irq_ops;
+    void *irq_cookie;
+    atomic_uint irq_pending, irq_stopped, irq_completions;
+    unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
+    struct npu_service_message deferred;
+    unsigned has_deferred;
     struct a733_npu_mmu_image image;
     struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
     unsigned command_count, owner, initialized;
@@ -104,6 +121,15 @@ int npu_service_init_deferred(struct npu_service *,const struct a733_npu_ops *,v
  * Bootstrap task, callback context and prepared resources remain live/pinned. */
 enum npu_service_result npu_service_activate(struct npu_service *);
 int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t command_mask);
+
+/* Optional private binding after init, before scheduling. The route/cookie and
+ * worker remain pinned. ISR entry follows root-owned mask of INTID97; it never
+ * reads NPU registers. mask_ok failure is sticky. Pre-binding IRQ dispatch must
+ * be retained by the platform. */
+int npu_service_bind_irq(struct npu_service *,const struct npu_service_irq_ops *,void *);
+void npu_service_irq_notify_from_isr(struct npu_service *,int mask_ok,BaseType_t *woken);
+int npu_service_irq_stopped(const struct npu_service *);
+unsigned npu_service_irq_completions(const struct npu_service *);
 
 /* Task-only calls. Caller identity comes from FreeRTOS, never from the request.
  * send copies its request; success means queued, not accepted by the controller.

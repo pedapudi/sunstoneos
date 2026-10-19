@@ -91,8 +91,10 @@ still include Linux-specific interface headers. The native application supplies
 its own checked register access, private allocations, cache publication, bounded
 polling and FreeRTOS task/lock interfaces through repository source. It does not
 link the Linux driver or its file and ioctl interfaces into FreeRTOS. The first
-trusted convolution polls completion with interrupt ID 97 masked; interrupt-driven
-completion and broader concurrent use still require qualification.
+trusted convolution defaults to polling with interrupt ID 97 masked. The optional
+[finite interrupt profile](../apps/npu-interrupt/README.md) implements deferred
+completion on that interrupt. Physical interrupt delivery and broader concurrent
+use still require qualification.
 
 No external firmware request was found in the inspected VIPLite 2 subtree.
 That observation does not establish that every compiler or execution mode is

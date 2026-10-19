@@ -163,3 +163,56 @@ timeout 10s ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64 \
 ```
 
 The emulator must exit with status zero and print `PASS NPU service:`.
+
+## Optional interrupt service preserves one event owner
+
+The finite single-core interrupt profile binds copied private callbacks before
+scheduling through `npu_service_bind_irq`. The existing unbound service remains
+polled. The binding and worker remain pinned; successful terminal CLOSE cannot
+reopen an interrupt binding. Requests and replies retain their existing layout.
+
+The platform ISR masks interrupt 97 and calls
+`npu_service_irq_notify_from_isr`. This latches an event notification or a sticky
+mask failure and wakes the worker. The ISR performs no NPU register read, output
+copy or cache operation. Pre-binding delivery is a retained platform failure.
+
+The worker alone reads the destructive event register. Ordinary deadline and
+idle checks do not consume an unnotified event. A successful completion still
+requires event zero, full idle, a second error check and output synchronization.
+The service counts only successful notified bootstrap and job completions; the
+finite client requires three, covering bootstrap and both inference jobs. Missing
+notifications expire with all borrowed memory retained. Cancellation progresses
+through its existing bounded request/acknowledgment/idle protocol without requiring
+an interrupt.
+
+The callback contract is specific to this source and consumer:
+
+| Callback | Invocation and completion condition |
+| --- | --- |
+| `mask` | Before OPEN, SUBMIT, CANCEL, CLOSE or notified event service when not already masked. Success proves disable propagation and no active handler. |
+| `rearm` | Only for an active bootstrap/job with no latched completion. The worker checks pending notifications and invokes rearm inside one kernel critical section. Pending state is never cleared by rearm. |
+| `stop` | Only after successful controller CLOSE has disabled device events and proved full idle. Success proves the owned source disabled, inactive and pending clear. |
+
+Each callback returns 1 for completion, 0 for deferred progress or -1 for a
+retained fault. Deferred work resumes through the worker's bounded waits, without
+a spin loop. A retained callback is never retried. Notifications arriving before
+rearm remain latched for service. Client queue insertion also wakes the worker,
+and request traffic cannot suppress deadline checks.
+
+CLOSE remains a worker-owned pending request while mask or stop is deferred. The
+service publishes its stopped receipt and releases the session owner only after
+stop succeeds. A failure keeps the owner and buffers retained. Controller faults
+allow status replies while deferred architecture masking continues; they permit
+no further NPU backend access. A late interrupt revokes the stopped receipt and
+latches failure. The finite application requires that receipt before suspending
+workers and again before normal return.
+
+Focused checks use the real FreeRTOS service, controller, native memory policy
+and cache adapter with modeled register effects and IRQ notifications. They
+cover pending notification during rearm, three completions and output acquisition,
+deferred mask/stop, missing IRQ deadlines, mask/rearm/device/stop failures,
+diagnostic replies after a deferred-mask timeout and cancellation without an
+event IRQ. Changed controller cases also pass address/undefined-behavior
+sanitizers. Results and exact inputs reside under
+`~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`. Physical delivery,
+cache visibility, numerical execution and recovery remain unqualified.

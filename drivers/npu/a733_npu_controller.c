@@ -178,11 +178,30 @@ int a733_npu_cancel(struct a733_npu_controller *c, uint64_t timeout)
     return 1;
 }
 
-enum a733_npu_state a733_npu_poll(struct a733_npu_controller *c)
+enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *c)
+{
+    if(!c)return A733_NPU_FAULT;
+    int canceled=c->state==A733_NPU_CANCEL_ASSERTED || c->state==A733_NPU_CANCEL_WAIT;
+    if(canceled || c->state==A733_NPU_BOOTING || c->state==A733_NPU_RUNNING) {
+        uint64_t elapsed=c->ops.microseconds(c->cookie)-(canceled?c->cancel_start:c->start);
+        if(elapsed >= (canceled?c->cancel_timeout:c->timeout))fail(c,A733_NPU_TIMEOUT);
+    }
+    return c->state;
+}
+
+enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_events)
 {
     if (!c) return A733_NPU_FAULT;
     if (c->state != A733_NPU_BOOTING && c->state != A733_NPU_RUNNING &&
-        c->state != A733_NPU_CANCEL_ASSERTED && c->state != A733_NPU_CANCEL_WAIT) return c->state;
+        c->state != A733_NPU_CANCEL_ASSERTED && c->state != A733_NPU_CANCEL_WAIT) {
+        /* An unexpected event between jobs is never attributed to the next job. */
+        if (sample_events && c->state != A733_NPU_FAULT && c->state != A733_NPU_CLOSED) {
+            uint32_t pending;
+            if (c->state == A733_NPU_COLD) fail(c, A733_NPU_IRQ);
+            else if (read_reg(c, 0x10, &pending) && pending) fail(c, A733_NPU_IRQ);
+        }
+        return c->state;
+    }
     int canceled = c->state == A733_NPU_CANCEL_ASSERTED || c->state == A733_NPU_CANCEL_WAIT;
     uint64_t elapsed = c->ops.microseconds(c->cookie) - (canceled ? c->cancel_start : c->start);
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
@@ -190,8 +209,10 @@ enum a733_npu_state a733_npu_poll(struct a733_npu_controller *c)
     }
     if (!check_configuration(c)) return c->state;
     uint32_t value;
-    if (!read_reg(c, 0x10, &value)) return c->state;
-    c->irq_seen |= value;
+    if (sample_events) {
+        if (!read_reg(c, 0x10, &value)) return c->state;
+        c->irq_seen |= value;
+    }
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     if (c->state == A733_NPU_CANCEL_ASSERTED) {
         if (elapsed < 100) return c->state;
@@ -214,6 +235,14 @@ enum a733_npu_state a733_npu_poll(struct a733_npu_controller *c)
     else if (c->bootstrap) { c->job.token = 0; c->state = A733_NPU_READY; }
     else c->state = A733_NPU_DONE;
     return c->state;
+}
+
+enum a733_npu_state a733_npu_poll(struct a733_npu_controller *c)
+{
+    if(!c)return A733_NPU_FAULT;
+    if(c->state!=A733_NPU_BOOTING && c->state!=A733_NPU_RUNNING &&
+       c->state!=A733_NPU_CANCEL_ASSERTED && c->state!=A733_NPU_CANCEL_WAIT)return c->state;
+    return a733_npu_advance(c,1);
 }
 
 int a733_npu_reap(struct a733_npu_controller *c, void **token, int *canceled)

@@ -31,8 +31,8 @@ independent watchdog requirement still applies.
 
 The polling core reads event status at register offset `0x10`. The platform
 must mask the corresponding GIC interrupt and prevent concurrent status reads.
-A later interrupt-driven service must preserve exclusive ownership of event
-acknowledgment.
+The optional interrupt service keeps event acknowledgment in the same worker;
+its ISR only masks the source and notifies that worker.
 
 The memory-publication callback receives the selected
 [MMU image](npu-mmu.md), command descriptor, and bootstrap indicator. It must
@@ -178,3 +178,19 @@ The [native assembler](nbg-assembly.md) now supplies relocation and command
 construction for the recorded model profiles. Complete command-memory admission,
 physical platform startup, numerical inference and error recovery remain
 outstanding. No hardware request occurred during these controller checks.
+
+## Optional notified progress
+
+`a733_npu_advance` separates event sampling from deadline, cancellation and
+previously latched completion progress. The interrupt service samples `0x10`
+only after its notification and a propagated mask with no active handler. The
+worker holds that mask after event zero while waiting for full idle, then reads
+events again before acquiring output visibility. Cancellation still requires
+its request pulse, acknowledgment and full idle even when no event interrupt
+arrives. `a733_npu_check_timeout` checks only time while masking is deferred.
+It cannot acknowledge events or touch NPU registers.
+
+The original `a733_npu_poll` preserves its inactive-state no-op behavior and
+continues sampling events for the default polled profile. An event observed
+between jobs by the optional notified path cannot be attributed to a later job.
+Neither a notification nor an idle observation alone establishes completion.

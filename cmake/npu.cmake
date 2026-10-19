@@ -99,3 +99,17 @@ target_link_options(npu-service-model PRIVATE -nostdlib -static -Wl,--gc-section
   "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-service-model.map")
 set_target_properties(npu-service-model PROPERTIES SUFFIX ".elf"
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")
+
+# Changed optional IRQ ownership path using the existing service/native providers.
+get_target_property(nirq_sources npu-service-model SOURCES)
+list(REMOVE_ITEM nirq_sources checks/npu-service.c)
+add_executable(npu-service-irq-model EXCLUDE_FROM_ALL ${nirq_sources} checks/npu-interrupt-service.c)
+foreach(prop IN ITEMS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS)
+ get_target_property(value npu-service-model ${prop})
+ set_property(TARGET npu-service-irq-model PROPERTY ${prop} "${value}")
+endforeach()
+target_link_options(npu-service-irq-model PRIVATE -nostdlib -static -Wl,--gc-sections
+ "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
+ "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-service-irq-model.map")
+set_target_properties(npu-service-irq-model PROPERTIES SUFFIX ".elf"
+ LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld")

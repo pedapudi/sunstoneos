@@ -563,3 +563,25 @@ properties. Successful CLOSE followed by local gate/reset stop is the engine
 stop prerequisite; a separate unspecified external-drain qualification is not
 required by the pinned normal teardown path. Shared resource leases and the
 allocation remain owned through the confirmed ROM return.
+
+## Optional finite interrupt completion
+
+The [interrupt profile](../apps/npu-interrupt/README.md) runs the same two trusted
+jobs through deferred interrupt completion on CPU0. It preserves the default
+polled profile and introduces no new inference interface. Bootstrap and both
+jobs must each complete after a service-owned event notification; the client and
+host require the resulting count of three and a matched interrupt-stop receipt.
+CLOSE retains the pending request and session until the device event source is
+disabled, full idle is established and interrupt 97 is disabled, inactive and
+pending clear. Local shutdown and provider quiescence follow that successful
+CLOSE. The root-owned monitor restores the saved interrupt configuration before
+SPI enables on normal return.
+
+The new execution profile is `npu-interrupt-finite-return-v1`, with separate
+hashed interrupt admission and host receipt checks. Focused native service,
+controller, client, routing and host checks pass under
+`~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`. Existing polled
+finite transport, copying and restoration evidence is reused. Two affected
+monitor composition cases accept a matching receipt and refuse pending interrupt
+97 before route restoration; unchanged cache and ROM-tail evidence is reused.
+Physical interrupt delivery, inference and return remain unqualified.

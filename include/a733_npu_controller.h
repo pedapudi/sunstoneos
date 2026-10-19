@@ -68,6 +68,13 @@ int a733_npu_open(struct a733_npu_controller *, const struct a733_npu_ops *, voi
                   const struct a733_npu_mmu_image *, const struct a733_npu_command *, uint64_t);
 int a733_npu_submit(struct a733_npu_controller *, const struct a733_npu_command *, uint64_t);
 enum a733_npu_state a733_npu_poll(struct a733_npu_controller *);
+/* Optional interrupt profile: only the serialized worker calls this. Sample
+ * events after the owned interrupt is masked and its notification collected.
+ * Without a sample, deadlines/cancellation and previously latched completion
+ * advance, but no initial destructive event read occurs. */
+enum a733_npu_state a733_npu_advance(struct a733_npu_controller *, int sample_events);
+/* Deadline-only progress while interrupt masking is deferred; no MMIO/cache. */
+enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *);
 int a733_npu_cancel(struct a733_npu_controller *, uint64_t stop_timeout);
 int a733_npu_reap(struct a733_npu_controller *, void **token, int *canceled);
 int a733_npu_close(struct a733_npu_controller *);

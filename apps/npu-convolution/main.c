@@ -84,6 +84,9 @@ static void client(void *unused)
     }
     }
 #ifdef SUNSTONE_NPU_FINITE_RETURN
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(npu_service_irq_completions(&c->service)!=3)retained(21);
+#endif
     platform_puts("NPU_STAGE=CLOSE\n");
     reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
     platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");
@@ -99,6 +102,11 @@ static void client(void *unused)
     atomic_store_explicit(&a733_npu_application_result.complete,mismatch ? 2 : 1,memory_order_release);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     if(!a733_npu_application_quiesce())retained(20);
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(!npu_service_irq_stopped(&c->service) || npu_service_irq_completions(&c->service)!=3)retained(21);
+    platform_puts("NPU_IRQ_COMPLETIONS=");platform_hex(npu_service_irq_completions(&c->service));
+    platform_puts("\nNPU_IRQ_STOPPED=");platform_hex(1);platform_puts("\n");
+#endif
     platform_puts("NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n");
     for(unsigned i=0;i<32;++i){platform_hex(a733_npu_application_result.first_digest[i]);platform_puts("\n");}
     platform_puts("NPU_SECOND_OUTPUT=\n");

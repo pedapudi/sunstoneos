@@ -1,4 +1,7 @@
 #include "a733_npu_application.h"
+#ifdef SUNSTONE_NPU_INTERRUPT
+#include "../npu-interrupt/irq.h"
+#endif
 #include <string.h>
 #include "aarch64_device_memory.h"
 #ifdef SUNSTONE_NPU_SINGLE_CORE
@@ -252,6 +255,9 @@ unsigned a733_npu_application_stopped(void)
 #endif
 static int finite_irq_quiet(void)
 {
+#ifdef SUNSTONE_NPU_INTERRUPT
+    if(!npu_service_irq_stopped(&app.reserved.convolution.service))return 0;
+#endif
     /* NPU INTID97: distributor bank3, bit1. Only observe the established
      * masked interrupt; never acknowledge or change inherited GIC state. */
     const uintptr_t addresses[]={0x03400000,0x0340010c,0x0340020c,0x0340030c};
@@ -391,6 +397,9 @@ int a733_npu_application_init(TaskHandle_t client)
            2
 #endif
        ) ||
+#ifdef SUNSTONE_NPU_INTERRUPT
+       !npu_application_irq_bind(&app.reserved.convolution.service) ||
+#endif
        !preparation_admitted())goto failed;
     return 1;
 failed:

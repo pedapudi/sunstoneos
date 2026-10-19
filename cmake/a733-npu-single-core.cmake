@@ -25,6 +25,10 @@ list(APPEND npsc_sources "${npsc_shared}/start.S" "${npsc_shared}/monitor.c" "${
  "${npsc_build}/usb_service.c" "${npsc_app}/usb.c"
  "${npsc_root}/drivers/usb/a733_usb_platform.c" "${npsc_root}/drivers/usb/a733_usb_platform_native.c"
  "${npsc_root}/arch/aarch64/start.S" "${npsc_root}/arch/aarch64/vectors.S" "${npsc_root}/arch/aarch64/cache.S")
+if(A733_NPU_INTERRUPT)
+ list(APPEND npsc_sources "${npsc_root}/apps/npu-interrupt/irq.c"
+  "${npsc_root}/apps/npu-interrupt/irq-route.c" "${npsc_root}/drivers/gpu/gicv3_spi.c")
+endif()
 list(REMOVE_DUPLICATES npsc_sources)
 set_source_files_properties("${npsc_root}/drivers/npu/npu_convolution.c" PROPERTIES
  COMPILE_DEFINITIONS "a733_npu_native_operations=a733_npu_application_operations")
@@ -40,6 +44,9 @@ set_property(TARGET a733-npu-convolution-single-core PROPERTY COMPILE_OPTIONS "$
 target_include_directories(a733-npu-convolution-single-core BEFORE PRIVATE "${npsc_app}" "${npsc_port}")
 target_include_directories(a733-npu-convolution-single-core PRIVATE ${npsc_includes} "${npsc_root}/apps/npu-convolution")
 target_compile_definitions(a733-npu-convolution-single-core PRIVATE ${npsc_definitions} GUEST=1 SUNSTONE_NPU_SINGLE_CORE=1)
+if(A733_NPU_INTERRUPT)
+ target_compile_definitions(a733-npu-convolution-single-core PRIVATE SUNSTONE_NPU_INTERRUPT=1)
+endif()
 set_property(SOURCE "${npsc_shared}/monitor.c" "${npsc_shared}/runtime.c" "${npsc_build}/platform.c" APPEND PROPERTY COMPILE_OPTIONS
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,a733-npu-convolution-single-core>:-include>"
  "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,a733-npu-convolution-single-core>:${npsc_app}/boot.h>")
@@ -49,6 +56,10 @@ set(npsc_inputs ${npsc_sources} ${npsc_headers} "${npsc_app}/link.ld" "${npsc_ap
  "${npsc_shared}/platform.patch" "${npsc_shared}/boot.h" "${npsc_shared}/cached.h"
  "${npsc_shared}/FreeRTOSConfig.h" "${npsc_app}/usb-service.patch"
  "${npsc_port}/portmacro.h" "${npsc_port}/port.c" "${CMAKE_CURRENT_LIST_FILE}")
+if(A733_NPU_INTERRUPT)
+ list(APPEND npsc_inputs "${npsc_root}/apps/npu-interrupt/irq.h"
+  "${npsc_root}/apps/npu-interrupt/irq-route.h")
+endif()
 list(REMOVE_DUPLICATES npsc_inputs)
 set(npsc_identity "npu-single-core-supervised-v1;ROM-USB-mode2;SRE;20s;${npsc_options};${npsc_definitions};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS}")
 foreach(input IN LISTS npsc_inputs)
