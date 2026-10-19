@@ -55,7 +55,7 @@ class Machine(service.Machine):
     self.mode_data=bytes(data)
    return
   super().write_mmio(cpu,access,a,size,v,unused)
-def run(image,sessions,out,early_only=False):
+def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=False):
  out.mkdir(parents=True,exist_ok=False);e=service.base.Image(image);e.sizes={};e.symbol_sizes={}
  with image.open('rb') as f:
   elf=ELFFile(f)
@@ -68,6 +68,15 @@ def run(image,sessions,out,early_only=False):
  for session in sessions:
   raw=session.read_bytes();profile=struct.unpack_from('<I',raw,860)[0];assert profile in (1,2)
   dest=out/f'profile-{profile}';dest.mkdir();m=Machine(e,raw)
+  if board_live_only:
+   layout=e.layouts['board_application'];address=e.address('board_live');hook=m.hooks.pop(address)
+   m.write(m.board+layout['fatal'],0);m.write(m.board+layout['live_until'],m.time+1000000,8)
+   assert m.call('board_live',0)==1
+   m.write(m.board+layout['fatal'],1);assert m.call('board_live',0)==0
+   m.write(m.board+layout['fatal'],0);m.write(m.board+layout['live_until'],m.time,8)
+   assert m.call('board_live',0)==0;m.hooks[address]=hook
+   results[str(profile)]={'actual_board_live_healthy':True,'actual_board_live_fatal_refused':True,'actual_board_live_expired_refused':True,'field_offsets':{k:layout[k] for k in ('fatal','live_until')},'physical_access':False}
+   continue
   if early_only:
    m.prepare_only();pending=m.frame();value=decoder.decode(pending,raw)
    assert value['status']==0 and struct.unpack_from('<I',pending,4)[0]==3 and m.field('initialized')==0
@@ -80,6 +89,24 @@ def run(image,sessions,out,early_only=False):
    continue
   m.establish();assert m.width==4 and m.card_hs==(profile==2)
   assert len(m.module_changes)==3 and m.module_changes[-1]==(0x81000007 if profile==1 else 0x81000003)
+  if layout_only:
+   assert profile==1 and len(sessions)==1
+   packet=decoder.read_request(19,2,1)
+   m.usb_step(packet[:1]);m.usb_step(packet[1:]);assert len(m.tx)==1
+   pending=m.tx[-1];assert decoder.decode(pending,raw)['status']==0
+   (dest/'pending-frame.bin').write_bytes(pending)
+   m.invoke(2,'tud_vendor_tx_cb',0,len(pending));m.complete(0,True)
+   for _ in range(500):
+    m.native_client();m.owner()
+    if m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['result'])==1:break
+   m.usb_step(b'\0');frame=m.tx[-1];value=decoder.decode(frame,raw)
+   assert frame[288:]==service.payload(19,2) and value['bus_width']==4 and value['card_hz']==25000000
+   assert m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['result'])==1
+   assert m.read(e.address('storage_read_consumer')+e.layouts['storage_read_consumer']['completed'])==2
+   m.invoke(2,'tud_vendor_tx_cb',0,len(frame));m.usb_step();assert m.state_of(0)==3
+   (dest/'read-frame.bin').write_bytes(frame);(dest/'trace.json').write_text(json.dumps(m.trace)+'\n')
+   results[str(profile)]={'passed':True,'actual_native_client_reads':2,'actual_usb0_copied_reads':1,'fragmented_request':True,'completed_tx_callback_and_ack':True,'physical_access':False}
+   continue
   (dest/'idle-frame.bin').write_bytes(m.frame())
   accepted,ticket=m.submit(2,19,2,1);assert accepted==1
   m.native_client();m.complete(0,True);frame=m.frame();value=decoder.decode(frame,raw)
@@ -95,7 +122,7 @@ def run(image,sessions,out,early_only=False):
   (dest/'second-frame.bin').write_bytes(second)
   (dest/'trace.json').write_text(json.dumps(m.trace)+'\n')
   results[str(profile)]={'passed':True,'commands':m.commands,'module_changes':m.module_changes,'native_reads':2,'usb_copied_reads':2,'physical_access':False}
- (out/'result.json').write_text(json.dumps({'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':results,'scope':('Actual linked session/start and copied API before construction and after early mapping failure; board/provider/time/scheduling hooks modeled. No card commands, startup or physical qualification.' if early_only else 'Actual linked owner/core/native filter, session/parser and two copied clients; shared provider returns, MMIO/card/time/scheduling modeled. No startup or physical qualification.')},indent=2)+'\n')
- print('Actual native early copied diagnostics passed.' if early_only else 'Actual native SD4 default/HS negotiation and native/USB repeated copied reads passed.')
+ (out/'result.json').write_text(json.dumps({'image_sha256':hashlib.sha256(image.read_bytes()).hexdigest(),'cases':results,'scope':('Actual linked board_live loads with healthy, fatal and expired shared-board fields, using current DWARF layout. Counter hooked; no controller/protocol tests repeated.' if board_live_only else 'Current linked board embedding layout, actual native client and USB0 fragmented request/copy/TX callback/ack; provider returns, card/MMIO/time/scheduling modeled. No host HID execution, CPU/startup or physical qualification.' if layout_only else 'Actual linked session/start and copied API before construction and after early mapping failure; board/provider/time/scheduling hooks modeled. No card commands, startup or physical qualification.' if early_only else 'Actual linked owner/core/native filter, session/parser and two copied clients; shared provider returns, MMIO/card/time/scheduling modeled. No startup or physical qualification.')},indent=2)+'\n')
+ print('Current linked board liveness layout passed.' if board_live_only else 'Current linked SD/client/USB0 layout composition passed.' if layout_only else 'Actual native early copied diagnostics passed.' if early_only else 'Actual native SD4 default/HS negotiation and native/USB repeated copied reads passed.')
 if __name__=='__main__':
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--session',type=Path,action='append',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--early-copy-only',action='store_true');a=p.parse_args();run(a.image,a.session,a.output,a.early_copy_only)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--session',type=Path,action='append',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--early-copy-only',action='store_true');p.add_argument('--layout-only',action='store_true');p.add_argument('--board-live-only',action='store_true');a=p.parse_args();assert sum((a.layout_only,a.early_copy_only,a.board_live_only))<=1;run(a.image,a.session,a.output,a.early_copy_only,a.layout_only,a.board_live_only)

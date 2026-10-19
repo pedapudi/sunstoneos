@@ -367,3 +367,29 @@ USB or queue access occurred. Both fitted microSD cards still require supervised
 read-only qualification; absent eMMC and UFS are not targets. Where supported,
 UHS/voltage switching, tuning, interrupts, DMA, writes, recovery and power
 management remain outstanding functional requirements. No benchmark is claimed.
+
+
+## Current shared USB layout composition
+
+The SD image rebuilt from integration revision `45fa0fe` includes the current
+USB HID types and class unit. Its ELF SHA-256 is
+`141078f41ea22546a55117dd21245655a20162d4d09487a6647bad7ddf0a9d78`.
+Evidence is under `~/.cache/sunstoneos/evidence/sd-shared-usb-20261019/`.
+All 163 linked objects and 411 compiled dependencies are frozen together;
+the earlier six-input USB difference is absent from this image.
+
+The embedded host grows the board application by 448 bytes. The selected linked
+case covers task/client bindings, two native-client reads, and one USB0 copied
+read through fragmented request assembly, TX completion and acknowledgment.
+Separate actual `board_live()` cases check the moved fatal and lifetime fields
+for healthy, fatal and expired states. Production preparation, observer identity
+refusals and image linker bounds pass. Shared provider returns, card/MMIO, time
+and scheduling remain modeled. No USB HID execution or CPU/startup qualification
+is claimed; the conditional NPU hooks are inactive in this target.
+
+Allocated object sections and symbolic relocations are compared with the
+preceding image in `object-comparison.json`. MMC protocol and platform code
+retain their accepted content, so mode, clock and refusal evidence is reused.
+Focused Astra review closes the liveness-layout coverage finding. The earlier
+frozen image remains preserved. Both microSD cards still require supervised
+physical qualification; this rebuild adds no device access or card writes.
