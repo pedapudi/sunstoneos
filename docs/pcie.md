@@ -10,9 +10,11 @@ PCIe operation remains unqualified.
 
 The controller has sixteen inbound and sixteen outbound translation windows,
 four embedded DMA read channels and four write channels. Gen2/Gen3 operation,
-bridge enumeration, BAR allocation, INTx/MSI service, DMA, endpoint drivers,
-power transitions and shutdown remain required follow-on work. The current
-READY result does not authorize those operations.
+bridge enumeration, general BAR allocation, wider interrupt/DMA modes, endpoint
+drivers, power transitions and shutdown remain required follow-on work. The
+separate [endpoint test application](pcie-test-application.md) implements one
+selected BAR, one MSI and one endpoint-DMA COPY offline. Configuration-only
+READY does not authorize those operations.
 
 ## The board handoff identifies the actual endpoint circuit
 

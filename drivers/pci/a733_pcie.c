@@ -20,7 +20,7 @@ static int separate(const void *a,size_t an,const void *b,size_t bn)
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
     return a&&b&&an<=UINTPTR_MAX-x&&bn<=UINTPTR_MAX-y&&(x+an<=y||y+bn<=x);
 }
-static int outside(const struct a733_pcie *p,const void *v,size_t n)
+int a733_pcie_output_outside(const struct a733_pcie *p,const void *v,size_t n)
 {
     return separate(p,sizeof(*p),v,n)&&separate(p->clocks,sizeof(*p->clocks),v,n)&&
         separate(p->pins,sizeof(*p->pins),v,n)&&separate(p->rails,sizeof(*p->rails),v,n)&&
@@ -248,6 +248,7 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
 {
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,fault(p));
+    if(p->test)return finish(p,A733_PCIE_INVALID);
     p->deadline=p->phase==READY?p->config.lifetime_deadline:p->config.deadline;
     if(!timely(p))return finish(p,fault(p));
     int h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_PENDING);
@@ -358,9 +359,10 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
 }
 enum a733_pcie_result a733_pcie_identity(struct a733_pcie *p,struct a733_pcie_endpoint *out)
 {
-    if(!p||p->self!=p||!outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
+    if(!p||p->self!=p||!a733_pcie_output_outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
+    if(p->test)return finish(p,A733_PCIE_INVALID);
     if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
     p->deadline=p->config.lifetime_deadline;
     if(!timely(p))return finish(p,fault(p));
@@ -371,9 +373,10 @@ enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *p,unsigned functio
     uint64_t deadline,uint32_t *out)
 {
     if(!p||p->self!=p||function>7||offset>4092||(offset&3)||!deadline||
-        !outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
+        !a733_pcie_output_outside(p,out,sizeof(*out)))return A733_PCIE_INVALID;
     if(!enter(p))return A733_PCIE_BUSY;
     if(p->failed)return finish(p,A733_PCIE_RETAINED);
+    if(p->test)return finish(p,A733_PCIE_INVALID);
     if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
     if(function&&!(p->endpoint.header_type&0x80))return finish(p,A733_PCIE_INVALID);
     p->deadline=deadline;
@@ -389,4 +392,40 @@ enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *p,unsigned functio
     if(!timely(p))return finish(p,fault(p));
     h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_BUSY);
     *out=v;return finish(p,A733_PCIE_READY);
+}
+
+enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *p,struct a733_pcie_epf_test *test)
+{
+    if(!test||!enter(p))return A733_PCIE_BUSY;
+    if(p->failed)return finish(p,A733_PCIE_RETAINED);
+    if(p->test)return finish(p,A733_PCIE_INVALID);
+    if(p->phase!=READY)return finish(p,A733_PCIE_PENDING);
+    p->deadline=p->config.lifetime_deadline;
+    if(!timely(p))return finish(p,fault(p));
+    int h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_BUSY);
+    int l=lock(p);if(l<0)return finish(p,fault(p));if(!l)return finish(p,A733_PCIE_BUSY);
+    if(!parent_profile(p)||!masked(p)||!link(p)||!atu_start(p,0)||
+       !check(p,ATU+4,BIT(31),BIT(31))||!endpoint(p)||!check(p,CFG+4,4,0))
+        return finish(p,fault(p));
+    p->test=test;return finish(p,A733_PCIE_READY);
+}
+enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *p,struct a733_pcie_epf_test *test,uint64_t deadline)
+{
+    if(!p||p->self!=p||!test||p->test!=test||!deadline||deadline>p->config.lifetime_deadline)return A733_PCIE_INVALID;
+    if(!enter(p))return A733_PCIE_BUSY;
+    if(p->failed)return finish(p,A733_PCIE_RETAINED);
+    p->deadline=deadline;
+    if(!timely(p))return finish(p,fault(p));
+    int h=health(p);if(h<0)return finish(p,fault(p));if(!h)return finish(p,A733_PCIE_BUSY);
+    int l=lock(p);if(l<0)return finish(p,fault(p));if(!l)return finish(p,A733_PCIE_BUSY);
+    if(!parent_profile(p)||!link(p))return finish(p,fault(p));
+    return A733_PCIE_READY;
+}
+enum a733_pcie_result a733_pcie_test_end(struct a733_pcie *p,int ok)
+{
+    if(!p||p->self!=p||!atomic_load_explicit(&p->busy,memory_order_acquire)||!p->held)return A733_PCIE_INVALID;
+    if(!ok||!timely(p)||!link(p))return finish(p,fault(p));
+    p->ops.leave(p->cookie);p->held=0;
+    int h=health(p);if(h<0)return finish(p,fault(p));
+    return finish(p,h?A733_PCIE_READY:A733_PCIE_BUSY);
 }

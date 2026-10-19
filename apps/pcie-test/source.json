@@ -1,0 +1,7 @@
+{
+  "kernel_revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+  "endpoint_function": {"lock":"pcie-pci-epf-test-c","sha256":"cb5cc6761615f0a0ef08344318bddd38a843aacea3398e521ab373f6f08476a8"},
+  "host_protocol": {"lock":"pcie-pci_endpoint_test-c","sha256":"00717f70825f1c31f0b78a5478a3d955f8b852b00224a385f0a770feeb081b2e"},
+  "bar_reference": {"repository":"https://github.com/orangepi-xunlong/u-boot-orangepi","revision":"b791be842935b27268ae3d00e943a9075495f30a","path":"drivers/pci/pci_auto.c","sha256":"e32fa1fa310d9f17b258490ea75b7f0ab1ba4ae10dae8193ca82abadc0e604c4"},
+  "scope":"Register/protocol and allocation references; Linux and U-Boot do not run on the A733 FreeRTOS root. The actual external endpoint controller, DMA driver and configuration require separate image-bound physical admission."
+}

@@ -1,4 +1,7 @@
 #include "a733_pcie_native.h"
+#ifdef SUNSTONE_PCIE_EPF_TEST
+#include "a733_pcie_epf_test.h"
+#endif
 #include "a733_platform_locks.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
@@ -87,7 +90,12 @@ int a733_pcie_native_address(uintptr_t a,unsigned width,unsigned writing)
 }
 static int allowed(struct a733_pcie_native *n,uintptr_t a,unsigned width,unsigned writing)
 {
-    return current(n)&&a733_pcie_native_address(a,width,writing)&&
+    if(!n)return 0;
+    int address=a733_pcie_native_address(a,width,writing);
+#ifdef SUNSTONE_PCIE_EPF_TEST
+    address=address||a733_pcie_epf_native_address(n->port,a,width,writing);
+#endif
+    return current(n)&&address&&
         !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
 }
@@ -103,7 +111,17 @@ static int write(void *cookie,uintptr_t a,unsigned width,uint32_t v)
     struct a733_pcie_native *n=cookie;if(!allowed(n,a,width,1))return 0;
     if((width==1&&v>255)||(width==2&&v>65535))return 0;
     if(a==0x03400194&&v!=0x0300ff00)return 0;
-    if(a==0x06000004&&v!=0x102)return 0;
+    if(a==0x06000004&&v!=0x102){
+#ifdef SUNSTONE_PCIE_EPF_TEST
+        if(!a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+#else
+        return 0;
+#endif
+    }
+#ifdef SUNSTONE_PCIE_EPF_TEST
+    if((n->port->test||!a733_pcie_native_address(a,width,1))&&
+       !a733_pcie_epf_native_write(n->port,a,width,v))return 0;
+#endif
     if(a==0x0600000a&&v!=0x0604)return 0;
     if(a>=0x06000040&&a<=0x06000114&&
         (a!=0x06000000u+n->port->root_cap+0xcu&&a!=0x06000000u+n->port->root_cap+0x30u))return 0;

@@ -44,6 +44,7 @@ struct a733_pcie_endpoint {
  * One designated task advances it. Application configuration reads serialize
  * the same outbound window and cannot write endpoint command/BAR registers.
  */
+struct a733_pcie_epf_test;
 struct a733_pcie {
     struct a733_pcie *self;
     struct a733_pcie_config config;
@@ -69,6 +70,7 @@ struct a733_pcie {
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
     uint8_t root_cap;
     uint32_t last_value;
+    struct a733_pcie_epf_test *test; /* One-way concrete test ownership. */
 };
 /* Pure initialization. One registry/rail ledger/PCK manager/pin manager must
  * cover every overlapping local and remote writer. Selected parents are held
@@ -95,6 +97,14 @@ enum a733_pcie_result a733_pcie_identity(struct a733_pcie *,struct a733_pcie_end
 enum a733_pcie_result a733_pcie_config_read(struct a733_pcie *,unsigned function,
     unsigned offset,uint64_t deadline,uint32_t *);
 
+int a733_pcie_output_outside(const struct a733_pcie *,const void *,size_t);
+/* Internal concrete test-client boundary. Claim reestablishes function zero
+ * and cold endpoint state under the existing mutex. No default getter/poll can
+ * advance a claimed port. Lock success keeps busy+register ownership through
+ * test_end; fault retains resources and any held register mutex. */
+enum a733_pcie_result a733_pcie_test_claim(struct a733_pcie *,struct a733_pcie_epf_test *);
+enum a733_pcie_result a733_pcie_test_lock(struct a733_pcie *,struct a733_pcie_epf_test *,uint64_t);
+enum a733_pcie_result a733_pcie_test_end(struct a733_pcie *,int);
 /* Internal driver interface: callers already own the common register mutex. */
 int a733_pcie_read(struct a733_pcie *,uintptr_t,unsigned,uint32_t *);
 int a733_pcie_write(struct a733_pcie *,uintptr_t,unsigned,uint32_t);

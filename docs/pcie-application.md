@@ -89,9 +89,11 @@ removing the board cable alone does not establish endpoint reset. A software dea
 independent reset or a DMA-drain guarantee. Disabled inbound windows do not
 establish hardware isolation from an untrusted endpoint.
 
-BAR allocation, bridges/enumeration, endpoint drivers, DMA, INTx/MSI service,
+The separate [endpoint test application](pcie-test-application.md) implements a
+selected BAR and one MSI-completed endpoint-DMA COPY offline. General BAR
+allocation, bridges/enumeration, endpoint drivers, wider DMA/interrupt modes,
 Gen2/Gen3, power transitions and shutdown remain required PCIe work. This initial
-application path does not claim complete PCIe support.
+configuration application retains its original scope.
 
 ## Software evidence
 
