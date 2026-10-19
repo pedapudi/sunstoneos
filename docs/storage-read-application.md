@@ -256,8 +256,9 @@ refusal and the version-two producer/package. The compiled closure contains
 `~/.cache/sunstoneos/evidence/storage-read-service-20261018/`.
 The checks execute actual linked application and MMC code; scheduling, shared
 provider returns, card/MMIO and USB completion are modeled. Physical card reads,
-faster SD modes, wider buses,
-eMMC, UFS, filesystem operations, updates and watchdog recovery remain unqualified.
+faster SD modes, wider buses, filesystem operations, updates and watchdog recovery
+remain unqualified. Neither current board has populated eMMC or UFS; those media
+are not physical qualification targets for these boards.
 The coordinator alone may prepare and execute a reviewed physical request after
 recovery of the quarantined board instance and establishment of current authority.
 

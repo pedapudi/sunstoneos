@@ -137,13 +137,14 @@ synchronization, display power enable, touch reset/interrupt, TWI12, ADC4,
 and supply rails. Panel selection remains open; controller support and a
 selected panel's initialization sequence are separate requirements.
 
-## Optional storage and other interfaces remain in scope
+## Current boards have no populated eMMC or UFS
 
-The manual's hardware table lists optional eMMC and UFS capacities. Its
-wording about default population is ambiguous, and the schematic includes
-both devices. Neither document proves that either device is populated on
-the attached board. The eMMC identification timeout therefore remains an
-unresolved result, not proof of an absent device.
+The user confirms that neither current board has physical eMMC or UFS populated.
+The manual lists optional capacities and the schematic includes both devices;
+those references describe board options, not the fitted configuration. The
+absence record comes from the user, not the earlier eMMC timeout. Do not probe
+these absent devices. Both microSD cards remain within the storage support and
+preservation requirements.
 
 The schematic also has dedicated sheets for power sequencing, LPDDR5,
 USB Type-C, microSD, HDMI, PCIe, and header signals. Sheet 5 includes the

@@ -167,6 +167,10 @@ second build while preserving checks for the actual requested application.
 
 ## Hardware access
 
+- The user confirms that neither current A733 board has populated eMMC or UFS.
+  Do not probe or schedule media qualification for these absent devices. Preserve
+  both microSD cards. Existing optional-storage drivers and historical evidence
+  remain available for a future populated board.
 - Parallel workers develop in isolated worktrees and use separate build/evidence
   directories. Assign file ownership before overlapping work begins.
 - One coordinator owns physical board testing. Workers use host checks/emulation

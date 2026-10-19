@@ -1,5 +1,9 @@
 # Read-only native eMMC application
 
+Neither current board has eMMC populated, as confirmed by the user. This optional
+application is retained for future populated boards; do not schedule it on the
+current boards. Its software evidence does not establish physical operation.
+
 The eMMC application identifies one explicitly selected controller and serves
 bounded copied reads to a USB client and a second native task. It reuses the
 [SD read service](storage-read-application.md), its two fixed clients and its
@@ -17,7 +21,7 @@ platform provider. PC1 reset must already be high and is never driven.
 Physical population, chip identity, wiring and controller selection require
 reviewed authority bound to the exact image and board instance. A device-tree
 node, strap observation or identification timeout does not establish those facts.
-The optional eMMC population remains unqualified. Admission requires cold card
+On a populated board, admission requires cold card
 history, excluded SDC2/SDC3/NAND/SPIF clients, both interrupts disabled and drained,
 source-qualified pin pulls and drives, settled supplies and manual PC 1.8 V
 configuration. The existing provider observes DCDC1 and DC1SW2 at 3.3 V and

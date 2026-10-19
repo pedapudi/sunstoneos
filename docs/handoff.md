@@ -5,6 +5,10 @@ further notice. Both queues have no active physical tests. Continue offline
 implementation, instruction checks and integration; defer new hardware launches
 that could require physical recovery. Do not request another reconnect meanwhile.
 
+The user confirms that neither board has populated eMMC or UFS. These absent
+devices need no population probe or media qualification on the current boards.
+Preserve both microSD cards; their native storage support remains required.
+
 All eight CPUs physically reach their first FreeRTOS task context and return
 safely. The returning diagnostic executes actual task construction and initial
 context restoration, then records the idle-task pointer, stack, argument and
@@ -81,8 +85,9 @@ focused source review is complete. Evidence: `i2s-duplex-20261018/snapshot/` and
 Native read-only eMMC access is integrated through the existing copied-client
 service. Both SDC2 and SDC3 selections pass instruction checks for identification,
 EXT_CSD and copied reads. Admission/capture checks and source review pass under
-`emmc-native-20261018/`. Population and the fitted route remain unknown. The
-single-core image retains resources permanently; it has no qualified ROM return.
+`emmc-native-20261018/`. Both current boards lack eMMC, so this optional path has
+no physical qualification target. Its single-core image retains resources
+permanently and has no qualified ROM return.
 
 H.264 header parsing and register planning now accept bounded Baseline IDR streams
 with prediction and residual coding. Four independent x264/FFmpeg comparisons,

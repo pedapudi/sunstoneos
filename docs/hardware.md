@@ -3,9 +3,10 @@
 This inventory covers all onboard hardware and usable SoC blocks. It does not
 depend on mimus using a device. The initial list comes from the A733 device tree
 and datasheet. The pinned V1.2 schematic now supplies [board wiring](board-wiring.md)
-for recovery, audio, cameras, and display. The attached board's revision and
-component population remain unverified. Expand the list as circuit and device
-inspection identifies additional blocks.
+for recovery, audio, cameras, and display. The user confirms that neither current
+board has populated eMMC or UFS; their media functions are not applicable to
+these boards. Both boards have microSD cards whose contents must be preserved.
+Board revision and other optional population still require confirmation.
 
 Status meanings: **planned** has no implementation; **implemented** has code;
 **tested** has a functional result under stated conditions; **qualified** meets
@@ -331,9 +332,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   eMMC routing. The [native read-only eMMC application](emmc-read-application.md)
   connects either explicitly selected controller to the existing copied-client
   service. Both controller instruction checks, admission and host capture pass.
-  Evidence: `emmc-native-20261018/`. Population and fitted routing remain unknown;
-  its single-core lifetime retains resources permanently and has no qualified ROM
-  return. The [bounded write primitive](mmc-write.md) snapshots input,
+  Evidence: `emmc-native-20261018/`. Neither current board has eMMC populated;
+  physical eMMC reads are not applicable. The optional application's single-core
+  lifetime retains resources permanently and has no qualified ROM return.
+  The [bounded write primitive](mmc-write.md) snapshots input,
   authenticates each request and confirms each sector through card status.
   Focused host checks cover SD/eMMC writes, authority loss and retained partial
   failure; affected native consumers compile. The [storage update service](storage-update.md)
@@ -461,8 +463,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `adc-returning-final-20261018/`. It retains clocks, power, pins and pending IRQ
   state after configured disable. Electrical admission and physical sampling
   remain outstanding.
-- UFS initialization: **implemented**, but the physical attempt did not return
-  to ROM. [Storage evidence](storage.md) records the failure and untested correction.
+- UFS initialization: **not applicable** to the current boards, which have no UFS
+  device populated. The optional controller code is implemented, but its earlier
+  physical attempt did not return to ROM. [Storage evidence](storage.md) preserves
+  that failure and untested correction. Keep probing disabled on these boards.
 - Independent watchdog: **implemented** register operations with host checks.
   [Hardware reset and FEL return](watchdog.md) remain untested; physical
   qualification is deferred. Supervised RAM-only tests use their own reviewed
@@ -1095,7 +1099,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | I2C | Transactions and recovery on exposed and internal buses | Clock dependencies, power devices, sensor control |
 | SPI | Transfers and exposed controller modes | Chip selects, DMA, shared pin functions |
 | PWM and ADC | Applicable waveform and sampling interfaces | Routed channels, clocking, signal verification |
-| SD, eMMC, UFS, SPI storage | Block access and recovery where populated or exposed | Population, boot conflicts, voltage, capacity, power-loss behavior |
+| SD, eMMC, UFS, SPI storage | Block access and recovery where populated or exposed; eMMC and UFS media absent on both current boards | Preserve both microSD cards; qualify SD and applicable SPI storage, boot conflicts, voltage, capacity and power-loss behavior |
 | USB controllers and PHYs | Host/device transfers and supported speeds; console and HID classes | Confirm physical ports, role switching, disconnect recovery |
 | Type-C and display multiplexing | Role/orientation and applicable display alternate modes | Confirm controller, wiring, shared PHY modes |
 | Wi-Fi | Firmware transport, scan, association, supported connection modes, packet interface | Confirm radio variant; SDIO/USB wiring; coexistence and reconnect |

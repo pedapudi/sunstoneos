@@ -1,10 +1,15 @@
 # Storage identification remains incomplete
 
+The user confirms that neither current board has populated eMMC or UFS. Both
+boards have microSD cards, and native SD identification, reads and preservation
+remain required. Do not schedule eMMC or UFS probes on these boards. The records
+below preserve earlier controller experiments; they do not establish media access.
+
 The FreeRTOS storage probe reaches the SD/MMC controller at `0x04022000`,
 resets it, updates its clock, and completes CMD0. CMD1, which requests eMMC
 operating conditions, receives no response. No storage device has been identified
-or read. This result does not establish that eMMC is absent: population, power,
-signal routing, and timing still need confirmation.
+or read by this probe. The timeout alone did not establish absence; the user has
+since confirmed that no eMMC is populated.
 
 The board device tree enables SD, eMMC, and UFS controllers. An enabled node
 does not establish physical population. UFS initialization failed to return to
@@ -92,11 +97,12 @@ The [pinned sources](sources.md) supply the register and wiring references:
   and the A733 GPIO definitions.
 
 The [PMIC reader](power.md) confirms that the rails assigned to UFS are enabled
-at programmed settings of 2.5 V and 1.8 V. Physical population remains unknown.
-The next hardware work is [independent watchdog qualification](watchdog.md),
-followed by guarded UFS initialization for read-only identification and block access.
+at programmed settings of 2.5 V and 1.8 V. Enabled rails do not establish a fitted
+device; the user confirms UFS is absent. Continue native microSD integration when
+board-specific recovery and admission permit it. Watchdog expiry is deferred and
+is not a prerequisite for unrelated hardware work.
 UFS references are available in the pinned bootloader's `drivers/ufs/` directory.
-Repeated CMD1 attempts need new evidence about wiring, power, or initialization.
+Do not repeat eMMC CMD1 attempts on these boards.
 Storage backup, native USB block export, persistent boot, writes, power-loss
 behavior, and recovery qualification remain outstanding.
 
@@ -125,4 +131,5 @@ PHY startup, local attribute reads, and storage identification remain unproven.
 The UFS target is excluded from normal builds by the default-off
 `SUNSTONE_EXPERIMENTAL_UFS` option. Its raw binary has been removed from the normal
 build location and preserved with the failure evidence. Do not execute the probe
-until independent watchdog recovery is physically tested and integrated.
+on the current boards, which lack UFS. A future populated board would require
+separate failure resolution and recovery qualification before any attempt.
