@@ -27,6 +27,10 @@ class AllCore(cached.Cached):
         super().restore(snapshot, fault)
         ctypes.memset(self.ram_pointer+0x42018100-0x41000000, 0, 0x5100)
         self.mmio[0x03460014] = 0  # CPU0 stays awake throughout.
+        # The secondary fixture assigns reset controls to every CPU. CPU0 has
+        # already executed the preserved preparation prefix; retain that state.
+        for name in ('sctlr_el1', 'tcr_el1'):
+            self.regs[0][name] = snapshot[2]['regs'][0][name]
         self.regs[0].update(icc_pmr_el1=0, ttbr0_el1=0xace000,
                             ttbr1_el1=0x135000, mair_el1=0x1234)
         self.original_mmio = copy.deepcopy(self.mmio)
@@ -89,6 +93,8 @@ class AllCore(cached.Cached):
             self.decoded[address] = next(self.decoder.disasm(bytes(u.mem_read(address, 4)), address))
         ins = self.decoded[address]; op, args = ins.mnemonic, ins.op_str.split(', ')
         m = self.regs[core]
+        if op == 'msr' and args[0] == 'sctlr_el3' and self.reg(core, args[1]) & 0x1005 == 0x1005:
+            assert m['sctlr_el1'] & 1 and m['tcr_el1'] & 0x800080 == 0x800080, 'EL3 cache adoption requires blocked EL1 walks'
         if self.fault == 'counter-corruption' and self.fault_injected and self.q(SHARED) == self.epoch and not self.q(SHARED+8):
             # The production primary rejected 257 increments. Its peers wait for
             # release until their absolute deadline; advance modeled time to that
@@ -182,6 +188,8 @@ def main():
                 assert struct.unpack_from('<8Q', raw, 0x3000+c*64) == (3, c, machine.epoch, 1, 256, 192, 255, 0)
             assert not any(machine.el3_enabled | machine.el1_enabled)
             assert machine.q(local.LOCAL) == 3
+            assert struct.unpack_from('<4Q', raw, 0x140) == tuple(machine.original_regs[0][n] for n in ('sctlr_el1','tcr_el1'))*2
+            assert all(machine.regs[0][n] == machine.original_regs[0][n] for n in ('sctlr_el1','tcr_el1'))
             for address, value in machine.original_mmio.items():
                 if 0x03400000 <= address < 0x03600000 and address & 0xffff not in (0x180, 0x280, 0x380):
                     assert machine.mmio[address] == value, ('Unrestored GIC', hex(address))

@@ -84,7 +84,19 @@ int identity_primary_run(void)
     // The primary joins only after all seven targets have been released. The
     // outer owner retains the distributor until CPU0 restores and targets are OFF.
     extern int primary_local_cache_probe(uint64_t epoch, uint64_t deadline);
+    extern void a733_cached_block_walks(void);
+    uint64_t sctlr1,tcr1,restored_sctlr1,restored_tcr1;
+    __asm__ volatile("mrs %0,sctlr_el1\n mrs %1,tcr_el1":"=r"(sctlr1),"=r"(tcr1));
+    HEADER->reserved[0]=sctlr1;HEADER->reserved[1]=tcr1;barrier();
+    // The reused prefix ends after restoring CPU0's original EL1 controls.
+    // Reapply the production preparation before EL3 enables its caches.
+    a733_cached_block_walks();
     if(primary_local_cache_probe(HEADER->epoch,HEADER->deadline)!=1)return 0;
+    __asm__ volatile("msr sctlr_el1,%0\n isb\n msr tcr_el1,%1\n isb"
+        ::"r"(sctlr1),"r"(tcr1):"memory");
+    __asm__ volatile("mrs %0,sctlr_el1\n mrs %1,tcr_el1":"=r"(restored_sctlr1),"=r"(restored_tcr1));
+    HEADER->reserved[2]=restored_sctlr1;HEADER->reserved[3]=restored_tcr1;barrier();
+    if(restored_sctlr1!=sctlr1 || restored_tcr1!=tcr1)return 0;
 #endif
     // All targets are released before waiting for cached shared-memory work.
     for(unsigned core=IDENTITY_FIRST_CORE;core<8;++core) {

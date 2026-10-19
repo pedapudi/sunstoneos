@@ -3,9 +3,15 @@
 The runtime PMIC provider owns the always-on I2C controller and PL0/PL1 once
 for the platform lifetime. Clients submit bounded rail snapshots to its
 designated task and retrieve copied results. Independent review, focused host
-and source checks, and native compilation passed. Physical operation remains
-unqualified. Supervised RAM-only execution requires reviewed entry conditions
-and retention through manual whole-board power removal.
+and source checks, and native compilation passed. A returning physical test
+also completes provider initialization, one DCDC1 snapshot, request reap,
+client-lease release and idle-state checks through the production native adapter.
+DCDC1 is enabled with selector `0x17`, decoded as a programmed 3.3 V. Inherited
+pin and I2C settings match after the transaction; no regulator data is written.
+Evidence is `pmic-provider-probe-20261018/physical/runtime/session.json`.
+This result covers one task and one rail under the returning monitor. Other
+rails, concurrent clients and accelerator-application startup remain unqualified.
+Supervised execution still requires reviewed entry and recovery conditions.
 
 The implementation consists of [the provider API](../include/a733_pmic.h),
 [transaction state machine](../drivers/power/a733_pmic.c) and

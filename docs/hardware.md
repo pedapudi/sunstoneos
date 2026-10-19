@@ -342,7 +342,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   compilation pass for shared selectors, snapshot ownership and retained faults.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
-  and native compilation pass. It adopts either supported 24 MHz APBS1 parent
+  and native compilation pass. A physical returning test now completes production
+  provider initialization, one DCDC1 snapshot, request reap, client-lease release
+  and idle-state checks with inherited pin/TWI settings restored. The selector
+  decodes as an enabled, programmed 3.3 V; this is not a voltage measurement.
+  Evidence: `pmic-provider-probe-20261018/physical/runtime/session.json`.
+  It adopts either supported 24 MHz APBS1 parent
   and rejects later route changes; focused reference-parent checks pass.
   [GPU/NPU consumers](pmic-consumers.md) now retain
   actual asynchronous observations and supply leases; selecting the shared

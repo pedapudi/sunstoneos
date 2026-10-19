@@ -14,39 +14,36 @@ CPU0 EL3/EL1 diagnostics, returning SRAM survey and instruction-cache disable.
 Reuse that DDR lifetime; refresh warm launcher state before the next native test.
 Recovery must remove every connected power source.
 
-The returning all-core diagnostic is implemented and builds under
-`all-core-pre-scheduler-20261018/`. It calls the frozen production
-`a733_smp_pre_scheduler` function on all eight cores, including CPU0. This
-function implements the arrival barrier and 256 atomic-lock-protected increments
-immediately before scheduler initialization. Three instruction cases pass:
-successful completion, an incorrect increment count, and failed EL3 restoration.
-The latter two retain execution. Each participant cleans the two shared pages
-and its final stack page after every production call has returned. The model
-checks all 192 cache lines per core and rejects later Normal-memory stores.
-This diagnostic does not enable interrupt delivery or select tasks. Its host
-decoder, runner binding and physical execution remain outstanding. Reuse the
-successful instruction case; the later fixture correction only advances modeled
-time in the incorrect-count case after the production primary rejects the count.
+The returning all-core diagnostic calls the frozen production
+`a733_smp_pre_scheduler` function on all eight cores, including CPU0. Three
+instruction cases and seven host cases pass under
+`all-core-pre-scheduler-20261018/entry-corrected/`. The diagnostic reapplies
+CPU0's required EL1 preparation after the reused prefix restores its original
+controls, then verifies their restoration after the new interval. Each core
+completes the production barrier and its 32 increments before cleaning the two
+shared pages and its final stack page. The host requires all eight results,
+256 increments and 192 cleaned cache lines per core. It rejects incomplete
+participants, restoration and shared-memory results. Physical execution remains
+outstanding. The current008 warm survey, returning cache-off helper and final
+launcher confirmation pass under that directory's `warm-008/`; DDR is unchanged.
+Earlier builds without the CPU0 entry correction are not eligible for execution.
 
-The second board responds on port `3-3` as `003:127`, identity
-`[7,2858,1097086,0,0]`, after a successful returning TWI register capture.
-Fresh DDR and launcher survey passed on cold instance `126`; preserve that
-powered lifetime through the recorded return. Automatic USB access works and
-all preparation/probe processes are stopped with their claims closed.
-Evidence: `second-board-cold-126-20261018/` and
-`pmic-baseline-probe-20261018/capture-only/physical/runtime/session.json`.
-Refresh warm launcher/cache state before another native launch; do not retrain DDR.
+The second board last returned responsive on port `3-3` as `003:009`, identity
+`[7,2874,1096968,0,0]`, after the production PMIC provider completed a DCDC1
+snapshot. Its actual FreeRTOS task, native mutex checks, shared clock/pin/rail
+providers and six I2C register reads executed. DCDC1 was enabled with selector
+`0x17`, decoded as a programmed 3.3 V. The request was reaped, client lease
+released, provider became idle, mutexes were released and inherited pin/TWI
+settings matched before normal ROM return. No regulator data was written.
+Evidence: `pmic-provider-probe-20261018/physical/runtime/session.json`.
+The physical process exited and its queue claim closed as passed.
 
-The returning native PMIC provider test is integrated from commit `8388444`.
-Its frozen image and source identities are under `pmic-provider-probe-20261018/`.
-Three linked-image cases cover one DCDC1 snapshot with request cleanup, a refusal
-before register writes, and an address NACK with retained ownership. Focused
-review found no blocking software defect. The test executes production task,
-mutex, clock, pin and PMIC adapters; earlier supply probes used legacy I2C.
-Production pin acquisition temporarily disconnects PL0/PL1 before restoring
-their I2C function. That operation remains physically unqualified. No regulator
-data is written. Fresh warm survey, powered-lifetime continuity and coordinator
-admission remain required before one supervised attempt on the second board.
+Second-board DDR continuity is cold126 → register capture127 → PMIC009.
+Refresh current009 launcher state before another native test; do not retrain DDR.
+This one-rail returning test does not qualify the accelerator applications'
+different startup/task configuration or native USB takeover. GPU transport-only
+and returning RTC integrations are being prepared offline in separate worktrees;
+root retains sole physical ownership and shared startup review.
 
 The corrected GPU attempt on the preceding instance `003:125` produced no
 native USB response. Its sole refusal-report read timed out, and communication

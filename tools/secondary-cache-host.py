@@ -13,9 +13,10 @@ HOST_SOURCES=local.HOST_SOURCES+('tools/secondary-cache-host.py',)
 MODEL_SOURCES=('checks/secondary-cache-probe.py',)+local.MODEL_SOURCES
 
 
-def decode(raw,nonce,smc_return,coherent=False,interrupts=False):
-    result=local.decode(raw,nonce,cached=True,coherent=coherent,interrupts=interrupts)
-    require(not any(raw[0x1c00:0x2100]) and not any(raw[0x2800:0x2900]),
+def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False):
+    result=local.decode(raw,nonce,cached=True,coherent=coherent,interrupts=interrupts,pre_scheduler=pre_scheduler)
+    require(not any(raw[0x1c00:0x2000]) and (pre_scheduler or
+            not any(raw[0x2000:0x2100]) and not any(raw[0x2800:0x2900])),
             'Unused cache report storage changed.')
     cores=[]
     for core,identity,initialized in zip(range(1,8),result['cores'],result['local_results']):

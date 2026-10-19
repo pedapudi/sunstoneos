@@ -56,7 +56,7 @@ def prepare(args):
         if local:names+=('prepare_core','a733_cpu_continue_init','a733_cpu_continue_poll','a733_cached_el3_vectors')
         if cached:names+=('a733_cached_allow_ns_code','a733_cpu_coherence_enable_el3','a733_cached_el3_l1',
                           'a733_cached_enter_el1','a733_cached_el1_l1','a733_cpu_el1_stacks','a733_cached_el3_fault')
-        if pre_scheduler:names+=('a733_smp_pre_scheduler','probe_arrived','probe_count','probe_lock',
+        if pre_scheduler:names+=('a733_cached_block_walks','a733_smp_pre_scheduler','probe_arrived','probe_count','probe_lock',
                                  'probe_finished','probe_release')
         native={n:address(n) for n in names}
         if pre_scheduler:
