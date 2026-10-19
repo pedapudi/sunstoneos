@@ -1019,110 +1019,53 @@ does not call. Input comparisons are under
 
 ## Next actions
 
-The complete eight-core image already includes Secure PMR initialization and the
-corrected observer priority. Its instruction model passes; the physical attempt
-under `smp-secure-pmr-20261018/full-image/runtime/` returned no result. The older
-frozen ELF used by the returning diagnostics under
-`smp-ns-publication-20261018/` has hash
-`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`.
-Its returning diagnostics now establish preparation, all-secondary cached
-execution, shared-memory exchange and SGI/PPI delivery. The interrupt overlay
-supplies the PMR correction; it does not change that original ELF. Rebuilding
-changes the overlay ABI, so derive new symbol/patch bindings if another overlay
-is needed. Preserve existing successful evidence for unchanged components.
+Continue offline while the user cannot reconnect either board. No hardware
+launch is admitted. Earlier instance identifiers and preparation records are
+historical evidence; they do not authorize a new session.
 
-The complete-image instruction model now includes Secure/Nonsecure PMR access,
-priority scaling and implemented priority bits. Reuse its accepted evidence.
-Review the real
-context handlers and the complete runtime write set before physical execution;
-the single-page diagnostic does not establish general cache cleanup.
+1. Finish runtime input delivery for H.264, JPEG and crypto. Separate workers own
+   their private applications and checks in `h264-stream`, `jpeg-runtime-input`
+   and `crypto-runtime-input` worktrees. H.264 must accept a supplied bounded
+   stream without rebuilding firmware. JPEG must accept a supplied supported
+   image and return copied pixels and dimensions. Crypto must accept bounded
+   SHA-256 or AES-128 ECB requests and return request-bound results. Preserve
+   private input ownership, generation checks and retained uncertain operations.
+   Numerical qualification remains distinct from accepting ordinary input.
+2. Integrate reviewed commits and frozen evidence promptly. Reuse successful
+   checks when their relevant inputs match. Keep shared drivers and startup
+   outside these workers' scope unless a concrete dependency requires a
+   coordinated change. Update the hardware matrix and existing issues.
+3. When physical recovery becomes available, the primary agent must refresh
+   board identity and admission before selecting one bounded CPU test. All eight
+   initial task contexts already pass physically. The full returning workload
+   passes instruction and host checks under `all-core-task-workload-20261019/`;
+   actual scheduling, floating-point work, timers and inter-core interrupts
+   together remain physically unqualified. Preserve the reviewed final-writer
+   barrier, Nonsecure memory publication and matched shutdown. Do not repeat
+   the earlier unobserved full launch unchanged.
+4. Resume independent device qualification only after board-specific preparation.
+   The second board needs fresh cold DDR and platform admission after its
+   disconnection. USB takeover has a source-backed device-session correction;
+   GPU and NPU have reviewed returning images and host capture. Their physical
+   operations remain unqualified. Refresh each device's clock, power, memory,
+   DMA and recovery prerequisites; software fixtures are not physical authority.
+5. Complete the remaining functions in the [hardware matrix](hardware.md),
+   including operational modes beyond the bounded applications. Preserve both
+   cards and require established recovery before persistent writes. Keep the
+   failed UFS probe and intentional watchdog expiry deferred. No MIPI camera,
+   display or microphone is attached; OV5640 is the first sensor, the DSI panel
+   remains undecided, and recorded audio supplies mimus input.
+6. Run unchanged-model mimus natively and qualify representative concurrent
+   workloads. After every required hardware function works, optimize complete
+   recognition to at most 0.05 times audio duration and investigate 0.01 times
+   as a bounded stretch target. Report loading and live latency separately.
+   Complete reproducible boot images, recovery/update procedures and physical
+   qualification before declaring the [goal](goal.md) achieved.
 
-The [GPU publication audit](gpu-single-core-publication.md) supports retaining
-its frozen image under the existing clean-entry contract. PMIC return101 is a
-candidate preceding cache cleanup; current entry state and continuous sole-writer
-history must still be bound before upload. Do not infer an additional system
-cache or rebuild the GPU image merely from the separate CPU publication finding.
-
-
-The accepted [goal](goal.md) prioritizes complete native device integration.
-After hardware functionality, warm mimus recognition must finish within 0.05
-times audio duration; 0.01 times is a stretch target for bounded investigation.
-Startup and live end-of-speech latency are separate measurements. Existing
-recordings and model identities remain the reference.
-
-The primary agent handles all further multicore diagnosis, implementation,
-review and physical tests directly. All seven secondaries pass production CPU
-preparation, local interrupt initialization, cached EL3/EL1 entry, concurrent
-shared-memory exchange, timer/peer interrupt delivery, explicit cache cleaning
-and restored shutdown. Current physical evidence:
-`secondary-interrupt-probe-20261018/physical-114/runtime/`.
+The primary agent retains all multicore implementation, review and board tests.
 The [Arm/Linux audit](a733-multicore-reference-audit.md) and
-[startup record](a733-smp-supervised.md) retain source comparisons and earlier
-observations.
-
-1. Continue from the physically passing all-eight-core production barrier to
-   actual task selection and scheduler startup on the first board. Reuse the
-   completed barrier and host evidence.
-   The full image and model already include the Secure PMR correction.
-   Preserve final-store synchronization and Nonsecure cache-clean completion
-   for the complete write set before shutdown. The prior interrupt result does
-   not establish SPI/LPI shutdown; review the applicable errata when enabling
-   those sources. Preserve DDR continuity and refresh warm launcher state.
-2. Qualify eight-core FreeRTOS scheduling and representative concurrent workloads
-   through the supervised observer. The earlier full launch remains unobserved;
-   do not repeat it unchanged without a correction or a narrower diagnostic
-   justified by new evidence. Preserve the sealed
-   [watchdog-dependent observer](a733-smp-observe-host.md) and its existing
-   admission requirements. USB enumeration does not establish success. The
-   failed UFS probe, intentional watchdog expiry and unattended fault tests
-   remain deferred; USB power-control work is closed.
-3. The second board's single-core SD launch candidate is prepared under
-   `second-board-20261018-3-3/single-core-admission/candidate-093/`. Its image
-   remains valid, but the instance-bound admission needs refreshing after the
-   returning GPU supply probe. Its remaining
-   card-state question is whether board and card were unpowered before initial
-   attachment. ROM source shows native initialization without a 1.8 V request,
-   but cannot establish an unknown card's state. Await that factual answer before
-   setting the native 3.3 V signaling admission. Use the integrated read-only SD application for initial card identification
-   and a sector-zero read after actual controller, memory and supply admission.
-   Preserve the inserted card's contents. The separate maintenance image needs
-   card/range ownership, protected backups and its qualified watchdog procedure;
-   it is not the first discovery path.
-4. The GPU single-core image has completed its first physical attempt, with no
-   native USB result and a failed refusal-report read. Its frozen image,
-   reset-held entry review, actual board admission and failed session are under
-   `gpu-single-core-20261018/physical-candidate-116/`. Source-qualified DCDC4
-   settling and current launcher checks preceded execution; no DDR retraining
-   or software-test replay occurred. Historical GPU/DMA drain remains unknown.
-   Preserve the retained ownership recorded above. The next attempt needs a
-   concrete correction or a narrower diagnostic that distinguishes startup,
-   application admission and USB observation. GPU computation remains unproven.
-
-The independent single-core NPU convolution image is integrated and reviewed.
-Its application clock checks now accept the supported normalized 24 MHz
-reference and PERI0 settings observed on the second board. Six focused cases
-execute the final ELF's clock acquisition path; 68 linked objects are unchanged.
-Evidence is under `npu-single-core-20261018/reference-refresh/`. Existing startup,
-model and host evidence is reused. Physical inference still needs post-recovery
-board preparation, NPU-specific clock/power observations and actual memory,
-DMA, USB and recovery admission. Software fixture records are not deployable.
-
-5. Complete every remaining path in the [hardware matrix](hardware.md), including
-   USB host/roles, radio and entropy binding, Bluetooth security/headset procedures,
-   audio, display, codecs, PCIe, SPI, routed PWM/ADC and power transitions.
-   Complete the remaining RTC modes and physical service qualification. OV5640 is the first camera;
-   no MIPI camera or display is connected, and the DSI panel is undecided.
-   No microphone is available. Recorded audio remains the mimus fixture.
-6. Qualify unchanged-model mimus with paced input and all cores. After every
-   required hardware function works, optimize and measure complete recognition,
-   startup, live latency, concurrency, recovery and resource use. Finish
-   reproducible boot/update artifacts and physical qualification of all required
-   functions. The full accepted goal remains incomplete.
-
-The independent board-application worker is preparing a boot-CPU-only USB/radio
-image in `sunstoneos-worktrees/board-single-core`, from `3eca977`. It owns the new
-target and additive shared single-core startup branches; it has no board access.
-The existing USB-only and USB-plus-radio features must remain intact. It is also
-correcting a source-proven prepared-session identity mismatch, with targeted
-validation and preserved historical artifacts. This work is not a diagnosis of
-the full multicore attempt.
+[startup record](a733-smp-supervised.md) hold the source comparisons. The accepted
+returning CPU diagnostics use frozen ELF
+`762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`;
+rebuilding it requires new symbol and patch bindings. Preserve the accepted
+artifacts instead of rebuilding them for handoff or documentation changes.
