@@ -20,6 +20,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | CPU diagnostic result | [Supervised startup](a733-smp-supervised.md): the matching checkpoint heading |
 | Cache mappings and publication | [CPU coherence](cpu-coherence.md): “EL3 and nonsecure EL1 use matching memory attributes” and “Cache entry requires published immutable memory”; also the audit's “Publication must cover the executable physical address space” |
 | Raw oscillator versus normalized reference admission | [Provider clock reference](provider-clock-reference.md): TWI11/USB2/radio/CE/I2S/PWM parents, raw S_TWI1/LED restrictions and [HDMI independent references and ownership](provider-clock-reference.md#hdmi-native-evidence); [SPI platform](spi-platform.md) distinguishes main SPI REF24 from raw S_SPI. Function checks do not qualify images or physical clocks |
+| DI301 field processing and source selection | [Native deinterlacing](deinterlace-native.md): effective SUN60IW2 DI301 selection, GPL configuration adaptation, masked register publication and retained master-9 lifetime; [host preparation](deinterlace-preparation.md) |
 | Evidence reuse | [Validation](validation.md): “Reuse valid evidence” |
 | Dependency provenance | [Sources](sources.md) and the component's source manifest |
 

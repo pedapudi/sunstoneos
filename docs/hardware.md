@@ -1641,6 +1641,27 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
+- DI301 deinterlacer: **implemented** one retained [native offline WEAVE path](deinterlace-native.md)
+  for a caller's 640×480 NV12 combined-field frame, top field first and 640-byte
+  strides. Pinned GPL DI301 configuration from Linux revision `2ac08e8…` runs
+  against a private CPU register image; whitelisted masked writes configure the
+  live controller. No opaque DI runtime or Linux kernel executes on the board.
+  Existing clock/power/PMIC providers, guarded master-9 IOMMU mappings and copied
+  USB output preserve exclusive ownership. Matched finish/nonbusy, IOMMU and
+  guard checks precede immutable output publication. Delivery-gated ACK permits
+  neither reuse nor another job; all resources remain retained.
+  Thirteen linked native cases, one actual full-speed TinyUSB case and separate
+  boot/SRAM checks pass with device, scheduling and memory-authority effects modeled.
+  The [host path](deinterlace-preparation.md) passes thirteen capture cases,
+  five allocation refusals and supervisor readiness without device access.
+  Root accepts frozen image `a472162b…`, 172 objects and 460 compiled inputs at
+  `81e55ee` under `deinterlace-native-20261020/root-integration.json`.
+  The only native snapshot difference is completed host-evidence documentation;
+  all nineteen host sources match. Physical processing, visibility, confinement,
+  USB, power and recovery remain unqualified. Finish is not independent fabric
+  drain. Motion-adaptive processing, TNR, film detection, crop/scale, additional
+  formats and repeated jobs remain required.
+
 - Crypto, random, identity and secure storage: **implemented** bounded
   [hardware random-number requests](entropy.md) through the native crypto engine.
   The service provisions supplied health thresholds and returns complete
@@ -1868,6 +1889,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership |
 | Video and image codecs | Supported encode/decode operations through application APIs | Firmware/runtime, formats, dimensions, shared memory bandwidth |
+| DI301 deinterlacer | Offline weave, motion-adaptive processing, TNR, film detection and supported formats | Shared DE_SYS power/clocks, guarded master-9 mappings, DMA visibility and physical field processing |
 | PCIe | Link, configuration, interrupts, DMA and endpoint interface | Connector and endpoint; link recovery and boot conflicts |
 | RTC and watchdog | Time retention, alarms, independent reset/recovery | Backup power population, clock source, reset-cause reporting |
 | Thermal and frequency control | Temperature, throttling, supported operating points | Calibration, power coordination, load measurements |
