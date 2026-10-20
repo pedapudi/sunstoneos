@@ -158,13 +158,28 @@ def main():
         try:prep.geometry_check(geometry)
         except ValueError:pass
         else:raise AssertionError('invalid geometry accepted')
-    for invalid in (source[:-2],source+b'\0\0',b'\0\x10'+source[2:]):
+    changed=bytearray(source);changed[0]^=1
+    for invalid in (source[:-2],source+b'\0\0',b'\0\x10'+source[2:],bytes(changed)):
         try:prep.upload_bytes(invalid,base)
         except ValueError:pass
         else:raise AssertionError('invalid input accepted')
+    proofs=(
+        (160,0),(164,4),(164,0x2c),(168,0),(168,0x101),(172,0),(172,0x41),
+        (176,0),(176,0x11),(176,0x10001),(180,2),(184,0),(188,614399))
+    for offset,value in proofs:
+        # Use the same sealed session and valid full output as the capture cases.
+        frame=bytearray(192+len(output))
+        struct.pack_into('<4I2Q',frame,0,0x30495053,1,1,614400,epoch,generation)
+        frame[32:64]=session[768:800];frame[64:96]=hashlib.sha256(session).digest()
+        frame[96:128]=hashlib.sha256(output).digest();struct.pack_into('<8I',frame,128,*actual_geometry)
+        struct.pack_into('<8I',frame,160,1,0xc,0x100,1,1,6,1,614400);frame[192:]=output
+        struct.pack_into('<I',frame,offset,value)
+        try:host.decode(bytes(frame),session)
+        except ValueError:pass
+        else:raise AssertionError('invalid completion proof accepted')
     summary=dict(passed=True,physical_access=False,scope=__doc__,native_image_sha256=prepared['image_sha256'],
         launcher_sha256=caller.digest(args.bundle/'launch.bin'),caller_sha256=caller.digest(Path(caller.__file__)),
-        host_sha256=caller.digest(Path(host.__file__)),cases=results,geometry_refusals=True)
+        host_sha256=caller.digest(Path(host.__file__)),cases=results,geometry_refusals=8,input_refusals=4,proof_refusals=len(proofs))
     (args.output/'result.json').write_text(json.dumps(summary,indent=2)+'\n');print(json.dumps(summary))
 
 
