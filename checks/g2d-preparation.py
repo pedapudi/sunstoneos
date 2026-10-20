@@ -30,13 +30,14 @@ def main():
         return dict(path=str(path),sha256=hashlib.sha256(data).hexdigest())
     note=record('MODEL-NOT-PHYSICAL.json',dict(**target,purpose=__doc__))
     for offset in (80,216,248,280):board[offset:offset+32]=bytes.fromhex(note['sha256'])
-    fields={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','g2d_inherited_powered_reset_deasserted','skipped_masters_physically_quiescent','remote_secure_writers_excluded','g2d_irq_owned_masked','iommu_irqs_owned_masked'],
+    fields={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','de_sys_consumers_excluded','de_sys_prior_transactions_drained','skipped_masters_physically_quiescent','remote_secure_writers_excluded','g2d_irq_owned_masked','iommu_irqs_owned_masked'],
         'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','g2d_device_mapping'],
         'electrical':['dcdc2_shared_800mv','g2d_operating_point_source_reviewed','stable_g2d_parent'],
         'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}
     refs={};facts={}
     for key,required in fields.items():
-        refs[key]=record(key+'.json',dict(**target,schema='a733-g2d-'+key+'-v1',reviewed=True,**{k:True for k in required}))
+        profile={'de_sys_power_profile':'off-or-on-retained-v1'} if key=='initial' else {}
+        refs[key]=record(key+'.json',dict(**target,schema='a733-g2d-'+key+'-v1',reviewed=True,**profile,**{k:True for k in required}))
         facts[key]=Path(refs[key]['path']).read_bytes()
     owner,authority,client=struct.unpack_from('<3Q',original,616)
     geometry=struct.unpack_from('<12I',original,856)

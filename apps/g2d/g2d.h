@@ -4,6 +4,7 @@
 #include "input.h"
 #include "a733_iommu.h"
 #include "device_memory_pool.h"
+#include "a733_de_sys_power.h"
 #include "../board/application.h"
 struct g2d_application {
     struct a733_g2d_session session;
@@ -16,6 +17,10 @@ struct g2d_application {
     struct a733_pmic_snapshot supply;
     struct a733_gpu_power_resources power_ready;
     uint64_t power_token;
+    struct a733_de_sys_power domain;
+    struct a733_clock_token domain_clock;
+    struct a733_rail_token domain_rail;
+    struct a733_gpu_resource_lease domain_pck;
     struct device_memory_pool *pool,*wb_pool;
     struct device_memory_lease leases[4],wb_leases[2];
     StaticTask_t task;StackType_t stack[4096];TaskHandle_t handle;

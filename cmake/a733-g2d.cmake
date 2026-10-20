@@ -27,7 +27,7 @@ apply_build_patch("${g2d_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733-
 list(APPEND g2d_sources "${g2d_build}/boot.c"
  "${SUNSTONE_SOURCE_ROOT}/platform/a733/device_memory_layout.c")
 foreach(source IN ITEMS apps/g2d/main.c apps/g2d/input.c apps/g2d/memory.c apps/g2d/native.c apps/g2d/usb.c apps/g2d/admission.c apps/g2d/snapshot.c
- drivers/g2d/a733_g2d.c drivers/iommu/a733_iommu.c)
+ drivers/g2d/a733_g2d.c drivers/iommu/a733_iommu.c drivers/power/a733_de_sys_power.c)
  list(APPEND g2d_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 add_executable(sunstone-a733-g2d EXCLUDE_FROM_ALL ${g2d_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
@@ -56,10 +56,11 @@ set(g2d_inputs ${g2d_sources} ${g2d_headers} ${board_inputs}
  "${g2d_build}/link.ld"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_g2d_application.h"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_g2d.h"
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_de_sys_power.h"
  "${SUNSTONE_SOURCE_ROOT}/drivers/g2d/g2d_mixer_type.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/g2d/sources.json" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES g2d_inputs)
-set(g2d_identity "runtime-native-g2d1;supervised20;ARGB8888-fill-copy-max1280x720;private-copy;extended-NC-guards;${CMAKE_C_COMPILER_VERSION}")
+set(g2d_identity "runtime-native-g2d1;supervised20;ARGB8888-fill-copy-max1280x720;private-copy;extended-NC-guards;retained-DE_SYS-on;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS g2d_inputs)
  file(SHA256 "${input}" g2d_hash)
  string(APPEND g2d_identity "${g2d_hash}")

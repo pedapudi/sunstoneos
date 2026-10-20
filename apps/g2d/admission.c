@@ -13,6 +13,9 @@ __attribute__((used,retain)) const uint64_t g2d_geometry[11]={
     sizeof(struct g2d_boot_contract),A733_BOARD_SESSION_ADDRESS,
     A733_G2D_SESSION_SECONDS,A733_G2D_INPUT_CAPACITY,A733_G2D_OUTPUT_CAPACITY,
     A733_G2D_RESULT_BYTES,A733_G2D_MAX_WIDTH,A733_G2D_MAX_HEIGHT};
+/* Profile1 admits coherent OFF or ON under whole-DE_SYS exclusion. This
+ * immutable image marker changes no serialized session/contract offsets. */
+__attribute__((used,retain)) const uint64_t g2d_power_profile[3]={0x07061000,10000,1};
 int a733_g2d_session_valid(const struct a733_g2d_session *s)
 {
     return s&&a733_board_session_valid(&s->board,0)&&s->board.workload==2&&

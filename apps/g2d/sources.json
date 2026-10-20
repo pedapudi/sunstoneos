@@ -1,8 +1,22 @@
 {
   "schema": "a733-g2d-references-v1",
   "runtime": "Native FreeRTOS CPU adapter submits GPL-derived RCQ commands to the A733 G2D mixer. No Linux kernel, firmware blob or opaque graphics library executes.",
-  "license": "GPL-2.0-or-later; original notices preserved in the copied register header and adapted controller.",
+  "license": "G2D controller/register adaptation: GPL-2.0-or-later. DE_SYS power sequence adaptation: GPL-2.0-only. Original notices are preserved in the adapted sources.",
   "reference_pins": {
+    "pck600_domains.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/pm_domain/pck600_domains.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "2d9c2b60b3b264d1732538815d12570e45386d30b280a1d0b4f5b9780bdc49ee",
+      "license": "GPL-2.0-only",
+      "adaptation": "drivers/power/a733_de_sys_power.c adapts only the sun60iw2 DE_SYS delay row, masked ON request, barrier and bounded10ms status observation. Linux genpd, regmap, poweroff and reset handling do not execute."
+    },
+    "sun60iw2-power.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/include/dt-bindings/power/sun60iw2-power.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "f5da443de3a15290511f60c5a8697bc01ec714985eb876108e1da9db76fadbe7",
+      "license": "GPL-2.0",
+      "use": "Identifies DE_SYS as domain1."
+    },
     "g2d_mixer_type.h": {
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_mixer_type.h",
       "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",

@@ -28,6 +28,16 @@ The existing board prefix binds epoch, generation, lease and native build identi
 The reserved reference digest stays zero; no reference pixels enter the native
 protocol.
 
+New images require the initial evidence record's `de_sys_power_profile` to equal
+`off-or-on-retained-v1`, with `de_sys_consumers_excluded` and
+`de_sys_prior_transactions_drained` both true. These facts cover every consumer
+of DE_SYS, including DE, deinterlace, G2D and EINK, in addition to the existing
+all-master, walk, interrupt and remote-writer exclusion. The native provider
+independently refuses incoherent command/status or reserved initial values.
+No idle register read establishes the admission facts. Older inherited-ON
+evidence alone cannot authorize this profile. The preparer checks the linked
+image's separate power-profile marker; the 904-byte session layout is unchanged.
+
 For example, a fill template can be produced from exact source bytes and the
 reviewed evidence files:
 

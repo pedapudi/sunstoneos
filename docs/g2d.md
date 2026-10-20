@@ -30,8 +30,26 @@ media master clock scopes against concurrent consumers.
 
 The supported module clock selects the PERI0 400 MHz output and divides by four
 for 100 MHz. Native code validates the normalized 24 MHz PLL reference, parent
-integer ratio, output gates, immutable fabric selectors, domain1 status and
-DE_SYS bus gates. It deasserts the DE_SYS and G2D resets, configures the disabled
+integer ratio, output gates, immutable fabric selectors and DE_SYS bus gates.
+Before local clock or IOMMU access, a fixed power provider accepts domain1 only
+when its command and status agree at OFF0 or ON8. An inherited ON state requires
+no domain write. For OFF, it writes the five published DE_SYS delay values and
+requests ON8 while preserving unrelated command bits. Status must reach ON8
+within 10 ms and the original session deadline. Neither bound is extended by
+polling or lock contention. The sequence follows the pinned Allwinner PCK600
+driver; it does not reset the PCK controller or request poweroff.
+
+The provider authenticates the actual G2D task, retained clock/PCK tokens and
+readonly DCDC2 lease before taking the common register mutex. The complete
+delay/request transaction holds that mutex; status polls release it after clean
+observations. Failure while held retains the mutex, and every failure retains
+all provider leases. READY is required before local G2D or IOMMU access. Domain
+ON readback establishes no inherited traffic drain or electrical qualification.
+The sealed initial authority must exclude and drain every DE_SYS consumer,
+including DE, deinterlace, G2D and EINK, throughout the retained session.
+
+After the provider reaches READY, native code deasserts the DE_SYS and G2D
+resets, configures the disabled
 module and enables its bus and module gates under the shared register mutex.
 An uncertain register write retains that mutex. The sealed initial evidence
 must establish independent drain and exclusion before these accesses.

@@ -160,7 +160,10 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         fact=json.loads(data)
         physical_authority(fact)
         require(fact.get('schema')=='a733-g2d-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'G2D authority is not bound to this image/target.')
-        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','g2d_inherited_powered_reset_deasserted','skipped_masters_physically_quiescent','remote_secure_writers_excluded','g2d_irq_owned_masked','iommu_irqs_owned_masked'],
+        if key=='initial':
+            require(fact.get('de_sys_power_profile')=='off-or-on-retained-v1',
+                'G2D requires reviewed coherent OFF/ON DE_SYS authority.')
+        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','de_sys_consumers_excluded','de_sys_prior_transactions_drained','skipped_masters_physically_quiescent','remote_secure_writers_excluded','g2d_irq_owned_masked','iommu_irqs_owned_masked'],
             'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','g2d_device_mapping'],
             'electrical':['dcdc2_shared_800mv','g2d_operating_point_source_reviewed','stable_g2d_parent'],
             'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}[key]
@@ -289,6 +292,9 @@ def _image_parts(data):
         p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
     _,geometry=immutable('g2d_geometry',88)
     require(struct.unpack('<11Q',geometry)==(0x4153373347324131,1,904,288,0x41f00000,20,3686400,3686400,192,1280,720),'G2D compiled geometry differs.')
+    _,power=immutable('g2d_power_profile',24)
+    require(struct.unpack('<3Q',power)==(0x07061000,10000,1),
+        'G2D image lacks the bounded retained DE_SYS power profile.')
     address,identity=immutable('a733_smp_build_id',32)
     for p in parts:p.pop('flags')
     return parts,address,identity
