@@ -408,6 +408,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   twenty modeled native composition/USB cases and four host groups pass, and
   one native image links under `monitor-application-20261018/`. Physical sampling,
   interrupt delivery, analog drain and recovery remain unqualified.
+  The monitor retention adapter now checks actual mutex ownership independently
+  of provider health: unowned entry failure returns without asserting ownership,
+  while known-held faults retain once and allow no later MMIO. Four focused host
+  cases cover monitor and camera adapters under
+  `mutex-enter-20261020/root-integration.json`; RTOS/context effects are modeled.
+  Existing native images predate the fix; no new native image is claimed.
 - CPU clock diagnostics: **tested** for read-only reporting of the boot A55
   clock configuration during recognition. [Application profiling](mimus.md)
   records the register decode and its limits.
@@ -792,7 +798,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
-- G2D: **implemented** one retained ARGB8888 fill or source-copy operation per
+- G2D: **implemented** one retained ARGB8888 fill, source-copy or source-over-solid operation per
   session through the [native application](g2d.md). Caller geometry is bounded
   to 1280×720 with byte stride at most 5120. Authenticated source input, RCQ
   commands and destination use guarded allocations. Typed global IOMMU admission
@@ -811,7 +817,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Root accepts the native/host/USB closures at `a7d2ece` under
   `g2d-native-20261020/root-integration.json`; the only native snapshot difference
   is an appended component-document evidence section. Existing verification was reused.
-  Current image `81916537…` adds source-backed DE_SYS domain-1 initialization:
+  Power-initialization image `81916537…` adds source-backed DE_SYS domain-1 initialization:
   coherent OFF requests ON, while coherent ON is adopted without domain writes.
   Fixed 10 ms polling and mutex deadlines stay within the original session bound.
   Uncertain writes, incoherent state or timeout retain resources without retry.
@@ -826,11 +832,26 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Earlier boot/SRAM, core and transport results retain their original scope,
   without replay. Physical power transition, SMP/cache behavior and pixels remain
   unqualified.
+  Current image `b27476ca…` adds operation 3: straight per-pixel source alpha
+  over one opaque solid color, using the existing rectangle/source bounds and
+  mappings. One actual submission/copied-result case passes with pixels/device
+  effects modeled. Two host policy cases keep authenticated differing output
+  eligible for ACK but refuse digest corruption; ideal integer blending is only
+  an unqualified diagnostic. Two geometry refusals and two new SRAM cases pass.
+  Root verifies all 187 compiled repository inputs at `1dbcf70` under
+  `g2d-blend-20261020/root-integration.json`; boot and eight USB-unit comparisons
+  preserve earlier evidence without replay. The changed geometry uses a new launcher.
+  A source-backed completion correction remains required: pinned Linux acknowledges
+  task-end, pulses mixer AHB reset and then wakes callers, including retained
+  TASK_APPLY. The current no-reset path establishes no equivalent output visibility.
+  Neither that reset nor task-end alone proves drain or permits reuse; physical
+  copied-output admission remains blocked pending the reviewed success lifecycle.
   The [host coordinator](g2d-preparation.md) uses one 19-second window within
-  native 20-second admission, durably saves output and compares copied bytes with
-  a CPU reference before delivery-gated generation/digest ACK. Every allocation,
+  native 20-second admission, durably saves output before delivery-gated
+  generation/digest ACK. Source-over CPU comparison is diagnostic, without a
+  qualified hardware-rounding oracle. Every allocation,
   mapping and provider identity remains retained; timeout or ACK establishes no
-  reclamation or drain. Scaling, blending, rotation, color conversion and further
+  reclamation or drain. Scaling, image-over-image/translucent blending, rotation, color conversion and further
   formats remain required. Physical pixels, DMA confinement/visibility, IRQ
   delivery, startup, recovery and performance remain unqualified.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
@@ -1031,6 +1052,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `dma-header-integration/root-integration.json`. Load-segment equivalence apart
   from build identity supports reuse of accepted checks; later shared-header
   changes do not invalidate this frozen candidate.
+  The [cache-ordering source audit](gpu-render.md) confirms existing per-job
+  firmware flushing and matching completion updates for compute and rendering;
+  it identifies no missing host cache command. Evidence:
+  `gpu-cache-visibility-20261020/assessment.json`. This reuses pinned source and
+  accepted image comparisons, without qualifying physical visibility or opaque
+  firmware internals.
   Wider dispatch geometry, shape/program replacement, graphics, concurrency,
   physical computation and mimus acceleration remain required. The accepted
   fixed-workload returning profile is preserved separately.
@@ -1322,6 +1349,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   provider initialization; the affected image and five binding checks pass under
   `camera-binding-20261018/`. All 120 preserved repository inputs match integration.
   No camera module is connected, so physical capture remains unqualified.
+  Its retention adapter has the same host-checked mutex-ownership correction
+  described under combined monitoring; prior native images retain their original
+  scope and do not include that source fix.
   The underlying driver provides **implemented** bounded [OV5640 control](camera.md) for two-lane
   640 × 480 UYVY at nominal 30 frames/s. Sensor state matches the pinned reference
   model; lifecycle checks and native compilation pass. The [CSI controller](csi-receiver.md)
@@ -1724,8 +1754,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
-- DI301 deinterlacer: **implemented** one retained [native offline WEAVE path](deinterlace-native.md)
-  for a caller's 640×480 NV12 combined-field frame, top field first and 640-byte
+- DI301 deinterlacer: **implemented** retained [offline WEAVE and initial motion processing](deinterlace-native.md)
+  for caller 640×480 NV12 combined-field frames, top field first and 640-byte
   strides. Pinned GPL DI301 configuration from Linux revision `2ac08e8…` runs
   against a private CPU register image; whitelisted masked writes configure the
   live controller. No opaque DI runtime or Linux kernel executes on the board.
@@ -1733,7 +1763,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   USB output preserve exclusive ownership. Matched finish/nonbusy, IOMMU and
   guard checks precede immutable output publication. Delivery-gated ACK permits
   neither reuse nor another job; all resources remain retained.
-  Thirteen linked native cases, one actual full-speed TinyUSB case and separate
+  The earlier WEAVE image has thirteen linked native cases, one actual full-speed
+  TinyUSB case and separate
   boot/SRAM checks pass with device, scheduling and memory-authority effects modeled.
   The [host path](deinterlace-preparation.md) passes thirteen capture cases,
   five allocation refusals and supervisor readiness without device access.
@@ -1742,8 +1773,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The only native snapshot difference is completed host-evidence documentation;
   all nineteen host sources match. Physical processing, visibility, confinement,
   USB, power and recovery remain unqualified. Finish is not independent fabric
-  drain. Motion-adaptive processing, TNR, film detection, crop/scale, additional
-  formats and repeated jobs remain required.
+  drain. Mode 2 adds one initial motion operation with two authenticated previous/
+  current frames and zero history, producing one copied frame. Dedicated DI reset
+  must be asserted with local bus/module gates off before the source-defined
+  initialization sequence; no confidence defaults are invented from CPU-shadow zeros.
+  Current image `2cff56ab…` passes one native operation, six refusals and copied
+  serializer/ACK checks, plus scoped host allocation/input/result/capture checks.
+  Synthetic device writes establish neither motion arithmetic nor physical reset,
+  DMA visibility or numerical output. Two new SRAM cases are separate; earlier
+  boot cases reuse identical allocated sections/relocations within their old scope.
+  Root verifies all 185 compiled repository inputs at `3a1f219` under
+  `deinterlace-motion-20261020/root-integration.json`; declared differences affect
+  future metadata wording and final host documentation only. The retained
+  descriptive WEAVE label does not replace mode-2 session/geometry admission.
+  Steady-state history/feedback, TNR, film detection, crop/scale, additional formats
+  and repeated jobs remain required.
 
 - Crypto, random, identity and secure storage: **implemented** bounded
   [hardware random-number requests](entropy.md) through the native crypto engine.
