@@ -1,7 +1,7 @@
 if(SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
 endif()
-# Same supervised board provider composition with one retained DI301 offline weave task.
+# Same supervised board provider composition with one retained DI301 WEAVE or initial MOTION task.
 set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
 if(NOT TARGET sunstone-a733-board)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-board.cmake")
@@ -72,7 +72,7 @@ set(deinterlace_inputs ${deinterlace_sources} ${deinterlace_headers} ${board_inp
  "${SUNSTONE_SOURCE_ROOT}/drivers/deinterlace/di-port.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/deinterlace/sources.json" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES deinterlace_inputs)
-set(deinterlace_identity "runtime-native-di301-weave1;supervised20;NV12-640x480;private-copy;extended-NC-guards;${CMAKE_C_COMPILER_VERSION}")
+set(deinterlace_identity "runtime-native-di301-weave-initial-motion1;supervised20;NV12-640x480;private-copy;extended-NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS deinterlace_inputs)
  file(SHA256 "${input}" deinterlace_hash)
  string(APPEND deinterlace_identity "${deinterlace_hash}")
@@ -89,7 +89,7 @@ set_target_properties(sunstone-a733-deinterlace PROPERTIES SUFFIX ".elf" LINK_DE
 
 set(deinterlace_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@deinterlace_build@/manifest.json" "{\"target\":\"sunstone-a733-deinterlace\",\"execution_profile\":\"deinterlace-supervised-v1\",\"workload\":\"copied-NV12-offline-weave\",\"build_id\":\"@deinterlace_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@deinterlace_build@/manifest.json" "{\"target\":\"sunstone-a733-deinterlace\",\"execution_profile\":\"deinterlace-supervised-v1\",\"workload\":\"copied-NV12-offline-weave-or-initial-motion\",\"build_id\":\"@deinterlace_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${deinterlace_manifest_script}" deinterlace_manifest_script @ONLY)
 file(WRITE "${deinterlace_build}/finish-manifest.cmake" "${deinterlace_manifest_script}")
