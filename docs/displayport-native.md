@@ -12,7 +12,7 @@ The closed profile uses four DisplayPort lanes at 1.62 Gb/s, 1280×720 at
 A sink must advertise four lanes, the selected rate, and the complete 720p60
 timing through a checked EDID base block or its first CTA extension. Unsupported
 sinks fail while ownership remains retained. Audio, HDCP, MST, live frame
-replacement and other rates remain required work.
+replacement and other rates are outside this initial profile.
 
 The image composes the existing supervised board PMIC, USB0, clock, rail, pin,
 PCK and register-lock providers. It holds COMB0, the shared SERDES lifecycle
@@ -59,6 +59,10 @@ published driver hardcodes 200 MHz with a FIXME. Available sources do not
 establish that this core input follows the global APB1 selector. An admission
 record must establish the actual core host frequency and its stability; fabric
 readback alone cannot supply that evidence.
+The cached `dp-aux-host-clock-audit-20261020/result.json` records the six primary
+source excerpts supporting this boundary. The manual's divider register describes
+a programmed host frequency; the pixel-clock selector and gate do not establish
+the internal AUX APB source.
 
 ## Memory and copied completion stay owned
 
@@ -80,6 +84,11 @@ those facts.
 A successful observation requires a newly cleared and subsequently observed DE
 frame-end status, a healthy link and controller, a completed master-8 fault scan,
 output stop, and confirmed Type-C shutdown. DP and TV1 stop before DE disable.
+Frame status is observed only after the incremental IOMMU scan completes.
+Normal completion requests shutdown from the Type-C task, which revokes at an
+idle transaction boundary. Faults still revoke immediately. Read-only authority
+checks retry metadata contention within the original deadline; device writes
+and partial controller operations are never repeated by that retry.
 The complete allocation, translations, supplies, clock and PCK ownership stay
 reserved until power removal. Disabling output does not prove DMA drain.
 An authority failure can prevent output stop; the terminal fault preserves the
@@ -90,3 +99,28 @@ The terminal copy is immutable and includes the full session digest, build
 identity, negotiated attachment, physical allocation, pixel digest and copied
 352-byte controller result. The transfer includes the terminal zero-length
 packet at full and high speed. Reading a reply grants no resource release.
+
+## Software evidence has explicit model boundaries
+
+The controller check executes the linked Cadence and Trilinear adaptations with
+modeled PHY readiness, AUX completion and sink responses. Its six cases cover
+nominal training, PHY timeout, repeated AUX deferral, short AUX reply, lost clock
+recovery and immutable-configuration mutation. The constructor check executes
+the actual allocator, page-table construction, pixel generation and digest
+calculation from the linked image. Its retained allocation bytes allow the host
+preparer to check every descriptor, pixel and padding byte without repeating
+those constructors.
+
+The negotiation check executes the native PMIC, Type-C, power and display task
+bodies through real provider objects. It models the independent TWI buses and
+USB Power Delivery partner. The composed check continues those task contexts
+through the display application. Architectural scheduling, elapsed time,
+register behavior, sink replies and frame-end events remain modeled.
+
+The composed scheduler serializes tasks. Its optional nominal ordering lets a
+task finish an existing register-lock operation before a tick-woken power
+observer runs. Native counter reads and deadlines still execute. This ordering
+can demonstrate device sequencing; it does not establish SMP scheduling,
+priority inheritance, contention tolerance or physical service timing. A
+preserved alternate ordering makes the power observer encounter a busy register
+lock and conservatively shut down. Neither ordering qualifies physical output.
