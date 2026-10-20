@@ -54,7 +54,9 @@ set(h264_encode_inputs ${h264_encode_sources} ${h264_encode_headers} ${board_inp
  "${SUNSTONE_SOURCE_ROOT}/apps/h264-encode/extended-link.patch"
  "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link-devices.ld"
  "${h264_encode_build}/link.ld"
- "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_encode_application.h" "${CMAKE_CURRENT_LIST_FILE}")
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_h264_encode_application.h"
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_h264_encode.h"
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_encode_platform.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES h264_encode_inputs)
 set(h264_encode_identity "runtime-native-h264-encode1;supervised60;two-VGA-NV12-Baseline-CAVLC-QP26;private-copy;extended-NC-guards;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS h264_encode_inputs)
