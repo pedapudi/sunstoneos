@@ -1,4 +1,5 @@
 #include "pvr_compute_service.h"
+#include "pvr_compute_context.h"
 #include "pvr_gpu_service.h"
 #include "aarch64_device_memory.h"
 #include <string.h>
@@ -265,7 +266,9 @@ static int write_client(void *ctx,enum pvr_cccb_region r,uint32_t off,const void
     struct pvr_compute_service *s=ctx;
     unsigned id=r==PVR_CCCB_CONTROL?2:3;
     if((unsigned)r>PVR_CCCB_COMMANDS||!io_span(s,id,off,n)||
-       (r==PVR_CCCB_CONTROL&&(off||n!=32||s->phase!=PVR_COMPUTE_SERVICE_FORMAT))||
+       (r==PVR_CCCB_CONTROL&&(off||n!=32||
+        (s->phase!=PVR_COMPUTE_SERVICE_FORMAT&&
+         !(s->phase==PVR_COMPUTE_SERVICE_CLEANUP&&s->client.phase==PVR_CCCB_FORMAT))))||
        (r==PVR_CCCB_COMMANDS&&s->phase!=PVR_COMPUTE_SERVICE_RUNNING))return 0;
     memcpy((unsigned char *)s->config->firmware[id].storage.cpu+off,in,n);
     __asm__ volatile("dsb sy":::"memory");return 1;
@@ -362,6 +365,68 @@ int pvr_compute_service_replace(struct pvr_compute_service *s,uint32_t sequence,
     if(!timely(s)||!pvr_compute_job_repeat(&s->job,deadline))
         return fail(s,PVR_COMPUTE_SERVICE_JOB),-1;
     s->phase=PVR_COMPUTE_SERVICE_RUNNING;return 1;
+}
+int pvr_compute_service_cleanup_begin(struct pvr_compute_service *s,uint64_t deadline)
+{
+    if(!s||!s->service||!s->config||s->service->phase!=PVR_GPU_SERVICE_READY||
+       s->service->config.compute!=s||s->service->config.graphics||s->service->config.render||
+       s->service->config.free_lists.count||s->service->owner>=PVR_GPU_SERVICE_CLIENTS||
+       (s->phase!=PVR_COMPUTE_SERVICE_READY&&s->phase!=PVR_COMPUTE_SERVICE_COMPLETE)||
+       atomic_load_explicit(&s->input_state,memory_order_acquire))return 0;
+    s->deadline=deadline;
+    if(deadline!=s->service->deadline||pvr_compute_service_admit_mode(s)!=1||
+       s->config->job->admit(s->config->job->admission_context,s->config->job)!=1||
+       !timely(s))return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
+    uint32_t expected=0,completed;
+    if(s->phase==PVR_COMPUTE_SERVICE_COMPLETE) {
+        if(s->job.phase!=PVR_JOB_COMPLETE||!s->job.sequence||s->client.phase!=PVR_CCCB_IDLE||
+           s->job.transport!=&s->client||s->client.queue!=&s->service->queue||
+           s->job.epoch!=s->epoch||s->client.epoch!=s->epoch||s->client.serial!=s->job.serial)
+            return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
+        expected=s->job.sequence;
+    } else if(s->job.phase!=PVR_JOB_NEW||s->client.phase!=PVR_CCCB_NEW)
+        return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
+    if(s->service->queue.phase!=PVR_CCB_ACTIVE||s->service->queue.epoch!=s->epoch||
+       s->config->job->firmware_context!=s->config->firmware_address[0]||
+       !io_span(s,0,0,PVR_COMPUTE_CONTEXT_BYTES)||!read_fence(s,&completed)||completed!=expected||!timely(s))
+        return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
+    if(s->client.phase==PVR_CCCB_NEW) {
+        const struct pvr_cccb_ops ops={clock_now,read_client,write_client,barrier};
+        if(!pvr_cccb_init(&s->client,&ops,s,&s->service->queue,
+            (uint32_t)s->config->job->programs->excluded[3].bytes,s->config->firmware_address[0],deadline))
+            return fail(s,PVR_COMPUTE_SERVICE_QUEUE);
+    }
+    s->cleanup_context=s->config->firmware_address[0];s->cleanup_status=0;
+    memset(&s->cleanup_token,0,sizeof(s->cleanup_token));
+    s->phase=PVR_COMPUTE_SERVICE_CLEANUP;return 1;
+}
+int pvr_compute_service_cleanup_poll(struct pvr_compute_service *s)
+{
+    if(!s||s->phase!=PVR_COMPUTE_SERVICE_CLEANUP)return -1;
+    if(s->service->phase!=PVR_GPU_SERVICE_COMPUTE_CLEANUP||s->epoch!=s->service->epoch||
+       s->epoch!=s->service->queue.epoch||s->cleanup_context!=s->config->firmware_address[0]||
+       !timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLEANUP_ERROR);
+    if(s->client.phase==PVR_CCCB_FORMAT) {
+        /* An unused context has not reached its first KICK. Publish the same
+         * initialized CCCB control that pinned pvr_queue_create supplies. */
+        if(pvr_cccb_poll(&s->client)!=PVR_CCCB_OK)return fail(s,PVR_COMPUTE_SERVICE_QUEUE);
+        return 0;
+    }
+    if(s->client.phase!=PVR_CCCB_IDLE)return fail(s,PVR_COMPUTE_SERVICE_QUEUE);
+    if(!s->cleanup_token.serial) {
+        /* Pinned pvr_fw_structure_cleanup: KCCB106, flags0, cleanup type0
+         * (FWCOMMONCONTEXT), then its exact firmware address. */
+        uint32_t command[PVR_CCB_COMMAND_BYTES/4]={PVR_CCB_MAGIC|106u,0,0,s->cleanup_context};
+        enum pvr_ccb_result r=pvr_ccb_submit(&s->service->queue,command,s->last_now,s->deadline,&s->cleanup_token);
+        if(r==PVR_CCB_AGAIN)return 0;
+        if(r!=PVR_CCB_OK)return fail(s,PVR_COMPUTE_SERVICE_CLEANUP_ERROR);
+        return 0;
+    }
+    enum pvr_ccb_result r=pvr_ccb_collect(&s->service->queue,s->cleanup_token,&s->cleanup_status);
+    if(r==PVR_CCB_AGAIN)return 0;
+    /* BUSY and firmware POLL_FAILURE never authorize disposal. */
+    if(r!=PVR_CCB_OK||s->cleanup_status!=1||!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLEANUP_ERROR);
+    s->phase=PVR_COMPUTE_SERVICE_CLEANED;return 1;
 }
 int pvr_compute_service_poll(struct pvr_compute_service *s)
 {

@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--firmware', type=Path, required=True)
     parser.add_argument('--lld', type=Path, required=True)
     parser.add_argument('--qemu', type=Path, required=True)
-    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 15)), default=[1, 2, 3])
+    parser.add_argument('--cases', nargs='+', type=int, choices=tuple(range(1, 22)), default=[1, 2, 3])
     parser.add_argument('--package',type=Path)
     parser.add_argument('--expected',type=Path)
     parser.add_argument('--expected-second',type=Path)
@@ -38,7 +38,8 @@ def main():
     build = out / 'build'
     extra = ['drivers/gpu/pvr_compute_service.c', 'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_compute_job.c',
              'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
-             'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c', 'platform/a733/gpu_vm_memory.c']
+             'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c', 'drivers/gpu/pvr_render_texture.c',
+             'platform/a733/gpu_vm_memory.c']
     cmake = '''cmake_minimum_required(VERSION 3.24)
 project(compute_composition LANGUAGES C ASM)
 add_subdirectory("ROOT" sunstone)

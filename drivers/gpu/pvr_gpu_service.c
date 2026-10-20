@@ -396,6 +396,16 @@ static void advance(struct pvr_gpu_service *s)
         }
         break;
     }
+    case PVR_GPU_SERVICE_COMPUTE_CLEANUP: {
+        enum pvr_gpu_control_result control=pvr_gpu_control_poll(&s->control,4);
+        if(control!=PVR_GPU_CONTROL_OK&&control!=PVR_GPU_CONTROL_AGAIN) {
+            fail(s,PVR_GPU_SERVICE_CONTROL);return;
+        }
+        int result=pvr_compute_service_cleanup_poll(s->config.compute);
+        if(result<0){fail(s,PVR_GPU_SERVICE_COMPUTATION);return;}
+        if(result==1)(void)begin_stop(s);
+        return;
+    }
     case PVR_GPU_SERVICE_DRAINING: {
         uint64_t current;
         if (!free_list_clock(s->config.context, &current)) { fail(s, PVR_GPU_SERVICE_CLOCK); return; }
@@ -550,8 +560,16 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     }
     if (s->config.compute && s->config.compute->phase != PVR_COMPUTE_SERVICE_READY &&
         s->config.compute->phase != PVR_COMPUTE_SERVICE_COMPLETE) return PVR_GPU_SERVICE_BUSY;
+    if(s->config.compute&&!s->config.graphics&&!s->config.render&&!s->config.free_lists.count&&
+       atomic_load_explicit(&s->config.compute->input_state,memory_order_acquire))return PVR_GPU_SERVICE_BUSY;
     if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return PVR_GPU_SERVICE_FAULT; }
     if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
+    if(s->config.compute&&!s->config.graphics&&!s->config.render&&!s->config.free_lists.count) {
+        if(pvr_compute_service_cleanup_begin(s->config.compute,s->deadline)!=1) {
+            fail(s,PVR_GPU_SERVICE_COMPUTATION);return PVR_GPU_SERVICE_FAULT;
+        }
+        s->phase=PVR_GPU_SERVICE_COMPUTE_CLEANUP;return PVR_GPU_SERVICE_OK;
+    }
     if (s->config.free_lists.count) { s->phase = PVR_GPU_SERVICE_DRAINING; return PVR_GPU_SERVICE_OK; }
     return begin_stop(s) ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_FAULT;
 }
@@ -571,7 +589,7 @@ static void worker(void *argument)
         int active = (s->phase >= PVR_GPU_SERVICE_STARTING && s->phase <= PVR_GPU_SERVICE_STOPPING) ||
                      s->phase == PVR_GPU_SERVICE_ENABLING || s->phase == PVR_GPU_SERVICE_BUILDING ||
                      s->phase == PVR_GPU_SERVICE_DRAINING || s->phase == PVR_GPU_SERVICE_PUBLISHING ||
-                     s->phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS;
+                     s->phase == PVR_GPU_SERVICE_PUBLISHING_GRAPHICS || s->phase == PVR_GPU_SERVICE_COMPUTE_CLEANUP;
         struct pvr_gpu_service_message message;
         if (xQueueReceive(s->requests, &message, active ? 1 : portMAX_DELAY) != pdTRUE) continue;
         if (message.client == PVR_GPU_SERVICE_CLIENTS && !message.ticket) {

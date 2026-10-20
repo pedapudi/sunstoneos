@@ -40,12 +40,14 @@ struct pvr_compute_service_config {
 enum pvr_compute_service_phase { PVR_COMPUTE_SERVICE_NEW, PVR_COMPUTE_SERVICE_BOUND,
     PVR_COMPUTE_SERVICE_DATA, PVR_COMPUTE_SERVICE_TABLES, PVR_COMPUTE_SERVICE_READY,
     PVR_COMPUTE_SERVICE_FORMAT, PVR_COMPUTE_SERVICE_RUNNING,
-    PVR_COMPUTE_SERVICE_COMPLETE, PVR_COMPUTE_SERVICE_FAILED };
+    PVR_COMPUTE_SERVICE_COMPLETE, PVR_COMPUTE_SERVICE_FAILED,
+    PVR_COMPUTE_SERVICE_CLEANUP, PVR_COMPUTE_SERVICE_CLEANED };
 enum pvr_compute_service_error { PVR_COMPUTE_SERVICE_NO_ERROR,
     PVR_COMPUTE_SERVICE_MAPPING, PVR_COMPUTE_SERVICE_CLOCK,
     PVR_COMPUTE_SERVICE_ADMISSION, PVR_COMPUTE_SERVICE_PUBLICATION,
     PVR_COMPUTE_SERVICE_QUEUE, PVR_COMPUTE_SERVICE_JOB,
-    PVR_COMPUTE_SERVICE_RESET, PVR_COMPUTE_SERVICE_LIFECYCLE, PVR_COMPUTE_SERVICE_CANCELLED };
+    PVR_COMPUTE_SERVICE_RESET, PVR_COMPUTE_SERVICE_LIFECYCLE, PVR_COMPUTE_SERVICE_CANCELLED,
+    PVR_COMPUTE_SERVICE_CLEANUP_ERROR };
 struct pvr_compute_service {
     const struct pvr_compute_service_config *config;
     struct pvr_gpu_service *service;
@@ -54,6 +56,8 @@ struct pvr_compute_service {
     struct pvr_mips_object objects[PVR_COMPUTE_SERVICE_OBJECTS];
     uint64_t deadline, last_now, epoch;
     uint32_t phase, error, buffer, page;
+    struct pvr_ccb_token cleanup_token;
+    uint32_t cleanup_context, cleanup_status;
     /* One copied request, never GPU mapped. Ticket/client bind its queue lifetime.
      * 0=empty, 1=caller copying, 2=worker-owned queued bytes. */
     atomic_uint input_state;
@@ -85,6 +89,11 @@ int pvr_compute_service_begin(struct pvr_compute_service *, uint64_t deadline);
 int pvr_compute_service_replace(struct pvr_compute_service *, uint32_t sequence,
     const void *, size_t bytes, uint64_t deadline);
 int pvr_compute_service_poll(struct pvr_compute_service *);
+/* Compute-only retained CLOSE. Admission/previous completion are rechecked
+ * before the fixed FWCOMMONCONTEXT request. Poll after servicing control/FWCCB;
+ * only exact status1 marks CLEANED. No mapping, buffer or lease is released. */
+int pvr_compute_service_cleanup_begin(struct pvr_compute_service *,uint64_t);
+int pvr_compute_service_cleanup_poll(struct pvr_compute_service *);
 /* No I/O: poison retained state when service/control/reset fails. */
 void pvr_compute_service_abort(struct pvr_compute_service *, unsigned error);
 /* Returns 1 for unrelated events, 0 for malformed/reset events. Any firmware

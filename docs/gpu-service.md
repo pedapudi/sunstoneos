@@ -63,13 +63,18 @@ power/reset ownership and the configured GPU clock, including after a reopen.
 Successful startup proceeds to compatibility and health checking. The service
 reports ready only after that controller completes its protocol. It continues
 polling with bounded event batches and retains the platform's event handler.
-There is no application job-submission API yet. GPU job admission, completion
-fences, and compiler/runtime integration remain required.
+The optional [compute service](gpu-compute-service.md) and
+[render service](gpu-render.md) provide their own job admission and completion
+protocols.
 
-CLOSE enters shutdown immediately. The worker performs both firmware power
+CLOSE starts bounded shutdown. A compute-only service first acknowledges
+firmware common-context cleanup, as specified by the
+[compute lifecycle](gpu-compute-service.md). The worker then performs both firmware power
 handshakes, retires normal queue/control access, checks idle/reset conditions,
 and calls platform isolation. Only successful completion releases the session
-owner. A later OPEN rebuilds the same reserved buffers with a new epoch.
+owner. A service without retained compute or free-list resources can later OPEN
+the same reserved buffers with a new epoch. Compute-backed sessions retain their
+allocations and refuse reopen.
 The isolation callback must block new GPU memory transactions and drain those
 already outstanding; requesting reset alone does not satisfy its contract.
 
@@ -80,7 +85,8 @@ Independent recovery must prove device quiescence before external reclamation.
 Task abandonment also retains resources.
 
 The worker advances one bounded controller step before receiving each request.
-While enabling power, starting, checking, ready, or stopping, it waits at most one tick for the
+While enabling power, starting, checking, ready, cleaning a compute context, or
+stopping, it waits at most one tick for the
 next request. Completion and deadlines therefore advance without client status
 polling. Scheduling delays and callback duration can extend the actual interval.
 Cold, stopped, and failed instances sleep until a request arrives.

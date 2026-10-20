@@ -22,7 +22,7 @@ static struct a733_gpu_vm_memory vm;
 static struct pvr_gpu_mapping maps[PVR_COMPUTE_SERVICE_MAPS];
 static uint64_t backing_pages[128],table_pages[PVR_COMPUTE_SERVICE_TABLE_PAGES];
 static uint32_t job_kicks,peer_checked,allow_complete,event_forwarded;
-static unsigned backing_used,mode_calls;
+static unsigned backing_used,mode_calls,cleanup_kicks,power_after_cleanup;
 static int observed_mode(void *ctx)
 {
     callback(ctx); ++mode_calls;
@@ -116,6 +116,22 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
 {
     unsigned next=(unsigned)word(resource(0),4),slot=(next-1)&127;
     unsigned char *command=resource(1)+slot*88;
+    if(word(command,4)==(PVR_CCB_MAGIC|106u)) {
+        callback(ctx);configASSERT(off==0xb00&&!value&&service.phase==PVR_GPU_SERVICE_COMPUTE_CLEANUP);
+        configASSERT(compute.phase==PVR_COMPUTE_SERVICE_CLEANUP&&!word(resource(2)+slot*4,4));
+        configASSERT(compute.client.phase==PVR_CCCB_IDLE&&
+            word((unsigned char *)computation.firmware[2].storage.cpu+12,4)==compute.client.size-1);
+        configASSERT(!word(command+4,4)&&!word(command+8,4)&&word(command+12,4)==computation.firmware_address[0]);
+        for(unsigned i=16;i<88;++i)configASSERT(!command[i]);
+        ++cleanup_kicks;put(resource(0)+128,4,next);
+        if(compute_service_case==19)put(resource(2)+((slot+1)&127)*4,4,1);
+        else put(resource(2)+slot*4,4,compute_service_case==17?3:compute_service_case==18?5:1);
+        return 1;
+    }
+    if(word(command,4)==(PVR_CCB_MAGIC|107u)&&compute_service_case>=15) {
+        configASSERT(cleanup_kicks==1&&compute.phase==PVR_COMPUTE_SERVICE_CLEANED&&compute.cleanup_status==1);
+        ++power_after_cleanup;
+    }
     if(word(command,4)!=(PVR_CCB_MAGIC|101u))return firmware_fixture_kick(ctx,off,value);
     callback(ctx);configASSERT(off==0xb00&&!value&&compute.phase==PVR_COMPUTE_SERVICE_RUNNING);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&get(&published));
@@ -174,7 +190,7 @@ static void completion_model(void)
 }
 static void compute_peer(void *unused)
 {
-    (void)unused;wait_flag(&job_kicks,1);
+    (void)unused;if(compute_service_case>=15){vTaskSuspend(NULL);return;}wait_flag(&job_kicks,1);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_DENIED);
     configASSERT(request(PVR_GPU_SERVICE_CLOSE,100000).result==PVR_GPU_SERVICE_DENIED);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_DENIED);
@@ -219,6 +235,36 @@ static void compute_owner(void *unused)
     }
     r=wait_phase(PVR_GPU_SERVICE_READY);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_READY);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
+    if(compute_service_case>=15) {
+        if(compute_service_case!=15) {
+            configASSERT(request(PVR_GPU_SERVICE_COMPUTE,1000000).result==PVR_GPU_SERVICE_OK);
+            wait_flag(&job_kicks,1);completion_model();
+            do {r=request(PVR_GPU_SERVICE_STATUS,0);vTaskDelay(1);}while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
+            r=request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0);configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_word_count==32);
+            if(compute_service_case==20)put(computation.firmware[5].storage.cpu,4,compute.job.sequence+1);
+            if(compute_service_case==21)programs.admission_token=18;
+        }
+        r=request(PVR_GPU_SERVICE_CLOSE,(compute_service_case==15||compute_service_case==16)?1000000:10000);
+        if(compute_service_case>=20)configASSERT(r.result==PVR_GPU_SERVICE_FAULT);
+        else configASSERT(r.result==PVR_GPU_SERVICE_OK);
+        if(compute_service_case==15||compute_service_case==16) {
+            r=wait_phase(PVR_GPU_SERVICE_STOPPED);
+            configASSERT(!r.owns_session&&r.compute_phase==PVR_COMPUTE_SERVICE_CLEANED&&compute.cleanup_status==1);
+            configASSERT(cleanup_kicks==1&&power_after_cleanup==2&&get(&isolated));
+            configASSERT(compute.cleanup_token.epoch==service.epoch&&compute.cleanup_token.serial);
+            configASSERT(request(PVR_GPU_SERVICE_OPEN,10000).result==PVR_GPU_SERVICE_BUSY);
+        } else {
+            r=wait_phase(PVR_GPU_SERVICE_FAILED);configASSERT(r.owns_session&&!get(&isolated)&&!power_after_cleanup);
+            configASSERT(cleanup_kicks==(compute_service_case>=20?0:1));
+            if(compute_service_case==17||compute_service_case==18)
+                configASSERT(compute.cleanup_status==(compute_service_case==17?3u:5u)&&compute.error==PVR_COMPUTE_SERVICE_CLEANUP_ERROR);
+            unsigned before=get(&calls);vTaskDelay(5);configASSERT(before==get(&calls));
+        }
+        configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+        platform_puts("PASS compute service case ");platform_hex(compute_service_case);
+        platform_puts("; exact compute cleanup before retained stop or retained refusal\n");platform_exit(0);
+    }
+
 #ifdef PVR_COMPUTE_SERVICE_PACKAGE_FIXTURE
     if((compute_service_case>=12&&compute_service_case<=14)) {
         configASSERT(request(PVR_GPU_SERVICE_COMPUTE,1000000).result==PVR_GPU_SERVICE_OK);
@@ -384,7 +430,7 @@ static void compute_owner(void *unused)
         configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);
         configASSERT(!wait_phase(PVR_GPU_SERVICE_STOPPED).owns_session);
         configASSERT(request(PVR_GPU_SERVICE_OPEN,1000000).result==PVR_GPU_SERVICE_BUSY);
-        configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.phase==PVR_COMPUTE_SERVICE_COMPLETE);
+        configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.phase==PVR_COMPUTE_SERVICE_CLEANED);
     } else {
         configASSERT(r.result==PVR_GPU_SERVICE_FAULT&&r.owns_session&&compute.error==PVR_COMPUTE_SERVICE_RESET);
         unsigned before=get(&calls);vTaskDelay(5);configASSERT(get(&calls)==before);

@@ -97,12 +97,27 @@ retaining all backing and power ownership. It does not establish that GPU
 execution stopped. Later requests cannot submit work or retrieve output. Reset
 and other faults also revoke output access, including after completion.
 
-CLOSE returns BUSY while a compute operation is pending. After numerical
-completion it can use the existing shutdown protocol and independently proven
-isolation callback. Compute backing remains retained afterward, and OPEN refuses
-to reuse that session. Explicit context cleanup and resource disposal remain required work. An unexpected multicore observation also requires per-core
-context state and command support; the documented A733 GPU is MC1. Power OFF alone does not prove
-that outstanding memory transactions have drained.
+CLOSE returns BUSY while a compute operation or copied input staging is pending.
+For a compute-only service, CLOSE rechecks native admission and acquires the exact
+completed timeline, or zero for an unused context. It initializes an unused
+client ring through the existing formatter, then submits firmware common-context
+cleanup before the existing power and isolation protocol. STATUS exposes the
+cleanup and cleaned compute phases. The same CLOSE deadline covers every step.
+
+The cleanup command follows pinned Linux `pvr_fw_structure_cleanup`
+(`pvr_fw.c:1096–1166`): KCCB command106, flags0, type0 (`FWCOMMONCONTEXT`),
+and the admitted context firmware address. Its epoch, serial and return slot
+must match the exact submitted receipt. Only status1 authorizes shutdown;
+firmware BUSY, poll failure, a missing receipt or an expired deadline retains
+ownership and prevents the healthy power-off path. BUSY is a terminal refusal
+for this bounded operation; no retry is implied.
+
+Cleanup acknowledges firmware context disposal. Compute backing, VM mappings
+and pool allocations remain retained, and OPEN refuses to reuse that session.
+Render contexts, render-target datasets and free lists still require their own
+ordered disposal. An unexpected multicore observation also requires per-core
+context state and command support; the documented A733 GPU is MC1. Power OFF
+alone does not prove that outstanding memory transactions have drained.
 
 With `config.compute == NULL`, existing requests use their previous lifecycle.
 The optional field appends no automatic compute operation. Service configuration,
@@ -146,6 +161,17 @@ evidence is reused. Success/reset evidence is archived under `baseline/`; the
 focused alignment and partial-publication follow-up has its own executable and
 manifest. Source snapshots, commands, firmware hash, and ELF hashes identify each
 executed artifact.
+
+The cleanup checks use `--cases 15 16 17 18 19 20 21`. They cover an unused
+context, a completed job with copied output, firmware BUSY and poll-failure
+returns, a completion written to the wrong KCCB slot, a future timeline and
+revoked admission. Both successful cases require acknowledged cleanup before
+both power commands, retained VM mappings and refused reopen. Failure cases
+retain the owner and prevent power shutdown. The unused case also checks the
+initialized client-ring wrap mask. All seven pass under
+`~/.cache/sunstoneos/evidence/gpu-compute-cleanup-20261020/`.
+Firmware returns and GPU output are modeled; this does not qualify physical
+cleanup, cache visibility, memory draining or allocation reclamation.
 
 The [native application](gpu-application.md) builds a compute mode with the
 actual reserved-memory and power providers. Physical qualification requires qualified
