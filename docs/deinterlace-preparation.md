@@ -116,3 +116,22 @@ The focused motion checks are `checks/deinterlace-motion-preparation.py` and
 proof and actual copied frame/ACK receipt artifacts. Earlier WEAVE, USB stream
 framing and ACK durability evidence remains applicable within unchanged code
 boundaries. Physical motion output and numerical behavior remain unqualified.
+
+Motion preparation and capture passed the focused offline checks on 20 October
+2026. The actual constructor supplied all allocation rows and page-table bytes
+for the exact typed template. Nine altered allocation, permission, guard, table
+and input-length cases were refused. The final sealed session passed root's two
+changed-mode SRAM cases before native execution.
+
+Capture consumed the actual native serializer's copied frame and ACK receipt.
+It refused seven malformed input, mode and result-extent cases, authenticated
+both source frames, and saved the complete output before ACK. The record leaves
+pixel comparison unchecked. The native fixture used synthetic DI writes without
+an arithmetic model; these results establish binding, extent and retention
+behavior, not motion-picture quality or physical completion.
+
+The current motion host closure is
+`~/.cache/sunstoneos/evidence/deinterlace-motion-host-20261020/frozen/manifest.json`.
+Preparation and capture results are `result.json` and `capture/result.json`
+beneath the same parent directory. Native source, constructor and execution
+closure remains in `~/.cache/sunstoneos/evidence/deinterlace-motion-20261020/`.
