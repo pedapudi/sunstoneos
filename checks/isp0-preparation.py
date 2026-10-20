@@ -5,7 +5,7 @@ Only physical_authority is substituted. Typed facts, source, allocator rows,
 full page-table bytes, image geometry and retained launcher remain production code.
 No native image build, device, queue or proprietary tool executes.
 """
-import argparse,hashlib,importlib.util,json,struct
+import argparse,copy,hashlib,importlib.util,json,struct
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
@@ -15,6 +15,7 @@ def module(name,path):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','session','input','allocation','table','output','clang','lld'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--allocation-case',action='append',choices=('alias','permission','guard','table-hole','geometry','prefetch'))
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     prep=module('isp0_fixture_prepare',ROOT/'apps/isp0/prepare.py')
     producer=module('isp0_fixture_producer',ROOT/'apps/isp0/producer.py')
@@ -59,13 +60,25 @@ def main():
     try:prep.validate_admission(admission,ih,th,raw)
     except ValueError as error:assert 'Modeled ISP0 evidence' in str(error)
     else:raise AssertionError('Production accepted modeled physical authority')
-    prep.allocation_check(proof,raw,table)
+    prep.allocation_check(proof,raw,table,image.read_bytes())
+    refused=[]
+    for change in a.allocation_case or ('alias','permission','guard','table-hole','geometry','prefetch'):
+        bad=copy.deepcopy(proof);badtable=bytearray(table);wrong=bytearray(raw)
+        if change=='alias':bad['allocations']['boot_pool'][1]['physical']=bad['allocations']['boot_pool'][0]['physical']
+        if change=='permission':bad['spans'][0]['access']=3
+        if change=='guard':bad['spans'][1]['physical']-=4096
+        if change=='table-hole':badtable[4]=1
+        if change=='geometry':struct.pack_into('<I',wrong,848,641)
+        if change=='prefetch':bad['spans'][0]['bytes']-=4096
+        try:prep.allocation_check(bad,bytes(wrong),bytes(badtable),image.read_bytes())
+        except ValueError:refused.append(change)
+        else:raise AssertionError('Invalid allocation accepted: '+change)
     bundle=a.output/'MODEL-NOT-PHYSICAL-bundle'
     with patch.object(prep,'physical_authority',lambda value:None):
         prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,a.clang,a.lld,a.input)
     result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
         source_sha256=hashlib.sha256(source).hexdigest(),allocation_source=str(a.allocation),
         allocation_source_sha256=hashlib.sha256(a.allocation.read_bytes()).hexdigest(),
-        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,bundle=str(bundle.resolve()))
+        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()

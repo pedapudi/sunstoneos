@@ -99,12 +99,51 @@ def physical_authority(record):
         'Modeled ISP0 evidence cannot authorize physical execution.')
 
 
-def allocation_check(proof,raw,table):
-    """Check actual provider rows and every IOMMU descriptor, including holes."""
-    require(False,'ISP0 allocation proof awaits the actual native allocation artifact.')
+def allocation_check(proof,raw,table,image):
+    """Bind actual provider extents to linked pools and reconstruct all descriptors."""
+    import io
+    session_check(raw);_image_parts(image)
+    symbols={s.name:int(s['st_value']) for s in ELFFile(io.BytesIO(image)).get_section_by_name('.symtab').iter_symbols()}
+    wb_low,wb_high=(symbols[k] for k in ('__device_pool_start','__device_pool_end'))
+    groups=proof.get('allocations',{})
+    require(set(groups)=={'boot_pool','uncached_pool'} and
+        len(groups['boot_pool'])==2 and len(groups['uncached_pool'])==8 and proof.get('table_bytes')==32768,
+        'Incomplete ISP0 native allocations.')
+    # Table, input+64-byte prefetch, Y, UV, load, save, save-load and VIPP.
+    rounded=[32768,618496,307200,307200,32768,28672,16384,4096]
+    extents=[]
+    for pool,low,high,sizes,state in [('boot_pool',wb_low,wb_high,[614400]*2,1),
+            ('uncached_pool',0x41c00000,0x41e00000,[n+(8192 if i else 0) for i,n in enumerate(rounded)],2)]:
+        for slot,(row,size) in enumerate(zip(groups[pool],sizes)):
+            address=row.get('physical');alignment=16384 if pool=='uncached_pool' and slot==0 else 4096
+            require(type(address) is int and row.get('slot')==slot and row.get('cpu')==address and
+                row.get('bytes')==size and row.get('state')==state and low<=address<=high-size and
+                not address%alignment,'ISP0 native provider extent differs.')
+            require(all(address>=a+n or a>=address+size for a,n in extents),'ISP0 native physical extents alias.')
+            extents.append((address,size))
+    nc=groups['uncached_pool'];pa=nc[0]['physical']
+    iovas=(0x100000,0x300000,0x380000,0x200000,0x210000,0x220000,0x230000)
+    access=(1,3,3,1,3,3,1)
+    spans=[dict(iova=iova,physical=nc[i+1]['physical']+4096,bytes=rounded[i+1],access=permission)
+        for i,(iova,permission) in enumerate(zip(iovas,access))]
+    require(proof.get('spans')==spans and proof.get('table_physical')==pa,'ISP0 guarded mapping differs.')
+    words=[0]*8192
+    def descriptor_address(value):return (value&0xfffff000)|((value>>24)&0x300)
+    windows=[]
+    for span in spans:
+        for window in range(span['iova']>>22,((span['iova']+span['bytes']-1)>>22)+1):
+            if window not in windows:windows.append(window)
+    require(len(windows)<=4,'ISP0 table capacity exceeded.')
+    for slot,window in enumerate(windows):words[window]=descriptor_address(pa+16384+slot*4096)|1
+    for span in spans:
+        for offset in range(0,span['bytes'],4096):
+            va=span['iova']+offset;slot=windows.index(va>>22)
+            words[4096+slot*1024+((va>>12)&1023)]=descriptor_address(span['physical']+offset)|6|(8 if span['access']&2 else 0)
+    require(table==struct.pack('<8192I',*words) and hashlib.sha256(table).hexdigest()==proof.get('table_sha256'),
+        'ISP0 descriptors, permissions or unmapped guard holes differ.')
 
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,image=None):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-isp0-supervised-entry-v1','Wrong ISP0 admission schema.')
     physical_authority(record)
@@ -134,7 +173,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     physical_authority(proof)
     require(proof.get('image')==image_hash and proof.get('session')==template_hash,
         'ISP0 allocation proof covers different image/session bytes.')
-    allocation_check(proof,raw,evidence(record['page_table']))
+    require(image is not None and hashlib.sha256(image).hexdigest()==image_hash,'ISP0 allocation requires its actual linked image.')
+    allocation_check(proof,raw,evidence(record['page_table']),image)
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=None):
@@ -147,7 +187,7 @@ def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
     require(mf.get('target')=='sunstone-a733-isp0' and mf.get('execution_profile')=='isp0-supervised-v1' and mf.get('final_elf')==ih,'Tested ISP0 image manifest required.')
-    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
+    record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,image=snapshots['image.elf'])
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
@@ -156,11 +196,21 @@ def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=
     # Runtime authenticates linked build identity, not the ELF file hash.
     raw[48:80]=identity
     build_launcher(out,clang,lld)
+    return finish_bundle(out,raw,cache,record)
+
+
+def finish_bundle(out,raw,cache,record):
+    """Finish sealed metadata after an already built, retained launcher."""
+    out=Path(out);session_check(raw)
+    ih=base.digest(out/'image.elf')
+    segments,address,identity=image_parts(out/'image.elf')
+    require(raw[48:80]==identity,'ISP0 runtime build identity differs.')
+    epoch,generation,lease=struct.unpack_from('<3Q',raw,24)
     uploads=[]
     for i,segment in enumerate(segments):
         if segment['data']:
             name=f'segment-{i}.bin';(out/name).write_bytes(segment['data']);uploads.append({'name':name,'address':segment['address']})
-    (out/'upload.bin').write_bytes(upload_bytes(snapshots['input.bggr12'],raw))
+    (out/'upload.bin').write_bytes(upload_bytes((out/'input.bggr12').read_bytes(),raw))
     (out/'session.bin').write_bytes(raw);uploads.append({'name':'session.bin','address':0x41f00000})
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,epoch,generation,lease)):(out/name).write_bytes(data)
     for name,count in [('result-zero.bin',16384),('report-zero.bin',128)]:(out/name).write_bytes(bytes(count))
@@ -184,7 +234,7 @@ def validate_bundle(bundle):
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require((out/'upload.bin').read_bytes()==upload_bytes((out/'input.bggr12').read_bytes(),raw),'ISP0 upload bytes differ.')
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,image=(out/'image.elf').read_bytes())
     segments,address,identity=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'ISP0 build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
     require(raw==expected_raw,'ISP0 session differs from admitted derivation.')
@@ -223,6 +273,10 @@ def _image_parts(data):
         parts.append({'address':a,'memory_bytes':n,'data':data,'flags':int(s['p_flags'])})
     for name,value in {'__uncached_pool_start':0x41c00000,'__uncached_pool_end':0x41e00000,'__a733_smp_contract':0x42004000,'__a733_smp_contract_end':0x42005000}.items():
         require(symbols.get(name,(0,))[0]==value,'ISP0 linker ownership differs.')
+    require('__device_pool_start' in symbols and '__device_pool_end' in symbols and
+        symbols['__device_pool_end'][0]-symbols['__device_pool_start'][0]==2097152 and
+        0x41200000<=symbols['__device_pool_start'][0]<symbols['__device_pool_end'][0]<=0x41c00000 and
+        not symbols['__device_pool_start'][0]%4096,'ISP0 linked WB pool differs.')
     require(any(p['flags']&1 and p['address']<=0x41000000<p['address']+len(p['data']) for p in parts),
         'ISP0 entry lacks executable file-backed bytes.')
     require('__bss_end' in symbols and symbols['__bss_end'][0]<=0x41f00000,'ISP0 session overlaps BSS.')
