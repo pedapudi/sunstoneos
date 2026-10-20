@@ -49,7 +49,9 @@ static void pmic(void *unused)
         if(r==A733_PMIC_READY||r==A733_PMIC_COMPLETE)
             atomic_store_explicit(&providers.shared.pmic_ready,1,memory_order_release);
         else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY){board_fail(NULL);park();}
-        vTaskDelay(1);
+        /* Advance an owned transaction without sleeping after each I2C state.
+         * Other ready tasks still run; faults above park with ownership held. */
+        if(providers.shared.pmic.held)taskYIELD();else vTaskDelay(1);
     }
 }
 static void typec(void *unused)
@@ -63,7 +65,11 @@ static void typec(void *unused)
             started=1;
         }
         if(started)(void)a733_typec_poll(&board.typec.provider);
-        vTaskDelay(1);
+        /* The I2C engine has its own absolute transaction deadline. Do not
+         * spend one tick between its byte states or spin on a retained fault. */
+        if(board.typec.bus.state>=A733_TWI_BEGIN&&
+           board.typec.bus.state<=A733_TWI_COMPLETE)taskYIELD();
+        else vTaskDelay(1);
     }
 }
 static void power(void *unused)

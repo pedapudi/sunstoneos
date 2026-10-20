@@ -35,19 +35,21 @@ int a733_platform_locks_init(struct a733_platform_locks *p, int (*now)(void *, u
     if (!p || !now || p->initialized) return 0;
     p->now = now; p->context = context;
     atomic_init(&p->retained, 0);
-    p->mutex[0] = xSemaphoreCreateMutexStatic(&p->storage[0]);
-    p->mutex[1] = xSemaphoreCreateMutexStatic(&p->storage[1]);
-    if (!p->mutex[0] || !p->mutex[1]) return 0;
+    for (unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i) {
+        p->mutex[i] = xSemaphoreCreateMutexStatic(&p->storage[i]);
+        if (!p->mutex[i]) return 0;
+    }
     p->callbacks = (struct a733_gpu_resource_locks){reg_enter, reg_leave, i2c_enter, i2c_leave, p};
     p->initialized = 1;
     return 1;
 }
 int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_lock lock, uint64_t deadline)
 {
-    if (!p || !p->initialized || (unsigned)lock >= 2 || !task_context() ||
+    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !task_context() ||
         (atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock))) return 0;
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
-    if (xSemaphoreGetMutexHolder(p->mutex[0]) == self || xSemaphoreGetMutexHolder(p->mutex[1]) == self) return 0;
+    for (unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        if (xSemaphoreGetMutexHolder(p->mutex[i]) == self) return 0;
     uint64_t now;
     if (!p->now(p->context, &now) || now >= deadline) return 0;
     uint64_t last = now;
@@ -70,14 +72,14 @@ int a733_platform_lock_enter(struct a733_platform_locks *p, enum a733_platform_l
 }
 void a733_platform_lock_leave(struct a733_platform_locks *p, enum a733_platform_lock lock)
 {
-    configASSERT(p && p->initialized && (unsigned)lock < 2 && task_context());
+    configASSERT(p && p->initialized && (unsigned)lock < A733_PLATFORM_LOCK_COUNT && task_context());
     configASSERT(xSemaphoreGetMutexHolder(p->mutex[lock]) == xTaskGetCurrentTaskHandle());
     configASSERT(!(atomic_load_explicit(&p->retained, memory_order_acquire) & (1u << lock)));
     configASSERT(xSemaphoreGive(p->mutex[lock]) == pdTRUE);
 }
 int a733_platform_lock_retain(struct a733_platform_locks *p, enum a733_platform_lock lock)
 {
-    if (!p || !p->initialized || (unsigned)lock >= 2 || !task_context() ||
+    if (!p || !p->initialized || (unsigned)lock >= A733_PLATFORM_LOCK_COUNT || !task_context() ||
         xSemaphoreGetMutexHolder(p->mutex[lock]) != xTaskGetCurrentTaskHandle()) return 0;
     atomic_fetch_or_explicit(&p->retained, 1u << lock, memory_order_release);
     return 1;

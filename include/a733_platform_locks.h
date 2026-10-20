@@ -5,10 +5,13 @@
 #include "a733_gpu_resources_native.h"
 #include <stdatomic.h>
 
-enum a733_platform_lock { A733_PLATFORM_REGISTER_LOCK, A733_PLATFORM_I2C_LOCK };
+enum a733_platform_lock {
+    A733_PLATFORM_REGISTER_LOCK, A733_PLATFORM_I2C_LOCK,
+    A733_PLATFORM_I2C1_LOCK, A733_PLATFORM_LOCK_COUNT
+};
 struct a733_platform_locks {
-    StaticSemaphore_t storage[2];
-    SemaphoreHandle_t mutex[2];
+    StaticSemaphore_t storage[A733_PLATFORM_LOCK_COUNT];
+    SemaphoreHandle_t mutex[A733_PLATFORM_LOCK_COUNT];
     atomic_uint retained;
     int (*now)(void *, uint64_t *);
     void *context;
@@ -16,7 +19,8 @@ struct a733_platform_locks {
     unsigned initialized;
 };
 /* One static instance per platform, initialized before clients become runnable.
- * Every CCU/PCK writer and PMIC/I2C client must share these callbacks. Supply
+ * Every CCU/PCK writer shares the register lock. PMIC/S_TWI0 transactions use
+ * I2C_LOCK; independent S_TWI1 transactions use I2C1_LOCK. Supply
  * the native adapter's monotonic microsecond clock. Require FreeRTOS static
  * mutexes plus scheduler-state/current-task/mutex-holder APIs. The supported
  * ports are the project's AArch64 SRE and patched SMP ports.
