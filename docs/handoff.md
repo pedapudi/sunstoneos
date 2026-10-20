@@ -28,7 +28,7 @@ entry failure, independently of health. Four focused host cases pass under
 integration. Existing native images predate this correction; no hardware result
 or new native build is claimed.
 
-The GPU [cache-ordering source audit](gpu-render.md) confirms the existing per-job
+The GPU [cache-ordering source audit](gpu-compiled-programs.md) confirms the existing per-job
 firmware/completion contract; it identifies no missing host cache command.
 `gpu-cache-visibility-20261020/assessment.json` adds no physical visibility proof.
 

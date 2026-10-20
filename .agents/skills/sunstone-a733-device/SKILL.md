@@ -32,6 +32,14 @@ For example, the generic TF-A redistributor power hooks have GIC-600 overrides
 in the [implementation-specific driver](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c).
 Copying only the generic call sequence can omit the hardware power protocol.
 
+Trace normal completion through the effective interrupt handler, waiter and
+caller before defining output ownership. Retained buffers do not by themselves
+justify omitting an upstream reset or stop: G2D pulses mixer reset before waking
+even a caller that retains its task. Separate successful completion from timeout
+recovery. An ordering difference needs a concrete behavioral explanation;
+acknowledgment timing in a single-job polled path need not match an interrupt
+service that accepts another job.
+
 ## Carry ownership through the native application
 
 Use the existing [clock leases](../../../docs/clock-leases.md),
