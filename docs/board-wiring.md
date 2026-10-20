@@ -95,6 +95,37 @@ copies are in `~/.cache/sunstoneos/evidence/fel-input-preparation-20261016/`.
 No physical input check has run. Existing hardware and performance evidence
 was reused without repeating those tests.
 
+## TYPEC24 has a documented DisplayPort route
+
+The pinned `board-schematic` V1.2, sheets 10–11, routes DisplayPort through
+TYPEC24. Sheet 11 labels it “TypeC DP Port”; this conclusion does not rely on
+COMB0 capability alone. The four connector pairs are:
+
+| Sheet-10 net pair | Sheet-11 path | TYPEC24 pins, P/N |
+| --- | --- | --- |
+| `COMB0-LANE0-P/N` | C223/C224, `TX-1P/N` | A2/A3 |
+| `COMB0-LANE1-P/N` | `RX-1P/N` | B11/B10 |
+| `COMB0-LANE2-P/N` | `RX-2P/N` | A11/A10 |
+| `COMB0-LANE3-P/N` | C226/C227, `TX-2P/N` | B2/B3 |
+
+SoC `DP-AUXP/N` balls A24/B24 reach TYPEC24 SBU1/SBU2, pins A8/B8,
+through C221/C222. The separate `DP-HPD` ball `1A15` is unconnected; do not
+assume a direct HPD wire. TYPEC16 instead carries USB0 and input power, with
+its SBU pins unconnected. It is not the documented DP connector.
+
+The pinned `board-manual` V1.0 advertises DP1.4 on printed page 2 and describes
+Type-C display accessories/output on pages 8 and 38. At kernel revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, the
+[exact-board DTS](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts#L401)
+defines COMB0 DP/USB orientation switching at lines 401–428, DP alternate-mode
+SVID `0xff01` at lines 2630–2636, and enabled `allwinner,drm-dp` at
+lines 2829–2845. Document identities remain in [the source pins](../sources.lock.json).
+
+Actual board revision/population and physical link operation remain unqualified.
+Native Type-C negotiation/orientation, HPD handling, COMB0 exclusion against USB3,
+link training and display output remain required. Published routing and source
+configuration do not establish successful negotiation or visible output.
+
 ## Audio and camera routes are independent of mimus
 
 Schematic sheets 14 and 18 identify separate external and Bluetooth audio buses.

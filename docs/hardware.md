@@ -90,6 +90,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   boundaries. Physical GPU/HDMI/USB operation, startup, visibility, drain and
   recovery remain unqualified. Concurrent live GPU/HDMI, broader formats/modes,
   streaming and frame retirement remain required.
+- DisplayPort: **planned** native output through the documented V1.2 TYPEC24
+  [lane and AUX route](board-wiring.md#typec24-has-a-documented-displayport-route).
+  TYPEC16 is USB0/power input, not the DP connector. The separate DP-HPD ball is
+  unconnected; Type-C negotiation/orientation, HPD handling, COMB0 exclusion with
+  USB3, link training and output remain required. Exact-board DTS corroborates
+  DP alternate mode. Actual board revision and physical link remain unqualified.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -1781,7 +1787,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | Display engine | Scanout, composition, synchronization and supported formats | Buffer sharing, display clocks, bandwidth |
 | HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY |
 | MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; no display connected, panel undecided; timings, power sequence, touch separate |
-| DisplayPort | Output and applicable Type-C integration | Verify board routing, shared PHY and monitor |
+| DisplayPort | DP output through documented V1.2 TYPEC24 lanes/AUX and Type-C alternate mode | Qualify actual revision, negotiation/orientation, HPD handling, COMB0 exclusion, link training and sink output |
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership |
 | Video and image codecs | Supported encode/decode operations through application APIs | Firmware/runtime, formats, dimensions, shared memory bandwidth |
