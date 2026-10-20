@@ -190,3 +190,10 @@ attempt to continue open-source native integration was also stopped. No further
 reference execution was attempted. Partial source and existing evidence are
 preserved on the local HEVC development branch. A complete IDR/P implementation,
 review, native build and selected validation remain outstanding.
+
+The final source review identified two outstanding corrections: retain the
+allocator's physical addresses in the page tables, or explicitly require identity
+mapping; and validate emulation-prevention bytes throughout each encoded unit.
+The partial controller already contains the requested integer-overflow, stable
+acquisition-token and copied-result lifetime corrections. None of these partial
+native paths has completed execution checks.
