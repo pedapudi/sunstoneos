@@ -1305,6 +1305,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   module electrical binding, physical DMA/coherence and drain, additional modes
   and physical qualification remain outstanding.
   No MIPI camera is connected; physical capture qualification awaits a module.
+  A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
+  640×480 BGGR12 frame and produces an immutable copied NV16 frame through
+  TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned
+  GPL ISP600 defaults/setters run natively; no opaque tuning or runtime blob is
+  required. Guarded mappings retain both IOMMU masters 1 and 2, every parameter
+  extent, input/output buffers and provider leases through completion or ACK.
+  Final image `32eb5b93…` has one nominal EL1h bounded-call result, seven classified
+  failures and five serializer cases. Device effects and output pixels are modeled;
+  the fixtures establish neither numerical processing nor full task scheduling.
+  Old invalid negative runs are excluded. The [host workflow](isp0-preparation.md)
+  passes fifteen stream cases, geometry/input/proof and six allocation refusals,
+  plus readiness; seven root boot guards and three SRAM cases remain separate.
+  Evidence is under `isp0-native-20261020/`. The only current compiled/declared
+  source difference adds an independent CE clock writer without changing existing
+  functions. No full TinyUSB/DCD, physical, numerical, sensor or scheduler
+  qualification is established. Independent pixel comparison, wider processing,
+  scaling, 3A tuning, interrupt completion and physical recovery remain required.
 
 - NPU: The application clock admission now accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass
