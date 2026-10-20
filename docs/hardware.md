@@ -691,6 +691,32 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remains under `i2s-runtime-pcm-20261019/` within its recorded scopes.
   Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
   routing and broader audio functions remain unqualified or required work.
+- G2D: **implemented** one retained ARGB8888 fill or source-copy operation per
+  session through the [native application](g2d.md). Caller geometry is bounded
+  to 1280×720 with byte stride at most 5120. Authenticated source input, RCQ
+  commands and destination use guarded allocations. Typed global IOMMU admission
+  excludes other masters while master 10 alone translates; shared DE_SYS/PCK,
+  clocks, rails, PMIC and USB providers retain the original native lifetime.
+  Fresh task-end, fault/guard checks and bounded copied output precede publication.
+  The [GPL source adaptation](../apps/g2d/sources.json) preserves register/header
+  notices; no opaque G2D firmware or Linux runtime is required.
+  Actual allocator, task, admission, boot and SRAM checks pass with their recorded
+  model boundaries. Twelve linked task cases include fill/copy effects interpreted
+  from actual RCQ words; they establish no physical pixels. Three actual TinyUSB
+  stack cases check FS/HS packet completion with modeled DCD effects; one uses
+  synthetic terminal-length metadata. Host capture, geometry/allocation refusals
+  and supervisor readiness checks pass; production refuses modeled authority.
+  Final image `4e043dad…` retains 169 objects and 448 compiled dependencies.
+  Root accepts the native/host/USB closures at `a7d2ece` under
+  `g2d-native-20261020/root-integration.json`; the only native snapshot difference
+  is an appended component-document evidence section. Existing verification was reused.
+  The [host coordinator](g2d-preparation.md) uses one 19-second window within
+  native 20-second admission, durably saves output and compares copied bytes with
+  a CPU reference before delivery-gated generation/digest ACK. Every allocation,
+  mapping and provider identity remains retained; timeout or ACK establishes no
+  reclamation or drain. Scaling, blending, rotation, color conversion and further
+  formats remain required. Physical pixels, DMA confinement/visibility, IRQ
+  delivery, startup, recovery and performance remain unqualified.
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
@@ -1788,6 +1814,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | HDMI | Output modes, detection, applicable audio | Monitor and cable; controller and PHY |
 | MIPI DSI | Host operation, panel commands, scanout, backlight integration | Schematic routes four DSI1 lanes to LCD; no display connected, panel undecided; timings, power sequence, touch separate |
 | DisplayPort | DP output through documented V1.2 TYPEC24 lanes/AUX and Type-C alternate mode | Qualify actual revision, negotiation/orientation, HPD handling, COMB0 exclusion, link training and sink output |
+| G2D | Native 2D fill/copy, scaling, blending, rotation and format conversion | Shared DE_SYS power/clocks, RCQ, IOMMU master 10, memory ownership and physical output correctness |
 | GPU | Memory management, submissions, graphics/compute runtime, recovery | Exact BVNC, firmware, compiler/runtime, power and synchronization |
 | NPU | Model loading, inference, compiler/runtime interface, recovery | Operator/shape support, numerical behavior, buffer ownership |
 | Video and image codecs | Supported encode/decode operations through application APIs | Firmware/runtime, formats, dimensions, shared memory bandwidth |
