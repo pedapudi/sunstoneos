@@ -202,3 +202,69 @@ the linked repeated MSC and USB delivery path, including a partial ACK response
 and immediate status during rearm. Its recognition and scheduler boundaries
 remain modeled. Existing model parity is reused; these checks do not establish
 physical concurrency, arithmetic changes or timing.
+
+## Capture through the supervised coordinator
+
+`tools/check-a733-mimus-board-supervised.py` captures this application's 16-byte
+request protocol. The generic board supervisor uses a different one-byte request
+and cannot capture combined Mimus results. Pass the outer bundle produced by
+`apps/mimus-board/prepare.py`, including its `board/` and `assets/` directories.
+The wrapper validates that existing preparation; it does not rebuild the image
+or launcher.
+
+The coordinator supplies the existing claim, owner, pinned FEL executable,
+reviewed admission and a fresh evidence destination:
+
+```sh
+python3 -B tools/check-a733-mimus-board-supervised.py \
+  --bundle /absolute/combined-bundle \
+  --fel /absolute/pinned/sunxi-fel \
+  --database /absolute/existing-queue.sqlite \
+  --claim reviewed-claim-id --owner coordinator \
+  --evidence /absolute/new-capture-evidence \
+  --generations 2 --supervised-manual-reconnect
+```
+
+`--generations` defaults to one and accepts one through 32. Only keyboard
+workload four accepts multiple generations; workload zero remains one-shot.
+Each workload-four generation requires a new keyboard trigger. All captures share the
+existing absolute 59-second window from launch, within the native 60-second
+session lifetime. The count bounds host work and never extends native admission.
+An incomplete count fails capture while preserving completed earlier results.
+
+The existing claim must bind the outer and inner preparation metadata, image,
+launcher, asset manifest and all three exact asset bodies. Its prerequisites
+are `supervised-ram-recovery` and `mimus-board-supervised-software`. The latter
+uses schema `a733-mimus-board-supervised-software-v1`, with the existing
+admission/launcher/capture/lifecycle result flags, exact image/launcher bytes,
+the wrapper's `software_sources()` identities and supporting evidence references.
+These software records do not supply physical admission. The wrapper only reads
+the existing claim; it creates no queue work.
+
+A temporary launch view contains the already validated board files and asset
+bytes for the existing sealed-source/readback preloader. It preserves original
+preparation metadata and records its derived upload map separately as
+`combined-launch-view.json`, with every original file hash and asset address.
+The original combined metadata is also retained. No new image preparation or
+second launch occurs.
+
+The capture record binds every generation to the image, combined bundle,
+session epoch and attachment generation. Raw response fragments and complete
+frames are flushed to disk before the next request. Before transmitting a
+keyboard ACK, the wrapper also durably saves the copied transcript, sector,
+trigger evidence and their identities. A durability failure stops capture.
+A response proving ACK receipt is recorded with its exact bytes and durable
+fragment references before subsequent journal publication. If that publication
+fails, the record retains the ACK observation and stops before another generation.
+Transport errors propagate immediately; no transfer retry or relaunch follows.
+The supervisor retains the physical lock and coordinator claim under its existing
+whole-board power-removal policy, including after success.
+
+`check-supervised-host.py` exercises this caller with fake fragmented transport
+and fake read-only claim records. It covers two generations, persistence failures
+before and after ACK, partial transfer failure, identity mismatch, an incomplete
+later generation, the shared deadline and timeout reduction after journal writes.
+It also checks the frozen upload view and rejects mismatched owner, asset and
+recovery records. The actual supervisor policy check stops at readiness, before
+queue or device access. These checks reuse the accepted prepared native image;
+they do not execute native code, repeat model parity or qualify physical capture.
