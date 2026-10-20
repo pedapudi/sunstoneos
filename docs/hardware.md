@@ -1381,7 +1381,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   edits require no rebuild and extend no execution claim. Physical decoding,
   cache/reference visibility, confinement, timing and drain remain unqualified.
   POC wrap and MMCO5 are source-reviewed but unexecuted. Long-term references,
-  unrestricted streaming, broader formats and encoding remain required. Baseline
+  unrestricted streaming, broader formats and broader encoding remain required. Baseline
   builds retain their separate scopes.
   The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
   is implemented for progressive Baseline IDR/P clips with one short-term reference
@@ -1472,7 +1472,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `jpeg-encode-native-20261020/root/integration.json`. Eight current input deltas
   belong to inactive radio/USB-host functions; frozen workload 2 uses private
   USB0 DEVICE output and does not establish those newer functions. Broader
-  dimensions, formats, qualities and video encoding remain required.
+  dimensions, formats, qualities and broader encoding remain required.
+  The [native H.264 encoder](h264-encode-native.md) implements one retained
+  two-picture job from caller-supplied 640×480 NV12 frames: Baseline level 3.1,
+  CAVLC, QP 26, IDR followed by P. Actual provider, lower-MMIO, IOMMU, copied
+  output and USB durability/ACK checks pass with entropy, completion and resource
+  observations modeled. ACK of immutable output zero permits P submission without
+  releasing that output or its reconstructed reference. All resources remain
+  retained. The 140 native programming writes match the pinned opaque A733 SDK
+  instruction reference; no opaque CPU library is linked or loaded natively.
+  The [source record](../apps/h264-encode/sources.json) pins that development-only
+  dependency and its notices. Root verifies 2,328 frozen files, 170 objects and
+  451 compiled inputs, including all 185 repository inputs, under
+  `h264-encode-20261020/root/integration.json`; final image is `2e4a93b0…`.
+  Real entropy, reconstructed-reference contents, numerical encoding, DMA
+  visibility, confinement and safe drain remain unqualified. Wider dimensions,
+  formats, counts, rate control, High/CABAC/B pictures, multiple references,
+  unrestricted streaming and H.265 encoding remain required.
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
