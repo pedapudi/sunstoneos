@@ -6,7 +6,10 @@ PMIC request, independent bus owners, real task stacks and negotiated token.
 Only architectural scheduling, elapsed time, MMIO, sink replies and frame-end
 events are modeled. Scheduling is serialized, with modeled one-millisecond tick
 preemption at eligible counter returns. SMP concurrency and priority inheritance
-are not exercised. Injected frame-end
+are not exercised. The optional nominal ordering lets a register-lock holder
+finish its bounded native operation before a tick-woken observer runs. This
+represents nonoverlapping progress on another core, not contention tolerance.
+Injected frame-end
 events establish application handling, not scanout. No physical link, pixel
 output or DMA drain is qualified.
 """
@@ -65,6 +68,7 @@ def main():
  p.add_argument('--resume',type=Path)
  p.add_argument('--observe-first-fault',action='store_true')
  p.add_argument('--observe-pc',type=lambda value:int(value,0))
+ p.add_argument('--register-owner-first',action='store_true')
  a=p.parse_args();assert not a.output.exists();a.output.mkdir(parents=True)
  base=module('dp_composed_base',ROOT/'checks/displayport-native.py')
  controller=module('dp_composed_controller',ROOT/'checks/displayport-controller.py')
@@ -149,8 +153,11 @@ def main():
    if name=='a733_counter_clock_now':
     # Complete the modeled counter function before considering an interrupt:
     # its out parameter, return value and caller PC are already coherent.
-    if self.time>=self.next_tick:self.tick_pending=True
-    if self.tick_pending and self.eligible():
+    owner_first=a.register_owner_first and self.holders.get(self.register_mutex,0)==self.task
+    if self.time>=self.next_tick:
+     if not self.tick_pending and owner_first:self.tick_deferrals.append([self.time,self.task])
+     self.tick_pending=True
+    if self.tick_pending and self.eligible() and not owner_first:
      self.next_tick=(self.time//1000+1)*1000;self.tick_pending=False
      self.tick_events.append([self.time,self.task]);self.boundary=('tick',0)
      self.stopped=True;self.u.emu_stop()
@@ -197,6 +204,9 @@ def main():
  m.next_tick=scheduler.get('next_tick',(m.time//1000+1)*1000)
  m.tick_pending=scheduler.get('tick_pending',False);m.tick_events=scheduler.get('tick_events',[])
  m.counter_calls=0;slice_trace=[];wire_trace=[]
+ m.register_mutex=m.get(m.shared+image.layouts['a733_native_usb']['locks']+image.layouts['a733_platform_locks']['mutex'])
+ if a.resume:assert scheduler.get('register_owner_first',False)==a.register_owner_first
+ m.tick_deferrals=scheduler.get('tick_deferrals',[])
  tasks=scheduler['tasks'];last=scheduler['last'];sequence=scheduler['sequence']
  m.runnable_tasks=tasks;m.task_priorities={task['handle']:task['priority'] for task in tasks}
  m.waiters=scheduler.get('waiters',{});m.wait_sequence=scheduler.get('wait_sequence',0);m.wait_events=scheduler.get('wait_events',[])
@@ -293,7 +303,7 @@ def main():
     # Keep the last coherent application boundary before the first controller
     # operation, so later lower-model fixes need not repeat PD or supply work.
     point=a.output/'pre-controller';point.mkdir();m.checkpoint(point,'negotiated')
-    (point/'scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase='scheduler-boundary',tasks=tasks,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events)))
+    (point/'scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase='scheduler-boundary',tasks=tasks,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events,register_owner_first=a.register_owner_first,tick_deferrals=m.tick_deferrals)))
     (point/'hardware.pickle').write_bytes(pickle.dumps(hw.export()))
     save(point/'inputs.json',inputs);save(point/'expected.json',baseline)
     files={f.name:dict(bytes=f.stat().st_size,sha256=sha(f)) for f in point.iterdir() if f.is_file()}
@@ -328,15 +338,17 @@ def main():
    file=a.output/('terminal-ram-'+str(i)+'.bin');memory.append(dict(address=at,bytes=count,file=str(file),sha256=sha(file)))
   save(a.output/'terminal-memory.json',dict(image_sha256=image_hash,memory=memory,reply_sha256=sha(a.output/'reply.bin'),physical=False,scope=__doc__))
   save(a.output/'summary.json',dict(passed=True,physical=False,image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),
-   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,tick_events=m.tick_events,mutex_events=m.wait_events,scope=__doc__))
+   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,tick_events=m.tick_events,mutex_events=m.wait_events,
+   register_owner_first=a.register_owner_first,tick_deferrals=m.tick_deferrals,scope=__doc__))
   print('PASS actual composed native retained-stop reply')
  except BaseException as error:
   if active is not None and phase=='scheduler-task':active['context']=m.u.context_save()
   m.checkpoint(a.output,'stopped')
-  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events)))
+  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events,register_owner_first=a.register_owner_first,tick_deferrals=m.tick_deferrals)))
   (a.output/'stopped-hardware.pickle').write_bytes(pickle.dumps(hw.export()))
   (a.output/'stopped-display.pickle').write_bytes(pickle.dumps(display.export()))
-  save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress,first_fault=m.fault_observation))
+  save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress,first_fault=m.fault_observation,
+   register_owner_first=a.register_owner_first,tick_deferrals=m.tick_deferrals))
   raise
  finally:
   save(a.output/'slice-trace.json',dict(columns=['start_us','end_us','task','boundary','ticks','wake_us','counter_calls','cc_state','cc_step','pd_turn','published_us'],rows=slice_trace))
