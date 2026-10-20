@@ -778,10 +778,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   stack cases check FS/HS packet completion with modeled DCD effects; one uses
   synthetic terminal-length metadata. Host capture, geometry/allocation refusals
   and supervisor readiness checks pass; production refuses modeled authority.
-  Final image `4e043dad…` retains 169 objects and 448 compiled dependencies.
+  Earlier image `4e043dad…` retains 169 objects and 448 compiled dependencies.
   Root accepts the native/host/USB closures at `a7d2ece` under
   `g2d-native-20261020/root-integration.json`; the only native snapshot difference
   is an appended component-document evidence section. Existing verification was reused.
+  Current image `81916537…` adds source-backed DE_SYS domain-1 initialization:
+  coherent OFF requests ON, while coherent ON is adopted without domain writes.
+  Fixed 10 ms polling and mutex deadlines stay within the original session bound.
+  Uncertain writes, incoherent state or timeout retain resources without retry.
+  Five changed native cases and seven host-authority cases pass with task identity,
+  mutexes, device effects, translations and pixels modeled. The host-authority
+  cases stop before allocation validation; they establish no complete admission.
+  Root verifies 187 compiled repository inputs and 199 declared sources at
+  `7104245` under `g2d-power-20261020/root-integration.json`; use
+  `frozen-final/manifest.json`, not the older snapshot reference in `closure.json`.
+  One image was built. All twelve allocated boot-object sections and symbolic
+  relocations match; unchanged launcher inputs reuse binary `1f0fa59a…`.
+  Earlier boot/SRAM, core and transport results retain their original scope,
+  without replay. Physical power transition, SMP/cache behavior and pixels remain
+  unqualified.
   The [host coordinator](g2d-preparation.md) uses one 19-second window within
   native 20-second admission, durably saves output and compares copied bytes with
   a CPU reference before delivery-gated generation/digest ACK. Every allocation,
