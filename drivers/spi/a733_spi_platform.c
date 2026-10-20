@@ -1,4 +1,5 @@
 #include "a733_spi_platform.h"
+#include "a733_clock_reference.h"
 #define CCU UINT32_C(0x02002000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -82,12 +83,12 @@ static int update(struct a733_spi_platform *s,uintptr_t a,uint32_t mask,uint32_t
 static int parent(struct a733_spi_platform *s)
 {
     uint32_t osc,ref;
-    if(!rd(s,0x07090160,&osc)||(osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
-       (((osc>>14)&3)!=0&&((osc>>14)&3)!=3))return 0;
+    if(!rd(s,0x07090160,&osc)||(osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1)))return 0;
+    /* Source0 is normalized SYS24M for main SPI0–4, but raw DCXO for S_SPI.
+     * A 24MHz divider plan cannot adopt a 19.2/26MHz S_SPI source. */
     if(s->route.port<5) {
-        if(!rd(s,CCU,&ref)||(ref&0xf8000000u)!=0xf8000000u||
-           ((ref>>8)&255)<79||((ref>>8)&255)>115||((ref>>8)&255)!=((ref>>16)&127))return 0;
-    }
+        if(!rd(s,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+    } else if(a733_clock_dcxo_hz(osc)!=24000000)return 0;
     return 1;
 }
 static int masked(struct a733_spi_platform *s)

@@ -41,7 +41,11 @@ Its usable package route remains an explicit research and qualification item.
 The registry supplies an exclusive controller token and shared fabric/parent
 stability. Main SPI controllers reserve REF and OSC for SYS_CLK24M. S_SPI
 reserves OSC for DCXO. The binding reads the oscillator and reference profile;
-it does not retune a shared parent.
+it does not retune a shared parent. SPI0–4 source0 is the normalized 24 MHz
+PLL reference, so a 19.2 or 26 MHz DCXO is accepted only with a valid reference
+ratio. S_SPI source0 selects raw DCXO and still requires a detected 24 MHz
+input for its fixed divider plan. These selectors follow manual sections
+4.1.6.168 and 4.2.5.12 and the pinned main/R CCU parent tables.
 
 A privileged boot handoff separately establishes recovery, mappings, stable
 24 MHz input, electrical safety, remote-firmware exclusion and absence of DMA

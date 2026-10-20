@@ -196,4 +196,4 @@ static void uncertain(void)
     assert(!a733_spi_route_plan((enum a733_spi_route)6,0,&route));
     assert(!a733_spi_route_plan(A733_SPI3_PE,2,&route));
 }
-int main(void){working();ownership();pin_conflict();bad_cs_readback();uncertain();puts("SPI real clock/pin/core composition, retained faults and restoration passed");}
+int main(void){working();ownership();pin_conflict();bad_cs_readback();uncertain();puts("SPI real clock/pin/core composition, retained faults and restoration passed");return 0;}
