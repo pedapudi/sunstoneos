@@ -1,0 +1,99 @@
+{
+  "schema": "a733-deinterlace-references-v1",
+  "runtime": "Pinned GPL DI301 configuration and algorithm defaults execute on the FreeRTOS CPU against a private register image. Native callbacks publish only the explicit active-weave register whitelist. No Linux kernel, queue or hardware status shadow executes.",
+  "license": "GPL-2.0-or-later for DI code; preserve all original notices. drm_fourcc.h retains its own permissive notice.",
+  "reference_pins": {
+    "bsp/drivers/di/Kconfig": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/Kconfig",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "7b9e047a45b65a2c081b4b29ec8c4d606e09d1923a39a1d89e014c57886607fe"
+    },
+    "bsp/drivers/di/Makefile": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "3f9c71ffeceee80b04c1c8a07486c0eab688724cbfefbcc238758b7dc2bbe53f"
+    },
+    "bsp/drivers/di/common/di_utils.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/common/di_utils.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "2edbf5e848c052d694289d4a2983e08f8904f9e73b61011c216c4eb3511c55fe"
+    },
+    "bsp/drivers/di/common/di_utils.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/common/di_utils.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "13cd8d3c5d9d861347292c4991762549c766a6c8b1c47736fba4d30d672a9796"
+    },
+    "bsp/drivers/di/drv_div3x/sunxi_di.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/sunxi_di.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "324befa59511007c43922c49d9254c6372b67ac6956faa0a5af3d52f9c45aaf5"
+    },
+    "bsp/drivers/di/drv_div3x/di_client.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/di_client.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "d49b190d55305461fa151d1281d0bd79b6951c217aaf1955195cdfe9c0ba2e01"
+    },
+    "bsp/drivers/di/drv_div3x/di_client.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/di_client.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "73e12a4ee5a08ea2bd739a93fe04e6f62e455a06845c7546f76deef3a3710061"
+    },
+    "bsp/drivers/di/drv_div3x/di_dev.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/di_dev.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "a4213017eda704c1a9e6e86ee2669578a07471fe57d113e86ea7f383a88300d8"
+    },
+    "bsp/drivers/di/drv_div3x/di_driver.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/di_driver.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "a842dd719b71f8c8497fd583bd0c4e292bf4fd06149a6ba274ac83e12134df62"
+    },
+    "bsp/drivers/di/drv_div3x/Makefile": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "11b50a92fb20e3723d7eb4c397f33dc19aac5385c54d0e7739aea291c3283653"
+    },
+    "bsp/drivers/di/drv_div3x/di_driver.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/di_driver.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "8aa64ad026d92ffdc7143a88d52ea78db006d83f47e524ecfbd2b697970083c2"
+    },
+    "bsp/drivers/di/drv_div3x/lowlevel_v3x/di30x.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/lowlevel_v3x/di30x.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "2f90e51e3366de0f93056cca5ad516fdec199f1cdcb58b373a34201a97412ccc"
+    },
+    "bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_alg.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_alg.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "f2ccf2cee22a04f73d607ff6eb559559e45812f3257ead23a6af2c0a10d6b443"
+    },
+    "bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_alg.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_alg.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "d56fab765985e14ed9453863420e05947ed5ff5687663da47a5004838fe3c3fa"
+    },
+    "bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_reg.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301_reg.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "5439eb63fa21a48dfac940759c82e2739f7e1a5afd7674035b7685acf8648e79"
+    },
+    "bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/di/drv_div3x/lowlevel_v3x/di301/di301.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "d4c262cf5df0abcc852a887b8f9987efa508479ee7905a60b137b6ef94f61999"
+    },
+    "include/uapi/drm/drm_fourcc.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/uapi/drm/drm_fourcc.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "9d2311ee6ba0d0c6eaf105cbcdc320fc8e5d161b1981d8377584b0f05bf99e82"
+    }
+  },
+  "variant": "Cached board config enables SUNXI_DI_V3X and SUNXI_DI_SINGEL_FILE; drv_div3x/Makefile selects DI301 for ARCH_SUN60IW2.",
+  "board_config": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/config/kernel/linux-sun60iw2-current-a733.config",
+    "sha256": "ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc"
+  },
+  "manual": "A733 manual14.4 and4.1 DI CCU controls; existing manual pin remains in sources.lock.json.",
+  "scope": "One offline NV12 combined-field weave frame. Matched processing finish and nonbusy authorize immutable copied output only, never fabric-drain/reclamation. Physical DMA completion/visibility remains unqualified."
+}

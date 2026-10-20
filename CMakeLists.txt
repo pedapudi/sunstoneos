@@ -245,3 +245,8 @@ option(SUNSTONE_A733_MONITOR "Build supervised repeated thermal/GPADC monitoring
 if(SUNSTONE_A733_MONITOR)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-monitor.cmake")
 endif()
+
+option(SUNSTONE_A733_DEINTERLACE "Build supervised native DI301 offline weave" OFF)
+if(SUNSTONE_A733_DEINTERLACE)
+ include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-deinterlace.cmake")
+endif()

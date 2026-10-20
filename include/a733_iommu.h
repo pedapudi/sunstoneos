@@ -143,6 +143,10 @@ int a733_iommu_init_encoder(struct a733_iommu *,const struct a733_iommu_ops *,
  * exclusion/drain and retained recovery contract match the encoder profile. */
 int a733_iommu_init_g2d(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
+/* Fixed offline DI301 profile: translate/access master9 only. The same global
+ * handoff/exclusion and permanent retained lifetime as G2D are required. */
+int a733_iommu_init_deinterlace(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 int a733_iommu_init_display(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
 int a733_iommu_open(struct a733_iommu *, uint64_t deadline_us);
