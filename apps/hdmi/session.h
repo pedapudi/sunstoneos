@@ -5,6 +5,9 @@
 #if SUNSTONE_HDMI_FRAMEBUFFER
 #include "framebuffer.h"
 #endif
+#if SUNSTONE_HDMI_AUDIO
+#include "../hdmi-audio/session.h"
+#endif
 #define A733_STORAGE_SESSION_ADDRESS UINT64_C(0x41f00000)
 #define HDMI_SESSION_MAGIC UINT64_C(0x4153373348444131)
 #define HDMI_CONTRACT_MAGIC UINT64_C(0x4153373348444331)
@@ -25,7 +28,13 @@ struct hdmi_session {
 #if SUNSTONE_HDMI_FRAMEBUFFER
     struct hdmi_framebuffer_session framebuffer;
 #endif
+#if SUNSTONE_HDMI_AUDIO
+    struct hdmi_audio_session audio;
+#endif
 };
+#if SUNSTONE_HDMI_AUDIO
+_Static_assert(sizeof(struct hdmi_session)==656&&offsetof(struct hdmi_session,audio)==440,"audio session ABI");
+#endif
 _Static_assert(sizeof(struct hdmi_session)<=4096,"immutable HDMI session page");
 _Static_assert(offsetof(struct hdmi_session,image)==48 &&
     offsetof(struct hdmi_session,evidence)==80 && offsetof(struct hdmi_session,analog)==112 &&

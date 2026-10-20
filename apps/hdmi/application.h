@@ -7,6 +7,9 @@
 #include "a733_pins_native.h"
 #include "a733_pmic_native.h"
 #include "task.h"
+#if SUNSTONE_HDMI_AUDIO
+#include "../hdmi-audio/native.h"
+#endif
 enum hdmi_application_state { HDMI_APP_PENDING,HDMI_APP_ACTIVE,
     HDMI_APP_STOPPED_RETAINED,HDMI_APP_FAULT_RETAINED };
 /* Atomic status is diagnostic only; ACTIVE means controller programming and

@@ -7,6 +7,9 @@
 struct hdmi_application app;
 const uint64_t a733_hdmi_session_bytes=sizeof(struct hdmi_session);
 const uint64_t a733_hdmi_framebuffer_mode=SUNSTONE_HDMI_FRAMEBUFFER;
+#if SUNSTONE_HDMI_AUDIO
+const uint64_t a733_hdmi_audio_geometry[10]={1,656,440,216,HDMI_AUDIO_PCM_ADDRESS,192000,48000,2,16,32};
+#endif
 #if SUNSTONE_HDMI_FRAMEBUFFER
 const uint64_t a733_hdmi_framebuffer_offset=offsetof(struct hdmi_session,framebuffer);
 #endif
@@ -35,11 +38,19 @@ static void pmic_task(void *unused)
                 atomic_store_explicit(&app.pmic_ready,1,memory_order_release);
             else if(r!=A733_PMIC_PENDING&&r!=A733_PMIC_BUSY)hdmi_fail(NULL);
         }
+#if SUNSTONE_HDMI_AUDIO
+        if(app.pmic.held){taskYIELD();continue;}
+#endif
         vTaskDelay(1);
     }
 }
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
-{return !context&&(entry==pmic_task||entry==hdmi_output_task);}
+{
+#if SUNSTONE_HDMI_AUDIO
+    if(dma_service_task_privileged(entry,context))return 1;
+#endif
+    return !context&&(entry==pmic_task||entry==hdmi_output_task);
+}
 void a733_smp_diagnostic_start(void)
 {
     if(!a733_smp_device_preparation_admitted())platform_panic("HDMI startup",1);
@@ -95,6 +106,9 @@ void a733_smp_diagnostic_start(void)
     if(!a733_hdmi_native_init(&app.hdmi,&config))platform_panic("HDMI native",10);
 #if SUNSTONE_HDMI_FRAMEBUFFER
     if(!hdmi_framebuffer_boot())platform_panic("HDMI framebuffer memory",12);
+#endif
+#if SUNSTONE_HDMI_AUDIO
+    if(!hdmi_audio_boot())platform_panic("HDMI audio memory/provider",14);
 #endif
     if(!a733_smp_device_preparation_admitted())platform_panic("HDMI startup expired",13);
     vTaskStartScheduler();platform_panic("HDMI scheduler returned",11);

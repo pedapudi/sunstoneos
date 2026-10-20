@@ -1,5 +1,9 @@
 # Default: supervised TV0 hardware colorbar. Optional retained DE framebuffer.
 option(SUNSTONE_HDMI_FRAMEBUFFER "Build fixed720p RGB565 framebuffer HDMI image" OFF)
+option(SUNSTONE_HDMI_AUDIO "Build finite fixed48kHz stereo PCM over internal I2S3" OFF)
+if(SUNSTONE_HDMI_AUDIO AND SUNSTONE_HDMI_FRAMEBUFFER)
+ message(FATAL_ERROR "HDMI audio currently uses the TV0 pattern only")
+endif()
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
@@ -38,8 +42,20 @@ if(SUNSTONE_HDMI_FRAMEBUFFER)
   list(APPEND hdmi_sources "${hdmi_root}/${source}")
  endforeach()
 endif()
+if(SUNSTONE_HDMI_AUDIO)
+ foreach(source IN ITEMS apps/hdmi-audio/native.c drivers/audio/a733_hdmi_audio.c
+  runtime/device_memory_pool.c platform/a733/memory_uncached.c
+  platform/a733/dma_startup.c platform/a733/dma_native.c drivers/dma/dma_memory.c
+  drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c drivers/dma/a733_dma_platform.c
+  drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c drivers/dma/dma_service_i2s.c
+  drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c drivers/audio/a733_i2s_stream.c
+  drivers/audio/a733_i2s_platform.c drivers/audio/a733_i2s_platform_native.c drivers/audio/a733_audio_leases.c)
+  list(APPEND hdmi_sources "${hdmi_root}/${source}")
+ endforeach()
+endif()
+list(REMOVE_DUPLICATES hdmi_sources)
 add_executable(sunstone-a733-hdmi EXCLUDE_FROM_ALL ${hdmi_sources})
-target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_FRAMEBUFFER=$<BOOL:${SUNSTONE_HDMI_FRAMEBUFFER}>)
+target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_FRAMEBUFFER=$<BOOL:${SUNSTONE_HDMI_FRAMEBUFFER}> SUNSTONE_HDMI_AUDIO=$<BOOL:${SUNSTONE_HDMI_AUDIO}>)
 get_target_property(hdmi_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET sunstone-a733-hdmi PROPERTY COMPILE_OPTIONS "${hdmi_options}")
 target_include_directories(sunstone-a733-hdmi BEFORE PRIVATE "${hdmi_root}/apps/hdmi"
@@ -48,12 +64,23 @@ target_include_directories(sunstone-a733-hdmi BEFORE PRIVATE "${hdmi_root}/apps/
 target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_SECURE_MONITOR=1
  SUNSTONE_A733_SMP_DIAGNOSTIC=1 A733_SMP_CONTRACT_MAGIC=0x4153373348444331ULL
  A733_SMP_RESULT_MAGIC=0x4153373348445231ULL)
+if(SUNSTONE_HDMI_AUDIO)
+ target_link_options(sunstone-a733-hdmi PRIVATE -Wl,--defsym=__uncached_pool_size=2097152
+  -Wl,--undefined=a733_hdmi_audio_geometry -Wl,--undefined=hdmi_audio_result -Wl,--undefined=hdmi_audio_result_ready)
+endif()
 if(SUNSTONE_HDMI_FRAMEBUFFER)
  target_link_options(sunstone-a733-hdmi PRIVATE -Wl,--defsym=__uncached_pool_size=2097152
   -Wl,--undefined=a733_hdmi_framebuffer_offset)
 endif()
 target_link_options(sunstone-a733-hdmi PRIVATE -Wl,--undefined=a733_hdmi_framebuffer_mode)
 file(GLOB hdmi_headers "${hdmi_root}/apps/hdmi/*.h")
+if(SUNSTONE_HDMI_AUDIO)
+ list(APPEND hdmi_headers "${hdmi_root}/apps/hdmi-audio/CMakeLists.txt"
+  "${hdmi_root}/apps/hdmi-audio/prepare.py" "${hdmi_root}/apps/hdmi-audio/capture.py"
+  "${hdmi_root}/apps/hdmi-audio/observe.py")
+ file(GLOB audio_headers "${hdmi_root}/apps/hdmi-audio/*.h")
+ list(APPEND hdmi_headers ${audio_headers} "${hdmi_root}/include/a733_hdmi_audio.h")
+endif()
 set(hdmi_inputs ${hdmi_sources} ${hdmi_headers} ${storage_inputs}
  "${CMAKE_CURRENT_LIST_FILE}" "${hdmi_root}/apps/hdmi/CMakeLists.txt"
  "${hdmi_root}/apps/hdmi/boot.patch" "${hdmi_root}/apps/hdmi/prepare.py"
@@ -65,7 +92,7 @@ if(SUNSTONE_HDMI_FRAMEBUFFER)
 else()
  set(hdmi_profile "TV0-pattern;no-DMA")
 endif()
-set(hdmi_identity "native-hdmi-2;framebuffer=${SUNSTONE_HDMI_FRAMEBUFFER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;${hdmi_profile};supervised")
+set(hdmi_identity "native-hdmi-3;audio=${SUNSTONE_HDMI_AUDIO};framebuffer=${SUNSTONE_HDMI_FRAMEBUFFER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;${hdmi_profile};supervised")
 foreach(input IN LISTS hdmi_inputs)
  file(SHA256 "${input}" hdmi_digest)
  string(APPEND hdmi_identity "${hdmi_digest}")

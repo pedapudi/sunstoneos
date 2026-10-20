@@ -127,6 +127,8 @@ establish native resource acquisition or physical output.
 
 Framebuffer scanout requires a DE-to-TV route and owned memory. A single
 XRGB8888 frame needs 3,686,400 bytes at 720p or 8,294,400 bytes at 1080p,
-exceeding the current 2 MiB cached pool. Audio, CEC, HDCP, hotplug interrupts,
+exceeding the current 2 MiB cached pool. The separate [finite HDMI audio image](hdmi-audio.md)
+adds fixed48kHz stereo PCM through the internal I2S3 route; physical playback remains
+unqualified. Additional audio modes, CEC, HDCP, hotplug interrupts,
 fractional refresh, additional modes/formats, deep color, scrambling, live mode
 changes, safe ownership release and eDP remain required for full hardware support.

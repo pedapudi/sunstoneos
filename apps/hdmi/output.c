@@ -6,6 +6,9 @@ static int fault(void)
 #if SUNSTONE_HDMI_FRAMEBUFFER
     hdmi_framebuffer_retain();
 #endif
+#if SUNSTONE_HDMI_AUDIO
+    hdmi_audio_retain();
+#endif
     (void)a733_hdmi_fail(&app.hdmi.controller.io);
     atomic_store_explicit(&app.state,HDMI_APP_FAULT_RETAINED,memory_order_release);
     return -1;
@@ -22,6 +25,11 @@ int hdmi_output_step(void)
     if(atomic_load_explicit(&app.state,memory_order_acquire)==HDMI_APP_STOPPED_RETAINED)return 1;
     struct a733_hdmi *h=&app.hdmi.controller;
     if(now>=app.stop_at||atomic_load_explicit(&app.cancel,memory_order_acquire)){
+#if SUNSTONE_HDMI_AUDIO
+        /* Early interruption cannot claim FIFO/source completion. Retain the
+         * whole service and its unknown device state for manual removal. */
+        if(!audio.published)return fault();
+#endif
         if(h->state==A733_HDMI_ACTIVE||h->state==A733_HDMI_PREPARED||h->state==A733_HDMI_STARTING){
             if(a733_hdmi_stop(h,app.deadline)!=1)return fault();
             app.stage=4;
@@ -48,6 +56,12 @@ int hdmi_output_step(void)
         if(hdmi_framebuffer_service()<0)return fault();
 #endif
         r=a733_hdmi_service(h,app.deadline);if(r<0)return fault();
+#if SUNSTONE_HDMI_AUDIO
+        if(h->state==A733_HDMI_ACTIVE){
+            int a=hdmi_audio_step();if(a<0)return fault();
+            if(a==1){if(a733_hdmi_stop(h,app.deadline)!=1)return fault();app.stage=4;return 0;}
+        }else if(!audio.published)return fault();
+#endif
         if(h->state==A733_HDMI_STOPPING)app.stage=4;
         else if(h->state!=A733_HDMI_ACTIVE)return fault();return r;
     case 4:

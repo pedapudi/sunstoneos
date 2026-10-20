@@ -2,6 +2,9 @@
 #include "boot.h"
 #include "a733_storage_digest.h"
 #include <string.h>
+#if SUNSTONE_HDMI_AUDIO
+#include "../hdmi-audio/native.h"
+#endif
 static int present(const uint8_t *p)
 {unsigned b=0;for(unsigned i=0;i<32;++i)b|=p[i];return b!=0;}
 int hdmi_session_valid(const struct hdmi_session *s)
@@ -19,6 +22,9 @@ int hdmi_session_valid(const struct hdmi_session *s)
         &&s->request.source==A733_HDMI_FRAMEBUFFER&&hdmi_framebuffer_session_valid(&s->framebuffer)
 #else
         &&s->request.source==A733_HDMI_PATTERN
+#endif
+#if SUNSTONE_HDMI_AUDIO
+        &&hdmi_audio_session_valid(&s->audio)
 #endif
         ;
 }

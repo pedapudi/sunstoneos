@@ -1,0 +1,100 @@
+{
+  "schema": "sunstone-source-adaptation-v1",
+  "execution": "A733 EL1 FreeRTOS HDMI output task and existing DMA service worker; no Linux runtime",
+  "sources": [
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.c",
+      "sha256": "62c12e90a66013fa8e1710a6efde29a0e5cb9aefc71c2721fb761185504018e3",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.c",
+      "authority": "_dw_audio_i2s_config, _dw_audio_acr_config, dw_audio_on",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.h",
+      "sha256": "6367140519f61fc3c9d23e1eeb6f9a03c27b9f1fe3b05871def1d5efc4e2ca46",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_avp.h",
+      "authority": "AUD register fields",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.c",
+      "sha256": "e308b3d38fb00d70908ef4fbaf01ab82454c6b232623820a411bb8183edaab32",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.c",
+      "authority": "dw_fc_audio_sample_config, dw_fc_audio_packet_config",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.h",
+      "sha256": "f2434bd6367d36cc88579f560fd8ec6dc52a18dc995047f7e482f41088e68cd2",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_fc.h",
+      "authority": "FC_AUD register fields",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.c",
+      "sha256": "649d924d88a39f7173d7464645e1574cdbb3ee326cd92d4d680b8729cd598aeb",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.c",
+      "authority": "dw_mc_sw_reset, dw_mc_set_clk",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.h",
+      "sha256": "60453c6bba554ee245e112f97cf6807ca65d35099b7eac1f87163101198cf24d",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_hdmi20/dw_mc.h",
+      "authority": "MC clock and reset fields",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "hdmi-research/kernel/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
+      "sha256": "681e2f32ed671e8f759fa84cb108416e76adae3bf94a07a11684d5bbbbfe00ae",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c",
+      "authority": "hdmi_set_cts_n, hdmi_enable_audio_clk",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "i2s/snd_sunxi_i2s.c",
+      "sha256": "d3446ec1e11a3fd69d53161f5612a0155e43391ee14569f1fecf942d7daec3a3",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/snd_sunxi_i2s.c",
+      "authority": "sunxi HDMI mapping, PCM16 sample width, TX hub",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "i2s/snd_sunxi_i2s.h",
+      "sha256": "f5eeda49997321150059b1c87cb016c7e2f3ed2e68a9c0abe3d0f5349b9b2a02",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/sound/platform/snd_sunxi_i2s.h",
+      "authority": "I2S FIFO and TX routing registers",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "gpu-power/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+      "sha256": "31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+      "authority": "I2S3 HDMI codec route, stereo32-bit slots, no MCLK, TX hub",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "gpu-power/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "authority": "I2S3 base02535000, TX DMA request6, fifo128",
+      "license": "GPL-2.0 (kernel source; preserve file notices)"
+    },
+    {
+      "cache": "camera-research/A733_User_Manual_V1.00.txt",
+      "sha256": "219d3c21e5377d18a096765f429555d0693f7fa9b2ae2eb5bb3f225d8b6a09c2",
+      "authority": "A733 User Manual V1.00 sections4.1.6.185/186,17.1 and DMA request table",
+      "license": "Allwinner documentation, reference only"
+    }
+  ]
+}
