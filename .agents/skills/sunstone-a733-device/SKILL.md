@@ -151,6 +151,11 @@ Prevent recurring fixture failures at setup:
   Preserve cross-field bindings when changing fixture identities: the board
   qualification and recovery hashes must identify the same record. Check the
   resulting session with the actual validator before a longer application batch.
+  Supervised producers emit an unarmed contract: the SRAM launcher supplies its
+  magic and timing fields. A fixture entering after that launcher must consume
+  the accepted post-launch contract, or explicitly model arming once and share
+  that exact artifact with downstream checks. Preserve the original template.
+  Stubbed contract validation does not initialize deadlines used later by boot.
 - Place emulator stack, scratch and return-trampoline memory outside the entire
   admitted device pools. An address outside the currently allocated pages may
   still violate the allocator's exclusion of its own pool from output arguments.
