@@ -245,11 +245,14 @@ controller has not been prepared at this checkpoint. Raw DCXO is 26 MHz and the
 native TWI divider is 97, giving 100 kHz.
 
 This composition evidence is frozen under
-`~/.cache/sunstoneos/evidence/displayport-native-20261020/typec-negotiated-ae83/`.
+`~/.cache/sunstoneos/evidence/displayport-native-20261020/typec-negotiated-9164/`.
 `negotiated-manifest.json` binds the exact executable, admitted session, runtime
 contract, constructor, task contexts, hardware state and check sources. The
 selected executable SHA-256 is
-`ae83b12f6e69b820f3bd8888335bd41314366c694e9197554f766fbd4c406b17`.
+`916462470c39d569d6a573cffbf33aa9d1f01117c534877eb46e65333289ddac`.
+The affected successor case uses unchanged check sources and preserves the
+earlier image's evidence separately. Negotiation and initial token validation
+do not establish sustained freshness during later consumer execution.
 The scheduler model preserves task priorities and the actual delay and SVC 105
 yield boundaries. It is serialized and cooperative; it does not qualify SMP
 execution, tick preemption, priority inheritance or physical scheduling latency.
