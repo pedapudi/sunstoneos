@@ -116,3 +116,19 @@ session and allocation proof before rebinding modeled transport identities.
 Capture cases cover pending and terminal observations, retained fault, malformed
 or stale identity, terminal proof, persistence failures and the absolute deadline.
 The production entry rejects the modeled bundle.
+
+The 2026-10-20 software evidence binds native image SHA-256
+`916462470c39d569d6a573cffbf33aa9d1f01117c534877eb46e65333289ddac`
+and its actual constructor allocation and serialized retained-stop reply. All
+twelve host capture cases passed. Four provider-input refusals and five
+allocation/table/pattern refusals remain preserved on their original image;
+unchanged validators and byte-identical allocation contents allowed reuse of
+those results. The actual coordinator readiness case also passed.
+
+The accepted SRAM binary is 2952 bytes, SHA-256
+`522c1dded8647e51b48b9f6dfb6fc5023c63e74784ee43f4cc1ec7ab6c7f0bb7`.
+Five launcher instruction cases passed on the preceding admitted image with
+that exact binary. Failed size attempts, the accepted objects and all sixteen
+compiler dependency inputs are preserved separately. The final bundle reuses
+the binary without recompilation. These modeled checks establish software
+behavior, not physical admission, SMP contention timing or visible output.
