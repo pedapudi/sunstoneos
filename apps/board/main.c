@@ -59,7 +59,7 @@ static void typec(void *unused)
         if(!board_live(NULL)||a733_smp_counter()/24>=service_deadline())
             a733_typec_revoke(&board.typec.provider);
         if(!started&&board_live(NULL)&&atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
-            if(!a733_typec_begin(&board.typec.provider,board.session.deadline_us))a733_typec_revoke(&board.typec.provider);
+            if(a733_typec_begin(&board.typec.provider,board.session.deadline_us)<0)a733_typec_revoke(&board.typec.provider);
             started=1;
         }
         if(started)(void)a733_typec_poll(&board.typec.provider);

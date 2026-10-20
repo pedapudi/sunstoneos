@@ -71,7 +71,8 @@ struct a733_typec {
 };
 /* Zero private storage once, before concurrency. No hardware access. */
 int a733_typec_init(struct a733_typec *,const struct a733_typec_config *);
-/* One attempt; no automatic reattach, role swap, reset retry or release. */
+/* Returns 0 when the attempt starts, -1 on refusal. One attempt; no automatic
+ * reattach, role swap, reset retry or release. */
 int a733_typec_begin(struct a733_typec *,uint64_t deadline);
 /* Independent provider task continues this call after host failure. 0 pending,
  * 1 active observation, -1 permanently revoked (shutdown may still be pending).
