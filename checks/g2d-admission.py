@@ -51,15 +51,15 @@ class Machine:
         return self.u.reg_read(UC_ARM64_REG_X0)
 results=[]
 machine=Machine()
-assert machine.call('g2d_admitted_session')==0 and machine.call('g2d_admitted_session_digest')==0
+assert machine.call('g2d_admitted_session')==0
 assert machine.call('a733_smp_contract_valid',machine.record,200)==1
 assert machine.call('g2d_board_prepare',machine.record)==1
 assert machine.call('g2d_session_prepare',machine.record)==1
-private=machine.call('g2d_admitted_session');digest=machine.call('g2d_admitted_session_digest')
-assert private and digest and len(machine.publications)==2
+private=machine.call('g2d_admitted_session')
+assert private and len(machine.publications)==2
 machine.u.mem_write(UPLOAD,bytes(len(raw)))
 assert bytes(machine.u.mem_read(private,len(raw)))==raw
-assert bytes(machine.u.mem_read(digest,32))==hashlib.sha256(raw).digest()
+assert hashlib.sha256(bytes(machine.u.mem_read(private,len(raw)))).digest()==contract[224:256]
 assert machine.call('g2d_session_prepare',machine.record)==0
 results.append('authenticated-board-and-G2D-private-publication-survives-upload-overwrite')
 layout=image.layouts['a733_g2d_session']
@@ -96,7 +96,7 @@ assert machine.call('a733_smp_contract_valid',machine.record,200)==0
 results.append('inherited-sixty-second-lifetime-refused')
 machine=Machine(publish=-1)
 assert machine.call('g2d_session_prepare',machine.record)==0
-assert machine.call('g2d_admitted_session')==0 and machine.call('g2d_admitted_session_digest')==0
+assert machine.call('g2d_admitted_session')==0
 results.append('failed-publication-never-exposes-session')
 report=dict(passed=True,physical_access=False,
     image_sha256=hashlib.sha256(args.image.read_bytes()).hexdigest(),

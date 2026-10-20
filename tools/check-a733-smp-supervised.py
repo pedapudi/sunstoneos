@@ -294,8 +294,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     The capture callback consumes only the newly enumerated native instance.
     Every uncertain post-entry outcome retains the physical lock and queue claim.
     """
-    capture_limit={'mimus_result':179,'accelerator_result':19,'gpu_display_result':19}.get(result_key,59)
-    require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','gpu_transport_result','gpu_display_result','accelerator_result','i2s_result','jpeg_result','jpeg_encode_result','h264_encode_result','hevc_result','h264_result','dsi_result','bluetooth_result','camera_result','mimus_result','mimus_board_result','crypto_result','thermal_result','rtc_result','pcie_result','storage_read_result','spi_result','uart_result','pwm_result','adc_result','monitor_result'),
+    capture_limit={'mimus_result':179,'accelerator_result':19,'gpu_display_result':19,'g2d_result':19}.get(result_key,59)
+    require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','gpu_transport_result','gpu_display_result','g2d_result','accelerator_result','i2s_result','jpeg_result','jpeg_encode_result','h264_encode_result','hevc_result','h264_result','dsi_result','bluetooth_result','camera_result','mimus_result','mimus_board_result','crypto_result','thermal_result','rtc_result','pcie_result','storage_read_result','spi_result','uart_result','pwm_result','adc_result','monitor_result'),
             'Unsupported supervised capture bounds.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
     ready()
