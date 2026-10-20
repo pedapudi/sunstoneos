@@ -1,0 +1,14 @@
+--- boot-supervised.c
++++ boot-isp0.c
+@@ -86,3 +86,9 @@
+-    extern int board_identity_prepare(uint64_t);
+-    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
++    extern int isp0_session_prepare(const struct a733_smp_contract *);
++    if(!isp0_session_prepare(&admission))a733_smp_stop(3,0x30b);
++    /* Polled DMA0 (149), VIPP0 (153), ISP0 channels (161..164), TOP (167)
++     * and USB0 (188..190) require no inherited enabled, pending or active IRQ.
++     * The fixed application reserves every channel of physical ISP0. */
++    if(((read32(0x03400110)|read32(0x03400210)|read32(0x03400310))&0x02200000)||
++       ((read32(0x03400114)|read32(0x03400214)|read32(0x03400314))&0x7000009e))
++        a733_smp_stop(3,0x30b);
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
