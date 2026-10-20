@@ -23,7 +23,9 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *, const struct a733_de_surfa
 
 /* Additional closed profile: UCH3 -> DE1 -> TV0, 1280x720 RGB565.
  * The HDMI controller independently establishes the exact 720p60 timing. */
-enum a733_de_output { A733_DE_LCD1_XRGB8888=0, A733_DE_TV0_RGB565=1 };
+enum a733_de_output { A733_DE_LCD1_XRGB8888=0, A733_DE_TV0_RGB565=1, A733_DE_TV1_RGB565=2 };
+/* TV1 uses the same immutable surface format and fixed720p60 dimensions. */
+int a733_de_plan_tv1(const struct a733_de_surface *,struct a733_de_plan *);
 int a733_de_plan_tv0(const struct a733_de_surface *,struct a733_de_plan *);
 enum a733_de_action { A733_DE_PREPARE, A733_DE_START, A733_DE_OBSERVE, A733_DE_STOP, A733_DE_REPLAY };
 enum a733_de_state { A733_DE_PENDING, A733_DE_READY, A733_DE_ARMED,

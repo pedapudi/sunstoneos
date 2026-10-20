@@ -1,0 +1,86 @@
+{
+  "schema": "a733-displayport-references-v1",
+  "runtime": "Adapted Cadence PHY and Trilinear DisplayPort controller execute on the FreeRTOS CPU. DE1 reads one immutable RGB565 surface through display IOMMU master8. Linux and U-Boot are not runtime dependencies.",
+  "license": "Cadence adaptation GPL-2.0; Trilinear controller/header and training adaptation GPL-2.0-or-later. Preserve required original notices. The image contains GPL-derived code.",
+  "reference_pins": {
+    "arch/arm64/configs/defconfig": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/configs/defconfig",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "548bcf09deac2b8d7de771eb78aa0cf081c66c27c251cf083c9774865a6d9949"
+    },
+    "bsp/drivers/drm/Kconfig": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/Kconfig",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "0484a3d0fbb3e260e8cebca783cf0fc7acce78ea75c633285ac9240034606ee3"
+    },
+    "bsp/drivers/drm/Makefile": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "b3e036cdaa5f2d704bd376414c0257f2b518e9cf6daca94afc6863170a345aac"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_edp/trilinear_dp14/trilinear_dp14.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_edp/trilinear_dp14/trilinear_dp14.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "7d88cf6c7c6bf6dacd9024eeb14a755bc4580fcb6724f875aab17b0e787ca209"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_edp/trilinear_dp14/trilinear_dp14.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_edp/trilinear_dp14/trilinear_dp14.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "50607845a6db0a7b76b1dfb4f0dfcff560fb9b6854a5748a9880cf35dd84e902"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_top.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "53144710599550158839bd0c779c4b5582b0d1443dfe834517dae06b8b98c502"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "576174ed8c754aabe81b8293becd3008dbea4cd98c154992801800a50f3f475e"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "8cb08c7cf5d162a20158ee75b459a4402d4f4ce2a987072d5812a786b5799c47"
+    },
+    "bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/hardware/lowlevel_tcon/tcon_tv_reg.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "c517868e9447868d566115a815e9a7276c8bd9ac31c3de7d97899f3746ab7401"
+    },
+    "bsp/drivers/drm/sunxi_device/sunxi_edp.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_edp.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "ad3afaa0d5afed2f687a919c83532cb91b8d04f80b88d0d8dcf1e8a17cfa1b53"
+    },
+    "bsp/drivers/drm/sunxi_device/sunxi_edp.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_edp.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "3f7ddcac2d86426dd37cacc63a76a79aeea6b0686119b6e693d66d53c5adcf6f"
+    },
+    "bsp/drivers/drm/sunxi_device/sunxi_tcon.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_device/sunxi_tcon.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "436c0232891f0fdc9381dfc833031beda6ffaf9b4dba8bbc16e07591733f6f6b"
+    },
+    "bsp/drivers/drm/sunxi_drm_edp.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/drm/sunxi_drm_edp.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "9d0373c1135534d19dbd419331c6abd567a4768d90f9173f2f71f417e2e0fe4b"
+    },
+    "bsp/drivers/phy/sunxi-cadence-combophy.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/phy/sunxi-cadence-combophy.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "84b5471d3b7bbb2ae247b75459135dff0a1d40eef9a2bb994df14eb799b5c082"
+    },
+    "arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa"
+    }
+  },
+  "manual": "A733 User Manual V1.00 sections4.1(CCU),15.2(TV1),15.4(DP),18.2(SERDES); manual pin remains in sources.lock.json.",
+  "source_selection": "bsp/drivers/drm/Makefile selects trilinear_dp14.o with CONFIG_AW_DRM_TRILINEAR_EDP14. The A733 manual DP register offsets independently match the adapter. The cached A733 kernel build configuration enables this option; that configuration is a comparison input, not a runtime dependency.",
+  "boundary": "Four-lane DP-only C/E,1.62Gb/s,26MHz raw oscillator,720p60 RGB888,one retained DE1 RGB565 frame. AUX host rate is an independently qualified cold-profile fact, not inferred from the Linux hardcoded200MHz FIXME. Physical negotiation/link/output and independent drain remain unqualified.",
+  "license_notice": "The complete GPL-2.0 text is preserved in docs/typec-pd-GPL-2.0.txt; SPDX and original copyright notices remain in adapted source files."
+}

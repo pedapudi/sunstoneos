@@ -42,6 +42,8 @@ int a733_de_plan(const struct a733_tcon_lcd_timing *t,const struct a733_de_surfa
 }
 int a733_de_plan_tv0(const struct a733_de_surface *s,struct a733_de_plan *out)
 {return plan(1280,720,2,0x0a,s,out);}
+int a733_de_plan_tv1(const struct a733_de_surface *s,struct a733_de_plan *out)
+{return plan(1280,720,2,0x0a,s,out);}
 int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t deadline)
 {
     if (!d || !c || overlap(d, sizeof(*d), c, sizeof(*c)) || d->initialized || !deadline ||
@@ -49,7 +51,7 @@ int a733_de_init(struct a733_de *d, const struct a733_de_config *c, uint64_t dea
         !c->ops.barrier || !c->ops.now_us) return 0;
     struct a733_de_plan p;
     if(c->output==A733_DE_LCD1_XRGB8888){if(!a733_de_plan(&c->timing,&c->surface,&p))return 0;}
-    else if(c->output==A733_DE_TV0_RGB565){if(!a733_de_plan_tv0(&c->surface,&p))return 0;}
+    else if(c->output==A733_DE_TV0_RGB565||c->output==A733_DE_TV1_RGB565){if(!a733_de_plan_tv0(&c->surface,&p))return 0;}
     else return 0;
     memset(d, 0, sizeof(*d));
     d->config = *c; d->plan = p; d->deadline = deadline; d->initialized = 1;
@@ -127,6 +129,7 @@ static struct word write_word(const struct a733_de *d, unsigned i)
     struct word w = setup[i - IMAGE_WORDS];
     if (w.offset == 0x8148) w.value = d->plan.size;
     if(w.offset==0x8010&&d->config.output==A733_DE_TV0_RGB565)w.value=0x40;
+    if(w.offset==0x8010&&d->config.output==A733_DE_TV1_RGB565)w.value=0x50;
     return w;
 }
 /* DE352 RCQ: pinned de_base.h header encoding and sunxi_de.c aligned
@@ -156,7 +159,7 @@ int a733_de_replay_valid(const void *pages,uint64_t base,uint64_t f)
 int a733_de_replay_request(struct a733_de *d,unsigned slot,uint64_t f,uint64_t deadline)
 {
  if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||slot>1||
- (d->config.output!=A733_DE_LCD1_XRGB8888&&d->config.output!=A733_DE_TV0_RGB565)||
+ (d->config.output!=A733_DE_LCD1_XRGB8888&&d->config.output!=A733_DE_TV0_RGB565&&d->config.output!=A733_DE_TV1_RGB565)||
  !d->config.ops.rcq_submit||deadline<=d->last_now||
  !replay_shape(d->config.surface.device_address,f)||f<d->plan.padded_bytes||
  d->config.surface.mapped_bytes!=2*f+8192)return 0;
@@ -227,7 +230,7 @@ enum a733_de_state a733_de_poll(struct a733_de *d)
         if (++d->index < check_count) goto out;
         d->index = 0;
     } else if (step == 2) {
-        unsigned route=d->config.output==A733_DE_TV0_RGB565?4u:1u;
+        unsigned route=d->config.output==A733_DE_TV0_RGB565?4u:d->config.output==A733_DE_TV1_RGB565?5u:1u;
         if ((value & 0xf) == route || ((value >> 8) & 0xf) == route || ((value >> 12) & 0xf) == route ||
             (d->action != A733_DE_PREPARE && (value & 0xf0) != (route<<4))) {
             fail(d, A733_DE_INITIAL_STATE); goto out;
