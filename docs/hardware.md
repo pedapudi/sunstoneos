@@ -103,6 +103,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remote-writer exclusion, memory ownership/publication, physical reset/boot,
   media loading/writes or recovery. Standalone OS boot remains incomplete;
   packer licensing and exact source equivalence remain unresolved.
+- Always-on processors and mailboxes: **planned**, with source assessment only
+  for the internal E902 management core. The pinned A733 manual, sections
+  5.2.1–5.2.4, identifies its configuration block at `0x07032000`; the shipped
+  monitor corroborates that map. The [cold-entry assessment](cold-entry.md#remote-processor-exclusion-needs-the-effective-a733-register-map)
+  distinguishes those sources from conflicting U-Boot directory definitions.
+  Management firmware, shared memory, mailbox services and clock/power ownership
+  remain unresolved. Reuse suitable existing firmware/services where their
+  authority and provenance are established. Cold-start application admission
+  requires remote-writer exclusion; omitting SCP firmware or reversing observed
+  startup writes does not establish E902 shutdown or transaction drain. No native
+  management-core control or physical qualification is claimed. This inventory
+  does not require a separate general-purpose application runtime on E902.
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
@@ -1743,7 +1755,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
 | RTC and watchdog | Time retention, alarms, independent reset/recovery | Backup power population, clock source, reset-cause reporting |
 | Thermal and frequency control | Temperature, throttling, supported operating points | Calibration, power coordination, load measurements |
 | Crypto, random, identity and secure storage | Applicable hardware operations and trusted firmware interfaces | Confirm silicon features, ownership, immutable provisioning state |
-| Always-on processors and mailboxes | Existing firmware services, notifications, sleep/wake coordination | Identify firmware ownership before repurposing any processor |
+| Always-on processors and mailboxes | E902 management-core ownership, existing firmware/mailbox services and sleep/wake coordination | Resolve firmware/shared-resource ownership and cold-start remote-writer exclusion; no physical control or drain qualification |
 | Remaining SoC/board functions | Audit LEDs, buttons, infrared, Ethernet, debug and other blocks | Distinguish routed devices, internal functions, and unavailable pins |
 
 Missing peripherals block their physical qualification. Continue implementation

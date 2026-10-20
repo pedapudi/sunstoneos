@@ -17,8 +17,9 @@ pin control enable I2C; I2C then enables PMIC regulator control. This distinctio
 avoids a circular dependency between complete power management and its own bus.
 A working single-core runtime supports independent peripheral integration. Full
 multicore scheduling remains a separate completion requirement.
-Cold-start application entry also requires remote-writer exclusion, memory
-publication and application authority. A [guarded entry recorder](cold-entry.md)
+Cold-start application entry also requires remote-writer exclusion, including
+the [E902 management core](cold-entry.md#remote-processor-exclusion-needs-the-effective-a733-register-map),
+memory publication and application authority. A [guarded entry recorder](cold-entry.md)
 or packaged container alone does not establish those prerequisites.
 
 DMA controllers move data between memory and peripherals. The system IOMMU maps
@@ -95,7 +96,7 @@ plan based on those records; it is not a new claim of hardware qualification.
 | rtc-and-watchdog | RTC and watchdog | basic-clock-reset, single-core-runtime | RTC source, calendar, retention and alarms; watchdog configuration, expiry and reset cause. | RTC needs clock/backup evidence and interrupt restoration. Intentional watchdog expiry waits for a qualified reset destination. | rtc-application.md |
 | thermal-and-frequency-control | Thermal and frequency control | clocks-resets-regulators-power-domains, identity-calibration | Calibrated temperature measurement, throttling and coordinated operating points. | Establish calibration, voltage/frequency limits and temperature response before automatic policy. | thermal-application.md |
 | crypto-random-identity-and-secure-storage | Crypto, random, identity and secure storage | clocks-resets-regulators-power-domains, single-core-runtime, identity-calibration, security-entropy | Hardware crypto, random, identity and available secure-storage services. SHA/AES bring-up is independent of qualified entropy. | Respect secure-world ownership and irreversible provisioning; validate each exposed service. | crypto-application.md |
-| always-on-processors-and-mailboxes | Always-on processors and mailboxes | clocks-resets-regulators-power-domains, single-core-runtime | Existing firmware services, notifications and usable sleep/wake paths. | Identify processor, memory and firmware ownership before repurposing any resource. | hardware.md |
+| always-on-processors-and-mailboxes | Always-on processors and mailboxes | clocks-resets-regulators-power-domains, single-core-runtime | E902 management-core ownership, existing firmware/mailbox services and usable sleep/wake paths; no separate general-purpose E902 runtime is implied. | Resolve processor, memory and firmware ownership; cold entry requires remote-writer exclusion, with shutdown/drain semantics established independently of startup writes. | hardware.md |
 | remaining-soc-board-functions | Remaining SoC/board functions | pin-control-and-gpio, clocks-resets-regulators-power-domains | Audit LEDs, buttons, IR, Ethernet and debug functions; implement every usable routed function. | Resolve board revision and population; document evidence for inaccessible or unrouted interfaces. | board-wiring.md |
 | all-board-support | Complete board integration | @hardware | Integrate every inventory area into a usable OS with concurrent resource ownership, public APIs, repeatable boot, error handling and documented recovery. | Qualify all usable functions and required modes. Record unavailable connectors/accessories explicitly; passing one diagnostic per device is insufficient. | goal.md |
 | performance-tuning | CPU, GPU and NPU performance tuning | all-board-support | Optimize and measure actual workloads after complete hardware functionality; reuse valid measurements. | Set workload-specific targets and compare equivalent outputs without redundant benchmark cycles. | validation.md |
