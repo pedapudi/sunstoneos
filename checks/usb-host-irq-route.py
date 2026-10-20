@@ -19,6 +19,8 @@ CASES = ['route', 'enabled', 'pending', 'active', 'rwp', 'lpi', 'redistributor-r
          'wrong-affinity', 'wrong-el', 'expired', 'groups-enabled', 'nonhost',
          'ignored-priority', 'ignored-route', 'dispatch', 'dispatch-wrong-cpu',
          'dispatch-expired', 'dispatch-unexpected']
+ROUTES = {'route': 0, 'route-dual': 4, 'route-ss': 6, 'route-ss-hid': 8,
+          'route-companion-hid': 10, 'route-companion-msc': 12}
 
 
 def main():
@@ -26,7 +28,7 @@ def main():
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     # Additional workload selectors require capable images; keep legacy defaults.
-    p.add_argument('--case', action='append', choices=CASES+['route-dual', 'route-ss', 'route-ss-hid'])
+    p.add_argument('--case', action='append', choices=CASES+list(ROUTES.keys())[1:])
     args = p.parse_args()
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
     with args.image.open('rb') as f:
@@ -90,7 +92,7 @@ def main():
         expiry = 5 if case in ('expired', 'dispatch-expired') else 1000
         cpu.mem_write(syms['admission']+deadline, expiry.to_bytes(8, 'little'))
         cpu.mem_write(syms['diagnostic_deadline'], expiry.to_bytes(8, 'little'))
-        selected_workload = {'nonhost': 2, 'route-dual': 4, 'route-ss': 6, 'route-ss-hid': 8}.get(case, 0)
+        selected_workload = 2 if case == 'nonhost' else ROUTES.get(case, 0)
         cpu.mem_write(SESSION+workload, selected_workload.to_bytes(4, 'little'))
         def read(uc, access, address, size, value, unused):
             reads.append(address)
@@ -143,10 +145,10 @@ def main():
             assert cpu.reg_read(UC_ARM64_REG_PC) == STOP, 'Instruction budget exhausted'
             if case == 'dispatch':
                 assert calls == ['host-handler'] and not writes
-            elif case in ('route', 'route-dual', 'route-ss', 'route-ss-hid', 'ignored-priority', 'ignored-route'):
+            elif case in ROUTES or case in ('ignored-priority', 'ignored-route'):
                 assert [(a, v) for a, s, v in writes] == list(EXPECTED.items()), writes
                 assert [s for a, s, v in writes] == [4, 4, 4, 4, 8]
-                assert cpu.reg_read(UC_ARM64_REG_X0) == (case in ('route', 'route-dual', 'route-ss', 'route-ss-hid'))
+                assert cpu.reg_read(UC_ARM64_REG_X0) == (case in ROUTES)
             else:
                 assert not writes
                 assert cpu.reg_read(UC_ARM64_REG_X0) == (case == 'nonhost')
