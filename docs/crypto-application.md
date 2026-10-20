@@ -17,13 +17,13 @@ client call and retention attempt with its static pool mutex. The register
 callbacks use the board's actual common register lock and counter. USB and PMIC
 providers continue to run independently.
 
-The image adopts an already enabled CE400 clock state. It does not program
-clocks, assert reset or invent a drain operation. The coordinator's read-only
+Session versions 1 and 2 adopt an already enabled CE400 clock state.
+Version 3 provisions the fixed CE clocks from an independently admitted
+reset-held, gated state. No version asserts reset or treats reset as drain. The coordinator's read-only
 snapshot in `~/.cache/sunstoneos/evidence/crypto-clocks-20261018-082/session.json`
 observed module word `0x81000000`, bus/reset word `0x00030003` and CE MBUS gate
 bit 2 enabled. The existing CE driver checks those local controls, shared PLLs,
-output gates and the admitted fabric configuration on each operation. Cold
-clock provisioning remains separate work.
+output gates and the admitted fabric configuration on each operation. The cold initialization path is described below.
 
 The 824-byte immutable session extends the existing USB0-only supervised board
 session. Its complete digest covers the CE owner and authority, physical evidence
@@ -275,3 +275,48 @@ native target links without changing CPU startup, CE drivers, shared providers
 or entropy policy. No hardware operation or queue entry was created. CE execution,
 secure-bank access, independently resolved prior DMA and physical drain remain
 unqualified.
+
+
+## Fixed cold clock provisioning for caller requests
+
+Session version 3 preserves the 824-byte layout and the version-2 operation and
+response formats. It requires a complete authenticated SHA-256 or AES request
+before acquiring the CE token or constructing its memory. Existing diagnostic
+and inherited-clock caller sessions retain their original behavior.
+
+The [clock source manifest](../apps/crypto/clock-sources.json) pins the A733
+manual and effective kernel clock, reset and CE sources. The fixed provider
+runs on the FreeRTOS CPU. It uses the existing CE exclusive token and stable
+oscillator, normalized reference, PERI0 and fabric leases. It neither changes
+parent PLLs nor enables entropy features.
+
+Cold admission uses the existing image-bound clock evidence field. The record
+must establish `ce_local_reset_held_gated`,
+`ce_mbus_gate_off_critical_neighbors_on`,
+`ce_local_clock_reset_write_authorized` and `mbus_ce_gate_write_authorized`,
+alongside stable parents and exclusion of competing clock/reset writers.
+Both-world exclusion, independently resolved prior DMA, memory authority and
+permanent retention remain separate requirements. The existing ready-clock
+snapshot does not satisfy this cold admission.
+
+Under the board register mutex, the provider checks CE clock fields at CCU
+`0xac0` against mask `0x8700001f` with value zero, and local gates/resets at
+`0xac4` against mask `0x30003` with value zero. MBUS bit 2 must be clear, while
+neighboring gate bits selected by `0x40302` must already be set. Those bits are
+real neighboring gates, despite the kernel helper's key naming. Every write
+preserves them and every other field outside the CE mask.
+
+The provider selects PERI0-400 with divider one while the module gate is off.
+It then releases CE and SYS reset, enables the CE bus gate, module gate, MBUS
+bit 2 and SYS gate in the pinned CE initialization order. Each write has full
+readback, authority and deadline checks. Final local state must match CE400
+before the existing memory session and SHA/AES clients are constructed. The
+ordinary operation writer continues to refuse CCU writes; a separate native
+adapter admits only these fixed monotonic transitions.
+
+An ambiguous initial state, lost authority, expiry or uncertain write ends the
+one attempt. The provider retains its token and any acquired register ownership;
+it performs no rollback, reset or release. Successful initialization also keeps
+all clock ownership reserved for the existing retained application lifecycle.
+Software readback establishes configuration consistency, not physical frequency,
+security permission, electrical timing or resolved predecessor DMA.
