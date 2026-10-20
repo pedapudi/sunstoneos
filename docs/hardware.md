@@ -724,29 +724,33 @@ implementation is **planned**. Partial results apply only to the stated scope:
   backing, builds two hardware render-target records and publishes graphics
   before compute and power activation. Source comparisons and native preparation,
   capacity-refusal and deadline cases pass; six affected central targets link.
-  The [fixed render service](gpu-render.md) submits compiled programs through
-  paired geometry/fragment queues and copies output only after timeline, pixel
-  and guard validation. Source comparisons and four native submission/failure
-  cases pass. Six affected central targets link with the render implementation.
-  The [indexed-texture application](gpu-render.md#indexed-textured-frames) now
-  accepts copied float4 positions, float2 UVs, uint16 triangle indices and RGBA8
-  textures. Trusted resident shaders use nearest/clamp sampling at LOD0 without
-  perspective, depth/stencil or blending. Texture and output dimensions reach
-  1920-by-1080; framebuffer size remains fixed for the session. Complete
-  validated drafts and both prior timelines precede submission; invalid drafts
-  preserve the prior output. Guarded snapshots stream through copied slots, released
-  only after final USB transfer completion. Replacement and CLOSE refuse borrowed
-  slots. Compiler/reference, native service, refusal and linked USB/host checks pass.
-  GPU/firmware effects and architectural admission are modeled; linked application
-  checks also model service replies and endpoint hardware. Root verifies 220 inputs
-  and 88 objects against revision `916aea2`, with no compiled-source delta, under
-  `gpu-textured-render-20261019/root-integration.json`. The exact-image static layout
-  review is `root-layout-final.json`; it establishes no startup execution.
-  Physical arithmetic, cache visibility, completion and confinement remain
-  unqualified. Arbitrary shaders, perspective, depth/stencil, blending, other
-  index/topology and texture modes, multisampling, display presentation and context
-  disposal remain required. The repeated 64-by-64 triangle-color profile retains
-  its separate image and evidence under `gpu-repeated-draw-20261019/`.
+  The [retained depth/blend profile](gpu-render.md#depth-testing-and-source-over-blending)
+  extends copied indexed textures through 1080p with fixed trusted shaders.
+  Per-frame state selects depth OFF/LESS/LEQUAL/ALWAYS, optional writes while depth is enabled, and
+  straight-alpha source-over blending. State is revalidated before replacing input
+  or revoking copied output. Depth is cleared per frame; its extra mapping brings
+  the maximum plan to sixteen mappings and 27 GPU table pages. Guarded framebuffer
+  snapshots retain their download slots until full USB completion; replacement
+  and CLOSE refuse borrowed slots.
+  The shared render worker now submits geometry plus partial-fragment FRAG_PR
+  (type 204), then standalone final FRAG (type 203). Frame n uses geometry
+  completion n, intermediate fragment 2n−1 and final fragment 2n. The partial
+  fragment carries no cleanup reference; the final carries one. Both rings remain
+  owned through the tail, and only acquired geometry/final-fragment completion
+  admits output or reuse. Uncertain final submission retains both owners.
+  Compiler/reference, actual VM/service and affected application checks pass with
+  GPU/firmware effects modeled; linked application checks also model service
+  replies and USB effects. A separate legacy-profile-2 sequence check passes.
+  Root verifies 220 inputs and 88 objects for unchanged ELF `d9a6fcfe…` at
+  `17fa005` under `gpu-depth-blend-20261019/root-integration.json`; the sole source
+  delta is a verified declaration newline. `root/layout-review.json` preserves
+  static session/layout scope without startup execution. Full-speed TinyUSB reuse
+  is source/object-bound; older single-final-fragment ownership evidence remains
+  historical and is superseded for the corrected shared rendering sequence.
+  Compute queues retain their separate behavior. Physical graphics, cache visibility,
+  confinement and recovery remain unqualified. Stencil, perspective, arbitrary
+  shaders, general blend equations, per-list state batches, multisampling, wider
+  texture modes, display presentation and context disposal remain required.
   The [native GPU application](gpu-application.md) connects real firmware,
   providers, IRQ routing, fixed rendering and copied USB output. Its central
   image links; focused checks verify retention when isolation is unavailable

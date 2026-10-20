@@ -107,7 +107,7 @@ functions and modes beyond these bounded applications.
 | [NPU SH/NT graph](npu-relative-shift.md) | Fixed FP32 four-head/128-step relative shift, external pool cleared before each job, chunked copied input/output and healthy CLOSE. Two reused-network SDK outputs match FP32 bits; native replies/IRQ/cache/transport are modeled. No unchanged-encoder acceleration. | `npu-relative-shift-20261019/root-integration.json` |
 | [Complete NPU NN graph](npu-complete-nn.md) | Published 125-operation ShuffleNetV2 graph with coefficients/pool; two copied jobs and CLOSE. Both SDK input patterns saturate to `[0,255]`, with undocumented classes: no input-sensitive accuracy, physical inference or mimus acceleration claim. | `npu-complete-nn-20261019/root-integration.json` |
 | [GPU programs/live input](gpu-compiled-programs.md) | Trusted sealed program, same-shape copied input, exact-sequence READ and CLOSE. Separate multi-dispatch and true 1D/2D grid profiles admit up to 31 workgroups/992 elements with 32 lanes. Numerical execution and device-cache visibility remain modeled/unqualified. | `gpu-dispatch-geometry-20261019/`; `gpu-workgroup-grid-20261019/root-integration.json`; `gpu-runtime-input-20261019/dma-header-integration/root-integration.json` |
-| [GPU indexed textures/repeated drawing](gpu-render.md) | Caller float4 positions/float2 UV, uint16 triangle indices and RGBA8 texture/output through 1080p; trusted nearest/clamp/LOD0 shaders. Guarded copied snapshots retain download credit until complete USB delivery. GPU effects are modeled; linked app also models service replies. Physical graphics/confinement, arbitrary shaders, perspective/depth/blend, wider modes, display presentation and disposal remain required. Separate 64×64 triangle profile retained. | `gpu-textured-render-20261019/root-integration.json`, `root-layout-final.json`; `gpu-repeated-draw-20261019/root-integration.json` |
+| [GPU indexed textures/depth/blend](gpu-render.md#depth-testing-and-source-over-blending) | Through 1080p with trusted shaders; per-frame depth OFF/LESS/LEQUAL/ALWAYS plus writes and straight-alpha source-over. Shared GEOM+FRAG_PR then final FRAG retains both rings through final completion. Old single-final-fragment ownership results are historical; legacy-profile-2 sequencing is separately checked. GPU/firmware and selected app/USB boundaries are modeled. Physical graphics, stencil/perspective, arbitrary shaders/blends, wider modes, presentation and disposal remain required. | `gpu-depth-blend-20261019/root-integration.json`, `closure.json`, `root/layout-review.json`, `reuse.json` |
 | [GPU returning application](gpu-application.md), [NPU returning application](npu-application.md) | Workers stop and PMIC parks before cleanup. Reviewed Nonsecure publication and matched host restoration are preserved separately from retained live-input profiles. Physical inference and ROM return remain unqualified; critical frozen scopes are below. | `gpu-returning-repeat-fix-20261019/root-review.json`; `gpu-returning-host-20261019/root-host-source-review.json`; `npu-finite-return-20261018/frozen/`; `npu-finite-host-20261018/root-host-source-review.json` |
 
 ## Blockers and image-specific evidence boundaries
@@ -144,6 +144,10 @@ functions and modes beyond these bounded applications.
   `gpu-returning-host-20261019/` within their publication/host scopes. GPU-cache
   ordering still depends on the pinned firmware's per-job contract; CPU cache
   maintenance alone does not establish device-cache visibility.
+  Corrected shared rendering uses FRAG_PR (204) at 2n−1, then final FRAG (203)
+  at 2n; geometry completion n and final fragment 2n gate output/reuse. Older
+  single-final-fragment ownership cases are superseded. Compute evidence retains
+  its separate scope.
 - **NPU returns:** preserve `npu-finite-quiescence-20261018/integration.json`,
   `npu-supply-returning-20261018/integration.json` and
   `npu-finite-host-20261018/transport-frozen/`. SRE tasks run at EL1t; cached SMP
@@ -167,10 +171,13 @@ functions and modes beyond these bounded applications.
 
 Current implementation owners are finishing these offline changes:
 
-- Video encoding: research-only proposal for a native path, preferably caller
-  YUV420→JPEG, using cached A733 authority.
-- GPU: depth/blend implementation is active; physical graphics remains
-  unqualified.
+- Video encoding: source-trace research for a native path, preferably caller
+  YUV420→JPEG, using cached A733 authority; no implementation claim.
+- USB MSC: GET_MAX_LUN EP0 stall recovery is assigned to the UART worker.
+- Inbound TCP: listen/accept integration is assigned to the I2S worker.
+
+The primary agent owns CPU work and integration. Recovery and hardware access
+remain unavailable.
 
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and
