@@ -5,7 +5,8 @@ The FreeRTOS encoder application implements one retained VGA job: caller-supplie
 most 1 MiB. Its linked native path and focused host models pass. Physical encoding,
 JPEG numerical correctness, device burst confinement and memory visibility
 remain unqualified. Other dimensions, formats, qualities, repeated capture and
-H.264/H.265 encoding remain required hardware scope.
+broader H.264/H.265 encoding remain required hardware scope. A retained VGA
+IDR/P mode is implemented in the [native H.264 encoder](h264-encode-native.md).
 
 ## Encoder authority comes from the encoder resource
 

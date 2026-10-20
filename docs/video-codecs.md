@@ -9,7 +9,9 @@ output. Its central image links and focused software checks pass. Physical
 decoding, memory confinement, completion and numerical conformance remain
 unqualified. The [native JPEG encoder](jpeg-encode-native.md) now implements a
 one-job VGA NV12/quality75 path with authenticated upload and retained copied
-JPEG output. Its focused models pass; physical encoding remains unqualified.
+JPEG output. The [native H.264 encoder](h264-encode-native.md) implements a retained
+two-picture VGA NV12 Baseline IDR/P job with caller upload and indexed copied
+AnnexB output. Focused models pass; physical encoding remains unqualified.
 
 This document is for engineers implementing FreeRTOS device drivers. A video
 engine (VE) contains several codec register groups. An IOMMU master identifies a
@@ -231,7 +233,7 @@ are capability claims, not SunstoneOS qualification results.
 | Direction and family | Advertised profile or limit | Runtime reference and native status |
 | --- | --- | --- |
 | JPEG encode | Baseline, 64-megapixel snapshots, 4K at 15 fps; 4:2:0/4:2:2/4:4:4, grayscale | Native one-job VGA NV12/quality75; modeled path tested, physical unqualified |
-| H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Encoder libraries present; native unsupported; manual's level/resolution combination needs clarification |
+| H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Bounded native VGA Baseline IDR/P path modeled; broader profiles/rates/resolutions remain required; manual's level/resolution combination needs clarification |
 | H.265 encode | Main, level 5 Main Tier, 4K at 30 fps | Encoder libraries present; native unsupported |
 | MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | First narrow JPEG profile implemented; physical execution unqualified |
 | H.265 decode | Main/Main10, level 5.2, 8192 by 4352 at 24 fps | `libawh265.so`; native unsupported |

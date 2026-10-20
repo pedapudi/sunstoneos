@@ -46,3 +46,32 @@ const struct a733_jpeg_encode_ops *a733_encode_platform_jpeg_ops(void);
 int a733_encode_native_read(void *,uintptr_t,uint32_t *);
 int a733_encode_native_write(void *,uintptr_t,uint32_t);
 #endif
+
+/* Separate H264 job bridge; the JPEG platform layout and callback ABI above
+ * remain unchanged. Only resource coordination is shared. No job casts. */
+#ifndef SUNSTONE_A733_H264_ENCODE_PLATFORM_H
+#define SUNSTONE_A733_H264_ENCODE_PLATFORM_H
+#include "a733_video_h264_encode.h"
+struct a733_h264_encode_platform_ops {
+ int (*now_us)(void *,uint64_t *);
+ int (*admit)(void *,const struct a733_encode_platform_config *,const struct a733_h264_encode_job *,uint64_t,uint64_t *);
+ int (*memory)(void *,uint64_t,const struct a733_h264_encode_job *,uint64_t);
+ int (*prime)(void *,uint64_t,unsigned,size_t,uint64_t);
+ int (*copied)(void *,uint64_t,unsigned,size_t,size_t,uint64_t);
+ int (*enter)(void *,uint64_t);
+ int (*leave)(void *);
+ int (*read)(void *,uintptr_t,uint32_t *);
+ int (*write)(void *,uintptr_t,uint32_t);
+};
+struct a733_h264_encode_platform {
+ struct a733_encode_platform common;
+ struct a733_h264_encode_platform_ops ops;
+ struct a733_h264_encode_job job;
+ void *cookie;
+ unsigned bound;
+};
+int a733_h264_encode_platform_init(struct a733_h264_encode_platform *,
+ const struct a733_encode_platform_config *,const struct a733_h264_encode_platform_ops *,void *);
+const struct a733_h264_encode_ops *a733_encode_platform_h264_ops(void);
+int a733_encode_h264_native_write(void *,uintptr_t,uint32_t);
+#endif

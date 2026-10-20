@@ -1,0 +1,53 @@
+{
+  "schema": "a733-h264-encode-references-v1",
+  "runtime": "Native FreeRTOS two-picture H264 controller and retained encoder providers; no foreign library linked or loaded natively.",
+  "authority": "Pinned effective A733 library instructions establish register behavior; old open-source encoder headers corroborate only their older chip. Full A733 codec implementation source is unavailable in the assessed package.",
+  "reference_pins": {
+    "video_enc_reg.h": {
+      "url": "https://raw.githubusercontent.com/allwinner-zh/media-codec/a912bbe300d522e199001bd903bab22e54eff37b/sunxi-cedarx/SOURCE/vencoder/include/video_enc_reg.h",
+      "revision": "a912bbe300d522e199001bd903bab22e54eff37b",
+      "sha256": "8f01655d5aa83860be70762a8b28785f876c64b2a7824bdacde43ec4e2a26f67"
+    },
+    "venc_device.c": {
+      "url": "https://raw.githubusercontent.com/allwinner-zh/media-codec/a912bbe300d522e199001bd903bab22e54eff37b/sunxi-cedarx/SOURCE/vencoder/venc_device.c",
+      "revision": "a912bbe300d522e199001bd903bab22e54eff37b",
+      "sha256": "4e867edf656d07ca0cfb586612e30be587c0bed22220f27f6ea9c1682622a518"
+    },
+    "EncAdapter.c": {
+      "url": "https://raw.githubusercontent.com/allwinner-zh/media-codec/a912bbe300d522e199001bd903bab22e54eff37b/sunxi-cedarx/SOURCE/vencoder/EncAdapter.c",
+      "revision": "a912bbe300d522e199001bd903bab22e54eff37b",
+      "sha256": "ac4163129ef8970e99b0c980d5cdc0aa1d0391cb95b23060b3018272dcfc8275"
+    },
+    "vencoder.h": {
+      "url": "https://raw.githubusercontent.com/allwinner-zh/media-codec/a912bbe300d522e199001bd903bab22e54eff37b/sunxi-cedarx/SOURCE/vencoder/include/vencoder.h",
+      "revision": "a912bbe300d522e199001bd903bab22e54eff37b",
+      "sha256": "62be1ba1678d581c8995fb2712e615dd67567ffee9972f634a06f2b7c4bb1bd1"
+    }
+  },
+  "libraries": {
+    "libvenc_codec.so": "b39fcc6e9c0b7deb58cfd4263c93825135c662fcc770b869d78caa5af91097cb",
+    "libvenc_base.so": "5282b1cd4f69014bb11b3dba9e13daa734de2407c39f4dec3566b7af534b599d",
+    "libVE.so": "3af49a5eb24f6832518a858274fb206d60e490985bff02f5d5be36d053f65be4",
+    "libcdc_base.so": "2d1c8b9a0be3c75445290f749e877c9baeb54657d9d8acad92216baae51f507f"
+  },
+  "notices": [
+    "Cached board vencoder.h: Copyright (c) 2008-2016 Allwinner Technology Co. Ltd. All rights reserved.",
+    "this software is based in part on the work of the Independent JPEG Group",
+    "Cached older video_enc_reg.h retains its LGPL-2.1 notice. No code from that header is linked into this native path."
+  ],
+  "format_data": "Fixed Baseline level31/CAVLC/QP26 VGA SPS/PPS/slice header data and controls verified against actual H264InitSPS/PPS/EncSliceHeader/h264EncFrame instructions. P header remainder uses the real six-bit command and ready precondition. Ring cursor derives from actual prior output; reconstruction and auxiliary buffers remain opaque.",
+  "host_only": [
+    "Unicorn for isolated AArch64 reference/native instruction checks",
+    "pyelftools for actual ELF geometry and identities",
+    "FFmpeg for nonconstant VGA NV12 fixture production"
+  ],
+  "qualification": "Native instruction models inject entropy/completion only. Physical H264 arithmetic, reconstruction contents, bursts, visibility, completion timing and drain remain unqualified.",
+  "additional_authority": {
+    "CdcIonGetMemType": "libcdc_base.so function0x5900..0x5918 returns constant1; host reference stub only."
+  },
+  "package": {
+    "url": "https://github.com/radxa/allwinner-debian/blob/7f592b79a85cb7b5ef86dabaf2016013b85a8d4d/packages/arm64/libcedarc/libcedarc-dev_2.0.0_arm64.deb",
+    "sha256": "ea2c62123466e233e5f358fffac10499a5ae3886d9fe340532907bba6f2f6d4e",
+    "execution": "Offline instruction reference only; extracted without package scripts. No opaque library linked or loaded by native firmware."
+  }
+}
