@@ -167,6 +167,10 @@ Prevent recurring fixture failures at setup:
   ELF symbols by object/function type when locating retained data. Match MMIO
   access widths to the instructions; an eight-byte fixture read can combine
   two independent four-byte hardware registers.
+  Before modeling task execution, enumerate the selected port's actual yield,
+  delay and suspend sites; a yield may be an inline SVC rather than a function
+  call. Save CPU, RAM, task and scheduler state on every execution-budget or
+  failure stop so unfinished work can resume without repeating initialization.
 - Use the configured tool paths and Python environment from accepted evidence.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.
