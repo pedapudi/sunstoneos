@@ -17,9 +17,11 @@ assert len(contract) in (224,4096) and not any(contract[224:])
 contract=contract[:224]
 assert len(contract)==224 and len(session)==656 and struct.unpack_from('<3Q',session)==(0x4153373348444131,1,656)
 spec=importlib.util.spec_from_file_location('hdmi_audio_irq_image',R/'checks/storage-read-native.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n);e=n.Image(P,layout_names=('a733_smp_contract',))
-# The producer leaves timestamps for the SRAM launcher. Supply that arming
-# step explicitly while this fixture models boot at counter 200.
+# The producer leaves magic/timestamps for the SRAM launcher. Supply that
+# arming step once; native model continuations reuse the saved exact contract.
 contract=bytearray(contract)
+assert struct.unpack_from('<Q',contract,e.layouts['a733_smp_contract']['magic'])[0]==0
+struct.pack_into('<Q',contract,e.layouts['a733_smp_contract']['magic'],0x4153373348444331)
 for field,value in dict(armed_at=100,startup_deadline=24000100,diagnostic_deadline=480000100,expires_at=480000100).items():
  assert struct.unpack_from('<Q',contract,e.layouts['a733_smp_contract'][field])[0]==0, field
  struct.pack_into('<Q',contract,e.layouts['a733_smp_contract'][field],value)
