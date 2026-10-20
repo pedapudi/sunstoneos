@@ -81,6 +81,28 @@ admission records cannot supply those facts for a cold boot. Media loading,
 package authentication, DDR training, full boot0 initialization, sustained
 FreeRTOS operation and recovery remain outside this evidence.
 
+## The parser cleans CPU caches before returning
+
+The pinned boot0 parser enables the data cache through `0x49066` before copying
+package items. Its successful return calls `0x49074`, which runs the set/way
+clean-and-invalidate loop at `0x47b80` before clearing the data-cache enable bit.
+The loop reads cache levels and geometry, skips instruction-only levels, restores
+the cache selector to zero and executes `DSB ST` followed by `ISB`. The separate
+main-tail cleanup described above occurs later.
+
+[The cache-wrapper check](../checks/cold-boot-cache.py) executes both actual
+wrappers, including their Thumb-to-Arm transition. One synthetic cache hierarchy
+produces all twenty expected set/way operations before the barrier and cache
+disable. System registers, cache effects and the delay remain modeled. The
+earlier parser check substituted these wrappers; its unchanged header-mutation
+and handoff results retain their original scope.
+
+Evidence is under `~/.cache/sunstoneos/evidence/cold-boot-cache-20261020/`.
+This establishes the pinned instruction sequence, not physical publication.
+Physical cache geometry, security domains, system-cache coverage and completion
+of prior DMA still need separate authority. No bootloader or monitor was changed,
+and no additional boot image was built.
+
 ## Remote-processor exclusion needs the effective A733 register map
 
 The A733 manual identifies an E902 configuration block at `0x07032000`
