@@ -135,6 +135,10 @@ int a733_iommu_init_decoder(struct a733_iommu *,const struct a733_iommu_ops *,
 /* Fixed display profile: translate/access master8 only, READ-only spans.
  * Same global initial isolation and retained manual-power-removal contract as
  * the decoder profile. No table changes, master sharing or release. */
+/* Fixed encoder profile translates/accesses master3 only. Same all-master
+ * initial exclusion/drain and permanent retention as decoder; no reuse. */
+int a733_iommu_init_encoder(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 int a733_iommu_init_display(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
 int a733_iommu_open(struct a733_iommu *, uint64_t deadline_us);

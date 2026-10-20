@@ -7,7 +7,9 @@ The [native JPEG application](jpeg-application.md) integrates the executor with
 clock/reset providers, decoder IOMMU mappings, guarded buffers and copied USB
 output. Its central image links and focused software checks pass. Physical
 decoding, memory confinement, completion and numerical conformance remain
-unqualified.
+unqualified. The [native JPEG encoder](jpeg-encode-native.md) now implements a
+one-job VGA NV12/quality75 path with authenticated upload and retained copied
+JPEG output. Its focused models pass; physical encoding remains unqualified.
 
 This document is for engineers implementing FreeRTOS device drivers. A video
 engine (VE) contains several codec register groups. An IOMMU master identifies a
@@ -97,7 +99,7 @@ MPEG group. A separate JPEG group exists at `0xe00`, and the package includes
 `libawmjpegplus.so`; that layout is not the selected profile. The shipped header's
 numeric group labels disagree with the binary's split-map top-level entries.
 The routing check executes the binary dispatch with a decoder context and uses
-its returned addresses. A zero decoder-context flag selects encoder top at
+its returned addresses. The decoder0/encoder1 creator flags select encoder top at
 `0x800`, so that flag is part of the checked reference setup.
 
 ## The first native profile accepts bounded baseline JPEG
@@ -228,7 +230,7 @@ are capability claims, not SunstoneOS qualification results.
 
 | Direction and family | Advertised profile or limit | Runtime reference and native status |
 | --- | --- | --- |
-| JPEG encode | Baseline, 64-megapixel snapshots, 4K at 15 fps; 4:2:0/4:2:2/4:4:4, grayscale | Encoder libraries present; native unsupported |
+| JPEG encode | Baseline, 64-megapixel snapshots, 4K at 15 fps; 4:2:0/4:2:2/4:4:4, grayscale | Native one-job VGA NV12/quality75; modeled path tested, physical unqualified |
 | H.264 encode | Baseline/Main/High, level 4.2, up to 4K at 30 fps | Encoder libraries present; native unsupported; manual's level/resolution combination needs clarification |
 | H.265 encode | Main, level 5 Main Tier, 4K at 30 fps | Encoder libraries present; native unsupported |
 | MJPEG decode | Up to 16384 by 16384; 1080p at 60 fps | First narrow JPEG profile implemented; physical execution unqualified |
