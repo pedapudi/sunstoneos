@@ -5,10 +5,10 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-def produce(image,out):
+def produce(image,out,interrupt=False):
  out.mkdir(parents=True,exist_ok=False);prep=module('spi_fixture_prepare',ROOT/'apps/spi/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
- raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(240));struct.pack_into('<6Q',raw,592,0x4153373353504131,1,832,23,91,5000000)
+ raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(240));struct.pack_into('<6Q',raw,592,0x4153373353504131,2 if interrupt else 1,832,23,91,5000000)
  # Same enabled fabric profile as accepted shared-provider fixtures.
  struct.pack_into('<6I',raw,488,0,0x83000002,0x84000001,24000000,200000000,200000000)
  raw[768:780]=bytes([15,0,0]*4);raw[780:792]=bytes([5,0,0]*4)

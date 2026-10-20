@@ -112,7 +112,9 @@ transactions. Qualification needs a connected peer, all supported wire formats,
 error recovery, shared-pin conflicts and concurrent workloads. Boot storage must
 remain protected.
 
-DMA, interrupt-driven scheduling, calibrated high rates, slave operation,
+The [supervised SPI3 application](spi-application.md) also implements deferred
+interrupt completion for one FIFO-sized WRITE_READ request; polling remains
+available. Broader interrupt-driven scheduling, DMA, calibrated high rates, slave operation,
 dual/quad transfers, three-wire and bit-aligned transfers, SPI1 DBI operation,
 power transitions and applicable flash protocols remain required. The separate
 SPIF controller is outside this driver's register aperture and remains in scope
