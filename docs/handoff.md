@@ -214,6 +214,14 @@ platform/clock-registry sanitizer cases pass under
 `dma-clock-reference-20261020/frozen/manifest.json`; no native image or physical
 DMA qualification is added. The overall goal remains incomplete.
 
+LRADC0 integration is under validation in the existing ADC application. Its
+driver and targeted GPADC mutex-denial checks pass; the native sampler still
+needs the corrected ordinary-SMP USB fixture. Interrupt guards and SRAM launcher
+checks retain their separate scopes. Physical sampling also needs an electrical
+determination for the board's 1.8 V pull-up and documented converter range.
+DMA1 remains at source audit: the CPUX request table does not establish the
+CPUS controller's DRAM request encoding. No DMA1 descriptor or launch is enabled.
+
 The [provider clock record](provider-clock-reference.md) covers normalized REF24
 admission in TWI11/USB2/radio/CE/I2S/PWM. [SPI](spi-platform.md) has separate
 parent checks. Raw S_TWI1, LED source 0 and S_SPI source 0 retain their recorded
