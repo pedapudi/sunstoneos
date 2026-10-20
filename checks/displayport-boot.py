@@ -15,7 +15,14 @@ session=a.session.read_bytes();contract=a.contract.read_bytes()
 assert len(contract) in (288,4096) and not any(contract[288:])
 contract=contract[:288]
 assert len(contract)==288 and len(session)==952 and struct.unpack_from('<2Q',session,592)==(0x4153373344504131,1)
-spec=importlib.util.spec_from_file_location('displayport_irq_image',R/'checks/storage-read-native.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n);e=n.Image(P,layout_names=())
+spec=importlib.util.spec_from_file_location('displayport_irq_image',R/'checks/storage-read-native.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n);e=n.Image(P,layout_names=('a733_smp_contract',))
+# The producer leaves timestamps for the SRAM launcher. Supply that arming
+# step explicitly while this fixture models boot at counter 200.
+contract=bytearray(contract)
+for field,value in dict(armed_at=100,startup_deadline=24000100,diagnostic_deadline=480000100,expires_at=480000100).items():
+ struct.pack_into('<Q',contract,e.layouts['a733_smp_contract'][field],value)
+contract=bytes(contract)
+(O/'contract.bin').write_bytes(contract)
 ops={}
 for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(P)],text=True).splitlines():
  m=re.match(r'^\s*([0-9a-f]+):\s+mrs\s+x(\d+),\s*(CurrentEL|MPIDR_EL1|SCTLR_EL3|CNTPCT_EL0)\s*$',line,re.I)
