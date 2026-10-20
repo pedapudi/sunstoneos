@@ -86,7 +86,8 @@ def session_check(raw,pcm):
     require(any(raw[472:504]) and any(raw[504:536]),'HDMI audio memory/electrical records absent.')
     controller,evidence,established,owned,service=struct.unpack_from('<2QI2H',raw,632)
     require(controller==0x04601000 and evidence and established==0x5f and service==1 and
-        owned&1 and struct.unpack_from('<Q',raw,616)[0]==0,
+        owned==0xffff and evidence==struct.unpack_from('<Q',raw,608)[0] and
+        struct.unpack_from('<I',raw,584)[0]&1 and struct.unpack_from('<Q',raw,616)[0]==0,
         'HDMI audio requires the immutable supervised DMA0 handoff.')
     return dict(epoch=epoch,generation=generation,lease=lease,supervisor=supervisor,
         authority=authority,frames=frames,source_bytes=len(pcm))
