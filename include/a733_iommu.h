@@ -139,6 +139,11 @@ int a733_iommu_init_decoder(struct a733_iommu *,const struct a733_iommu_ops *,
  * initial exclusion/drain and permanent retention as decoder; no reuse. */
 int a733_iommu_init_encoder(struct a733_iommu *,const struct a733_iommu_ops *,
     void *,const struct a733_iommu_tables *);
+/* Recorded Bayer ISP0 profile: translate/access CSI master1 and ISP master2.
+ * Initial global exclusion/drain and manual-power-removal retention remain
+ * mandatory. No additional master admission, table mutation or reuse. */
+int a733_iommu_init_isp0(struct a733_iommu *,const struct a733_iommu_ops *,
+    void *,const struct a733_iommu_tables *);
 /* Fixed G2D profile translates/accesses master10 only. Global initial
  * exclusion/drain and retained recovery contract match the encoder profile. */
 int a733_iommu_init_g2d(struct a733_iommu *,const struct a733_iommu_ops *,

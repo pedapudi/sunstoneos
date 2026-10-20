@@ -189,6 +189,13 @@ int a733_iommu_init_encoder(struct a733_iommu *s,const struct a733_iommu_ops *op
     if(r==1){s->translated_masters=0x8;s->accessible_masters=0x8;}
     return r;
 }
+int a733_iommu_init_isp0(struct a733_iommu *s,const struct a733_iommu_ops *ops,
+    void *ctx,const struct a733_iommu_tables *tables)
+{
+    int r=a733_iommu_init(s,ops,ctx,tables);
+    if(r==1){s->translated_masters=6;s->accessible_masters=6;s->camera_supervised=1;}
+    return r;
+}
 int a733_iommu_init_g2d(struct a733_iommu *s,const struct a733_iommu_ops *ops,
     void *ctx,const struct a733_iommu_tables *tables)
 {

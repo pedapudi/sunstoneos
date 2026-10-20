@@ -1,0 +1,74 @@
+{
+  "repository": "https://github.com/orangepi-xunlong/linux-orangepi",
+  "license": "GPL-2.0-only for adapted camera implementation; retain each original notice",
+  "execution": "CPU FreeRTOS native driver and ISP0 hardware; Linux source is reference only",
+  "opaque_runtime_artifacts": false,
+  "files": [
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/isp0-assessment-20261020/isp_default_tbl.h",
+      "sha256": "9d501d6d2dd49c7f3920e9c28d2f143b58d15db90d73f80ff6975f2c3b7df7d5",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp_default_tbl.h"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/isp0-assessment-20261020/vin_os.c",
+      "sha256": "f9e75497b8302a671e0b2519cb1309bfb0e2d10fc2635b82b4558f8dae75c6e3",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/utility/vin_os.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/sunxi_isp.c",
+      "sha256": "83bcba85e5e842e9be61ee071007cc8e6456b21a2a75060c905f1438ee194b18",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/sunxi_isp.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.c",
+      "sha256": "74eb4366372f641a84a71363a1edcfc5afdfeb01da7db27fa26ff75a142faa3b",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg.h",
+      "sha256": "4b31b9c7fa9274333100ab6cb23814a9360df181eccdbefd5f879446b809d42c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg.h"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h",
+      "sha256": "d4701f18876b50d3fd4f87fe05119ffb751568eeac06a31eb83876141fb7fe4a",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-isp/isp600/isp600_reg_cfg.h"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/top_reg.c",
+      "sha256": "810e2b59b85096e1a25ec29bea636a9c7b93b727033707f8b3e43d57e963511b",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/top_reg_i.h",
+      "sha256": "a596f73382656b8814089480f609b76d622c80f6f426a30334b94ca7f35c72cb",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/top_reg_i.h"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-video/vin_video.c",
+      "sha256": "70aeac0132e022b798b5f682b30cbaf1f23b14d6c8d5ca25ab1a9f9262ad3c0c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/vin_video.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/camera/bsp/drivers/vin/vin-video/vin_core.c",
+      "sha256": "d6813559eb16f3e1d66e09a8c8fedffa5f8c4f3c732cf82d56b9c01e339ca211",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-video/vin_core.c"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/board-kernel/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa"
+    },
+    {
+      "path": "/home/sunil/.cache/sunstoneos/sources/radio/build/external/config/kernel/linux-sun60iw2-current-a733.config",
+      "sha256": "ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc"
+    }
+  ],
+  "effective_defines": {
+    "ISP_600": 1,
+    "CONFIG_ARCH_SUN60IW2": 1,
+    "ISP_LOAD_REG_SIZE": 4096,
+    "IS_ENABLED(x)": "x"
+  },
+  "kernel_revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+  "configuration_note": "The separately cached selected Linux configuration is identified by its own file SHA256; it is not claimed to belong to the kernel source revision."
+}
