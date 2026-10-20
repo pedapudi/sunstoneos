@@ -31,8 +31,9 @@ int gpu_display_session_valid(const struct gpu_display_session *s)
 {
     if(!s || s->magic!=GPU_DISPLAY_SESSION_MAGIC || s->version!=1 ||
        s->bytes<sizeof(*s) || s->bytes>GPU_DISPLAY_ENVELOPE_LIMIT ||
-       s->inputs_bytes!=s->bytes-offsetof(struct gpu_display_session,inputs) ||
-       s->inputs_bytes!=s->inputs.bytes || !hdmi_session_valid(&s->hdmi) ||
+       !s->memory_authority ||
+       s->inputs.bytes!=s->bytes-offsetof(struct gpu_display_session,inputs) ||
+       !hdmi_session_valid(&s->hdmi) ||
        s->hdmi.pck_client==7 || (s->hdmi.owner>=9&&s->hdmi.owner<=11) ||
        (s->hdmi.pmic.owner>=9&&s->hdmi.pmic.owner<=11) ||
        !present(s->gpu_initial)||!present(s->gpu_memory)||!present(s->gpu_electrical)||
@@ -67,7 +68,7 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
        c->inverse_generation!=~c->generation || !a733_device_memory_handoff_valid(&layout,c->reserved) ||
        memcmp(c->build_id,a733_smp_build_id,32) || !gpu_display_session_valid(s))return 0;
     const struct gpu_display_boot_contract *record=gpu_display_boot_record(c);
-    if(!record || memcmp(s->hdmi.image,a733_smp_build_id,32) ||
+    if(!record || c->reserved[1]!=s->memory_authority || memcmp(s->hdmi.image,a733_smp_build_id,32) ||
        c->epoch!=s->hdmi.epoch || c->generation!=s->hdmi.generation || c->lease!=s->hdmi.lease ||
        memcmp(record->entry_digest,s->hdmi.evidence,32) || c->armed_at>now ||
        c->armed_at>UINT64_MAX-HDMI_WINDOW_TICKS || c->startup_deadline!=c->armed_at+A733_SMP_COUNTER_HZ ||

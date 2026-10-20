@@ -9,7 +9,7 @@ struct gpu_display_session {
     uint64_t magic,version,bytes;
     struct hdmi_session hdmi;
     uint8_t gpu_initial[32],gpu_memory[32],gpu_electrical[32],gpu_supervision[32];
-    uint64_t inputs_bytes;
+    uint64_t memory_authority;
     struct gpu_display_inputs inputs;
 };
 struct gpu_display_boot_contract {
