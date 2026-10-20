@@ -17,6 +17,21 @@ implementations; physical support on this board requires qualification evidence.
 | [PowerVR](https://docs.mesa3d.org/drivers/powervr.html) | Documentation inspected 2026-10-16 | Candidate GPU runtime; board software selects BVNC 36.56.104.183, listed under active development; physical identity pending |
 | [OV5640 driver](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/media/i2c/ov5640.c) | `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` | Sensor programming reference; native control and complete register-image comparison in [camera.md](camera.md) |
 
+The [Type-C Power Delivery (PD)/DisplayPort adaptation](typec.md#bounded-pd-and-displayport-profile) uses
+source-available board Linux FUSB302/TCPM, PD definitions and DisplayPort references
+at `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. The combined native FreeRTOS
+adaptation is GPL-2.0-only, with pins/notices in `docs/typec-pd-sources.json` and
+`docs/typec-pd-GPL-2.0.txt`; no Linux runtime or opaque PD firmware is loaded.
+Its bounded PD2 source profile offers fixed 5 V/500 mA and DP assignments C/E,
+without increasing the independently qualified power budget. Earlier compiled
+provider/default-host and 26 MHz divider evidence predates final token changes.
+Final host token checks cover freshness, concurrent validation and Hot Plug Detect (HPD) event
+sequence behavior through low/high cycles; actual-task PD composition remains
+pending. Evidence and
+these separate source identities are under `typec-pd-20261020/handoff.json` and
+`review.json`. Physical negotiation, electrical operation and scheduling latency
+remain unqualified.
+
 The inspected upstream Linux Allwinner device-tree directory at
 `2f2f7eeef8b0a1a9b9ca998231419873ccae8d4e` contains no A733 entry.
 Track upstream support per component instead of assuming the board is supported.
