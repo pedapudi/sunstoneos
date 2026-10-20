@@ -1535,6 +1535,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   visibility, confinement and safe drain remain unqualified. Wider dimensions,
   formats, counts, rate control, High/CABAC/B pictures, multiple references,
   unrestricted streaming and H.265 encoding remain required.
+  [HEVC decoding](hevc-native.md) remains incomplete. Bringup has typed
+  session/startup/CMake foundations and source-only host tools; runtime preparation
+  refuses absent native allocation/page-table proof. Partial native source remains
+  separately preserved at `hevc-decode` commit `69c4eac`, unreviewed and unbuilt.
+  Planned native dependencies are GPL Cedrus control and LGPL GStreamer parsing;
+  their pins and notices are in [the source record](../apps/hevc/sources.json).
+  Opaque A733 CedarC libraries remain offline instruction references, not planned
+  native runtime dependencies or a replacement project. Their metadata allocation
+  ABI mismatch limits the saved trace; constructor/register evidence establishes
+  no decoded picture. Existing UBSan session-validator evidence covers two valid
+  and eleven invalid range cases only. The source-only host audit verifies 24
+  frozen files under `hevc-host-source-20261020/root-integration.json`.
+  No native HEVC image, host-runtime result or physical decode claim exists;
+  review, complete IDR/P integration, allocation/mapping proof and selected runtime
+  validation remain required.
   The attached board ROM profile, actual memory/cache/drain authority, physical
   decoding and remaining codec modes remain outstanding.
 
