@@ -2,14 +2,15 @@
 
 `apps/gpu-display/prepare.py` prepares immutable RAM inputs for the retained
 GPU-to-HDMI application. It packs two caller-selected texture inputs with the
-HDMI provider configuration and combined physical-admission records. Preparation
-does not launch a board or observe GPU execution, HDMI output or visible pixels.
-The native image has no USB transport, so this preparer adds no USB capture path.
+HDMI provider configuration and combined physical-admission records. Preparation performs no device or queue access. A separate supervised caller
+observes copied GPU hashes, selected pixel samples and presentation/terminal
+evidence through the native USB owner. Those observations do not establish
+visible pixels or complete framebuffer correctness.
 
-The supported native geometry is a 704-byte authority prefix followed by the
+The supported native geometry is a 840-byte authority prefix followed by the
 existing 144-byte application input header and two canonical texture payloads.
 The entire session must fit in the 1 MiB reservation at 0x41f00000. Preparation
-checks the image's twelve geometry words and DWARF structure sizes and offsets.
+checks the image's fourteen geometry words and DWARF structure sizes and offsets.
 It refuses stripped images, unsupported layouts, overlapping loads, writable
 geometry, unexpected extended pools and initialized session/monitor allocations.
 
@@ -26,7 +27,8 @@ python apps/gpu-display/prepare.py \
 ```
 
 The image manifest must name `sunstone-a733-gpu-display`, execution profile
-`gpu-display-supervised-v1`, workload `copied-two-frame-HDMI-720p60`, and the
+`gpu-display-supervised-v2`, workload
+`copied-two-frame-HDMI-720p60-usb-observation`, and the
 exact ELF and build digests. `inputs.bin` comes from `apps/gpu-display/host.py`.
 That producer packs two existing `texture.input_bytes()` results within the
 remaining session capacity. The preparer rechecks payload ordering, digests,
@@ -43,7 +45,7 @@ reject impossible constructor inputs; they do not establish electrical state.
 
 ## Combined physical admission
 
-The admission schema is `a733-gpu-display-supervised-admission-v1`. It binds the
+The admission schema is `a733-gpu-display-supervised-admission-v2`. It binds the
 target identity and USB port, image, input digest, epoch, generation, boot lease,
 supervisor, display owner, framebuffer authority and extended-memory authority.
 It requires the original 20-second lifetime and combined GPU/HDMI retention.
@@ -65,6 +67,19 @@ the preparer's validator:
 | `gpu_memory` | Full extended reservation and confined firmware/graphics address paths, with the same display-parent authority |
 | `gpu_electrical` | Qualified GPU PLL/supply and shared GPU/HDMI clock/power exclusion |
 | `gpu_supervision` | Retention through the combined lifetime and manual whole-board power removal |
+| `usb_initial` | Owned ROM PIO lifetime, external DMA exclusion, owned and quiet IRQs 188–190, and no concurrent ROM access |
+| `usb_electrical` | Exact four rails, stable shared fabric and PMIC/pin snapshot, and a dedicated retained output sink |
+| `usb_supervision` | Manual whole-board power removal, one attempt and retention for the full 20-second lifetime |
+
+The containing version-2 envelope adds a 136-byte USB authority at byte 704,
+with application inputs beginning at byte 840. The preparer derives that authority
+from the admission fields `usb_owner`, `usb_handoff`, `usb_cold_reference` and
+`usb_supply_uv`, plus the three USB record digests. The owner must differ from
+HDMI, PMIC and GPU owners 9–11. The cold reference is ROM device mode 2; the four
+supplies are exactly 3,300,000, 3,300,000, 1,200,000 and 900,000 microvolts.
+The electrical proof binds the existing HDMI fabric settings and rates and the
+same inherited PMIC/pin bytes. The USB owner creates no independent provider or
+additional session window.
 
 Each physical record must be explicitly reviewed and identified as physical
 evidence. That declaration does not establish its assertions. The coordinator
@@ -103,7 +118,22 @@ digest at byte 224 and entry digest at byte 256. The root-owned wrapper preserve
 the 20-second admission window. Building that wrapper does not execute it or
 establish CPU startup, peripheral operation, recovery or memory ownership.
 
-The focused check is `checks/gpu-display-preparation.py`. Its positive bundle
+`tools/check-a733-gpu-display-supervised.py` uses the existing coordinator claim,
+sealed-upload and retained-recovery flow. Its software prerequisite must cover the
+exact image, launcher and host source closure. Its capture window is 19 seconds
+within the original native 20-second lifetime. Every request and reply uses the
+same retained USB instance and absolute deadline. Copied replies are persisted
+before decoding. Every decoded reply must match the frozen epoch, generation,
+lease, build identity and full-session digest. Terminal input hashes must also
+match the frozen caller inputs.
+Success requires the native protocol's healthy GPU, HDMI, DE and PMIC terminal
+states and all three ordered presentation records. It does not authorize resource
+release, a reconnect retry or reuse of frame memory.
+
+The preparation and capture checks use the selected version-2 image. Version-1
+native and host evidence remains frozen in its original scope; it is not replayed
+to qualify USB observation. The focused preparation check is
+`checks/gpu-display-preparation.py`. Its positive bundle
 fixture substitutes only the explicit physical-record predicate, while retaining
 the new binding, provenance, assembly and freeze checks. The same fixture must
 fail ordinary production validation. Separate linked input checks use the actual

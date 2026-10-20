@@ -19,20 +19,20 @@ def refused(call):
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     for name in ('image','root-session','provider-session','manifest','producer-inputs','mesa-archive','firmware','firmware-license','output','clang','lld','objcopy'):ap.add_argument('--'+name,type=Path,required=True)
-    ap.add_argument('--case',action='append',choices=('refusal','bundle','linked-input','provenance'))
+    ap.add_argument('--case',action='append',choices=('refusal','bundle','linked-input','provenance','usb'))
     a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=True);image=a.image.read_bytes();parts,address,build=p.image_data(image)
     result_path=a.output/'result.json';results=json.loads(result_path.read_text()) if result_path.exists() else {'physical_access':False,'image_sha256':p.sha(image),'cases':{}}
     assert results['image_sha256']==p.sha(image),'Refuse stale image evidence'
-    selected=a.case or ['refusal','bundle','linked-input','provenance']
+    selected=a.case or ['refusal','bundle','usb']
     def passed(name,value):results['cases'][name]=value;p.save_json(result_path,results);print('PASS',name,flush=True)
-    raw=a.root_session.read_bytes();data=raw[704:];p.validate_inputs(data)
+    raw=a.root_session.read_bytes();data=raw[p.INPUT_OFFSET:];p.validate_inputs(data)
     hdmi=bytearray(a.provider_session.read_bytes()[24:568]);hdmi[48:80]=build;profile=p.session_profile(hdmi)
     if 'refusal' in selected and 'refusal' not in results['cases']:
         (a.output/'hdmi.bin').write_bytes(hdmi);(a.output/'inputs.bin').write_bytes(data)
         p.save_json(a.output/'synthetic-admission.json',{'schema':p.ADMISSION,'physical_access':False,'reviewed':True})
         refused(lambda:p.prepare(a.image,a.manifest,a.output/'hdmi.bin',a.output/'inputs.bin',a.output/'synthetic-admission.json',a.output/'must-not-create',None,None,None))
         assert not (a.output/'must-not-create').exists()
-        refused(lambda:p.session_profile(raw[24:568]))
+        legacy=bytearray(raw);struct.pack_into('<Q',legacy,8,1);refused(lambda:p.request_bytes(address,build,bytes(legacy),*struct.unpack_from('<3Q',raw,48)))
         for offset in (328,336+11*4,392):
             bad=bytearray(hdmi);bad[offset]=0;refused(lambda:p.session_profile(bad))
         bad=bytearray(data);bad[48:80]=bytes(32);refused(lambda:p.validate_inputs(bytes(bad)))
@@ -47,7 +47,9 @@ def main():
         def put(name,record):
             path=fixtures/name;p.save_json(path,record);return ref(path)
         common={**profile,'identity':'MODELED-NOT-A-BOARD','port':'MODELED-NOT-A-PORT','image_sha256':p.sha(image),
-            'memory_authority':struct.unpack_from('<Q',raw,696)[0],'combined_lifetime':True,'reviewed':True,'physical_access':False}
+            'memory_authority':struct.unpack_from('<Q',raw,696)[0],
+            'usb_owner':struct.unpack_from('<Q',raw,704)[0],'usb_handoff':struct.unpack_from('<Q',raw,712)[0],
+            'usb_cold_reference':2,'usb_supply_uv':list(p.USB_SUPPLIES),'combined_lifetime':True,'reviewed':True,'physical_access':False}
         outer={**common,'schema':p.ADMISSION,'execution_profile':p.PROFILE,'session_seconds':20,'inputs_sha256':p.sha(data)}
         proof=put('MODELED-proof.json',{'physical_access':False,'scope':'Parser fixture; no physical authority'})
         outer['ddr']=put('MODELED-ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':p.RANGES,'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
@@ -55,6 +57,10 @@ def main():
             fact={**common,'schema':'a733-gpu-display-'+name.replace('_','-')+'-v1','conditions':{k:proof for k in conditions}}
             if name=='analog':fact['request_sha256']=p.sha(hdmi[232:304])
             if name=='power':fact['pmic_pins_sha256']=p.sha(hdmi[304:440])
+            if name.startswith('usb_'):fact.update(session_seconds=20)
+            if name=='usb_initial':fact.update(cold_reference=2,irq_ids=[188,189,190])
+            if name=='usb_electrical':fact.update(supply_uv=list(p.USB_SUPPLIES),fabric_sha256=p.sha(hdmi[512:536]),pmic_pins_sha256=p.sha(hdmi[304:440]),dedicated_sink=True)
+            if name=='usb_supervision':fact['one_attempt']=True
             if name in ('memory','gpu_memory'):fact.update(ranges=p.RANGES,display_parent_bytes=4194304)
             if name=='memory':fact.update(display_master=8,gpu_system_iommu_master=None,display_bank_bytes=3739648,framebuffer_snapshot_sha256=p.sha(hdmi[504:544]))
             outer[name]=put('MODELED-'+name+'.json',fact)
@@ -119,5 +125,37 @@ def main():
             assert expected in reason,reason
         passed('provenance',{'passed':True,'cases':['missing shader-producing C input','retained shader differs from immutable uploaded native bytes'],
             'scope':'Actual combined provenance validator with only physical-record predicate substituted. Complete record digests rebound so refusals reach provenance checks; no compiler, launcher or native execution.'})
+    if 'usb' in selected and 'usb' not in results['cases']:
+        folder=a.output/'usb-refusals';folder.mkdir(exist_ok=False)
+        outer=json.loads((a.output/'MODELED-inputs/MODELED-admission.json').read_text())
+        hdmi=bytearray((a.output/'MODELED-inputs/hdmi.bin').read_bytes())
+        cases=[]
+        for name,changes,fact_name,fact_changes in (
+            ('owner-collision',{'usb_owner':9},None,None),
+            ('missing-handoff',{'usb_handoff':0},None,None),
+            ('wrong-ROM-mode',{'usb_cold_reference':1},None,None),
+            ('wrong-rails',None,'usb_electrical',{'supply_uv':[3300000,3300000,1200000,900001]}),
+            ('wrong-fabric',None,'usb_electrical',{'fabric_sha256':'00'*32}),
+            ('wrong-pins',None,'usb_electrical',{'pmic_pins_sha256':'00'*32}),
+            ('partial-IRQ-set',None,'usb_initial',{'irq_ids':[188,189]}),
+            ('shorter-lifetime',None,'usb_supervision',{'session_seconds':19})):
+            record=json.loads(json.dumps(outer))
+            if changes:record.update(changes)
+            if fact_name:
+                fact=json.loads(Path(record[fact_name]['path']).read_text());fact.update(fact_changes)
+                path=folder/(name+'.json');p.save_json(path,fact);record[fact_name]={'path':str(path.resolve()),'sha256':p.digest(path)}
+            entry=json.dumps(record).encode();hdmi[80:112]=bytes.fromhex(p.sha(entry))
+            with patch.object(p,'physical_record',lambda record:None):
+                reason=refused(lambda:p.validate_admission(entry,bytes(hdmi),data,build,p.sha(image),image_raw=image))
+            assert reason;cases.append(name)
+        metadata=json.loads((a.output/'MODELED-NOT-ADMITTED-bundle/prepared.json').read_text())
+        assert all(k in metadata for k in ('epoch','generation','lease','usb_owner','usb_handoff','segments'))
+        assert metadata['segments'][-1]=={'name':'session.bin','address':0x41f00000}
+        assert not any(v['name'] in ('request.bin','contract.bin','launch.bin') for v in metadata['segments'])
+        session=(a.output/'MODELED-NOT-ADMITTED-bundle/session.bin').read_bytes()
+        assert struct.unpack_from('<3Q',session)==(p.SESSION_MAGIC,2,len(session))
+        assert len(session[704:840])==136 and struct.unpack_from('<2I4I',session,816)==(2,0,*p.USB_SUPPLIES)
+        passed('usb',{'passed':True,'cases':cases,'derived_authority_bytes':136,'input_offset':840,
+            'scope':'New USB authority derivation and typed fact/refusal checks, exact sealed-supervisor metadata. Only physical-record predicate substituted; no native, launcher, queue or USB execution.'})
 
 if __name__=='__main__':main()
