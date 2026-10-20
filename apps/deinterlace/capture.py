@@ -33,7 +33,7 @@ def decode(raw,session):
     require(count==(MAXIMUM if status==1 else 0) and len(raw)==HEADER+count,
         'Deinterlace copied extent differs.')
     result=dict(status=status,bytes=count,width=640,height=480,y_stride=640,uv_stride=640,
-        format='NV12',mode='WEAVE',top_field_first=True,matched_finish=finish,
+        format='NV12',mode='WEAVE' if geometry[5]==1 else 'MOTION-OUT_1FRAME',top_field_first=True,matched_finish=finish,
         hardware_status=hardware_status,scanned_masters=scanned,guards=guards,
         physical_qualified=False)
     if status in (1,3):
@@ -49,11 +49,12 @@ def decode(raw,session):
 
 
 def expected_output(source,session):
-    """WEAVE retains the interleaved full-frame Y and UV field lines."""
+    """Return the WEAVE identity oracle; motion has no numerical pixel oracle."""
     preparation.session_check(session)
-    require(len(source)==MAXIMUM and hashlib.sha256(source).digest()==session[768:800],
+    require(len(source)==preparation.geometry_check(struct.unpack_from('<8I',session,856)) and
+        hashlib.sha256(source).digest()==session[768:800],
         'Deinterlace source differs from sealed input.')
-    return bytes(source)
+    return bytes(source) if struct.unpack_from('<I',session,876)[0]==1 else None
 
 def ack(frame,session):
     require(decode(frame,session)['status']==1,'Cannot acknowledge absent deinterlace output.')
@@ -97,9 +98,10 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             require(result['status']==1,'Unexpected already-acknowledged deinterlace output.')
             output=evidence/'output.nv12';supervisor.durable_frame(output,frame[HEADER:])
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
-                matches_cpu_reference=frame[HEADER:]==expected,wire_header_hex=frame[:HEADER].hex())
+                matches_cpu_reference=frame[HEADER:]==expected if expected is not None else None,
+                pixel_reference_checked=expected is not None,wire_header_hex=frame[:HEADER].hex())
             record['deinterlace_output']=copied;save()
-            if not copied['matches_cpu_reference']:
+            if expected is not None and not copied['matches_cpu_reference']:
                 result['matches_cpu_reference']=False
                 record['deinterlace_result']='observed-failure';record['durable_result']=entry.copy();save();return result
             copied['ack_write_intent']=True;save()
@@ -121,7 +123,8 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             try:save()
             except BaseException:
                 record['deinterlace_result']='unobserved';record.pop('durable_result',None);raise
-            result.update(matches_cpu_reference=True,ack_observed=True)
+            result.update(matches_cpu_reference=True if expected is not None else None,
+                pixel_reference_checked=expected is not None,ack_observed=True)
             return result
         raise supervisor.CaptureWindowExpired('deinterlace exhausted its bounded pending-query budget.')
     except BaseException as error:

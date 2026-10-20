@@ -1,15 +1,19 @@
 # Native DI301 preparation and capture
 
-The host path prepares one fixed 640 × 480 NV12 frame for the A733 DI301
-engine under FreeRTOS. NV12 stores the full-resolution Y plane followed by
+The host path prepares fixed 640 × 480 NV12 input for the A733 DI301 engine
+under FreeRTOS. WEAVE uses one combined-field frame; first-operation motion
+uses two consecutive combined-field frames. NV12 stores the full-resolution Y plane followed by
 interleaved U/V samples at half vertical resolution. Both plane strides are
-640 bytes; the complete input and copied output each contain 460800 bytes.
+640 bytes. A frame contains 460800 bytes. WEAVE input contains one frame,
+and motion input concatenates two frames into 921600 bytes. Both modes copy
+one 460800-byte output frame.
 The combined frame interleaves top and bottom field lines in each plane.
 Offline WEAVE preserves those lines in the output.
 
 `apps/deinterlace/producer.py` seals the input digest and four typed authority
 records into an 888-byte session. The required configuration is top field first,
-NV12, WEAVE, the inherited 300 MHz DI module clock, both IOMMU gate values
+NV12, WEAVE or first-operation MOTION OUT_1FRAME, the 300 MHz DI module clock,
+both IOMMU gate values
 `0x10007`, and the shared DCDC2 rail at 800 mV. The reference digest stays zero.
 The deterministic field pattern distinguishes the fields and plane rows:
 
@@ -24,6 +28,10 @@ allocations hold authenticated input staging and immutable copied output.
 The uncached allocations hold the page table and guarded DMA input/output.
 Only the source and destination spans are mapped; source pages are read-only.
 The engine receives one authenticated upload with the admitted input digest.
+Motion adds guarded current-frame and MD flag allocations. Its previous/current
+frame spans are read-only; the output frame and output flags are writable.
+The complete page table includes four L2 windows and leaves all guards and
+intervening holes unmapped.
 
 Physical admission requires typed records bound to the image, target and
 session. They cover prior DMA exclusion and draining, clock and power ownership,
@@ -48,7 +56,10 @@ termination; truncated streams fail capture.
 Capture durably saves the result and output, compares WEAVE output with the
 sealed input, and journals acknowledgment intent before sending the 41-byte
 acknowledgment. It requires a matching acknowledgment receipt before reporting
-observed success. A transport or durability failure preserves an unobserved
+observed success. Motion verifies the immutable copied bytes, session identity
+and completion guards; it records `pixel_reference_checked=false` and
+`matches_cpu_reference=null`. It has no numerical pixel oracle.
+A transport or durability failure preserves an unobserved
 result and the available journal. Output acknowledgment does not release memory,
 clock, power or DMA ownership. Resources remain retained until the reviewed
 whole-board power removal.
@@ -81,3 +92,27 @@ The snapshot at
 preserves the host sources, sealed bundle and captured evidence. Native device
 effects and entry authority were modeled; these results establish host software
 behavior and do not qualify physical DI301 operation.
+
+First-operation motion requires the initial record fact
+`di_dedicated_reset_held_bus_and_module_gated`. WEAVE retains
+`di_inherited_powered_reset_deasserted`. The motion entry checks reset and gate
+readback before the source-exact reset release, configuration and gate sequence.
+It does not assert reset during execution or recovery. Reliance on the reset
+defaults follows the pinned Linux lifecycle; it does not establish numerical
+correctness or physical operation. Motion starts with private zero history and
+retains all frame, flag, table and staging allocations after success or failure.
+
+The geometry marker's second revision raises maximum input capacity to 921600
+bytes. The session remains 888 bytes, the result header 192 bytes and the
+extended contract 288 bytes. Legacy first-revision images remain restricted to
+WEAVE. Generate the deterministic two-frame input with:
+
+```sh
+python3 apps/deinterlace/producer.py --mode motion --pattern-output /absolute/cache/input.nv12
+```
+
+The focused motion checks are `checks/deinterlace-motion-preparation.py` and
+`checks/deinterlace-motion-host.py`. They consume exact native allocation/table
+proof and actual copied frame/ACK receipt artifacts. Earlier WEAVE, USB stream
+framing and ACK durability evidence remains applicable within unchanged code
+boundaries. Physical motion output and numerical behavior remain unqualified.
