@@ -7,7 +7,7 @@ struct cell {uintptr_t address;uint32_t value;};
 struct fixture {
  struct a733_clock_leases clocks;struct a733_clock_token token;
  struct a733_adc driver;struct cell cells[40];unsigned cells_used,held,retained,reads,writes,acks,data_reads;
- unsigned authorized,deny_read,deny_write,reassert,block_retention;
+ unsigned authorized,deny_read,deny_write,reassert,block_retention,deny_enter;
  uint64_t now;uintptr_t denied_address;uint32_t last_ack;
 };
 static uint32_t *cell(struct fixture *f,uintptr_t a)
@@ -16,7 +16,7 @@ static int fixture_now(void *v,uint64_t *n){struct fixture *f=v;*n=++f->now;retu
 static int task_current(void *v){(void)v;return 1;}
 static int authorize_adc(void *v,const struct a733_adc_config *c,const struct a733_clock_token *t)
 {struct fixture *f=v;assert(c->owner==23&&c->handoff==91&&t->id==f->token.id);return f->authorized;}
-static int register_enter(void *v,uint64_t d){struct fixture *f=v;assert(!f->held&&f->now<d);f->held=1;return 1;}
+static int register_enter(void *v,uint64_t d){struct fixture *f=v;assert(!f->held&&f->now<d);if(f->deny_enter)return -1;f->held=1;return 1;}
 static void register_leave(void *v){struct fixture *f=v;assert(f->held&&!f->retained);f->held=0;}
 static void register_retain(void *v){struct fixture *f=v;assert(f->held);f->held=0;f->retained=1;if(f->block_retention)atomic_store(&f->clocks.busy,1);}
 static int read_register(void *v,uintptr_t a,uint32_t *out)
@@ -53,8 +53,18 @@ static void initialize(struct fixture *f,unsigned cold)
 }
 static enum a733_adc_result start(struct fixture *f)
 {assert(a733_adc_poll(&f->driver)==A733_ADC_PENDING);return a733_adc_poll(&f->driver);}
+#ifndef ADC_DENIED_ENTRY_ONLY
 static void sample(struct fixture *f,uint32_t mask)
 {*cell(f,0x02521038)=mask;for(unsigned i=0;i<4;++i)*cell(f,0x02521080+4*i)=i?4095-i:0;}
+#endif
+#ifdef ADC_DENIED_ENTRY_ONLY
+int main(void)
+{
+ struct fixture f;initialize(&f,0);f.deny_enter=1;
+ assert(start(&f)==A733_ADC_RETAINED&&f.driver.fault&&!f.held&&!f.retained&&!f.reads&&!f.writes);
+ puts("PASS GPADC denied entry retains token without retaining unowned register mutex");return 0;
+}
+#else
 int main(int argc,char **argv)
 {
  assert(argc==2);unsigned cases=0;
@@ -90,3 +100,5 @@ int main(int argc,char **argv)
  assert(fprintf(file,"{\"exclusive_hex\":\"%016llx%016llx\",\"shared_hex\":\"%016llx%016llx\",\"rail_index\":%u,\"core_cases\":%u}\n",(unsigned long long)(exclusive>>64),(unsigned long long)exclusive,(unsigned long long)((A733_CLOCK_GPADC24M|A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC)>>64),(unsigned long long)(A733_CLOCK_GPADC24M|A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC),A733_RAIL_CLDO3,cases)>0&&!fclose(file));
  printf("PASS %u new core cases and additive CLDO3 profile/selectors; MMIO modeled\n",cases);
 }
+
+#endif
