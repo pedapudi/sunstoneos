@@ -28,7 +28,7 @@ int deinterlace_input_feed(struct deinterlace_input *p,const struct a733_deinter
        !p->bytes||!p->capacity||p->capacity>DEINTERLACE_INPUT_PADDED||p->capacity%4096||!deadline||
        clock(context,&now)!=1||now>=deadline||!s->board.epoch||!s->board.generation||
        !a733_deinterlace_geometry_valid(s)||!s->authority||!present(s->fixture)||present(s->reference))return reject(p);
-    if(!p->header_used){p->expected=A733_DEINTERLACE_INPUT_CAPACITY;if(!p->expected||p->expected>p->capacity)return reject(p);p->epoch=s->board.epoch;p->generation=s->board.generation;
+    if(!p->header_used){p->expected=a733_deinterlace_input_bytes(s);if(!p->expected||p->expected>p->capacity)return reject(p);p->epoch=s->board.epoch;p->generation=s->board.generation;
         p->authority=s->authority;p->deadline=deadline;memcpy(p->hash,s->fixture,32);}
     if(p->epoch!=s->board.epoch||p->generation!=s->board.generation||p->authority!=s->authority||
        p->deadline!=deadline||now<p->last_now||memcmp(p->hash,s->fixture,32)||

@@ -97,7 +97,13 @@ static int clocks(void)
     static const struct {unsigned offset,mask,value;} changes[]={
       {0xa74,0x10000,0x10000},{0xa24,0x10000,0x10000},
       {0xa20,0x0700001f,A733_DEINTERLACE_MODULE},{0xa24,1,1},{0xa20,0x80000000,0x80000000}};
-    if(!deinterlace.clock_step&&!bits(CCU+0xa20,0x80000000,0))return -1;
+    if(!deinterlace.clock_step){
+      if(!bits(CCU+0xa20,0x80000000,0))return -1;
+      /* MOTION admits the reset-held lifetime used by the pinned Linux
+       * disable/enable sequence. Never assert/reset an inherited live engine. */
+      if(deinterlace.session.mode==A733_DEINTERLACE_MOTION&&
+         !bits(CCU+0xa24,0x10001,0))return -1;
+    }
     if(!parents()||!update(CCU+changes[deinterlace.clock_step].offset,changes[deinterlace.clock_step].mask,
        changes[deinterlace.clock_step].value))return -1;
     ++deinterlace.clock_step;leave();return deinterlace.clock_step==5?1:0;
@@ -136,6 +142,7 @@ static int launch(void)
  if(!deinterlace_guards()||!a733_deinterlace_plan_valid(&deinterlace.plan)||!parents())return -1;
  int r=enter();if(r!=1)return r<0?-1:0;
  size_t count;const struct a733_deinterlace_word *w=a733_deinterlace_words(&count);
+ if(deinterlace.session.mode==A733_DEINTERLACE_WEAVE)count=A733_DEINTERLACE_WEAVE_WORDS;
  if(!deinterlace.command_step){
   /* Source disabled, inherited work excluded by admission. Clear only stale
    * finish before arming this one operation; never reset or infer bus drain. */
@@ -179,7 +186,13 @@ static int step(void)
   __asm__ volatile("dsb sy":::"memory");memcpy(deinterlace.payload+deinterlace.copied,deinterlace.output+deinterlace.copied,n);
   __asm__ volatile("dsb sy":::"memory");if(!stable())return -1;deinterlace.copied+=n;
   if(a733_iommu_scan(&deinterlace.iommu,deadline())!=1)return -1;return 0;}
- uint8_t hash[32];storage_digest_bytes(deinterlace.input,deinterlace.bytes,hash);
+ /* Recheck both immutable DMA inputs against the retained authenticated
+  * upload; neither source span may be CPU-written after publication. */
+ if(memcmp(deinterlace.input,deinterlace.supplied.bytes,deinterlace.bytes)||
+    (deinterlace.session.mode==A733_DEINTERLACE_MOTION&&
+     memcmp(deinterlace.current,deinterlace.supplied.bytes+deinterlace.bytes,deinterlace.bytes)))return -1;
+ uint8_t hash[32];storage_digest_bytes(deinterlace.supplied.bytes,
+   a733_deinterlace_input_bytes(&deinterlace.session),hash);
  if(memcmp(hash,deinterlace.session.fixture,32)||!stable())return -1;
  storage_digest_bytes(deinterlace.payload,deinterlace.bytes,deinterlace.digest);
  if(!stable())return -1;deinterlace.guards_ok=1;return 1;

@@ -9,7 +9,7 @@ _Static_assert(A733_BOARD_SUPERVISED_SECONDS==A733_DEINTERLACE_SESSION_SECONDS,
     "DEINTERLACE and board providers must use the same session lifetime");
 /* Host preparation reads these words from the actual linked image. */
 __attribute__((used,retain)) const uint64_t deinterlace_geometry[11]={
-    A733_DEINTERLACE_SESSION_MAGIC,1,sizeof(struct a733_deinterlace_session),
+    A733_DEINTERLACE_SESSION_MAGIC,2,sizeof(struct a733_deinterlace_session),
     sizeof(struct deinterlace_boot_contract),A733_BOARD_SESSION_ADDRESS,
     A733_DEINTERLACE_SESSION_SECONDS,A733_DEINTERLACE_INPUT_CAPACITY,A733_DEINTERLACE_OUTPUT_CAPACITY,
     A733_DEINTERLACE_RESULT_BYTES,A733_DEINTERLACE_MAX_WIDTH,A733_DEINTERLACE_MAX_HEIGHT};

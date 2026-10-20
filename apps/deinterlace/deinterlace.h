@@ -17,9 +17,9 @@ struct deinterlace_application {
     struct a733_gpu_power_resources power_ready;
     uint64_t power_token;
     struct device_memory_pool *pool,*wb_pool;
-    struct device_memory_lease leases[3],wb_leases[2];
+    struct device_memory_lease leases[6],wb_leases[2];
     StaticTask_t task;StackType_t stack[4096];TaskHandle_t handle;
-    uint8_t *input,*output,*payload;
+    uint8_t *input,*output,*payload,*current,*flag_input,*flag_output;
     struct a733_deinterlace_plan plan;
     uint32_t *table;
     size_t bytes,rounded,copied;

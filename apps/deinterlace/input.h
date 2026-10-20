@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #define DEINTERLACE_UPLOAD_MAGIC UINT32_C(0x55494453)
-#define DEINTERLACE_INPUT_PADDED 462848u
+#define DEINTERLACE_INPUT_PADDED 921600u
 #define DEINTERLACE_RESULT_HEADER 192u
 /* One immutable job. Header LE32 magic/version/raw length/reserved0, then
  * LE64 epoch/generation. Each fragment is bound to the retained session.
