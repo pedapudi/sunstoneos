@@ -94,7 +94,7 @@ def main():
     if inline:self.u.reg_write(UC_ARM64_REG_PC,at+4)
     else:self.ret()
     self.stopped=True;self.u.emu_stop();return
-   if name=='a733_counter_clock_now':self.time+=1
+   if name=='a733_counter_clock_now':self.time+=1;self.counter_calls+=1
    super().code(u,at,n,unused)
    if name=='a733_counter_clock_now':
     # Complete the modeled counter function before considering an interrupt:
@@ -148,6 +148,7 @@ def main():
  scheduler=pickle.loads((source/('stopped-scheduler.pickle' if a.resume else 'scheduler.pickle')).read_bytes())
  m.next_tick=scheduler.get('next_tick',(m.time//1000+1)*1000)
  m.tick_pending=scheduler.get('tick_pending',False);m.tick_events=scheduler.get('tick_events',[])
+ m.counter_calls=0;slice_trace=[];wire_trace=[]
  tasks=scheduler['tasks'];last=scheduler['last'];sequence=scheduler['sequence']
  assert scheduler['phase'] in ('detached-validation-complete','scheduler-boundary','scheduler-task')
  interrupted=scheduler.get('active_handle') if scheduler['phase']=='scheduler-task' else None
@@ -198,7 +199,10 @@ def main():
   return v
  def write(at,width,value):
   m.mmio_in_progress=True
-  if not hw.write(at,value):display.write(at,width,value)
+  handled=hw.write(at,value)
+  if handled and at in (hw.TWI0+0xc,hw.TWI1+0xc):
+   bus=hw.bus[at&~4095];wire_trace.append([m.time,at,value,bus['due'],bus['wire'],bus['stop']])
+  if not handled:display.write(at,width,value)
   m.mmio_in_progress=False
  original_read=read
  def checked_read(at,width):
@@ -217,6 +221,7 @@ def main():
     m.u.reg_write(UC_ARM64_REG_LR,0x43fff000);m.u.reg_write(UC_ARM64_REG_X0,0);pc=active['entry']
    else:m.u.context_restore(active['context']);pc=m.u.reg_read(UC_ARM64_REG_PC)
    m.task=active['handle'];m.boundary=None;m.stopped=False;m.callname=active['role'];phase='scheduler-task'
+   started_us=m.time;started_calls=m.counter_calls
    m.u.emu_start(pc,0,count=1000000000)
    assert m.stopped and m.boundary,(active['role'],hex(m.u.reg_read(UC_ARM64_REG_PC)),m.trace[-25:])
    active['context']=m.u.context_save();phase='scheduler-boundary';active['runs']+=1
@@ -226,6 +231,10 @@ def main():
    elif kind=='suspend':active['wake']=1<<60
    else:assert ticks==1;active['delays']+=1;active['wake']=(m.time//1000+ticks)*1000
    last[active['handle']]=sequence;sequence+=1
+   provider=m.app+m.af['typec']+image.layouts['a733_typec_native']['provider'];ccf=image.layouts['a733_typec']
+   slice_trace.append([started_us,m.time,active['role'],kind,ticks,active['wake'],m.counter_calls-started_calls,
+    m.get(provider+ccf['state'],4),m.get(provider+ccf['step'],4),m.get(provider+ccf['pd_turn'],4),
+    m.get(provider+ccf['published']+image.layouts['a733_typec_token']['observed_us'])])
    if (active['role']=='display' and m.get(native_at+nf['stage'],4)==6 and
        not m.get(native_at+nf['controller']+image.layouts['a733_dp']['self']) and
        not (a.output/'pre-controller').exists()):
@@ -278,6 +287,8 @@ def main():
   save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress))
   raise
  finally:
+  save(a.output/'slice-trace.json',dict(columns=['start_us','end_us','task','boundary','ticks','wake_us','counter_calls','cc_state','cc_step','pd_turn','published_us'],rows=slice_trace))
+  save(a.output/'wire-trace.json',dict(columns=['time_us','address','control','due_us','wire_state','stopping'],rows=wire_trace))
   for path,digest in inputs.items():assert sha(path)==digest,('input changed',path)
   files={str(p.relative_to(a.output)):dict(bytes=p.stat().st_size,sha256=sha(p)) for p in a.output.rglob('*') if p.is_file()}
   save(a.output/'manifest.json',dict(image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),files=files,physical=False))
