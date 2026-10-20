@@ -245,6 +245,7 @@ int gpu_display_bank_copy(unsigned frame,uint32_t sequence,uint32_t offset,const
     uint16_t *out=(void *)(framebuffer.extent.cpu+FRAME_OFFSET+frame*GPU_DISPLAY_FRAME_BYTES+offset/2);
     for(uint32_t i=0;i<bytes;i+=4)
         out[i/4]=(uint16_t)(((uint16_t)(in[i]>>3)<<11)|((uint16_t)(in[i+1]>>2)<<5)|(in[i+2]>>3));
+    if(!gpu_display_evidence_chunk(frame,offset,in,out,bytes))return 0;
     app.copied[frame]+=bytes;app.frame_sequence[frame]=sequence;
     return hdmi_live(NULL);
 }
@@ -463,7 +464,16 @@ int gpu_display_output_step(void)
                 if(state!=A733_DE_ARMED || framebuffer.de.replay_slot!=slots[app.presentations] ||
                    !framebuffer.de.replay_rcq_done || framebuffer.de.replay_frame_end<framebuffer.de.replay_rcq_done)
                     return output_fault();
+                uint64_t observed;
+                if(!a733_counter_clock_now(&app.counter,&observed)||observed<time||
+                   observed<framebuffer.de.replay_frame_end||observed>=app.deadline)return output_fault();
                 app.presented[app.presentations]=app.frame_sequence[slots[app.presentations]];
+                app.presentation[app.presentations]=(struct gpu_display_presentation){
+                    .slot=slots[app.presentations],.sequence=app.presented[app.presentations],
+                    .rcq_done_us=framebuffer.de.replay_rcq_done,.frame_end_us=framebuffer.de.replay_frame_end,
+                    .verified_source_address=framebuffer.de.config.surface.device_address+
+                        slots[app.presentations]*GPU_DISPLAY_FRAME_BYTES,
+                    .raw_status=framebuffer.de.raw_status,.flags=1,.observed_us=observed};
                 ++app.presentations;return 0;
             }
             /* Never run a fault scan concurrently with RCQ admission/polling.
@@ -488,4 +498,4 @@ int gpu_display_output_step(void)
     }
 }
 void gpu_display_output_task(void *unused)
-{(void)unused;for(;;){(void)gpu_display_output_step();vTaskDelay(1);}}
+{(void)unused;for(;;){(void)gpu_display_output_step();gpu_display_observation_poll();vTaskDelay(1);}}

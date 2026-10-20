@@ -14,8 +14,16 @@ int hdmi_live(void *unused)
     }
     if(manager_failed || atomic_load_explicit(&app.counter.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.clocks.failed,memory_order_acquire) ||
-       atomic_load_explicit(&app.locks.retained,memory_order_acquire) ||
-       a733_smp_counter()/24>=app.deadline){hdmi_fail(NULL);return 0;}
+       atomic_load_explicit(&app.locks.retained,memory_order_acquire)){
+        hdmi_fail(NULL);return 0;
+    }
+    if(a733_smp_counter()/24>=app.deadline){
+        /* A completed retained stop stays successful when its lifetime ends.
+         * USB separately faults an unfinished exchange or parks an idle owner.
+         * Shared-provider failures above remain terminal faults. */
+        if(atomic_load_explicit(&app.state,memory_order_acquire)!=2)hdmi_fail(NULL);
+        return 0;
+    }
     return 1;
 }
 void hdmi_fail(void *unused)
@@ -62,7 +70,7 @@ static void pmic_task(void *unused)
 }
 BaseType_t gpu_display_task_privileged(TaskFunction_t entry,void *context)
 {return pvr_gpu_service_task_privileged(entry,context)||(!context&&
-    (entry==pmic_task||entry==gpu_display_output_task||entry==gpu_display_render_task))?pdTRUE:pdFALSE;}
+    (entry==pmic_task||entry==gpu_display_output_task||entry==gpu_display_render_task||entry==gpu_display_usb_task))?pdTRUE:pdFALSE;}
 void a733_smp_diagnostic_start(void)
 {
     if(!a733_smp_device_preparation_admitted())platform_panic("GPU display preparation",1);
@@ -86,10 +94,10 @@ void a733_smp_diagnostic_start(void)
     if(!a733_gpu_resources_init(&app.pck,&app.pck_native.operations,&app.pck_native))platform_panic("GPU display PCK",6);
     struct a733_rail_binding rails={&app.clocks,&app.pck,app.session.generation,a733_counter_clock_now,&app.counter};
     if(!a733_rail_leases_init(&app.rails,&rails))platform_panic("GPU display rails",7);
-    TaskFunction_t functions[]={pmic_task,gpu_display_output_task,gpu_display_render_task};
-    const char *names[]={"gpu-display-pmic","gpu-display","gpu-render"};
-    for(unsigned i=0;i<3;++i){
-        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,i==2?2:4,app.stacks[i],&app.tasks[i]);
+    TaskFunction_t functions[]={pmic_task,gpu_display_output_task,gpu_display_render_task,gpu_display_usb_task};
+    const char *names[]={"gpu-display-pmic","gpu-display","gpu-render","gpu-display-usb"};
+    for(unsigned i=0;i<4;++i){
+        app.handles[i]=xTaskCreateStatic(functions[i],names[i],4096,NULL,i==2?2:i==3?3:4,app.stacks[i],&app.tasks[i]);
         if(!app.handles[i])platform_panic("GPU display tasks",8);
     }
     struct a733_pmic_config pmic=app.session.pmic;pmic.startup_deadline=app.deadline;
@@ -102,7 +110,7 @@ void a733_smp_diagnostic_start(void)
         .owner=app.session.owner,.epoch=app.session.epoch,.request=app.session.request,
         .supervision=app.session.supervisor,.recovery_mode=A733_HDMI_SUPERVISED_FRAMEBUFFER,
         .pixel_source=hdmi_framebuffer_source,.pixel_context=&framebuffer};
-    if(!a733_hdmi_native_init(&app.hdmi,&hdmi) || !gpu_display_render_prepare() ||
+    if(!a733_hdmi_native_init(&app.hdmi,&hdmi) || !gpu_display_usb_init() || !gpu_display_render_prepare() ||
        !hdmi_framebuffer_boot())platform_panic("GPU display native binding",10);
     if(!a733_smp_device_preparation_admitted())platform_panic("GPU display startup expired",11);
     vTaskStartScheduler();platform_panic("GPU display scheduler returned",12);

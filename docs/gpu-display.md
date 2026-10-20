@@ -118,5 +118,91 @@ Host preparation and the generated SRAM wrapper are described in
 native image and accepted host/SRAM evidence under
 `gpu-display-host-20261020/root-integration.json`; six actual AArch32 launcher
 cases stop before reset with CPU state and MMIO modeled. Ordinary production
-validation refuses the positive modeled bundle. This native target has no USB
-transport or capture path; no physical launch or output is established.
+validation refuses the positive modeled bundle. The preserved finite image
+predates the USB observation path below; no physical launch or output is established.
+
+
+## Copied USB observations
+
+The supervised image adds USB0 PIO observation to the retained two-frame path.
+Its version 2 authenticated envelope inserts a 136-byte USB authority at byte
+704 and moves the application inputs to byte 840. The authority binds a distinct
+USB owner and handoff, three evidence digests, the admitted ROM-device starting
+state and four supply voltages. The complete envelope still fits in 1 MiB.
+
+USB borrows the existing counter, clock registry, rail leases, register/I2C locks
+and PMIC task. It creates no second native USB provider. Four PMIC snapshots are
+acquired and reaped before USB readiness permits GPU submission. Once USB is
+ready, its health checks observe provider metadata without creating another
+PMIC request. GPU completion and HDMI stop precede the existing PMIC park
+acknowledgment. USB continues polling retained provider metadata afterward.
+
+A 32-byte request supplies magic, protocol version, consecutive request ID,
+length, epoch and generation. Admission checks the exact identity before posting
+the single mailbox. The display task copies a 1,024-byte response containing two
+frame records, three presentation records and terminal state. USB reads only
+that immutable response; it never reads mutable GPU or display internals.
+
+Each frame record contains the canonical input digest, hashes of copied RGBA8
+and converted RGB565 bytes, and sixteen pixel samples. Samples cover four fixed
+columns and four fixed rows, including the image corners. Presentation records
+bind slot 0→1→0 to completed register commands, source-address readback and a
+subsequent frame-end observation. The response also binds the lease, native
+image identity and authenticated full-envelope digest. Hashes and samples are
+selected evidence; they do not establish full pixel correctness or visible HDMI
+pixels.
+
+The mailbox remains owned until every response byte and the terminating USB
+zero-length packet complete. The producer waits for capacity for all 1,024 bytes
+and writes them once. An unexpected short FIFO write faults and retains the
+response. The pinned TinyUSB stream writer can submit when its FIFO reaches an
+endpoint packet, and its vendor completion callback runs before automatic
+zero-length packet selection (`src/tusb.c:407–417` and
+`src/class/vendor/vendor_device.c:916–921`). These semantics require retaining
+the response through the later zero-length completion. Both 64-byte full-speed
+and 512-byte high-speed endpoints divide the response exactly.
+
+The caller in `apps/gpu-display/capture.py` reads up to 1,025 bytes so the final
+zero-length packet terminates the transfer. It requires exactly 1,024 data bytes,
+validates response identity and terminal proof, and offers each raw response to
+a persistence callback before decoding it. At most 200 exchanges transfer
+204,800 response bytes plus 6,400 request bytes. Every transfer uses the original
+19-second host deadline; GPU/display share the original 20-second session and
+HDMI stop starts at 18 seconds. No observation extends those deadlines.
+
+After healthy terminal publication, an idle USB task parks at session expiry.
+An incomplete request, posted snapshot, response or final zero-length packet at
+expiry latches failure and retains ownership. Display continues servicing copied
+observations after terminal publication while USB remains live. Uncertainty
+never authorizes a reset, memory disposal or another frame.
+
+The system-IOMMU access mask remains 0x100 for display master 8. It authorizes
+the micro-register subset this application may inspect, rather than listing all
+powered devices. The pinned A733 device tree assigns USB master 0 separately
+and places DE, DI, G2D and EINK in the shared DE_SYS domain
+(`sun60iw2p1.dtsi:448–451,494–515`). USB uses fixed PIO and performs no DMA;
+all-master DMA exclusion and initial drain remain independent requirements.
+Unadmitted micro-register sets are skipped. Unexpected global IOMMU faults
+retain the application; this path does not claim to scan USB micro-fault state.
+
+The observation evidence is under
+`~/.cache/sunstoneos/evidence/gpu-display-capture-20261020/`.
+The final image SHA-256 is
+`700413937babe0471ee7a9022c0df09c20079f1280ecf7a86f47dc827a9710d3`.
+Its compiled closure contains 104 objects and 248 dependency inputs. Actual
+shared-provider construction, USB platform MMIO, copied-output hashing and
+sampling, presentation timestamps and terminal park execute in the preserved
+initial observation image. The final image changes USB framing and image
+identity only; the other 102 raw objects, allocated sections and relocation
+bytes match. Those unchanged component results are reused explicitly.
+
+Focused final-image checks execute the parser, copied snapshot and corrected
+USB framing through full-speed and high-speed final-packet completion. They
+reuse only writable terminal state from the hashed component checkpoint, retain
+final code and read-only data, and bind the final session identity. They also
+cover identity refusal, mailbox immutability, request limits, expiry races and
+retained failures. TinyUSB transfer effects, provider readiness in these narrow
+framing cases, counter progression and scheduling are modeled. Earlier partial
+FIFO-write concatenation is preserved as component evidence and supplies no
+USB packet-framing proof. Root admission/retention and quiet-IRQ checks remain
+separate evidence. Physical GPU, USB and HDMI operation remain unqualified.

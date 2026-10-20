@@ -3,6 +3,8 @@
 #include "../hdmi/session.h"
 #include "../hdmi/framebuffer.h"
 #include "input.h"
+#include "observation.h"
+#include "usb-authority.h"
 #include "a733_counter_clock.h"
 #include "a733_platform_locks.h"
 #include "a733_pins_native.h"
@@ -10,6 +12,7 @@
 #include "a733_gpu_backend.h"
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_platform_native.h"
+#include "a733_usb_platform.h"
 #include "task.h"
 #define GPU_DISPLAY_FRAME_BYTES UINT32_C(1847296)
 #define GPU_DISPLAY_BANK_BYTES (2u*GPU_DISPLAY_FRAME_BYTES+8192u)
@@ -36,8 +39,21 @@ struct gpu_display_application {
     struct a733_gpu_compute_reserved gpu_compute;
     struct a733_gpu_graphics_memory gpu_graphics;
     struct pvr_gpu_service gpu_service;
-    StaticTask_t tasks[3];StackType_t stacks[3][4096];TaskHandle_t handles[3];
+    struct {
+        const struct gpu_display_usb_authority *authority;
+        struct a733_usb_platform platform;
+        struct a733_rail_token rail;
+        struct a733_pmic_lifetime power;
+        struct a733_pmic_request request;
+        struct a733_pmic_snapshot snapshots[4];
+        unsigned step,rail_index;
+    } usb;
+    struct gpu_display_frame_evidence evidence[2];
+    struct gpu_display_presentation presentation[3];
+    struct gpu_display_observation_mailbox observation;
+    StaticTask_t tasks[4];StackType_t stacks[4][4096];TaskHandle_t handles[4];
     atomic_uint fatal,pmic_ready,frames_ready,gpu_closed,state,pmic_park_request,pmic_parked;
+    atomic_uint usb_ready;
     uint64_t deadline,stop_at,last_now;
     uint32_t copied[2],frame_sequence[2],presented[3],presentations;
     unsigned stage;
@@ -54,6 +70,8 @@ void gpu_display_irq(void);
 int gpu_display_bank_copy(unsigned,uint32_t,uint32_t,const void *,uint32_t);
 int gpu_display_bank_seal(void);
 void gpu_display_output_task(void *);
+void gpu_display_usb_task(void *);
+int gpu_display_usb_init(void);
 int gpu_display_output_step(void);
 BaseType_t gpu_display_task_privileged(TaskFunction_t,void *);
 #endif

@@ -51,7 +51,10 @@ void gpu_display_render_task(void *unused)
     if(xTaskGetCurrentTaskHandle()!=app.handles[2])retained();
     const struct gpu_display_inputs *inputs=gpu_display_inputs_get();
     if(!gpu_display_inputs_valid(inputs))retained();
-    while(!atomic_load_explicit(&app.pmic_ready,memory_order_acquire)){(void)budget(1000000);vTaskDelay(1);}
+    /* All USB supply snapshots finish before rendering. After USB publication
+     * it performs metadata-only PMIC health checks, so terminal park cannot
+     * strand a later USB power request. No host enumeration is awaited. */
+    while(!atomic_load_explicit(&app.usb_ready,memory_order_acquire)){(void)budget(1000000);vTaskDelay(1);}
     struct pvr_gpu_service_reply r=lifecycle(PVR_GPU_SERVICE_OPEN,15000000);
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=lifecycle(PVR_GPU_SERVICE_STATUS,0);}
     uint64_t epoch=r.epoch;
@@ -71,6 +74,7 @@ void gpu_display_render_task(void *unused)
         r=scoped(epoch,&q,NULL,5000000,&ticket);
         if(r.render_sequence!=frame+1)retained();
         while(r.render_phase!=PVR_RENDER_SERVICE_COMPLETE){vTaskDelay(1);r=lifecycle(PVR_GPU_SERVICE_STATUS,0);}
+        if(!gpu_display_evidence_begin(frame,in->digest))retained();
         for(uint32_t offset=0;offset<GPU_DISPLAY_WIDTH*GPU_DISPLAY_HEIGHT*4u;){
             uint32_t n=GPU_DISPLAY_WIDTH*GPU_DISPLAY_HEIGHT*4u-offset;if(n>PVR_RENDER_TEXTURE_CHUNK)n=PVR_RENDER_TEXTURE_CHUNK;
             q=(struct pvr_render_texture_request){.operation=PVR_TEXTURE_READ,.previous=frame+1,.offset=offset,.bytes=n};
@@ -83,6 +87,7 @@ void gpu_display_render_task(void *unused)
             q.operation=PVR_TEXTURE_RELEASE;q.generation=ticket;q.bytes=0;
             r=scoped(epoch,&q,NULL,1000000,&ticket);offset+=n;
         }
+        if(!gpu_display_evidence_end(frame))retained();
     }
     r=lifecycle(PVR_GPU_SERVICE_CLOSE,1000000);
     while(r.phase!=PVR_GPU_SERVICE_STOPPED){vTaskDelay(1);r=lifecycle(PVR_GPU_SERVICE_STATUS,0);}
