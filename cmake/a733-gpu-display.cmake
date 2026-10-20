@@ -43,7 +43,7 @@ endforeach()
 include("${gd_root}/apps/gpu-display/CMakeLists.txt")
 sunstone_gpu_display_application(sunstone-a733-gpu-display)
 target_compile_definitions(sunstone-a733-gpu-display PRIVATE SUNSTONE_SECURE_MONITOR=1
- SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1
+ SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_EXTENDED_DEVICE_MEMORY=1 SUNSTONE_A733_USB=1
  A733_SMP_CONTRACT_MAGIC=0x4153373347444331ULL A733_SMP_RESULT_MAGIC=0x4153373347445231ULL)
 target_link_options(sunstone-a733-gpu-display PRIVATE -nostdlib -static -Wl,--gc-sections
  "-Wl,-T,${gd_build}/link-devices.ld" "-Wl,-Map,${gd_build}/image.map")

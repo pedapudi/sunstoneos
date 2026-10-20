@@ -136,6 +136,10 @@ Prevent recurring fixture failures at setup:
 
 - Select the real application feature flags before building. A headset-only
   configuration does not cover transcription startup.
+  Restoring the patched TinyUSB MUSB source also requires
+  `SUNSTONE_A733_USB=1` on the consuming target. Without that definition, the
+  controller translation unit compiles without its `dcd_*` implementations.
+  Check definitions when a derived target restores sources it previously removed.
 - Construct valid sessions and provider configurations with their actual producers.
   Resolve structure sizes, hashes, callback layouts, clock parents, rail ownership
   and deadlines together before running cases. A session-sealing fixture can
