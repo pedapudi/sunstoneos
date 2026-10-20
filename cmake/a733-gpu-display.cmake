@@ -1,4 +1,4 @@
-# Reuse the GPU provider closure and one cached architecture image. No USB owner.
+# Reuse the GPU provider closure and one cached image with a shared-provider USB0 PIO owner.
 set(SUNSTONE_GPU_SUPERVISED ON CACHE BOOL "Supervised GPU admission" FORCE)
 set(SUNSTONE_GPU_RUNTIME_TEXTURE ON CACHE BOOL "Indexed texture support" FORCE)
 set(SUNSTONE_GPU_COMPUTE_APPLICATION OFF CACHE BOOL "Fixed compute application" FORCE)
@@ -14,13 +14,10 @@ file(MAKE_DIRECTORY "${gd_build}")
 get_target_property(gd_sources sunstone-a733-gpu-render SOURCES)
 foreach(source IN ITEMS apps/gpu-render/main.c apps/gpu-render/admission.c apps/gpu-render/session.c
  apps/gpu-render/usb.c apps/gpu-render/texture.c platform/a733/native_usb.c
- platform/a733/maintenance_watchdog.c drivers/usb/a733_usb_platform.c drivers/usb/a733_usb_platform_native.c)
+ platform/a733/maintenance_watchdog.c)
  list(REMOVE_ITEM gd_sources "${gd_root}/${source}")
 endforeach()
-list(REMOVE_ITEM gd_sources "${gpu_app_boot}" "${gpu_app_build}/platform.c" "${gpu_app_build}/build-id.c"
- "${storage_build}/tinyusb/dcd_sunxi_musb.c" "${TINYUSB_DIR}/src/tusb.c"
- "${TINYUSB_DIR}/src/common/tusb_fifo.c" "${TINYUSB_DIR}/src/device/usbd.c"
- "${TINYUSB_DIR}/src/class/vendor/vendor_device.c")
+list(REMOVE_ITEM gd_sources "${gpu_app_boot}" "${gpu_app_build}/platform.c" "${gpu_app_build}/build-id.c")
 foreach(pair "boot.c|boot.patch" "platform.c|platform.patch" "link-devices.ld|link.patch")
  string(REPLACE "|" ";" parts "${pair}")
  list(GET parts 0 source)
@@ -61,7 +58,7 @@ list(REMOVE_DUPLICATES gd_inputs)
 get_target_property(gd_options sunstone-a733-gpu-display COMPILE_OPTIONS)
 get_target_property(gd_definitions sunstone-a733-gpu-display COMPILE_DEFINITIONS)
 get_target_property(gd_links sunstone-a733-gpu-display LINK_OPTIONS)
-set(gd_identity "gpu-display-v1;supervised20;copied-RGBA8-to-two-RGB565;TV0-720p60;extended-pools;${gpu_app_cc_hash};${gpu_app_ld_hash};${gd_options};${gd_definitions};${gd_links};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS};${CMAKE_BUILD_TYPE}")
+set(gd_identity "gpu-display-v2;USB0-PIO-copied-observation;supervised20;copied-RGBA8-to-two-RGB565;TV0-720p60;extended-pools;${gpu_app_cc_hash};${gpu_app_ld_hash};${gd_options};${gd_definitions};${gd_links};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS};${CMAKE_BUILD_TYPE}")
 foreach(input IN LISTS gd_inputs)
  file(SHA256 "${input}" digest)
  string(APPEND gd_identity "${digest}")
@@ -76,7 +73,7 @@ target_sources(sunstone-a733-gpu-display PRIVATE "${gd_build}/build-id.c")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gd_inputs})
 set(gd_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@gd_build@/manifest.json" "{\"target\":\"sunstone-a733-gpu-display\",\"execution_profile\":\"gpu-display-supervised-v1\",\"workload\":\"copied-two-frame-HDMI-720p60\",\"build_id\":\"@gd_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@gd_build@/manifest.json" "{\"target\":\"sunstone-a733-gpu-display\",\"execution_profile\":\"gpu-display-supervised-v2\",\"workload\":\"copied-two-frame-HDMI-720p60-usb-observation\",\"build_id\":\"@gd_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${gd_manifest_script}" gd_manifest_script @ONLY)
 file(WRITE "${gd_build}/finish-manifest.cmake" "${gd_manifest_script}")

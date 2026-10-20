@@ -30,3 +30,5 @@ const struct hdmi_session *gpu_display_hdmi_get(void)
 {return retained.ready?&((const struct gpu_display_session *)(const void *)retained.bytes)->hdmi:NULL;}
 const struct gpu_display_inputs *gpu_display_inputs_get(void)
 {return retained.ready?&((const struct gpu_display_session *)(const void *)retained.bytes)->inputs:NULL;}
+const struct gpu_display_usb_authority *gpu_display_usb_get(void)
+{return retained.ready?&((const struct gpu_display_session *)(const void *)retained.bytes)->usb:NULL;}

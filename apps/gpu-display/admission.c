@@ -22,14 +22,15 @@ int hdmi_session_valid(const struct hdmi_session *s)
         ;
 }
 
-__attribute__((used,retain)) const uint64_t gpu_display_geometry[12]={
-    GPU_DISPLAY_SESSION_MAGIC,1,offsetof(struct gpu_display_session,inputs),
+__attribute__((used,retain)) const uint64_t gpu_display_geometry[14]={
+    GPU_DISPLAY_SESSION_MAGIC,2,offsetof(struct gpu_display_session,inputs),
     sizeof(struct gpu_display_boot_contract),A733_STORAGE_SESSION_ADDRESS,
     GPU_DISPLAY_ENVELOPE_LIMIT,20,sizeof(struct hdmi_session),
-    offsetof(struct gpu_display_session,gpu_initial),sizeof(struct gpu_display_inputs),1280,720};
+    offsetof(struct gpu_display_session,gpu_initial),sizeof(struct gpu_display_inputs),1280,720,
+    offsetof(struct gpu_display_session,usb),sizeof(struct gpu_display_usb_authority)};
 int gpu_display_session_valid(const struct gpu_display_session *s)
 {
-    if(!s || s->magic!=GPU_DISPLAY_SESSION_MAGIC || s->version!=1 ||
+    if(!s || s->magic!=GPU_DISPLAY_SESSION_MAGIC || s->version!=2 ||
        s->bytes<sizeof(*s) || s->bytes>GPU_DISPLAY_ENVELOPE_LIMIT ||
        !s->memory_authority ||
        s->inputs.bytes!=s->bytes-offsetof(struct gpu_display_session,inputs) ||
@@ -38,6 +39,14 @@ int gpu_display_session_valid(const struct gpu_display_session *s)
        (s->hdmi.pmic.owner>=9&&s->hdmi.pmic.owner<=11) ||
        !present(s->gpu_initial)||!present(s->gpu_memory)||!present(s->gpu_electrical)||
        !present(s->gpu_supervision))return 0;
+    const struct gpu_display_usb_authority *usb=&s->usb;
+    if(!usb->owner || !usb->handoff || usb->owner==s->hdmi.owner ||
+       usb->owner==s->hdmi.pmic.owner || (usb->owner>=9&&usb->owner<=11) ||
+       usb->cold_reference!=2 || usb->reserved ||
+       usb->supply_uv[0]!=3300000 || usb->supply_uv[1]!=3300000 ||
+       usb->supply_uv[2]!=1200000 || usb->supply_uv[3]!=900000 ||
+       !present(usb->initial) || !present(usb->electrical) ||
+       !present(usb->supervision))return 0;
     /* EL3 checks only integer bounds and hashes. Vertex floating-point checks
      * run at EL1 before providers, through gpu_display_inputs_valid. */
     const struct gpu_display_inputs *in=&s->inputs;
