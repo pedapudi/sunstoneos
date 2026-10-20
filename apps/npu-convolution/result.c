@@ -3,7 +3,12 @@
 #include "result.h"
 #ifdef SUNSTONE_NPU_SUPERVISED
 #include "session.h"
+#ifdef SUNSTONE_ACCELERATORS
+#include "../accelerators/session.h"
+_Static_assert(A733_SMP_CONTRACT_MAGIC==ACCELERATOR_CONTRACT_MAGIC,"combined launcher contract");
+#else
 _Static_assert(A733_SMP_CONTRACT_MAGIC==NPU_CONTRACT_MAGIC,"supervised launcher contract");
+#endif
 #define NPU_REQUIRED A733_NPU_HANDOFF_SUPERVISED_REQUIRED
 #define USB_REQUIRED A733_NPU_APPLICATION_USB_SUPERVISED
 #else
