@@ -1,5 +1,6 @@
 #include "spi.h"
 #include "snapshot.h"
+#include "irq.h"
 #include "boot.h"
 #include <string.h>
 int board_application_task_privileged(void (*entry)(void *),void *context)
@@ -17,5 +18,8 @@ int board_application_start(void)
  spi.session=*s;
  if(!spi_session_valid(&spi.session)||memcmp(s->board.image,a733_smp_build_id,32))return 0;
  spi.handle=xTaskCreateStatic(spi_task,"spi",2048,NULL,4,spi.stack,&spi.task);
- return spi.handle&&spi_construct();
+ if(!spi.handle)return 0;
+ if(spi.session.version==2)vTaskCoreAffinitySet(spi.handle,1);
+ if(!spi_construct())return 0;
+ return spi.session.version!=2||spi_irq_bind();
 }

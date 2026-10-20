@@ -20,11 +20,15 @@ list(REMOVE_ITEM spi_sources "$<TARGET_OBJECTS:a733-board-usb2-host>"
 # Keep normal source inclusion, actual boot and provider source identities.
 apply_build_patch("${spi_build}/boot.c" "${board_build}/boot-supervised.c"
  "${SUNSTONE_SOURCE_ROOT}/apps/spi/boot.patch")
-list(APPEND spi_sources "${spi_build}/boot.c"
+list(REMOVE_ITEM spi_sources "${storage_build}/platform.c")
+apply_build_patch("${spi_build}/platform.c" "${storage_build}/platform.c"
+ "${SUNSTONE_SOURCE_ROOT}/apps/spi/platform.patch")
+list(APPEND spi_sources "${spi_build}/boot.c" "${spi_build}/platform.c"
+ "${SUNSTONE_SOURCE_ROOT}/drivers/gpu/gicv3_spi.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/spi/a733_spi.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/spi/a733_spi_platform.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/spi/a733_spi_platform_native.c")
-foreach(source IN ITEMS apps/spi/main.c apps/spi/native.c apps/spi/run.c apps/spi/usb0.c apps/spi/admission.c apps/spi/snapshot.c)
+foreach(source IN ITEMS apps/spi/main.c apps/spi/native.c apps/spi/irq.c apps/spi/run.c apps/spi/usb0.c apps/spi/admission.c apps/spi/snapshot.c)
  list(APPEND spi_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
 add_executable(sunstone-a733-spi EXCLUDE_FROM_ALL ${spi_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
@@ -45,11 +49,13 @@ if(spi_links)
 endif()
 file(GLOB spi_headers "${SUNSTONE_SOURCE_ROOT}/apps/spi/*.h")
 set(spi_inputs ${spi_sources} ${spi_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/include/gicv3_spi.h"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_spi.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_spi_platform.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_spi_platform_native.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/spi/boot.patch"
+ "${SUNSTONE_SOURCE_ROOT}/apps/spi/platform.patch"
  "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_DUPLICATES spi_inputs)
-set(spi_identity "native-spi1;supervised60;spi3-pe-cs0;write-read32;retained-bldo1;retained;${CMAKE_C_COMPILER_VERSION}")
+set(spi_identity "native-spi1;supervised60;spi3-pe-cs0;write-read32;poll-or-IRQ59;retained-bldo1;retained;${CMAKE_C_COMPILER_VERSION}")
 foreach(input IN LISTS spi_inputs)
  file(SHA256 "${input}" spi_hash)
  string(APPEND spi_identity "${spi_hash}")
