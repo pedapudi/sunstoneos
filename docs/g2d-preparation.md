@@ -1,4 +1,4 @@
-# Prepare and capture one G2D fill or copy
+# Prepare and capture one G2D fill, copy or source-over-solid
 
 The native application performs one caller-selected fill or source-copy operation
 and exports an immutable CPU-owned copy. The host path uses the existing
@@ -126,9 +126,11 @@ not rewrite the journal for every 512-byte source chunk. This preserves a bounde
 request history without adding thousands of fsyncs to the session window.
 
 The host preserves raw fragments, full responses and `output.argb` durably before
-ACK. It compares every copied byte with an independent CPU fill/copy reference,
+ACK. For fill and copy it compares every byte with an independent CPU reference,
 including zero pixels outside the rectangle and zero padding. A mismatch retains
-the actual output and stops before ACK. A matching result receives one
+the actual output and stops before ACK. Blending retains its ideal reference
+comparison as an unqualified diagnostic; authenticated output may differ from
+that ideal without blocking ACK. An authenticated result receives one
 41-byte ACK bound to generation and output digest. One final query must return
 ACKed status with unchanged identity, digests and proofs. This observation ends
 capture; every native resource remains retained. Evidence failures after an
@@ -143,7 +145,7 @@ interrupt delivery, recovery or performance.
 `checks/g2d-preparation.py` consumes the frozen native evidence directory and raw
 page-table artifact from the actual allocator case. It produces typed modeled
 facts, checks allocation and descriptor refusals, and compiles the SRAM launcher
-once. `checks/g2d-host.py` consumes that modeled bundle and checks fill/copy bytes,
+once. `checks/g2d-host.py` consumes that modeled bundle and checks fill/copy/source-over-solid bytes,
 FS/HS framing, durable output before ACK, identity refusal and partial failures.
 Both checkers record physical authority as false. The operational caller rejects
 the modeled bundle.
@@ -171,3 +173,18 @@ unchanged board authority and stops before DDR/allocation validation; it claims
 no complete physical admission or capture. Launcher generation, request format
 and every launcher source/header match the preserved launcher above. Its binary
 and object artifacts are reused without recompilation or instruction-case replay.
+
+
+For opaque solid-background blending, pass `--operation source-over-solid` and
+an opaque `--color`, such as `0xff315a93`. Source coordinates and destination
+rectangle retain the copy bounds. Input pixels use straight per-pixel alpha;
+output and padding outside the rectangle remain zero. This operation adds no
+second upload or buffer mapping. It requires the launcher built with the changed
+geometry header; the earlier fill/copy launcher rejects operation 3.
+
+The host compares RGB against ideal nearest-integer `/255` source-over arithmetic
+and expects opaque output alpha. Hardware rounding remains unqualified, and the
+capture record states that limit. The arithmetic comparison is an unqualified diagnostic and does not reject an
+authenticated output or prevent its ACK. Session, digest, completion and durable
+output checks remain strict. Neither the comparison nor ACK authorizes another
+operation or releases retained resources.

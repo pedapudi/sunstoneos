@@ -1,7 +1,7 @@
-# Native G2D fill and copy
+# Native G2D fill, copy and solid-background blending
 
 The native FreeRTOS application implements one retained ARGB8888 fill or
-source-copy operation per boot. This document assumes familiarity with DMA,
+source-copy or source-over-solid operation per boot. This document assumes familiarity with DMA,
 IOMMU translation and the supervised A733 launch contract. Software
 implementation does not establish physical pixel correctness or safe resource
 reclamation. Board testing is blocked while physical recovery is unavailable.
@@ -10,10 +10,13 @@ The caller supplies width, height, byte stride, operation, destination rectangle
 source origin and fill color in the sealed 904-byte session. Width is at most
 1280, height at most 720 and stride at most 5120 bytes. The stride must cover
 all pixels and be divisible by four. ARGB8888 bytes are B, G, R, A in memory.
-Fill requires a zero source origin; copy requires a zero fill color. Bounds
-checks use subtraction before computing offsets. Scaling, blending, rotation,
+Fill requires a zero source origin; copy requires a zero fill color. Source-over-solid
+uses straight per-pixel source alpha over the opaque ARGB color in `color`; its
+alpha byte must be 255. It uses the same bounded source origin and rectangle as
+copy. Bounds
+checks use subtraction before computing offsets. Scaling, image-over-image blending, translucent backgrounds, rotation,
 color conversion and additional formats remain required hardware modes outside
-this initial application.
+these bounded operations.
 
 The caller uploads stride times height bytes, including row padding. A SHA256
 digest authenticates the complete source even for fill. The destination starts
@@ -80,8 +83,12 @@ cover at most three distinct 4 MiB windows and never map the guards.
 ## Completion precedes the immutable copy
 
 The register-command queue (RCQ) contains eight headers. It configures video
-layer0, disables unused UI layers and scaling, selects blender COPY and writes
-the bounded destination rectangle. A zero-dirty final header preserves the
+layer0, disables unused UI layers and scaling, and writes the bounded destination
+rectangle. Fill and copy select blender COPY. Source-over-solid enables UI2 in
+constant-color mode as pipe1, with uploaded V0 foreground in pipe0, and selects
+Porter-Duff SRCOVER. UI2 adds no buffer reads or IOMMU mapping. Both inputs and
+the output use the effective upstream straight-alpha settings; the uploaded
+source retains its per-pixel alpha rather than a substituted global alpha. A zero-dirty final header preserves the
 hardware's even-header requirement. GPL source provenance and preserved
 notices are recorded in [the source manifest](../apps/g2d/sources.json).
 
@@ -92,6 +99,17 @@ software does not infer undocumented increment semantics. A non-destructive IOMM
 scan follows completion and each bounded output-copy chunk. Guard checks and
 fresh completion observations surround every chunk. The final copied digest
 and source digest are checked before the terminal success publication.
+
+The current native readout omits a step in the effective pinned Linux success
+path. Linux acknowledges task-end, toggles the mixer AHB reset from zero to one,
+and only then signals completion. Its retained `TASK_APPLY` path also performs
+that reset without destroying or unmapping the task. Retained allocations
+therefore do not establish that reset is needed only for reuse. The source does
+not explain whether reset is required for safe output observation, nor establish
+that reset itself drains writes. Fresh task-end and fault scans alone do not
+exclude late output writes. Physical copied-output admission needs a reviewed
+success lifecycle and visibility boundary; the current no-reset model cannot
+supply that authority. Linux timeout recovery is not a drain guarantee.
 
 USB exports the immutable private copy. Its 192-byte header binds the full
 sealed session digest, source digest, output digest, dimensions, operation,
@@ -107,7 +125,15 @@ A final query returns acknowledged status with the same proof and no payload.
 ACK, timeout and task completion release no memory, mappings, clocks or power.
 The shared session deadline bounds upload, setup, submission, copying and USB.
 
-Physical qualification must compare fill and copy output, including arbitrary
+The host source-over reference computes each RGB channel as
+`(source * alpha + background * (255 - alpha) + 127) // 255` and sets output alpha
+to 255. This is an ideal nearest-integer expectation. The pinned setters establish
+routing and controls, but do not establish device quantization. For blending, agreement or disagreement is recorded as an unqualified
+diagnostic and does not gate ACK. Authentication, completion and durable output
+checks remain strict. Modeled output cannot qualify physical arithmetic. The UAPI SRCOVER/DSTOVER formula comments conflict with the
+executed source and are not used as an oracle.
+
+Physical qualification must compare fill, copy and source-over output, including arbitrary
 source alpha, nonzero origins and untouched padding, with the CPU reference.
 It must also establish actual MMIO and DMA
 reachability, parent stability and retained failure handling. INTID83 is
@@ -163,3 +189,25 @@ and an exact high-speed packet-length case with modeled DCD completions.
 The raw constructor table, task checkpoints and case records are preserved
 beside the frozen image. These models do not establish physical pixels,
 interrupt delivery, USB operation or recovery.
+
+
+The source-over image has SHA256
+`b27476caef23ad7cd378552efcc5a919420c8e801f6f658466290d6b1bbfe710`, with evidence
+under `g2d-blend-20261020/`. A source comparison check matches the complete UI2
+and blender register images against unchanged pinned Linux setters under
+ASan/UBSan. One linked native job interprets emitted RCQ words with explicit
+ideal blending effects, then checks the retained copy, full session binding,
+master10-only scans and guards. Its source origin and destination origin differ,
+and a 60-pixel image with 256-byte stride exercises untouched row padding.
+
+Two changed SRAM entry cases admit this operation and refuse a nonopaque
+background. The changed inline geometry predicate requires the new launcher;
+its source and binary are retained. Root confirms all twelve boot-object
+sections and symbolic relocations, generated boot source and FreeRTOS port
+source match the accepted power image. Existing boot and TinyUSB evidence keeps
+its recorded scope without replay. The operation model consumes root-published
+contract bytes as supplied state at the actual private and live record addresses;
+it does not execute startup or establish cache publication. New host cases use
+the saved native copied bytes with the identical sealed session and check ideal
+reference-difference reporting, durable capture and ACK refusal on a corrupted
+output digest.
