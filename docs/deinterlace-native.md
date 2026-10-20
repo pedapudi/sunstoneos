@@ -1,7 +1,7 @@
 # Native offline deinterlacing
 
-`sunstone-a733-deinterlace` accepts one authenticated 640 × 480 NV12 frame,
-submits a fixed offline WEAVE operation to A733 DI301, and exposes an immutable
+`sunstone-a733-deinterlace` accepts an authenticated fixed-geometry NV12 job,
+submits one offline WEAVE or initial motion-adaptive operation to A733 DI301, and exposes an immutable
 copied output through USB0. It retains the controller, buffers, IOMMU tables,
 clock/power ownership and copied result until whole-board power removal.
 Successful output delivery does not authorize another job or resource reuse.
@@ -11,8 +11,9 @@ strides. The Y plane contains 480 lines and the UV plane 240 lines, totaling
 460,800 bytes. Alternating lines belong to alternating fields. Deterministic
 field patterns and caller-supplied frames are valid inputs; no media permission
 or preknown output oracle is required. Weave preserves those fields without
-motion-adaptive interpolation. Motion detection, TNR, film detection, crop,
-scale, additional formats and repeated jobs are outside this profile.
+motion-adaptive interpolation. TNR, film detection, crop, scale, additional formats and repeated jobs remain
+outside both profiles. Mode 2 adds initial motion-adaptive processing as
+described below.
 
 ## Selected implementation and configuration
 
@@ -113,6 +114,46 @@ drop policy. The 20-second session deadline bounds upload, execution and USB
 service; expiry stops service and retains memory, even if delivery is incomplete.
 The host workflow is described in [deinterlace preparation](deinterlace-preparation.md).
 
+## Initial motion-adaptive operation
+
+Mode 2 reuses the pinned `DI_MODE_30HZ` configuration: `MOTION` with one output
+frame, based on field 2 as defined by `dit_setting_reg.output_mode`. The upload
+contains two complete combined-field NV12 frames, previous then current,
+totaling 921,600 bytes. One digest authenticates both frames before provider
+acquisition. Output remains one 460,800-byte NV12 frame. The 888-byte session
+and 192-byte result retain their layout; the immutable geometry marker is
+revision 2 and declares the maximum upload size. Mode 1 retains its existing
+single-frame input and WEAVE behavior.
+
+This is one initial operation with zero motion history. The source initializes
+two 76,800-byte motion-flag buffers with stride 160 and initial direction zero.
+The first buffer is read-only and the second writable by DI; neither is reused.
+The fixed path enables DIT, MD and their required DMA channels, while TNR, film
+detection and video-on-film remain disabled. The existing `alg_en == 0` branch
+preserves the selected hardware motion settings and excludes CPU feedback; it
+does not disable hardware MD. No steady-state history or repeated-job claim is
+made.
+
+Motion confidence thresholds and slopes at offsets `0x1004` through `0x100c`
+have no explicit initialization in the pinned DI301 setup. Mode 2 therefore
+requires an admitted lifetime with dedicated DI reset held asserted and its bus
+and module clocks gated. Native readback checks all three conditions before
+following `di_clk_enable`: preserve the already released DE_SYS reset, release
+dedicated DI reset, configure rate, then enable bus and module clocks. It never
+asserts reset on inherited work or uses reset as a drain/recovery operation.
+This follows the upstream reset-default lifecycle; numerical confidence defaults
+and physical reset effectiveness remain unqualified. The adapter never writes
+CPU-shadow zeros into those confidence registers. Mode 1 still uses its admitted
+powered, reset-deasserted entry.
+
+Motion requires 1,384,448 bytes of WB allocations and 1,617,920 bytes of NC
+allocations. The existing 32 KiB IOMMU table maps five spans across four L2
+windows: previous input at `0x10000000`, output at `0x10400000`, current input
+at `0x10800000`, and flags at `0x10c00000` and `0x10c20000`. All have unmapped
+guard pages and checked tail padding. Both input frames are checked against the
+retained authenticated upload before output publication. The same one-attempt,
+retained-result and USB ACK rules apply.
+
 ## Preserved software evidence
 
 Evidence is under `deinterlace-native-20261020`. The configuration-only
@@ -132,3 +173,17 @@ the 460,992-byte response, FIFO refill, terminal ZLP and ACK ordering, with DCD
 transfers modeled. Root's four boot-guard and three SRAM cases are preserved
 separately. None of these checks establishes physical DI, USB, power, recovery
 or DMA visibility. No board, queue or storage access occurred.
+
+The separate `deinterlace-motion-20261020` evidence covers initial MOTION
+configuration under ASan/UBSan, the actual allocator and five-span table, cold
+entry refusals, new buffer guards and copied-result ownership. Its device model
+performs explicitly synthetic bounded writes; it does not implement or validate
+DI motion arithmetic. The host checks output integrity without a CPU pixel
+oracle. Earlier WEAVE, boot, power and USB evidence remains bound to its original
+frozen image and is not replayed for this mode.
+
+The accepted motion image retains the inherited descriptive workload label
+`copied-NV12-offline-weave`. That label is not a runtime predicate: the sealed
+session mode and linked geometry marker determine admission. The generator is
+corrected separately for future builds; the accepted image is not rebuilt for
+that wording change.
