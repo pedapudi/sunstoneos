@@ -73,6 +73,9 @@ or engine confinement. Verify command streams, descriptors, tensors and outputs
 against their actual address paths, including internal SRAM or bypass routes.
 Exact register readback can reject unsupported state without proving the engine
 uses the intended mapping.
+Use the allocator's returned physical address when constructing device mappings.
+If a fixed profile instead uses CPU addresses as physical addresses, explicitly
+require equality before transferring ownership to the device.
 
 Cache publication must target the writer's physical address space. EL3 with its
 MMU disabled uses Secure addresses, even when `SCR_EL3.NS=1`; maintenance by
@@ -145,6 +148,14 @@ Prevent recurring fixture failures at setup:
   and deadlines together before running cases. A session-sealing fixture can
   leave provider fields unused; validate its pin and PMIC handoff before reusing
   it for application construction.
+  Preserve cross-field bindings when changing fixture identities: the board
+  qualification and recovery hashes must identify the same record. Check the
+  resulting session with the actual validator before a longer application batch.
+- Place emulator stack, scratch and return-trampoline memory outside the entire
+  admitted device pools. An address outside the currently allocated pages may
+  still violate the allocator's exclusion of its own pool from output arguments.
+  The extended profile reserves `0x48000000..0x79000000`; inherited fixtures with
+  stack or scratch near `0x50000000` are unsuitable for allocator execution.
 - Resolve native hooks by defining compilation unit and verify the final ELF.
   Local names can collide, and a function may be inlined. Cover the actual return
   width and calling convention rather than a guessed symbol boundary. Filter
