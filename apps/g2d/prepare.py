@@ -41,7 +41,8 @@ def geometry_check(geometry):
         stride*height<=3686400 and format_==0 and w>0 and h>0 and
         dx<width and dy<height and w<=width-dx and h<=height-dy,'Invalid G2D destination geometry.')
     require((operation==1 and sx==sy==0) or
-        (operation==2 and color==0 and sx<width and sy<height and w<=width-sx and h<=height-sy),
+        (operation in (2,3) and (color==0 if operation==2 else color>>24==255) and
+         sx<width and sy<height and w<=width-sx and h<=height-sy),
         'Invalid G2D source rectangle or operation.')
     return stride*height
 

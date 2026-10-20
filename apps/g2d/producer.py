@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seal caller-selected ARGB8888 fill/copy geometry and exact source bytes."""
+"""Seal caller-selected ARGB8888 fill/copy/source-over-solid geometry and exact source bytes."""
 import argparse
 import hashlib
 import importlib.util
@@ -38,12 +38,12 @@ def main():
         parser.add_argument('--'+name,type=lambda value:int(value,0))
     for name in ('dx','dy','sx','sy','color'):
         parser.add_argument('--'+name,type=lambda value:int(value,0),default=0)
-    parser.add_argument('--operation',choices=('fill','copy'),required=True)
+    parser.add_argument('--operation',choices=('fill','copy','source-over-solid'),required=True)
     args=parser.parse_args()
     values={name:getattr(args,name) for name in ('owner','authority','client','width','height','dx','dy','sx','sy','color')}
     values.update(stride=args.stride if args.stride is not None else args.width*4,
         w=args.w if args.w is not None else args.width,h=args.h if args.h is not None else args.height,
-        operation=1 if args.operation=='fill' else 2)
+        operation={'fill':1,'copy':2,'source-over-solid':3}[args.operation])
     values.update({name:getattr(args,name).read_bytes() for name in ('initial','memory','electrical','supervision')})
     args.output.write_bytes(extend(args.board.read_bytes(),args.input.read_bytes(),**values))
 

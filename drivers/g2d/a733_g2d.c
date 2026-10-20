@@ -31,6 +31,7 @@ int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session
     memset(memory,0,capacity);uint8_t *p=memory;
     struct g2d_mixer_ovl_v_reg *v=(void *)(p+128);
     struct g2d_mixer_bld_reg *b=(void *)(p+384);
+    struct g2d_mixer_ovl_u_reg *u=(void *)(p+256);
     struct g2d_mixer_write_back_reg *w=(void *)(p+832);
     unsigned size=(s->w-1)|((s->h-1)<<16);
     v->ovl_attr.dwval=UINT32_C(0xff000001)|(s->op==1?16:0);
@@ -41,11 +42,22 @@ int a733_g2d_commands(void *memory,size_t capacity,const struct a733_g2d_session
     b->bld_en_ctrl.dwval=0x101;b->mem_size[0].dwval=size;
     b->out_size.dwval=size;b->bld_ctrl.dwval=0x00010001; /* COPY */
     b->rop_ctrl.dwval=0xf0;b->ch3_index0.dwval=0x41000;
+    if(s->op==A733_G2D_SRCOVER_SOLID){
+        /* Effective g2d_bsp_bld: V0/pipe0 source, UI2/pipe1 destination.
+         * G2D_PIXEL_ALPHA and bpremul=0 preserve straight per-pixel alpha.
+         * UI2 is a constant opaque color, so it issues no buffer reads. */
+        _Static_assert(sizeof(*u)==32,"UI2 RCQ slot ends before VSU");
+        u->ovl_attr.dwval=UINT32_C(0xff000011);
+        u->ovl_mem.dwval=size;u->ovl_winsize.dwval=size;
+        u->ovl_mem_pitch0=s->stride;u->ovl_fill_color=s->color;
+        b->bld_en_ctrl.dwval=0x301;b->mem_size[1].dwval=size;
+        b->bld_ctrl.dwval=0x03010301; /* SRCOVER; straight output. */
+    }
     w->data_size.dwval=size;w->pitch0=s->stride;
     w->laddr0=A733_G2D_OUTPUT_IOVA+s->dy*s->stride+s->dx*4;
     block(p,0,128,sizeof(*v),G2D_V0);
     block(p,1,192,4,G2D_UI0);block(p,2,224,4,G2D_UI1);
-    block(p,3,256,4,G2D_UI2);block(p,4,288,4,G2D_VSU);
+    block(p,3,256,s->op==A733_G2D_SRCOVER_SOLID?sizeof(*u):4,G2D_UI2);block(p,4,288,4,G2D_VSU);
     block(p,5,384,sizeof(*b),G2D_BLD);block(p,6,832,sizeof(*w),G2D_WB);
     /* Eighth header is the required even-count zero-dirty terminator. */
     return 1;

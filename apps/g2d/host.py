@@ -30,18 +30,22 @@ def decode(raw,session):
     size=geometry[1]*geometry[2]
     require(count==(size if status==1 else 0) and len(raw)==HEADER+count,'G2D copied extent differs.')
     result=dict(status=status,bytes=count,width=geometry[0],height=geometry[1],stride=geometry[2],
-        format='ARGB8888-little-endian-BGRA',operation='fill' if geometry[4]==1 else 'copy',
+        format='ARGB8888-little-endian-BGRA',operation={1:'fill',2:'copy',3:'source-over-solid'}[geometry[4]],
         complete=complete,rcq_status=rcq,scanned_masters=scanned,guards=guards,physical_qualified=False)
     if status in (1,3):
         require(complete==1 and rcq&1 and scanned==0x400 and guards==1,'G2D completion or guard proof differs.')
         if status==1:
             require(hashlib.sha256(raw[HEADER:]).digest()==raw[96:128],'G2D copied pixel digest differs.')
         result['sha256']=raw[96:128].hex()
+    if geometry[4]==3:result['arithmetic_scope']='Ideal straight-alpha /255 nearest reference; hardware rounding unqualified.'
     return result
 
 
 def expected_output(source,session):
-    """Independent byte-exact fill/copy oracle, including zero destination padding."""
+    """Fill/copy bytes and ideal source-over oracle, including zero padding.
+
+    Blending rounds the ideal /255 result to nearest. Hardware quantization is
+    unqualified; modeled pixels compared here do not qualify device arithmetic."""
     preparation.session_check(session)
     width,height,stride,format_,operation,dx,dy,w,h,sx,sy,color=struct.unpack_from('<12I',session,856)
     require(len(source)==height*stride and hashlib.sha256(source).digest()==session[768:800],
@@ -50,7 +54,14 @@ def expected_output(source,session):
     row=struct.pack('<I',color)*w if operation==1 else None
     for y in range(h):
         target=(dy+y)*stride+dx*4
-        out[target:target+w*4]=row if operation==1 else source[(sy+y)*stride+sx*4:(sy+y)*stride+(sx+w)*4]
+        start=(sy+y)*stride+sx*4
+        if operation==3:
+            background=struct.pack('<I',color)
+            for x in range(w):
+                pixel=source[start+x*4:start+x*4+4];alpha=pixel[3]
+                out[target+x*4:target+x*4+4]=bytes(
+                    [(pixel[c]*alpha+background[c]*(255-alpha)+127)//255 for c in range(3)]+[255])
+        else:out[target:target+w*4]=row if operation==1 else source[start:start+w*4]
     return bytes(out)
 
 
@@ -98,7 +109,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
                 matches_cpu_reference=frame[HEADER:]==expected,wire_header_hex=frame[:HEADER].hex())
             record['g2d_output']=copied;save()
-            if not copied['matches_cpu_reference']:
+            if struct.unpack_from('<I',session,872)[0]==3:
+                copied['reference_qualified']=False
+                copied['reference_comparison']='matches-ideal' if copied['matches_cpu_reference'] else 'differs-from-ideal'
+                save()
+            elif not copied['matches_cpu_reference']:
                 result['matches_cpu_reference']=False
                 record['g2d_result']='observed-failure';record['durable_result']=entry.copy();save();return result
             copied['ack_write_intent']=True;save()
@@ -120,7 +135,8 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             try:save()
             except BaseException:
                 record['g2d_result']='unobserved';record.pop('durable_result',None);raise
-            result.update(matches_cpu_reference=True,ack_observed=True)
+            result.update(matches_cpu_reference=copied['matches_cpu_reference'],ack_observed=True)
+            if 'reference_qualified' in copied:result['reference_qualified']=False
             return result
         raise supervisor.CaptureWindowExpired('G2D exhausted its bounded pending-query budget.')
     except BaseException as error:

@@ -56,9 +56,25 @@
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_bld.c",
       "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
       "sha256": "19e67ee9de3a27f9229c2e879dc8e8b3eedf15cb238e753d15069e6d4b4d2d24"
+    },
+    "g2d_rcq/g2d_ovl_u.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_ovl_u.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "e1e9f6f0046684461fa7f2cfac7729bab4e4083bc8d45a819483e68e55c152bc"
+    },
+    "sunxi-g2d.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/sunxi-g2d.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "b12f4c8ad4aebcf05aaaad5c3a73715832a771eb010e346244d00a0b91c13595"
+    },
+    "g2d_rcq/g2d.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "abc5f9f6ae61013ba1c88b44ef9929c1fc48818cb06facb1065e4f73e7750612"
     }
   },
   "manual": "A733 User Manual V1.00 sections 4.1.6.108\u2013109 (G2D CCU) and 14.5 (fill and blit). Existing sources.lock.json pins the manual.",
   "dtsi": "Pinned sun60iw2p1.dtsi selects MMIO0x05440000, INTID83, DE_SYS/PCK1, four clocks/resets and IOMMU master10.",
-  "limits": "Physical pixels, RCQ completion/counter semantics, bus reachability, clock stability and DMA visibility require a supervised board test; software checks cannot qualify them."
+  "limits": "Physical pixels, RCQ completion/counter semantics, bus reachability, clock stability and DMA visibility require a supervised board test; software checks cannot qualify them.",
+  "source_over_solid": "g2d_bsp_bld and independent bitblt route source through V0/pipe0 and destination through UI2/pipe1. UI2 fill-color mode supplies opaque background without another DMA buffer. Effective image validation forces bpremul=0; pixel-alpha mode0 and straight blender/output flags are retained. SRCOVER uses03010301. UAPI formula comments are contradictory and are not an arithmetic oracle. Host /255 nearest reference does not establish hardware rounding."
 }
