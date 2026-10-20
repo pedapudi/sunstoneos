@@ -56,15 +56,21 @@ static void typec_task(void *unused)
      !dp_app.typec.provider.transaction&&!dp_app.typec.provider.pd.transaction&&
      !dp_app.typec.bus.held&&dp_app.typec.bus.state==A733_TWI_READY)
    a733_typec_revoke(&dp_app.typec.provider);
-  if(started)(void)a733_typec_poll(&dp_app.typec.provider);
+  unsigned cc_progress=0;
+  if(started){
+   enum a733_typec_state oldstate=dp_app.typec.provider.state;unsigned oldstep=dp_app.typec.provider.step;
+   (void)a733_typec_poll(&dp_app.typec.provider);
+   cc_progress=oldstate==A733_TYPEC_MONITOR&&dp_app.typec.provider.state==A733_TYPEC_MONITOR&&
+    !dp_app.typec.provider.pd_turn&&dp_app.typec.provider.step&&dp_app.typec.provider.step!=oldstep;
+  }
   if(dp_app.typec.provider.state==A733_TYPEC_OFF_RETAINED&&
      atomic_load_explicit(&dp_app.typec.output_state,memory_order_acquire)==1)
    atomic_store_explicit(&dp_app.typec_stop,DP_TYPEC_OFF,memory_order_release);
-  /* Keep a pending byte/block transfer moving within its5ms deadline.
-   * Yield to the independent equal-priority power task between polls. */
+  /* Keep transfers and progressing CC observation steps moving. A completed
+   * publication, a PD turn, or no-progress BUSY work still sleeps one tick. */
   if(started&&dp_app.typec.provider.state!=A733_TYPEC_OFF_RETAINED&&
      dp_app.typec.provider.state!=A733_TYPEC_UNCERTAIN&&
-     (dp_app.typec.provider.transaction||dp_app.typec.provider.pd.transaction))taskYIELD();
+     (dp_app.typec.provider.transaction||dp_app.typec.provider.pd.transaction||cc_progress))taskYIELD();
   else vTaskDelay(1);
  }
 }
