@@ -2,7 +2,8 @@
 
 The host path prepares fixed 640 × 480 NV12 input for the A733 DI301 engine
 under FreeRTOS. WEAVE uses one combined-field frame; first-operation motion
-uses two consecutive combined-field frames. NV12 stores the full-resolution Y plane followed by
+uses two consecutive combined-field frames. NV12 stores the full-resolution
+Y plane followed by
 interleaved U/V samples at half vertical resolution. Both plane strides are
 640 bytes. A frame contains 460800 bytes. WEAVE input contains one frame,
 and motion input concatenates two frames into 921600 bytes. Both modes copy
@@ -13,8 +14,7 @@ Offline WEAVE preserves those lines in the output.
 `apps/deinterlace/producer.py` seals the input digest and four typed authority
 records into an 888-byte session. The required configuration is top field first,
 NV12, WEAVE or first-operation MOTION OUT_1FRAME, the 300 MHz DI module clock,
-both IOMMU gate values
-`0x10007`, and the shared DCDC2 rail at 800 mV. The reference digest stays zero.
+both IOMMU gate values `0x10007`, and the shared DCDC2 rail at 800 mV. The reference digest stays zero.
 The deterministic field pattern distinguishes the fields and plane rows:
 
 ```sh
@@ -26,11 +26,11 @@ manifest. It checks the linked session geometry, protected memory ranges,
 actual allocation rows and every IOMMU table descriptor. The two cached
 allocations hold authenticated input staging and immutable copied output.
 The uncached allocations hold the page table and guarded DMA input/output.
-Only the source and destination spans are mapped; source pages are read-only.
+WEAVE maps only source and destination spans; source pages are read-only.
 The engine receives one authenticated upload with the admitted input digest.
-Motion adds guarded current-frame and MD flag allocations. Its previous/current
+Motion adds guarded current-frame and motion-detection flag allocations. Its previous/current
 frame spans are read-only; the output frame and output flags are writable.
-The complete page table includes four L2 windows and leaves all guards and
+The motion page table includes four L2 windows and leaves all guards and
 intervening holes unmapped.
 
 Physical admission requires typed records bound to the image, target and
@@ -72,7 +72,7 @@ faults test refusal and acknowledgment ordering. These checks establish software
 behavior; physical clock, DMA visibility, completion and recovery evidence
 remain required before hardware qualification.
 
-Host preparation and capture passed the focused offline checks on 20 October
+WEAVE preparation and capture passed the focused offline checks on 20 October
 2026. Preparation consumed the actual native constructor's allocation proof and
 complete page table for the emitted session. It rejected physical launch from
 modeled authority and refused altered allocation aliases, permissions, guards,
