@@ -1,4 +1,4 @@
-# A733 system IOMMU: bounded camera mappings and cold installation
+# A733 system IOMMU: fixed device mappings and cold installation
 
 The native [table builder and controller](../drivers/iommu/a733_iommu.c) implement
 page mappings, a polled initial configuration, and fault capture for the A733
@@ -7,11 +7,12 @@ addresses into physical RAM addresses and checks device read/write permissions.
 This component has host and source-comparison evidence. It has no physical
 qualification or native platform handoff.
 
-The initial controller profile translates camera master 1. All other masters
-remain excluded under a retained global lease. The component cannot replace an
-enabled inherited directory, release that lease, remap live tables, or reclaim
-buffers. Independent hardware watchdog and ROM-return qualification remain
-prerequisites for physical IOMMU access.
+The controller provides camera, decoder, encoder and display profiles. Each
+installs fixed translations under a retained global lease. The component cannot
+replace an enabled inherited directory, release that lease, remap live tables,
+or reclaim buffers. Supervised profiles can retain all resources until planned
+whole-board power removal; they do not require watchdog expiry or ROM return.
+Returning operation requires separately qualified recovery.
 
 ## Two banks serve ten physical masters
 
@@ -50,8 +51,22 @@ uses the board's Allwinner IOMMU v2 implementation.
 The clock/reset controller has separate IOMMU0 and IOMMU1 gate/reset registers
 at offsets `0x058c` and `0x05b4`. Each has system H/P/M clock gates and a system
 reset. The device tree also assigns master power domains. Accessing another
-master's micro registers requires that domain to be accessible. Camera-domain
-ownership alone cannot authorize accesses to the USB, video, or display paths.
+master's micro registers requires its clocks and any applicable power domain to
+be accessible. Camera-domain ownership alone cannot authorize accesses to the
+USB, video, or display paths.
+
+The controller's `accessible_masters` mask and the admission record's
+`powered_masters` mask identify the authorized micro-register sets, not every
+engine receiving power. The camera profile authorizes all ten sets; the decoder
+uses `0x00c0`, encoder `0x0008`, and display `0x0100`. The pinned device tree
+assigns DE0, the deinterlacer, G2D and e-paper to the same display power domain.
+Powering that domain does not authorize accesses to all four micro-register
+sets. The USB master has no power-domain property in that device tree.
+
+The GPU/display application can therefore use USB0 programmed I/O while retaining
+the display mask `0x0100`. It does not enable USB DMA, install USB translations,
+or inspect USB micro-register faults. Initial exclusion and drain still cover
+every DMA master, and unexpected global bank faults retain the session.
 
 ## Page construction has explicit size and address limits
 
@@ -108,11 +123,13 @@ admission must establish all of the following:
 - Accessible master power domains, retained clocks/resets, and IRQ ownership.
 - Exclusive CPU/table/buffer reservations and an established CPU-to-physical
   alias for the table arena.
-- Qualified independent watchdog recovery and ROM return.
+- Qualified recovery for returning operation, or an explicit plan to retain all
+  resources until whole-board power removal for a supported supervised profile.
 
-No current platform adapter supplies this proof. Clearing an enable register
-or observing an idle camera cannot establish it. The callback performs resource
-admission and memory validation; native code constructs and installs the tables.
+Native platform adapters carry these admission facts, but software checks do
+not establish them on a physical board. Clearing an enable register or observing
+an idle camera cannot establish them. The callback performs resource admission
+and memory validation; native code constructs and installs the tables.
 
 After admission, the controller refuses either enabled bank or existing bank,
 directory-walk, leaf-walk, or master fault status. Thus even a completed admission cannot replace active
@@ -122,23 +139,24 @@ complete cache cleaning and its barrier before reporting success.
 
 The controller writes both directory bases, prefetch controls and invalidation
 modes. It disables IOMMU interrupts for polled operation, selects translation
-for CSI, and selects bypass for the remaining masters. It then follows the
-source's initial global flush, programs automatic clock gating, and enables
+for the selected profile, and selects bypass for other accessible masters.
+It then follows the source's initial global flush, programs automatic clock gating, and enables
 both banks. Ordinary configuration writes receive readback checks. Each poll
 performs at most one platform or register operation and checks monotonic time
 before and after it.
 
 ACTIVE means this initial sequence completed. The higher-level global owner
-may then admit CSI traffic while retaining every other master's exclusion.
+may then admit the selected device's traffic while retaining every other
+master's DMA exclusion.
 The tables, clocks, domains and global token remain owned. Bypass does not
 isolate another master from RAM; allowing a bypassed master to run requires
 its own memory and resource policy.
 
 ## Cache invalidation does not establish safe reclamation
 
-The source flush writes 3 to each bank's global flush request and 1 to every
-real master's micro-TLB flush request. It waits 10 microseconds and clears the
-global requests. It does not check a completion bit. The native controller
+The source flush writes 3 to each bank's global flush request and 1 to each
+accessible master's micro-TLB flush request. It waits 10 microseconds and clears
+the global requests. It does not check a completion bit. The native controller
 preserves this initial sequence and the minimum delay, with bounded polling.
 It does not infer that the delay proves drain or permits memory reuse.
 
@@ -164,9 +182,10 @@ performs no reset, automatic recovery, or fault acknowledgment.
 ## Fault snapshots retain diagnostic and ownership state
 
 Fault capture reads both bank status registers, both directory/leaf walk-status
-registers, both walk error addresses and data words, and every real master's
-status, address and data. Array order follows the master table above. High and
-low address words remain separate to preserve the raw evidence.
+registers, both walk error addresses and data words, and each accessible master's
+status, address and data. Inaccessible micro-register sets are skipped; their
+zero-filled slots are not observations. Array order follows the master table
+above. High and low address words remain separate to preserve the raw evidence.
 
 The source identifies bank status bits 16 and 17 as directory and leaf walk
 faults; low bits identify local masters with permission faults. The native core
