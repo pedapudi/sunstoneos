@@ -155,9 +155,12 @@ functions and modes beyond these bounded applications.
   The historical two-job
   image has the NEW-only callback defect and is superseded for repeated submit.
   Keep `gpu-returning-application-20261019/ns-publication/` and
-  `gpu-returning-host-20261019/` within their publication/host scopes. GPU-cache
-  ordering still depends on the pinned firmware's per-job contract; CPU cache
-  maintenance alone does not establish device-cache visibility.
+  `gpu-returning-host-20261019/` within their publication/host scopes. Native
+  compute/render cache ordering implements the pinned firmware's documented
+  per-job flushing contract and matched completion UPDATEs. No missing host-side
+  cache command is identified. Physical device-cache visibility remains
+  unqualified; CPU maintenance alone does not establish it. Source comparison:
+  `gpu-cache-visibility-20261020/assessment.json`.
   Corrected shared rendering uses FRAG_PR (204) at 2n−1, then final FRAG (203)
   at 2n; geometry completion n and final fragment 2n gate output/reuse. Older
   single-final-fragment ownership cases are superseded. Compute evidence retains

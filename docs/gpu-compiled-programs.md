@@ -268,8 +268,8 @@ Device backing cannot be overwritten until acquired completion; output replies
 own their copied bytes. A queued input slot is released once after consumption
 or rejection. Faults retain GPU ownership and backing.
 
-Device-cache visibility uses the pinned Linux firmware contract independently
-of CPU cache maintenance. The board driver at commit
+Device-cache ordering is implemented through the pinned Linux firmware
+contract independently of CPU cache maintenance. The board driver at commit
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` documents default
 [per-job device memory-cache flushing for coherency](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/include/pvr_drm.h#L515-L527).
 Its [queue submission](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/gpu/imagination/pvr_queue.c#L698-L705)
@@ -277,16 +277,37 @@ places the compute task before its timeline UPDATE. Its completion code uses
 that timeline to signal the job's done fence. The native queue uses the same
 CDM task and UPDATE order. Its compute flags select serialization and one core;
 its zero firmware configuration flags match the pinned initializer. That
-initializer disables overlap only below 4 KiB; the A733 SLC is 16 KiB. No custom cache policy replaces those defaults.
+initializer disables overlap only below 4 KiB; the A733 SLC is 16 KiB.
+The native SLC initialization also follows the pinned driver's feature-dependent
+settings. No custom cache policy replaces those defaults.
+
+The normal pinned job/queue submission path does not add a separate
+`SLCFLUSHINVAL` command per job. That command's ABI declaration does not establish
+a missing call in this path. The separate `MMUCACHE` command handles translation
+changes. Native graphics and compute table publication finishes before firmware
+enablement, and repeated jobs preserve their mappings; copied input replacement
+changes data rather than page tables.
 
 The acquired previous UPDATE therefore establishes completion under that device
 cache contract before CPU input replacement or output poisoning. The next
 acquired UPDATE precedes CPU output invalidation, guard verification and copying.
 Input and output CPU publication use the existing whole-page EL1 operations.
 CPU cache cleaning does not itself invalidate GPU caches. The internal MCU/USC
-cache operations remain an opaque firmware dependency governed by the published
-contract; software models do not qualify that behavior on hardware. Exact source
-hashes and default-configuration anchors reside in the runtime evidence record.
+cache operations remain inside opaque firmware governed by the published
+contract. No missing host-side cache command or ordering step is identified;
+physical visibility remains unqualified.
+
+The corrected rendering path uses the same contract. Geometry UPDATE n and
+partial-fragment UPDATE 2n−1 precede final fragment UPDATE 2n. Only acquired
+geometry n and final fragment 2n permit output invalidation or another frame's
+device input overwrite. Partial-fragment completion alone cannot transfer output
+ownership. These render sources match the accepted depth/blend freeze.
+
+The accepted source audit is
+`gpu-runtime-input-20261019/root-cache-review.json`. The current compute helper,
+configuration, split-render and explicit-command comparison is preserved in
+`gpu-cache-visibility-20261020/assessment.json`. No build or execution was repeated
+for that comparison. Software models do not establish physical cache visibility.
 
 The GPU application's USB task receives one bounded frame into its private
 mailbox. Only its registered owner task invokes the GPU service. The USB task
