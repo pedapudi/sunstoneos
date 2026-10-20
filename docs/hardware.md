@@ -71,6 +71,24 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `hdmi-ref26-20261020/root-integration.json`; the initial checker and corrected
   continuation remain separately preserved. GPU consumer source was updated;
   its earlier frozen image and evidence retain their original scope.
+  [Finite HDMI audio](hdmi-audio.md) now sends one caller PCM file through DMA0,
+  internal I2S3 and the HDMI sampler alongside the TV0 pattern. It accepts
+  1–48,000 stereo S16LE frames at 48 kHz, with EDID LPCM admission and retained
+  normalized AUDIO1/HDMI clock ownership. GPL DesignWare/BSP/CCU adaptations run
+  under FreeRTOS; no new opaque audio firmware is required.
+  Final image `432b7c10…` executes actual admission, construction and PMIC/output/DMA
+  tasks over models, consuming 8,196 bytes (2,049 frames), observing DMA completion
+  and FIFO empty, then publishing a retained 160-byte RAM result. Two fault
+  continuations retain uncertainty. The [host tools](hdmi-audio-preparation.md)
+  prepare sealed PCM and decode supplied result files; twenty-three refusals,
+  two durability failures and bounded boot/launcher checks pass. No live USB/FEL
+  capture exists. Root's `hdmi-audio-nc-20261020/root-integration.json` binds
+  618 saved inputs; the only current repository difference is an ISP0 constructor
+  declaration, while all final declared native/host sources match.
+  All allocations and leases remain retained. FIFO empty does not establish
+  serializer drain, transmitted packets or sound. Physical audio, SMP/preemption,
+  interrupt delivery, MMIO timing, visibility and recovery remain unqualified;
+  streaming, wider formats/rates and broader HDMI audio remain required.
   The [GPU-to-HDMI application](gpu-display.md#copied-usb-observations) copies
   two trusted 720p RGBA8 renders into separate immutable RGB565 display frames.
   GPU CLOSE precedes HDMI start. RCQ replay 0→1→0 requires fresh queue completion,
