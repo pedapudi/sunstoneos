@@ -1,0 +1,12 @@
+--- link-devices.ld
++++ link-hevc.ld
+@@ -50,7 +50,8 @@
+     ASSERT(__device_pool_start == 0x48000000 && __device_pool_end == 0x78000000 &&
+            __uncached_pool_start == 0x78000000 && __uncached_pool_end == 0x79000000,
+            "device reservations differ from the admitted profile")
+-    ASSERT(__bss_end <= 0x42000000, "EL1 allocations exceed RAM")
++    ASSERT(__bss_end <= 0x41f00000, "HEVC decoder session overlaps image state")
++    .hevc_session 0x41f00000 (NOLOAD) : { . += 4096; } > RAM
+     ASSERT(__a733_smp_boot_stack_top <= 0x421f0000, "monitor allocations exceed RAM")
+     ASSERT(__tables_end <= 0x42200000, "tables exceed reservation")
+     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
