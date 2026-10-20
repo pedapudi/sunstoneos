@@ -95,21 +95,26 @@ notices are recorded in [the source manifest](../apps/g2d/sources.json).
 Submission clears stale task and configuration status, verifies their absence,
 records the frame counter and enables one RCQ task. Success requires a fresh
 task-end transition after submission. The frame counter remains diagnostic;
-software does not infer undocumented increment semantics. A non-destructive IOMMU fault
-scan follows completion and each bounded output-copy chunk. Guard checks and
-fresh completion observations surround every chunk. The final copied digest
-and source digest are checked before the terminal success publication.
+software does not infer undocumented increment semantics.
 
-The current native readout omits a step in the effective pinned Linux success
-path. Linux acknowledges task-end, toggles the mixer AHB reset from zero to one,
-and only then signals completion. Its retained `TASK_APPLY` path also performs
-that reset without destroying or unmapping the task. Retained allocations
-therefore do not establish that reset is needed only for reuse. The source does
-not explain whether reset is required for safe output observation, nor establish
-that reset itself drains writes. Fresh task-end and fault scans alone do not
-exclude late output writes. Physical copied-output admission needs a reviewed
-success lifecycle and visibility boundary; the current no-reset model cannot
-supply that authority. Linux timeout recovery is not a drain guarantee.
+Normal completion follows the effective pinned Linux success path. The native
+application latches the observed task-end status, acknowledges only task-end with
+a write of one, and verifies that it cleared. It requires the mixer AHB reset
+bit to be deasserted, pulses that bit from zero to one, and verifies both writes
+while preserving the rotation reset and neighboring bits. An unexpected asserted
+reset or uncertain write causes terminal failure with retained resources.
+
+Only the completed sequence permits output reads. A non-destructive IOMMU fault
+scan follows the reset and each bounded output-copy chunk. Guard checks, the
+captured reset word and a cleared task-end status surround every chunk. The
+exported completion status retains the pre-acknowledgment observation. The final
+copied digest and source digest are checked before terminal success publication.
+
+The pinned IRQ path performs this acknowledgment and reset before signaling
+completion, including for retained `TASK_APPLY` operations. Its source does not
+establish that reset drains writes or permits safe buffer reuse. Physical output
+visibility remains unqualified. Linux timeout recovery is not a drain guarantee;
+all native outcomes retain memory, mappings and device resources.
 
 USB exports the immutable private copy. Its 192-byte header binds the full
 sealed session digest, source digest, output digest, dimensions, operation,
@@ -211,3 +216,22 @@ it does not execute startup or establish cache publication. New host cases use
 the saved native copied bytes with the identical sealed session and check ideal
 reference-difference reporting, durable capture and ACK refusal on a corrupted
 output digest.
+
+
+The normal-completion image has SHA256
+`01b71b3f3248f8f7e5dc6ace268abaa70e249933e3fad7084bf83058cb01e1b9`, with evidence
+under `g2d-success-20261020/`. Six linked native completion cases restore one
+submitted-job checkpoint. Normal completion acknowledges task-end, preserves
+configuration status during acknowledgment, pulses only mixer reset and copies
+16384 bytes. Stuck acknowledgment, an unexpectedly asserted reset, uncertainty
+after either reset write and a later task-end each return native failure without
+reading or copying output pixels. Every case retains its DMA extents. The four
+failures within the completion sequence leave completion readiness clear.
+
+The check reuses accepted RCQ words and modeled pixels as data. It supplies the
+root-derived runtime contract at the actual private and live record addresses;
+prepared pools, scheduler services and device effects remain modeled. It does
+not execute startup, requalify pixel arithmetic or prove physical write
+visibility. The earlier blend model omitted the normal-success reset and retains
+only that earlier implementation's scope. The unchanged launcher binary and
+prior boot and transport evidence retain their recorded scopes without replay.

@@ -13,6 +13,7 @@ def load(name,path):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','profile','output','clang','lld'):p.add_argument('--'+n,type=Path,required=True)
+ p.add_argument('--reuse-launcher',type=Path)
  a=p.parse_args()
  for tool in (a.clang,a.lld):assert tool.is_file() and os.access(tool,os.X_OK),tool
  old=(a.profile/'session.bin').read_bytes();raw=(a.profile/'input.argb').read_bytes();assert len(old)==904 and len(raw)==16384
@@ -32,6 +33,11 @@ def main():
  session=producer.extend(bytes(board),raw,owner=owner,authority=authority,client=client,**facts,width=60,height=64,stride=256,operation=3,dx=9,dy=17,w=31,h=23,sx=5,sy=7,color=0xff315a93)
  prep.embedded_reference(image,session);request,contract=prep.request_bytes(address,identity,session,*ids)
  for name,data in [('image.elf',image),('session.bin',session),('input.argb',raw),('request.bin',request),('contract.bin',contract),('upload.bin',prep.upload_bytes(raw,session))]:(a.output/name).write_bytes(data)
- prep.build_launcher(a.output,str(a.clang),str(a.lld))
- record('provenance.json',dict(**target,build_id=identity.hex(),session_sha256=hashlib.sha256(session).hexdigest(),source_sha256=hashlib.sha256(raw).hexdigest(),launcher_sha256=hashlib.sha256((a.output/'launch.bin').read_bytes()).hexdigest(),profile=str(a.profile),profile_geometry=list(struct.unpack_from('<12I',old,856)),geometry=list(struct.unpack_from('<12I',session,856)),scope=__doc__))
+ if a.reuse_launcher:
+  inputs={'launch.c':ROOT/'apps/g2d/launch.c','launch.S':ROOT/'platform/a733-smp-observe/launch.S','launch.ld':ROOT/'platform/a733-smp-observe/launch.ld','boot.h':ROOT/'platform/a733-smp-cached/boot.h','a733_g2d_application.h':ROOT/'include/a733_g2d_application.h','a733_board_application.h':ROOT/'include/a733_board_application.h','base-supervised-launch.c':ROOT/'platform/a733-smp-supervised/launch.c'}
+  assert all((a.reuse_launcher/n).read_bytes()==path.read_bytes() for n,path in inputs.items())
+  names=[*inputs,'g2d-launch-base.c','launch.bin','launch.elf','launch.c.o','launch.S.o','launch.c.d','launch.S.d','launcher-build.log','launcher-commands.json']
+  for name in names:shutil.copy2(a.reuse_launcher/name,a.output/name)
+ else:prep.build_launcher(a.output,str(a.clang),str(a.lld))
+ record('provenance.json',dict(**target,build_id=identity.hex(),session_sha256=hashlib.sha256(session).hexdigest(),source_sha256=hashlib.sha256(raw).hexdigest(),launcher_sha256=hashlib.sha256((a.output/'launch.bin').read_bytes()).hexdigest(),profile=str(a.profile),launcher_reused=bool(a.reuse_launcher),profile_geometry=list(struct.unpack_from('<12I',old,856)),geometry=list(struct.unpack_from('<12I',session,856)),scope=__doc__))
 if __name__=='__main__':main()
