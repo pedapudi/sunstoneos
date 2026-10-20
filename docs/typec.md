@@ -235,6 +235,29 @@ rate. Frozen inputs, artifacts and checkpoints preserve the exact executable
 for each case. The original independent GPIO/I2C-failure evidence remains
 applicable to the retained shutdown mechanism; a physical PD fault is untested.
 
+The composed DisplayPort executable also completes one PD-enabled native path
+with CC1 selected, pin C configured and HPD high. The actual PMIC, display,
+Type-C and power task bodies execute from the admitted constructor checkpoint;
+the real token validator accepts the negotiated publication. At the first DP
+supply request, the trace records the PMIC holding controller mutex 1 while
+Type-C holds controller mutex 2 and advances an S_TWI1 transaction. The DP
+controller has not been prepared at this checkpoint. Raw DCXO is 26 MHz and the
+native TWI divider is 97, giving 100 kHz.
+
+This composition evidence is frozen under
+`~/.cache/sunstoneos/evidence/displayport-native-20261020/typec-negotiated-ae83/`.
+`negotiated-manifest.json` binds the exact executable, admitted session, runtime
+contract, constructor, task contexts, hardware state and check sources. The
+selected executable SHA-256 is
+`ae83b12f6e69b820f3bd8888335bd41314366c694e9197554f766fbd4c406b17`.
+The scheduler model preserves task priorities and the actual delay and SVC 105
+yield boundaries. It is serialized and cooperative; it does not qualify SMP
+execution, tick preemption, priority inheritance or physical scheduling latency.
+The 200 MHz DP APB value is a qualified model input, not a measurement. Earlier
+stopped fixtures remain separate: they do not count as native driver failures
+or as completed negotiation. The later DisplayPort consumer continues from this
+checkpoint rather than fabricating a token or substituting a validator.
+
 Full hardware support still requires dual-role/device operation, role swaps,
 VCONN and applicable cable/accessory support, further PD profiles, and physical
 SuperSpeed and DisplayPort qualification.
