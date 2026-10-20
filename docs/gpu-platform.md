@@ -144,9 +144,10 @@ Evidence, commands, source identities, and artifacts are under
 `checks/a733-platform-locks.c`. The emulator fixture supplies the inherited
 baseline; it is not a board-ready executable.
 
-Physical qualification requires independently qualified watchdog recovery,
-current board access, Device mappings, a real shared-lock deployment, and an
-established PLL/rail/I2C baseline. A coordinator can then build a bounded power
+Physical qualification requires current board access, recovery suitable for the
+selected bounded test, Device mappings, a real shared-lock deployment, and an
+established PLL/rail/I2C baseline. Watchdog expiry is not a prerequisite for
+unrelated supervised tests. A coordinator can then build a bounded power
 transition image with explicit token and register-state reporting. GPU firmware
 boot, transaction isolation, execution, and physical IRQ delivery still require
 their own integration. No board request is submitted from these emulator images.
