@@ -73,7 +73,7 @@ static uint32_t *word(uintptr_t a)
     if(a>=C && a<C+sizeof(ccu))return &ccu[(a-C)/4];
     if(a>=P && a<P+sizeof(pio))return &pio[(a-P)/4];
     if(a>=A733_I2S0_BASE && a<A733_I2S0_BASE+sizeof(ir))return &ir[(a-A733_I2S0_BASE)/4];
-    configASSERT(a==0x07090160);static uint32_t osc;return &osc;
+    configASSERT(a==0x07090160);static uint32_t osc=0x10000002;return &osc;
 }
 static int read_reg(void *context,uintptr_t a,uint32_t *out)
 {

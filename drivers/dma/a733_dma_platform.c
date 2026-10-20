@@ -1,4 +1,5 @@
 #include "a733_dma_platform.h"
+#include "a733_clock_reference.h"
 
 #define CCU UINT32_C(0x02002000)
 #define DMA UINT32_C(0x04601000)
@@ -26,13 +27,13 @@ int a733_dma_platform_scopes(const struct a733_dma_platform_config *c,a733_clock
         (c->desired_cpu&c->desired_mcu) ||
         (((c->expected_cpu^c->desired_cpu)|(c->expected_mcu^c->desired_mcu))&~c->route_change_mask) ||
         (!c->cold && (c->expected_cpu!=c->desired_cpu || c->expected_mcu!=c->desired_mcu))) return 0;
-    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC;
+    a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_OSC|A733_CLOCK_REF;
     for (unsigned i=0;i<3;++i) {
         if ((c->fabric[i]&~fabric_masks[i]) || (i && !(c->fabric[i]&BIT(31)))) return 0;
         unsigned mhz=parent_mhz[i][(c->fabric[i]>>24)&7];
         unsigned divisor=(c->fabric[i]&31)+1;
         if (!mhz || (mhz*1000000u)%divisor || c->rate_hz[i]!=(mhz*1000000u)/divisor) return 0;
-        if (mhz!=24) shared|=A733_CLOCK_PERI0|A733_CLOCK_REF;
+        if (mhz!=24) shared|=A733_CLOCK_PERI0;
     }
     *out=shared;return 1;
 }
@@ -73,17 +74,16 @@ static int update(struct a733_dma_platform *p,uintptr_t address,uint32_t mask,
 static int parents_stable(struct a733_dma_platform *p)
 {
     uint32_t osc,ref,peri,a,b,gate_config,gate_status;
-    if (!rd(p,OSC,&osc) || (((osc>>14)&3)!=0 && ((osc>>14)&3)!=3)) return 0;
+    /* Fabric source zero is SYS_CLK24M; PERI0 also uses normalized PLL_REF.
+     * Raw DCXO need not itself run at 24 MHz. Retain and check REF for both. */
+    if (!rd(p,OSC,&osc) || !rd(p,CCU,&ref) || !a733_clock_ref24_valid(osc,ref)) return 0;
     if (!(p->shared&A733_CLOCK_PERI0)) return 1;
-    if (!rd(p,CCU,&ref) || (ref&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000)) return 0;
-    unsigned n=((ref>>8)&255)+1, m=((ref>>16)&127)+1;
-    if (n<80 || n>116 || n!=m) return 0;
     /* User Manual 4.1.6.6: input divisor M1 is bit 1 plus one. */
     if (!rd(p,CCU+0xa0,&peri) || (peri&UINT32_C(0xfe000000))!=UINT32_C(0xfe000000) ||
         (peri&(BIT(24)|BIT(1))) || !rd(p,CCU+0xa8,&a) || (a&BIT(31)) ||
         !rd(p,CCU+0xac,&b) || (b&BIT(27)) || !rd(p,CCU+0x1908,&gate_config) ||
         !rd(p,CCU+0x1988,&gate_status)) return 0;
-    n=((peri>>8)&255)+1;
+    unsigned n=((peri>>8)&255)+1;
     if (n<53 || n>105) return 0;
     for (unsigned i=0;i<3;++i) {
         unsigned mhz=p->selected_mhz[i], divisor, branches;

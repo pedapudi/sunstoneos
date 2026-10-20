@@ -62,9 +62,9 @@ token. Only these inherited parent selectors are admitted:
 
 | Clock and register | Selector | Parent rate |
 | --- | --- | --- |
-| AHB, `0x02002500` | 0 or 3 | 24 MHz or PERI0 600 MHz |
-| NSI, `0x02002580` | 0, 2, 3, or 4 | 24 MHz, PERI0 800 MHz, 600 MHz, or 480 MHz |
-| MBUS, `0x02002588` | 0, 1, 3, or 4 | 24 MHz, PERI0 600 MHz, 480 MHz, or 400 MHz |
+| AHB, `0x02002500` | 0 or 3 | SYS_CLK24M or PERI0 600 MHz |
+| NSI, `0x02002580` | 0, 2, 3, or 4 | SYS_CLK24M, PERI0 800 MHz, 600 MHz, or 480 MHz |
+| MBUS, `0x02002588` | 0, 1, 3, or 4 | SYS_CLK24M, PERI0 600 MHz, 480 MHz, or 400 MHz |
 
 The divisor is the five-bit field plus one. Its range is 1–32. The parent rate
 must divide by it without a fractional hertz result and equal the supplied rate.
@@ -73,11 +73,15 @@ NSI and MBUS global gates must already be enabled. DDR, display-engine, NPU,
 parents requires source validation and corresponding authority against their
 writers.
 
-The oscillator selector at `0x07090160[15:14]` must be 0 or 3, using the
-[existing source-validated oscillator interpretation](gpu-resources.md). PERI0 profiles also
-require the source-defined PLL enable, supply, lock, and output flags. Reference
-PLL N and M must be equal within the source's multiplier limits, producing
-24 MHz. PERI0 N must lie between 53 and 105. Each selected output divisor must
+All admitted fabric parents use the normalized 24 MHz reference. The A733 manual
+sections 4.1.6.66, 4.1.6.74 and 4.1.6.76 name source zero `SYS_CLK24M`;
+the pinned Linux CCU tables name it `sys24M`. PERI0 also derives from PLL_REF.
+Startup retains shared REF ownership even when every fabric selector is zero.
+The existing reference decoder requires enabled, stable DCXO and enabled,
+locked PLL_REF with `DCXO_Hz × N = 24,000,000 × M`. It accepts supported
+24, 26 and 19.2 MHz raw oscillators with matching reference factors.
+PERI0 profiles additionally require their PLL enable, supply, lock and output
+flags. PERI0 N must lie between 53 and 105. Each selected output divisor must
 produce its nominal rate. For example, N=100 and divisors 2, 3, and 5 produce
 the 1.2 GHz, 800 MHz, and 480 MHz outputs; fixed division produces 600 and 400 MHz.
 
@@ -95,6 +99,15 @@ settings; physical frequency remains unmeasured. The clock reference labels DMA0
 with `dcxo`; that bookkeeping does not establish that DMA transfers run at
 24 MHz. The fabric checks establish conservative stability prerequisites. Throughput
 and complete fabric power management require separate qualification.
+
+The focused `checks/dma-clock-reference.c` check executes the actual platform
+and clock registry for SYS_CLK24M-only and PERI0 profiles. Ten sanitizer cases
+cover three valid oscillator/reference pairs, invalid normalization and missing
+reference lock. Accepted paths exclude a competing REF writer; rejected paths
+retain ownership without register writes. Evidence is under
+`dma-clock-reference-20261020/`. Earlier platform batches were not repeated.
+Register effects and time are modeled; this does not qualify a native image,
+DMA transfer or physical clock.
 
 ## Cold startup releases an inherited reset without taking over active work
 

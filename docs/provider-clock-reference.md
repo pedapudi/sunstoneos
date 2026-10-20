@@ -1,4 +1,4 @@
-# Normalized clock admission in TWI, USB2, radio and CE
+# Normalized clock admission
 
 The generic TWI11 adapter, USB2 host platform, radio platform and crypto engine
 validate a 24 MHz **reference output**, rather than requiring a 24 MHz raw board
@@ -34,6 +34,7 @@ Its `pll_ref_clk` factors and fixed `pll_peri0_clk` parent agree with this path.
 | `drivers/usb/a733_usb2_platform.c` | USB2 reference and MF select source 0 SYS_CLK24M; suspend selects source 1 SYS_CLK24M. The enabled pipe path uses PERI0_480M divided by four. Existing DWC clock constants therefore remain based on 24 MHz. | Manual §§4.1.6.199–201, 4.1.6.204; Linux `usb_ref_parents`, `usb2_suspend_parents`, `usb2_mf_parents`, `usb2_u2_pipe_parents` |
 | `drivers/net/a733_radio_platform.c` | Fabric sources use SYS_CLK24M or admitted PERI0 branches. SMHC1 explicitly selects source 0 SYS_CLK24M with M=30/N=1, retaining its 800 kHz input. The module's independent RF clock is not reconfigured. | Manual §4.1.6.130 and §11.3.3; Linux `smhc_parents` |
 | `drivers/crypto/a733_ce.c` | CE selects PERI0_400M. PERI0 retains its fixed PLL_REF parent and existing divider/gate checks. TRNG separately retains its RC16M lease and enable-bit requirement; `ce_clk2m_rc` is RC16M/8, not raw DCXO/8. | Manual §§4.1.6.6, 4.1.6.117, 9.1.7.16 and 19.1.3; Linux `ce_parents` |
+| `drivers/dma/a733_dma_platform.c` | AHB, NSI and MBUS use SYS_CLK24M or admitted PERI0 branches. Every profile retains REF; all-source-zero profiles avoid unrelated PERI0 reads. Existing divisors and gate checks remain. | Manual §§4.1.6.66, 4.1.6.74, 4.1.6.76; Linux `apb0_parents`, `nsi_parents`, `mbus_parents`; [focused DMA evidence](dma-platform.md#admission-verifies-the-selected-parent-and-programmed-rate) |
 
 TWI11 is not the always-on S_TWI1 controller used by Type-C. APBS1 source 0 is
 raw DCXO; source 4 is normalized PLL_REF. This correction changes neither the

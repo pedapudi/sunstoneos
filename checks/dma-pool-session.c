@@ -33,7 +33,7 @@ int __wrap_a733_dma_platform_native_read(void *cookie,uintptr_t address,uint32_t
     (void)cookie;
     configASSERT(xTaskGetCurrentTaskHandle()==session.bootstrap);
     configASSERT(xSemaphoreGetMutexHolder(locks.mutex[0])==session.bootstrap);
-    ++platform_accesses;*out=address==0x07090160 ? 0 : *reg(address);return 1;
+    ++platform_accesses;*out=address==0x07090160 ? 0x10000002 : *reg(address);return 1;
 }
 int __wrap_a733_dma_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
 {

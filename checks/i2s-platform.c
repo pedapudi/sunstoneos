@@ -130,7 +130,7 @@ static void setup(unsigned cold)
     now=1; mutex=reads=writes=publish_count=releases=0;
     conflict_scope=late_acquire=late_publish=late_release=busy_lock=0;
     lease_pending=write_failure=lock_never=late_pin_release=late_write=0; failure_address=0;
-    osc=0; saved_div2=2u<<20; pll_count=0;
+    osc=0x10000002; saved_div2=2u<<20; pll_count=0;
     regress_after_enable=regression_phase=0;
     gate_status_reads=gate_status_hold=gate_status_fail=gate_status_late=0;
     ccu[0]=(0xf8000000u | (99u<<8) | (99u<<16));

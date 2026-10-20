@@ -73,6 +73,7 @@ static struct a733_dma_platform_config config(unsigned cold)
 static void setup(struct model *m,struct a733_dma_platform *p,struct a733_dma_platform_config c)
 {
     memset(m,0,sizeof(*m));memset(p,0,sizeof(*p));m->now=100;m->deadline=c.deadline_us;
+    m->osc=0x10000002;
     assert(a733_clock_leases_init(&m->leases,now,m));
     for(unsigned i=0;i<3;++i) m->ccu[(unsigned[]){0x500/4,0x580/4,0x588/4}[i]]=c.fabric[i]|0x00400000;
     m->ccu[0]=0xf8000000|(99<<16)|(99<<8);
@@ -137,7 +138,7 @@ int main(int argc, char **argv)
         c=config(0);c.fabric[0]=0;c.fabric[1]=c.fabric[2]=0x80000000;
         c.rate_hz[0]=c.rate_hz[1]=c.rate_hz[2]=24000000;
         setup(&m,&p,c);m.ccu[0x1908/4]=m.ccu[0x1988/4]=0;m.fail_read=CCU+0x1908;
-        assert(finish(&m,&p)==READY && !m.writes && !m.parent_reads);
+        assert(finish(&m,&p)==READY && !m.writes && m.parent_reads==1);
         puts("PASS DMA selected PERI0 branches: No-Auto/software/effective gates, unselected branches, failed/late reads and retained ownership");
         return 0;
     }
@@ -171,8 +172,9 @@ int main(int argc, char **argv)
     setup(&m,&p,config(0));assert(finish(&m,&p)==READY && !m.writes);
     c=config(0);c.fabric[0]=0;c.fabric[1]=c.fabric[2]=0x80000000;
     c.rate_hz[0]=c.rate_hz[1]=c.rate_hz[2]=24000000;
-    setup(&m,&p,c);m.ccu[0]=m.ccu[0xa0/4]=0;
-    assert(finish(&m,&p)==READY && !m.parent_reads && p.shared==(A733_CLOCK_FABRIC|A733_CLOCK_OSC));
+    setup(&m,&p,c);m.ccu[0xa0/4]=0;
+    assert(finish(&m,&p)==READY && m.parent_reads==1 &&
+        p.shared==(A733_CLOCK_FABRIC|A733_CLOCK_OSC|A733_CLOCK_REF));
     c=config(0);c.fabric[1]=c.fabric[2]=0x84000000;c.fabric[2]=0x83000000;
     c.rate_hz[1]=c.rate_hz[2]=480000000;
     setup(&m,&p,c);assert(finish(&m,&p)==READY && !m.writes);
@@ -200,4 +202,5 @@ int main(int argc, char **argv)
     assert(a733_dma_platform_poll(&p)==PENDING);m.late_leave=1;
     assert(a733_dma_platform_poll(&p)==RETAINED && !m.writes);retained(&m,&p);
     puts("DMA platform ownership, clock admission, ordering and retained failures pass");
+    return 0;
 }

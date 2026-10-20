@@ -30,7 +30,7 @@ int __wrap_a733_dma_platform_native_read(void *cookie,uintptr_t address,uint32_t
     configASSERT(xTaskGetCurrentTaskHandle()==bootstrap_task);
     configASSERT(xSemaphoreGetMutexHolder(locks.mutex[0])==bootstrap_task);
     atomic_fetch_add_explicit(&platform_reads,1,memory_order_relaxed);
-    *out=address==0x07090160 ? 0 : *reg(address);return 1;
+    *out=address==0x07090160 ? 0x10000002 : *reg(address);return 1;
 }
 int __wrap_a733_dma_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
