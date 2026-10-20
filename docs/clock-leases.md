@@ -70,7 +70,8 @@ COMB0 uses bit 70 for its analog, lane, orientation and PIPE routing controls.
 VE_ENC uses bit 71 for the encoder clock, reset, routes and power domain 3.
 The encoder owns this scope exclusively and separately reserves its selected
 parent, fabric and rail. IOMMU preparation excludes encoder ownership before
-register access. A scope reservation does not establish encoder initialization
+register access, including the private JPEG, H.264 and HDMI preparation paths.
+A scope reservation does not establish encoder initialization
 or completed DMA. Bits 72–127 remain invalid.
 The focused `checks/a733-media-clock.c --encoder-ownership` case passes
 encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
@@ -78,6 +79,9 @@ directions before register access. Time and hardware callbacks are modeled.
 The two affected clock units compile for freestanding AArch64 with their
 existing ABI assertions. Evidence: `encoder-clock-scope-20261020/` in the local
 evidence cache. No encoder operation or physical behavior is qualified.
+The three affected application units also compile with their existing feature
+configurations. Earlier frozen images retain their recorded scope policy; they
+do not establish coexistence with the new encoder.
 The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller

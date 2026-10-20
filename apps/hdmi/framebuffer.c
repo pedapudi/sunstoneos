@@ -13,7 +13,7 @@
 #define PIXEL_BYTES (1280u*720u*2u)
 #define FRAME_OFFSET 36864u
 #define FRAME_SPAN (2097152u-32768u)
-#define EXCLUSION (A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_VE_DEC)
+#define EXCLUSION (A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_VE_DEC|A733_CLOCK_VE_ENC)
 struct hdmi_framebuffer framebuffer;
 static int present(const uint8_t *p)
 {unsigned x=0;for(unsigned i=0;i<32;++i)x|=p[i];return x!=0;}
