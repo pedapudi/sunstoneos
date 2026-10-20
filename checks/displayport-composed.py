@@ -63,6 +63,8 @@ def main():
   p.add_argument('--'+name,type=Path,required=True)
  p.add_argument('--checkpoint-manifest-sha256',required=True)
  p.add_argument('--resume',type=Path)
+ p.add_argument('--observe-first-fault',action='store_true')
+ p.add_argument('--observe-pc',type=lambda value:int(value,0))
  a=p.parse_args();assert not a.output.exists();a.output.mkdir(parents=True)
  base=module('dp_composed_base',ROOT/'checks/displayport-native.py')
  controller=module('dp_composed_controller',ROOT/'checks/displayport-controller.py')
@@ -88,8 +90,18 @@ def main():
    if self.u.reg_read(UC_ARM64_REG_PSTATE)&0x80 or core>=8:return False
    return all(self.get(self.image.address(symbol)+core*8)==0 for symbol in ('ullCriticalNestings','ullPortInterruptNestings'))
   def code(self,u,at,n,unused):
+   if at==a.observe_pc:
+    self.fault_observation=dict(time_us=self.time,pc=at,task=self.task,return_pc=self.u.reg_read(UC_ARM64_REG_LR),
+     registers={f'x{i}':self.u.reg_read(UC_ARM64_REG_X0+i) for i in range(29)})
+    self.boundary=('fault-observation',0);self.stopped=True;self.u.emu_stop();return
    name=self.hooks.get(at)
    assert name not in ('vTaskEnterCritical','vTaskExitCritical'), 'unexpected unmodeled critical-section API'
+   if name=='a733_dp_fault':
+    if self.observe_fault:
+     self.fault_observation=dict(time_us=self.time,object=self.u.reg_read(UC_ARM64_REG_X0),
+      error=self.u.reg_read(UC_ARM64_REG_X0+1),return_pc=self.u.reg_read(UC_ARM64_REG_LR),task=self.task)
+     self.boundary=('fault-observation',0);self.stopped=True;self.u.emu_stop()
+    return
    queue=self.u.reg_read(UC_ARM64_REG_X0)
    if name=='xQueueSemaphoreTake':
     wait=self.u.reg_read(UC_ARM64_REG_X0+1);held=self.holders.get(queue,0)
@@ -143,6 +155,9 @@ def main():
      self.tick_events.append([self.time,self.task]);self.boundary=('tick',0)
      self.stopped=True;self.u.emu_stop()
  image=base.base.Image(a.image);m=Machine(image,raw,contract)
+ m.observe_fault=a.observe_first_fault;m.fault_observation=None
+ fault=image.address('a733_dp_fault');m.hooks[fault]='a733_dp_fault';m.u.hook_add(UC_HOOK_CODE,m.code,begin=fault,end=fault)
+ if a.observe_pc is not None:m.u.hook_add(UC_HOOK_CODE,m.code,begin=a.observe_pc,end=a.observe_pc)
  m.yield_sites=set()
  for start,data in image.parts:
   for offset in range(0,len(data)-3,4):
@@ -261,6 +276,7 @@ def main():
    assert m.stopped and m.boundary,(active['role'],hex(m.u.reg_read(UC_ARM64_REG_PC)),m.trace[-25:])
    active['context']=m.u.context_save();phase='scheduler-boundary';active['runs']+=1
    kind,ticks=m.boundary
+   if kind=='fault-observation':phase='scheduler-task';raise RuntimeError('paused before first native DisplayPort fault')
    if kind=='yield':active['yields']+=1;active['wake']=m.time;m.time+=1
    elif kind in ('tick','unblock'):active['wake']=m.time
    elif kind=='mutex':active['wake']=m.waiters[active['handle']]['until']
@@ -320,7 +336,7 @@ def main():
   (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events)))
   (a.output/'stopped-hardware.pickle').write_bytes(pickle.dumps(hw.export()))
   (a.output/'stopped-display.pickle').write_bytes(pickle.dumps(display.export()))
-  save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress))
+  save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress,first_fault=m.fault_observation))
   raise
  finally:
   save(a.output/'slice-trace.json',dict(columns=['start_us','end_us','task','boundary','ticks','wake_us','counter_calls','cc_state','cc_step','pd_turn','published_us'],rows=slice_trace))
