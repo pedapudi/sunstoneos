@@ -1423,9 +1423,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is under `encoder-clock-scope-20261020/`. These checks establish neither a linked
   encoder application nor encoder initialization, DMA completion or physical
   operation. Earlier frozen images retain their own clock policies.
-  The attached board
-  ROM profile, actual memory/cache/drain authority, physical decoding,
-  remaining decode formats and all encoder paths remain outstanding.
+  The [native JPEG encoder](jpeg-encode-native.md) implements one retained
+  caller-supplied 640×480 NV12 job, stride 640, quality 75, with at most 1 MiB
+  of copied baseline JPEG output. It adopts inherited powered PCK3 state,
+  reserves exclusive encoder ownership and maps IOMMU master 3. Published opaque
+  libraries provide development-only instruction references; no such library
+  is linked or loaded natively. Actual provider, lower-MMIO, IOMMU and copy checks
+  pass with completion and entropy modeled. The complete native image is linked,
+  not executed; JPEG numerical correctness, burst confinement, visibility, drain
+  and physical operation remain unqualified. Buffers, mappings and leases remain
+  retained; no repeated-job or release claim is made.
+  Root verifies 447 compiled inputs, 169 objects and the frozen snapshots under
+  `jpeg-encode-native-20261020/root/integration.json`. Eight current input deltas
+  belong to inactive radio/USB-host functions; frozen workload 2 uses private
+  USB0 DEVICE output and does not establish those newer functions. Broader
+  dimensions, formats, qualities and video encoding remain required.
+  The attached board ROM profile, actual memory/cache/drain authority, physical
+  decoding and remaining codec modes remain outstanding.
 
 - Crypto, random, identity and secure storage: **implemented** bounded
   [hardware random-number requests](entropy.md) through the native crypto engine.

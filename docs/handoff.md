@@ -96,6 +96,7 @@ functions and modes beyond these bounded applications.
 | [Optional eMMC reads](emmc-read-application.md) | SDC2/SDC3 identification, EXT_CSD and copied reads pass instruction/host checks. Neither current board has a qualification target. The single-core image retains resources and has no qualified ROM return. | `emmc-native-20261018/` |
 | [High/Baseline H.264](h264-native.md#high-profile-runtime-clips-and-presentation-ordering) | High profile 100, progressive 8-bit 4:2:0: CABAC/scaling/weights, I/P/B/reference-B; two full-HD or four HD short-term references, four active list entries, five reordered copied-output slots. Twelve full-HD + twelve refB-HD + twelve four-ref-HD pictures complete in models; normal mode decodes three/copies two. Physical decode/cache/confinement/drain remain unqualified; POC wrap/MMCO5 are unexecuted; long-term refs, unrestricted streaming and encoding remain required. Separate Baseline scopes retained. | `h264-high-20261019/root-integration.json`, `closure.json`, `root/layout-review.json`; Baseline: `h264-fullhd-20261019/` |
 | [VGA/legacy H.264](h264-native.md) | VGA admits 256 prepared 640×480 pictures, 512 KiB/AU; legacy 48×32 IDR/P remains separate. Input refill, reference retirement and copied-output ACK are distinct. Corrected launcher and supervisor-policy evidence are bounded as below. Physical pixels, reference visibility, confinement and drain remain unqualified; no reclamation. | `h264-vga-20261019/root-integration.json`; `h264-launcher-20261019/root-integration.json`; `h264-supervisor-entry-20261019/result.json` |
+| [JPEG encoding](jpeg-encode-native.md) | One retained caller 640×480 NV12 job, stride 640/quality 75; copied JPEG ≤1 MiB. Inherited PCK3, exclusive encoder lease and IOMMU master 3. Provider/IOMMU/copy checks model completion and entropy; native image linked, not executed. No numerical, burst, visibility, drain or physical claim; all resources retained. Frozen workload 2 uses private USB0, with eight inactive radio/USB-host input deltas. Broader encoding remains required. | `jpeg-encode-native-20261020/root/integration.json`, `closure-summary.json`, `commit-binding.json` |
 | [JPEG](jpeg-application.md) | Authenticated supplied baseline YCbCr420 image and copied pixels with dimensions; independent oracle optional. Pixel correctness and confinement remain physically unqualified. | `jpeg-runtime-input-20261018/` |
 | [Crypto](crypto-application.md) | Bounded caller SHA-256/AES-128 ECB, private input and request-bound output; key-cleanup and fragment-handling review resolved. Physical engine operation, secure access and drain remain unqualified. | `crypto-runtime-input-20261018/` |
 | [USB HID/CPU IRQ](usb2-host.md) | LS/FS/HS HID copies four reports without desktop events. Supervised board option routes CPU0 INTID187 to the existing owner; other profiles poll. IRQ delivery, DMA/drain, power and attachment reuse remain unqualified. | `usb-host-interrupt-20261018/root-integration.json`; `usb-host-cpu-irq-20261019/root-integration.json` |
@@ -169,12 +170,6 @@ functions and modes beyond these bounded applications.
   native transcript does not establish physical concurrent recognition/storage.
 
 ## Continuation and evidence reuse
-
-Current implementation owners are finishing these offline changes:
-
-- Video encoding: published-instruction trace, then private caller YUV420→JPEG
-  implementation. Exclusive encoder/IOMMU ownership is checked separately under
-  `encoder-clock-scope-20261020/`; encoder operation remains unimplemented.
 
 The standalone SD boot-container source assessment identifies a published recipe,
 but no packager or image is implemented. The primary agent owns the unresolved
