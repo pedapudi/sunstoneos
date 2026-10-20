@@ -1,5 +1,6 @@
 #include "crypto.h"
 #include "boot.h"
+#include "snapshot.h"
 #include "a733_ce_native.h"
 #include "a733_memory_reservations.h"
 #include "aarch64_device_memory.h"
@@ -33,7 +34,7 @@ static int masked(void)
 }
 static int authorize(void *v,const struct a733_ce_config *c,const struct a733_clock_token *t,const struct a733_ce_memory *m)
 {
- if(v!=&crypto||!board_live(NULL)||!mappings()||!masked()||!crypto.engine.initialized||
+ if(v!=&crypto||(crypto.session.version==3&&crypto.clock.state!=A733_CE_CLOCK_READY)||!board_live(NULL)||!mappings()||!masked()||!crypto.engine.initialized||
  m!=crypto.engine.controller.memory||c->owner!=crypto.session.owner||c->handoff!=crypto.session.authority||
  c->profile!=A733_CE_SHA256_AES128||c->deadline_us!=deadline()||c->health_profile||c->configure_health||
  t->id!=crypto.token.id||t->owner!=crypto.token.owner||t->shared!=crypto.token.shared||t->exclusive!=crypto.token.exclusive)return 0;
@@ -48,6 +49,17 @@ static int authorize(void *v,const struct a733_ce_config *c,const struct a733_cl
   * prior drain and secure access; masked/readable registers alone never do. */
  return a733_clock_token_status(&providers.shared.clocks,&crypto.token)==A733_CLOCK_OK;
 }
+static int clock_authorize(void *v)
+{
+ const struct crypto_session *sealed=crypto_admitted_session();
+ if(v!=&crypto||!sealed||crypto.session.version!=3||
+ !crypto_session_valid(&crypto.session)||memcmp(&crypto.session,sealed,sizeof(*sealed))||
+ xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING||xTaskGetCurrentTaskHandle()!=crypto.handle||
+ !atomic_load_explicit(&crypto.input_ready,memory_order_acquire)||
+ !board_live(NULL)||!mappings()||!masked()||
+ memcmp(&crypto.clock.config,&crypto.config,sizeof(crypto.config)))return 0;
+ return 1;
+}
 int crypto_construct(void)
 {
  if(!mappings()||!masked()||!board_live(NULL)||board.session.deadline_us<=10000)return 0;
@@ -59,9 +71,20 @@ int crypto_construct(void)
  if(a733_clock_acquire(&providers.shared.clocks,crypto.session.owner,
  A733_CLOCK_PERI0|A733_CLOCK_REF|A733_CLOCK_OSC|A733_CLOCK_FABRIC,A733_CLOCK_CE,deadline(),&crypto.token)!=A733_CLOCK_OK)return 0;
  struct a733_ce_ops ops={.now_us=now,.authorize=authorize,.enter=enter,.leave=leave,.retain=retain};
- if(xSemaphoreTake(crypto.mutex,0)!=pdTRUE)return 0;
- int ok=a733_ce_session_native_init(&crypto.engine,&crypto.config,&ops,&crypto,&providers.shared.clocks,&crypto.token)&&
+ if(xSemaphoreTake(crypto.mutex,0)!=pdTRUE){
+  if(crypto.session.version==3)(void)a733_clock_retain(&providers.shared.clocks,&crypto.token);
+  return 0;
+ }
+ int cold=1;
+ if(crypto.session.version==3){
+  const struct a733_ce_clock_ops clocks={clock_authorize,now,enter,leave,retain,
+   a733_ce_native_read,a733_ce_clock_native_write};
+  cold=a733_ce_clock_provision(&crypto.clock,&crypto.config,&clocks,&crypto,
+   &providers.shared.clocks,&crypto.token);
+ }
+ int ok=cold&&a733_ce_session_native_init(&crypto.engine,&crypto.config,&ops,&crypto,&providers.shared.clocks,&crypto.token)&&
  a733_ce_hash_bind(&crypto.run.hash,&crypto.engine)&&a733_ce_cipher_bind(&crypto.run.cipher,&crypto.engine);
+ if(!ok&&crypto.session.version==3)(void)a733_clock_retain(&providers.shared.clocks,&crypto.token);
  if(xSemaphoreGive(crypto.mutex)!=pdTRUE)return 0;return ok;
 }
 static int eligible(void *v)
@@ -71,7 +94,7 @@ static int eligible(void *v)
  * reads the request only after acquire, then USB can never replace it. */
 int crypto_input_live(void)
 {
- return crypto.session.version==2&&board_live(NULL)&&a733_smp_counter()/24<deadline()&&
+ return crypto_session_runtime(&crypto.session)&&board_live(NULL)&&a733_smp_counter()/24<deadline()&&
  crypto.session.board.epoch==board.session.epoch&&crypto.session.board.generation==board.session.generation&&
  !atomic_load_explicit(&crypto.result,memory_order_acquire)&&
  !atomic_load_explicit(&crypto.input_ready,memory_order_acquire);
@@ -97,7 +120,7 @@ void crypto_task(void *unused)
   if(!board_live(NULL)||a733_smp_counter()/24>=deadline()){
    crypto.retaining=1;atomic_store_explicit(&crypto.result,2,memory_order_release);
   }
-  if(crypto.session.version==2&&!crypto.retaining&&!crypto.constructed){
+  if(crypto_session_runtime(&crypto.session)&&!crypto.retaining&&!crypto.constructed){
    if(!atomic_load_explicit(&crypto.input_ready,memory_order_acquire)){vTaskDelay(1);continue;}
    if(!crypto_construct()){
     crypto.retaining=1;crypto_key_clear(crypto.run.request.key);

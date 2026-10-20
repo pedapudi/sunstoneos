@@ -47,11 +47,11 @@ def image_manifest_check(manifest,raw):
 def session_check(raw):
     require(len(raw)==824,'Crypto session must be824bytes.')
     require(board.session_check(raw[:592],usb_reference_modes=(1,2))==2,'Crypto requires USB0/provider selection2.')
-    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373343524131 and struct.unpack_from('<Q',raw,600)[0] in (1,2) and struct.unpack_from('<Q',raw,608)[0]==824,'Invalid crypto session extension.')
+    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373343524131 and struct.unpack_from('<Q',raw,600)[0] in (1,2,3) and struct.unpack_from('<Q',raw,608)[0]==824,'Invalid crypto session extension.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid crypto owner.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing crypto physical evidence.')
-    if struct.unpack_from('<Q',raw,600)[0]==2:
+    if operation.runtime(raw):
         require(any(raw[760:792]),'Missing authenticated crypto request');return
     require(raw[760:792]==hashlib.sha256(vectors.INPUTS).digest() and raw[792:824]==hashlib.sha256(vectors.REFERENCE).digest(),'Crypto vectors differ.')
 
@@ -60,7 +60,7 @@ def embedded_reference(image,session):
     import io
     from elftools.elf.elffile import ELFFile
     session_check(session)
-    if struct.unpack_from('<Q',session,600)[0]==2:return None
+    if operation.runtime(session):return None
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'Crypto image has no vector symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
@@ -115,13 +115,17 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             'memory':['private_cacheable_page','no_physical_aliases','ce_physical_ram_reachable','exclusive_cache_lines','permanent_page_reservation'],
             'clocks':['observed_ce400_peri0','stable_ref_peri0_fabric','no_clock_reset_writers','ce_local_gates_resets_ready'],
             'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse','one_attempt']}[key]
+        if key=='clocks' and struct.unpack_from('<Q',raw,600)[0]==3:
+            required=['stable_ref_peri0_fabric','no_clock_reset_writers',
+                'ce_local_reset_held_gated','ce_mbus_gate_off_critical_neighbors_on',
+                'ce_local_clock_reset_write_authorized','mbus_ce_gate_write_authorized']
         require(all(fact.get(k) is True for k in required),'Required CRYPTO physical fact absent.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,request=None):
     snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
-    if struct.unpack_from('<Q',raw,600)[0]==2:
+    if operation.runtime(raw):
         require(request is not None,'Caller-supplied operation required');snapshots['operation.bin']=Path(request).read_bytes();operation.decode(snapshots['operation.bin'],raw)
     else:require(request is None,'Diagnostic session cannot accept a runtime operation')
     embedded_reference(snapshots['image.elf'],raw)
@@ -177,7 +181,7 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'CRYPTO upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'CRYPTO launch contract changed.')
     p['_reference']=embedded_reference((out/'image.elf').read_bytes(),raw)
-    if struct.unpack_from('<Q',raw,600)[0]==2:
+    if operation.runtime(raw):
         require('operation.bin' in p['files'],'Unsealed crypto operation');p['_operation']=(out/'operation.bin').read_bytes();operation.decode(p['_operation'],raw)
     else:require('operation.bin' not in p['files'],'Unexpected diagnostic operation')
     p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p

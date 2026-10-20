@@ -7,7 +7,7 @@ unsigned crypto_request_output(const struct crypto_request *r)
 {return r->operation==CRYPTO_SHA256?32:r->bytes;}
 int crypto_request_copy(struct crypto_request *out,const struct crypto_session *session,const void *input,size_t bytes)
 {
- if(!out||!session||session->version!=2||!input||bytes<CRYPTO_REQUEST_HEADER||bytes>sizeof(*out))return 0;
+ if(!out||!session||!crypto_session_runtime(session)||!input||bytes<CRYPTO_REQUEST_HEADER||bytes>sizeof(*out))return 0;
  /* Copy first: authenticated bytes are the bytes consumed by the CE owner. */
  memset(out,0,sizeof(*out));memcpy(out,input,bytes);
  uint8_t digest[32];storage_digest_bytes(out,bytes,digest);

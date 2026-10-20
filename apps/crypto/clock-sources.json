@@ -1,0 +1,33 @@
+{
+  "schema": "a733-ce-fixed-clock-references-v1",
+  "runtime": "The fixed CCU provider executes on the FreeRTOS CPU before existing CE SHA/AES clients. Linux is a source reference, not a runtime dependency.",
+  "license": "GPL-2.0-or-later; retain original source notices. The manual is a register reference.",
+  "pins": {
+    "a733-user-manual-1.00": {
+      "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "archive": "camera-research/A733_User_Manual_V1.00.pdf",
+      "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d"
+    },
+    "board-gpu-power-ccu-sun60iw2-c": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+      "archive": "gpu-power/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+      "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77"
+    },
+    "board-video-platform-ccu-reset-c": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_reset.c",
+      "sha256": "d74d49ad45c05efcb834fd803fe4a134b2ad80b1e801b4d8cbda05dda61a337f",
+      "archive": "gpu-power/drivers/clk/sunxi-ng/ccu_reset.c"
+    },
+    "ce-sunxi_ce-c": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce.c",
+      "archive": "rng/sunxi_ce.c",
+      "sha256": "c4807b2ff8daa748263a774406f05f500f7a6dbeeb51ffef7326940130eb8928"
+    }
+  },
+  "fields": "CCU ac0 PERI0-400/div1/gate; ac4 CE/SYS reset release and gates; 5e4 only CE bit2 with critical neighboring bits40302 already enabled. Manual4.1.6.84,117,118 and pinned CE enable order1148..1215.",
+  "lifecycle": "Version3 cold admission independently resolves prior DMA and both-world authority. Reset is never asserted and is not a drain proof. Parents remain adopted and leased; resources remain reserved on success and uncertainty."
+}

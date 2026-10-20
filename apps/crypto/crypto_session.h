@@ -10,6 +10,9 @@ struct crypto_session {
  uint8_t initial[32],memory[32],clocks[32],supervision[32],fixture[32],reference[32];
 };
 _Static_assert(sizeof(struct crypto_session)==824,"Crypto wire layout");
+/* Version3 keeps the caller wire format and admits fixed cold CE clocks. */
+static inline int crypto_session_runtime(const volatile struct crypto_session *s)
+{return s->version==2||s->version==3;}
 int crypto_session_valid(const struct crypto_session *);
 extern const uint8_t crypto_inputs[83],crypto_reference[160];
 #endif

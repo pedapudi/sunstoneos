@@ -1,4 +1,5 @@
 #include "a733_ce_native.h"
+#include "a733_ce_clock.h"
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
 #define SEC UINT32_C(0x04603800)
@@ -59,6 +60,31 @@ int a733_ce_native_write(void *cookie,uintptr_t a,uint32_t v)
         if (a==NS+0xd0 && ((old&1) || !(v&2))) return 0;
     }
     *(volatile uint32_t *)a=v;
+    __asm__ volatile("dsb sy" ::: "memory");return 1;
+}
+/* The cold provider owns the register mutex and authenticates CCU write
+ * permission before entry. No ordinary CE operation can call this adapter. */
+int a733_ce_clock_native_write(void *cookie,uintptr_t a,uint32_t value)
+{
+    (void)cookie;
+    if(a!=CCU+0xac0&&a!=CCU+0xac4&&a!=CCU+0x5e4)return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    uint32_t old=*(volatile const uint32_t *)a,mask;
+    if(a==CCU+0xac0){
+        mask=0x8700001f;
+        uint32_t from=old&mask,to=value&mask;
+        if(!((from==0&&to==0x01000000)||(from==0x01000000&&to==0x81000000)))return 0;
+    }else if(a==CCU+0xac4){
+        mask=0x30003;
+        uint32_t from=old&mask,to=value&mask;
+        if(!((from==0&&to==0x30000)||(from==0x30000&&to==0x30001)||
+             (from==0x30001&&to==0x30003)))return 0;
+    }else{
+        mask=4;
+        if((old&0x40306)!=0x40302||(value&4)!=4)return 0;
+    }
+    if((old^value)&~mask)return 0;
+    *(volatile uint32_t *)a=value;
     __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
 int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync mode)

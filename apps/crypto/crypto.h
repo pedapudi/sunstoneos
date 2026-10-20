@@ -2,10 +2,12 @@
 #define SUNSTONE_CRYPTO_PRIVATE_H
 #include "crypto_session.h"
 #include "run.h"
+#include "a733_ce_clock.h"
 #include "../board/application.h"
 struct crypto_application {
  struct crypto_session session;
  struct a733_ce_session engine;
+ struct a733_ce_clock clock;
  struct a733_ce_config config;
  struct a733_clock_token token;
  struct crypto_run run;

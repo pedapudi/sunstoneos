@@ -9,7 +9,7 @@ vectors=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(vectors)
 _spec=importlib.util.spec_from_file_location('crypto_operation',Path(__file__).with_name('request.py'))
 operation=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(operation)
 def decode(raw,session,reference=vectors.REFERENCE,request=None):
-    if len(session)==824 and struct.unpack_from('<Q',session,600)[0]==2:
+    if operation.runtime(session):
         if request is None:raise ValueError('Authenticated operation required')
         admitted=operation.decode(request,session)
         if len(raw)<144:raise ValueError('Truncated crypto operation frame')

@@ -24,7 +24,7 @@ SERIAL='sunstoneos-a733-crypto'
 
 def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,reference=REFERENCE,request=None):
     preparation.session_check(session)
-    runtime=struct.unpack_from('<Q',session,600)[0]==2
+    runtime=preparation.operation.runtime(session)
     if runtime:preparation.operation.decode(request,session)
     else:require(len(reference)==160 and session[792:824]==hashlib.sha256(reference).digest(),
         'CRYPTO diagnostic fixture/reference differs.')

@@ -7,10 +7,10 @@ int crypto_session_valid(const struct crypto_session *s)
 {
  uint8_t digest[32];
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
- s->magic!=A733_CRYPTO_SESSION_MAGIC||(s->version!=1&&s->version!=2)||s->bytes!=sizeof(*s)||
+ s->magic!=A733_CRYPTO_SESSION_MAGIC||(s->version!=1&&!crypto_session_runtime(s))||s->bytes!=sizeof(*s)||
  !s->owner||s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||!s->authority||
  !present(s->initial,32)||!present(s->memory,32)||!present(s->clocks,32)||!present(s->supervision,32))return 0;
- if(s->version==2)return present(s->fixture,32);
+ if(crypto_session_runtime(s))return present(s->fixture,32);
  storage_digest_bytes(crypto_inputs,83,digest);if(memcmp(digest,s->fixture,32))return 0;
  storage_digest_bytes(crypto_reference,160,digest);return !memcmp(digest,s->reference,32);
 }

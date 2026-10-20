@@ -62,7 +62,7 @@ static void crypto_exchange(void)
     if(crypto_response_bytes){if(crypto_response[8]==1&&!crypto_output_ready())stop();unsigned n=tud_vendor_write(crypto_response+crypto_response_sent,crypto_response_bytes-crypto_response_sent);
         crypto_response_sent+=n;tud_vendor_flush();return;}
     if(!tud_vendor_available())return;
-    if(operation_prefix_bytes || crypto.session.version==2){
+    if(operation_prefix_bytes || crypto_session_runtime(&crypto.session)){
         if(!operation_prefix_bytes){
             uint8_t command;if(tud_vendor_read(&command,1)!=1)stop();
             if(!command){if(tud_vendor_available())stop();goto response;}
@@ -98,7 +98,7 @@ response:;
     if(result==1){memcpy(crypto_response+96,crypto.digest,32);memcpy(crypto_response+128,crypto.payload,CRYPTO_OUTPUT_BYTES);}
     else memset(crypto_response+96,0,32);
     if(result==1&&!crypto_output_ready()){result=2;put32(crypto_response+8,2);put32(crypto_response+12,0);memset(crypto_response+96,0,32);}
-    if(crypto.session.version==2){
+    if(crypto_session_runtime(&crypto.session)){
         put32(crypto_response+4,2);
         unsigned accepted=atomic_load_explicit(&crypto.input_ready,memory_order_acquire);
         const struct crypto_request *r=&crypto.run.request;
