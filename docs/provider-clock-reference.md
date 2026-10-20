@@ -60,3 +60,46 @@ electrical readiness, radio operation, USB transfers, camera operation or CE
 execution. Existing component and physical-admission requirements still apply;
 see [camera platform](camera-platform.md), [USB2 host](usb2-host.md),
 [radio platform](radio-platform.md) and [crypto engine](crypto-engine.md).
+
+## I2S, PWM and HDMI follow-up
+
+The I2S AUDIO1 reference and PWM profile guards use the same decoder. AUDIO1
+has a fixed PLL_REF parent in the pinned Linux `pll_audio1_clk` definition;
+manual §4.1.6.51 and table 4-3 define the existing integer plan. Its 24 MHz
+reference arithmetic is unchanged. No audio sample format, divider, DMA or
+buffer-lifetime behavior changes.
+
+PWM0 channel 5 continues to select SYS_CLK24M. Its APB0 profile accepts SYS24M
+or PERI0_600M; the finite-pulse and fan timing still use their existing 24 MHz
+basis. Manual §§18.7.3 and 18.7.5.1 distinguish these clocks from raw DCXO.
+The optional LED's APBS0 route needs a separate check: manual §4.2.5.2 and
+Linux `r_apbs_parents` identify source 0 as raw DCXO and source 4 as normalized
+PLL_REF. Source 0 therefore retains the raw-24 MHz restriction required by the
+existing LED plan. On a 26 MHz board, that LED configuration is refused; source
+4 can use the existing normalized 24 MHz plan. This patch does not silently
+reinterpret a caller's fixed 24 MHz APBS0 rate as 26 MHz.
+
+The HDMI native restriction is deliberately unchanged. Its `CCU_PREPARE` stage
+selects HDMI_SFR source 1 at CCU offset 0x1690, which manual §4.1.6.232 and Linux
+`hdmi_sfr_parents` identify as raw DCXO. The native binding reserves OSC and
+FABRIC, without a REF lease. The S_PPU register at 0x070101ac is only a gate
+(manual §4.2.5.17); it does not establish a 24 MHz source. Replacing the baseline
+restriction with normalized-reference validation would leave that raw-SFR
+consumer inconsistent. Supporting 26 MHz requires a separate complete audit of
+HDMI's selected SFR source, parent leases and actual consumer behavior, with
+appropriate affected native evidence.
+
+The added cases are selected without replaying the earlier four providers:
+
+```sh
+python checks/provider-clock-reference.py --providers i2s pwm --output evidence
+```
+
+Both pass with address and undefined-behavior sanitizers against the actual
+`reference()` and `profile()` function bodies and public structures. The cases
+cover valid oscillator encodings, malformed reference/enable state, PWM PERI0
+rate mismatch, LED source-0 refusal at 26/19.2 MHz, source-4 acceptance and APBS0
+readback mismatch. Astra's delta source review found no remaining mismatch.
+Evidence is under `audio-pwm-hdmi-clock-20261020`. Earlier provider evidence
+remains under its original frozen inputs. No HDMI, whole-image, startup or
+physical checks were executed for this follow-up.

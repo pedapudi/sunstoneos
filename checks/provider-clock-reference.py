@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the four changed provider clock admissions on modeled register reads."""
+"""Exercise selected provider clock admissions on modeled register reads."""
 import argparse, hashlib, json, re, shlex, subprocess
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -16,7 +16,7 @@ def input_identity(source):
     raw=subprocess.check_output(['/usr/bin/clang-21','-MM','-I'+str(ROOT/'include'),str(source)],text=True)
     return {str(Path(v).resolve()):digest(Path(v)) for v in shlex.split(raw.replace('\\\n',' ').split(':',1)[1])}
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,required=True);ap.add_argument('--resume',action='store_true');a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=a.resume)
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,required=True);ap.add_argument('--resume',action='store_true');ap.add_argument('--providers',nargs='+',choices=['twi','usb2','radio','ce','i2s','pwm']);a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=a.resume)
     common='''#include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,16 +29,22 @@ static unsigned count,writes;
 static uint32_t *word(uintptr_t address){for(unsigned i=0;i<count;i++)if(registers[i].address==address)return &registers[i].value;assert(count<96);registers[count].address=address;return &registers[count++].value;}
 static void initial(unsigned osc,unsigned n,unsigned m){memset(registers,0,sizeof registers);count=writes=0;*word(0x07090160)=0x10000003|(osc<<14);*word(CCU)=0xf8000000|((n-1)<<8)|((m-1)<<16);*word(CCU+0xa0)=0xfe000000|(99<<8)|(1<<20)|(2<<16)|(4<<2);*word(CCU+0x1908)=0x0fff0fff;*word(CCU+0x1988)=0x0fff0000;}
 '''
-    cases=[('twi','drivers/i2c/a733_twi_native.c','a733_twi_native_prepare'),('usb2','drivers/usb/a733_usb2_platform.c','parents'),('radio','drivers/net/a733_radio_platform.c','profile'),('ce','drivers/crypto/a733_ce.c','clocks')]
+    cases=[('twi','drivers/i2c/a733_twi_native.c','a733_twi_native_prepare'),('usb2','drivers/usb/a733_usb2_platform.c','parents'),('radio','drivers/net/a733_radio_platform.c','profile'),('ce','drivers/crypto/a733_ce.c','clocks'),('i2s','drivers/audio/a733_i2s_platform.c','reference'),('pwm','drivers/pwm/a733_pwm.c','profile')]
     results=json.loads((a.output/'completed.json').read_text()) if a.resume else []
     for name,path,fn in cases:
+        if a.providers and name not in a.providers:continue
         prior=next((v for v in results if v['provider']==name),None)
         if prior:
             assert prior['sha256']==digest(ROOT/path) and prior['helper_sha256']==digest(ROOT/'include/a733_clock_reference.h'),'Refuse stale successful evidence'
             assert prior['inputs']==input_identity(a.output/(name+'.c')),'Refuse changed successful check inputs'
             continue
         text=(ROOT/path).read_text();actual=block(text,fn)
-        if name=='twi':
+        if name in ('i2s','pwm'):
+            typ,header=('a733_audio_parent','a733_i2s_platform.h') if name=='i2s' else ('a733_pwm','a733_pwm.h')
+            extra='uint64_t deadline,' if name=='i2s' else ''
+            ignored='(void)deadline;' if name=='i2s' else ''
+            setup=f'#include "{header}"\n#define OSC UINT32_C(0x07090160)\nstatic struct {typ} p;\nstatic int rd(struct {typ} *p,{extra}uintptr_t address,uint32_t *value){{(void)p;{ignored}*value=*word(address);return 1;}}\nstatic void prepare(void){{memset(&p,0,sizeof p);}}\nstatic int test(void);\n'
+        elif name=='twi':
             setup='''#include "a733_twi.h"
 #define A733_PLATFORM_REGISTER_LOCK 0
 static int current(struct a733_twi_native *p){(void)p;return 1;}
@@ -79,6 +85,9 @@ for(unsigned i=0;i<4;i++){initial(osc[i],nn[i],mm[i]);prepare();assert(test());}
 for(unsigned bad=0;bad<5;bad++){initial(2,96,104);prepare();switch(bad){case 0:*word(CCU)=0xf8000000|(95<<8)|(95<<16);break;case 1:*word(0x07090160)&=~BIT(28);break;case 2:*word(0x07090160)&=~BIT(1);break;case 3:*word(CCU)&=~BIT(28);break;case 4:*word(CCU)=0xf8000000|(78<<8)|(78<<16);break;}assert(!test());assert(!writes);}
 '''
         if name=='ce':main+='initial(2,96,104);prepare();*word(0x07090160)&=~1u;assert(!test());p.config.profile=A733_CE_SHA256_ONLY;assert(test());\n'
+        if name=='pwm':
+            main+='initial(2,96,104);prepare();p.shared=A733_CLOCK_PERI0;p.config.apb0=0x03000000;*word(CCU+0x510)=p.config.apb0;assert(test());*word(CCU+0xa0)^=1u<<8;assert(!test());\n'
+            main+='for(unsigned i=0;i<4;i++){initial(osc[i],nn[i],mm[i]);prepare();p.config.led_enabled=1;assert(test()==(i<2));p.config.apbs0=0x04000000;*word(0x0701000c)=p.config.apbs0;assert(test());*word(0x0701000c)^=1;assert(!test());}\n'
         if name in ('twi','radio'):
             # Exercise the PERI0 route as well as the direct SYS24M route.
             if name=='twi':setroute='p.config.apb1=0x03000000;*word(CCU+0x518)=p.config.apb1;'
@@ -92,5 +101,5 @@ for(unsigned bad=0;bad<5;bad++){initial(2,96,104);prepare();switch(bad){case 0:*
             if v.returncode:raise RuntimeError(name+' '+phase+' failed; see preserved log')
         results.append({'provider':name,'passed':True,'source':path,'sha256':digest(ROOT/path),'helper_sha256':digest(ROOT/'include/a733_clock_reference.h'),'function':fn,'extracted_function_sha256':hashlib.sha256(actual.encode()).hexdigest(),'inputs':input_identity(generated),'command':cmd})
         (a.output/'completed.json').write_text(json.dumps(results,indent=2)+'\n')
-    (a.output/'result.json').write_text(json.dumps({'physical_access':False,'cases':results,'helper_sha256':digest(ROOT/'include/a733_clock_reference.h'),'scope':'Actual unchanged function bodies extracted from the four edited providers and compiled against actual public structs. Register reads and preexisting ownership/lock/time/pin dependencies are modeled; no native startup, whole-provider qualification, hardware or physical frequency measurement.'},indent=2)+'\n')
+    (a.output/'result.json').write_text(json.dumps({'physical_access':False,'cases':results,'helper_sha256':digest(ROOT/'include/a733_clock_reference.h'),'scope':'Actual function bodies extracted from the selected providers and compiled against actual public structs. Register reads and preexisting ownership/lock/time/pin dependencies are modeled; no native startup, whole-provider qualification, hardware or physical frequency measurement.'},indent=2)+'\n')
 if __name__=='__main__':main()

@@ -1,4 +1,5 @@
 #include "a733_i2s_platform.h"
+#include "a733_clock_reference.h"
 #include "a733_audio_leases.h"
 
 #define CCU UINT32_C(0x02002000)
@@ -63,11 +64,9 @@ static int update(struct a733_audio_parent *p, uint64_t deadline, uintptr_t a,
 static int reference(struct a733_audio_parent *p)
 {
     uint32_t osc, ref;
+    /* AUDIO1 has the fixed normalized PLL_REF parent, not raw DCXO. */
     return rd(p, p->deadline, OSC, &osc) &&
-        (((osc >> 14) & 3) == 0 || ((osc >> 14) & 3) == 3) &&
-        rd(p, p->deadline, CCU, &ref) && (ref & UINT32_C(0xf8000000)) == UINT32_C(0xf8000000) &&
-        ((ref >> 8) & 255) >= 79 && ((ref >> 8) & 255) <= 115 &&
-        ((ref >> 8) & 255) == ((ref >> 16) & 127);
+        rd(p, p->deadline, CCU, &ref) && a733_clock_ref24_valid(osc, ref);
 }
 static int gate_control(struct a733_audio_parent *p)
 {

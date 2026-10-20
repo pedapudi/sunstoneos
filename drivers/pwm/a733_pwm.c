@@ -12,6 +12,7 @@
  * cross-checked against A733 manual18.7; no Linux/U-Boot runtime is required.
  */
 #include "a733_pwm.h"
+#include "a733_clock_reference.h"
 #include <string.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define PWM A733_PWM_BASE
@@ -77,12 +78,14 @@ static int health(struct a733_pwm *p)
 }
 static int profile(struct a733_pwm *p)
 {
- uint32_t v,ref;
+ uint32_t v,osc,ref;
  if(p->config.led_enabled&&(!rd(p,0x0701000c,&v)||(v&0x0700001f)!=p->config.apbs0))return 0;
- if(!rd(p,0x07090160,&v)||(v&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
- (((v>>14)&3)!=0&&((v>>14)&3)!=3)||!rd(p,0x02002000,&ref)||(ref&0xf8000000)!=0xf8000000)return 0;
- unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
- if(n<80||n>116||n!=m||!rd(p,0x02002510,&v)||(v&0x0300001f)!=p->config.apb0)return 0;
+ if(!rd(p,0x07090160,&osc)||!rd(p,0x02002000,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+ /* PWM/APB0 use normalized clocks. LED APBS0 source0 is raw DCXO;
+  * preserve the fixed24MHz LED plan there, while source4 uses PLL_REF. */
+ if(p->config.led_enabled && !(p->config.apbs0>>24) && a733_clock_dcxo_hz(osc)!=24000000)return 0;
+ unsigned n;
+ if(!rd(p,0x02002510,&v)||(v&0x0300001f)!=p->config.apb0)return 0;
  p->report.apb0=v;
  if(p->shared&A733_CLOCK_PERI0){uint32_t pll,a,b,gate,status;
   if(!rd(p,0x020020a0,&pll)||(pll&0xfe000000)!=0xfe000000||(pll&(BIT(24)|BIT(1)))||
