@@ -11,4 +11,5 @@ struct gpu_display_usb_authority {
 };
 _Static_assert(sizeof(struct gpu_display_usb_authority)==136,"USB observation authority");
 const struct gpu_display_usb_authority *gpu_display_usb_get(void);
+const uint8_t *gpu_display_session_digest_get(void);
 #endif
