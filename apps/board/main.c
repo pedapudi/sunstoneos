@@ -9,6 +9,10 @@
 #include "a733_storage_digest.h"
 #include "aarch64_device_memory.h"
 #include <string.h>
+#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB3)
+/* Immutable capability, retained like existing application geometry records. */
+__attribute__((used,retain)) const uint64_t board_usb3_hid_capability[4]={UINT64_C(0x4153373353484431),1,8,64};
+#endif
 struct board_application board;
 struct board_provider providers;
 static struct board_radio radio;
@@ -283,7 +287,7 @@ void a733_smp_diagnostic_start(void)
     if(!a733_typec_native_init(&board.typec,&tc))platform_panic("board typec",7);
     struct a733_usb2_platform_config *hc=&board.host_config;
     *hc=(struct a733_usb2_platform_config){.owner=s->usb2_owner,.identity=s->generation,.topology=s->topology,
-        .deadline=s->deadline_us-10000,.lifetime_deadline=s->deadline_us-10000,.pck_client=s->pck_client,.revision=s->usb2_revision,.superspeed=s->workload==6};
+        .deadline=s->deadline_us-10000,.lifetime_deadline=s->deadline_us-10000,.pck_client=s->pck_client,.revision=s->usb2_revision,.superspeed=s->workload==6||s->workload==8};
     memcpy(hc->fabric,s->fabric,sizeof(hc->fabric));memcpy(hc->fabric_hz,s->fabric_hz,sizeof(hc->fabric_hz));
     memcpy(hc->supply_uv,s->usb_supply_uv,sizeof(hc->supply_uv));
     struct device_memory_pool *pool=a733_memory_uncached_init();

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare a private pinned TinyUSB host tree with bounded SuperSpeed BOT enumeration."""
+"""Prepare a private pinned TinyUSB host tree with bounded SuperSpeed BOT and keyboard enumeration."""
 import argparse,hashlib,shutil
 from pathlib import Path
-PINS={'common/tusb_types.h': '60debb8a21b42e32f8664ac53913e9711470293ab79f1c312000df9112aacf8c', 'tusb.c': '02c521aa1a3b97ffdb7a6b29d77e18353c368f16187ade6b311b1706f519db15', 'host/usbh.c': '8b87d1b3a90962ec02d8b643c43a3385452e5976094f453ad4a19e0216fd711d', 'class/msc/msc_host.c': 'd4a31430507766f022047572b6162a57d9a4286782a262010b8f014361463e1a'}
+PINS={'class/hid/hid_host.c': '5c0add1606bfd97ef9cf739c713a1875dc8dbeb434d8a3d7c27b074ccaf34c3e', 'common/tusb_types.h': '60debb8a21b42e32f8664ac53913e9711470293ab79f1c312000df9112aacf8c', 'tusb.c': '02c521aa1a3b97ffdb7a6b29d77e18353c368f16187ade6b311b1706f519db15', 'host/usbh.c': '8b87d1b3a90962ec02d8b643c43a3385452e5976094f453ad4a19e0216fd711d', 'class/msc/msc_host.c': 'd4a31430507766f022047572b6162a57d9a4286782a262010b8f014361463e1a'}
 def replace(s,a,b):
     assert a in s,a[:80]
     return s.replace(a,b)
@@ -23,6 +23,20 @@ def prepare(source,out):
       ep_desc=(const tusb_desc_endpoint_t *)(comp+6);
     }''')
     change('class/msc/msc_host.c',msc)
+    def hid(s):
+        s=replace(s,'desc_itf->bNumEndpoints * sizeof(tusb_desc_endpoint_t));',
+          'desc_itf->bNumEndpoints * (sizeof(tusb_desc_endpoint_t) + (tuh_speed_get(daddr)==TUSB_SPEED_SUPER?6:0)));')
+        s=replace(s,'    p_desc = tu_desc_next(p_desc);\n  }\n\n  // Assume bNumDescriptors','''    p_desc = tu_desc_next(p_desc);
+    if(tuh_speed_get(daddr)==TUSB_SPEED_SUPER){
+      TU_ASSERT(desc_itf->bNumEndpoints==1 && p_desc[0]==6 && p_desc[1]==0x30 &&
+        p_desc[2]==0 && p_desc[3]==0 && tu_unaligned_read16(p_desc+4)==p_hid->epin_size,0);
+      p_desc+=6;
+    }
+  }
+
+  // Assume bNumDescriptors''')
+        return s
+    change('class/hid/hid_host.c',hid)
     def host(s):
         s=replace(s,'uint8_t max_packet_size)', 'uint16_t max_packet_size)')
         s=replace(s,'usbh_edpt_control_open(0, 8)', 'usbh_edpt_control_open(0, dev0_bus->speed==TUSB_SPEED_SUPER?512:8)')

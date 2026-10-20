@@ -247,7 +247,7 @@ static int control_response(const struct a733_xhci_notice *e)
         unsigned total=bytes>=4?le16(p+2):0,is_hub=desc->kind==A733_USB2_DEVICE_HUB,ss=device->speed==4;
         if(ss&&(!n->ss_ready||(p[8]*8u>900u||p[8]*8u>n->platform.typec->config.source_ma)))return 0;
         if(bytes<9||p[0]!=9||p[4]!=1||p[5]!=1||!(p[7]&128)||p[8]>250||
-           (is_hub?(total!=(hub->protocol==2?41u:25u)||(p[7]&0xc0)!=0xc0||(p[7]&31)):(ss?total!=44:(total!=32&&total!=34))))return 0;
+           (is_hub?(total!=(hub->protocol==2?41u:25u)||(p[7]&0xc0)!=0xc0||(p[7]&31)):(ss?(total!=40&&total!=44):(total!=32&&total!=34))))return 0;
         if(bytes==9){if(desc->configuration_probe)return 0;memcpy(desc->configuration_prefix,p,9);desc->configuration_probe=1;return 1;}
         if(bytes!=total||!desc->configuration_probe||memcmp(desc->configuration_prefix,p,9)||p[9]!=9||p[10]!=4||p[11]||p[12])return 0;
         if(is_hub){
@@ -261,13 +261,14 @@ static int control_response(const struct a733_xhci_notice *e)
             }
             return 1;
         }
-        if(bytes==34){
+        if(bytes==(ss?40u:34u)){
             unsigned ep=p[29],packet=le16(p+31),interval=p[33];
             if(p[13]!=1||p[14]!=3||p[15]>1||p[16]>2||(!p[15]&&p[16])||
                (p[15]&&!p[16])||p[18]!=9||p[19]!=0x21||p[23]!=1||p[24]!=0x22||
                !le16(p+25)||le16(p+25)>256||p[27]!=7||p[28]!=5||
                ep&~0x8fu||!(ep&128)||!(ep&15)||p[30]!=3||!packet||
-               packet>(device->speed==2?8u:64u)||!interval||interval>(device->speed==3?16u:255u))return 0;
+               packet>(device->speed==2?8u:64u)||!interval||interval>(device->speed>=3?16u:255u))return 0;
+            if(ss&&(p[15]!=1||p[16]!=1||p[34]!=6||p[35]!=0x30||p[36]||p[37]||le16(p+38)!=packet))return 0;
             if(n->hid_seen||(n->msc_seen&&!n->dual_leaf))return 0;
             n->hid_seen=1;n->hid_address=e->address;
             desc->kind=A733_USB2_DEVICE_HID;n->kind=n->msc_seen?A733_USB2_DEVICE_DUAL:A733_USB2_DEVICE_HID;n->hid.endpoint=ep;n->hid.packet=packet;n->hid.interval=interval;
@@ -358,7 +359,7 @@ bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
         if(host->hub.present&&address==host->hub.address)
             return e->bEndpointAddress==host->hub.endpoint&&tu_unaligned_read16(&e->wMaxPacketSize)==host->hub.packet&&
               e->bInterval==host->hub.interval&&a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hub.packet,e->bInterval,d);
-        return host->hid_seen&&address==host->hid_address&&e->bEndpointAddress==host->hid.endpoint&&
+        return (!host->platform.config.superspeed||host->ss_ready)&&host->hid_seen&&address==host->hid_address&&e->bEndpointAddress==host->hid.endpoint&&
           tu_unaligned_read16(&e->wMaxPacketSize)==host->hid.packet&&e->bInterval==host->hid.interval&&
           a733_xhci_open_interrupt(&host->core,address,e->bEndpointAddress,host->hid.packet,e->bInterval,d);
     }

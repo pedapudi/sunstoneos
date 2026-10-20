@@ -603,9 +603,9 @@ int a733_xhci_open_interrupt(struct a733_xhci *x,unsigned address,unsigned ep,
     struct a733_xhci_device *d=device_address(x,address);
     if(!owner(x)||!d||x->failed||!x->connected||!address||address!=d->address||
        ep&~0x8fu||!(ep&128)||!(ep&15)||!packet||packet>(d->speed==2?8u:64u)||
-       !interval||interval>(d->speed==3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
+       (d->speed<1||d->speed>4)||!interval||interval>(d->speed>=3?16u:255u)||deadline>x->lifetime_deadline||guard(x,deadline)!=1)return 0;
     unsigned encoded;
-    if(d->speed==3)encoded=interval-1;
+    if(d->speed>=3)encoded=interval-1;
     else{encoded=3;for(unsigned v=interval;v>1;v>>=1)++encoded;}
     struct a733_xhci_endpoint *e=endpoint(d,ep);
     if(e)return e->packet==packet&&e->transfer_type==3&&e->interval==encoded&&!e->aborted;

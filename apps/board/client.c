@@ -69,6 +69,9 @@ void board_host_task(void *unused)
         if(board_host_irq_after()<0)break;
 #endif
         enum a733_usb2_device_kind kind=a733_usb2_device_kind(&board.host);
+        if(r==A733_USB2_READY&&
+           ((board.session.workload==8&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed!=4||board.host.hid.protocol!=1))||
+            (board.session.workload==6&&kind!=A733_USB2_DEVICE_MSC)))break;
         if(board.session.workload==4){
             if(!dual_step(&issued,&reports,&sector_done))break;
         }else if(r==A733_USB2_READY&&!issued){
@@ -97,8 +100,13 @@ void board_host_task(void *unused)
             struct a733_usb2_hid_report report;
             int done=a733_usb2_hid_result(&board.host,&report);if(done<0)break;
             if(done==1){
+                if(board.session.workload==8&&(report.speed!=4||report.protocol!=1))break;
                 hid_append(board.sector,&report,reports);++reports;
-                if(reports==4){atomic_store_explicit(&board.result,1,memory_order_release);issued=2;}
+                if(reports==4){
+                    struct a733_usb2_native *n=&board.host;
+                    if(board.session.workload==8&&n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)!=1)break;
+                    atomic_store_explicit(&board.result,1,memory_order_release);issued=2;
+                }
                 else if(!a733_usb2_hid_receive(&board.host,board.host.platform.config.lifetime_deadline))break;
             }
         }

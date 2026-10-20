@@ -28,7 +28,7 @@
  * odd selections include radio. Supervised4 requires both USB leaf classes
  * without radio and is admitted only by the board target capability. */
 static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}
-static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6;}
+static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6||workload==8;}
 /* Immutable little-endian image-owned input. No pointer or storage grant is
  * accepted. Evidence hashes identify externally qualified, reviewed facts;
  * producing this record does not itself establish those facts. */

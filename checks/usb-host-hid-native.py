@@ -29,7 +29,7 @@ class Image:
     def address(self,name,unit=None):
         v=({a for (u,n),a in self.variables.items() if n==name and u.endswith(unit)} if unit else self.symbols.get(name,set())-{0})
         assert len(v)==1,(name,unit,v);return next(iter(v))
-def run(image_path,reports_path,out,resume_batch=None):
+def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=None):
     out.mkdir(parents=True,exist_ok=False);image=Image(image_path)
     response_address=image.address('response','/apps/board/usb0.c');response_bytes_address=image.address('response_bytes','/apps/board/usb0.c')
     (out/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),response=response_address,response_bytes=response_bytes_address,defining_unit='apps/board/usb0.c'),indent=2)+'\n')
@@ -47,10 +47,18 @@ def run(image_path,reports_path,out,resume_batch=None):
     session[48:80]=bytes(cpu.mem_read(image.address('a733_smp_build_id'),32));cpu.mem_write(board,bytes(session))
     cpu.mem_write(board+layout['host']+native['platform']+platform['config']+config['lifetime_deadline'],struct.pack('<Q',10000000))
     cpu.mem_write(board+layout['host']+native['kind'],struct.pack('<I',2))
+    core=board+layout['host']+native['core'];core_fields=image.layouts['a733_xhci']
+    if superspeed:
+        cpu.mem_write(board+session_layout['workload'],struct.pack('<I',8));session[session_layout['workload']:session_layout['workload']+4]=struct.pack('<I',8)
+        cpu.mem_write(board+session_layout['source_ma'],struct.pack('<I',900));session[session_layout['source_ma']:session_layout['source_ma']+4]=struct.pack('<I',900)
+        cpu.mem_write(core+core_fields['speed'],struct.pack('<I',3 if fault=='hs-fallback' else 4))
+        hid=board+layout['host']+native['hid'];cpu.mem_write(hid+image.layouts['a733_usb2_hid']['protocol'],struct.pack('<I',1))
+        cpu.mem_write(core+core_fields['ops']+image.layouts['a733_xhci_ops']['live'],image.address('board_live').to_bytes(8,'little'))
     report_bytes=reports_path.read_bytes();stride=image.sizes['a733_usb2_hid_report'];assert stride==96 and len(report_bytes)==4*stride
     calls=[];completed=[];requests=[];pending=[];done=[];response_available=[False]
     names=('board_live','a733_usb2_native_poll','a733_usb2_device_kind','a733_usb2_hid_receive','a733_usb2_hid_result','vTaskDelay','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read')
     if 'board_host_irq_before' in image.symbols:names+=('board_host_irq_before','board_host_irq_after','board_host_irq_wait')
+    names+=tuple(n for n in ('board_host_irq_stop','a733_usb2_native_lost','a733_typec_revoke') if n in image.symbols)
     hooks={image.address(n):n for n in names}
     def ret(value):cpu.reg_write(UC_ARM64_REG_X0,value);cpu.reg_write(UC_ARM64_REG_PC,cpu.reg_read(UC_ARM64_REG_LR))
     def hook(machine,a,size,unused):
@@ -58,12 +66,13 @@ def run(image_path,reports_path,out,resume_batch=None):
         name=hooks.get(a)
         if name is None:return
         args=[machine.reg_read(UC_ARM64_REG_X0+i) for i in range(8)];calls.append(name)
-        if name=='a733_usb2_hid_receive':assert args[1]==10000000 and not pending;pending.append(True);requests.append(True);ret(1)
+        if name=='board_live' and fault=='lost-after-copy' and len(completed)==4 and not response_available[0]:ret(0)
+        elif name=='a733_usb2_hid_receive':assert args[1]==10000000 and not pending;pending.append(True);requests.append(True);ret(1)
         elif name=='a733_usb2_hid_result':
             assert pending and len(completed)<4;at=len(completed)*stride;machine.mem_write(args[1],report_bytes[at:at+stride]);pending.clear();completed.append(True);ret(1)
         elif name in ('vTaskDelay','board_host_irq_wait'):
-            assert cpu.mem_read(board+layout['result'],4)==struct.pack('<I',1) if len(completed)==4 else True
-            if len(completed)==4 or resume_batch is not None:done.append(True);machine.emu_stop()
+            assert cpu.mem_read(board+layout['result'],4)==struct.pack('<I',2 if fault else 1) if len(completed)==4 or fault=='hs-fallback' else True
+            if len(completed)==4 or resume_batch is not None or fault=='hs-fallback':done.append(True);machine.emu_stop()
             else:ret(0)
         elif name=='a733_usb2_device_kind':ret(2)
         elif name=='a733_usb2_native_poll':ret(1)
@@ -78,22 +87,28 @@ def run(image_path,reports_path,out,resume_batch=None):
         return cpu.reg_read(UC_ARM64_REG_X0)&0xffffffff
     assert call('a733_board_session_valid',board,0)==1
     if resume_batch is None:
-        call('board_host_task',0);assert len(completed)==len(requests)==4 and not pending
+        call('board_host_task',0);assert len(completed)==len(requests)==(0 if fault=='hs-fallback' else 4) and not pending
     else:
         batch=resume_batch.read_bytes();assert len(batch)==512
         cpu.mem_write(board+layout['sector'],batch);cpu.mem_write(board+layout['result'],struct.pack('<I',1))
-    batch=bytes(cpu.mem_read(board+layout['sector'],512));assert struct.unpack_from('<3I',batch)==(0x52444948,1,4)
+    batch=bytes(cpu.mem_read(board+layout['sector'],512));assert fault=='hs-fallback' or struct.unpack_from('<3I',batch)==(0x52444948,1,4)
     (out/'batch.bin').write_bytes(batch);response_available[0]=True;call('board_usb0_task',0)
-    count=int.from_bytes(cpu.mem_read(response_bytes_address,4),'little');assert count==584
-    frame=bytes(cpu.mem_read(response_address,584));assert struct.unpack_from('<I',frame,4)[0]==2 and frame[72:]==batch
+    count=int.from_bytes(cpu.mem_read(response_bytes_address,4),'little');assert count==(72 if fault else 584)
+    frame=bytes(cpu.mem_read(response_address,count));assert fault or (struct.unpack_from('<I',frame,4)[0]==2 and frame[72:]==batch)
     (out/'frame.bin').write_bytes(frame);(out/'session.bin').write_bytes(session)
     decoder=module('hid_board_decoder',ROOT/'apps/board/observe.py');result=decoder.decode(frame,session)
-    assert result['kind']=='hid-input' and result['sector'] is None and [r['bytes'] for r in result['reports']]==[8,3,0,8]
+    if fault:
+        assert result['usb_state']==2 and result['sector'] is None
+        (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,fault=fault,image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),calls=calls,scope='Linked SS keyboard mismatch/authority refusal before copied publication; providers/IRQ modeled.'),indent=2)+'\n');return
+    expected=[struct.unpack_from('<I',report_bytes,i*stride+16)[0] for i in range(4)]
+    assert result['kind']=='hid-input' and result['sector'] is None and [r['bytes'] for r in result['reports']]==expected
+    if superspeed:assert result['device_speed']=='super-gen1'
     # Same arbitrary contents remain a storage sector under version1.
     storage=bytearray(frame);struct.pack_into('<I',storage,4,1)
-    decoded=decoder.decode(storage,session);assert decoded['kind']=='storage-sector' and decoded['sector']==batch
+    if not superspeed:
+        decoded=decoder.decode(storage,session);assert decoded['kind']=='storage-sector' and decoded['sector']==batch
     refused=[]
-    for name,offset,value in [('batch-count',80,3),('speed',96,4),('interface',97,1),('length',112,65),('reserved',100,1),('version',76,2)]:
+    for name,offset,value in [('batch-count',80,3),('speed',96,3 if superspeed else 4),('interface',97,1),('length',112,65),('reserved',100,1),('version',76,2)]:
         bad=bytearray(frame);bad[offset]=value
         try:decoder.decode(bad,session)
         except ValueError:refused.append(name)
@@ -105,5 +120,5 @@ def run(image_path,reports_path,out,resume_batch=None):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','reports','output'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--resume-batch',type=Path)
-    a=p.parse_args();run(a.image,a.reports,a.output,a.resume_batch)
+    p.add_argument('--resume-batch',type=Path);p.add_argument('--superspeed',action='store_true');p.add_argument('--fault',choices=('hs-fallback','lost-after-copy'))
+    a=p.parse_args();run(a.image,a.reports,a.output,a.resume_batch,a.superspeed,a.fault)

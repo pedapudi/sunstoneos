@@ -5,13 +5,15 @@ and copied read-only storage and HID input APIs. It supports one directly attach
 high-speed mass-storage device or one low-, full- or high-speed HID interface,
 directly or behind one admitted high-speed USB2 hub. A separate supervised
 profile adds one directly attached SuperSpeed Gen1 Bulk-Only Transport (BOT)
-mass-storage device on
+mass-storage device or one boot-keyboard HID interface on
 TYPEC24, using COMB0. The USB2 profiles keep their existing admission and wire
 contracts.
 The storage profile uses one configuration, interface 0, alternate 0, two bulk
 endpoints and LUN 0. Storage configuration descriptors must contain the standard
 32-byte configuration/interface/endpoint sequence for USB2, or the 44-byte
-sequence with two immediate SuperSpeed endpoint companions for Gen1. Blocks
+sequence with two immediate SuperSpeed endpoint companions for Gen1. The direct
+Gen1 keyboard uses one 40-byte configuration with an immediate interrupt
+endpoint companion. Blocks
 must be 512 bytes.
 The composed software check passes with the actual TinyUSB stack, xHCI core and
 shared resource providers. Physical operation, connector power and independent
@@ -518,13 +520,61 @@ and retention for failed/stale commands, stale transfer events, deadline expiry,
 wrong dequeue readback and generation loss. Device and register behavior is
 modeled. Physical endpoint recovery and storage reads remain unqualified.
 
+## Direct Gen1 keyboard reports use an explicit workload
+
+Supervised workload 8 selects one directly attached Gen1 boot keyboard on
+TYPEC24. It uses the existing HID descriptor, interrupt-IN ring, 64-byte report
+buffer and copied caller API. It adds no hub, endpoint allocation or mutable
+native layout. SuperSpeed hubs and USB2 children on a companion root remain
+separate requirements. The Mimus keyboard consumer retains its existing USB2
+profiles; workload 8 publishes raw reports through the board application.
+
+The admitted configuration has interface 0, alternate 0, one boot-keyboard HID
+interface and one interrupt-IN endpoint. The packet size is 1–64 bytes and
+bInterval is 1–16. Its immediate six-byte SuperSpeed companion must specify
+bMaxBurst zero, bmAttributes zero and wBytesPerInterval equal to the packet size.
+These restrictions establish one transaction per service interval. The xHCI
+Interval is bInterval minus one, Mult and Max Burst remain zero, and Max ESIT
+Payload equals the admitted packet size. USB 3.2 section 9.6.6–7 and xHCI 1.2
+sections 4.8.2.4 and 6.2.3.6 define these fields.
+
+The private pinned TinyUSB adaptation includes the companion in the HID class
+length and skips it before returning the consumed interface extent. Native
+descriptor validation checks every companion field before endpoint opening.
+BOS, SET_ISOCH_DELAY and SET_SEL use the existing Gen1 sequence. A stalled or
+mismatched interrupt completion retains the controller and refuses caller data.
+
+The 592-byte sealed board session remains unchanged. Workload 8 requires the
+supervised USB3 image, host ownership, no radio profile and the existing 900 mA
+source qualification floor. Workload 7 remains refused. Preparation checks a
+32-byte immutable ELF capability record as well as the supplied manifest, so
+asserting a manifest field cannot enable an older MSC-only image. The physical
+record must explicitly name `hid-keyboard`, bind the image and session template,
+and establish a compatible Gen1 cable and keyboard. Legacy MSC records preserve
+their existing interpretation. No matching physical record is currently available.
+
+The application requires HID class, Gen1 speed and keyboard protocol before
+requesting reports. It copies four reports, checks lifetime and attachment
+again, and publishes the existing HID wire version 2. Its speed field records
+Gen1 only under workload 8; older workload decoders keep their USB2 limits.
+The host saves the copied report batch as data and does not send desktop input.
+High-speed fallback and generation loss before publication refuse success.
+
+Focused software evidence is under
+`~/.cache/sunstoneos/evidence/usb-ss-hid-20261020/`. Actual stack compositions
+cover ordinary and 64-byte interrupt reports, strict companion/interval/protocol
+refusals and uncertain completions. Linked application and host checks cover
+copied publication, fallback and lifetime refusal, immutable image capability
+and class-bound authority. Device, cache, RTOS and transport effects are modeled;
+physical keyboard, power, DMA and interrupt operation remain unqualified.
+
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
 refuses low/full-speed mass storage, deeper or bus-powered hubs, more than two
 leaves or two leaves of the same class,
 interrupt OUT, high-bandwidth periodic
-transfers, isochronous endpoints, SuperSpeed hubs or HID, Gen2, streams,
+transfers, isochronous endpoints, SuperSpeed hubs, other SuperSpeed HID profiles, Gen2, streams,
 nonstandard speed-ID tables, more than eight
 scratchpads and richer mass-storage configurations. GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
 profile. Bulk stalls, other control stalls and uncertain recovery retain the

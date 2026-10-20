@@ -22,6 +22,7 @@ static unsigned stall_case,stall_seen,recovery_commands,recovery_delay,stall_eve
 static uint64_t recovery_wait,reset_command_pointer,stalled_pointer;
 static uint8_t *stalled_caller;static uint8_t stalled_original;
 static unsigned ss_mode,ss_bad,ss_reverse,ss_burst=15,ss_streams,ss_source=900,ss_conflict;
+static unsigned ss_hid,ss_hid_bad;
 static uint16_t ss_analog[65536];static unsigned ss_halfwords;
 static uint64_t last_command,last_transfer[A733_XHCI_DEVICES][3];
 static unsigned hid_mode,device_speed=3,device_packet=64,hid_packet=8,hid_interval=10;
@@ -129,12 +130,20 @@ static void control_data(uint8_t *p,unsigned count)
         uint8_t config[]={9,2,44,0,1,1,0,0x80,112,9,4,0,0,2,8,6,0x50,0,
             7,5,0x81,2,0,4,0,6,0x30,(uint8_t)ss_burst,(uint8_t)ss_streams,0,0,
             7,5,2,2,0,4,0,6,0x30,(uint8_t)ss_burst,(uint8_t)ss_streams,0,0};
+        uint8_t keyboard[]={9,2,40,0,1,1,0,0x80,112,9,4,0,0,1,3,1,1,0,
+            9,0x21,0x11,1,0,1,0x22,sizeof(hid_descriptor),0,7,5,0x81,3,(uint8_t)hid_packet,0,(uint8_t)hid_interval,
+            6,0x30,0,0,(uint8_t)hid_packet,0};
+        if(ss_hid_bad==1)keyboard[36]=1;
+        if(ss_hid_bad==2)keyboard[35]=0x31;
+        if(ss_hid_bad==3)keyboard[38]=(uint8_t)(hid_packet+1);
+        if(ss_hid_bad==4)keyboard[33]=17;
+        if(ss_hid_bad==5)keyboard[16]=2;
         uint8_t bos[]={5,15,22,0,2,7,16,2,2,0,0,0,10,16,3,0,14,0,1,10,255,7};
         const uint8_t string[]={4,3,9,4};
         if(ss_bad==7)config[27]=16;if(ss_bad==8)config[28]=17;if(ss_bad==9)config[29]=1;
         if(ss_bad==1)bos[12]=9;if(ss_bad==2)config[26]=0x31;if(ss_bad==3)config[8]=ss_source==1500?150:113;
-        if(request[1]==6){const uint8_t *src=request[3]==1?device:request[3]==2?config:request[3]==15?bos:string;
-            unsigned size=request[3]==1?18:request[3]==2?44:request[3]==15?22:4;assert(count<=size);memcpy(p,src,count);}
+        if(request[1]==6){const uint8_t *src=request[3]==1?device:request[3]==2?(ss_hid?keyboard:config):request[3]==15?bos:request[3]==0x22?hid_descriptor:string;
+            unsigned size=request[3]==1?18:request[3]==2?(ss_hid?40:44):request[3]==15?22:request[3]==0x22?sizeof(hid_descriptor):4;assert(count<=size);memcpy(p,src,count);}
         else assert(request[1]==0xfe&&count==1);
         return;
     }
@@ -248,13 +257,13 @@ static void wire(void)
                 assert(!!(get32(d->input+x->context_bytes)&(1u<<25))==(hub_protocol==2));
             }else if(is_hid(j)){
                 struct a733_xhci_endpoint *e=&d->endpoints[1];const uint8_t *context=d->input+(e->number+1)*x->context_bytes;
-                unsigned interval=speed==3?hid_interval-1:3;unsigned value=hid_interval;
-                if(speed!=3)while(value>1){++interval;value>>=1;}
+                unsigned interval=speed>=3?hid_interval-1:3;unsigned value=hid_interval;
+                if(speed<3)while(value>1){++interval;value>>=1;}
                 assert(get32(context)==interval<<16);
                 assert(get32(context+4)==((hid_packet<<16)|(7u<<3)|(3u<<1)));
                 assert(get32(context+16)==((hid_packet<<16)|hid_packet));
             }
-            if(ss_mode){
+            if(ss_mode&&!ss_hid){
                 for(unsigned k=1;k<3;++k){struct a733_xhci_endpoint *e=&d->endpoints[k];
                     const uint8_t *c=d->input+(e->number+1)*x->context_bytes;
                     assert(get32(c)==0); /* MaxPStreams and Mult disabled. */
@@ -405,6 +414,14 @@ int main(int argc,char **argv)
           strstr(mode,"setup")?9:strstr(mode,"status")?10:1;
         mode="read";
     }
+    if(!strncmp(mode,"ss-hid",6)){
+        ss_hid=hid_mode=1;hid_packet=8;hid_interval=4;device_packet=512;
+        if(strstr(mode,"max")){hid_packet=64;report_bytes=64;hid_interval=16;}
+        ss_hid_bad=strstr(mode,"burst")?1:strstr(mode,"companion")?2:strstr(mode,"payload")?3:
+            strstr(mode,"interval")?4:strstr(mode,"protocol")?5:0;
+        if(strstr(mode,"stall"))failed_hid_event=1;
+        if(strstr(mode,"pointer"))wrong_hid_pointer=1;
+    }
     if(!strncmp(mode,"ss-",3)){
         ss_mode=1;ss_reverse=strstr(mode,"reverse")!=NULL;device_speed=4;
         if(strstr(mode,"bad-bos"))ss_bad=1;if(strstr(mode,"bad-companion"))ss_bad=2;
@@ -469,6 +486,32 @@ int main(int argc,char **argv)
         device_packet=device_speed==3?64:device_speed==1?32:8;hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
     }
     start_core();
+    if(ss_hid){
+        for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();
+        if(ss_hid_bad){
+            assert(n.failed&&n.core.failed&&!n.hid_mounted);
+            puts("PASS strict SS HID descriptor/companion refusal retains before reports");return 0;
+        }
+        assert(n.mounted&&!n.failed&&n.hid_mounted&&n.kind==A733_USB2_DEVICE_HID&&n.ss_ready&&n.core.speed==4);
+        struct a733_usb2_hid_report result;memset(&result,0x5a,sizeof(result));
+        FILE *f=argc>2?fopen(argv[2],"wb"):NULL;if(argc>2)assert(f);
+        for(unsigned report=0;report<4;++report){
+            assert(a733_usb2_hid_receive(&n,m.now+500000));
+            for(unsigned i=0;i<10000&&!n.hid.complete&&!n.failed;++i)poll();
+            if(failed_hid_event||wrong_hid_pointer){
+                assert(n.failed&&n.core.failed&&a733_usb2_hid_result(&n,&result)<0);
+                for(unsigned i=0;i<sizeof(result);++i)assert(((uint8_t *)&result)[i]==0x5a);
+                if(f)assert(!fclose(f));puts("PASS SS HID uncertain event retains before caller copy");return 0;
+            }
+            assert(n.hid.complete&&!n.failed&&a733_usb2_hid_result(&n,&result)==1);
+            assert(result.speed==4&&result.protocol==1&&result.bytes==report_bytes&&result.sequence==report+1);
+            for(unsigned i=0;i<report_bytes;++i)assert(result.data[i]==(uint8_t)(report*17+i+1));
+            if(f)assert(fwrite(&result,1,sizeof(result),f)==sizeof(result));
+        }
+        if(f)assert(!fclose(f));
+        if(irq_model)assert(irq_begins&&irq_releases&&!n.core.irq_service);
+        puts("PASS SS BOS/ISOCH/SEL and actual TinyUSB keyboard enumeration/context with four copied reports");return 0;
+    }
     if(stall_case){
         uint8_t sector[512];memset(sector,0x5a,sizeof(sector));
         for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();

@@ -19,7 +19,7 @@ def decode(frame, session, profile=None):
         raise ValueError('invalid copied sector extent')
     digest=session[368:400]
     workload=struct.unpack_from('<I',session,400)[0]
-    if workload in (4,6) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
+    if workload in (4,6,8) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
         raise ValueError('Combined workload requires supervised session')
     if frame[40:72]!=digest:
         raise ValueError('radio profile identity mismatch')
@@ -28,7 +28,7 @@ def decode(frame, session, profile=None):
             raise ValueError('disabled host is not admitted')
     elif workload in (2,3):
         raise ValueError('disabled host reported activity')
-    if workload in (0,2,4,6):
+    if workload in (0,2,4,6,8):
         if profile is not None or radio_state or radio_bytes:
             raise ValueError('unexpected radio result')
     elif workload in (1,3):
@@ -56,6 +56,7 @@ def decode(frame, session, profile=None):
                                radio_completion_scope='expected-response-and-socket-disposal',
                                tcp_wire_drain_established=False)
     if workload==4 and usb_state==1 and version!=3:raise ValueError('Combined workload requires combined result')
+    if workload==8 and usb_state==1 and version!=2:raise ValueError('SS keyboard workload requires copied HID result')
     if workload==6 and usb_state==1 and version!=4:raise ValueError('SS-required workload needs SS result')
     if version==4:
         if workload!=6 or usb_state!=1:raise ValueError('SS result is not admitted')
@@ -69,7 +70,7 @@ def decode(frame, session, profile=None):
         result.update(decode_dual(frame[72:]))
     if version==2:
         if usb_state!=1:raise ValueError('HID version requires a completed copied batch')
-        result.update(decode_hid(frame[72:]))
+        result.update(decode_hid(frame[72:],superspeed=workload==8))
         result['kind']='hid-input';result['sector']=None
     return result
 
@@ -88,18 +89,19 @@ def decode_dual(raw):
     return dict(kind='storage-and-hid',sector=raw[sector_offset:sector_offset+sector_bytes],
                 msc_address=address,msc_speed='high',msc_interface=interface,msc_in=epin,msc_out=epout,lba=lba,**hid)
 
-def decode_hid(raw):
+def decode_hid(raw,superspeed=False):
     if len(raw)!=512 or struct.unpack_from('<3I',raw)!=(0x52444948,1,4):raise ValueError('Invalid copied HID batch')
     address=struct.unpack_from('<I',raw,12)[0];generation=struct.unpack_from('<Q',raw,16)[0]
     speed,interface,protocol,endpoint=raw[24:28]
-    if not 1<=address<=127 or not generation or speed not in (1,2,3) or interface or protocol>2 or endpoint&~0x8f or not endpoint&0x80 or not endpoint&15 or any(raw[28:32]) or any(raw[352:]):
+    if not 1<=address<=127 or not generation or speed not in ((4,) if superspeed else (1,2,3)) or interface or protocol>2 or endpoint&~0x8f or not endpoint&0x80 or not endpoint&15 or any(raw[28:32]) or any(raw[352:]):
         raise ValueError('Invalid HID device/interface identity')
+    if superspeed and protocol!=1:raise ValueError('SS keyboard protocol differs')
     reports=[];previous=0
     for i in range(4):
         at=32+i*80;sequence,count=struct.unpack_from('<QI',raw,at)
         if not sequence or sequence<=previous or count>(8 if speed==2 else 64) or any(raw[at+12:at+16]) or any(raw[at+16+count:at+80]):raise ValueError('Invalid HID report extent or sequence')
         reports.append(dict(sequence=sequence,bytes=count,data_hex=raw[at+16:at+16+count].hex()));previous=sequence
-    return dict(hid_generation=generation,device_address=address,device_speed={1:'full',2:'low',3:'high'}[speed],
+    return dict(hid_generation=generation,device_address=address,device_speed={1:'full',2:'low',3:'high',4:'super-gen1'}[speed],
       interface=interface,protocol=protocol,endpoint=endpoint,reports=reports)
 
 def main():
