@@ -112,3 +112,20 @@ are modeled; no peripheral MMIO is mapped. Host execution also checks actual
 RCQ fields, fragmented upload authentication and master10-only IOMMU programming
 and fault scans. These checks establish software behavior under their stated
 models. Physical G2D, USB and interrupt operation remain unqualified.
+
+Twelve saved task cases execute the final linked AArch64 task, clock and rail
+registries, GPU resource manager, native clock accesses, IOMMU and copied-output
+logic. They cover fresh completion, stale status refusal, global and master10
+faults, configuration-only timeout, failure after copying, unchanged terminal
+polling and two 32768-byte copy chunks. Separate fill and copy cases interpret
+the actual emitted RCQ and mixer words with an ARGB8888 hardware-effect model,
+then compare copied output with the sealed caller reference. Every trace excludes
+other masters' micro registers. PMIC service results, scheduler mutexes,
+translation observations and hardware effects remain explicit model boundaries.
+
+The transport check reuses the terminal copied checkpoint. Actual configured
+TinyUSB vendor, FIFO and endpoint code passes full-speed and high-speed streams
+and an exact high-speed packet-length case with modeled DCD completions.
+The raw constructor table, task checkpoints and case records are preserved
+beside the frozen image. These models do not establish physical pixels,
+interrupt delivery, USB operation or recovery.
