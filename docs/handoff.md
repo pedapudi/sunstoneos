@@ -99,7 +99,7 @@ functions and modes beyond these bounded applications.
 | [Crypto](crypto-application.md) | Bounded caller SHA-256/AES-128 ECB, private input and request-bound output; key-cleanup and fragment-handling review resolved. Physical engine operation, secure access and drain remain unqualified. | `crypto-runtime-input-20261018/` |
 | [USB HID/CPU IRQ](usb2-host.md) | LS/FS/HS HID copies four reports without desktop events. Supervised board option routes CPU0 INTID187 to the existing owner; other profiles poll. IRQ delivery, DMA/drain, power and attachment reuse remain unqualified. | `usb-host-interrupt-20261018/root-integration.json`; `usb-host-cpu-irq-20261019/root-integration.json` |
 | [USB hub/dual leaf](usb2-host.md) | Workload 4: one self-powered HS USB2 hub, one LS/FS/HS HID plus one HS MSC. Joint immutable output requires both results and fresh attachment. Existing IRQ187 route retained; derived profiles keep workloads 0–3. Hub/TT, power, DMA and drain remain unqualified. | `usb-host-dual-leaf-20261019/root-integration.json`; earlier single leaf: `usb-host-hub-20261019/` |
-| [USB Gen1 BOT](usb2-host.md#one-direct-gen1-storage-device-uses-comb0) | Workload 6, direct read-only LBA0, source-backed COMB0; no USB2 fallback. Requires authenticated ≥900 mA and image-bound physical route/rail/clock/source-switch evidence; none exists. Gen2, hubs/HID, streams, wider classes and safe detach/drain remain required. | `usb-host-superspeed-20261019/root-integration.json` |
+| [USB MSC/Gen1 BOT](usb2-host.md) | GET_MAX_LUN endpoint reset/dequeue precedes LUN0 fallback and copied READ10; eleven HS cases model hardware, SS recovery is source-reviewed only. Other stalls/uncertainty retain. Workload 6 direct read-only LBA0 refuses USB2 fallback and requires authenticated ≥900 mA plus image-bound COMB0/rail/clock/route/source-switch admission; none exists. Wider modes and safe detach/drain remain required. Frozen recovery image retains the older clock policy. | `usb-msc-stall-20261020/root-integration.json`; Gen1: `usb-host-superspeed-20261019/` |
 | [Thermal](thermal-application.md), [ADC](adc-application.md), [finite USB](usb.md) | Finite applications and return adapters integrated. Thermal/ADC retain configuration and leases; ADC needs fitted-divider electrical admission. Physical operations/return remain unqualified. | `thermal-adc-returning-source-20261018/integration.json`; `usb-returning-20261018/integration.json` |
 | [RTC source/alarm](rtc-application.md) | Separate source initialization and external-source alarm paths. Source admission precedes alarm use; success requires verified Secure interrupt-state restoration, not only a completion message. | `rtc-source-returning-20261018/integration.json`; `rtc-alarm-returning-20261018/integration.json` |
 | [NPU runtime/IRQ](npu-application.md), [service](npu-service.md) | Retained same-model SUBMIT/READ/copied output/REAP/CLOSE; IRQ97 owner alone acknowledges. Bootstrap plus two finite inferences require three notified completions and stopped receipt. Source-off CLOSE/GIC stop precede release; retained runtime keeps OS/USB live without ROM return. | `npu-interrupt-service-20261019/root-integration.json`; `npu-runtime-input-20261019/dma-reconcile/root-integration.json` |
@@ -171,13 +171,15 @@ functions and modes beyond these bounded applications.
 
 Current implementation owners are finishing these offline changes:
 
-- Video encoding: source-trace research for a native path, preferably caller
-  YUV420→JPEG, using cached A733 authority; no implementation claim.
-- USB MSC: GET_MAX_LUN EP0 stall recovery is assigned to the UART worker.
+- Video encoding: published-instruction trace, then private caller YUV420→JPEG
+  implementation. Exclusive encoder/IOMMU ownership is checked separately under
+  `encoder-clock-scope-20261020/`; encoder operation remains unimplemented.
 - Inbound TCP: listen/accept integration is assigned to the I2S worker.
 
-The primary agent owns CPU work and integration. Recovery and hardware access
-remain unavailable.
+The standalone SD boot-container source assessment identifies a published recipe,
+but no packager or image is implemented. The primary agent owns the unresolved
+cold-entry/component contract, CPU work and integration; an FEL image is not a
+substitute for that contract. Recovery and hardware access remain unavailable.
 
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and

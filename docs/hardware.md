@@ -1401,6 +1401,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `862fae444a481eb9505d8ba7ef3835760e208764663c1e7aef8459f8b9be43ac`
   omits the counter-read permission and cannot publish completed output; its
   substituted-read compositions retain only their historical modeled-path scope.
+  The [shared clock policy](clock-leases.md) reserves exclusive encoder scope
+  bit 71 and excludes encoder ownership during generic and private JPEG/H.264/HDMI
+  IOMMU preparation. A focused registry/media ownership case passes with modeled
+  callbacks; two core and three application units compile for AArch64. Evidence
+  is under `encoder-clock-scope-20261020/`. These checks establish neither a linked
+  encoder application nor encoder initialization, DMA completion or physical
+  operation. Earlier frozen images retain their own clock policies.
   The attached board
   ROM profile, actual memory/cache/drain authority, physical decoding,
   remaining decode formats and all encoder paths remain outstanding.
@@ -1547,6 +1554,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   physical admission record exists. Physical link operation, source capacity,
   DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs/HID,
   Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
+  GET_MAX_LUN protocol-stall recovery now resets endpoint zero and sets its
+  dequeue pointer before notifying TinyUSB, which falls back to LUN 0 and
+  completes the copied READ10 path. Eleven affected high-speed TinyUSB/provider
+  cases pass with device effects modeled; SuperSpeed recovery is source-reviewed
+  only. Other control stalls, bulk clear-halt and uncertain recovery retain
+  resources. The native image was compiled, not executed. Its integration audit
+  verifies 436 dependencies and 163 objects at `ad1f680` under
+  `usb-msc-stall-20261020/root-integration.json`. Frozen image `70e32112…`
+  retains the older clock-scope header; it links no encoder or media-IOMMU
+  preparation and does not establish the newer encoder exclusion.
   Full startup, physical power/switch qualification, actual
   transfers and report timing, DMA drain, CPU interrupt delivery, repeated
   attachment, safe detach/reuse, bus-powered budgets, deeper hubs/more leaves,
