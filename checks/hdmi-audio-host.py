@@ -52,7 +52,7 @@ def main():
         elif case=='authority':struct.pack_into('<Q',raw,536,0)
         elif case=='handoff':raw[552]^=1
         elif case=='clock':struct.pack_into('<I',raw,300,24000000 if struct.unpack_from('<I',raw,300)[0]==26000000 else 26000000)
-        elif case=='video-mode':struct.pack_into('<I',raw,232,16)
+        elif case=='video-mode':struct.pack_into('<I',raw,288,16)
         elif case=='memory-record':facts['audio_memory']+=b' '
         elif case=='sink-record':facts['sink_edid']=bytes(256)
         elif case=='session-image':raw[48]^=1

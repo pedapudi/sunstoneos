@@ -78,7 +78,7 @@ def session_check(raw,pcm):
     supervisor,owner=struct.unpack_from('<2Q',raw,208)
     require((magic,version,size)==(base.SESSION_MAGIC,1,656) and
         all((epoch,generation,lease,supervisor,owner)),'HDMI audio session identity differs.')
-    require(struct.unpack_from('<3I',raw,232)==(4,0,0),
+    require(struct.unpack_from('<3I',raw,288)==(4,0,0),
         'HDMI audio requires the limited-range720p60 hardware pattern.')
     authority,frames=struct.unpack_from('<2Q',raw,536)
     require(authority and 1<=frames<=48000 and len(pcm)==frames*4 and
