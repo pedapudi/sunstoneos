@@ -39,7 +39,7 @@ __attribute__((noinline)) int g2d_allocate(void)
     for(unsigned i=0;i<4;++i){struct device_memory_extent e;
         size_t size=!i?32768:i==3?12288:g2d.rounded+8192;
         if(!device_memory_acquire_aligned(g2d.pool,g2d.session.owner,size,i?4096:16384,
-           &g2d.leases[i],&e)||e.bytes!=size||e.cpu%(i?4096:16384))return 0;
+           &g2d.leases[i],&e)||e.bytes!=size||e.physical!=e.cpu||e.cpu%(i?4096:16384))return 0;
         if(!i)g2d.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,size);uint8_t *p=(void *)(e.cpu+4096);
             if(i==1)g2d.input=p;else if(i==2)g2d.output=p;else g2d.commands=p;}

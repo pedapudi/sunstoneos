@@ -53,7 +53,8 @@ Disabled registers or empty fault status do not establish this proof.
 
 Each uncached source, destination and command allocation has an unmapped
 4096-byte guard before and after its device-visible extent. Bytes after the
-logical source and destination lengths retain a sentinel. The table arena has
+logical source and destination lengths retain a sentinel. Every uncached extent must have identical CPU and physical
+addresses before pointer-derived mappings are accepted. The table arena has
 its own complete allocation. The extended memory provider supplies every
 allocation; physical addresses come from its actual leases. Table mappings
 cover at most three distinct 4 MiB windows and never map the guards.
@@ -78,7 +79,12 @@ USB exports the immutable private copy. Its 192-byte header binds the full
 sealed session digest, source digest, output digest, dimensions, operation,
 completion status, master10 fault-scan mask and guard result. Query is byte0.
 ACK is byte1 followed by the generation as LE64 and the output SHA256 digest.
-ACK is accepted only after actual completion of the entire output transfer.
+The response joins header and payload into one packet stream. The transmit
+callback refills the FIFO before TinyUSB considers an intermediate zero-length
+packet. A response whose length is divisible by the negotiated endpoint packet
+size ends with one zero-length packet. The host consumes that packet before ACK.
+ACK is accepted only after actual completion of the entire output transfer,
+including its terminal zero-length packet when required.
 A final query returns acknowledged status with the same proof and no payload.
 ACK, timeout and task completion release no memory, mappings, clocks or power.
 The shared session deadline bounds upload, setup, submission, copying and USB.

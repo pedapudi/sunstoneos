@@ -2,9 +2,6 @@
 #include "a733_storage_digest.h"
 #include "a733_g2d.h"
 #include <string.h>
-__attribute__((used,retain)) const uint64_t g2d_runtime_geometry[11]={
- A733_G2D_SESSION_MAGIC,1,904,288,0x41f00000,20,
- A733_G2D_INPUT_CAPACITY,A733_G2D_OUTPUT_CAPACITY,G2D_RESULT_HEADER,1280,720};
 static uint32_t le32(const uint8_t *p)
 {return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);}
 static uint64_t le64(const uint8_t *p){return le32(p)|((uint64_t)le32(p+4)<<32);}
