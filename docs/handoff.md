@@ -199,7 +199,13 @@ GPU→HDMI copied USB observation is accepted within its modeled boundaries;
 physical startup/output remain unqualified. G2D fill/copy native/host software
 integration and DP composed native/host observation are accepted within their
 recorded model scopes. DI301 offline weave is accepted within the modeled scope
-above. HDMI audio source/implementation work remains active and unaccepted.
+above. HDMI audio construction and admission pass in the instruction model;
+playback and host integration remain active and unaccepted.
+ISP0 processing of recorded raw images is under implementation. Its fixed
+640 × 480 BGGR12 input and NV16 output use source-available ISP600 configuration.
+The application admission and startup are implemented; driver, memory, USB and
+host integration remain unfinished. The existing camera path still uses ISP1
+pass-through. Neither path has physical image-processing qualification.
 DMA fabric admission now accepts correctly normalized 24 MHz references from
 supported raw oscillators and retains REF in every admitted profile. Ten focused
 platform/clock-registry sanitizer cases pass under
