@@ -55,3 +55,14 @@ int mimus_keyboard_copy(uint8_t out[128])
     if(!atomic_load_explicit(&accepted,memory_order_acquire))return 0;
     memcpy(out,evidence,128);return 1;
 }
+
+int mimus_keyboard_rearm(void)
+{
+    if(atomic_load_explicit(&fault,memory_order_acquire)||
+       !atomic_load_explicit(&accepted,memory_order_acquire)||
+       atomic_load_explicit(&full,memory_order_acquire))return 0;
+    /* Preserve previous identity/sequence, but require a new neutral report.
+     * accepted keeps the producer out until this release publication. */
+    neutral=0;
+    atomic_store_explicit(&accepted,0,memory_order_release);return 1;
+}

@@ -23,10 +23,12 @@ extern "C" TaskHandle_t xTaskCreateStatic(TaskFunction_t f,const char *const,con
 {assert(n==16384&&!p&&pri==3);worker=f;return reinterpret_cast<TaskHandle_t>(1);}
 extern "C" void vTaskSuspend(TaskHandle_t){std::longjmp(parked,1);}
 extern "C" void vTaskDelay(TickType_t){std::longjmp(parked,1);}
-extern "C" void fixture_task_yield(){if(mimus_board_started()&&!overlap){mimus_board_storage_completed();overlap=true;if(cancel)live=false;}}
+extern "C" void fixture_task_yield(){if(mimus_board_started()&&!overlap){mimus_board_storage_completed(1);overlap=true;if(cancel)live=false;}}
 extern "C" void runtime_smp_init(){}
 extern "C" void runtime_init(){}
 extern "C" size_t runtime_heap_peak(){return 0;}
+extern "C" int mimus_board_keyboard(){return 0;}
+extern "C" int mimus_board_rearm(){return 0;}
 extern "C" int mimus_board_trigger_step(){return live?1:-1;}
 extern "C" int mimus_board_live(){return live;}
 extern "C" int mimus_board_session_live(){return live;}

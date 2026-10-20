@@ -14,8 +14,11 @@ int mimus_board_keyboard(void);
 int mimus_board_trigger_step(void);
 int mimus_board_trigger_copy(uint8_t [128]);
 int mimus_board_start(void);
-int mimus_board_started(void);
-void mimus_board_storage_completed(void);
+unsigned mimus_board_started(void);
+unsigned mimus_board_generation(void);
+int mimus_board_ack(unsigned);
+int mimus_board_rearm(void);
+void mimus_board_storage_completed(unsigned);
 int mimus_board_copy(uint32_t,size_t,uint8_t *,size_t *,uint32_t *);
 #ifdef __cplusplus
 }

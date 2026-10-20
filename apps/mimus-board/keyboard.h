@@ -12,6 +12,8 @@ struct mimus_keyboard_report {
     uint8_t data[8];
 };
 int mimus_keyboard_empty(void);
+/* Consumer only, after delivery-owned evidence has been acknowledged. */
+int mimus_keyboard_rearm(void);
 int mimus_keyboard_offer(const struct mimus_keyboard_report *);
 int mimus_keyboard_step(void);
 int mimus_keyboard_copy(uint8_t out[128]);

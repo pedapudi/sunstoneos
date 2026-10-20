@@ -17,16 +17,17 @@ host=module('keyboard_host',ROOT/'apps/mimus-board/host.py');prep=module('keyboa
 trigger=a.native_trigger.read_bytes()[64:];assert host.decode_trigger(trigger)['attachment_generation']==23
 text=b'FORMATTED There was silence.\n';sector=bytes(range(256))*2
 results={}
-def capture(epoch=19,generation=23,keyboard=True,payload=trigger,version=2):
+def capture(epoch=19,generation=23,keyboard=True,payload=trigger,version=3,recognition_generation=1):
     calls=[]
     def exchange(packet):
-        op,zero,count,offset,reserved=struct.unpack('<BBHIQ',packet);assert not zero and not reserved
+        op,zero,count,offset,reserved=struct.unpack('<BBHIQ',packet);assert not zero and reserved==(recognition_generation if keyboard and op else 0)
         calls.append(op);body=text[offset:offset+count] if op==1 else sector if op==2 else payload if op==3 else b''
-        return struct.pack('<8I2Q16x',0x424d494d,version,1,len(body),len(text),offset,1,op,epoch,generation)+body
-    value=host.capture(exchange,epoch,generation,100,now=lambda:1,keyboard=keyboard)
-    assert value['transcript']==text and value['sector']==sector and calls[-1]==0 and 3 in calls
+        return struct.pack('<8I2QQII',0x424d494d,version,1,len(body),len(text),offset,1,op,epoch,generation,recognition_generation,0xffffffff,0)+body
+    value=host.capture(exchange,epoch,generation,100,now=lambda:1,keyboard=keyboard,recognition_generation=recognition_generation)
+    assert value['transcript']==text and value['sector']==sector and calls[-1]==4 and 3 in calls
     return value
 assert capture()['trigger']['bytes']==trigger;results['actual_native_trigger_decoded']=True
+assert capture(recognition_generation=2)['recognition_generation']==2;results['next_generation_capture_and_ack']=True
 for name,offset,blob in [('stale-generation',16,struct.pack('<Q',24)),('sequence',80,struct.pack('<Q',999)),('nonneutral',40,b'\x01'),('nonenter',90,b'\x04'),('protocol',27,b'\x02'),('mode',30,b'\x01'),('reserved',127,b'\x01')]:
     changed=bytearray(trigger);changed[offset:offset+len(blob)]=blob
     try:capture(payload=bytes(changed))
@@ -66,7 +67,7 @@ payload=bytearray(trigger);struct.pack_into('<Q',payload,16,generation);calls=[]
 def exchange(packet):
     op,_,count,offset,_=struct.unpack('<BBHIQ',packet);calls.append(op)
     body=text[offset:offset+count] if op==1 else sector if op==2 else bytes(payload) if op==3 else b''
-    return struct.pack('<8I2Q16x',0x424d494d,2,1,len(body),len(text),offset,1,op,epoch,generation)+body
+    return struct.pack('<8I2QQII',0x424d494d,3,1,len(body),len(text),offset,1,op,epoch,generation,1,0xffffffff,0)+body
 assert host.capture_bundle(exchange,bundle,100,now=lambda:1)['trigger']['attachment_generation']==generation and 3 in calls
 results['actual_prepare_and_bundle_capture_entry']=True
 # Fragmented reads and transport refusal remain exercised through real adapter.

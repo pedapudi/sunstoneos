@@ -11,8 +11,8 @@ keyboard and one high-speed storage device behind the existing self-powered
 high-speed hub. Press and release a key, then press unmodified Enter. After
 input authentication, the observed release followed by Enter starts the same
 recorded recognition. A key press before the
-neutral report does not start it. Recognition remains one-shot per retained
-session. The recording supplies speech while no microphone is attached.
+neutral report does not start it. Keyboard recognition repeats within the retained session after explicit result
+acknowledgment. Workload zero remains one-shot. The recording supplies speech while no microphone is attached.
 
 The native application and host capture are implemented and tested offline.
 Physical concurrent operation, scheduling and recovery remain unqualified.
@@ -66,7 +66,10 @@ rollover, duplicate-key, short-report or identity errors refuse the session.
 A neutral report followed immediately by Enter publishes immutable evidence
 with the two sequences and exact input bytes. Other valid keys require another
 neutral report. The producer holds the mailbox until consumption and stops
-requesting input after acceptance. No keyboard events enter the host desktop.
+requesting input after acceptance. It resumes after the previous recognition result
+and its acknowledgment have completed USB delivery. Each rearm clears the neutral
+condition while preserving attachment identity and consecutive report sequencing.
+A held Enter cannot trigger the next recognition. No keyboard events enter the host desktop.
 
 The USB2 task publishes a bounded atomic liveness observation for the EL0 recognizer and an immutable attachment
 identity. The existing recognizer yield checkpoint closes admission and parks
@@ -78,23 +81,54 @@ polling after completion, and the board's independent power tasks continue after
 failure. Recovery requires the existing supervised whole-board power removal.
 
 USB0 accepts a fixed 16-byte little-endian request: operation byte, zero byte,
-16-bit count, 32-bit offset and eight zero bytes. Operation zero queries status
-with zero count and offset. Operation one copies up to 1,024 transcript bytes.
-Operation two copies the 512-byte sector with zero offset. Workload four also
-accepts operation three, with zero offset and count 128, to copy the trigger
-evidence. Requests may arrive in fragments. Responses have a 64-byte header followed by the requested copy.
-The header contains eight 32-bit words: magic `0x424d494d`, version, state
-(pending zero, success one, failure two), copied length, full transcript length,
-requested offset, storage state and operation. The epoch and generation follow
-as two 64-bit words; the final 16 bytes are zero. Frame version is one for
-workload zero and two for workload four.
+16-bit count, 32-bit offset and a 64-bit recognition generation. Operation zero
+queries status with zero count, offset and request generation. Operation one
+copies up to 1,024 transcript bytes. Operation two copies the 512-byte sector
+with zero offset. Keyboard workload four also accepts operation three to copy
+128 trigger-evidence bytes, and operation four to acknowledge the result with
+zero count and offset. Nonzero keyboard operations require the exact current
+recognition generation. Workload zero retains zero in the final request word
+and its original operations zero through two.
+
+Responses have a 64-byte header followed by the requested copy. The first eight
+32-bit words contain magic `0x424d494d`, version, state (pending zero, success
+one, refusal two), copied length, full transcript length, requested offset,
+storage state and operation. Session epoch and attachment generation occupy
+bytes 32 through 47. Workload zero retains version one and sixteen reserved zero
+bytes. Keyboard version three places its 64-bit recognition generation at byte
+48, the 32-bit generation limit `4294967295` at byte 56 and zero at byte 60.
+
+One result generation owns its transcript, copied sector and trigger evidence
+until the USB0 owner observes full transmit completion of all three exports
+and the matching ACK response.
+Transcript delivery must cover a contiguous prefix ending at its full length;
+retransmission is permitted. A stale ACK returns refusal without rearming. An ACK for a ready result before
+full export also returns refusal; an ACK during recognition remains pending. A valid ACK takes effect only when its entire response finishes
+transmission. That callback synchronously closes successful result admission
+before publishing the acknowledgment to the recognition task. Status during
+this transition is pending, including a response finishing after rearm.
+
+The recognition task then clears its old transcript, advances the generation
+and rearms the keyboard gate. The USB2 owner starts a new sector-zero read only
+while recognition of that generation is active. Its copied completion must
+match the active generation before recognition returns. Earlier reads cannot
+satisfy the next overlap requirement. Missing overlap, expired liveness or
+uncertain device state retains failure. All allocations stay reserved. The
+existing absolute session deadline bounds reuse; acknowledgment at the maximum
+generation retains failure before identity wrap. No per-recognition allocation
+accumulates: the unchanged recognizer constructs and destroys its temporary
+objects and recreates its arena on every call.
 
 `host.py` freezes and rechecks exact input bytes, assembles fragmented USB replies
 and collects transcript plus sector followed by a final live status query. Its
 transport adapter accepts an already claimed device and an identity-check
 callback from the coordinator. It repeats only completed pending responses within
 an absolute deadline and query budget. Transport failures propagate immediately.
-`capture_bundle()` selects the frame version and required trigger read from
+Keyboard capture exports the complete result and sends its generation-matched
+ACK. A caller passes `recognition_generation` to collect each subsequent result;
+the default is one. It polls boundedly through the preceding generation’s pending
+status while the task consumes the previous ACK. `capture_bundle()` selects the
+frame version and required trigger read from
 identity metadata returned by frozen-bundle validation. Keyboard capture requires
 trigger generation equal to session generation, consecutive neutral/Enter
 sequences, boot keyboard metadata and exact reserved bytes. The final live query
@@ -149,7 +183,7 @@ execute boot or identity hooks. A supported keyboard, hub, storage device, fresh
 electrical/DDR admission and available whole-board recovery remain physical
 prerequisites. No attached accessory or physical concurrent operation is assumed.
 
-The final keyboard image SHA-256 is
+The earlier one-shot keyboard image SHA-256 is
 `bd2007542c2cd2ef3696f73ebdbc865bdc012454f8394564694efd11b76142d1`.
 Separate private identity-hook cases admit workloads zero/four and refuse
 one/two/six/eight; exception level, cache/session validation and publication are
@@ -159,3 +193,12 @@ the 4 MiB heap at `0x413584c0..0x417584c0`, and the cached device pool at
 the successful application instruction cases; their explicit object comparison
 preserves those results. Shared startup, scheduler and physical DMA remain
 outside these checks.
+
+The repeated-generation change uses `check-repeated.cc` to run the actual task
+lifecycle, authentication, mailbox and reset with a modeled recognizer and
+scheduler. It covers two generations, held Enter, stale/duplicate ACK, immutable
+results and missing fresh storage overlap. `check-native.py --keyboard` executes
+the linked repeated MSC and USB delivery path, including a partial ACK response
+and immediate status during rearm. Its recognition and scheduler boundaries
+remain modeled. Existing model parity is reused; these checks do not establish
+physical concurrency, arithmetic changes or timing.

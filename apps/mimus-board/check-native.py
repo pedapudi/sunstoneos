@@ -43,7 +43,7 @@ with a.image.open('rb') as f:
             name=d.attributes['DW_AT_name'].value.decode()
             if d.tag in ('DW_TAG_structure_type','DW_TAG_typedef') and name in ('board_application','a733_usb2_native','a733_typec_token','hidh_interface_t','a733_xhci_device') and ('DW_AT_byte_size' in d.attributes or name=='hidh_interface_t'):fields[name]=members(d)
             if d.tag=='DW_TAG_variable' and 'DW_AT_location' in d.attributes:
-                wanted=(unit.endswith('/class/hid/hid_host.c') and name=='_hidh_itf') or (unit.endswith('/a733_xhci_tinyusb.c') and name=='host') or (unit.endswith('/apps/mimus-board/recognition.cc') and name in ('state','started','overlap','transcript','used'))
+                wanted=(unit.endswith('/class/hid/hid_host.c') and name=='_hidh_itf') or (unit.endswith('/a733_xhci_tinyusb.c') and name=='host') or (unit.endswith('/apps/mimus-board/recognition.cc') and name in ('state','started','overlap','generation','acknowledged','transcript','used'))
                 if wanted:
                     ops=DWARFExprParser(dwarf.structs).parse_expr(d.attributes['DW_AT_location'].value)
                     assert len(ops)==1 and ops[0].op_name in ('DW_OP_addr','DW_OP_addrx')
@@ -97,7 +97,7 @@ class Machine:
         if self.keyboard and address==symbols['tuh_hid_receive_report']:
             self.hid_requests+=1;self.ret(1);return
         if address==symbols['tuh_msc_read10']:
-            self.reads+=1;assert self.word(local['started'],4)==1
+            self.reads+=1;assert self.word(local['started'],4)!=0
             self.write(self.h+self.hf['read_complete'],1,4);self.ret(1);return
         if address==symbols['a733_usb2_read_result']:self.copies+=1
         if address==symbols['a733_usb2_platform_outside']:self.ret(1);return
@@ -128,8 +128,8 @@ class Machine:
         pc,context=self.taskpc[name];self.cpu.context_restore(context);self.paused=False
         self.cpu.emu_start(pc,0,count=1000000);assert self.paused,name
         self.taskpc[name]=(self.pc,self.cpu.context_save())
-    def response(self,op,offset=0,count=0):
-        packet=struct.pack('<BBHIQ',op,0,count,offset,0);start=len(self.tx)
+    def response(self,op,offset=0,count=0,generation=None):
+        packet=struct.pack('<BBHIQ',op,0,count,offset,(self.word(local['generation'],4) if generation is None else generation) if self.keyboard and op else 0);start=len(self.tx)
         # Real serializer accumulates requests fragmented across task polls.
         for part in (packet[:1],packet[1:5],packet[5:]):self.rx.extend(part);self.tick('board_usb0_task')
         expected=None
@@ -185,15 +185,54 @@ if a.keyboard:
  m.write(local['started'],1,4);m.tick('board_host_task')
  assert m.reads==1 and m.copies==1 and m.word(local['overlap'],4)==1
  m.cpu.mem_write(local['transcript'],m.text);m.write(local['used'],len(m.text),4);m.write(local['state'],1,4)
- trigger=m.response(3,0,128);assert struct.unpack_from('<I',trigger,4)[0]==2
+ trigger=m.response(3,0,128);assert struct.unpack_from('<I',trigger,4)[0]==3
  assert trigger==m.response(3,0,128) and trigger[64+40:64+48]==bytes(8)
  assert trigger[64+88:64+96]==bytes([0,0,0x28,0,0,0,0,0])
  assert m.response(1,0,len(m.text))[64:]==m.text and m.response(2,0,512)[64:]==m.sector
  before=m.polls;requests=m.hid_requests;m.tick('board_host_task');assert m.polls>before and m.hid_requests==requests
+ # A stale generation must not acknowledge or reset any result.
+ assert struct.unpack_from('<I',m.response(4,generation=2),8)[0]==2
+ assert m.word(local['acknowledged'],4)==0
+ assert struct.unpack_from('<I',m.response(4),8)[0]==1
+ assert m.word(local['acknowledged'],4)==1 and m.word(local['state'],4)==3
+ # Immediate status after ACK is pending; it may finish after worker rearm.
+ m.rx.extend(struct.pack('<BBHIQ',0,0,0,0,0));status_start=len(m.tx)
+ m.tick('board_usb0_task');m.tick('board_usb0_task');assert m.pending==37
+ # Scheduling/recognition remain explicit modeled boundaries: mirror only the
+ # worker's post-ACK state updates, then run actual gate, MSC and USB instructions.
+ m.write(local['state'],0,4);m.write(local['started'],0,4);m.write(local['overlap'],0,4)
+ m.write(local['generation'],2,4);assert m.call('mimus_keyboard_rearm')==1
+ m.tick('board_usb0_task');assert m.pending==64
+ m.call('tud_vendor_tx_cb',0,64);m.pending=0
+ assert struct.unpack_from('<I',bytes(m.tx[status_start:]),8)[0]==0
+ assert m.word(m.b+m.bf['fatal'],4)==0
+ results['immediate_status_across_rearm_is_pending']=True
+ m.tick('board_host_task')
+ assert report(m,bytes([0,0,0x28,0,0,0,0,0]))==0
+ m.tick('board_host_task');assert report(m,bytes(8))==0
+ m.tick('board_host_task');assert report(m,bytes([0,0,0x28,0,0,0,0,0]))==1
+ assert m.reads==1
+ m.write(local['started'],2,4);m.tick('board_host_task')
+ assert m.reads==2 and m.copies==2 and m.word(local['overlap'],4)==2
+ m.cpu.mem_write(local['transcript'],m.text);m.write(local['used'],len(m.text),4);m.write(local['state'],1,4)
+ assert struct.unpack_from('<I',m.response(4),8)[0]==2
+ assert m.word(local['acknowledged'],4)==1
+ assert m.response(1,0,len(m.text))[64:]==m.text
+ assert m.response(2,0,512)[64:]==m.sector
+ assert len(m.response(3,0,128))==192
+ # Queue every ACK byte but withhold its TX completion. Rearm is still forbidden.
+ packet=struct.pack('<BBHIQ',4,0,0,0,2);m.rx.extend(packet)
+ start=len(m.tx)
+ for _ in range(8):m.tick('board_usb0_task')
+ assert len(m.tx)-start==64 and m.pending==64 and m.word(local['acknowledged'],4)==1
+ m.call('tud_vendor_tx_cb',0,63);assert m.word(local['acknowledged'],4)==1
+ m.call('tud_vendor_tx_cb',0,1);m.pending=0;assert m.word(local['acknowledged'],4)==2
+ results.update(two_generations=True,fresh_storage_each_generation=True,stale_ack_refused=True,
+     premature_ack_refused=True,ack_waits_for_final_tx_completion=True,fresh_neutral_required_after_rearm=True)
  a.output.with_suffix('.trigger-frame.bin').write_bytes(trigger)
  results.update(actual_boot_protocol_getter=True,exact_neutral_enter=True,no_read_before_trigger_and_recognition=True,
     actual_hid_result_copy=True,actual_sector_copy_during_recognition=True,immutable_fragmented_trigger_export=True,
-    transcript_and_sector_export=True,one_shot_no_rearm=True,continued_polling=True)
+    transcript_and_sector_export=True,immutable_until_ack=True,continued_polling=True)
  for mode in ('report','unmounted','mouse'):
     bad=Machine(True)
     if mode=='report':bad.write(local['_hidh_itf']+fields['hidh_interface_t']['protocol_mode'],1,1)

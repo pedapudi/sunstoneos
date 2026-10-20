@@ -34,7 +34,7 @@ def validate_assets(output):
         require(len(data)==item['bytes'] and hashlib.sha256(data).hexdigest()==item['sha256'],'Frozen input changed.')
     return value
 
-def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep,*,keyboard=False):
+def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep,*,keyboard=False,recognition_generation=1):
     """Exchange must preserve USB identity and never retry failed transport.
 
     It writes each complete request and assembles exactly one complete response.
@@ -45,13 +45,22 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
     frames=[]
     def query(op,offset=0,count=0):
         require(now()<deadline,'Capture expired.')
-        packet=struct.pack('<BBHIQ',op,0,count,offset,0)
+        packet=struct.pack('<BBHIQ',op,0,count,offset,recognition_generation if keyboard and op else 0)
         frame=exchange(packet);frames.append(frame)
         require(now()<deadline and len(frame)>=64,'Incomplete or expired response.')
         magic,version,state,size,total,position,storage,reply=struct.unpack_from('<8I',frame)
-        require((magic,version,reply,position)==(0x424d494d,2 if keyboard else 1,op,offset),'Response identity differs.')
-        require(struct.unpack_from('<QQ',frame,32)==(epoch,generation) and not any(frame[48:64]),'Session identity differs.')
+        require((magic,version,reply,position)==(0x424d494d,3 if keyboard else 1,op,offset),'Response identity differs.')
+        require(struct.unpack_from('<QQ',frame,32)==(epoch,generation),'Session identity differs.')
         require(state in (0,1,2) and size<=1024 and len(frame)==64+size,'Invalid result extent.')
+        require(storage in (0,1),'Storage failed or invalid.')
+        if keyboard:
+            observed,limit,reserved=struct.unpack_from('<QII',frame,48)
+            require(limit==0xffffffff and not reserved and 1<=recognition_generation<=limit,'Recognition bounds differ.')
+            if op==0 and observed==recognition_generation-1:
+                require(size==0 and state==0,'Previous generation payload refused.')
+                return 0,0,b''
+            require(observed==recognition_generation,'Recognition generation differs.')
+        else:require(not any(frame[48:64]),'Reserved response bytes differ.')
         require(state!=2,'Native combined workload refused result.')
         require(state!=1 or storage==1,'Storage incomplete.')
         require(state==1 or size==0,'Pending payload refused.')
@@ -82,13 +91,16 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
         require(trigger['attachment_generation']==generation,'Trigger attachment generation differs.')
     state,current,data=ready(0)
     require(state==1 and current==total and not data,'Final live status refused.')
-    return {'transcript':bytes(text),'sector':sector,'trigger':trigger,'frames':frames}
-def capture_bundle(exchange,bundle,deadline,now=time.monotonic,pause=time.sleep):
+    if keyboard:
+        state,current,data=ready(4)
+        require(state==1 and current==total and not data,'Generation acknowledgment refused.')
+    return {'transcript':bytes(text),'sector':sector,'trigger':trigger,'frames':frames,'recognition_generation':recognition_generation if keyboard else None}
+def capture_bundle(exchange,bundle,deadline,now=time.monotonic,pause=time.sleep,*,recognition_generation=1):
     """Select capture policy from the validated frozen session, before transport."""
     spec=importlib.util.spec_from_file_location('mimus_capture_prepare',ROOT/'apps/mimus-board/prepare.py')
     preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
     identity=preparation.validate_bundle(bundle,capture_identity=True)
-    return capture(exchange,identity['epoch'],identity['generation'],deadline,now,pause,keyboard=identity['workload']==4)
+    return capture(exchange,identity['epoch'],identity['generation'],deadline,now,pause,keyboard=identity['workload']==4,recognition_generation=recognition_generation)
 
 def decode_trigger(data):
     require(len(data)==128,'Trigger extent differs.')

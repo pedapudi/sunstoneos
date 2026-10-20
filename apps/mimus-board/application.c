@@ -93,3 +93,5 @@ int mimus_board_keyboard_poll(void)
     if(!n->hid.pending&&mimus_keyboard_empty()&&!a733_usb2_hid_receive(n,n->platform.config.lifetime_deadline))return 0;
     return 1;
 }
+
+int mimus_board_rearm(void){return mimus_board_live()&&mimus_keyboard_rearm();}
