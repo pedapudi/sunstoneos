@@ -9,7 +9,7 @@
 #define MAX_OFFSET UINT32_C(0x8000)
 enum { P_CAP,P_EXT,P_HALTED,P_RESET,P_RESET_WAIT,P_MEMORY,P_DCBAA,P_COMMAND,
        P_ERST_SIZE,P_ERST_BASE,P_ERDP,P_IMAN,P_CONFIG,P_RUN,P_RUNNING,P_POWER,P_ACTIVE };
-enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13 };
+enum { C_ENABLE=9,C_ADDRESS=11,C_CONFIGURE=12,C_EVALUATE=13,C_RESET_ENDPOINT=14,C_SET_DEQUEUE=16 };
 enum { T_NORMAL=1,T_SETUP=2,T_DATA=3,T_STATUS=4,T_ADDRESS_STATUS=5 };
 enum { CONTROL_IDLE,CONTROL_SETUP,CONTROL_DATA,CONTROL_STATUS };
 static uint32_t get32(const void *v)
@@ -134,7 +134,9 @@ static int command(struct a733_xhci *x,struct a733_xhci_device *d,unsigned kind,
     if(x->command_kind)return 0;
     x->command_kind=kind;x->command_device=(unsigned)(d-x->devices)+1;x->command_deadline=x->deadline;
     if(!ring(x,x->commands,x->command_pa,&x->command_index,&x->command_cycle,
-       kind==C_ENABLE?0:d->input_pa,0,TYPE(kind)|flags,&x->command_pointer))return 0;
+       kind==C_ENABLE||kind==C_RESET_ENDPOINT?0:kind==C_SET_DEQUEUE?
+         (d->endpoints[0].ring_pa+16*d->endpoints[0].index)|d->endpoints[0].cycle:d->input_pa,
+       0,TYPE(kind)|flags,&x->command_pointer))return 0;
     return wr(x,x->doorbell,0);
 }
 static void ep_context(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
@@ -213,7 +215,20 @@ static int transfer_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     struct a733_xhci_endpoint *e=NULL;
     for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(d->endpoints[i].number==number&&d->endpoints[i].pending==2)e=&d->endpoints[i];
     if(!e||e->pending_trb!=pointer||e->aborted)return 0;
-    if(code!=1&&code!=13)return 0; /* Stall/halt/reset recovery remains retained. */
+    if(code==6){
+        /* Only the fixed read-only MSC GET_MAX_LUN protocol stall is admitted.
+         * One TD is outstanding. Revoke its CPU destination immediately, keep
+         * its pointer/deadline, and publish no class completion until both
+         * recovery commands have completed. No stalled payload is copied. */
+        static const uint8_t max_lun[8]={0xa1,0xfe,0,0,0,0,1,0};
+        if(number!=1||!d->address||d->speed<3||d->speed>4||
+           memcmp(d->setup,max_lun,8)||
+           (e->kind!=T_SETUP&&e->kind!=T_DATA&&e->kind!=T_STATUS))return 0;
+        e->caller=NULL;
+        if(!barrier(x)||(get32(d->device+x->context_bytes)&7)!=2)return 0;
+        e->pending=3;return 1;
+    }
+    if(code!=1&&code!=13)return 0;
     unsigned requested=e->kind==T_SETUP?8:e->length;
     if(residual>requested||(code==1&&residual)||(code==13&&(!e->direction||e->kind==T_SETUP||e->kind==T_STATUS)))return 0;
     unsigned bytes=requested-residual;
@@ -243,6 +258,20 @@ static int command_event(struct a733_xhci *x,const struct a733_xhci_trb *event)
     }
     if(!barrier(x))return 0;
     unsigned slot_state=get32(d->device+12)>>27;
+    if(kind==C_RESET_ENDPOINT||kind==C_SET_DEQUEUE){
+        struct a733_xhci_endpoint *e=&d->endpoints[0];
+        const uint8_t *context=d->device+x->context_bytes;
+        if((slot_state!=2&&slot_state!=3)||!e->pending_trb||e->aborted||
+           (get32(context)&7)!=3)return 0;
+        if(kind==C_RESET_ENDPOINT){
+            if(e->pending!=3)return 0;e->pending=4;return 1;
+        }
+        uint64_t dequeue=(uint64_t)get32(context+8)|((uint64_t)get32(context+12)<<32);
+        if(e->pending!=4||dequeue!=((e->ring_pa+16*e->index)|e->cycle))return 0;
+        unsigned ep=e->address;
+        e->caller=NULL;e->pending=0;e->pending_trb=0;d->control_stage=CONTROL_IDLE;
+        notify(x,A733_XHCI_TRANSFER,d->address,ep,0,1);return 1;
+    }
     if(kind==C_ADDRESS) {
         if(!d->pending_address){if(slot_state!=1)return 0;d->port_ready=3;d->endpoints[0].configured=1;return 1;}
         unsigned assigned=get32(d->device+12)&255;
@@ -448,6 +477,15 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
             if(d->port_ready==1){if(!command(x,d,C_ENABLE,x->slot_type<<16))goto failed;d->port_ready=4;goto done;}
             if(d->port_ready==2){address_context(x,d);if(!command(x,d,C_ADDRESS,(d->slot<<24)|BIT(9)))goto failed;d->port_ready=4;goto done;}
             if(d->port_ready!=3)continue;
+            struct a733_xhci_endpoint *control=&d->endpoints[0];
+            if(control->pending==3||control->pending==4){
+                /* Reserve the next unpublished producer slot for the next
+                 * Setup TD, skipping every stage of the failed request. Never
+                 * ring the endpoint between Reset and Set Dequeue. */
+                if((control->ring[control->index].control&1)==control->cycle)goto failed;
+                unsigned kind=control->pending==3?C_RESET_ENDPOINT:C_SET_DEQUEUE;
+                if(!command(x,d,kind,(d->slot<<24)|BIT(16)))goto failed;goto done;
+            }
             if(d->endpoints[0].pending==1&&d->pending_address&&!d->address_status){
                 address_context(x,d);if(!command(x,d,C_ADDRESS,d->slot<<24))goto failed;d->endpoints[0].pending=2;goto done;
             }

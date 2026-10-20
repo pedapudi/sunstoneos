@@ -479,6 +479,45 @@ operation remain unqualified. Source shutdown does not prove external device
 power removal or DMA drain. Neither board has eMMC or UFS populated; this work
 adds no probes for either absent device.
 
+## GET_MAX_LUN stalls recover before the class callback
+
+An admitted high-speed or Gen1 storage device may stall the exact one-byte
+GET_MAX_LUN request on interface 0. The controller matches the transfer event
+against the pending slot, EP0 and TRB, revokes the caller destination, and
+preserves the original deadline. It copies no stalled payload. Other requests
+and non-control endpoint stalls retain the session.
+
+The owner polls two commands through the existing command/event rings: Reset
+Endpoint with Transfer State Preserve cleared, then Set TR Dequeue Pointer.
+Each completion must match its command pointer, slot and successful result.
+The output endpoint context must move from Halted to Stopped; its final dequeue
+pointer and cycle must match the next unpublished producer slot. Recovery does
+not reset or reuse the ring allocation. It skips the failed request's remaining
+stages and reserves that slot for the next SETUP. No endpoint doorbell is issued
+between the recovery commands.
+
+Only after both commands complete does the adapter discard its old control
+buffer and publish one STALLED completion. The pinned TinyUSB control callback
+then invokes its MSC fallback, selects LUN 0 and sends Test Unit Ready. Capacity
+and copied READ10 use the existing read-only path. TinyUSB does not call
+`hcd_edpt_clear_stall` for this EP0 failure; that hook continues to refuse generic
+bulk recovery. A software timeout, stale event, failed command or lost generation
+never authorizes a new transfer or resource reuse.
+
+The sequence follows xHCI 1.2 sections 4.6.8, 4.6.10 and 4.10.2.1. The pinned
+Linux `xhci-ring.c` handles a default-control stall with Reset Endpoint followed
+by a dequeue update. Pinned TinyUSB `usbh.c` completes STALLED control requests
+without its failed-transfer retry path; `msc_host.c` selects one LUN when
+GET_MAX_LUN fails. These primary inputs are cached and pinned in
+`sources.lock.json`; no stack source or model is replaced.
+
+Focused software compositions execute the actual TinyUSB fallback, xHCI core
+and copied READ10 path. They cover stalls at SETUP, DATA and STATUS, delayed
+recovery commands, producer wrap and cycle, one interrupt-driven event path,
+and retention for failed/stale commands, stale transfer events, deadline expiry,
+wrong dequeue readback and generation loss. Device and register behavior is
+modeled. Physical endpoint recovery and storage reads remain unqualified.
+
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
@@ -487,9 +526,9 @@ leaves or two leaves of the same class,
 interrupt OUT, high-bandwidth periodic
 transfers, isochronous endpoints, SuperSpeed hubs or HID, Gen2, streams,
 nonstandard speed-ID tables, more than eight
-scratchpads and richer mass-storage configurations. Endpoint-stall recovery is
-not implemented; devices that stall GET_MAX_LUN are retained rather than using
-the usual fallback. These are implementation limits, not claims that the board
+scratchpads and richer mass-storage configurations. GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
+profile. Bulk stalls, other control stalls and uncertain recovery retain the
+session; generic clear-halt and BOT reset recovery remain unsupported. These are implementation limits, not claims that the board
 cannot support those modes.
 
 Further required work includes wider xHCI endpoint modes, physical interrupt

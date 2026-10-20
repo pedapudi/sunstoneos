@@ -155,6 +155,17 @@ static int control_response(const struct a733_xhci_notice *e)
     struct a733_xhci_device *device=&n->core.devices[n->control_device];
     struct a733_usb2_hub *hub=&n->hub;
     const uint8_t *p=n->control_buffer,*s=n->control_setup;unsigned bytes=n->control_bytes;
+    if(e->result==1){
+        /* TinyUSB invokes the class fallback immediately on STALLED, without
+         * hcd_edpt_clear_stall. The core has already completed Reset Endpoint
+         * and Set TR Dequeue; the old stage/caller can now be forgotten. */
+        static const uint8_t max_lun[8]={0xa1,0xfe,0,0,0,0,1,0};
+        if((e->endpoint&15)||e->bytes||desc->kind!=A733_USB2_DEVICE_MSC||
+           !n->msc_seen||e->address!=n->address||memcmp(s,max_lun,8)||
+           device->control_stage||device->endpoints[0].pending||
+           device->endpoints[0].pending_trb||device->endpoints[0].caller)return 0;
+        n->control_buffer=NULL;n->control_bytes=0;return 1;
+    }
     if(!p){
         if(n->platform.config.superspeed&&device->control_stage==0&&e->bytes==0&&e->endpoint==128){
             if(s[1]==49){if(n->ss_control!=2||n->ss_request!=2)return 0;n->ss_control=3;}
@@ -423,6 +434,7 @@ bool hcd_edpt_xfer(uint8_t port,uint8_t address,uint8_t ep,uint8_t *buffer,uint1
 }
 bool hcd_edpt_abort_xfer(uint8_t port,uint8_t address,uint8_t ep)
 {return owner()&&!port&&a733_xhci_abort(&host->core,address,ep);}
+/* Bulk clear-halt/BOT reset recovery is outside the fixed GET_MAX_LUN path. */
 bool hcd_edpt_clear_stall(uint8_t port,uint8_t address,uint8_t ep)
 {(void)port;(void)address;(void)ep;lost();return false;}
 bool hcd_dcache_clean(const void *p,uint32_t z){(void)p;(void)z;return owner();}

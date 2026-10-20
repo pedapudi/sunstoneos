@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_usb2_native.h"
+#include "tusb.h"
 #include "../drivers/usb/a733_usb3_phy.h"
 #include <assert.h>
 #include <stdio.h>
@@ -17,6 +18,9 @@ static _Alignas(4096) uint8_t dma[A733_XHCI_MEMORY_BYTES];
 static uint32_t registers[0x8000/4];
 static unsigned reg_fault,lose_on_lock,platform_writes,commands,transfers,events,event_cycle=1;
 static unsigned bad_status,hold_bulk,short_data,bad_config,short_descriptor;
+static unsigned stall_case,stall_seen,recovery_commands,recovery_delay,stall_events;
+static uint64_t recovery_wait,reset_command_pointer,stalled_pointer;
+static uint8_t *stalled_caller;static uint8_t stalled_original;
 static unsigned ss_mode,ss_bad,ss_reverse,ss_burst=15,ss_streams,ss_source=900,ss_conflict;
 static uint16_t ss_analog[65536];static unsigned ss_halfwords;
 static uint64_t last_command,last_transfer[A733_XHCI_DEVICES][3];
@@ -192,6 +196,33 @@ static void wire(void)
     if(x->command_kind&&x->command_pointer!=last_command){
         unsigned j=x->command_device-1;assert(j<A733_XHCI_DEVICES);
         struct a733_xhci_device *d=&x->devices[j];unsigned speed=ss_mode?4:speed_for(j);
+        if(stall_seen&&(x->command_kind==14||x->command_kind==16)){
+            assert(!n.msc_mounted&&!n.bot_stage&&!n.bot_phase&&!d->endpoints[0].caller);
+            if(stalled_caller)assert(*stalled_caller==stalled_original);
+            if(stall_case==8){a733_typec_revoke(&role);return;}
+            if(stall_case==6)return; /* Original request deadline, no renewed bound. */
+            if(recovery_wait!=x->command_pointer){recovery_wait=x->command_pointer;recovery_delay=2;}
+            if(recovery_delay){--recovery_delay;return;}
+            ++recovery_commands;
+            const struct a733_xhci_trb *cmd=&x->commands[(x->command_pointer-x->command_pa)/16];
+            uint64_t param=(uint64_t)cmd->parameter_lo|((uint64_t)cmd->parameter_hi<<32);
+            assert(!cmd->status&&(cmd->control&~1u)==((x->command_kind<<10)|(1u<<16)|(d->slot<<24)));
+            if(x->command_kind==14){
+                assert(!param&&(get32(d->device+x->context_bytes)&7)==2);
+                reset_command_pointer=x->command_pointer;
+                if(stall_case==4){last_command=x->command_pointer;event(32,stalled_pointer,1,0,1,d->slot);return;}
+                if(stall_case!=2)put32(d->device+x->context_bytes,3);
+            }else{
+                assert(recovery_commands==2&&(get32(d->device+x->context_bytes)&7)==3);
+                assert(param==((d->endpoints[0].ring_pa+16*d->endpoints[0].index)|d->endpoints[0].cycle));
+                assert(!(d->endpoints[0].ring[d->endpoints[0].index].control&1)==!!d->endpoints[0].cycle);
+                put32(d->device+x->context_bytes+8,(uint32_t)param^(stall_case==7?16:0));
+                put32(d->device+x->context_bytes+12,(uint32_t)(param>>32));
+            }
+            last_command=x->command_pointer;++commands;
+            event(33,stall_case==5&&x->command_kind==16?reset_command_pointer:x->command_pointer,
+                (stall_case==2&&x->command_kind==14)||(stall_case==3&&x->command_kind==16)?19:1,0,0,d->slot);return;
+        }
         last_command=x->command_pointer;++commands;
         if(x->command_kind==11){
             assert((get32(d->input+x->context_bytes)&(15u<<20))==(speed<<20));
@@ -277,6 +308,18 @@ static void wire(void)
         else if(cbw[15]==0x25){assert(e->length==8);const uint8_t capacity[]={0,0,0,127,0,0,2,0};memcpy(e->bounce,capacity,8);}
         else if(cbw[15]==0x28){assert(e->length==512);for(unsigned k=0;k<512;++k)e->bounce[k]=(uint8_t)(k*17+3);if(short_data)residual=1;}
         else{assert(cbw[15]==3||cbw[15]==0x12);memset(e->bounce,0,e->length);}
+        if(stall_case&&!stall_seen&&!i&&request[0]==0xa1&&request[1]==0xfe&&
+           e->kind==(stall_case==9?2u:stall_case==10?4u:3u)){
+            stall_seen=1;++stall_events;stalled_pointer=e->pending_trb;
+            stalled_caller=e->caller;if(stalled_caller)stalled_original=*stalled_caller;
+            if(e->kind==3)e->bounce[0]=127; /* Must not be copied into TinyUSB. */
+            put32(d->device+x->context_bytes,2);
+            event(32,e->pending_trb,6,e->length,e->number,d->slot);return;
+        }
+        if(stall_seen&&i&&!e->direction){
+            assert(recovery_commands==2&&!d->endpoints[0].pending&&d->control_stage==0);
+            assert(cbw[13]==0); /* The actual TinyUSB fallback selects LUN0. */
+        }
         event(32,e->pending_trb,ss_mode&&ss_bad==4&&request[1]==48&&!i?6:hub_mode&&!j&&i&&hub_after_fault==4?6:residual?13:1,residual,e->number,d->slot);return;
     }
 }
@@ -355,6 +398,13 @@ int main(int argc,char **argv)
 {
     const char *mode=argc>1?argv[1]:"read";
     if(!strncmp(mode,"irq-",4)){irq_model=1;mode+=4;}
+    if(!strncmp(mode,"msc-stall",9)){
+        stall_case=strstr(mode,"reset-fail")?2:strstr(mode,"dequeue-fail")?3:
+          strstr(mode,"stale-transfer")?4:strstr(mode,"stale-command")?5:
+          strstr(mode,"deadline")?6:strstr(mode,"readback")?7:strstr(mode,"generation")?8:
+          strstr(mode,"setup")?9:strstr(mode,"status")?10:1;
+        mode="read";
+    }
     if(!strncmp(mode,"ss-",3)){
         ss_mode=1;ss_reverse=strstr(mode,"reverse")!=NULL;device_speed=4;
         if(strstr(mode,"bad-bos"))ss_bad=1;if(strstr(mode,"bad-companion"))ss_bad=2;
@@ -419,6 +469,28 @@ int main(int argc,char **argv)
         device_packet=device_speed==3?64:device_speed==1?32:8;hid_packet=device_speed==2?8:64;hid_interval=device_speed==3?4:10;
     }
     start_core();
+    if(stall_case){
+        uint8_t sector[512];memset(sector,0x5a,sizeof(sector));
+        for(unsigned i=0;i<24000&&!n.mounted&&!n.failed;++i)poll();
+        assert(stall_seen&&stall_events==1);
+        if(stall_case>=2&&stall_case<=8){
+            assert(n.failed&&n.core.failed&&!n.mounted&&a733_usb2_read_result(&n,sector)<0);
+            for(unsigned i=0;i<512;++i)assert(sector[i]==0x5a);
+            enum device_memory_state state;struct device_memory_extent extent;
+            assert(device_memory_describe(&n.private_pool,n.memory,&extent,&state)&&state==DEVICE_MEMORY_RETAINED);
+            assert(!n.core.devices[0].endpoints[0].caller);
+            puts("PASS uncertain/stale EP0 recovery retains before class fallback or caller copy");return 0;
+        }
+        assert(n.mounted&&!n.failed&&n.blocks==128&&n.block_bytes==512&&commands==6&&recovery_commands==2);
+        assert(tuh_msc_get_maxlun(n.address)==1&&n.core.devices[0].endpoints[0].cycle==0);
+        assert(a733_usb2_read_sector(&n,7,m.now+500000));
+        for(unsigned i=0;i<10000&&!n.read_complete&&!n.failed;++i)poll();
+        assert(n.read_complete&&!n.failed&&a733_usb2_read_result(&n,sector)==1);
+        for(unsigned i=0;i<512;++i)assert(sector[i]==(uint8_t)(i*17+3));
+        if(argc>2){FILE *f=fopen(argv[2],"wb");assert(f&&fwrite(sector,1,512,f)==512&&!fclose(f));}
+        if(irq_model)assert(irq_begins&&irq_releases&&!n.core.irq_service);
+        puts("PASS actual TinyUSB GET_MAX_LUN STALL fallback after matched Reset/Set Dequeue, wrap/DCS and copied READ10");return 0;
+    }
     if(dual_mode){
         for(unsigned i=0;i<20000&&!n.mounted&&!n.failed;++i)poll();
         if(dual_duplicate){assert(n.failed&&n.core.failed&&!n.mounted);puts("PASS duplicate leaf class retains whole session");return 0;}

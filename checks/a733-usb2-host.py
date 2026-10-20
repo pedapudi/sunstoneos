@@ -156,7 +156,7 @@ void usb2_source_reference(u32 *out){out[0]=out[1]=0;struct dwc3 d={.ref_clk=out
     cases=['admission','read','mutex-loss','bad-config','short-descriptor','bad-status','short-data','cancel','detach']
     cases=[] if a.compile_only else a.cases or cases
     for case in cases:
-        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])
+        run(case,[out/'composed',case,*([out/(case+'-reports.bin')] if case.startswith('ss-') or case.startswith('irq-ss-') or case.startswith('msc-stall') or case.startswith('irq-msc-stall') or case.startswith('dual-') or case.startswith('irq-dual-') or case in ('hid-fs','hid-ls','hid-hs','hub-hid-fs','hub-hid-ls','hub-hid-hs','hub-mtt-ls','hub-port7','irq-hub-hid-fs') else [])])
     native_flags=[compiler,'--target=aarch64-none-elf','-march=armv8-a','-mstrict-align','-mgeneral-regs-only',
         '-std=gnu11','-O2','-g','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin',
         '-DINCLUDE_xTaskGetSchedulerState=1','-DINCLUDE_xTaskGetCurrentTaskHandle=1','-DINCLUDE_xSemaphoreGetMutexHolder=1']
