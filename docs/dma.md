@@ -32,8 +32,10 @@ runtime dependency.
 The pinned [device tree](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi)
 describes DMA0 with 16 channels and 64 request IDs. The
 [A733 datasheet](https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf),
-section 3.9.4, lists two 16-channel controllers. DMA1 remains in scope;
-its address, ownership, and peripheral routing need confirmation.
+section 3.9.4, lists two 16-channel controllers. The pinned A733 User Manual
+V1.00 confirms DMA1's address and register layout. Its domain-specific request
+routing and current ownership remain unresolved; executable DMA1 support is
+unimplemented.
 
 | DMA0 resource | Reference value or behavior |
 | --- | --- |
@@ -51,6 +53,78 @@ The routing values are the kernel's initialization policy. They do not establish
 the attached board's current routing or exclusive ownership of an idle channel.
 Controller-global interrupt banks used by older sunxi DMA revisions do not
 describe this revision's per-channel registers.
+
+## DMA1 request routing remains unresolved
+
+The A733 User Manual V1.00, section 13.1.6, lists both controllers under the
+same register layout. Its interrupt table and CCU descriptions establish these
+DMA1 resources:
+
+| DMA1 resource | Source-defined value |
+| --- | --- |
+| Register base | `0x04024000`; 16 channel blocks at `+0x100 + channel * 0x40` |
+| CPU interrupts | Nonsecure interrupt ID 145; secure interrupt ID 146 |
+| Bus gate and reset | CCU `0x0200270c`, gate bit 0 and reset-release bit 16 |
+| Memory-interface gate | CCU `0x020025e4`, bit 3; preserve every unrelated field |
+| Channel security | Controller `+0x20`; one means nonsecure for each channel |
+| Interrupt destinations | Controller `+0x34` CPU and `+0x38` CPUS channel masks |
+
+The pinned Linux CCU source independently defines the DMA1 gate/reset and
+memory-interface gate. Its source label `dcxo` does not establish the transfer
+clock rate. The manual identifies AHB as the working clock and describes the
+DMAC's AHB/MBUS interfaces. Existing normalized fabric/REF ownership must remain
+held; this audit authorizes no parent retuning.
+
+The request table cannot yet authorize a DMA1 DRAM copy. Section 13.1.1 says
+one controller is in the CPUX domain and the other is in CPUS. Table 13-2 in
+section 13.1.4.1 explicitly describes CPUX source and destination requests,
+with SRAM at request 0 and DRAM at request 1. The common register list does not
+extend that table to the other domain. The pinned Linux device tree exposes
+only DMA0; its effective driver uses `DRQ_SDRAM=0` for memory copies. Neither
+source establishes the DMA1/CPUS DRAM request value. A bounded search of
+published A733/sun60iw2 DMA1 and RTOS HAL definitions found no resolving primary
+source. This is an unresolved applicability conflict, rather than authority to
+choose either value.
+
+The smallest proposed operation is the existing DMA-copy application's finite
+1,024-byte channel-0 copy, using its retained descriptor/source/destination pool,
+service result/reap protocol and immutable copied-result observer. The core
+controller and native memory adapter already accept a base address. Platform
+startup, the service singleton and result admission still restrict it to DMA0.
+An eventual extension needs two fixed controller profiles, selected once from
+the immutable handoff and bound to the platform addresses, exclusive clock
+token, native allowlist and service base. A union of both register allowlists
+would permit access under the wrong controller's token.
+
+Semantic RAM endpoints should remain RAM throughout mapping validation. Once
+the request value is established, the owned controller profile can select its
+hardware encoding inside submission, where descriptors are rebuilt. DMA1 FIFO
+and cyclic modes need no admission in this first operation. Existing DMA0
+descriptor bytes and its single-controller-per-image service remain supported.
+
+Physical admission must independently exclude and drain every prior CPU,
+remote-processor, channel, route and peripheral producer. The selected channel's
+nonsecure bit must also be read after reset release and before activation;
+the documented reset default cannot substitute for that observation. Existing
+startup omits this security read and its allowlist excludes `+0x20`. No security
+write, remote-core shutdown, inherited drain or recovery can be inferred from
+an idle controller. Failure must retain the pool, controller and parent leases.
+Remote ownership remains a physical blocker without reopening the separate
+management-core investigation.
+
+The audit used the existing cached primary sources:
+
+| Source | Pin and local cache |
+| --- | --- |
+| A733 User Manual V1.00, sections 13.1.1, 13.1.4.1, 13.1.6–7, 4.1.6.84 and 4.1.6.86 | `sources.lock.json:a733-user-manual-1.00`, SHA256 `cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d`; `sources/camera-research/A733_User_Manual_V1.00.pdf` and extracted text |
+| Linux DMA driver | Revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, SHA256 `d60e6598835ddf16b1f2374f746abd82da507dfefeb16edade9a0f7021b3d3bb`; `sources/dma-platform/sunxi-dma.c` |
+| Linux device tree | Same revision, SHA256 `1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa`; `sources/dma-platform/sun60iw2p1.dtsi` |
+| Linux CCU driver | Same revision, SHA256 `1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77`; `sources/dma-platform/ccu-sun60iw2.c` |
+
+Cache paths are relative to `~/.cache/sunstoneos/`. Source URLs and hashes are
+also preserved in `sources/dma-platform/manifest.json` and the existing source
+lock. No driver, application, startup, register access, build or runtime check
+was changed or executed for this audit.
 
 Data address bits 32–34 occupy descriptor parameter bits 11–13 for the source
 and 15–17 for the destination. The encoder retains the original 64-bit input
