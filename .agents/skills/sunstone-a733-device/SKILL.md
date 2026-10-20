@@ -138,10 +138,15 @@ Prevent recurring fixture failures at setup:
   configuration does not cover transcription startup.
 - Construct valid sessions and provider configurations with their actual producers.
   Resolve structure sizes, hashes, callback layouts, clock parents, rail ownership
-  and deadlines together before running cases.
+  and deadlines together before running cases. A session-sealing fixture can
+  leave provider fields unused; validate its pin and PMIC handoff before reusing
+  it for application construction.
 - Resolve native hooks by defining compilation unit and verify the final ELF.
   Local names can collide, and a function may be inlined. Cover the actual return
-  width and calling convention rather than a guessed symbol boundary.
+  width and calling convention rather than a guessed symbol boundary. Filter
+  ELF symbols by object/function type when locating retained data. Match MMIO
+  access widths to the instructions; an eight-byte fixture read can combine
+  two independent four-byte hardware registers.
 - Use the configured tool paths and Python environment from accepted evidence.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.

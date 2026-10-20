@@ -114,6 +114,11 @@ instructions, structure offsets and hash checks are one binary's ABI. A rebuilt
 native image requires fresh symbol/disassembly verification and affected fixture
 updates; never transplant old patch addresses into a new build.
 
+When a fixture models a whole function, give that hook precedence over an
+instruction hook at the same address. A boundary function may begin with `MRS`.
+Inspect the executed interval for inlined `CNTPCT_EL0` reads: replacing only
+`a733_smp_counter` leaves those reads on the emulator's unrelated clock.
+
 Verify that the executed path contains the proposed correction. Editing the
 controller source does not change a frozen ELF called by an overlay. Trace the
 build's generated sources, patches and linked objects before claiming coverage.
