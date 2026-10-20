@@ -1,0 +1,8 @@
+--- boot-supervised.c
++++ boot-h264-encode.c
+@@ -86,3 +86,3 @@
+-    extern int board_identity_prepare(uint64_t);
+-    if(!board_identity_prepare(admission.startup_deadline))a733_smp_stop(3,0x30a);
++    extern int h264_encode_session_prepare(const struct a733_smp_contract *);
++    if(!h264_encode_session_prepare(&admission))a733_smp_stop(3,0x30b);
+     if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
