@@ -1570,26 +1570,25 @@ implementation is **planned**. Partial results apply only to the stated scope:
   The [native mimus session](mimus-usb.md) also passes asset loading, status polling
   during recognition, repeated results, and host-lease return with automatic access.
   The [combined keyboard/recognition/storage application](../apps/mimus-board/README.md)
-  now accepts workloads 0 and 4. Workload 4 requires a boot-protocol keyboard and
-  HS storage behind the existing self-powered HS hub. After input authentication,
-  a neutral report followed by unmodified Enter triggers one unchanged recorded
-  recognition. The same privileged USB2 owner handles HID and MSC; EL0 consumes
-  only the copied mailbox. Success requires the checked read-only sector copy
-  during recognition and fresh attachment/liveness. USB0 returns copied transcript,
-  sector and trigger evidence; owners keep polling. Models and weights are unchanged.
-  Root verifies 748 inputs and 203 objects against revision `7383e16`, with no
-  compiled-source divergence, under `mimus-keyboard-20261019/root-integration.json`.
-  Application fixtures retain earlier image `7cdf72a9…`; only identity/build-ID
-  objects differ in final `bd200754…`, as `identity-object-delta.json` records.
-  Six final linked identity-hook cases admit only workloads 0/4 and refuse 1/2/6/8,
-  with exception/cache/session/publication facts modeled; shared startup is excluded.
-  HID/MSC completion, recognition-active state/transcript, scheduling and FIFOs
-  are modeled in the
-  application checks. Seventy-four unchanged mimus dependencies retain earlier
-  recognizer parity under its separate scope. Physical concurrent operation,
-  visibility, startup, recovery and timing remain unqualified. A supported keyboard,
-  hub/storage and fresh image-bound electrical/DDR/model-memory admission remain
-  prerequisites. All memory stays retained; no desktop keyboard events are sent.
+  repeats workload-4 recorded recognition within the retained session. Every
+  generation requires a fresh neutral→unmodified Enter trigger and a fresh
+  generation-bound sector-zero copy while recognition is active. One privileged
+  USB2 owner handles HID/MSC; EL0 consumes only copied mailboxes. Models and
+  weights remain unchanged. Transcript, sector and trigger evidence remain
+  immutable until all exports and the generation-matched ACK response complete
+  USB delivery. Only then can the recognition task advance and rearm; held Enter,
+  stale ACK or an earlier storage read cannot satisfy the next generation.
+  Generation stops before wrapping past `UINT32_MAX`; the original absolute
+  session deadline still bounds reuse. Workload 4 uses version-3 result frames;
+  workload 0 retains version-1 one-shot behavior. Root verifies 1,335 frozen files, 203 objects, six archives and 748
+  compiled inputs, including all 179 repository inputs, under
+  `mimus-repeated-board-20261020/root/integration.json` and `root-frozen/manifest.json`.
+  Final image `05c4b4d9…` was built once; unchanged arithmetic retains earlier
+  model parity. Lifecycle, recognition, transport, hardware and scheduling are
+  modeled. Physical startup, concurrent operation, visibility, recovery and
+  timing and performance remain unqualified. All memory remains retained; keyboard/hub/MSC
+  and image-bound electrical/DDR/model-memory admission are still required.
+  No desktop keyboard events are sent.
   [Cold USB0 preparation](usb-platform.md) now supplies native clock/reset/PHY
   sequencing, detached-controller admission and shared-reference publication.
   Host checks, source comparisons and native instruction checks pass. It keeps
