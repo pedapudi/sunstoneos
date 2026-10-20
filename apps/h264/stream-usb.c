@@ -21,25 +21,51 @@ static void response(void)
     struct h264_stream *s=&h264_stream;unsigned ordinal=s->query_ordinal;
     unsigned next=atomic_load_explicit(&s->next,memory_order_acquire);
     unsigned terminal=atomic_load_explicit(&s->failed,memory_order_acquire)?2:atomic_load_explicit(&h264.result,memory_order_acquire);
+#ifdef SUNSTONE_H264_HIGH
+    unsigned present_next=atomic_load_explicit(&s->present_next,memory_order_acquire);
+#endif
     sending=NULL;
-    for(unsigned i=0;i<2;++i)if(atomic_load_explicit(&s->output[i].state,memory_order_acquire)==2&&s->output[i].ordinal==ordinal)sending=&s->output[i];
+    for(unsigned i=0;i<H264_STREAM_COPIES;++i)if((atomic_load_explicit(&s->output[i].state,memory_order_acquire)==2
+#ifdef SUNSTONE_H264_HIGH
+        ||(terminal==2&&atomic_load_explicit(&s->output[i].state,memory_order_acquire)==3)
+#endif
+        )&&s->output[i].ordinal==ordinal)sending=&s->output[i];
+#ifdef SUNSTONE_H264_HIGH
+    unsigned status=sending?1:terminal==2?2:ordinal<present_next?3:0;
+#else
     unsigned status=sending?1:terminal==2?2:ordinal<next?3:0;
-    const uint8_t *d=h264_stream_descriptor(s,ordinal);
+#endif
+    const uint8_t *d=h264_stream_presentation_descriptor(s,ordinal);
+#ifdef SUNSTONE_H264_HIGH
+    unsigned output_bytes=h264_stream_u32(s->manifest+32)*h264_stream_u32(s->manifest+36)*3/2;
+#else
+    unsigned output_bytes=H264_STREAM_OUTPUT_BYTES;
+#endif
     memset(header,0,sizeof(header));put32(header,0x34363248);put32(header+4,H264_STREAM_RESPONSE_VERSION);put32(header+8,status);
-    put32(header+12,sending?H264_STREAM_OUTPUT_BYTES:0);
+    put32(header+12,sending?output_bytes:0);
     put32(header+16,(uint32_t)s->epoch);put32(header+20,(uint32_t)(s->epoch>>32));
     put32(header+24,(uint32_t)s->generation);put32(header+28,(uint32_t)(s->generation>>32));
     memcpy(header+32,s->manifest_hash,32);memcpy(header+64,d+16,32);
     if(sending)memcpy(header+96,sending->digest,32);
     put32(header+128,ordinal);put32(header+132,s->count);
-    put32(header+136,h264_stream_u32(d+8));put32(header+140,2*h264_stream_u32(d+8));
+    put32(header+136,h264_stream_u32(d+8));
+#ifdef SUNSTONE_H264_HIGH
+    put32(header+140,h264_stream_u32(d+12));
+    put32(header+144,h264_stream_u32(s->manifest+32));put32(header+148,h264_stream_u32(s->manifest+36));put32(header+152,h264_stream_u32(d+92));put32(header+156,terminal);
+    uint32_t geometry[]={h264_stream_u32(s->manifest+24),h264_stream_u32(s->manifest+28),h264_stream_u32(s->manifest+24),h264_stream_u32(s->manifest+24)/2,h264_stream_u32(s->manifest+40),h264_stream_u32(s->manifest+44),h264_stream_u32(s->manifest+48),h264_stream_u32(s->manifest+52)};
+    for(unsigned i=0;i<8;++i)put32(header+160+4*i,geometry[i]);
+    put32(header+192,next);put32(header+196,h264_stream_u32(d+88));put32(header+200,h264_stream_u32(d+80));put32(header+204,h264_stream_u32(d+96));put32(header+208,h264_stream_u32(d+100));put32(header+212,sending&&h264_stream_u32(d+4)?1:0);
+    put32(header+216,sending&&atomic_load_explicit(&sending->state,memory_order_acquire)==3?1:0);
+#else
+    put32(header+140,2*h264_stream_u32(d+8));
     put32(header+144,H264_STREAM_WIDTH);put32(header+148,H264_STREAM_HEIGHT);put32(header+152,h264_stream_u32(d+8)?0:2);put32(header+156,terminal);
 #ifdef SUNSTONE_H264_FULLHD
     /* Authenticated fixed profile, including pending/failed metadata. */
     const uint32_t geometry[]={1920,1088,1920,960,0,0,0,8};
     for(unsigned i=0;i<8;++i)put32(header+160+4*i,geometry[i]);
 #endif
-    s->query_pending=0;sent=transferred=0;total=H264_STREAM_RESPONSE_BYTES+(sending?H264_STREAM_OUTPUT_BYTES:0);
+#endif
+    s->query_pending=0;sent=transferred=0;total=H264_STREAM_RESPONSE_BYTES+(sending?output_bytes:0);
 }
 void h264_stream_usb(void)
 {

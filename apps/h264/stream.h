@@ -1,10 +1,12 @@
 #ifndef SUNSTONE_H264_STREAM_H
 #define SUNSTONE_H264_STREAM_H
 #include "stream-profile.h"
+#ifdef SUNSTONE_H264_HIGH
+#include "a733_h264_high.h"
+#endif
 #include "a733_h264_application.h"
 #include <stdatomic.h>
 #define H264_STREAM_FRAMES 256u
-#define H264_STREAM_DESCRIPTOR_BYTES 96u
 #define H264_STREAM_MANIFEST_MAGIC UINT32_C(0x4d363248)
 #define H264_STREAM_FRAME_MAGIC UINT32_C(0x46363248)
 #define H264_STREAM_QUERY_MAGIC UINT32_C(0x51363248)
@@ -17,7 +19,7 @@
 struct h264_stream_output {
     atomic_uint state; /*0 empty,1 controller-private,2 published. */
     atomic_uint delivered;
-    unsigned ordinal;
+    unsigned ordinal,decode_ordinal,gop;
     struct a733_h264_picture picture;
     uint8_t digest[32];
 #ifdef SUNSTONE_H264_FULLHD
@@ -27,13 +29,13 @@ struct h264_stream_output {
 #endif
 };
 struct h264_stream {
-    uint8_t manifest[H264_STREAM_FRAMES*H264_STREAM_DESCRIPTOR_BYTES];
+    uint8_t manifest[H264_STREAM_MANIFEST_PREFIX+H264_STREAM_FRAMES*H264_STREAM_DESCRIPTOR_BYTES];
     #ifdef SUNSTONE_H264_FULLHD
     uint8_t *input,*oracle;
 #else
     uint8_t input[H264_STREAM_INPUT_BYTES],oracle[H264_STREAM_OUTPUT_BYTES];
 #endif
-    struct h264_stream_output output[2];
+    struct h264_stream_output output[H264_STREAM_COPIES];
     uint8_t header[32],ack[32],manifest_hash[32],config_hash[32];
     uint64_t epoch,generation,authority,deadline,last_now;
     size_t header_used,received,body_bytes,input_bytes,oracle_bytes,config_bytes;
@@ -41,6 +43,12 @@ struct h264_stream {
     atomic_uint manifest_ready,au_state,next,failed; /*AU0 writable,1 ready,2 active. */
     unsigned query_pending,query_ordinal; /* USB task only. */
     struct a733_h264_picture picture;
+#ifdef SUNSTONE_H264_HIGH
+    struct h264_high *high;
+    struct h264_high_plan plan;
+    atomic_uint present_next;
+    unsigned committed_reorder,committed_gop;
+#endif
 };
 extern struct h264_stream h264_stream;
 size_t h264_stream_remaining(const struct h264_stream *);
@@ -57,6 +65,8 @@ uint32_t h264_stream_u32(const uint8_t *);
 int h264_stream_storage_init(uint64_t owner);
 int h264_stream_storage_valid(void);
 void h264_stream_storage_retain(void);
+int h264_stream_publish(struct h264_stream *);
+const uint8_t *h264_stream_presentation_descriptor(const struct h264_stream *,unsigned);
 void h264_stream_usb(void);
 void h264_stream_tx_complete(unsigned);
 #endif

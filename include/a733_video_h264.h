@@ -26,7 +26,7 @@
 enum a733_h264_buffer { A733_H264_INPUT, A733_H264_Y, A733_H264_C,
     A733_H264_PICTURE_INFO, A733_H264_MV, A733_H264_NEIGHBOR, A733_H264_BUFFERS };
 struct a733_h264_span { uint64_t iova, bytes; };
-enum a733_h264_profile { A733_H264_LEGACY, A733_H264_VGA_STREAM, A733_H264_FULLHD_STREAM };
+enum a733_h264_profile { A733_H264_LEGACY, A733_H264_VGA_STREAM, A733_H264_FULLHD_STREAM, A733_H264_HIGH_STREAM };
 struct a733_h264_job {
     const uint8_t *input;
     size_t input_bytes;
@@ -85,7 +85,8 @@ enum a733_h264_state { A733_H264_NEW, A733_H264_ACQUIRE, A733_H264_HASH,
     A733_H264_IDENTIFY, A733_H264_PREPARE, A733_H264_CHECK,
     A733_H264_PROGRAM, A733_H264_INIT, A733_H264_FLUSH, A733_H264_HEADER_WAIT,
     A733_H264_TRIGGER, A733_H264_WAIT, A733_H264_DISABLE, A733_H264_ACK,
-    A733_H264_COPY, A733_H264_MB_COUNT, A733_H264_COPIED, A733_H264_FAULT };
+    A733_H264_COPY, A733_H264_MB_COUNT, A733_H264_COPIED, A733_H264_FAULT, A733_H264_REFERENCE_TABLES };
+struct h264_high_plan;
 struct a733_h264_run {
     struct a733_h264_ops ops;
     struct a733_h264_job job;
@@ -97,6 +98,7 @@ struct a733_h264_run {
     struct a733_h264_sequence sequence;
     struct a733_h264_picture picture;
     enum a733_h264_state state;
+    const struct h264_high_plan *high;
 };
 /* Fresh zeroed storage, single privileged serialized caller, no reentry.
  * Stream headers are parsed after acquisition. Inclusive VLD end is the
@@ -121,4 +123,7 @@ int a733_h264_vga_next(struct a733_h264_run *,size_t frame_bytes,unsigned frame_
 int a733_h264_stream_begin(struct a733_h264_run *,const struct a733_h264_ops *,void *,
     const struct a733_h264_job *,size_t frame_bytes,uint64_t deadline_us);
 int a733_h264_stream_next(struct a733_h264_run *,size_t frame_bytes,unsigned frame_num);
+int a733_h264_high_begin(struct a733_h264_run *,const struct a733_h264_ops *,void *,
+    const struct a733_h264_job *,size_t,const struct h264_high_plan *,uint64_t);
+int a733_h264_high_next(struct a733_h264_run *,size_t,const struct h264_high_plan *);
 #endif

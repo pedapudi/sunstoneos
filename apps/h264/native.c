@@ -84,7 +84,21 @@ static const uint32_t capacity[]={8192,8192,8192,0x21000,8192,0xc000};
 static const unsigned slots[]={2,2,2,1,2,1};
 static const uint32_t used[]={4096,2048,1024,A733_H264_PICTURE_INFO_BYTES,2048,0xc000};
 static const uint32_t prefix[]={4096,4096,4096,4096,4096,16384};
-#ifdef SUNSTONE_H264_FULLHD
+#ifdef SUNSTONE_H264_HIGH
+static const uint32_t vga_capacity[]={4194304,6266880,3133440,0x35000,786432,0xc000};
+static uint32_t high_step[6],high_used[6],high_slots[6];
+#define vga_slot_capacity high_step
+#define vga_used high_used
+#define vga_slots high_slots
+static void high_geometry(void)
+{
+    const struct h264_high_plan *p=&h264_stream.plan;
+    uint32_t step[]={4194304,p->y_step,p->c_step,0x35000,p->mv_step,0xc000};
+    uint32_t used[]={4194304,p->picture.width*p->picture.height,p->picture.width*p->picture.height/2,p->picture_used,p->mv_field*2,0xc000};
+    uint32_t count[]={1,p->slots,p->slots,1,p->slots,1};
+    memcpy(high_step,step,sizeof(step));memcpy(high_used,used,sizeof(used));memcpy(high_slots,count,sizeof(count));
+}
+#elif defined(SUNSTONE_H264_FULLHD)
 static const uint32_t vga_slot_capacity[]={4194304,2088960,1044480,0x35000,262144,0xc000};
 static const uint32_t vga_capacity[]={4194304,4177920,2088960,0x35000,524288,0xc000};
 static const uint32_t vga_used[]={4194304,2088960,1044480,0x34000,262144,0xc000};
@@ -93,7 +107,9 @@ static const uint32_t vga_slot_capacity[]={524288,307200,155648,0x22000,40960,0x
 static const uint32_t vga_capacity[]={524288,614400,311296,0x22000,81920,0xc000};
 static const uint32_t vga_used[]={524288,307200,153600,0x21000,38912,0xc000};
 #endif
+#ifndef SUNSTONE_H264_HIGH
 static const uint32_t vga_slots[]={1,2,2,1,2,1};
+#endif
 static int vga(void){return h264.session.version==H264_STREAM_SESSION_VERSION;}
 static int h264_guards(void)
 {
@@ -108,6 +124,9 @@ static int h264_guards(void)
         for(unsigned slot=0;slot<count[a];++slot)
             for(unsigned i=prefix[a]+slot*step[a]+limit[a];
                 i<prefix[a]+(slot+1)*step[a];++i)if(p[i]!=0xa5)return 0;
+#ifdef SUNSTONE_H264_HIGH
+        if(vga())for(unsigned i=prefix[a]+count[a]*step[a];i<prefix[a]+cap[a];++i)if(p[i]!=0xa5)return 0;
+#endif
         for(unsigned i=prefix[a]+cap[a];i<e.bytes;++i)if(p[i]!=0xa5)return 0;
     }
     return 1;
@@ -136,14 +155,28 @@ static int h264_fullhd_copied(struct h264_stream_output *out,uint64_t deadline)
     /* At most32rows (61440bytes), including oracle/hash work, per callback.
      * Cr uses coded544-row Cb storage, not the visible540-row copy extent. */
     unsigned plane=h264.copy_plane,row=h264.copy_row;
+#ifdef SUNSTONE_H264_HIGH
+    unsigned visible_width=h264_stream.picture.visible_width,visible_height=h264_stream.picture.visible_height;
+    unsigned coded_width=h264_stream.picture.width,coded_height=h264_stream.picture.height;
+    unsigned width=plane?visible_width/2:visible_width,height=plane?visible_height/2:visible_height;
+#else
     unsigned width=plane?960:1920,height=plane?540:1080;
+#endif
     unsigned count=height-row;if(count>32)count=32;
+#ifdef SUNSTONE_H264_HIGH
+    size_t vy=visible_width*visible_height;
+    size_t offset=plane?vy+(plane-1)*(vy/4)+(size_t)row*width:(size_t)row*width;
+    const struct h264_high_plan *plan=&h264_stream.plan;unsigned slot=plan->slot,stride=plane?coded_width/2:coded_width;
+    const volatile uint8_t *source=plane?h264.chroma+slot*plan->c_step+(plane-1)*(coded_width*coded_height/4):h264.luma+slot*plan->y_step;
+    source+=(h264_stream.picture.crop_top/(plane?2:1))*stride+h264_stream.picture.crop_left/(plane?2:1);
+#else
     size_t offset=plane?2073600+(plane-1)*518400+(size_t)row*width:(size_t)row*width;
-    unsigned slot=h264.run.picture_index&1;
+    unsigned slot=h264.run.picture_index&1,stride=width;
     const volatile uint8_t *source=plane?h264.chroma+slot*1044480+(plane-1)*522240:h264.luma+slot*2088960;
+#endif
     uint8_t *destination=out->payload+offset;
     __asm__ volatile("dsb sy":::"memory");
-    for(unsigned y=0;y<count;++y)for(unsigned x=0;x<width;++x)destination[(size_t)y*width+x]=source[(size_t)(row+y)*width+x];
+    for(unsigned y=0;y<count;++y)for(unsigned x=0;x<width;++x)destination[(size_t)y*width+x]=source[(size_t)(row+y)*stride+x];
     __asm__ volatile("dsb sy":::"memory");
     size_t bytes=(size_t)count*width;
     if((h264_stream.oracle_bytes&&memcmp(destination,h264_stream.oracle+offset,bytes))||
@@ -198,6 +231,9 @@ static int h264_copied(void *v,uint64_t token,uint64_t d)
 }
 static int h264_allocate(void)
 {
+#ifdef SUNSTONE_H264_HIGH
+    high_geometry();
+#endif
     h264.pool=a733_memory_uncached_init();if(!h264.pool)return 0;
     const uint32_t *cap=vga()?vga_capacity:capacity,*step=vga()?vga_slot_capacity:slot_capacity;
     const uint32_t *limit=vga()?vga_used:used;const unsigned *count=vga()?vga_slots:slots;
@@ -222,7 +258,11 @@ static int h264_allocate(void)
         {0x10001000,0x10010000,0x10014000,0x10020000,0x10068000,0x10070000},
         {0x10000000,0x10100000,0x10200000,0x10300000,0x10400000,0x10500000}};
 #ifdef SUNSTONE_H264_FULLHD
+#ifdef SUNSTONE_H264_HIGH
+    static const uint32_t hd_addresses[]={0x10000000,0x10401000,0x109fc000,0x10cfa000,0x10d30000,0x10df4000};
+#else
     static const uint32_t hd_addresses[]={0x10000000,0x10401000,0x10801000,0x10a00000,0x10a36000,0x10abc000};
+#endif
     const uint32_t *iova=vga()?hd_addresses:addresses[0];
 #else
     const uint32_t *iova=addresses[vga()];
@@ -278,6 +318,9 @@ static int h264_setup(void)
     struct a733_h264_platform_ops ops={h264_now,h264_authority,h264_memory,h264_copied,
         h264_enter,h264_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!h264_allocate()||!a733_h264_platform_init(&h264.platform,c,&ops,&h264))return -1;
+#ifdef SUNSTONE_H264_HIGH
+    return a733_h264_high_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_stream.input_bytes,&h264_stream.plan,h264_deadline())?1:-1;
+#endif
     return (vga()?a733_h264_stream_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_stream.input_bytes,h264_deadline()):
         a733_h264_begin(&h264.run,a733_video_platform_h264_ops(),&h264.platform,&h264.job,h264_deadline()))?1:-1;
 }
@@ -290,6 +333,7 @@ static void h264_vga_failure(void)
 static void h264_vga_step(void)
 {
     if(atomic_load_explicit(&h264_stream.failed,memory_order_acquire)){h264_vga_failure();return;}
+    if(h264_stream_publish(&h264_stream)<0){h264_vga_failure();return;}
     if(atomic_load_explicit(&h264.result,memory_order_acquire))return;
     if(atomic_load_explicit(&h264_stream.au_state,memory_order_acquire)!=2){
         int taken=h264_stream_take(&h264_stream);if(taken<0){h264_vga_failure();return;}if(!taken)return;
@@ -309,7 +353,12 @@ static void h264_vga_step(void)
         memset(h264.input,0,H264_STREAM_INPUT_BYTES);
         memcpy(h264.input,h264_stream.input+h264_stream.picture.slice_offset,h264_stream.picture.slice_bytes);
         __asm__ volatile("dsb sy":::"memory");input->state=DEVICE_MEMORY_DEVICE;
-        if(a733_h264_stream_next(&h264.run,h264_stream.input_bytes,h264_stream.picture.frame_num)!=1){h264_vga_failure();return;}
+#ifdef SUNSTONE_H264_HIGH
+        if(a733_h264_high_next(&h264.run,h264_stream.input_bytes,&h264_stream.plan)!=1)
+#else
+        if(a733_h264_stream_next(&h264.run,h264_stream.input_bytes,h264_stream.picture.frame_num)!=1)
+#endif
+        {h264_vga_failure();return;}
         h264.refill_step=0;
     }
     int result=h264.stage?a733_h264_poll(&h264.run):h264_setup();

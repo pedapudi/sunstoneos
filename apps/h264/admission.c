@@ -1,4 +1,5 @@
 #include "a733_h264_application.h"
+#include "stream-profile.h"
 #include "a733_rail_leases.h"
 #ifdef SUNSTONE_H264_FULLHD
 #include "fullhd-boot.h"
@@ -12,7 +13,7 @@ int a733_h264_session_valid(const struct a733_h264_session *s)
     return s&&a733_board_session_valid(&s->board,0)&&s->board.workload==2&&
         s->magic==A733_H264_SESSION_MAGIC&&
 #ifdef SUNSTONE_H264_FULLHD
-        s->version==3&&
+        s->version==H264_STREAM_SESSION_VERSION&&
 #else
         (s->version==1||s->version==2)&&
 #endif

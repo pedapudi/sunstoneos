@@ -73,10 +73,11 @@
     "register_source": "cedrus_h264.c:cedrus_set_params,cedrus_write_frame_list,_cedrus_write_ref_list,cedrus_skip_bits; CedarC H264ConfigureRefFrameRegister/H264ConfigureRefListRegister and A733 instructions corroborate field positions.",
     "license": "CedarC GNU LGPL version2 notices retained in adaptation; Cedrus GPL-2.0-or-later.",
     "lifetime": "Fixed VGA input and two reference/output/MV slots with persistent context scratch. Cedrus successful job completion supports healthy input refill; CedarC sliding-window marking retires the previous reference after its consumer completes. Private copied-output ACK ownership is separate. No fault reuse, unmapping, reclamation or physical drain qualification.",
-    "fullhd": "Same parser/controller/application; coded 1920x1088 with canonical bottom crop to 1920x1080. Cedrus internal SRAM width branch and effective A733 H264MallocFrmBuffer corroborate external-scratch choice; CedarC field MV formula corroborated by pinned A733 instructions. Existing extended WB/NC providers, fixed reference pool, immutable retained CPU ledger and bounded visible-row copying."
+    "fullhd": "Same parser/controller/application; coded 1920x1088 with canonical bottom crop to 1920x1080. Cedrus internal SRAM width branch and effective A733 H264MallocFrmBuffer corroborate external-scratch choice; CedarC field MV formula corroborated by pinned A733 instructions. Existing extended WB/NC providers, fixed reference pool, immutable retained CPU ledger and bounded visible-row copying.",
+    "high": "The same controller/application also admits a separately selected High/CABAC/I/P/B runtime-geometry profile with standalone GStreamer syntax/DPB adaptation, reference/scaling/weight tables, five copied-output slots and presentation ordering. Fixed shared-reservation layout; retained ownership and no reuse after uncertain completion."
   },
   "host-oracle": {
-    "execution": "Host only. libx264 encodes Baseline IDR and IDR+P clips with predicted macroblocks; FFmpeg decodes independent YUV420p references and traces parsed syntax. Neither is linked or loaded on FreeRTOS.",
+    "execution": "Host only. libx264 encodes Baseline and High CABAC I/P/B clips, including weighted prediction, custom scaling matrices and reference B pictures; FFmpeg decodes independent YUV420p references and traces syntax. Neither is linked or loaded on FreeRTOS.",
     "version": "ffmpeg version 8.0.1-3ubuntu2 Copyright (c) 2000-2025 the FFmpeg developers",
     "files": {
       "/usr/bin/ffmpeg": "bdf6aabffdba7411edff8d36c389d695257fcdf823d196020176e117612862f6",
@@ -106,5 +107,66 @@
     "revision": "d92ffcb082595f0fffda45ea481cec40fe5a3a8d",
     "sha256": "250ef3dfc38afad12f77dea9829963035180fbd3e099d68e30b5a4ae675f2d7c",
     "git_blob": "77d5a1e69b85f62041a5e0bf8816b1f8ed7a8787"
+  },
+  "gstreamer-standalone-high": {
+    "revision": "d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202",
+    "tag": "1.26.0",
+    "source_only": true,
+    "files": {
+      "gsth264parser.c": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecparsers/gsth264parser.c",
+        "sha256": "5b03da7855057185afd5071fe9d78f48908989209131acceba8a7a21a41a0903",
+        "bytes": 119372
+      },
+      "gsth264parser.h": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecparsers/gsth264parser.h",
+        "sha256": "39f352c304352f4d1401dd4eb850f97068e09bdaa107f61796de0e8221b848c2",
+        "bytes": 52865
+      },
+      "nalutils.c": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecparsers/nalutils.c",
+        "sha256": "2a61d464fed4807bba951021d662e061e2351a24b45746aa1011359a05a97f1f",
+        "bytes": 12596
+      },
+      "nalutils.h": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecparsers/nalutils.h",
+        "sha256": "c953cfb2f483f82d3a90f7b1f37f89830775f031a121f7f839e9e7fcbcfd73d0",
+        "bytes": 7889
+      },
+      "gsth264decoder.c": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecs/gsth264decoder.c",
+        "sha256": "447d7f358360741711756915649ca1595bcfc03eb670f770892c4c8ea0959af5",
+        "bytes": 110476
+      },
+      "gsth264picture.c": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecs/gsth264picture.c",
+        "sha256": "b0c62b51092e4b2a9ade71a1effb15048e28dc2efcf435080dd4eed77d3dc74d",
+        "bytes": 35719
+      },
+      "COPYING": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/COPYING",
+        "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+        "bytes": 26530
+      },
+      "gstv4l2codech264dec.c": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/sys/v4l2codecs/gstv4l2codech264dec.c",
+        "sha256": "270dd4f6d40c4d6485f7886f44a506a314baa234f9967c8477302e4884903fbb",
+        "bytes": 54570
+      },
+      "gsth264picture-private.h": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecs/gsth264picture-private.h",
+        "sha256": "f81fa0563772e945b7efda408e99cace6cb671849a42e589c4886636dc0addaf",
+        "bytes": 1183
+      },
+      "gsth264picture.h": {
+        "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202/subprojects/gst-plugins-bad/gst-libs/gst/codecs/gsth264picture.h",
+        "sha256": "3fd61076291fea56662f51ec56f8182b5fe7083bc49ed83763381124ffa90c6a",
+        "bytes": 9693
+      }
+    },
+    "execution": "Selected standalone C SPS/PPS/slice/NalReader/raster helpers execute on the FreeRTOS CPU. Adapted fixed-array POC/list/MMCO algorithms also execute there. No GStreamer, GLib/GObject, V4L2 or Linux runtime is linked.",
+    "adaptation": "apps/h264/gst-source.py verifies pins and generates selected original functions with notices. Fixed integer port; no FMO allocation; explicit pre-arithmetic dimension/reference/Golomb bounds. apps/h264/high-parse.c adapts gsth264decoder.c/gsth264picture.c short-term DPB algorithms.",
+    "license": "GNU Library General Public License version 2 or later; Chromium BSD notice retained for adapted decoder portions. Original notices and complete upstream COPYING are preserved in apps/h264/LICENSE.gstreamer and frozen source inputs.",
+    "bounds": "Profile 100; progressive 8-bit 4:2:0; POC0/2; one slice; at most four short-term reference pictures and four active list entries per list; MMCO1/5 only. Fixed storage constrains geometry and reference count jointly. Long-term references and unrestricted streaming remain required work."
   }
 }

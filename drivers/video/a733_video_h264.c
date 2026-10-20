@@ -5,6 +5,7 @@
  * cedrus_h264.c (Jens Kuske/Bootlin), and checked against pinned A733 instructions.
  * Source/license identities are recorded in apps/h264/sources.json. */
 #include "a733_video_h264.h"
+#include "a733_h264_high.h"
 #include <string.h>
 /* Syntax adaptation from H6-CedarC h264_nalu.c, revision recorded in
  * apps/h264/sources.json (GNU Lesser General Public License version2).
@@ -225,14 +226,15 @@ static int write_reg(struct a733_h264_run *r,uint32_t off,uint32_t value)
 static int begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
                     const struct a733_h264_job *j,uint64_t d)
 {
-    static const uint64_t sizes[3][A733_H264_BUFFERS]={
+    static const uint64_t sizes[4][A733_H264_BUFFERS]={
         {8192,8192,8192,0x21000,8192,0xc000},
         {524288,614400,311296,0x22000,81920,0xc000},
-        {4194304,4177920,2088960,0x35000,524288,0xc000}};
-    if(!j||j->profile>A733_H264_FULLHD_STREAM||(int)j->profile<0)return 0;
+        {4194304,4177920,2088960,0x35000,524288,0xc000},
+        {4194304,6266880,3133440,0x35000,786432,0xc000}};
+    if(!j||j->profile>A733_H264_HIGH_STREAM||(int)j->profile<0)return 0;
     const uint64_t *capacity=sizes[j->profile];
     if(!r||r->state!=A733_H264_NEW||!o||!j||!j->input||!d||!o->now_us||
-       !j->input_bytes||j->input_bytes>(j->profile==A733_H264_FULLHD_STREAM?A733_H264_FULLHD_INPUT_BYTES:j->profile?A733_H264_VGA_INPUT_BYTES:A733_H264_INPUT_BYTES)||!o->acquire||!o->prepare||!o->read||!o->write||!o->copied)return 0;
+       !j->input_bytes||j->input_bytes>(j->profile>=A733_H264_FULLHD_STREAM?A733_H264_FULLHD_INPUT_BYTES:j->profile?A733_H264_VGA_INPUT_BYTES:A733_H264_INPUT_BYTES)||!o->acquire||!o->prepare||!o->read||!o->write||!o->copied)return 0;
     for(unsigned i=0;i<A733_H264_BUFFERS;++i){
         const struct a733_h264_span *s=&j->buffers[i];
         if(!s->iova||(s->iova&4095)||s->bytes!=capacity[i]||
@@ -252,7 +254,7 @@ int a733_h264_stream_begin(struct a733_h264_run *r,const struct a733_h264_ops *o
 {
     struct a733_h264_picture picture;size_t config;
     if(!j||(j->profile!=A733_H264_VGA_STREAM&&j->profile!=A733_H264_FULLHD_STREAM)||
-       j->input_bytes!=(j->profile==A733_H264_FULLHD_STREAM?A733_H264_FULLHD_INPUT_BYTES:A733_H264_VGA_INPUT_BYTES)||
+       j->input_bytes!=(j->profile>=A733_H264_FULLHD_STREAM?A733_H264_FULLHD_INPUT_BYTES:A733_H264_VGA_INPUT_BYTES)||
        !a733_h264_parse_stream(j->profile,j->input,bytes,0,&picture,&config)||!begin(r,o,v,j,d))return 0;
     r->picture=picture;r->sequence.pictures[0]=picture;r->frame_bytes=bytes;return 1;
 }
@@ -270,6 +272,50 @@ int a733_h264_vga_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,vo
 {return j&&j->profile==A733_H264_VGA_STREAM?a733_h264_stream_begin(r,o,v,j,bytes,d):0;}
 int a733_h264_vga_next(struct a733_h264_run *r,size_t bytes,unsigned frame_num)
 {return r&&r->job.profile==A733_H264_VGA_STREAM?a733_h264_stream_next(r,bytes,frame_num):0;}
+int a733_h264_high_begin(struct a733_h264_run *r,const struct a733_h264_ops *o,void *v,
+    const struct a733_h264_job *j,size_t bytes,const struct h264_high_plan *p,uint64_t deadline)
+{
+    if(!j||j->profile!=A733_H264_HIGH_STREAM||j->input_bytes!=4194304||!bytes||bytes>j->input_bytes||!p||!p->slots||p->slots>5||p->slot>=p->slots||!begin(r,o,v,j,deadline))return 0;
+    r->high=p;r->picture=p->picture;r->frame_bytes=bytes;return 1;
+}
+int a733_h264_high_next(struct a733_h264_run *r,size_t bytes,const struct h264_high_plan *p)
+{
+    if(!r||r->job.profile!=A733_H264_HIGH_STREAM||r->state!=A733_H264_COPIED||r->picture_index>=255||!p||!bytes||bytes>r->job.input_bytes||p->slot>=p->slots||p->slots>5||live(r)!=1)return 0;
+    ++r->picture_index;r->high=p;r->picture=p->picture;r->frame_bytes=bytes;
+    r->index=r->flushed=r->flush_bits=0;r->state=A733_H264_CHECK;return 1;
+}
+static int program_high(struct a733_h264_run *r)
+{
+    const struct h264_high_plan *p=r->high;const struct a733_h264_span *b=r->job.buffers;
+    unsigned n=r->index;uint32_t off,value;
+    static const uint32_t offsets[]={0xec,0xc4,0xc8,0x250,0x254,0x240,0x22c,0x260,0x24c,0x200,0x204,0x208,0x20c,0x21c,0x220,0x234,0x238,0x23c,0x230,0x2e0};
+    uint32_t input=(uint32_t)b[0].iova;
+    uint32_t values[]={r->format,p->picture.width*p->picture.height/4,(p->picture.width/2<<16)|p->picture.width,(uint32_t)b[3].iova,(uint32_t)b[5].iova,0,0,0,p->slot,p->picture.sps,p->picture.pps,p->picture.shs,p->picture.shs2,p->picture.qp,0x407,0,p->picture.slice_bytes*8,input+4194303,(input&0x0ffffff0)|(input>>28)|0x70000000,0x400};
+    unsigned count=sizeof(offsets)/sizeof(*offsets);
+    if(n<count){off=offsets[n];value=values[n];}
+    else if((n-=count)<18*8){
+        unsigned slot=n/8,field=n%8;off=0x2e4;value=0;
+        if(slot<5&&p->valid[slot]){
+            if(field<2)value=p->pocs[slot][field];
+            if(field==2&&slot==p->slot&&!p->reference)value=0x22;
+            if(field==3)value=(uint32_t)b[1].iova+slot*p->y_step;
+            if(field==4)value=(uint32_t)b[2].iova+slot*p->c_step;
+            if(field==5||field==6)value=(uint32_t)b[4].iova+slot*p->mv_step+(field==6?p->mv_field:0);
+        }
+    }else if((n-=18*8)<57){off=n?0x2e4:0x2e0;value=n?p->scaling[n-1]:0x800;}
+    else return 0;
+    if(write_reg(r,off,value)!=1)return -1;++r->index;return 1;
+}
+static int high_tables(struct a733_h264_run *r)
+{
+    const struct h264_high_plan *p=r->high;unsigned n=r->index;uint32_t off,value;
+    if(!n){off=0x210;value=p->weight_denom;}
+    else if(--n<20){unsigned list=n/10,word=n%10;off=word?0x2e4:0x2e0;value=word?0:0x640+list*36;
+        if(word&&word<=8)for(unsigned j=0;j<4;++j){unsigned i=(word-1)*4+j;if(i<p->ref_count[list])value|=(p->lists[list][i]<<1)<<(8*j);}
+    }else if((n-=20)<193){off=n?0x2e4:0x2e0;value=n?p->weights[n-1]:0;}
+    else return 0;
+    if(write_reg(r,off,value)!=1)return -1;++r->index;return 1;
+}
 /* Program provenance: SPS/PPS/SHS/QP/VLD and frameSRAM match the preserved
  * libawh264 instruction trace. Initial full frame-list clearing, primary-only
  * buffers and offset0/INIT/FLUSH come from Cedrus. SDROT_CTRL0 disables scaling;
@@ -277,6 +323,7 @@ int a733_h264_vga_next(struct a733_h264_run *r,size_t bytes,unsigned frame_num)
  */
 static int program(struct a733_h264_run *r)
 {
+    if(r->job.profile==A733_H264_HIGH_STREAM)return program_high(r);
     const struct a733_h264_span *s=r->job.buffers;
     unsigned vga=r->job.profile!=A733_H264_LEGACY,hd=r->job.profile==A733_H264_FULLHD_STREAM;
     uint32_t off,value,n=r->index,slot=vga?(r->picture_index&1):r->picture_index;
@@ -372,9 +419,12 @@ int a733_h264_poll(struct a733_h264_run *r)
         if(value&0xe)return fail(r);
         if(!(value&0x100)){
             r->flushed+=r->flush_bits;
-            r->state=r->flushed==r->picture.header_bits?A733_H264_TRIGGER:A733_H264_FLUSH;
+            if(r->flushed==r->picture.header_bits&&r->job.profile==A733_H264_HIGH_STREAM){r->index=0;r->state=A733_H264_REFERENCE_TABLES;}
+            else r->state=r->flushed==r->picture.header_bits?A733_H264_TRIGGER:A733_H264_FLUSH;
         }
         break;
+    case A733_H264_REFERENCE_TABLES:
+        result=high_tables(r);if(result<0)return -1;if(!result)r->state=A733_H264_TRIGGER;break;
     case A733_H264_TRIGGER:
         if(write_reg(r,0x224,8)!=1)return -1;
         r->state=A733_H264_WAIT;break;

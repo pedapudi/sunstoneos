@@ -1,13 +1,183 @@
 # Native H.264 bounded decoding profiles
 
-The native application decodes bounded progressive Baseline IDR/P clips on the
-video engine (VE) and exposes copied planar YU12 output. The default build retains
-the 48-by-32 single/two-picture profile and 640-by-480 streaming profile. A separate
-full-HD build selects 1920-by-1080 visible output with the existing extended memory
-providers. These builds share the parser, controller and application. None
-establishes physical codec qualification. High profile, CABAC, B pictures, broader
-reference patterns and dimensions, other codecs, and unmanifested live ingestion
-remain required work.
+The native application programs the video engine (VE) and exposes copied planar
+YU12 pictures. Baseline builds retain the 48-by-32 single/two-picture,
+640-by-480 streaming and 1920-by-1080 streaming modes. A separate High-profile
+build admits runtime geometry, CABAC, I/P/B pictures and multiple short-term
+references through the same controller and application. Physical decoding remains
+unqualified. Long-term references, unrestricted streaming, broader profiles and
+formats, other codecs and encoding remain required work.
+
+## High-profile runtime clips and presentation ordering
+
+`SUNSTONE_H264_HIGH=ON` selects session version 4, the existing extended memory
+providers and the same private 288-byte boot contract as the full-HD build.
+`SUNSTONE_H264_GSTREAMER_SOURCE` names the pinned source cache recorded in
+`apps/h264/sources.json`. The build verifies those source hashes and selects
+standalone SPS/PPS/slice-header, bit-reader and scaling-list functions. The
+FreeRTOS CPU runs these functions and adapted GStreamer picture-order-count
+(POC), reference-list and decoded-picture-buffer (DPB) algorithms. No GStreamer,
+GLib, GObject, V4L2 or Linux runtime executes on the board. Generated files retain
+upstream LGPL notices. `apps/h264/LICENSE.gstreamer` retains those notices, the
+Chromium BSD notice from the adapted decoder and complete upstream COPYING.
+
+The admitted stream is High profile 100, progressive 8-bit 4:2:0, level at most
+4.0, with one complete slice per picture and fixed SPS/PPS bytes throughout a
+session. CABAC, 8-by-8 transforms, custom scaling matrices, explicit weighted P/B
+prediction and implicit weighted B prediction are programmed from parsed syntax.
+The initial picture must be IDR. Subsequent I/P/B pictures may use up to four
+short-term references, including reference B pictures. Each reference list may
+contain at most four active entries, including repeated weighted entries. A
+four-reference stream that signals five active weighted entries is refused.
+
+POC types 0 and 2, short-term list modifications 0/1, sliding-window marking and
+memory-management operations 1/5 are implemented. Frame-number gaps, long-term
+marking/references, fields/MBAFF, POC type 1, FMO, redundant slices, transform
+bypass and unsupported marking operations are refused. The SPS must signal VUI
+bitstream restrictions, at most two reordered pictures and a DPB limit of at
+most four. Missing references fail rather than conceal damage. The completed
+fixtures exercise POC type 0 and operation 1; wraparound and operation 5 remain
+source-reviewed paths without execution coverage.
+
+Coded dimensions are multiples of 16, from 16-by-16 through 1920-by-1088.
+Visible dimensions must be positive and even, at most 1920-by-1080. Even crop
+amounts on all four edges are accepted. The full coded picture remains available
+for prediction; copied YU12 output contains only visible samples. Geometry,
+level limits and reference count are validated together against the fixed pool.
+For example, 1920-by-1088 permits two references plus the destination;
+1280-by-720 permits four references plus the destination. Runtime dimensions do
+not increase the existing extended-memory reservation.
+
+### Fixed device and CPU storage budgets
+
+The High build retains six guarded device spans and the existing four IOMMU
+windows. No generic IOMMU policy changes are required.
+
+| IOVA | Capacity in bytes | Device access |
+| --- | --- | --- |
+| `0x10000000` | 4,194,304 input | Read |
+| `0x10401000` | 6,266,880 Y pictures | Read/write |
+| `0x109fc000` | 3,133,440 chroma pictures | Read/write |
+| `0x10cfa000` | 217,088 picture scratch | Read/write |
+| `0x10d30000` | 786,432 motion vectors | Read/write |
+| `0x10df4000` | 49,152 neighbor scratch | Read/write |
+
+For coded width W and height H, each picture uses page-rounded W*H Y bytes and
+W*H/2 chroma bytes. Each motion-vector field requires
+`ALIGN((W/16)*ceil((H/16)/2)*32,1024)` bytes; a page-rounded picture slot holds two
+fields. The destination needs a slot separate from every current reference.
+The parser checks all slot products against the aggregate capacities before
+publishing a plan. Picture scratch uses the greater of 130 KiB and
+`18*4096 + H*128` bytes. Source-defined SRAM selection for widths through 1920
+and the effective A733 allocation anchors are the same as the full-HD branch
+below. These formulas include coded padding and are independent of visible crop.
+
+Actual allocator execution requires 14,749,696 uncached bytes, including tables,
+alignment and guards. CPU write-back allocations require 23,920,640 bytes: a
+4 MiB upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
+metadata. Each copied-output capacity is 3,110,400 bytes. The actual metadata
+structure uses 243,064 bytes. Observed native parser stack use in the allocation
+fixture is 2,616 bytes; the existing USB task has a 16 KiB stack. These are
+modeled execution measurements, not worst-case stack or physical timing proofs.
+All eight CPU leases are retained before publication. Device spans, CPU leases,
+alignment, guard capacity and table construction are validated before device use.
+
+### Authenticated input and independent ownership transitions
+
+The sealed session authenticates a fixed manifest of at most 256 pictures. Its
+128-byte prefix binds geometry, crop, reference/reorder limits, optional-oracle
+mode and the SPS/PPS digest. Each 128-byte descriptor binds one access unit's
+length/digest, optional pixel-oracle length/digest, decode ordinal, presentation
+ordinal, GOP, frame number, POC, slice kind, reference flag and IDR flag. Every
+picture's complete upload is copied, hashed and parsed before its first device
+write. Parsed values must match authenticated claims. The manifest does not
+supply device drain authority. Partial uploads remain bounded and unpublished.
+
+A prepared DPB transition is speculative. It commits only after the engine's
+source-defined decoded/macroblock completion, guarded visible copying and the
+executor's final status, fault, liveness and deadline checks. References keep
+their coded Y/chroma and motion-vector extents until their last completed
+consumer and subsequent marking retire them. Input refill follows healthy
+completion checks. Copied-output acknowledgment controls only the CPU copy;
+it cannot retire a device reference or authorize input refill. Uncertain
+completion prevents subsequent decoding and retains every allocation.
+
+Five private CPU output slots support up to two published, unacknowledged
+pictures plus the admitted reorder interval. Output publication follows
+presentation order; decode order may differ. The application applies
+backpressure when copies or caller ACKs prevent progress. Acknowledging a copy
+cannot resurrect a failed session. Completed copies remain queryable after
+failure, including completed future anchors that had not reached normal
+presentation order. Such responses carry an explicit reorder-pending flag.
+A partially copied failing picture remains private.
+
+High commands use wire version 2. The 256-byte response has version 5 and binds
+the session, manifest and input digests. It reports presentation/decode ordinals,
+GOP, signed POC, visible/coded dimensions, strides, all crop edges, reference/IDR
+flags, completed decode count and reorder-pending state. The host saves actual
+copied bytes before ACK. An optional client-supplied independent oracle enables
+numerical comparison; normal decoding returns copied bytes and metadata with
+`oracle_verified` false. Host capture stops on failure; manual indexed queries
+can retrieve additional retained reorder-private anchors.
+
+The controller programs frame-list POCs, both motion-vector field pointers,
+both reference lists, prediction weights and raster scaling matrices from the
+immutable plan. Cedrus places reference-list/weight programming after decoder
+INIT/FLUSH and scaling programming before INIT. The lower native VE policy now
+admits the weight-denominator register at `0x01c0e210`; the focused access check
+executes that actual policy, including width, alignment and peripheral-base
+refusals. Existing VLD offset-zero copying, busy guards and decoded-macroblock
+completion checks remain in force.
+
+### Compiled evidence and physical limits
+
+Evidence is retained under `~/.cache/sunstoneos/evidence/h264-high-20261019`.
+The native candidate SHA-256 is
+`ecd05003b5430d12940e77fce7f1a6e2634c88afe5779181da07574ba759dc66`.
+`compiled/dependencies.json`, `compiled/commands.json` and
+`compiled/objects.json` identify 462 compiler inputs and 175 linked objects.
+The source/linked-input freeze records the final closure. Provenance-only
+updates to `apps/h264/sources.json` after compilation do not change this accepted
+executable; its original build-identity input is preserved separately.
+
+`allocation-budget` and `allocation-four-ready` execute actual native parser,
+CPU storage, allocator and IOMMU setup before composed device cases. The entry
+check executes the generated AArch32 launcher for accepted High, rejected
+full-HD and invalid session versions. Root's `root/layout-review.json` and
+`root/frozen/manifest.json` preserve the linked startup/retained-contract review.
+Generated boot and linker bytes match the accepted full-HD startup. No shared
+CPU startup, GIC or secondary execution is repeated.
+
+Producer fixtures use actual host libx264 High/CABAC clips. Independent FFmpeg
+supplies visible pixel references and syntax traces. The native composed checks
+execute the linked parser, DPB, allocation/table builder, controller, visible
+copy, digest, presentation order and serializer. Power/admission, MMIO, pixel
+writes, device translation, fault scans and USB are explicit models. Injected
+pixels establish copy/oracle behavior but do not qualify hardware arithmetic,
+reference visibility, DMA confinement or timing. The native results are in `native/result.json` and
+`native-four/result.json`: twelve full-HD pictures across an IDR boundary,
+twelve HD pictures including reference B pictures, twelve four-reference HD
+pictures and three normal-mode decoded pictures. The independent register
+oracles are `register-oracle.json` and `four-register-oracle.json`. They derive
+DPB transitions, lists, POCs, motion-vector pointers, strides and prediction
+weights from FFmpeg syntax rather than native parser plans. `host/result.json`
+checks actual bundles and presentation capture with native-produced frames,
+modeled transport/progress and the actual fsync-backed output writer. It
+checks output persistence before ACK and preserves the earlier output on B
+failure. `bounds/result.json` records focused sanitized syntax refusals.
+`preparation-coverage.json` records setup failures and their limited repairs.
+No completed native case is replayed for those repairs.
+
+The focused Astra source review covers POC/lists/marking, speculative commit,
+reference/MV lifetime and output ordering. Existing Baseline parser and CPU startup evidence remains scoped to
+its unchanged paths.
+
+The inherited multicore startup, extended-memory mapping, electrical state,
+initial device exclusion, IOMMU authority and whole-board recovery remain
+physical prerequisites. Source-backed healthy next-picture programming does
+not prove physical transaction drain or permit reclamation. All resources stay
+retained until whole-board power removal after success or failure. No physical
+attempt is authorized by these host-only results.
 
 ## Full-HD streaming and extended memory
 

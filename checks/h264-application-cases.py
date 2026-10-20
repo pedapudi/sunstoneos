@@ -7,7 +7,7 @@ from elftools.elf.elffile import ELFFile
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_X1,UC_ARM64_REG_X2,UC_ARM64_REG_X3,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 
-def setup(image,out,session_optional=False,fixture_optional=False):
+def setup(image,out,session_optional=False,fixture_optional=False,high=False):
     """Validate fixture prerequisites without executing native instructions."""
     errors=[];symbols={};symbol_candidates={};copy_entries=set();segments=[];layouts={};reference=b'';session=b''
     try:
@@ -39,6 +39,7 @@ def setup(image,out,session_optional=False,fixture_optional=False):
         'board_live','board_fail','a733_iommu_scan','a733_iommu_poll','device_memory_describe','h264_load',
         'vTaskDelay','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init',
         'tud_task_ext','tud_vendor_n_available','tud_vendor_n_read'}
+    if high:required_symbols.discard('a733_h264_begin');required_symbols.add('a733_h264_high_begin')
     for name in sorted(required_symbols):
         if not symbols.get(name):errors.append('Missing ELF symbol: '+name)
         if name!='h264_copied' and len(symbol_candidates.get(name,set()))!=1:errors.append('Ambiguous ELF symbol: '+name)

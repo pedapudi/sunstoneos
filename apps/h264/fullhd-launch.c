@@ -1,3 +1,8 @@
+#ifdef SUNSTONE_H264_HIGH
+#define H264_LAUNCH_VERSION 4
+#else
+#define H264_LAUNCH_VERSION 3
+#endif
 /* Existing SRAM entry and supervised handoff with the fixed extended record. */
 #include "a733_h264_application.h"
 #define a733_smp_launch_prepare h264_supervised_base_prepare
@@ -7,7 +12,7 @@ int a733_smp_launch_prepare(void)
 {
     volatile const struct a733_h264_session *j=(const void *)A733_BOARD_SESSION_ADDRESS;
     volatile const struct a733_board_session *s=&j->board;
-    ADMIT(j->magic==A733_H264_SESSION_MAGIC&&j->version==3&&j->bytes==sizeof(*j)&&
+    ADMIT(j->magic==A733_H264_SESSION_MAGIC&&j->version==H264_LAUNCH_VERSION&&j->bytes==sizeof(*j)&&
         s->magic==A733_BOARD_SESSION_MAGIC&&s->version==2&&s->bytes==sizeof(*s)&&s->workload==2&&
         s->epoch==REQUEST[3]&&s->generation==REQUEST[4]&&s->lease==REQUEST[6]&&
         CONTRACT->reserved[1]==s->memory_authority,14);

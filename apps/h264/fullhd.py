@@ -9,7 +9,7 @@ def require(ok,message):
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     reservation=struct.unpack_from('<Q',raw,200)[0] # Existing board memory authority.
-    require(len(raw)==856 and struct.unpack_from('<Q',raw,600)[0]==3 and len(identity)==32 and
+    require(len(raw)==856 and struct.unpack_from('<Q',raw,600)[0] in (3,4) and len(identity)==32 and
         0x41000000<=address<=0x411fffe0 and all(type(x) is int and 0<x<2**64 for x in (epoch,generation,lease,reservation)),
         'Invalid full-HD launch identity.')
     session_digest=hashlib.sha256(raw).digest()
@@ -20,7 +20,7 @@ def request_bytes(address,identity,raw,epoch,generation,lease):
     require(len(contract)==288,'Full-HD contract ABI differs.')
     return request,contract+bytes(4096-len(contract))
 
-def image_parts(path):
+def image_parts(path,high=False):
     # Same fixed large-profile ELF geometry as apps/gpu-render/prepare.py.
     with Path(path).open('rb') as f:
         elf=ELFFile(f);require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Native full-HD ELF required.')
@@ -45,6 +45,10 @@ def image_parts(path):
             p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]
         _,geometry=immutable('h264_fullhd_geometry',64)
         require(struct.unpack('<8Q',geometry)==(0x4844464844323634,1,1920,1088,1920,1080,4194304,3110400),'Full-HD compiled geometry differs.')
+        require(('h264_high_geometry' in symbols)==high,'Extended image/profile selection differs.')
+        if high:
+            _,marker=immutable('h264_high_geometry',64)
+            require(struct.unpack('<8Q',marker)==(0x4847494844323634,1,1920,1088,5,5,14749696,1048576),'High compiled capacity marker differs.')
         address,identity=immutable('a733_smp_build_id',32)
         for p in parts:p.pop('flags')
         return parts,address,identity

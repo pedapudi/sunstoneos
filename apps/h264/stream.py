@@ -8,7 +8,11 @@ import struct
 import time
 ROOT=Path(__file__).resolve().parents[2]
 WIDTH,HEIGHT,FRAME_BYTES,INPUT_LIMIT,FRAME_LIMIT=640,480,460800,524288,256
+def high_module():
+    spec=importlib.util.spec_from_file_location('h264_high_host',ROOT/'apps/h264/high.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+
 def profile(version=2):
+    if version==4:return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=4194304,header_bytes=256,response_version=5,name='high-cabac-runtime')
     require(version in (2,3),'Unsupported stream session version.')
     return dict(width=1920,height=1080,frame_bytes=3110400,input_limit=4194304,header_bytes=192,response_version=4,name='fullhd1920x1080-idr-p') if version==3 else dict(width=WIDTH,height=HEIGHT,frame_bytes=FRAME_BYTES,input_limit=INPUT_LIMIT,header_bytes=160,response_version=3,name='vga640x480-idr-p')
 
@@ -23,6 +27,7 @@ def header(magic,ordinal,session,aux=0):
     return struct.pack('<4I2Q',magic,1,ordinal,aux,*struct.unpack_from('<2Q',session,24))
 
 def descriptors(manifest,version=2):
+    if version==4:return high_module().descriptors(manifest)
     limits=profile(version)
     require(0<len(manifest)<=256*96 and len(manifest)%96==0,'Invalid VGA manifest size.')
     result=[];previous=0
@@ -35,12 +40,14 @@ def descriptors(manifest,version=2):
     return result
 
 def manifest_upload(session,manifest):
+    if struct.unpack_from('<Q',session,600)[0]==4:return high_module().manifest_upload(session,manifest)
     descriptors(manifest,struct.unpack_from('<Q',session,600)[0])
     require(struct.unpack_from('<Q',session,600)[0] in (2,3) and not any(session[800:832]) and
         hashlib.sha256(manifest).digest()==session[768:800],'VGA manifest/session mismatch.')
     return header(M,len(manifest)//96,session,len(manifest))+manifest
 
 def frame_upload(session,manifest,ordinal,data,oracle=None):
+    if struct.unpack_from('<Q',session,600)[0]==4:return high_module().frame_upload(session,manifest,ordinal,data,oracle)
     rows=descriptors(manifest,struct.unpack_from('<Q',session,600)[0]);require(0<=ordinal<len(rows),'VGA frame ordinal out of range.');d=rows[ordinal]
     require(len(data)==d['input_bytes'] and hashlib.sha256(data).digest()==d['input_hash'],'VGA input changed.')
     oracle=b'' if oracle is None else oracle
@@ -80,6 +87,7 @@ def prepare_inputs(clip,output,reference=None,version=2):
     return bytes(manifest)
 
 def validate_inputs(directory,manifest,version=2):
+    if version==4:return high_module().validate_inputs(directory,manifest)
     root=Path(directory);frames=[]
     for d in descriptors(manifest,version):
         i=d['ordinal'];data=(root/f'frame-{i:03}.h264').read_bytes()
@@ -90,6 +98,7 @@ def validate_inputs(directory,manifest,version=2):
     return frames
 
 def decode(raw,session,manifest,ordinal,oracle=None):
+    if struct.unpack_from('<Q',session,600)[0]==4:return high_module().decode(raw,session,manifest,ordinal,oracle)
     limits=session_profile(session);head=limits['header_bytes'];frame_bytes=limits['frame_bytes']
     require(len(raw)>=head and struct.unpack_from('<2I',raw)==(0x34363248,limits['response_version']),'Invalid stream response.')
     status,n=struct.unpack_from('<2I',raw,8);require(status in (0,1,2,3) and n==(frame_bytes if status==1 else 0) and len(raw)==head+n,'Invalid stream payload length.')
@@ -103,6 +112,7 @@ def decode(raw,session,manifest,ordinal,oracle=None):
     return dict(status=status,picture_index=index,picture_count=count,frame_num=number,poc=poc,width=width,height=height,terminal=terminal,oracle_verified=status==1 and oracle is not None,sha256=raw[96:128].hex() if status==1 else None)
 
 def capture_device(device,same,deadline,session,evidence,record,save,manifest,frames,durable):
+    if struct.unpack_from('<Q',session,600)[0]==4:return high_module().capture_device(device,same,deadline,session,evidence,record,save,manifest,frames,durable)
     limits=session_profile(session);head=limits['header_bytes'];frame_bytes=limits['frame_bytes']
     require(len(frames)==len(descriptors(manifest,struct.unpack_from('<Q',session,600)[0])),'VGA capture requires every sealed frame input.')
     def timeout():
@@ -142,5 +152,9 @@ def capture_device(device,same,deadline,session,evidence,record,save,manifest,fr
 if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--input',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--reference',type=Path)
-    p.add_argument('--profile',choices=('vga','fullhd'),default='vga')
-    a=p.parse_args();prepare_inputs(a.input,a.output,a.reference,3 if a.profile=='fullhd' else 2)
+    p.add_argument('--profile',choices=('vga','fullhd','high'),default='vga')
+    p.add_argument('--syntax-helper',type=Path)
+    a=p.parse_args()
+    if a.profile=='high':
+        require(a.syntax_helper is not None,'High requires actual syntax producer executable.');high_module().prepare_inputs(a.input,a.output,a.reference,a.syntax_helper)
+    else:prepare_inputs(a.input,a.output,a.reference,3 if a.profile=='fullhd' else 2)
