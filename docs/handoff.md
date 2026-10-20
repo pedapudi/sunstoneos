@@ -199,9 +199,12 @@ GPU→HDMI copied USB observation is accepted within its modeled boundaries;
 physical startup/output remain unqualified. G2D fill/copy native/host software
 integration and DP composed native/host observation are accepted within their
 recorded model scopes. DI301 offline weave is accepted within the modeled scope
-above. HDMI audio source/implementation work remains active and unaccepted; the
-root agent is correcting DMA normalized-reference admission. The overall goal
-remains incomplete.
+above. HDMI audio source/implementation work remains active and unaccepted.
+DMA fabric admission now accepts correctly normalized 24 MHz references from
+supported raw oscillators and retains REF in every admitted profile. Ten focused
+platform/clock-registry sanitizer cases pass under
+`dma-clock-reference-20261020/frozen/manifest.json`; no native image or physical
+DMA qualification is added. The overall goal remains incomplete.
 
 The [provider clock record](provider-clock-reference.md) covers normalized REF24
 admission in TWI11/USB2/radio/CE/I2S/PWM. [SPI](spi-platform.md) has separate

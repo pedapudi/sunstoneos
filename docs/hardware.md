@@ -651,7 +651,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   clocks, dedicated gates/reset state and CPU/MCU routes under retained ownership.
   Host/reference checks and native compilation pass. Selected parent branches
   require forced-on control, software enable and effective-gate readback;
-  focused admission checks pass. The [startup adapter](dma-startup.md)
+  focused admission checks pass. Fabric admission now validates normalized REF24
+  for SYS_CLK24M and PERI0 profiles, accepting valid raw 24/26/19.2 MHz reference
+  ratios and retaining REF ownership. Ten focused sanitizer cases pass under
+  `dma-clock-reference-20261020/frozen/manifest.json`; they add no native-image
+  or physical transfer qualification. The [startup adapter](dma-startup.md)
   now binds the clock registry, common counter, register mutex and deferred
   service activation. Focused two-core composition passes and the integrated
   target links. Physical handoff remains unqualified. The [native reservation
