@@ -30,3 +30,5 @@ int adc_session_prepare(const struct a733_smp_contract *contract)
 }
 const struct adc_session *adc_admitted_session(void)
 {return admitted.ready?&admitted.session:NULL;}
+int adc_lradc_selected(void)
+{return admitted.ready&&admitted.session.version==2;}

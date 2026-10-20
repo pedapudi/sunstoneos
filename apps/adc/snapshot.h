@@ -5,4 +5,6 @@ struct a733_smp_contract;
 /* Primary EL3 calls once with its already validated private contract. */
 int adc_session_prepare(const struct a733_smp_contract *);
 const struct adc_session *adc_admitted_session(void);
+/* Select the LRADC interrupt guard from the validated private snapshot. */
+int adc_lradc_selected(void);
 #endif
