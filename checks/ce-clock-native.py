@@ -58,7 +58,7 @@ class Machine:
  def ret(self,v=0):self.u.reg_write(UC_ARM64_REG_X0,v&((1<<64)-1));self.u.reg_write(UC_ARM64_REG_PC,self.u.reg_read(UC_ARM64_REG_LR))
  def code(self,u,at,size,unused):
   if at==0x43fff000:self.done=True;u.emu_stop();return
-  if at in self.instructions:
+  if at in self.instructions and at not in self.hooks:
    word=self.instructions[at];kind=word&0xffffffe0;index=word&31;reg=UC_ARM64_REG_FP if index==29 else UC_ARM64_REG_LR if index==30 else UC_ARM64_REG_XZR if index==31 else UC_ARM64_REG_X0+index
    if kind in (0xd50b7a20,0xd50b7e20,0xd5087620):self.cache.append([kind,u.reg_read(reg)])
    else:u.reg_write(reg,{0xd5384240:4,0xd53b0020:0x40004,0xd5381000:5,0xd53be000:24000000,0xd53be020:self.time*24}[kind])
