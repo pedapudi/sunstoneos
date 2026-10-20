@@ -19,13 +19,15 @@ packer=module('gpu_display_input_packer',ROOT/'apps/gpu-display/host.py')
 require,save_json=gpu.require,gpu.save_json
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def digest(path):return sha(Path(path).read_bytes())
-SCHEMA='a733-gpu-display-supervised-bundle-v1'
-ADMISSION='a733-gpu-display-supervised-admission-v1'
-PROFILE='gpu-display-supervised-v1'
+SCHEMA='a733-gpu-display-supervised-bundle-v2'
+ADMISSION='a733-gpu-display-supervised-admission-v2'
+PROFILE='gpu-display-supervised-v2'
 SESSION_MAGIC=0x4153373347444131
 CONTRACT_MAGIC=0x4153373347444331
 REQUEST_MAGIC=0x4153373347444c31
-GEOMETRY=(SESSION_MAGIC,1,704,288,0x41f00000,1048576,20,544,568,144,1280,720)
+GEOMETRY=(SESSION_MAGIC,2,840,288,0x41f00000,1048576,20,544,568,144,1280,720,704,136)
+INPUT_OFFSET=840
+USB_SUPPLIES=(3300000,3300000,1200000,900000)
 RANGES=[[0x41000000,0x42200000],[0x48000000,0x78000000],[0x78000000,0x79000000]]
 CONDITIONS={
  'analog':{'qualified-complete-analog-image','charge-pump-and-reserved-test-provenance','cold-reset-inactive-vo1','exclusive-resistor-word-writers'},
@@ -36,7 +38,10 @@ CONDITIONS={
  'gpu_initial':gpu.GPU_CONDITIONS,
  'gpu_memory':{'full-extended-dram-physically-reserved','firmware-and-graphics-address-paths-confined','no-physical-aliases','cache-publication-and-acquisition'},
  'gpu_electrical':{'gpu-pll-400mhz-parent','gpu-dcdc4-800mv-settled','shared-ccu-pck-pmic-ownership','gpu-hdmi-concurrent-lease-exclusion'},
- 'gpu_supervision':{'manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure','combined-gpu-hdmi-lifetime'}}
+ 'gpu_supervision':{'manual-whole-board-power-removal','retain-all-resources-until-power-removal','stop-after-first-failure','combined-gpu-hdmi-lifetime'},
+ 'usb_initial':{'rom-pio-lifetime-owned','external-usb-dma-excluded','usb-irqs-188-189-190-owned-quiet','no-concurrent-rom-access'},
+ 'usb_electrical':{'four-usb-rails-qualified','stable-shared-fabric-clock','dedicated-retained-output-sink'},
+ 'usb_supervision':{'manual-whole-board-power-removal','retain-all-resources-for-complete-20-second-lifetime','stop-after-first-failure','one-attempt'}}
 
 def image_data(raw):
     elf=ELFFile(io.BytesIO(raw));require(elf.elfclass==64 and elf.little_endian and elf['e_machine']=='EM_AARCH64' and elf['e_type']=='ET_EXEC' and elf['e_entry']==0x41000000,'Native GPU/display ELF required.')
@@ -61,13 +66,14 @@ def image_data(raw):
                 require(not p['flags']&2,'Writable immutable symbol: '+name)
                 return at,p['data'][at-p['address']:at-p['address']+size]
         raise ValueError('Unbacked immutable symbol: '+name)
-    require(struct.unpack('<12Q',read('gpu_display_geometry',96)[1])==GEOMETRY,'Unsupported native geometry.')
+    require(struct.unpack('<14Q',read('gpu_display_geometry',112)[1])==GEOMETRY,'Unsupported native geometry.')
     for name,address in {'__device_pool_start':0x48000000,'__device_pool_end':0x78000000,'__uncached_pool_start':0x78000000,'__uncached_pool_end':0x79000000,'__a733_smp_result':0x42000000,'__a733_smp_contract':0x42004000,'__a733_smp_contract_end':0x42005000}.items():
         require(name in symbols and symbols[name]['st_value']==address,'Linker reservation differs: '+name)
     require(elf.has_dwarf_info(),'Native DWARF ABI information required.')
-    wanted={'gpu_display_session':(848,{'hdmi':24,'gpu_initial':568,'gpu_memory':600,'gpu_electrical':632,'gpu_supervision':664,'memory_authority':696,'inputs':704}),
+    wanted={'gpu_display_session':(984,{'hdmi':24,'gpu_initial':568,'gpu_memory':600,'gpu_electrical':632,'gpu_supervision':664,'memory_authority':696,'usb':704,'inputs':840}),
         'hdmi_session':(544,{'image':48,'evidence':80,'analog':112,'power':144,'supervision':176,'supervisor':208,'owner':216,'pck_client':224,'request':232,'pmic':304,'pins':336,'framebuffer':440}),
         'hdmi_framebuffer_session':(104,{'isolation':0,'memory':32,'authority':64}),
+        'gpu_display_usb_authority':(136,{'owner':0,'handoff':8,'initial':16,'electrical':48,'supervision':80,'cold_reference':112,'reserved':116,'supply_uv':120}),
         'gpu_display_inputs':(144,{'frame':16})};found=set()
     for cu in elf.get_dwarf_info().iter_CUs():
         for die in cu.iter_DIEs():
@@ -83,7 +89,7 @@ def image_data(raw):
     return parts,address,build
 
 def validate_inputs(raw):
-    require(len(raw)>=144 and struct.unpack_from('<Q2I',raw)==(packer.MAGIC,1,len(raw)) and len(raw)<=1048576-704,'Invalid packed application extent.')
+    require(len(raw)>=144 and struct.unpack_from('<Q2I',raw)==(packer.MAGIC,1,len(raw)) and len(raw)<=1048576-INPUT_OFFSET,'Invalid packed application extent.')
     frames=[];next_offset=144
     for index in range(2):
         row=struct.unpack_from('<8I32s',raw,16+index*64);shape=row[:5];offset,size,reserved,expected=row[5:]
@@ -100,7 +106,7 @@ def validate_inputs(raw):
                 all((w[k]&0x7fffffff)<=0x3f800000 and (not w[k]&0x80000000 or not w[k]&0x7fffffff) for k in (4,5)),'Noncanonical profile2 vertex.')
         require(all(struct.unpack_from('<H',payload,vertices*24+i*2)[0]<vertices for i in range(indices)),'Index exceeds vertex extent.')
         frames.append((shape,payload));next_offset+=size
-    require(next_offset==len(raw) and packer.inputs(frames,limit=1048576-704)==raw,'Noncanonical packed texture input.')
+    require(next_offset==len(raw) and packer.inputs(frames,limit=1048576-INPUT_OFFSET)==raw,'Noncanonical packed texture input.')
     return frames
 
 def session_profile(hdmi):
@@ -147,7 +153,11 @@ def validate_admission(admission_raw,hdmi,inputs,build,image_hash,cache=None,fro
         all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual full extended DDR authority required.')
     for ref in ddr['evidence']:evidence(ref)
     offsets={'analog':112,'power':144,'supervision':176,'isolation':440,'memory':472}
-    gpu_digests=[]
+    gpu_digests=[];usb_digests=[]
+    require(type(record.get('usb_owner')) is int and 0<record['usb_owner']<2**64 and
+        record['usb_owner'] not in (profile['owner'],struct.unpack_from('<Q',hdmi,304)[0],9,10,11) and
+        type(record.get('usb_handoff')) is int and 0<record['usb_handoff']<2**64 and
+        record.get('usb_cold_reference')==2 and record.get('usb_supply_uv')==list(USB_SUPPLIES),'Exact ROM PIO USB owner/handoff and four rails required.')
     for name,conditions in CONDITIONS.items():
         data=evidence(record[name]);facts=json.loads(data);physical_record(facts)
         require(facts.get('schema')=='a733-gpu-display-'+name.replace('_','-')+'-v1' and facts.get('reviewed') is True and facts.get('combined_lifetime') is True and
@@ -155,7 +165,13 @@ def validate_admission(admission_raw,hdmi,inputs,build,image_hash,cache=None,fro
             set(facts.get('conditions',{}))==conditions,'Physical fact does not cover combined lifetime: '+name)
         for ref in facts['conditions'].values():evidence(ref)
         if name in offsets:require(hashlib.sha256(data).digest()==hdmi[offsets[name]:offsets[name]+32],'HDMI proof digest differs: '+name)
-        else:gpu_digests.append(hashlib.sha256(data).digest())
+        elif name.startswith('gpu_'):gpu_digests.append(hashlib.sha256(data).digest())
+        else:
+            usb_digests.append(hashlib.sha256(data).digest())
+            require(all(facts.get(k)==record[k] for k in ('usb_owner','usb_handoff')) and facts.get('session_seconds')==20,'USB fact covers another owner or lifetime.')
+            if name=='usb_initial':require(facts.get('cold_reference')==2 and facts.get('irq_ids')==[188,189,190],'Exact ROM PIO reference and USB IRQ set required.')
+            if name=='usb_electrical':require(facts.get('supply_uv')==list(USB_SUPPLIES) and facts.get('fabric_sha256')==sha(hdmi[512:536]) and facts.get('pmic_pins_sha256')==sha(hdmi[304:440]) and facts.get('dedicated_sink') is True,'USB rails/shared fabric/provider snapshot differs.')
+            if name=='usb_supervision':require(facts.get('one_attempt') is True,'USB lifetime requires one-attempt retained recovery.')
         if name=='analog':require(facts.get('request_sha256')==sha(hdmi[232:304]),'Qualified analog request differs.')
         if name=='power':require(facts.get('pmic_pins_sha256')==sha(hdmi[304:440]),'Inherited PMIC/pins differ.')
         if name in ('memory','gpu_memory'):
@@ -195,14 +211,16 @@ def validate_admission(admission_raw,hdmi,inputs,build,image_hash,cache=None,fro
         require(len(loads)==1 and size>0,'Shader is not backed by one immutable upload: '+name)
         offset=address-loads[0]['p_vaddr'];native=loads[0].data()[offset:offset+size]
         require(0<len(compiled)<=len(native) and native[:len(compiled)]==compiled and not any(native[len(compiled):]),'Resident shader differs from retained producer output: '+name)
-    return record,cache,b''.join(gpu_digests)
+    usb=struct.pack('<2Q',record['usb_owner'],record['usb_handoff'])+b''.join(usb_digests)+struct.pack('<2I4I',2,0,*USB_SUPPLIES)
+    require(len(usb)==136,'USB authority layout differs.')
+    return record,cache,b''.join(gpu_digests),usb
 
-def assemble(hdmi,inputs,record,gpu_digests):
-    raw=struct.pack('<3Q',SESSION_MAGIC,1,704+len(inputs))+hdmi+gpu_digests+struct.pack('<Q',record['memory_authority'])+inputs
-    require(len(raw)==704+len(inputs)<=1048576,'Combined session size differs.');return raw
+def assemble(hdmi,inputs,record,gpu_digests,usb):
+    raw=struct.pack('<3Q',SESSION_MAGIC,2,INPUT_OFFSET+len(inputs))+hdmi+gpu_digests+struct.pack('<Q',record['memory_authority'])+usb+inputs
+    require(len(raw)==INPUT_OFFSET+len(inputs)<=1048576 and len(usb)==136,'Combined session size differs.');return raw
 
 def request_bytes(address,build,raw,e,g,l):
-    require(848<=len(raw)<=1048576 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,1,len(raw)) and
+    require(984<=len(raw)<=1048576 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,len(raw)) and
         struct.unpack_from('<3Q',raw,48)==(e,g,l) and raw[72:104]==build and len(build)==32 and
         all(type(v) is int and 0<v<2**64 for v in (e,g,l)) and 0x41000000<=address<=0x411fffe0,'Launch/session identity differs.')
     authority=struct.unpack_from('<Q',raw,696)[0];require(authority,'Missing extended memory authority.');h=hashlib.sha256(raw).digest()
@@ -220,7 +238,7 @@ def build_launcher(out,clang,lld,objcopy='/usr/lib/llvm-21/bin/llvm-objcopy'):
         'CONTRACT->reserved[2+i]':'((volatile uint64_t *)((uintptr_t)CONTRACT+224))[i]'}
     for old,new in replacements.items():require(old in text,'Maintained supervised launcher changed: '+old);text=text.replace(old,new)
     (out/'gpu-display-launch-base.c').write_text(text)
-    for name,path in [('launch.c',ROOT/'apps/gpu-display/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:shutil.copy2(path,out/name)
+    for name,path in [('launch.c',ROOT/'apps/gpu-display/launch.c'),('usb-authority.h',ROOT/'apps/gpu-display/usb-authority.h'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:shutil.copy2(path,out/name)
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
     commands=[[clang,*flags,'-MD','-MF',out/(name+'.d'),'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands.extend([[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],[objcopy,'-O','binary',out/'launch.elf',out/'launch.bin']])
@@ -234,13 +252,14 @@ def build_launcher(out,clang,lld,objcopy='/usr/lib/llvm-21/bin/llvm-objcopy'):
 def prepare(image,manifest,hdmi_session,inputs,admission,output,clang,lld,objcopy):
     image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();hdmi=Path(hdmi_session).read_bytes();data=Path(inputs).read_bytes();entry=Path(admission).read_bytes()
     parts,address,build=image_data(image_raw);m=json.loads(manifest_raw)
-    require(m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60' and m.get('build_id')==build.hex() and m.get('final_elf')==sha(image_raw),'Exact combined manifest required.')
-    record,cache,gpu_digests=validate_admission(entry,hdmi,data,build,sha(image_raw),image_raw=image_raw);raw=assemble(hdmi,data,record,gpu_digests)
+    require(m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60-usb-observation' and m.get('build_id')==build.hex() and m.get('final_elf')==sha(image_raw),'Exact combined manifest required.')
+    record,cache,gpu_digests,usb=validate_admission(entry,hdmi,data,build,sha(image_raw),image_raw=image_raw);raw=assemble(hdmi,data,record,gpu_digests,usb)
     out=Path(output);out.mkdir(parents=True,exist_ok=False);build_launcher(out,clang,lld,objcopy)
     fixed={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':entry};uploads=[]
     for i,part in enumerate(parts):
         if part['data']:
             name=f'segment-{i}.bin';fixed[name]=part['data'];uploads.append({'name':name,'address':part['address']})
+    segments=uploads+[{'name':'session.bin','address':0x41f00000}]
     request,contract=request_bytes(address,build,raw,*(record[k] for k in ('epoch','generation','lease')))
     fixed.update({'request.bin':request,'contract.bin':contract,'result-zero.bin':bytes(16384),'report-zero.bin':bytes(128)})
     for name,at in [('session.bin',0x41f00000),('request.bin',0x52c00),('contract.bin',0x42004000),('result-zero.bin',0x42000000),('report-zero.bin',0x52d00),('launch.bin',0x52000)]:uploads.append({'name':name,'address':at})
@@ -249,7 +268,8 @@ def prepare(image,manifest,hdmi_session,inputs,admission,output,clang,lld,objcop
         name=f'entry-evidence-{i}.bin';fixed[name]=value;evidence[path]={'name':name,'sha256':sha(value)}
     for name,value in fixed.items():(out/name).write_bytes(value)
     p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'execution_profile':PROFILE,'session_bytes':len(raw),
-        'geometry':list(GEOMETRY),'payloads':uploads,'reservations':[{'address':v['address'],'bytes':v['memory_bytes']} for v in parts],
+        **session_profile(hdmi),'memory_authority':record['memory_authority'],'usb_owner':record['usb_owner'],'usb_handoff':record['usb_handoff'],
+        'geometry':list(GEOMETRY),'segments':segments,'payloads':uploads,'reservations':[{'address':v['address'],'bytes':v['memory_bytes']} for v in parts],
         'entry_evidence':evidence,'files':{v.name:digest(v) for v in out.iterdir() if v.is_file()}}
     save_json(out/'prepared.json',p);return validate_bundle(out)
 
@@ -259,20 +279,23 @@ def validate_bundle(bundle):
     for name,expected in p['files'].items():
         require(Path(name).name==name,'Invalid bundle filename.');data[name]=(out/name).read_bytes();require(sha(data[name])==expected,'Frozen bytes changed: '+name)
     parts,address,build=image_data(data['image.elf']);raw=data['session.bin'];m=json.loads(data['image-input-manifest.json'])
-    require(p['image_sha256']==sha(data['image.elf'])==m.get('final_elf') and p['build_id']==build.hex()==m.get('build_id') and m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==p['execution_profile']==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60' and p['geometry']==list(GEOMETRY) and p['session_bytes']==len(raw),'Frozen image/profile metadata differs.')
+    require(p['image_sha256']==sha(data['image.elf'])==m.get('final_elf') and p['build_id']==build.hex()==m.get('build_id') and m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==p['execution_profile']==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60-usb-observation' and p['geometry']==list(GEOMETRY) and p['session_bytes']==len(raw),'Frozen image/profile metadata differs.')
     cache={path:data[ref['name']] for path,ref in p['entry_evidence'].items()}
     require(all(sha(cache[path])==ref['sha256'] for path,ref in p['entry_evidence'].items()),'Frozen proof metadata differs.')
-    record,_,digests=validate_admission(data['admission.json'],raw[24:568],raw[704:],build,p['image_sha256'],cache,True,image_raw=data['image.elf'])
-    require(raw==assemble(raw[24:568],raw[704:],record,digests),'Frozen session assembly differs.')
+    record,_,digests,usb=validate_admission(data['admission.json'],raw[24:568],raw[INPUT_OFFSET:],build,p['image_sha256'],cache,True,image_raw=data['image.elf'])
+    require(raw==assemble(raw[24:568],raw[INPUT_OFFSET:],record,digests,usb),'Frozen session assembly differs.')
+    require(all(p.get(k)==v for k,v in session_profile(raw[24:568]).items()) and
+        all(p.get(k)==record[k] for k in ('memory_authority','usb_owner','usb_handoff')),'Frozen lifetime/owner metadata differs.')
     expected=[]
     for i,part in enumerate(parts):
         if part['data']:
             name=f'segment-{i}.bin';require(data[name]==part['data'],'Frozen ELF upload differs.');expected.append({'name':name,'address':part['address']})
+    require(p['segments']==expected+[{'name':'session.bin','address':0x41f00000}],'Sealed supervisor segment list differs.')
     for name,at in [('session.bin',0x41f00000),('request.bin',0x52c00),('contract.bin',0x42004000),('result-zero.bin',0x42000000),('report-zero.bin',0x52d00),('launch.bin',0x52000)]:expected.append({'name':name,'address':at})
     require(p['payloads']==expected and p['reservations']==[{'address':v['address'],'bytes':v['memory_bytes']} for v in parts],'Frozen upload/reservation geometry differs.')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,build,raw,*(record[k] for k in ('epoch','generation','lease')))):require(data[name]==value,'Frozen launch binding differs.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128) and 0<len(data['launch.bin'])<=0xc00,'Launcher/result extent differs.')
-    return {**p,'_frozen':data,'_prepared_sha256':sha(metadata)}
+    return {**p,'_frozen':data,'_sizes':{name:len(value) for name,value in data.items()},'_prepared_sha256':sha(metadata)}
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
