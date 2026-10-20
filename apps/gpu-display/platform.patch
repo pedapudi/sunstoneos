@@ -1,0 +1,20 @@
+--- platform.c
++++ platform-gpu-display.c
+@@ -80,6 +80,8 @@
+ _Noreturn void a733_smp_exit_privileged(unsigned status,uint64_t detail)
+ {
+     __asm__ volatile("msr daifset,#15":::"memory");
++    extern void a733_storage_maintenance_stop(void);
++    a733_storage_maintenance_stop();
+     unsigned c=core();
+     if(c<8 && status)__atomic_store_n(&a733_smp_core_results[c].failure,detail?detail:status,__ATOMIC_RELEASE);
+     a733_cached_smc(status,detail);
+@@ -133,6 +135,8 @@
+ {
+     unsigned c=core();
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
++    extern void gpu_display_irq(void);
++    if(interrupt==95){gpu_display_irq();return;}
+     if(interrupt==30 && !c) {
+         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+     } else if(interrupt==0 && c<8) {

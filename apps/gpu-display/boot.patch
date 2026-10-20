@@ -1,0 +1,93 @@
+--- boot.c
++++ boot-gpu-display.c
+@@ -2,9 +2,19 @@
+ #include "a733_device_memory_layout.h"
+ #endif
+ #include "cached.h"
++#include "session.h"
+ #include "a733_cpu_continue.h"
+ #include <stddef.h>
+-static struct a733_smp_contract admission __attribute__((section(".bss.a733_smp_monitor")));
++static struct gpu_display_boot_contract retained_contract __attribute__((section(".bss.a733_smp_monitor")));
++#define admission retained_contract.base
++const struct gpu_display_boot_contract *gpu_display_boot_record(const struct a733_smp_contract *c)
++{
++    if(c!=&admission)return NULL;
++    const volatile uint64_t *live=(const void *)A733_SMP_CONTRACT_ADDRESS;
++    const uint64_t *copy=(const void *)&retained_contract;
++    for(unsigned i=0;i<sizeof(retained_contract)/8;++i)if(live[i]!=copy[i])return NULL;
++    return &retained_contract;
++}
+ static struct a733_cpu_start power[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static struct a733_cpu_entry owners[7] __attribute__((section(".bss.a733_smp_monitor")));
+ static unsigned targets[7] __attribute__((section(".bss.a733_smp_monitor")));
+@@ -22,8 +32,8 @@
+     RESULT->completed_mask=status?0:255;
+     RESULT->status=status;RESULT->detail=detail;RESULT->end_counter=a733_smp_counter();
+     barrier();RESULT->stage=5;barrier();
+-    /* Keep every CPU, register and memory reservation. The independently armed
+-     * watchdog owns reset; this image never feeds, disarms or resets it. */
++    /* Supervised terminal halt retains all CPUs, registers and reservations.
++     * No reset occurs. USB may be unavailable; manual reconnection owns recovery. */
+     for(;;)__asm__ volatile("wfe");
+ }
+ static int boot_state(void)
+@@ -63,22 +73,16 @@
+     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
+     volatile const uint64_t *in=(const volatile uint64_t *)source;
+     uint64_t *out=(uint64_t *)&admission;
+-    for(unsigned i=0;i<sizeof(admission)/8;++i)out[i]=in[i];
++    for(unsigned i=0;i<sizeof(retained_contract)/8;++i)out[i]=in[i];
+     barrier();
+     if(!boot_state() || !a733_smp_contract_valid(&admission,a733_smp_counter()) ||
+        source->magic!=admission.magic || source->generation!=admission.generation ||
+        (RESULT->magic==A733_SMP_RESULT_MAGIC && RESULT->generation==admission.generation))
+         a733_smp_stop(1,1);
+-    /* Admission values are recorded by the qualified external arm procedure.
+-     * Readback can reject changed configuration; it cannot prove timer progress. */
+-    if((read32(0x02050014)&0xffff)!=admission.watchdog_mode ||
+-       (read32(0x02050010)&0xffff)!=admission.watchdog_configuration ||
+-       (read32(0x02050018)&0xffff)!=admission.watchdog_output ||
+-       read32(0x07090108)!=admission.fel_flag ||
+-       read32(0x070501c0)!=admission.redirect_flag ||
+-       read32(0x070501c4)!=admission.redirect_entry ||
+-       read32(0x070501d4)!=admission.alternate_flag ||
+-       (read32(0x03000024)&0x100))a733_smp_stop(1,2);
++    /* Supervised admission never arms a timer or installs a reset redirect.
++     * Configuration readback does not claim independent fault recovery. */
++    if((read32(0x02050014)&1) || (read32(0x02050010)&0x100) ||
++       read32(0x070501c0) || read32(0x070501d4))a733_smp_stop(1,2);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
+@@ -87,6 +91,11 @@
+     #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
+     if (!a733_device_memory_boot_admit(&admission)) a733_smp_stop(3, 0x107);
+     #endif
++    if(!gpu_display_session_prepare(&admission))a733_smp_stop(3,0x308);
++    /* Refuse inherited GPU interrupt ownership; do not clear pending/active
++     * state or infer firmware quiescence from interrupt masking. */
++    if((read32(0x03400108)|read32(0x03400208)|read32(0x03400308))&(1u<<31))
++        a733_smp_stop(3,0x309);
+     a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
+     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
+     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
+@@ -98,6 +107,18 @@
+     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
+     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
++    /* GPU SPI95 remains disabled until its service publishes a binding. */
++    write32(0x03400088,read32(0x03400088)|(1u<<31));
++    write32(0x03400d08,read32(0x03400d08)&~(1u<<31));
++    write32(0x03400c14,read32(0x03400c14)&~(3u<<30));
++    write32(0x0340045c,(read32(0x0340045c)&0x00ffffff)|0xd8000000);
++    uint64_t route=(mpidr&0xffffff)|((mpidr>>32&0xff)<<32);
++    *(volatile uint64_t *)(uintptr_t)0x034062f8=route;barrier();
++    if(!(read32(0x03400088)&(1u<<31)) || (read32(0x03400d08)&(1u<<31)) ||
++       (read32(0x03400c14)&(3u<<30)) || (read32(0x0340045c)>>24)!=0xd8 ||
++       *(volatile uint64_t *)(uintptr_t)0x034062f8!=route ||
++       ((read32(0x03400108)|read32(0x03400208)|read32(0x03400308))&(1u<<31)))
++        a733_smp_stop(3,0x30a);
+     for(unsigned c=1;c<8;++c) {
+         targets[c-1]=c;
+         struct a733_cpu_start_config config={.ops={power_read,power_write,power_barrier,now_us},

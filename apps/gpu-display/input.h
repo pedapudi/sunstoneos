@@ -15,7 +15,7 @@ struct gpu_display_input_frame {
 /* Pointer-free application data within the root-owned authenticated envelope.
  * bytes covers this header and both canonical payloads. Offsets are relative to
  * this header, not CPU/device addresses. Payloads must be contiguous, in frame
- * order, and cover bytes exactly. Root retains the full envelope before BSS.
+ * order, and cover bytes exactly. Root retains the full envelope after initial BSS clearing and before providers.
  * Digests bind bytes; authority, isolation and physical qualification are
  * independent root-owned admission requirements. */
 struct gpu_display_inputs {
