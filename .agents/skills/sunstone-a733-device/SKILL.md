@@ -42,6 +42,13 @@ them. A local enable bit does not establish a stable parent, settled voltage,
 exclusive register access or completed device writes. Shared parents must remain
 protected while another consumer uses them.
 
+Trace each mutex-entry callback's error contract before changing ownership
+handling. Media-clock and thermal callbacks can fail before acquisition or
+return a negative result after acquiring. Their retention adapters must check
+actual task/mutex ownership, independently of failed health checks. Preserve
+known-held uncertainty, and establish normal task context before querying a
+FreeRTOS mutex holder. Unowned denial must not reach an asserting native retain.
+
 Decode clock rates from the selected parent and its documented divider fields.
 Distinguish the raw oscillator, PLL reference output and architectural counter;
 one declared frequency does not establish the others. A valid reference output
