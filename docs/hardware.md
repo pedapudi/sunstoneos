@@ -832,7 +832,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Earlier boot/SRAM, core and transport results retain their original scope,
   without replay. Physical power transition, SMP/cache behavior and pixels remain
   unqualified.
-  Current image `b27476ca…` adds operation 3: straight per-pixel source alpha
+  Blend image `b27476ca…` adds operation 3: straight per-pixel source alpha
   over one opaque solid color, using the existing rectangle/source bounds and
   mappings. One actual submission/copied-result case passes with pixels/device
   effects modeled. Two host policy cases keep authenticated differing output
@@ -841,11 +841,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Root verifies all 187 compiled repository inputs at `1dbcf70` under
   `g2d-blend-20261020/root-integration.json`; boot and eight USB-unit comparisons
   preserve earlier evidence without replay. The changed geometry uses a new launcher.
-  A source-backed completion correction remains required: pinned Linux acknowledges
-  task-end, pulses mixer AHB reset and then wakes callers, including retained
-  TASK_APPLY. The current no-reset path establishes no equivalent output visibility.
-  Neither that reset nor task-end alone proves drain or permits reuse; physical
-  copied-output admission remains blocked pending the reviewed success lifecycle.
+  The normal-success correction now follows pinned Linux's task-end acknowledgment
+  and mixer AHB reset pulse before output reads, including retained TASK_APPLY.
+  It verifies acknowledgment and both reset writes while preserving configuration
+  status, rotation reset and neighboring fields. Fresh fault/guard/status checks
+  surround copying. Final image `01b71b3f…` passes six completion forks from one
+  submitted-job checkpoint, with no resubmission. One image was built. Normal
+  completion copies 16,384 bytes; refusals permit no output read. Root verifies
+  all 187 compiled repository inputs and 202 declared sources at `6f39897` under
+  `g2d-success-20261020/root-integration.json`. Startup, pixels, task scheduling and
+  device effects remain modeled or outside those cases. Earlier no-reset blend
+  evidence retains only its original scope. Old boot/launcher checks remain
+  scoped separately; seven USB units match and the eighth corrects one private
+  session-digest offset immediate. No repeated transport matrix is claimed.
+  Neither reset nor task-end proves physical visibility, drain or safe reuse;
+  all resources stay retained.
   The [host coordinator](g2d-preparation.md) uses one 19-second window within
   native 20-second admission, durably saves output before delivery-gated
   generation/digest ACK. Source-over CPU comparison is diagnostic, without a

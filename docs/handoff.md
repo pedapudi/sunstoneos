@@ -17,10 +17,9 @@ these absent devices. Preserve both microSD cards and their native support.
 No MIPI camera, display or microphone is attached. OV5640 is the first sensor
 target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
-Current offline implementation work addresses G2D's normal-completion lifecycle:
-the pinned Linux success path pulses mixer reset before notifying callers,
-including retained tasks. Current no-reset models establish no equivalent output
-visibility. Accepted G2D and DI modes retain the modeled scopes listed below.
+Current offline work covers external DMA0 consumer access-authority admission
+and bounded Wi-Fi reconnection design. These remain active and unaccepted.
+Accepted G2D/DI modes retain the modeled scopes listed below.
 
 Camera and thermal-monitor adapters now check actual mutex ownership after
 entry failure, independently of health. Four focused host cases pass under
@@ -31,6 +30,12 @@ or new native build is claimed.
 The GPU [cache-ordering source audit](gpu-compiled-programs.md) confirms the existing per-job
 firmware/completion contract; it identifies no missing host cache command.
 `gpu-cache-visibility-20261020/assessment.json` adds no physical visibility proof.
+
+NPU and DI successful-completion source audits identify no extra reset-before-read
+requirement. DI's retained polling finish acknowledgment is intentional for its
+single-job lifetime. `npu-normal-completion-20261020/audit.json` and
+`deinterlace-motion-20261020/completion-source-audit.json` add no native execution
+or physical visibility qualification.
 
 ## Board state and recovery
 
@@ -134,7 +139,7 @@ functions and modes beyond these bounded applications.
 | [NPU SH/NT graph](npu-relative-shift.md) | Fixed FP32 four-head/128-step relative shift, external pool cleared before each job, chunked copied input/output and healthy CLOSE. Two reused-network SDK outputs match FP32 bits; native replies/IRQ/cache/transport are modeled. No unchanged-encoder acceleration. | `npu-relative-shift-20261019/root-integration.json` |
 | [Complete NPU NN graph](npu-complete-nn.md) | Published 125-operation ShuffleNetV2 graph with coefficients/pool; two copied jobs and CLOSE. Both SDK input patterns saturate to `[0,255]`, with undocumented classes: no input-sensitive accuracy, physical inference or mimus acceleration claim. | `npu-complete-nn-20261019/root-integration.json` |
 | [Combined GPU/NPU](accelerator-composition.md) | Trusted GPU compute and complete NPU graph share providers and one copied USB owner. Interleaved results/independent CLOSE retain the session deadline; shared faults revoke both. Native and host preparation/capture checks model admission, CPU/RTOS, arithmetic and hardware; NPU outputs remain saturated. Positive bundle substitutes physical NPU validation; production refuses synthetic proofs. Supervisor stops at readiness before queue/USB. Native linked; physical execution unqualified. | `gpu-npu-composition-20261020/root/integration.json`; host: `accelerator-host-20261020/root-integration.json`, `results.json`, `supervisor-entry.json` |
-| [G2D fill/copy/source-over-solid](g2d.md), [host](g2d-preparation.md) | Caller ARGB8888, ≤1280×720, guarded master-10 mappings and retained DE_SYS OFF→ON/adopt-ON. Current `b27476ca…` adds straight alpha over opaque solid; one submission plus scoped host/SRAM checks pass with pixels/RTOS/device effects modeled. Ideal blend comparison is diagnostic only. Earlier power/core/USB/boot evidence retains its scope. Linux normal success pulses mixer reset before notification; current no-reset visibility is unresolved. All resources retained; physical operation/drain and broader modes remain unqualified or required. GPL adaptation, no opaque G2D firmware. | `g2d-blend-20261020/root-integration.json`; power: `g2d-power-20261020/root-integration.json`; earlier core/USB scopes preserved |
+| [G2D fill/copy/source-over-solid](g2d.md), [host](g2d-preparation.md) | Caller ARGB8888, ≤1280×720, guarded master-10 mappings and retained DE_SYS initialization. Current `01b71b3f…` acknowledges task-end and verifies mixer-reset pulse before output reads. Six completion forks use one submitted-job checkpoint, no resubmission; new image/source closure accepted. Earlier pixel/USB/boot/launcher evidence retains its scope; no repeated matrix. Ideal blending remains diagnostic. All resources retained; physical visibility/drain, SMP, pixels and broader modes remain unqualified or required. | `g2d-success-20261020/root-integration.json`; blend: `g2d-blend-20261020/root-integration.json`; earlier power/core scopes preserved |
 | [GPU programs/live input](gpu-compiled-programs.md) | Trusted sealed program, same-shape copied input, exact-sequence READ and CLOSE. Separate multi-dispatch and true 1D/2D grid profiles admit up to 31 workgroups/992 elements with 32 lanes. Numerical execution and device-cache visibility remain modeled/unqualified. | `gpu-dispatch-geometry-20261019/`; `gpu-workgroup-grid-20261019/root-integration.json`; `gpu-runtime-input-20261019/dma-header-integration/root-integration.json` |
 | [GPU indexed textures/depth/blend](gpu-render.md#depth-testing-and-source-over-blending) | Through 1080p with trusted shaders; per-frame depth OFF/LESS/LEQUAL/ALWAYS plus writes and straight-alpha source-over. Shared GEOM+FRAG_PR then final FRAG retains both rings through final completion. Old single-final-fragment ownership results are historical; legacy-profile-2 sequencing is separately checked. GPU/firmware and selected app/USB boundaries are modeled. Physical graphics, stencil/perspective, arbitrary shaders/blends, wider modes, presentation and disposal remain required. | `gpu-depth-blend-20261019/root-integration.json`, `closure.json`, `root/layout-review.json`, `reuse.json` |
 | [GPU returning application](gpu-application.md), [NPU returning application](npu-application.md) | Workers stop and PMIC parks before cleanup. Reviewed Nonsecure publication and matched host restoration are preserved separately from retained live-input profiles. Physical inference and ROM return remain unqualified; critical frozen scopes are below. | `gpu-returning-repeat-fix-20261019/root-review.json`; `gpu-returning-host-20261019/root-host-source-review.json`; `npu-finite-return-20261018/frozen/`; `npu-finite-host-20261018/root-host-source-review.json` |
