@@ -9,7 +9,9 @@ ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 class Image:
- def __init__(self,path):
+ def __init__(self,path,layout_names=None):
+  # Select only layouts consumed by a fixture. Unrelated translation units
+  # may legally declare different private structures with the same name.
   with path.open('rb') as f:
    e=ELFFile(f);self.parts=[(int(p['p_vaddr']),p.data()) for p in e.iter_segments() if p['p_type']=='PT_LOAD'];self.symbols={};self.functions={};self.layouts={}
    for s in e.get_section_by_name('.symtab').iter_symbols():self.symbols.setdefault(s.name,set()).add(int(s['st_value']))
@@ -19,7 +21,7 @@ class Image:
      if 'DW_AT_name' not in d.attributes:continue
      n=d.attributes['DW_AT_name'].value.decode()
      if d.tag=='DW_TAG_subprogram' and 'DW_AT_low_pc' in d.attributes:self.functions.setdefault((unit,n),set()).add(int(d.attributes['DW_AT_low_pc'].value))
-     if d.tag=='DW_TAG_structure_type':
+     if d.tag=='DW_TAG_structure_type' and (layout_names is None or n in layout_names):
       fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
       if fields:
        if n in self.layouts:assert self.layouts[n]==fields,n
