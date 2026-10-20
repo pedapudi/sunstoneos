@@ -15,7 +15,7 @@ static int lradc(void)
  assert(a733_clock_acquire(&m,2,0,A733_CLOCK_RTC32K,100,&other)==A733_CLOCK_BUSY);
  assert(a733_clock_acquire(&m,2,0,A733_CLOCK_FABRIC,100,&other)==A733_CLOCK_BUSY);
  assert(a733_clock_acquire(&m,2,A733_CLOCK_RTC32K,0,100,&other)==A733_CLOCK_OK);
- assert(a733_clock_acquire(&m,3,0,A733_CLOCK_BIT(74),100,&other)==A733_CLOCK_INVALID);
+ assert(a733_clock_acquire(&m,3,0,(A733_CLOCK_ALL+1),100,&other)==A733_CLOCK_INVALID);
  puts("PASS additive LRADC72/RTC32K73 scope and stable-parent conflicts; legacy RTC writers require explicit exclusion");return 0;
 }
 int main(int argc,char **argv)

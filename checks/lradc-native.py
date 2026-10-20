@@ -28,12 +28,12 @@ class Image(BaseImage):
       if name in layouts:
        size=int(d.attributes['DW_AT_byte_size'].value);assert name not in self.sizes or self.sizes[name]==size;self.sizes[name]=size
 
-def produce(image,manifest,out):
+def produce(image,manifest,out,reuse_launcher=None):
  """Actual production validator/producer, explicitly fictitious electrical facts."""
  out.mkdir(parents=True,exist_ok=False);p=module('lradc_prepare',ROOT/'apps/adc/prepare.py')
  provider=module('lradc_provider',ROOT/'checks/a733-provider-fixture.py');identity=p.base.image_parts(image)[2];ih=sha(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/adc-application-20261018/fixture/session-template.bin'
- raw=bytearray(provider.nominal_provider_session(baseline.read_bytes()));raw[48:80]=identity
+ raw=bytearray(provider.nominal_provider_session(baseline.read_bytes(),usb_reference_mode=1));raw[48:80]=identity
  struct.pack_into('<Q',raw,600,2);raw[768]=0
  target=dict(identity='LRADC-SOFTWARE-MODEL',port='NO-PHYSICAL-PORT',image_sha256=ih)
  def record(name,value):
@@ -48,14 +48,25 @@ def produce(image,manifest,out):
   if key=='electrical':value.update(cldo3_uv=1800000,cldo3_selector=13,source_impedance_ohms=struct.unpack_from('<I',raw,780)[0],lradc_idle_electrical_authority=determination)
   if key=='clocks':value.update(configure_adc_clock=0,apb1=0,apb1_hz=24000000)
   refs[key]=record(key+'.json',value);raw[632+32*i:664+32*i]=bytes.fromhex(refs[key]['sha256'])
- template=out/'session-template.bin';template.write_bytes(raw);p.session_check(raw);provider.validate_nominal_providers(raw)
+ template=out/'session-template.bin';template.write_bytes(raw);p.session_check(raw);provider.validate_nominal_providers(raw,usb_reference_mode=1)
  conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}
  platform=record('platform.json',dict(**target,schema='a733-smp-observer-platform-v1',entry_conditions_established=True,physical_coherence_result='under-test',conditions={k:generic for k in sorted(conditions)}))
  ddr=record('ddr.json',dict(**target,schema='a733-ddr-reservation-v1',exclusive=True,published_cache_disabled=True,remote_writers_excluded=True,ranges=[[0x41000000,0x42200000]],evidence=[generic]))
  admission=dict(**target,schema='a733-adc-supervised-entry-v1',reservation=100,session_template_sha256=sha(template),ddr=ddr,platform=platform,**refs,whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,preserve_microsd=True,one_attempt=True,evidence=[generic]))
  ap=out/'admission.json';save(ap,admission);p.validate_admission(admission,ih,sha(template),raw)
- bundle=out/'MODEL-NOT-DEPLOYABLE-bundle';p.prepare(image,manifest,ap,template,bundle,'/usr/lib/llvm-21/bin/clang','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
- save(out/'producer.json',dict(physical=False,image_sha256=ih,source_template_sha256=sha(baseline),session_sha256=sha(bundle/'session.bin'),launch_sha256=sha(bundle/'launch.bin'),scope='Actual typed producer only; launcher compiled once, never executed here. Electrical authority is fictitious.'))
+ bundle=out/'MODEL-NOT-DEPLOYABLE-bundle'
+ if reuse_launcher:
+  previous=p.validate_bundle(reuse_launcher);assert previous['image_sha256']==ih
+  source_pairs={'launch.c':ROOT/'apps/adc/launch.c','launch.S':ROOT/'platform/a733-smp-observe/launch.S','launch.ld':ROOT/'platform/a733-smp-observe/launch.ld','boot.h':ROOT/'platform/a733-smp-cached/boot.h','adc_session.h':ROOT/'apps/adc/adc_session.h','a733_board_application.h':ROOT/'include/a733_board_application.h','base-supervised-launch.c':ROOT/'platform/a733-smp-supervised/launch.c'}
+  for name,path in source_pairs.items():assert (reuse_launcher/name).read_bytes()==path.read_bytes(),name
+  def reuse(destination,clang,lld):
+   names=[*source_pairs,'adc-launch-base.c','launch.c.o','launch.S.o','launch.elf','launch.bin','launcher-build.log','launcher-commands.json']
+   for name in names:
+    data=(reuse_launcher/name).read_bytes();assert hashlib.sha256(data).hexdigest()==previous['files'][name];(destination/name).write_bytes(data)
+   save(destination/'launcher-reuse.json',dict(original_bundle=str(reuse_launcher.resolve()),prepared_sha256=sha(reuse_launcher/'prepared.json'),launch_sha256=sha(reuse_launcher/'launch.bin'),source_inputs_unchanged=True,compiled=False))
+  p.build_launcher=reuse
+ p.prepare(image,manifest,ap,template,bundle,'/usr/lib/llvm-21/bin/clang','/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')
+ save(out/'producer.json',dict(physical=False,image_sha256=ih,source_template_sha256=sha(baseline),session_sha256=sha(bundle/'session.bin'),launch_sha256=sha(bundle/'launch.bin'),scope='Actual typed producer only; launcher compiled once or reused with unchanged source inputs, never executed here. Electrical authority is fictitious.'))
  return bundle
 
 class Machine:
@@ -71,12 +82,12 @@ class Machine:
   self.shared=image.address('providers')+image.layouts['board_provider']['shared'];self.usb=image.layouts['a733_native_usb']
   self.locks=self.shared+self.usb['locks'];self.registry=self.shared+self.usb['clocks'];self.pmic=self.shared+self.usb['pmic']
   self.native=self.base+self.l['native'];self.driver=self.base+self.l['lradc'];self.d=image.layouts['a733_lradc']
-  self.time=struct.unpack_from('<Q',contract,80)[0]//24+1000;self.task=1;self.holders={};self.done=False;self.incoming=bytearray();self.tx=bytearray();self.trace=[];self.mmio=[];self.mmio_in_progress=False;self.task_contexts={};self.call_name=None
+  self.time=struct.unpack_from('<Q',contract,80)[0]//24+1000;self.task=1;self.holders={};self.done=False;self.incoming=bytearray();self.tx=bytearray();self.trace=[];self.mmio=[];self.mmio_in_progress=False;self.task_contexts={};self.call_name=None;self.critical=0;self.saved_daif=0
   self.regs={0x07090160:0x10000003,0x02002000:0xf8636300,0x02002518:0,0x07090000:0,0x07090004:0,0x07090008:15,0x0709000c:0,0x02003024:0xa5000000,0x02524000:0x01000168,0x0252400c:63}
   self.u.mem_write(0x41f00000,session);self.u.mem_write(0x43fa0000,contract)
   self.u.mem_write(self.board,session[:592]);self.u.mem_write(self.board+self.b['admitted_session'],session[:592]);self.put(self.board+160,struct.unpack_from('<Q',contract,104)[0]//24,8)
   self.put(self.shared+self.usb['pmic_ready'],1)
-  names=['board_live','a733_smp_counter','a733_counter_clock_now','aarch64_device_translate','a733_cpu_coherence_publish','xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xQueueCreateMutexStatic','xQueueGenericCreateStatic','xTaskCreateStatic','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','a733_pmic_identity','a733_pmic_live','a733_pmic_submit','a733_pmic_result','a733_rail_acquire','a733_rail_poll','a733_rail_status','a733_rail_retain','vTaskDelay','platform_panic','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush']
+  names=['board_live','a733_smp_counter','a733_counter_clock_now','aarch64_device_translate','a733_cpu_coherence_publish','xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xQueueCreateMutexStatic','xQueueGenericCreateStatic','xTaskCreateStatic','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','a733_pmic_identity','a733_pmic_live','a733_pmic_submit','a733_pmic_result','a733_rail_acquire','a733_rail_poll','a733_rail_status','a733_rail_retain','vTaskEnterCritical','vTaskExitCritical','vTaskDelay','platform_panic','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush']
   self.hooks={image.address(n):n for n in names};assert len(self.hooks)==len(names)
   for a in set(self.hooks)|{0x43fff000}:self.u.hook_add(UC_HOOK_CODE,self.code,begin=a,end=a)
   self.u.hook_add(UC_HOOK_MEM_READ,self.read_mmio,begin=0x02000000,end=0x07ffffff);self.u.hook_add(UC_HOOK_MEM_WRITE,self.write_mmio,begin=0x02000000,end=0x07ffffff)
@@ -111,7 +122,17 @@ class Machine:
     fields=self.image.layouts['a733_pmic_snapshot'];raw=bytearray(self.image.sizes['a733_pmic_snapshot'])
     for key,value,n in [('rail',22,4),('chip',3,1),('enable',32,1),('selector',13,1),('enabled',1,4),('decoded',1,4),('programmed_uv',1800000,4)]:raw[fields[key]:fields[key]+n]=value.to_bytes(n,'little')
     u.mem_write(x[2],bytes(raw));self.ret(2)
+  elif name=='vTaskEnterCritical':
+   assert not self.get(self.image.address('ullPortInterruptNestings'),8)
+   if not self.critical:self.saved_daif=u.reg_read(UC_ARM64_REG_PSTATE)&0x3c0
+   self.critical+=1;self.put(self.image.address('ullCriticalNestings'),self.critical,8);u.reg_write(UC_ARM64_REG_PSTATE,u.reg_read(UC_ARM64_REG_PSTATE)|0x80);self.ret()
+  elif name=='vTaskExitCritical':
+   assert self.critical;self.critical-=1;self.put(self.image.address('ullCriticalNestings'),self.critical,8)
+   assert not self.get(self.image.address('ullPortInterruptNestings'),8)
+   if not self.critical:u.reg_write(UC_ARM64_REG_PSTATE,(u.reg_read(UC_ARM64_REG_PSTATE)&~0x3c0)|self.saved_daif)
+   self.ret()
   elif name=='vTaskDelay':
+   assert not self.critical
    self.ret();self.task_contexts[self.call_name]=u.context_save();self.done=True;u.emu_stop()
   elif name=='platform_panic':raise AssertionError(('native panic',x,self.trace[-12:]))
   elif name in ('a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext'):self.ret(1)
@@ -188,6 +209,6 @@ def run(image,bundle,contract_path,out):
   m.checkpoint(out,'stopped');save(out/'failure.json',dict(pc=hex(m.u.reg_read(UC_ARM64_REG_PC)),stage=m.get(m.base+m.l['stage']),mmio_in_progress=m.mmio_in_progress,trace=m.trace[-20:],mmio=m.mmio[-20:]));raise
 
 if __name__=='__main__':
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--manifest',type=Path);p.add_argument('--bundle',type=Path);p.add_argument('--contract',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
- if a.manifest:produce(a.image,a.manifest,a.output)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--manifest',type=Path);p.add_argument('--reuse-launcher',type=Path);p.add_argument('--bundle',type=Path);p.add_argument('--contract',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
+ if a.manifest:produce(a.image,a.manifest,a.output,a.reuse_launcher)
  else:run(a.image,a.bundle,a.contract,a.output)

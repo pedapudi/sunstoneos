@@ -178,7 +178,7 @@ static void encoder_ownership_case(void)
     struct a733_clock_token encoder,decoder,out={.id=999};
     const a733_clock_mask_t stable=A733_CLOCK_PLL_VE0|A733_CLOCK_FABRIC;
     assert(a733_clock_acquire(&m.registry,10,A733_CLOCK_VE_ENC,0,999999,&out)==A733_CLOCK_INVALID);
-    assert(a733_clock_acquire(&m.registry,10,0,A733_CLOCK_BIT(72),999999,&out)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&m.registry,10,0,(A733_CLOCK_ALL+1),999999,&out)==A733_CLOCK_INVALID);
     assert(out.id==999);
     assert(a733_clock_acquire(&m.registry,10,stable,A733_CLOCK_VE_ENC,999999,&encoder)==A733_CLOCK_OK);
     assert(encoder.shared==(stable|A733_CLOCK_REF|A733_CLOCK_OSC));
