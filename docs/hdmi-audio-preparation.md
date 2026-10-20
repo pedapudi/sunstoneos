@@ -75,3 +75,20 @@ directory's parent entry as well as the archived files and directory entries.
 A failed archive operation cannot report successful completion. The focused
 checks consume the final native producer's exact session and actual result;
 software observation does not qualify physical HDMI audio output or recovery.
+
+Preparation and offline observation passed on 20 October 2026 using the final
+native result for 2049 frames, or 8196 PCM bytes. This input crosses three source
+pages and includes a partial final burst. The host checks passed valid terminal
+and retained-failure decoding, refused altered session/PCM/proof/clock/sink
+bindings and invalid completion claims, and refused archive write failures.
+Production preparation rejected the modeled admission records.
+
+The exact final launcher also passed root's bounded 20-second handoff and
+request/contract digest-refusal cases. Host results and immutable inputs are
+preserved under
+`~/.cache/sunstoneos/evidence/hdmi-audio-host-nc-20261020/`, with the selected-file
+snapshot at `frozen/manifest.json`. Root's launcher result is
+`~/.cache/sunstoneos/evidence/hdmi-audio-nc-20261020/root-launcher/result.json`.
+The native run used instruction emulation and modeled device effects. These
+results establish software behavior; physical audio, clock, DMA visibility,
+serializer completion and recovery remain unqualified.
