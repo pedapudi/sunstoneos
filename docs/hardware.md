@@ -60,6 +60,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   inputs match integration; existing display evidence was reused. Analog
   admission, physical DMA reachability, monitor output and broader modes remain
   required.
+  The [GPU-to-HDMI application](gpu-display.md) copies two trusted GPU render
+  results into separately owned 1280×720 RGB565 display frames. Actual linked
+  constructors, full-frame RGBA8 conversion, ticket/sequence ownership, display
+  IOMMU installation and immutable RCQ replay 0→1→0 pass software checks.
+  GPU CLOSE precedes HDMI start; concurrently active GPU/HDMI is not established.
+  Fresh queue completion, source-address readback and later frame-end gate each
+  observation. Healthy stop disables HDMI/TV0 and DE, then parks the PMIC owner;
+  uncertainty retains all allocations, mappings and identities. GPU uses its
+  private MMU; system-IOMMU master 8 maps only the display bank.
+  Final image `ae7c6ee1…` preserves 91 leaf objects from the checked initial image;
+  root separately checks changed DRAM-bound admission and linked layout. The
+  audit verifies 676 frozen files, 95 objects and 214 compiled inputs, including
+  all 179 repository inputs, under `gpu-display-20261020/root/integration.json`.
+  GPU completion/pixels, hardware, CPU/cache and RTOS effects remain modeled.
+  Host preparation and the SRAM wrapper remain pending. Physical rendering,
+  output, visibility, drain and recovery remain unqualified; broader modes,
+  streaming and frame retirement remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -860,6 +877,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Root verifies 3,433 frozen files and all 24 current sources at `f645c89` under
   `accelerator-host-20261020/root-integration.json`; no native rebuild or physical
   execution occurred. Hardware, arithmetic and RTOS effects remain modeled.
+  Trusted copied frames also feed the [GPU-to-HDMI application](gpu-display.md)
+  described above; GPU CLOSE precedes display start, and physical output remains
+  unqualified.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The

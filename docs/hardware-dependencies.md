@@ -20,8 +20,12 @@ multicore scheduling remains a separate completion requirement.
 
 DMA controllers move data between memory and peripherals. The system IOMMU maps
 addresses for particular device masters. They are separate prerequisites. GPU and
-NPU have private memory translation; neither requires the system IOMMU. Current
-USB0, UART, SPI and storage paths can use programmed I/O.
+NPU have private memory translation; neither requires the system IOMMU. A
+[GPU-to-display composition](gpu-display.md) can copy GPU results into a separate
+display bank;
+only that display bank then requires the system IOMMU. HDMI also accepts non-GPU
+framebuffers, so GPU is not a prerequisite of every HDMI mode. Current USB0,
+UART, SPI and storage paths can use programmed I/O.
 
 Dependencies cover the complete listed function. Earlier partial modes can work
 with fewer prerequisites: HDMI colorbars precede framebuffer scanout, DSI commands
