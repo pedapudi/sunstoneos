@@ -21,7 +21,7 @@ The registry covers the oscillator, reference clock, peripheral PLL0, audio
 PLL1, its DIV2 and DIV5 outputs, local audio controllers, DMA0, PLL_NPU, the
 NPU controller and interconnect configuration. Local audio scopes cover I2S0 through I2S4, ASRC, OWA transmit
 and DMIC. Media scopes cover video PLLs, CSI/ISP, display engines, display
-outputs, both system IOMMUs and the video decoder. Thermal scopes cover its
+outputs, both system IOMMUs and separate video decoder and encoder scopes. Thermal scopes cover its
 controller and the shared GPADC24M source word. DCDC2 has separate rail
 ownership without clock ancestry. Other hardware needs additional scopes
 before it can share this authority. UART0–6 and both always-on UARTs have
@@ -66,7 +66,18 @@ APBS0 uses bit 69 for the always-on GPIO bus source/divider at R_CCU offset
 0x0c. Shared users prevent retuning; an exclusive reservation permits an admitted
 change. Its supported source0/source4 profiles retain REF and OSC conservatively.
 The PMIC reserves APBS0 alongside APBS1 because its PL0/PL1 pins use that bus.
-Bits 70–127 remain invalid.
+COMB0 uses bit 70 for its analog, lane, orientation and PIPE routing controls.
+VE_ENC uses bit 71 for the encoder clock, reset, routes and power domain 3.
+The encoder owns this scope exclusively and separately reserves its selected
+parent, fabric and rail. IOMMU preparation excludes encoder ownership before
+register access. A scope reservation does not establish encoder initialization
+or completed DMA. Bits 72–127 remain invalid.
+The focused `checks/a733-media-clock.c --encoder-ownership` case passes
+encoder/decoder coexistence, parent conflicts and IOMMU exclusion in both
+directions before register access. Time and hardware callbacks are modeled.
+The two affected clock units compile for freestanding AArch64 with their
+existing ABI assertions. Evidence: `encoder-clock-scope-20261020/` in the local
+evidence cache. No encoder operation or physical behavior is qualified.
 The registry fault indicator uses a lock-free 32-bit atomic.
 Permanent-token owners can observe failure without reentering the registry lock.
 The native DMA composition covers late fault observation; PCIe controller

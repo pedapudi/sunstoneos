@@ -65,7 +65,7 @@ int a733_media_clock_init(struct a733_media_clock *p,const struct a733_media_clo
     if (c->groups&VI) {shared|=A733_CLOCK_PLL_VIDEO0;exclusive|=A733_CLOCK_VI;}
     if (c->groups&DE) {shared|=A733_CLOCK_PLL_DE;exclusive|=A733_CLOCK_DE_SYS;}
     if (c->groups&VO) {shared|=A733_CLOCK_PERI0;exclusive|=A733_CLOCK_VO0|A733_CLOCK_DISPLL1;}
-    if (c->groups&MM) exclusive|=A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VE_DEC;
+    if (c->groups&MM) exclusive|=A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VE_DEC|A733_CLOCK_VE_ENC;
     *p=(struct a733_media_clock){.self=p,.config=*c,.ops=*o,.registry=registry,.pck_manager=manager,
         .pck=*pck,.cookie=cookie,.shared=shared,.exclusive=exclusive,.pck_client=client,.initialized=1};
     for (unsigned i=0;i<3;++i) p->selected_mhz[i]=selected[i];

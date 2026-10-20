@@ -84,6 +84,9 @@ static int gpu_rail(void *v,struct a733_gpu_resource_rail *r,uint64_t deadline)
 static void setup(struct model *m,unsigned groups)
 {
     memset(m,0,sizeof(*m));m->setup=1;m->pck=1;
+    /* PCK ownership includes OSC; the actual resource provider checks both
+     * oscillator enable/status bits even without a PLL parent reservation. */
+    m->osc=0x10000002;
     m->ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);
     m->ccu[0xa0/4]=0xfe000000u|(99u<<8)|(1u<<20)|(2u<<16)|(4u<<2);
     m->ccu[0x120/4]=0xf8000000u|(53u<<8)|(3u<<20);
@@ -169,11 +172,36 @@ static void final_retention_case(void)
     terminal(&m,A733_MEDIA_RETAINED);
     puts("PASS final deadline failure retains ownership through registry BUSY without publishing PREPARED");
 }
+static void encoder_ownership_case(void)
+{
+    struct model m;setup(&m,A733_MEDIA_IOMMU);
+    struct a733_clock_token encoder,decoder,out={.id=999};
+    const a733_clock_mask_t stable=A733_CLOCK_PLL_VE0|A733_CLOCK_FABRIC;
+    assert(a733_clock_acquire(&m.registry,10,A733_CLOCK_VE_ENC,0,999999,&out)==A733_CLOCK_INVALID);
+    assert(a733_clock_acquire(&m.registry,10,0,A733_CLOCK_BIT(72),999999,&out)==A733_CLOCK_INVALID);
+    assert(out.id==999);
+    assert(a733_clock_acquire(&m.registry,10,stable,A733_CLOCK_VE_ENC,999999,&encoder)==A733_CLOCK_OK);
+    assert(encoder.shared==(stable|A733_CLOCK_REF|A733_CLOCK_OSC));
+    assert(a733_clock_acquire(&m.registry,11,stable,A733_CLOCK_VE_DEC,999999,&decoder)==A733_CLOCK_OK);
+    assert(a733_clock_acquire(&m.registry,12,0,A733_CLOCK_VE_ENC,999999,&out)==A733_CLOCK_BUSY);
+    assert(a733_clock_acquire(&m.registry,12,0,A733_CLOCK_PLL_VE0,999999,&out)==A733_CLOCK_BUSY);
+    assert(a733_clock_release(&m.registry,&decoder,999999)==A733_CLOCK_OK);
+    /* The actual IOMMU preparation path must exclude an encoder before MMIO. */
+    assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_BUSY);
+    assert(!m.reads && !m.writes && !m.authorize && !m.driver.token.id);
+    assert(a733_clock_release(&m.registry,&encoder,999999)==A733_CLOCK_OK);
+    assert(a733_media_clock_poll(&m.driver)==A733_MEDIA_PENDING);
+    assert((m.driver.token.exclusive&A733_CLOCK_VE_ENC)!=0);
+    assert(a733_clock_acquire(&m.registry,10,stable,A733_CLOCK_VE_ENC,999999,&out)==A733_CLOCK_BUSY);
+    assert(out.id==999 && !m.reads && !m.writes);
+    puts("PASS exclusive encoder, independent decoder, stable parent and bidirectional IOMMU preparation exclusion");
+}
 int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--final-retention")) {final_retention_case();return 0;}
+    if (argc==2 && !strcmp(argv[1],"--encoder-ownership")) {encoder_ownership_case();return 0;}
     assert(argc==1);
-    struct model m;registry_cases();
+    struct model m;registry_cases();encoder_ownership_case();
     const unsigned profiles[]={A733_MEDIA_ALL,A733_MEDIA_VI,A733_MEDIA_DE,A733_MEDIA_VO0,A733_MEDIA_IOMMU};
     for (unsigned i=0;i<5;++i) {
         setup(&m,profiles[i]);m.auth_pending=1;m.lock_busy=1;m.reenter=1;
