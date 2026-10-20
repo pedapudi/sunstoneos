@@ -107,6 +107,11 @@ The focused check is `checks/gpu-display-preparation.py`. Its positive bundle
 fixture substitutes only the explicit physical-record predicate, while retaining
 the new binding, provenance, assembly and freeze checks. The same fixture must
 fail ordinary production validation. Separate linked input checks use the actual
-application/GPU validators with address and undefined-behavior sanitizers. Root
-owns SRAM instruction checks and native architecture review. Physical operation
-remains unqualified.
+application/GPU validators with address and undefined-behavior sanitizers. Root's six actual generated AArch32 launcher cases cover the valid handoff and
+refuse unsupported version, entry digest, layout, memory authority and input
+extent. They use the preserved 2,420-byte wrapper and stop before reset with
+CPU state, counter and MMIO modeled. Native CPU startup and physical operation
+remain unqualified. Evidence is under
+`gpu-display-host-20261020/root-launcher/result.json` and `root-frozen/manifest.json`.
+The host audit at `gpu-display-host-20261020/root-integration.json` verifies
+451 frozen files and all 35 current sources without rebuilding the native image.

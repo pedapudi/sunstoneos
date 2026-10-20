@@ -74,9 +74,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   audit verifies 676 frozen files, 95 objects and 214 compiled inputs, including
   all 179 repository inputs, under `gpu-display-20261020/root/integration.json`.
   GPU completion/pixels, hardware, CPU/cache and RTOS effects remain modeled.
-  Host preparation and the SRAM wrapper remain pending. Physical rendering,
-  output, visibility, drain and recovery remain unqualified; broader modes,
-  streaming and frame retirement remain required.
+  Host preparation and SRAM admission checks are implemented. Preparation binds
+  caller inputs, shader/firmware provenance and combined physical records; production
+  validation refuses the modeled positive fixture. Six actual generated AArch32
+  launcher cases cover handoff and malformed version/digest/layout/memory/input
+  refusals, stopping before reset. CPU state, counters and MMIO remain modeled.
+  Root verifies 451 frozen files and all 35 current sources under
+  `gpu-display-host-20261020/root-integration.json`; the native image is unchanged.
+  This target has no USB transport or capture path. Physical startup, output,
+  visibility and drain remain unqualified. Broader modes, streaming and frame
+  retirement remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).

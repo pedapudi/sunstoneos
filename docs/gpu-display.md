@@ -112,3 +112,11 @@ mapping checks and native RCQ helper execute. This evidence does not establish
 concurrent live GPU/HDMI lease operation, interrupt exclusion on silicon, GPU
 shader execution or visible pixels. The offline fixture’s synthetic GPU proof
 bytes confer no physical admission authority.
+
+Host preparation and the generated SRAM wrapper are described in
+[the preparation guide](gpu-display-preparation.md). Root verifies the unchanged
+native image and accepted host/SRAM evidence under
+`gpu-display-host-20261020/root-integration.json`; six actual AArch32 launcher
+cases stop before reset with CPU state and MMIO modeled. Ordinary production
+validation refuses the positive modeled bundle. This native target has no USB
+transport or capture path; no physical launch or output is established.

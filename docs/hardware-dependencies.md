@@ -25,7 +25,9 @@ NPU have private memory translation; neither requires the system IOMMU. A
 display bank;
 only that display bank then requires the system IOMMU. HDMI also accepts non-GPU
 framebuffers, so GPU is not a prerequisite of every HDMI mode. Current USB0,
-UART, SPI and storage paths can use programmed I/O.
+UART, SPI and storage paths can use programmed I/O. The [combined admission](gpu-display-preparation.md)
+must cover both engines and retained shared memory; an offline bundle does not
+establish those physical facts.
 
 Dependencies cover the complete listed function. Earlier partial modes can work
 with fewer prerequisites: HDMI colorbars precede framebuffer scanout, DSI commands
