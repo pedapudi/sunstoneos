@@ -63,6 +63,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
+  The [microSD monitor-container packager](microsd-boot-package.md) creates
+  ordinary files only, using pinned boot0 and the published host packer with one
+  caller-supplied flat monitor. It inserts no stock monitor, U-Boot or SCP.
+  One actual packer invocation and seventeen host checks pass; root verifies
+  27 frozen files and five current sources under
+  `microsd-boot-package-20261020/wrapper-root-integration.json`. The separate
+  boot0 parser/reset-request model accepts monitor-only handoff but executes no
+  payload. No native cold-entry payload, media write or physical boot is qualified;
+  packer licensing and exact source equivalence remain unresolved.
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
   Physical FreeRTOS tasks now pass the [kernel check](a733-kernel.md) on that CPU.
@@ -1596,7 +1605,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Earlier images retain their own frozen input/layout authority. Type-C VBUS
   cutoff does not remove external hub power.
   The [SuperSpeed Gen1 storage profile](usb2-host.md#one-direct-gen1-storage-device-uses-comb0)
-  is implemented for one directly attached BOT device. Supervised workload 6 uses
+  is implemented for one BOT leaf, directly or through the bounded hub below. Supervised workload 6 uses
   the source-backed COMB0 PHY path, actual TinyUSB enumeration/MSC and xHCI contexts,
   then copies one read-only LBA 0 sector through USB0. It refuses USB2 fallback.
   Twenty focused compositions, two affected USB2 cases, linked publication/host
@@ -1607,9 +1616,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   changes. Admission requires an authenticated source of at least 900 mA and
   image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
   physical admission record exists. Physical link operation, source capacity,
-  DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs, wider
-  HID profiles, Gen2, streams, wider classes, power budgets and safe detach/drain
-  remain required.
+  DMA, interrupt delivery and recovery remain unqualified. Wider HID profiles,
+  Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
   [Direct Gen1 keyboard reports](usb2-host.md#direct-gen1-keyboard-reports-use-an-explicit-workload)
   are implemented under explicit supervised workload 8. One boot keyboard with
   a zero-burst companion and 1–64-byte packets supplies four copied raw reports;
@@ -1623,6 +1631,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `usb-ss-hid-20261020/handoff.md`, `root/identity.json` and
   `root-route/route-ss-hid.json`. Root verifies 436 compiled inputs and 163
   objects at `214f3fe` under `usb-ss-hid-20261020/root/integration.json`.
+  [Bounded hub and companion-root operation](usb2-host.md#one-gen1-hub-or-the-usb2-companion-root-serves-one-leaf)
+  supports direct attachment or one self-powered hub with one selected leaf.
+  Workloads 6/8 select Gen1 MSC/boot keyboard; workloads 10/12 select a USB2
+  companion-root boot keyboard/high-speed MSC. Only one root enumerates. The
+  592-byte session binds typed `usb_topology` at offset 404: zero for direct,
+  one for a single hub. Actual TinyUSB classes/controller/provider and linked
+  copied-client/host checks pass with hardware, RTOS and IRQ effects modeled.
+  Six root identity/layout cases and two new route cases pass. Root verifies
+  2,255 frozen files, 163 objects and 436 compiled inputs under
+  `usb-ss-hub-20261020/root/integration.json`. The native image is linked, not
+  physically executed. Admission binds root, topology and class, a ≥900 mA source,
+  and actual hub supply/downstream power; no physical bundle exists. Physical
+  topology, DMA visibility, IRQ delivery and recovery remain unqualified. Nested
+  hubs, simultaneous roots, additional leaves and broader USB modes remain required.
   GET_MAX_LUN protocol-stall recovery now resets endpoint zero and sets its
   dequeue pointer before notifying TinyUSB, which falls back to LUN 0 and
   completes the copied READ10 path. Eleven affected high-speed TinyUSB/provider

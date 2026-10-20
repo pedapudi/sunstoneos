@@ -57,7 +57,9 @@ under the evidence directory.
 
 The pinned board packer produces a sole-monitor TOC1 package from synthetic
 bytes. Its output matches the assessed item geometry, padding and additive
-checksum. This establishes host container generation only. The packer runs
+checksum. This establishes host container generation only. The
+[ordinary-file packager guide](microsd-boot-package.md) documents the implemented
+wrapper, input constraints and preservation checks. The packer runs
 on the development host; its source equivalence and individual redistribution
 terms remain unresolved. Evidence is in
 `microsd-boot-package-20261020/actual-packer/`.
