@@ -15,14 +15,14 @@ int adc_output_ready(void)
 {return adc_live()&&atomic_load_explicit(&adc.result,memory_order_acquire)==1;}
 static int mappings(void)
 {
- const uintptr_t pages[]={0x02002000,0x02003000,0x02521000,0x03400000,0x07090000};
+ const uintptr_t pages[]={0x02002000,0x02003000,adc.session.version==2?0x02524000:0x02521000,0x03400000,0x07090000};
  for(unsigned i=0;i<sizeof(pages)/sizeof(*pages);++i){struct aarch64_translation t;
   if(!aarch64_device_translate(pages[i],1,&t)||t.physical!=pages[i]||t.attributes||t.shareability!=2)return 0;}
  return 1;
 }
 static int admitted(void *v,const struct a733_adc_config *c,const struct a733_clock_token *t)
 {
- return v==&adc&&adc_live()&&c==&adc.driver.config&&
+ return v==&adc&&adc_live()&&c==(adc.session.version==2?&adc.lradc.config:&adc.driver.config)&&
  c->owner==adc.config.owner&&c->handoff==adc.config.handoff&&c->startup_deadline_us==adc.config.startup_deadline_us&&
  c->apb1==adc.config.apb1&&c->apb1_hz==adc.config.apb1_hz&&c->configure_adc_clock==adc.config.configure_adc_clock&&
  t->id==adc.token.id&&t->owner==adc.token.owner&&t->shared==adc.token.shared&&t->exclusive==adc.token.exclusive&&mappings();
@@ -47,11 +47,11 @@ int adc_construct(void)
 {
  if(!board_live(NULL)||board.session.deadline_us<=10000||!adc.handle||!mappings())return 0;
  atomic_init(&adc.failed,0);atomic_init(&adc.result,0);atomic_init(&adc.pending,0);
- adc.irq=(struct gicv3_spi){0x03400000,A733_ADC_INTID};adc.masked=1;
+ adc.irq=(struct gicv3_spi){0x03400000,adc.session.version==2?A733_LRADC_INTID:A733_ADC_INTID};adc.masked=1;
  adc.config=(struct a733_adc_config){.owner=adc.session.owner,.handoff=adc.session.authority,
  .startup_deadline_us=board.session.deadline_us-10000,.apb1=adc.session.apb1,.apb1_hz=adc.session.apb1_hz,
  .configure_adc_clock=adc.session.configure_adc_clock};
- if(!a733_adc_native_init(&adc.native,&providers.shared.locks,adc.handle,admitted,&adc))return 0;
+ if(!(adc.session.version==2?a733_lradc_native_init:a733_adc_native_init)(&adc.native,&providers.shared.locks,adc.handle,admitted,&adc))return 0;
  adc.operations=(struct a733_adc_ops){now,current,authorize,enter,leave,retain,read_register,write_register};
  storage_digest_bytes(&adc.session,sizeof(adc.session),adc.session_digest);return 1;
 }

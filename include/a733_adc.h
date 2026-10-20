@@ -17,6 +17,7 @@ struct a733_adc_ops {
   * Supervised permanent retention/manual power removal is permitted; software
   * deadlines cannot recover stalled MMIO. No pad or reference writes are allowed. */
  int (*authorize)(void *,const struct a733_adc_config *,const struct a733_clock_token *);
+ /* enter:1 acquired,0 busy,negative denial without ownership. */
  int (*enter)(void *,uint64_t);void (*leave)(void *);void (*retain)(void *);
  int (*read)(void *,uintptr_t,uint32_t *);int (*write)(void *,uintptr_t,uint32_t);
 };

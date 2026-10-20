@@ -50,7 +50,19 @@ static void retain(void *cookie)
     struct a733_adc_native *n=cookie;
     configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_REGISTER_LOCK)==1);
 }
-static int readable(uintptr_t a)
+static int readable_gpadc(uintptr_t);
+static int readable(struct a733_adc_native *n,uintptr_t a)
+{
+ if(n->lradc){
+  switch(a){case 0x07090000:case 0x07090004:case 0x07090008:case 0x0709000c:
+  case 0x07090160:case 0x02002000:case 0x020020a0:case 0x020020a8:case 0x020020ac:
+  case 0x02002518:case 0x02003024:case 0x02003908:case 0x02003988:
+  case 0x03400000:case 0x03400108:case 0x03400208:case 0x03400308:
+  case 0x02524000:case 0x02524004:case 0x02524008:case 0x0252400c:return 1;default:return 0;}
+ }
+ return readable_gpadc(a);
+}
+static int readable_gpadc(uintptr_t a)
 {
  switch(a){
  case 0x07090160:case 0x02002000:case 0x020020a0:case 0x020020a8:case 0x020020ac:
@@ -66,12 +78,28 @@ static int allowed(struct a733_adc_native *n)
  xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;}
 static int read_register(void *cookie,uintptr_t a,uint32_t *out)
 {
- struct a733_adc_native *n=cookie;if(!out||!readable(a)||!allowed(n))return 0;
+ struct a733_adc_native *n=cookie;if(!out||!readable(n,a)||!allowed(n))return 0;
  __asm__ volatile("dsb sy" ::: "memory");*out=*(volatile const uint32_t *)a;__asm__ volatile("dsb sy" ::: "memory");return 1;
 }
 static int write_register(void *cookie,uintptr_t a,uint32_t value)
 {
  struct a733_adc_native *n=cookie;if(!allowed(n))return 0;uint32_t mask;
+ if(n->lradc){
+  switch(a){
+  case 0x02003024:mask=0x10001;break;
+  case 0x02524000:mask=0xffcf3ffd;if((value&mask)!=0x0100004c&&(value&mask)!=0x0100004d)return 0;break;
+  case 0x02524004:mask=0x1f1f;if(value&mask&~1u)return 0;break;
+  case 0x02524008:
+   if(value!=1)return 0;
+   __asm__ volatile("dsb sy" ::: "memory");*(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+  default:return 0;
+  }
+  __asm__ volatile("dsb sy" ::: "memory");uint32_t old=*(volatile const uint32_t *)a;
+  if((old^value)&~mask)return 0;
+  if(a==0x02003024&&(old&~value&mask))return 0;
+  *(volatile uint32_t *)a=value;__asm__ volatile("dsb sy" ::: "memory");return 1;
+ }
+
  switch(a){
  case 0x02002fc0:mask=0x8700001f;if((value&mask)!=0x81000000&&(value&mask)!=0x01000000&&(value&mask)!=0x80000000&&(value&mask)!=0)return 0;break;
  case 0x02002fc4:mask=0x10001;break;
@@ -96,5 +124,13 @@ int a733_adc_native_init(struct a733_adc_native *n,struct a733_platform_locks *l
 {
  if(!n||n->initialized||!locks||!locks->initialized||!task||!admit)return 0;
  n->locks=locks;n->owner_task=task;n->admit=admit;n->admission_cookie=cookie;
+ n->lradc=0;
  n->operations=(struct a733_adc_ops){now,current,authorize,enter,leave,retain,read_register,write_register};n->initialized=1;return 1;
+}
+
+int a733_lradc_native_init(struct a733_adc_native *n,struct a733_platform_locks *locks,void *task,
+ int (*admit)(void *,const struct a733_adc_config *,const struct a733_clock_token *),void *cookie)
+{
+ if(!a733_adc_native_init(n,locks,task,admit,cookie))return 0;
+ n->lradc=1;return 1;
 }

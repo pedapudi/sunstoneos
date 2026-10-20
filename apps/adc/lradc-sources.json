@@ -1,0 +1,49 @@
+{
+  "execution": "FreeRTOS CPU; Linux is an implementation reference only; no Linux runtime or firmware loaded",
+  "adaptation_license": "GPL-2.0 (existing GPADC lifecycle and GPL-2.0-or-later LRADC register source combined)",
+  "sources": {
+    "a733-user-manual-1.00": {
+      "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "archive": "camera-research/A733_User_Manual_V1.00.pdf",
+      "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d"
+    },
+    "a733-datasheet": {
+      "revision": "0.93",
+      "url": "https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf",
+      "archive": "A733_Datasheet_V0.93.pdf",
+      "sha256": "ebbdf6a9a46ea1fcdc5eac48a584f70a5ea240cd5cc54a3f80f6d6e00adf25ce"
+    },
+    "board-schematic": {
+      "revision": "V1.2",
+      "url": "https://drive.google.com/uc?export=download&id=1layhtSvMpQo-z_iMJjNfNVvhPhObpsvW",
+      "archive": "board-documents/schematic-v1.2.pdf",
+      "sha256": "4e0e92afbb1cca97a9c8593b8f2679178d9738f242ea431ed3650e893fe28ed0"
+    },
+    "board-gpu-power-ccu-sun60iw2-c": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+      "archive": "gpu-power/drivers/clk/sunxi-ng/ccu-sun60iw2.c",
+      "sha256": "1d32bb8555f8ff205d35210f638f9d42cc28aa9295c46963aa1c810d47b06d77"
+    },
+    "board-gpu-power-sun60iw2p1-dtsi": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "archive": "gpu-power/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa"
+    },
+    "board-gpu-power-sun60i-a733-orangepi-zero3w-dts": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+      "archive": "gpu-power/arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-zero3w.dts",
+      "sha256": "31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39"
+    },
+    "board-linux-lradc": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/lradc/sunxi-lradc.c",
+      "archive": "board-kernel/sunxi-lradc.c",
+      "sha256": "62161abb5047d07663aea4ef8282be969bc8de1e53c8a915ffe1c8b794f38b90",
+      "license": "GPL-2.0-or-later"
+    }
+  }
+}

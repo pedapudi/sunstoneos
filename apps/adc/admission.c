@@ -6,9 +6,9 @@
 int adc_session_valid(const struct adc_session *s)
 {
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
- s->magic!=A733_ADC_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
+ s->magic!=A733_ADC_SESSION_MAGIC||(s->version!=1&&s->version!=2)||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
  s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||
- s->configure_adc_clock>1||s->cldo3_selector!=13||s->cldo3_uv!=1800000||
+ s->configure_adc_clock>1||(s->version==2&&s->configure_adc_clock)||s->cldo3_selector!=13||s->cldo3_uv!=1800000||
  !s->source_impedance_ohms||s->source_impedance_ohms>1000000||
  !present(s->initial,32)||!present(s->electrical,32)||!present(s->clocks,32)||!present(s->supervision,32))return 0;
  if(s->apb1&~0x0300001fu)return 0;

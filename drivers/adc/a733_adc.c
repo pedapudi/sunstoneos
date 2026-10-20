@@ -117,7 +117,7 @@ static enum a733_adc_result lock(struct a733_adc *p)
     if (r==A733_CLOCK_BUSY) return finish(p,A733_ADC_BUSY);
     if (r!=A733_CLOCK_OK) return fault(p);
     int entered=p->ops.enter(p->cookie,p->deadline);
-    if (entered!=0) p->held=1;
+    if (entered==1) p->held=1;
     if (entered!=1) return entered==0 && timely(p) ? finish(p,A733_ADC_BUSY) : fault(p);
     if (!timely(p)) return fault(p);
     /* Waiting for the shared mutex can outlive the token's validity. Recheck

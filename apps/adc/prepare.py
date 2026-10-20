@@ -24,17 +24,24 @@ FACTS={
  'clocks':['stable_24mhz_osc_ref_fabric_apb1','gpadc24m_policy_authorized','all_parent_writers_honor_registry'],
  'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}
 
+LRADC_FACTS={
+ 'initial':['lradc0_r23_avcc_passive_only','no_external_drive_or_strap_change','lradc_exclusive_handoff','lradc_local_gate_off_reset_owned','no_inherited_controller_or_handlers','remote_secure_writers_excluded','irq69_owned_masked','whole_board_gic_authority'],
+ 'electrical':['avcc_cldo3_safe_stable_qualified','lradc_internal_reference_qualified','actual_r23_population_verified','device_mappings_security_verified'],
+ 'clocks':['stable_24mhz_osc_ref_fabric_apb1','stable_rtc32k_and_selected_upstream','all_parent_writers_honor_registry','all_legacy_rtc_source_calibration_oscillator_writers_excluded'],
+ 'supervision':FACTS['supervision']}
+
 def session_check(raw):
     require(len(raw)==784,'ADC session must be784bytes.')
     require(board.session_check(raw[:592])==2,'ADC requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373341444131,1,784),'Invalid ADC session.')
+    magic,version,size=struct.unpack_from('<3Q',raw,592)
+    require(magic==0x4153373341444131 and version in (1,2) and size==784,'Invalid ADC session.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid ADC ownership.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing ADC physical evidence.')
     apb,hz=struct.unpack_from('<2I',raw,760);parent=apb>>24;div=(apb&31)+1;source={0:24000000,3:600000000}.get(parent,0)
     require(not apb&~0x0300001f and source and source%div==0 and hz==source//div,'Invalid ADC APB1 profile.')
     uv,impedance=struct.unpack_from('<2I',raw,776)
-    require(raw[768] in (0,1) and raw[769]==13 and raw[770:776]==bytes(6) and uv==1800000 and 1<=impedance<=1000000,'Invalid nominal ADC supply/acquisition profile.')
+    require((raw[768]==0 if version==2 else raw[768] in (0,1)) and raw[769]==13 and raw[770:776]==bytes(6) and uv==1800000 and 1<=impedance<=1000000,'Invalid nominal ADC supply/acquisition profile.')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
@@ -65,6 +72,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     require(record.get('schema')=='a733-adc-supervised-entry-v1','Wrong ADC admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
     cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
+    version=struct.unpack_from('<Q',raw,600)[0]
+    facts=LRADC_FACTS if version==2 else FACTS
     for key,offset in [('initial',632),('electrical',664),('clocks',696),('supervision',728)]:
         item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
         if str(path) not in cache:
@@ -72,11 +81,31 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'ADC evidence differs.')
         fact=json.loads(data)
         require(fact.get('schema')=='a733-adc-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'ADC authority is not bound to image/target.')
-        require(all(fact.get(k) is True for k in FACTS[key]),'Required ADC physical fact absent.')
+        require(all(fact.get(k) is True for k in facts[key]),'Required ADC physical fact absent.')
         if key=='electrical':require((fact.get('cldo3_uv'),fact.get('cldo3_selector'),fact.get('source_impedance_ohms'))==(struct.unpack_from('<I',raw,776)[0],raw[769],struct.unpack_from('<I',raw,780)[0]),'ADC supply/impedance authority differs.')
+        if key=='electrical' and version==2:
+            # The schematic pull-up exceeds the documented conversion range.
+            # Neither a generic reviewed flag nor a saturated sample grants an
+            # electrical rating. Require the separate target-bound determination.
+            reference=fact.get('lradc_idle_electrical_authority')
+            require(isinstance(reference,dict) and set(reference)=={'path','sha256'},'Missing independent LRADC idle electrical authority.')
+            path=Path(reference['path']);require(path.is_absolute(),'LRADC electrical authority path must be absolute.')
+            if str(path) not in cache:
+                require(not frozen,'Missing frozen LRADC electrical authority.');cache[str(path)]=path.read_bytes()
+            data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==reference['sha256'],'LRADC electrical determination differs.')
+            determination=json.loads(data)
+            require(determination.get('schema')=='a733-lradc-idle-electrical-authority-v1' and
+                    determination.get('identity')==record['identity'] and determination.get('port')==record['port'] and
+                    determination.get('image_sha256')==image_hash and determination.get('reviewed') is True and
+                    determination.get('basis') in ('manufacturer-explicit-idle-overrange-rating','independent-board-electrical-determination') and
+                    determination.get('nominal_pullup_uv')==1800000 and determination.get('documented_conversion_max_uv')==1350000 and
+                    determination.get('safe_idle_overrange_at_admitted_avcc') is True and
+                    determination.get('not_inferred_from_saturation_or_keymap') is True,
+                    'LRADC idle overrange lacks independent electrical authority.')
+
         if key=='clocks':
             require(fact.get('configure_adc_clock')==raw[768] and fact.get('apb1')==struct.unpack_from('<I',raw,760)[0] and fact.get('apb1_hz')==struct.unpack_from('<I',raw,764)[0],'ADC parent policy authority differs.')
-            require(not raw[768] or fact.get('all_ths_adc_consumers_excluded') is True,'Cold GPADC parent setup requires every THS/ADC consumer excluded.')
+            require(version==2 or not raw[768] or fact.get('all_ths_adc_consumers_excluded') is True,'Cold GPADC parent setup requires every THS/ADC consumer excluded.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):

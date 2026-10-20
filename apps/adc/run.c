@@ -54,7 +54,7 @@ static int supply_valid(void)
 }
 int adc_publish(void)
 {
- uint32_t header[]={adc.supply.programmed_uv,adc.supply.selector&31,1,1000,2,15,0,0};
+ uint32_t header[]={adc.supply.programmed_uv,adc.supply.selector&31,adc.session.version==2?2u:1u,adc.session.version==2?3u:1000u,2,adc.session.version==2?1u:15u,0,0};
  memcpy(adc.payload,header,sizeof(header));storage_digest_bytes(adc.payload,sizeof(adc.payload),adc.digest);
  unsigned empty=0;if(!adc_live()||!atomic_compare_exchange_strong_explicit(&adc.result,&empty,1,memory_order_release,memory_order_relaxed))return retain_failure();
  if(!adc_live())return retain_failure();return 1;
@@ -88,28 +88,35 @@ int adc_step(void)
   if(p!=A733_PMIC_COMPLETE||!supply_valid())return retain_failure();adc.stage=5;return 0;
  case 5:{
   a733_clock_mask_t shared=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC;
-  a733_clock_mask_t exclusive=A733_CLOCK_GPADC;
-  if(adc.session.configure_adc_clock)exclusive|=A733_CLOCK_GPADC24M;else shared|=A733_CLOCK_GPADC24M;
+  a733_clock_mask_t exclusive=adc.session.version==2?A733_CLOCK_LRADC:A733_CLOCK_GPADC;
+  if(adc.session.version==2)shared|=A733_CLOCK_RTC32K|A733_CLOCK_RC16M;
+  else if(adc.session.configure_adc_clock)exclusive|=A733_CLOCK_GPADC24M;else shared|=A733_CLOCK_GPADC24M;
   if(adc.session.apb1>>24==3)shared|=A733_CLOCK_PERI0;
   enum a733_clock_result c=a733_clock_acquire(&providers.shared.clocks,adc.session.owner,shared,exclusive,adc.config.startup_deadline_us,&adc.token);
   if(c==A733_CLOCK_BUSY)return 0;if(c!=A733_CLOCK_OK)return retain_failure();adc.stage=6;return 0;}
  case 6:
-  if(!a733_adc_init(&adc.driver,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token))return retain_failure();adc.stage=7;return 0;
+  if(!(adc.session.version==2?a733_lradc_init(&adc.lradc,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token):a733_adc_init(&adc.driver,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token)))return retain_failure();adc.stage=7;return 0;
  case 7:{
-  enum a733_adc_result v=a733_adc_poll(&adc.driver);
-  if(adc.driver.fault)return retain_failure();if(v==A733_ADC_PENDING||v==A733_ADC_BUSY)return 0;
+  enum a733_adc_result v=adc.session.version==2?a733_lradc_poll(&adc.lradc):a733_adc_poll(&adc.driver);
+  if(adc.session.version==2?adc.lradc.fault:adc.driver.fault)return retain_failure();if(v==A733_ADC_PENDING||v==A733_ADC_BUSY)return 0;
   if(v!=A733_ADC_READY)return retain_failure();adc.stage=8;return 0;}
  case 8:{
   unsigned notified=atomic_exchange_explicit(&adc.pending,0,memory_order_acq_rel);uint64_t n=a733_smp_counter()/24;
   if(notified||n>=adc.next_read){
-   struct a733_adc_sample sample;enum a733_adc_result v=a733_adc_read(&adc.driver,adc.config.startup_deadline_us,&sample);
-   if(adc.driver.fault)return retain_failure();adc.next_read=n+25000;
+   struct a733_adc_sample sample;enum a733_adc_result v=adc.session.version==2?a733_lradc_read(&adc.lradc,adc.config.startup_deadline_us,&sample):a733_adc_read(&adc.driver,adc.config.startup_deadline_us,&sample);
+   if(adc.session.version==2?adc.lradc.fault:adc.driver.fault)return retain_failure();adc.next_read=n+25000;
    if(v==A733_ADC_SAMPLE){if(!adc_collect(&sample))return retain_failure();}
    else if(v!=A733_ADC_AGAIN&&v!=A733_ADC_BUSY)return retain_failure();
   }
   if(adc.sets==2){if(!mask())return retain_failure();adc.stage=9;return 0;}
-  if(!rearm())return retain_failure();return 0;}
- case 9:{int ready=provider_ready();if(ready<0)return retain_failure();if(!ready)return 0;return adc_publish();}
+  if(adc.session.version!=2&&!rearm())return retain_failure();return 0;}
+ case 9:
+  if(adc.session.version==2){enum a733_adc_result v=a733_lradc_stop(&adc.lradc,adc.config.startup_deadline_us);
+   if(adc.lradc.fault)return retain_failure();if(v==A733_ADC_BUSY)return 0;if(v!=A733_ADC_STOPPED)return retain_failure();}
+  if(adc.session.version==2){adc.stage=10;return 0;}
+  /* GPADC preserves its original stage9 publication path. */
+  /* fall through */
+ case 10:{int ready=provider_ready();if(ready<0)return retain_failure();if(!ready)return 0;return adc_publish();}
  default:return retain_failure();
  }
 }

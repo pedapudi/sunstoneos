@@ -3,9 +3,10 @@
 #include "adc_session.h"
 #include "../board/application.h"
 #include "a733_adc_native.h"
+#include "a733_lradc.h"
 #include "gicv3_spi.h"
 struct adc_application {
- struct adc_session session;struct a733_adc driver;struct a733_adc_native native;
+ struct adc_session session;struct a733_adc driver;struct a733_lradc lradc;struct a733_adc_native native;
  struct a733_adc_config config;struct a733_adc_ops operations;
  struct a733_clock_token token;struct a733_rail_token rail;
  struct a733_pmic_lifetime lifetime;struct a733_pmic_request request;struct a733_pmic_snapshot supply;

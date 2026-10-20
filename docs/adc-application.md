@@ -256,3 +256,86 @@ requires 24 MHz. Cold setup preserves the direct 24 MHz path and selects SYS24
 for the other admitted oscillators. PERI0 bit 24 remains reserved. A focused
 sanitized check exercises actual registry and driver start/read/stop with these
 profiles. This correction does not relax electrical or controller admission.
+
+## LRADC0 raw observations require separate electrical authority
+
+The same ADC application implements a fixed LRADC0 mode in session version 2.
+The 784-byte session and copied report retain their extents. Version 1 keeps
+its GPADC0–3 behavior. The LRADC mode copies two later observations of channel
+0, each with a timestamp, sequence and six-bit raw code. It supplies no key map,
+voltage conversion or board-ID interpretation.
+
+**Physical LRADC sampling is blocked by an unresolved electrical mismatch.**
+The V1.2 schematic connects LRADC0 at ball 1D23 through R23, 10 kΩ, to AVCC.
+The inherited CLDO3 profile programs nominal 1.8 V. A733 manual section 18.13.1
+and datasheet V0.93 section 3.10.9 specify a 0–1.35 V LRADC input range. The
+schematic has no five-key resistor ladder matching the kernel board node.
+Neither a saturated conversion nor that key configuration establishes safe
+idle operation above the conversion range. The datasheet supplies no explicit
+idle overrange tolerance. No qualifying electrical determination exists for
+either board.
+
+The offline producer requires a separate target- and image-bound electrical
+determination for the actual R23/AVCC connection. It must explicitly establish
+safe idle overrange at the admitted supply, with the documented 1.35 V range
+and nominal 1.8 V pull-up stated separately. The ordinary reviewed-evidence
+flag cannot replace this record. Actual population, supply, reference, mappings,
+security and remote-writer exclusion remain required. The application only
+reads the inherited CLDO3 setting; it never changes voltage or drives a pad.
+
+The [LRADC source manifest](../apps/adc/lradc-sources.json) pins the effective
+A733 Linux LRADC driver, device trees, clock driver, manual and schematic.
+The native FreeRTOS driver adapts their register and clock sequence, alongside
+the existing GPADC driver's ownership and retention code. It uses channel 0
+only, matching the A733 external signal table. Linux is a source reference;
+no Linux runtime or ADC firmware is loaded.
+
+The controller is at `0x02524000`; the effective A733 device tree assigns
+SPI 37, GIC interrupt ID 69. CCU offset `0x1024` owns gate bit 0 and reset bit
+16. The manual identifies RTC32K as the sampling source; the Linux `dcxo`
+parent annotation describes the bus gate and does not establish the sample
+clock. The driver observes either the external low-speed source or normal
+internal-RC divider path. It refuses source changes and automatic switching.
+The slowest sample selector is 3. The manual calls its sample rate 250 Hz;
+the Linux macro calls it 32 Hz. The manual also describes eight-sample
+averaging. The report carries the selector without promising a measured
+sample or update rate.
+
+A real exclusive LRADC lease protects its controller, local gate/reset and
+interrupt. Stable RTC32K, RC16M, oscillator, reference and fabric reservations
+remain held, with PERI0 retained when APB1 selects it. Existing RTC initialization
+and its adapters do not participate in the clock registry. This fixed mode
+therefore separately requires exclusion of every legacy RTC source,
+calibration and oscillator writer; the new RTC32K scope alone does not establish
+coexistence. The source and relevant divider fields are checked throughout
+sampling. No RTC source, parent clock or calibration register is written.
+
+The authenticated private session selects a boot check that refuses inherited
+interrupt-69 enable, pending or active state before distributor changes.
+The application still inherits the original whole-board GIC authority and
+GPADC interrupt setup. It makes no narrow coexistence claim. Interrupt 69
+stays masked. Only the local DATA0 interrupt is enabled, following the pinned
+driver; the task polls its pending flag under the existing register mutex.
+There is no LRADC ISR or channel-1 access.
+
+Startup requires the local gate off and established reset ownership. It
+deasserts reset, opens the gate, refuses inherited conversion or local interrupt
+enables, clears an observed stale DATA0 flag and verifies a clear boundary.
+It then enables channel-0 normal sampling last. A copied observation requires
+a newly pending DATA0 flag. After copying, the task acknowledges only that flag
+and verifies another clear boundary before accepting a later observation.
+The power-on data value 63 alone is not a conversion. These observations are
+not lossless conversion counts.
+
+After the second observation, the task clears controller enable and local
+interrupt enable and checks their readback. This configured stop does not prove
+analog drain. Every clock, supply, configuration and memory reservation remains
+owned. Ambiguity, lost authority, expiry or uncertain access ends copied-output
+eligibility and retains resources. There is no reset assertion, restart or
+release path.
+
+The copied 160-byte payload identifies LRADC with reference-kind field 2,
+sample-selector field 3 and channel mask 1. It preserves the two existing
+64-byte observation groups; each uses only its channel-0 record and zeros the
+three unused records. The host validates raw codes 0–63, strictly later time
+and sequence, zero padding and the complete session/output digests.

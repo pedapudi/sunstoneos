@@ -89,7 +89,9 @@ typedef unsigned __int128 a733_clock_mask_t;
 #define A733_CLOCK_LOCALS  ((a733_clock_mask_t)0x3fc0)
 #define A733_CLOCK_COMB0 A733_CLOCK_BIT(70) /* Complete COMB0 analog/lane/orientation/PIPE routing; exclusive. */
 #define A733_CLOCK_VE_ENC A733_CLOCK_BIT(71) /* Encoder clocks, reset, routes and domain 3; exclusive. */
-#define A733_CLOCK_ALL     (A733_CLOCK_BIT(72)-1) /* Bits0–71 assigned; higher bits refused. */
+#define A733_CLOCK_LRADC A733_CLOCK_BIT(72) /* Complete LRADC0 controller, CCU1024 gate/reset and IRQ69; exclusive. */
+#define A733_CLOCK_RTC32K A733_CLOCK_BIT(73) /* Stable RTC32K source/mux/divider/gates; legacy RTC writers also require explicit exclusion. */
+#define A733_CLOCK_ALL     (A733_CLOCK_BIT(74)-1) /* Bits0–73 assigned; higher bits refused. */
 #define A733_CLOCK_AUDIO_CHANGE (A733_CLOCK_AUDIO1|A733_CLOCK_AUDIO2|A733_CLOCK_AUDIO5|A733_CLOCK_LOCALS)
 
 enum a733_clock_result { A733_CLOCK_OK, A733_CLOCK_BUSY, A733_CLOCK_INVALID,

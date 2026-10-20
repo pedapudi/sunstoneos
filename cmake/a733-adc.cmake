@@ -25,6 +25,7 @@ apply_build_patch("${adc_build}/platform.c" "${storage_build}/platform.c"
 list(REMOVE_ITEM adc_sources "${storage_build}/platform.c")
 list(APPEND adc_sources "${adc_build}/platform.c" "${adc_build}/boot.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/adc/a733_adc.c"
+ "${SUNSTONE_SOURCE_ROOT}/drivers/adc/a733_lradc.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/adc/a733_adc_native.c"
  "${SUNSTONE_SOURCE_ROOT}/drivers/gpu/gicv3_spi.c")
 foreach(source IN ITEMS apps/adc/main.c apps/adc/native.c apps/adc/run.c apps/adc/collect.c apps/adc/usb0.c apps/adc/admission.c apps/adc/snapshot.c)
@@ -48,6 +49,7 @@ if(adc_links)
 endif()
 file(GLOB adc_headers "${SUNSTONE_SOURCE_ROOT}/apps/adc/*.h")
 set(adc_inputs ${adc_sources} ${adc_headers} ${board_inputs}
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_lradc.h" "${SUNSTONE_SOURCE_ROOT}/apps/adc/lradc-sources.json"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_adc.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_adc_native.h"
  "${SUNSTONE_SOURCE_ROOT}/apps/adc/boot.patch" "${SUNSTONE_SOURCE_ROOT}/apps/adc/platform.patch"
  "${CMAKE_CURRENT_LIST_FILE}")

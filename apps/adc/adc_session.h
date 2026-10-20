@@ -3,6 +3,8 @@
 #include "a733_board_application.h"
 #define A733_ADC_SESSION_MAGIC UINT64_C(0x4153373341444131)
 #define A733_ADC_CONTRACT_MAGIC UINT64_C(0x4153373341444331)
+/* Version1 observes GPADC0..3; version2 observes only LRADC0. Both retain
+ * the same typed extent; LRADC requires configure_adc_clock=0. */
 #define ADC_OUTPUT_BYTES 160u
 struct adc_session {
  struct a733_board_session board;uint64_t magic,version,bytes,owner,authority;
