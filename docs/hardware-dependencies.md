@@ -39,6 +39,11 @@ precede scanout, and CSI receiver checks precede sensor capture. Bluetooth firmw
 loads through SDIO before UART operation; Bluetooth does not require Wi-Fi association.
 Bluetooth wired PCM uses I2S1, while voice transported through HCI can proceed independently.
 
+Clock admission follows each consumer's selected source. The
+[provider clock reference](provider-clock-reference.md) distinguishes normalized
+REF24 from raw DCXO; a shared nominal rate does not authorize another selector
+or establish measured frequency.
+
 Qualification conditions describe physical equipment, electrical evidence or recovery
 that a mode needs. They are not claims that accessories are currently available.
 No MIPI camera, DSI panel or microphone is connected. Intentional watchdog expiry
@@ -86,7 +91,7 @@ plan based on those records; it is not a new claim of hardware qualification.
 | display-engine | Display engine | clocks-resets-regulators-power-domains, system-iommu | Framebuffer scanout, composition, synchronization and formats. | Verify buffers, bandwidth and visible output through an admitted display interface. | display-engine.md |
 | hdmi | HDMI | display-engine, clocks-resets-regulators-power-domains | Detection, modes, PHY, framebuffer output and HDMI audio. Colorbars can precede framebuffer integration. | Attach a monitor and cable; qualify video modes and audio with a compatible sink. | hdmi-framebuffer.md |
 | mipi-dsi | MIPI DSI | display-engine, clocks-resets-regulators-power-domains, pin-control-and-gpio | DSI1 host, PHY, panel command sequences, scanout and backlight. Command transport can precede scanout; touch is separate. | No panel is selected or attached. Admit panel timings, power sequencing and cable before physical output. | dsi.md |
-| displayport | DisplayPort | display-engine, type-c-and-display-multiplexing | Complete output through the documented V1.2 TYPEC24 COMB0 lanes and AUX/SBU route; TYPEC16 is separate USB0/power input. | Qualify actual revision, Type-C negotiation/orientation, HPD handling, COMB0 exclusion against USB3, link training and sink output. | board-wiring.md |
+| displayport | DisplayPort | display-engine, type-c-and-display-multiplexing | Complete output through the documented V1.2 TYPEC24 COMB0 lanes and AUX/SBU route; TYPEC16 is separate USB0/power input. | Qualify actual revision, Type-C negotiation/orientation, HPD handling, COMB0 exclusion against USB3, link training and sink output. | displayport-native.md |
 | g2d | G2D | clocks-resets-regulators-power-domains, single-core-runtime, system-iommu | Native 2D fill, copy, scaling, blending, rotation and format conversion; register-command queues and owned buffers. Current application uses system-IOMMU master 10, independently of the GPU. | Establish typed global IOMMU exclusion/drain, shared DE_SYS/PCK/rail ownership and image-bound mappings; qualify actual pixels, visibility and retained failures. | g2d.md |
 | gpu-software | GPU firmware and compiler/runtime | - | Pin compatible firmware, command ABI, shader compiler and runtime dependencies with provenance and licenses; preserve per-job cache, partial-render and cleanup contracts. | Confirm BVNC hardware revision compatibility and artifact identities. | gpu-application.md |
 | gpu | GPU | clocks-resets-regulators-power-domains, single-core-runtime, gpu-software | Private MMU, cache ownership, firmware startup, graphics/compute submission and recovery. Rendering needs geometry/partial-fragment/final-fragment completion and retained depth/input/output ownership before reuse. | Verify power and memory geometry; demonstrate useful outputs and safe shutdown. A compute fixture alone does not qualify graphics. | gpu-platform.md |

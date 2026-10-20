@@ -19,6 +19,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | Boot0 monitor header, cleanup and guarded cold entry | [Cold-entry recorder](cold-entry.md): mutable header/loadword, actual parser→main-tail cleanup, independent reset-state model and parked report; [boot evidence](boot.md) and [ordinary-file packaging](microsd-boot-package.md) retain separate limits |
 | CPU diagnostic result | [Supervised startup](a733-smp-supervised.md): the matching checkpoint heading |
 | Cache mappings and publication | [CPU coherence](cpu-coherence.md): “EL3 and nonsecure EL1 use matching memory attributes” and “Cache entry requires published immutable memory”; also the audit's “Publication must cover the executable physical address space” |
+| Raw oscillator versus normalized reference admission | [Provider clock reference](provider-clock-reference.md): selected TWI11/USB2/radio/CE parents, REF24 decoding and raw-DCXO S_TWI1 distinction; four function checks do not qualify applications or physical clocks |
 | Evidence reuse | [Validation](validation.md): “Reuse valid evidence” |
 | Dependency provenance | [Sources](sources.md) and the component's source manifest |
 

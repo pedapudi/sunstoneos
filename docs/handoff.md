@@ -85,6 +85,7 @@ functions and modes beyond these bounded applications.
 | --- | --- | --- |
 | [PCIe endpoint COPY](pcie-test-application.md) | One trusted direct `pci-epf-test` endpoint: selected BAR/iATU, 4,096-byte DMA COPY, one-shot MSI and immutable copied USB output. Hardware/scheduling are modeled. Requires endpoint-specific DMA-before-unmap and data-before-status/MSI authority; none exists yet. All resources remain retained; physical DMA/MSI, all-core startup and recovery remain unqualified. | `pcie-endpoint-20261019/root-integration.json`; `root/review.json` in that directory |
 | [GPU→HDMI copied USB observations](gpu-display.md#copied-usb-observations) | Two immutable 720p converted frames and ordered 0→1→0 replay; GPU CLOSE precedes HDMI start. Typed USB authority and full-session digest bind copied hashes/16 samples per frame, three presentations and healthy GPU/HDMI/DE/PMIC terminal state. Final `70041393…`: fifteen framing cases; earlier components/eight root cases reused via 102 unchanged objects, seven SRAM cases separately. Durable host capture uses 19 s/native 20 s. Effects remain modeled; no full-pixel, visible-output, physical or concurrent GPU/HDMI qualification. All resources retained. | `gpu-display-capture-20261020/root-integration.json`; host: `gpu-display-observation-host-20261020/`, [capture scope](gpu-display-preparation.md#bundle-and-evidence-limits) |
+| [DisplayPort implementation](displayport-native.md) | Four-lane 1.62 Gb/s, 720p60 RGB8/C-or-E profile. Earlier-image actual tasks reach CC1/C/HPD high; construction passes before controller initialization. Wrapper changed afterward; final composition awaits CC-step cadence correction. COMB0/SERDES excludes USB3/PCIe; resources retained. No final hash, trained-link, visible-output or physical qualification claim. | `displayport-native-20261020/typec-negotiated-ae83/frozen/manifest.json`, `constructor-ae83/constructor-manifest.json`; [preparation limits](displayport-preparation.md) |
 | [DSI immutable-frame replay](display-scanout.md#caller-uploaded-immutable-frame-replay) | Two authenticated XRGB8888 uploads selected 0→1→0 through the register command queue (RCQ) at modeled 720p/1080p. Fresh RCQ completion plus later DE frame-end bind copied results; full USB delivery precedes next request. Frames/command pages stay immutable: no retirement, recycling or arbitrary new-frame streaming. No attached panel, physical pixels, electrical qualification or shared startup execution. | `display-frame-present-20261019/root-integration.json`; `root/layout-review.json` in that directory |
 | [UART2 FIFO/IRQ/DMA](uart-application.md#finite-dma-transfers) | Finite 1–1,024-byte DMA echo: both channels active before requests; success requires stopped DMA, requests off, true TEMT/RX-empty/idle, copied echo, REAP/CLOSE and UART release. Known-live faults cancel boundedly; uncertainty retains. DMA0 parent/allocation stay owned for board lifetime. Device/cache/RTOS effects are modeled; physical wiring, DMA visibility and inherited startup remain unqualified. | `uart-dma-20261019/root-integration.json`, `root/layout-review.json`; earlier FIFO/IRQ evidence remains separate |
 | [I2S duplex/repeated service](i2s-application.md), [cyclic DMA](i2s-stream.md) | Separate TX/RX channels; copied slots survive cancellation until delivery/ACK. Fixed cyclic TX and checked-copy RX/duplex are integrated. Continuity, cache visibility and wire drain remain unqualified; RX ordering blocker is below. | `i2s-duplex-20261018/integration.json`; `i2s-repeated-20261018/root-integration.json`; `i2s-hardware-cyclic-20261019/root-integration.json` |
@@ -194,9 +195,14 @@ The shared launcher correction `6407e26` preserves exact legacy preprocessed
 templates and the combined binary; it adds no physical launch evidence.
 GPU→HDMI copied USB observation is accepted within its modeled boundaries;
 physical startup/output remain unqualified. G2D fill/copy native/host software
-integration is accepted within the model scopes above. DP/Type-C negotiation
-implementation is in progress; its native path remains planned until integrated
-evidence is accepted.
+integration is accepted within the model scopes above. DP is implemented with
+accepted predecessor PD/constructor checkpoints; final composed execution remains
+pending the CC-step cadence correction. The overall goal remains incomplete.
+
+The [provider clock correction](provider-clock-reference.md) has four focused
+actual-function checks for normalized REF24 admission in TWI11/USB2/radio/CE.
+It does not change raw-DCXO S_TWI1 timing, qualify a native image or transfer
+physical evidence.
 
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and

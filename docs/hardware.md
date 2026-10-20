@@ -90,12 +90,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   boundaries. Physical GPU/HDMI/USB operation, startup, visibility, drain and
   recovery remain unqualified. Concurrent live GPU/HDMI, broader formats/modes,
   streaming and frame retirement remain required.
-- DisplayPort: **planned** native output through the documented V1.2 TYPEC24
-  [lane and AUX route](board-wiring.md#typec24-has-a-documented-displayport-route).
-  TYPEC16 is USB0/power input, not the DP connector. The separate DP-HPD ball is
-  unconnected; Type-C negotiation/orientation, HPD handling, COMB0 exclusion with
-  USB3, link training and output remain required. Exact-board DTS corroborates
-  DP alternate mode. Actual board revision and physical link remain unqualified.
+- DisplayPort: **implemented** a bounded [native TYPEC24 path](displayport-native.md)
+  for four lanes at 1.62 Gb/s, 720p60 RGB8 and Type-C assignments C/E through the
+  documented V1.2 [lane/AUX route](board-wiring.md#typec24-has-a-documented-displayport-route).
+  TYPEC16 remains USB0/power input; PD messages supply HPD because the dedicated
+  pad is unconnected. COMB0/SERDES/VO1 ownership excludes USB3 and PCIe sharing
+  in this profile; retained master-8 memory supplies the display frames.
+  Earlier-image actual tasks reached CC1/pin C/HPD high, and construction passed
+  before controller initialization. These checkpoints are preserved under
+  `displayport-native-20261020/typec-negotiated-ae83/frozen/manifest.json` and
+  `constructor-ae83/constructor-manifest.json`. The wrapper changed afterward;
+  full final-image composition awaits a CC-step cadence correction. No final
+  composition hash or trained-link/output result is claimed. Actual board
+  revision, physical negotiation, AUX/link operation, visible output, memory
+  visibility/drain and recovery remain unqualified. Broader rates/modes, audio,
+  HDCP, MST and live-frame replacement remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -494,6 +503,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   provider disables their competing inherited-bus readers. Emulator checks pass
   for both consumers and retained failures. Cold bus startup, recovery, regulator
   writes and electrical qualification remain open.
+  [Provider clock admission](provider-clock-reference.md) now validates the
+  normalized 24 MHz reference for generic TWI11, USB2, radio and CE instead of
+  requiring a 24 MHz raw oscillator. Each consumer retains its selected parent
+  and existing divider arithmetic; CE retains separate TRNG RC16M requirements.
+  Type-C S_TWI1 is different: APBS1 source 0 is raw DCXO and keeps its existing
+  source-derived timing. Four actual-function sanitizer checks and source review
+  are accepted under `provider-clock-reference-20261020/root-integration.json`.
+  Ownership/time/register observations are modeled; this supplies no new native
+  application, measured-frequency or physical qualification.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
