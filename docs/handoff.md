@@ -17,13 +17,19 @@ these absent devices. Preserve both microSD cards and their native support.
 No MIPI camera, display or microphone is attached. OV5640 is the first sensor
 target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
-Current offline work covers camera/thermal mutex-failure handling, G2D
-source-over blending over an opaque solid background, and DI301 motion-adaptive
+Current offline work covers G2D source-over blending over an opaque solid
+background and DI301 motion-adaptive
 processing of two recorded NV12 frames containing top and bottom fields.
 The DI301 mode requires asserted reset and disabled clocks at entry, followed
 by the upstream initialization sequence.
 These additions are under implementation or focused validation; their existing
 device modes retain the evidence listed below.
+
+Camera and thermal-monitor adapters now check actual mutex ownership after
+entry failure, independently of health. Four focused host cases pass under
+`mutex-enter-20261020/root-integration.json`; all 103 frozen source files match
+integration. Existing native images predate this correction; no hardware result
+or new native build is claimed.
 
 ## Board state and recovery
 
