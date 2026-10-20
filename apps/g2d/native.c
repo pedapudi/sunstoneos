@@ -193,12 +193,31 @@ static int launch(void)
        !store(A733_G2D_BASE+0x20,0x10)||!store(A733_G2D_BASE+0x28,1))return -1;
     return 1;
 }
+/* Pinned successful IRQ order: acknowledge task-end, pulse mixer AHB reset,
+ * then signal completion. This is never a timeout/fault recovery or drain proof.
+ * The exclusive G2D scope owns these private top registers. */
+static int finish(uint32_t status)
+{
+    uint32_t reset;
+    if(g2d.finish_ready||g2d.complete||!(status&1))return -1;
+    g2d.rcq_status=status; /* Immutable pre-ack observation exported on success. */
+    if(!store(A733_G2D_BASE+0x24,1)||!bits(A733_G2D_BASE+0x24,1,0)||
+       !load(A733_G2D_BASE+8,&reset)||!(reset&1))return -1;
+    g2d.reset_word=reset;
+    /* Change mixer bit0 only; preserve rotation bit1 and all neighbors. */
+    if(!store(A733_G2D_BASE+8,reset&~1u)||
+       !bits(A733_G2D_BASE+8,UINT32_MAX,reset&~1u)||
+       !store(A733_G2D_BASE+8,reset|1u)||
+       !bits(A733_G2D_BASE+8,UINT32_MAX,reset|1u)||
+       !bits(A733_G2D_BASE+0x24,1,0))return -1;
+    g2d.finish_ready=1;g2d.complete=1;return 1;
+}
 static int stable(void)
 {
     uint32_t status;
-    return live()&&g2d_guards()&&load(A733_G2D_BASE+0x24,&status)&&
-       (status&0xff01)==(g2d.rcq_status&0xff01)&&
-       (status&1);
+    return live()&&g2d.finish_ready&&g2d.complete&&(g2d.rcq_status&1)&&
+       g2d_guards()&&bits(A733_G2D_BASE+8,UINT32_MAX,g2d.reset_word)&&
+       load(A733_G2D_BASE+0x24,&status)&&!(status&1);
 }
 static int step(void)
 {
@@ -207,7 +226,7 @@ static int step(void)
        if(launch()!=1)return -1;g2d.stage=2;return 0;}
     if(g2d.stage==2){uint32_t status;if(!load(A733_G2D_BASE+0x24,&status))return -1;
        if(!(status&1))return 0;
-       g2d.rcq_status=status;g2d.complete=1;
+       if(finish(status)!=1)return -1;
        if(a733_iommu_scan(&g2d.iommu,deadline())!=1)return -1;g2d.stage=3;return 0;}
     int r=a733_iommu_poll(&g2d.iommu);if(r!=1)return r;
     if(g2d.iommu.fault.scanned_masters!=0x400||!stable())return -1;

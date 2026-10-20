@@ -27,7 +27,8 @@ struct g2d_application {
     uint8_t *input,*output,*commands,*payload;
     uint32_t *table;
     size_t bytes,rounded,copied;
-    uint32_t rcq_status,baseline,guards_ok,complete;
+    uint32_t rcq_status,baseline,guards_ok,complete,reset_word;
+    unsigned finish_ready;
     unsigned stage,copy_step,clock_step;
     uint64_t last_now;
     atomic_uint result;
