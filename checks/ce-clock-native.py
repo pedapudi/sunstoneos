@@ -61,7 +61,7 @@ class Machine:
   if at in self.instructions and at not in self.hooks:
    word=self.instructions[at];kind=word&0xffffffe0;index=word&31;reg=UC_ARM64_REG_FP if index==29 else UC_ARM64_REG_LR if index==30 else UC_ARM64_REG_XZR if index==31 else UC_ARM64_REG_X0+index
    if kind in (0xd50b7a20,0xd50b7e20,0xd5087620):self.cache.append([kind,u.reg_read(reg)])
-   else:u.reg_write(reg,{0xd5384240:4,0xd53b0020:0x40004,0xd5381000:5,0xd53be000:24000000,0xd53be020:self.time*24}[kind])
+   else:u.reg_write(reg,{0xd5384240:4,0xd53b0020:0x04040004,0xd5381000:5,0xd53be000:24000000,0xd53be020:self.time*24}[kind])
    u.reg_write(UC_ARM64_REG_PC,at+4);return
   name=self.hooks[at];a=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(8)];self.trace.append(name)
   if name=='board_live':self.ret(not(self.mode=='authority-loss' and self.clock_writes>=2))
@@ -125,7 +125,7 @@ class Machine:
    self.u.context_restore(self.contexts[name]);entry=self.u.reg_read(UC_ARM64_REG_PC)
   else:
    stack=self.app+self.af['stack']+16384 if name=='crypto_task' else 0x43fc0000 if name=='board_usb0_task' else 0x43fd0000
-   self.u.reg_write(UC_ARM64_REG_SP,stack);self.u.reg_write(UC_ARM64_REG_LR,0x43fff000)
+   self.u.reg_write(UC_ARM64_REG_SP,stack&~15);self.u.reg_write(UC_ARM64_REG_LR,0x43fff000)
    for i,v in enumerate(args):self.u.reg_write(UC_ARM64_REG_X0+i,v)
    entry=self.image.address(name,unit)
   self.u.emu_start(entry,0,count=budget)
@@ -134,7 +134,7 @@ class Machine:
   self.phase='boundary';self.task=prior_task
   return self.u.reg_read(UC_ARM64_REG_X0)&0xffffffff
  def snapshot(self):
-  names=('time','holders','regs','task','due','starts','clock_writes','incoming','tx','mode','case','phase','callname','call_args','mmio_in_progress','mmio','cache','trace','contexts')
+  names=('time','holders','regs','task','due','starts','clock_writes','incoming','tx','mode','case','phase','callname','call_args','mmio_in_progress','mmio','cache','trace','contexts','done','register_mutex','translations')
   return dict(ram=bytes(self.u.mem_read(0x41000000,0x03000000)),**pickle.loads(pickle.dumps({k:getattr(self,k) for k in names})))
  def restore(self,s):
   self.u.mem_write(0x41000000,s['ram'])
@@ -180,33 +180,74 @@ def typed_model_facts(output,image,raw):
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for name in ('image','output'):p.add_argument('--'+name,type=Path,required=True)
+ p.add_argument('--authenticated-checkpoint',type=Path)
  a=p.parse_args();assert not a.output.exists();a.output.mkdir(parents=True)
  names=('crypto_application','board_application','board_provider','a733_native_usb','a733_platform_locks','a733_ce_clock','a733_ce_session','a733_ce_config','a733_ce','a733_clock_token','crypto_run')
  image=image_module.Image(a.image,layout_names=names);image.path=a.image
  source=Path.home()/'.cache/sunstoneos/evidence/crypto-single-core-20261018/session-fixture.bin'
- raw=bytearray(providers.nominal_provider_session(source.read_bytes(),usb_reference_mode=2))
- _,_,build=prep.base.image_parts(a.image);raw[48:80]=build
- # Same actual producers and fixed provider fields; all authority is MODEL-only.
- for offset in (24,32,40):struct.pack_into('<Q',raw,offset,0x4345000000000000+offset)
- struct.pack_into('<Q',raw,600,3);struct.pack_into('<2Q',raw,616,12,13)
- request=prep.operation.encode(1,0xce00000000000001,b'cold clock request through the existing SHA client')
- raw[760:792]=hashlib.sha256(request).digest();raw[792:824]=bytes(32)
- admission_record=typed_model_facts(a.output,a.image,raw)
+ if a.authenticated_checkpoint:
+  previous=a.authenticated_checkpoint.resolve().parent
+  assert a.authenticated_checkpoint.resolve()==previous/'authenticated-before-clock.pickle'
+  manifest=json.loads((previous/'manifest.json').read_text())
+  assert manifest['image_sha256']==sha(a.image)
+  assert {'authenticated-before-clock.pickle','authenticated-before-clock-ram.bin','session.bin','operation.bin'}<=set(manifest['files'])
+  for name,row in manifest['files'].items():
+   file=(previous/name).resolve();assert previous in file.parents
+   assert file.stat().st_size==row['bytes'] and sha(file)==row['sha256']
+  raw=(previous/'session.bin').read_bytes();request=(previous/'operation.bin').read_bytes()
+  admission_record=json.loads((previous/'admission.json').read_text())
+ else:
+  raw=bytearray(providers.nominal_provider_session(source.read_bytes(),usb_reference_mode=2))
+  _,_,build=prep.base.image_parts(a.image);raw[48:80]=build
+  # Same actual producers and fixed provider fields; all authority is MODEL-only.
+  for offset in (24,32,40):struct.pack_into('<Q',raw,offset,0x4345000000000000+offset)
+  struct.pack_into('<Q',raw,600,3);struct.pack_into('<2Q',raw,616,12,13)
+  request=prep.operation.encode(1,0xce00000000000001,b'cold clock request through the existing SHA client')
+  raw[760:792]=hashlib.sha256(request).digest();raw[792:824]=bytes(32)
+  admission_record=typed_model_facts(a.output,a.image,raw)
  raw=bytes(raw);providers.validate_nominal_providers(raw,2);prep.session_check(raw);prep.operation.decode(request,raw)
- (a.output/'session.bin').write_bytes(raw);(a.output/'operation.bin').write_bytes(request)
+ (a.output/'session.bin').write_bytes(raw);(a.output/'operation.bin').write_bytes(request);save(a.output/'admission.json',admission_record)
  inputs={str(f.resolve()):sha(f) for f in (a.image,Path(__file__),ROOT/'checks/storage-read-native.py',ROOT/'checks/a733-provider-fixture.py',ROOT/'apps/crypto/prepare.py',ROOT/'apps/crypto/request.py',ROOT/'apps/crypto/observe.py',ROOT/'tools/check-a733-crypto-supervised.py',source,providers.SOURCE)}
  for f in (Path.home()/'.cache/sunstoneos/evidence/crypto-single-core-20261018/host/MODEL-NOT-DEPLOYABLE-bundle').glob('*.json'):inputs[str(f.resolve())]=sha(f)
+ if a.authenticated_checkpoint:
+  for f in (a.authenticated_checkpoint,previous/'authenticated-before-clock-ram.bin',previous/'manifest.json',previous/'inputs.json'):inputs[str(f.resolve())]=sha(f)
  save(a.output/'inputs.json',inputs);m=Machine(image,raw,request);results={}
  try:
-  assert m.call('crypto_session_prepare',0x43e00000)==1
-  assert m.call('a733_clock_leases_init',m.shared+m.sf['clocks'],image.address('a733_counter_clock_now'),m.shared+m.sf['counter'])==1
-  assert m.call('a733_platform_locks_init',m.shared+m.sf['locks'],image.address('a733_counter_clock_now'),m.shared+m.sf['counter'])==1
-  ll=image.layouts['a733_platform_locks'];m.register_mutex=m.get(m.shared+m.sf['locks']+ll['mutex'],8)
-  assert m.call('board_application_start')==1;m.task=m.get(m.app+m.af['handle'],8)
-  assert m.task and m.call('crypto_task')>=0 and not m.mmio and not m.get(m.app+m.af['token'],8)
-  m.incoming.extend(b'\1'+struct.pack('<I',len(request))+request)
-  m.call('board_usb0_task')
-  assert not m.incoming and m.get(m.app+m.af['input_ready'])==1 and not m.mmio
+  if a.authenticated_checkpoint:
+   state=pickle.loads(a.authenticated_checkpoint.read_bytes());assert state['resumable'] and state['image_sha256']==sha(a.image)
+   state['ram']=(previous/'authenticated-before-clock-ram.bin').read_bytes()
+   for name in ('cpu','resumable','image_sha256'):state.pop(name)
+   m.restore(state)
+   assert m.phase=='boundary' and m.callname=='board_usb0_task' and not any(m.holders.values()) and not m.mmio_in_progress
+   assert m.task==m.get(m.app+m.af['handle'],8) and m.task
+   assert m.starts==0 and m.due is None and m.clock_writes==0 and m.mode=='nominal'
+   assert m.get(m.clock+m.cf['state'])==0
+   request_address=m.app+m.af['run']+image.layouts['crypto_run']['request']
+   assert bytes(m.u.mem_read(request_address,len(request)))==request
+   # The saved pre-input iteration only waited. Re-enter this task body's clean
+   # loop entry on its aligned model stack; preserve all admitted/provider and
+   # authenticated request bytes. No native task context constructor is modeled.
+   m.contexts.pop('crypto_task',None)
+   assert m.af['handle']-m.af['stack']==16384
+   ll=image.layouts['a733_platform_locks'];m.register_mutex=m.get(m.shared+m.sf['locks']+ll['mutex'],8)
+   assert m.get(m.app+m.af['input_ready'])==1 and not m.get(m.app+m.af['token'],8)
+   assert not m.get(m.engine+m.ef['initialized']) and not m.clock_writes
+   assert bytes(m.u.mem_read(0x41f00000,824))==raw
+   from elftools.elf.elffile import ELFFile
+   with a.image.open('rb') as stream:
+    for segment in ELFFile(stream).iter_segments():
+     if segment['p_type']=='PT_LOAD' and not(int(segment['p_flags'])&2):
+      assert bytes(m.u.mem_read(int(segment['p_vaddr']),len(segment.data())))==segment.data()
+  else:
+   assert m.call('crypto_session_prepare',0x43e00000)==1
+   assert m.call('a733_clock_leases_init',m.shared+m.sf['clocks'],image.address('a733_counter_clock_now'),m.shared+m.sf['counter'])==1
+   assert m.call('a733_platform_locks_init',m.shared+m.sf['locks'],image.address('a733_counter_clock_now'),m.shared+m.sf['counter'])==1
+   ll=image.layouts['a733_platform_locks'];m.register_mutex=m.get(m.shared+m.sf['locks']+ll['mutex'],8)
+   assert m.call('board_application_start')==1;m.task=m.get(m.app+m.af['handle'],8)
+   assert m.task and m.call('crypto_task')>=0 and not m.mmio and not m.get(m.app+m.af['token'],8)
+   m.incoming.extend(b'\1'+struct.pack('<I',len(request))+request)
+   m.call('board_usb0_task')
+   assert not m.incoming and m.get(m.app+m.af['input_ready'])==1 and not m.mmio
   ready=m.snapshot();m.checkpoint(a.output,'authenticated-before-clock');results['deferred-until-authenticated-request']=True
   m.case='nominal-operation'
   for _ in range(40):
