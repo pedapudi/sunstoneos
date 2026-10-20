@@ -1,8 +1,7 @@
 # GPU rendering to retained HDMI frames
 
 The GPU/display application connects the existing trusted indexed-texture GPU
-renderer to DE1, TV0 and HDMI at 1280×720, 60 Hz. Its source is implemented;
-linked and native composition checks are pending. Physical GPU rendering and
+renderer to DE1, TV0 and HDMI at 1280×720, 60 Hz. Its native image and focused software composition checks pass. Physical GPU rendering and
 HDMI output remain unqualified.
 
 The native caller submits two caller-selected canonical texture inputs through
@@ -40,11 +39,13 @@ the GPU reservations. The parent contains 32 KiB of IOMMU tables, a leading
 4 KiB guard, two 1,847,296-byte padded RGB565 frames and two 4 KiB command pages.
 Those regions require 3,739,648 bytes. The active RGB565 pitch is 2560 bytes and
 each frame contains 1,843,200 pixel bytes. No full framebuffer occupies BSS.
-The actual constructors and VM planners must validate the final allocation and
-mapping capacities; the size calculation does not establish admission.
+The actual linked constructors and VM planners accepted the complete allocations
+and mapping capacities. Write-back parents occupy 23,382 pages; noncacheable GPU
+parents occupy 72 pages, followed by the aligned 1,024-page display parent.
+The display parent starts at physical 0x78048000 in the admitted extended pool.
 
 The root-owned authenticated envelope includes GPU/HDMI initial-state, memory,
-electrical and supervision authority plus application data. Its complete upload
+electrical and supervision authority plus the exact extended-memory reservation identity and application data. Its complete upload
 at 0x41f00000 must fit below 0x42000000 and survive BSS clearing before provider
 construction. The application data header is 144 bytes: magic, version, total
 length and two 64-byte records. Each record contains the existing five-word
@@ -82,3 +83,32 @@ HDMI analog inputs, an attached monitor/cable, GPU firmware execution and actual
 pixels remain external prerequisites. Broader HDMI modes, other display formats,
 arbitrary new-frame streaming, frame retirement, graphics shader modes and
 performance work remain required beyond this bounded integration.
+
+The preserved evidence is under
+`~/.cache/sunstoneos/evidence/gpu-display-20261020/`. The final image SHA-256 is
+`ae7c6ee15b117f214ea1975b39d4d1f8f27ba007632f7efa3ed2c137460d717c`.
+Its exact compiled closure records 95 objects and 214 dependency inputs.
+Root checked full-envelope authentication, retained publication, memory-authority
+binding and quiet SPI95 routing without executing CPU startup.
+
+Application checks execute the actual shared-provider constructors, extended
+allocators, graphics planners, two-input native caller, copied-output accessor,
+RGB565 conversion, IOMMU installation and TV0/DE register paths. They check
+sequence-matched release, valid CPU versus DEVICE ownership, immutable bank
+publication, slot observations 1→2→1, healthy DE stop and the actual PMIC owner’s
+park acknowledgment. A submitted replay that reaches its deadline retains the
+bank and refuses subsequent MMIO.
+
+Those application results execute the preserved first image with SHA-256
+`a794a6d4ebdd05563bab6174ad55fde5824d1c5b296e9580fa6737ddd1a4bdbb`.
+The final image changes only admission, boot, snapshot and build-identity objects;
+the other 91 objects are identical. Root separately checked the changed memory
+binding. Application results are reused through that object comparison.
+
+GPU service completion and pixel values, HDMI preparation/health/stop, PMIC
+readiness, register effects, CPU admission/cache/translation boundaries and
+FreeRTOS scheduling are modeled in these checks. The PMIC park task, display
+mapping checks and native RCQ helper execute. This evidence does not establish
+concurrent live GPU/HDMI lease operation, interrupt exclusion on silicon, GPU
+shader execution or visible pixels. The offline fixture’s synthetic GPU proof
+bytes confer no physical admission authority.
