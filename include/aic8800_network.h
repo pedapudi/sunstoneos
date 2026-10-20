@@ -36,6 +36,9 @@ struct aic8800_network {
     struct aic8800_network_packet current;
     uint64_t generation,rx_packets,tx_bus_completions,rx_dropped,tx_dropped;
     atomic_uint ready,failed,address_ready,address_failed,address_sequence;
+    atomic_uint offline_request,offline_ack,offline;
+    unsigned offline_queued; /* Sole IP task; private FIFO marker identity below. */
+    uint8_t offline_marker;
     atomic_uint_least32_t address_value,mask_value,gateway_value,dns_value;
     TickType_t address_started;
     atomic_uint_fast64_t lease_started,lease_ticks;
@@ -55,6 +58,12 @@ void aic8800_network_fault(struct aic8800_network *);
 int aic8800_network_ready(const struct aic8800_network *);
 /* IP-task-only lease checks, called by the existing stack event trace hook. */
 void aic8800_network_ip_step(void);
+/* Fixed-address, healthy lifetime only. IP-task receipt follows actual down
+ * processing and every earlier FIFO event. No failed flag is cleared. */
+void aic8800_network_ip_event(unsigned,void *);
+int aic8800_network_offline(struct aic8800_network *);
+int aic8800_network_offline_ready(struct aic8800_network *);
+int aic8800_network_resume(struct aic8800_network *);
 int aic8800_network_address(const struct aic8800_network *,uint8_t [4]);
 int aic8800_network_status(const struct aic8800_network *,uint32_t [4]);
 #endif

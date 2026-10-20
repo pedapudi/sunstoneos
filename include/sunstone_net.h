@@ -32,7 +32,7 @@ struct sunstone_net_reply {
 struct sunstone_net_message {struct sunstone_net_request request;uint64_t ticket;unsigned client;TickType_t submitted;};
 struct sunstone_net_client {
     TaskHandle_t task;
-    uint64_t next_ticket,pending;
+    uint64_t next_ticket;atomic_uint_fast64_t pending;
     QueueHandle_t reply_queue;StaticQueue_t queue;
     uint8_t storage[sizeof(struct sunstone_net_reply)];
 };
@@ -87,7 +87,7 @@ struct sunstone_net {
     uint8_t request_storage[SUNSTONE_NET_CLIENTS*sizeof(struct sunstone_net_message)];
     StaticTask_t task;StackType_t stack[SUNSTONE_NET_STACK_WORDS];TaskHandle_t worker;
     uint64_t next_handle;
-    atomic_uint activation,failed;
+    atomic_uint activation,failed,client_gate,offline;
     uint8_t initialized,owned_poll;
 };
 /* Trusted initialization before scheduling. Configuration and task identities
@@ -114,6 +114,10 @@ int sunstone_net_init_owned(struct sunstone_net *,const struct sunstone_net_conf
  * after revocation, fault the network before calling to drain copied replies. */
 int sunstone_net_poll_owned(struct sunstone_net *);
 int sunstone_net_activate(struct sunstone_net *);
+/* Owned polling only; every socket, pending request and unread reply must be
+ * disposed before closing admission. Reopening also requires NetworkUp. */
+int sunstone_net_offline(struct sunstone_net *);
+int sunstone_net_resume(struct sunstone_net *);
 int sunstone_net_submit(struct sunstone_net *,const struct sunstone_net_request *,uint64_t *ticket);
 int sunstone_net_receive(struct sunstone_net *,struct sunstone_net_reply *,TickType_t wait);
 /* Current client only; request cancellation of its outstanding ticket. An

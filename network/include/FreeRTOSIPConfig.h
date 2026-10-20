@@ -24,7 +24,8 @@ void sunstone_net_stack_free(void *);
 #define ipconfigDNS_SEND_BLOCK_TIME_TICKS 0
 #define ipconfigDNS_RECEIVE_BLOCK_TIME_TICKS 0
 void sunstone_net_ip_step(void);
-#define iptraceNETWORK_EVENT_RECEIVED(event) sunstone_net_ip_step()
+void sunstone_net_ip_event(unsigned,void *);
+#define iptraceNETWORK_EVENT_RECEIVED(event) sunstone_net_ip_event((event),xReceivedEvent.pvData)
 #define ipconfigUSE_LLMNR 0
 #define ipconfigUSE_MDNS 0
 #define ipconfigUSE_NBNS 0

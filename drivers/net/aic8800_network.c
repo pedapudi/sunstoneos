@@ -1,4 +1,5 @@
 #include "aic8800_network.h"
+#include <limits.h>
 #include "aic8800_data.h"
 #include "aic8800_security.h"
 #include "aic8800_supplicant.h"
@@ -41,7 +42,7 @@ static int authority_for(const struct aic8800_sdio_transport *t,uint64_t generat
         t->supplicant->state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(t->security);
 }
 int aic8800_network_ready(const struct aic8800_network *n)
-{return n&&n->initialized&&!atomic_load(&n->failed)&&atomic_load(&n->ready);}
+{return n&&n->initialized&&!atomic_load(&n->offline)&&!atomic_load(&n->failed)&&atomic_load(&n->ready);}
 static int address_expired(const struct aic8800_network *n)
 {
     if(!n->config.dhcp)return 0;
@@ -88,7 +89,7 @@ void vApplicationIPNetworkEventHook_Multi(eIPCallbackEvent_t event,NetworkEndPoi
     struct aic8800_network *n=stack_owner;if(!n||endpoint!=&n->endpoint)return;
     if(event!=eNetworkUp){atomic_store(&n->address_ready,0);return;}
     if(address_expired(n)==1)address_revoke(n);
-    if(atomic_load(&n->failed)||atomic_load(&n->address_failed))return;
+    if(atomic_load(&n->offline)||atomic_load(&n->failed)||atomic_load(&n->address_failed))return;
     uint32_t ip=endpoint->ipv4_settings.ulIPAddress;
     if(n->config.dhcp){
         /* The hook precedes the stack's default/minimum lease substitution.
@@ -192,6 +193,7 @@ void aic8800_network_poll(struct aic8800_network *n)
     struct aic8800_sdio_transport *t=n->config.transport;
     if(address_expired(n)==1)address_revoke(n);
     if(atomic_load(&n->failed)){if(n->stack_started&&!n->down_sent){FreeRTOS_NetworkDown(&n->interface);n->down_sent=1;}return;}
+    if(atomic_load(&n->offline))return;
     aic8800_dispatch_poll(n->receive);
     if(n->receive->faulted||t->state==AIC8800_TRANSPORT_FAULT||!t->wifi||t->wifi->association_generation!=n->generation||
         t->wifi->link==AIC8800_WIFI_LINK_DOWN||t->wifi->link==AIC8800_WIFI_LINK_UNRESOLVED){aic8800_network_fault(n);return;}
@@ -231,4 +233,54 @@ void aic8800_network_poll(struct aic8800_network *n)
         uint64_t deadline=now+n->config.tx_timeout;if(deadline>t->deadline)deadline=t->deadline;
         if(aic8800_transport_send_data(t,n->current.ethernet,n->current.bytes,deadline))n->active=1;
     }
+}
+
+/* Invoked by the existing IP-task trace before its current event is processed.
+ * The marker is appended after down processing, so its receipt fences earlier
+ * RX/output events too. Future timer/output callbacks see offline until resume. */
+void aic8800_network_ip_event(unsigned event,void *data)
+{
+    struct aic8800_network *n=stack_owner;if(!n||!atomic_load(&n->offline))return;
+    configASSERT(xIsCallingFromIPTask());
+    unsigned epoch=atomic_load_explicit(&n->offline_request,memory_order_acquire);
+    if(n->offline_queued==epoch&&event==eNoEvent&&data==&n->offline_marker){
+        atomic_store(&n->address_ready,0);
+        atomic_store_explicit(&n->offline_ack,epoch,memory_order_release);return;
+    }
+    if(n->offline_queued==epoch)return;
+    n->interface.bits.bInterfaceUp=pdFALSE;
+    prvProcessNetworkDownEvent(&n->interface);
+    IPStackEvent_t marker={eNoEvent,&n->offline_marker};
+    if(xSendEventStructToIPTask(&marker,0)==pdPASS)n->offline_queued=epoch;
+}
+int aic8800_network_offline(struct aic8800_network *n)
+{
+    if(!n||n!=stack_owner||n->config.dhcp||!aic8800_network_address(n,NULL)||
+       atomic_load(&n->offline)||atomic_load(&n->address_failed)||
+       atomic_load(&n->offline_request)==UINT_MAX||n->active)return 0;
+    atomic_store(&n->ready,0);atomic_store(&n->address_ready,0);
+    atomic_fetch_add(&n->offline_request,1);
+    atomic_store_explicit(&n->offline,1,memory_order_release);
+    IPStackEvent_t wake={eNoEvent,NULL};(void)xSendEventStructToIPTask(&wake,0);return 1;
+}
+int aic8800_network_offline_ready(struct aic8800_network *n)
+{
+    if(!n||!atomic_load(&n->offline)||atomic_load(&n->failed)||
+       atomic_load_explicit(&n->offline_ack,memory_order_acquire)!=atomic_load(&n->offline_request))return 0;
+    if(n->active)return 0;
+    if(n->owns_current){n->owns_current=0;++n->tx_dropped;}
+    struct aic8800_network_packet packet;
+    while(xQueueReceive(n->tx,&packet,0)==pdPASS)++n->tx_dropped;
+    return 1;
+}
+int aic8800_network_resume(struct aic8800_network *n)
+{
+    if(!aic8800_network_offline_ready(n)||n->config.dhcp||atomic_load(&n->address_failed)||
+       !authority_for(n->config.transport,n->config.transport->wifi->association_generation)||
+       !aic8800_transport_attachment_ready(n->config.transport))return 0;
+    /* No IP callback can still hold an old ready=true observation across the
+     * acknowledged FIFO fence. No new callback reads generation while offline. */
+    n->generation=n->config.transport->wifi->association_generation;
+    atomic_store(&n->ready,1);atomic_store_explicit(&n->offline,0,memory_order_release);
+    FreeRTOS_NetworkDown(&n->interface);return 1;
 }

@@ -36,7 +36,11 @@ struct a733_radio_session {
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
-    unsigned bootstrap_only;
+    unsigned bootstrap_only,reconnect_phase;
+    uint64_t reconnect_deadline,reconnect_open;
+    uint16_t reconnect_reason;
+    struct aic8800_wifi_target reconnect_target;
+    struct aic8800_supplicant_config reconnect_security;
 };
 /* Pure init, before first platform poll. Requires the actual initialized
  * platform and immutable firmware blobs. Firmware identity is an expectation;
@@ -62,6 +66,13 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
 /* Serialized owner task only. Each admission directly authenticates the real
  * platform borrow. Deadlines must fit the current runtime lease. RF, association
  * and open-port authority remain explicit lower-layer inputs. */
+/* Healthy, same-AP fixed-address reconnect. All sockets must have completed
+ * CLOSE and every copied reply must be consumed. New submissions stay closed
+ * until the same IP interface publishes a fresh address. Fault/unsolicited loss
+ * and DHCP are refused. Security config is required only for existing WPA2.
+ * Success admits bounded work; poll returns PENDING until NETWORK is restored. */
+int a733_radio_session_reconnect(struct a733_radio_session *,const struct aic8800_wifi_target *,
+    const struct aic8800_supplicant_config *,uint64_t open_authority,uint16_t reason,uint64_t deadline);
 int a733_radio_session_scan(struct a733_radio_session *,uint64_t deadline);
 int a733_radio_session_connect(struct a733_radio_session *,const struct aic8800_wifi_target *,uint64_t deadline);
 int a733_radio_session_disconnect(struct a733_radio_session *,uint16_t reason,uint64_t deadline);

@@ -114,7 +114,7 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
-    if(r->stage==ONLINE)return publish(r,aic8800_network_ready(&r->session.sockets.network)?
+    if(r->stage==ONLINE)return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
         BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
     if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
@@ -142,6 +142,14 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
         }
     }
     return r->session.fault?retain(r):publish(r,BOARD_RADIO_PENDING);
+}
+int board_radio_reconnect(struct board_radio *r,uint64_t deadline)
+{
+    return r&&r->self==r&&r->constructed&&r->stage==ONLINE&&r->config.recovery_state&&
+        xTaskGetCurrentTaskHandle()==r->config.session.owner_task&&
+        !atomic_load_explicit(&r->failed,memory_order_acquire)&&
+        !(atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)&&
+        a733_radio_session_reconnect(&r->session,&r->config.target,&r->config.security,0,3,deadline);
 }
 int board_radio_submit(struct board_radio *r,const struct sunstone_net_request *request,uint64_t *ticket)
 {

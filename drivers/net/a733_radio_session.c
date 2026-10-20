@@ -1,8 +1,9 @@
 #include "a733_radio_session.h"
+#include <string.h>
 #ifndef SUNSTONE_AIC8800_RSN
 #error "Native radio session requires the actual RSN integration"
 #endif
-enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP };
+enum { PLATFORM,ADOPT,SETUP,IDENTITY,FIRMWARE,START_RUNTIME,DISPATCH,WIFI,DATA,MANAGEMENT,NETWORK,BOOTSTRAP,RECONNECT };
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -117,6 +118,67 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
 {return initialize(s,p,c,0);}
 int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
 {return initialize(s,p,c,1);}
+/* Each phase advances one existing bounded worker; the device lifetime and
+ * data sequence are never reconstructed. Only the IP task processes its fence. */
+static int reconnect_poll(struct a733_radio_session *s)
+{
+    struct aic8800_sdio_transport *t=&s->transport;uint64_t current;
+    if(!now(s,&current)||current>=s->reconnect_deadline)return 0;
+    if(s->reconnect_phase==0){
+        if(!aic8800_network_offline_ready(&s->sockets.network))return 1;
+        s->reconnect_phase=1;
+    }
+    if(s->reconnect_phase<7){
+        aic8800_dispatch_poll(&s->dispatcher);
+        struct aic8800_data_frame frame;
+        if(aic8800_dispatch_peek_data(&s->dispatcher,&frame)){
+            if(!aic8800_dispatch_consume_data(&s->dispatcher))return 0;
+            return 1; /* Offline old-generation RX is deliberately discarded. */
+        }
+    }
+    if(s->reconnect_phase<=2&&s->wifi.link!=
+       (s->reconnect_target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED))return 0;
+    switch(s->reconnect_phase){
+    case 1:
+        if(t->supplicant){
+            if(aic8800_transport_retire_security(t,s->reconnect_deadline))s->reconnect_phase=2;
+        }else s->reconnect_phase=3;
+        break;
+    case 2:
+        if(t->supplicant->state==AIC8800_SUPPLICANT_RETIRED&&aic8800_transport_finish_security(t))s->reconnect_phase=3;
+        break;
+    case 3:
+        if(aic8800_transport_disconnect(t,s->reconnect_reason,s->reconnect_deadline))s->reconnect_phase=4;
+        break;
+    case 4:
+        if(s->wifi.link==AIC8800_WIFI_LINK_UNRESOLVED)return 0;
+        if(s->wifi.link==AIC8800_WIFI_LINK_DOWN&&aic8800_transport_attachment_ready(t)&&
+           aic8800_transport_connect(t,&s->reconnect_target,s->reconnect_deadline))s->reconnect_phase=5;
+        break;
+    case 5:
+        if(s->wifi.link==AIC8800_WIFI_LINK_UNRESOLVED)return 0;
+        if(s->wifi.state!=AIC8800_WIFI_READY||!aic8800_transport_attachment_ready(t))break;
+        if(s->reconnect_target.security==AIC8800_WIFI_OPEN){
+            if(s->wifi.link!=AIC8800_WIFI_ASSOCIATED_OPEN)return 0;
+            if(aic8800_transport_authorize_open_data(t,s->reconnect_open))s->reconnect_phase=6;
+        }else{
+            if(s->wifi.link!=AIC8800_WIFI_SECURITY_PENDING)return 0;
+            if(!aic8800_supplicant_rearm(&s->supplicant,&s->security,t,&s->reconnect_security)||
+               !aic8800_transport_start_security(t,&s->security,&s->supplicant,s->reconnect_deadline))return 0;
+            aic8800_security_zero(s->reconnect_security.pmk,sizeof(s->reconnect_security.pmk));s->reconnect_phase=6;
+        }
+        break;
+    case 6:
+        if(aic8800_network_resume(&s->sockets.network))s->reconnect_phase=7;
+        break;
+    case 7:
+        if(!sunstone_net_poll_owned(&s->sockets))return 0;
+        if(sunstone_net_resume(&s->sockets)){s->stage=NETWORK;s->reconnect_phase=0;}
+        break;
+    default:return 0;
+    }
+    return 1;
+}
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
 {
     if(!enter(s))return A733_SESSION_INVALID;
@@ -178,6 +240,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
         break;
     case MANAGEMENT:aic8800_dispatch_poll(&s->dispatcher);break;
     case BOOTSTRAP:aic8800_dispatch_poll(&s->dispatcher);break;
+    case RECONNECT:if(!reconnect_poll(s))return leave(s,fail(s));break;
     case NETWORK:
         if(!sunstone_net_poll_owned(&s->sockets))return leave(s,fail(s));
         break;
@@ -189,7 +252,7 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
 }
 static int admission(struct a733_radio_session *s,uint64_t deadline)
 {
-    return !s->bootstrap_only&&!s->fault&&!s->renew_pending&&s->stage>=MANAGEMENT&&deadline&&deadline<=s->deadline&&
+    return !s->bootstrap_only&&!s->fault&&!s->renew_pending&&(s->stage==MANAGEMENT||s->stage==NETWORK)&&deadline&&deadline<=s->deadline&&
         live(s)==A733_SESSION_PENDING;
 }
 int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
@@ -257,3 +320,30 @@ int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_d
 {if(!enter(s))return 0;int ok=outside(s,out,sizeof(*out))&&aic8800_dispatch_take_record(&s->dispatcher,out);(void)leave(s,A733_SESSION_PENDING);return ok;}
 int a733_radio_session_take_scan(struct a733_radio_session *s,struct aic8800_wifi_scan_summary *out)
 {if(!enter(s))return 0;return done(s,outside(s,out,sizeof(*out))&&admission(s,s->deadline)&&aic8800_transport_take_scan(&s->transport,out));}
+
+int a733_radio_session_reconnect(struct a733_radio_session *s,const struct aic8800_wifi_target *target,
+    const struct aic8800_supplicant_config *security,uint64_t open,uint16_t reason,uint64_t deadline)
+{
+    if(!enter(s))return 0;
+    struct aic8800_wifi *w=&s->wifi;uint64_t current;
+    if(!now(s,&current)||deadline<=current)return done(s,0);
+    int ok=outside(s,target,sizeof(*target))&&s->stage==NETWORK&&admission(s,deadline)&&reason&&
+        w->state==AIC8800_WIFI_READY&&w->link==
+            (w->target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED)&&
+        !s->sockets.network.config.dhcp&&aic8800_network_address(&s->sockets.network,NULL)&&
+        w->association_generation!=UINT64_MAX&&target->security==w->target.security&&
+        target->channel_index==w->target.channel_index&&target->ssid_bytes==w->target.ssid_bytes&&
+        target->connection_authority&&target->beacon_evidence&&
+        !memcmp(target->bssid,w->target.bssid,6)&&!memcmp(target->ssid,w->target.ssid,target->ssid_bytes)&&
+        aic8800_transport_attachment_ready(&s->transport)&&s->data.state==AIC8800_DATA_IDLE&&
+        ((target->security==AIC8800_WIFI_OPEN&&!security&&open)||
+         (target->security==AIC8800_WIFI_WPA2_PSK_CCMP&&!open&&outside(s,security,sizeof(*security))&&
+          security->beacon_record==target->beacon_evidence&&aic8800_supplicant_config_valid(security)&&
+          s->supplicant.state==AIC8800_SUPPLICANT_AUTHORIZED&&aic8800_security_open(&s->security)));
+    if(ok&&sunstone_net_offline(&s->sockets)){
+        s->reconnect_target=*target;if(security)s->reconnect_security=*security;
+        s->reconnect_deadline=deadline;s->reconnect_reason=reason;s->reconnect_open=open;
+        s->reconnect_phase=0;s->stage=RECONNECT;
+    }else ok=0;
+    return done(s,ok);
+}

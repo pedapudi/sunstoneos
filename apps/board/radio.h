@@ -136,6 +136,10 @@ int board_radio_init(struct board_radio *,const struct board_radio_config *);
 /* Same actual radio owner each iteration; existing PMIC task polls its provider. */
 enum board_radio_result board_radio_poll(struct board_radio *);
 /* Existing copied bounded socket queues; call from configured client tasks. */
+/* Existing radio owner task only. Quiescent sockets, healthy fixed-address
+ * WPA2 profile; same admitted target/credentials, new association/RSN state.
+ * board_radio_poll advances it and reports PENDING until address publication. */
+int board_radio_reconnect(struct board_radio *,uint64_t absolute_deadline_us);
 int board_radio_submit(struct board_radio *,const struct sunstone_net_request *,uint64_t *);
 int board_radio_receive(struct board_radio *,struct sunstone_net_reply *,TickType_t);
 #endif

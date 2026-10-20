@@ -72,16 +72,20 @@ static u8 *alloc_eapol(void *ctx,u8 type,const void *payload,u16 bytes,size_t *l
     if(payload)os_memcpy(p+4,payload,bytes);
     *length=4+bytes;if(data)*data=p+4;return p;
 }
+int aic8800_supplicant_config_valid(const struct aic8800_supplicant_config *cfg)
+{
+    if(!span(cfg,sizeof(*cfg))||!cfg->entropy||!cfg->entropy_record||!cfg->beacon_record||
+       !cfg->ticks_per_second||cfg->ticks_per_second>UINT64_MAX/1000000||
+       !cfg->command_timeout||cfg->command_timeout>UINT64_MAX/8||
+       cfg->ap_rsn_bytes<2||cfg->ap_rsn_bytes>sizeof(cfg->ap_rsn))return 0;
+    struct wpa_ie_data ie;
+    return !wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)&&ie.group_cipher==WPA_CIPHER_CCMP&&
+        (ie.pairwise_cipher&WPA_CIPHER_CCMP)&&(ie.key_mgmt&WPA_KEY_MGMT_PSK)&&!(ie.capabilities&WPA_CAPABILITY_MFPR);
+}
 int aic8800_supplicant_init(struct aic8800_supplicant *s,const struct aic8800_supplicant_config *cfg)
 {
-    if(!span(s,sizeof(*s))||!span(cfg,sizeof(*cfg))||overlap(s,sizeof(*s),cfg,sizeof(*cfg))||s->initialized||
-        !cfg->entropy||!cfg->entropy_record||!cfg->beacon_record||!cfg->ticks_per_second||
-        cfg->ticks_per_second>UINT64_MAX/1000000||!cfg->command_timeout||cfg->command_timeout>UINT64_MAX/8||
-        cfg->ap_rsn_bytes<2||cfg->ap_rsn_bytes>sizeof(cfg->ap_rsn))return 0;
-    struct wpa_ie_data ie;
-    if(wpa_parse_wpa_ie_rsn(cfg->ap_rsn,cfg->ap_rsn_bytes,&ie)||ie.group_cipher!=WPA_CIPHER_CCMP||
-        !(ie.pairwise_cipher&WPA_CIPHER_CCMP)||!(ie.key_mgmt&WPA_KEY_MGMT_PSK)||
-        (ie.capabilities&WPA_CAPABILITY_MFPR))return 0;
+    if(!span(s,sizeof(*s))||!aic8800_supplicant_config_valid(cfg)||
+       overlap(s,sizeof(*s),cfg,sizeof(*cfg))||s->initialized)return 0;
     aic8800_security_zero(s,sizeof(*s));s->config=*cfg;s->initialized=1;return 1;
 }
 int aic8800_supplicant_claim(struct aic8800_supplicant *s,struct aic8800_sdio_transport *owner,
@@ -226,4 +230,25 @@ int aic8800_supplicant_retire(struct aic8800_supplicant *s,uint64_t now,uint64_t
         now<s->last_now||deadline>s->owner->deadline)return 0;
     s->last_now=now;s->deadline=deadline;s->security->authorized=0;s->security->retiring=1;
     s->state=AIC8800_SUPPLICANT_RETIRING;return 1;
+}
+
+int aic8800_supplicant_rearm(struct aic8800_supplicant *s,struct aic8800_security *sec,
+    struct aic8800_sdio_transport *t,const struct aic8800_supplicant_config *cfg)
+{
+    if(!s||!sec||!t||!s->initialized||!sec->initialized||!t->wifi||!t->card||!t->card->host||
+       !aic8800_transport_attachment_ready(t)||!aic8800_supplicant_config_valid(cfg)||
+       overlap(s,sizeof(*s),cfg,sizeof(*cfg))||overlap(sec,sizeof(*sec),cfg,sizeof(*cfg))||
+       s->owner!=t||s->security!=sec||sec->owner!=t||sec->supplicant!=s||
+       s->data!=t->data||s->wifi!=t->wifi||sec->wifi!=t->wifi||
+       s->generation!=sec->generation||s->generation==UINT64_MAX||t->wifi->association_generation!=s->generation+1||
+       s->state!=AIC8800_SUPPLICANT_RETIRED||!s->retire_closed||!sec->retired||
+       sec->state!=AIC8800_SECURITY_IDLE||sec->authorized||sec->port_confirmed||
+       s->entered||s->rsn||s->count||s->action_active||s->port_pending||s->deferred_bytes||
+       t->supplicant||t->security||t->data->security||!aic8800_transport_attachment_ready(t))return 0;
+    for(unsigned i=0;i<AIC8800_SECURITY_KEYS;++i)if(sec->keys[i].valid)return 0;
+    for(unsigned i=0;i<AIC8800_SUPPLICANT_TIMERS;++i)
+        if(s->timers[i].handler||s->timers[i].context||s->timers[i].argument||s->timers[i].due)return 0;
+    for(unsigned i=0;i<AIC8800_SUPPLICANT_SMALL_SLOTS+AIC8800_SUPPLICANT_LARGE_SLOTS;++i)if(s->used[i])return 0;
+    aic8800_security_zero(sec,sizeof(*sec));aic8800_security_zero(s,sizeof(*s));
+    return aic8800_security_init(sec)&&aic8800_supplicant_init(s,cfg);
 }

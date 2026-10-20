@@ -419,10 +419,12 @@ int sunstone_net_submit(struct sunstone_net *s,const struct sunstone_net_request
         if(!label)return 0;
     }
     int i=client(s);if(i<0)return 0;struct sunstone_net_client *c=&s->clients[i];
-    if(c->pending||c->next_ticket==UINT64_MAX)return 0;
+    unsigned unlocked=0;
+    if(!atomic_compare_exchange_strong(&s->client_gate,&unlocked,1))return 0;
+    if(atomic_load(&s->offline)||c->pending||c->next_ticket==UINT64_MAX){atomic_store(&s->client_gate,0);return 0;}
     struct sunstone_net_message m={.request=*r,.client=(unsigned)i,.ticket=++c->next_ticket,.submitted=xTaskGetTickCount()};
-    if(xQueueSend(s->requests,&m,0)!=pdPASS)return 0;
-    c->pending=m.ticket;*ticket=m.ticket;return 1;
+    if(xQueueSend(s->requests,&m,0)!=pdPASS){atomic_store(&s->client_gate,0);return 0;}
+    c->pending=m.ticket;*ticket=m.ticket;atomic_store(&s->client_gate,0);return 1;
 }
 int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *reply,TickType_t wait)
 {
@@ -430,7 +432,7 @@ int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *reply
     int i=client(s);if(i<0||!s->clients[i].pending)return 0;
     if(xQueueReceive(s->clients[i].reply_queue,reply,wait)!=pdPASS)return 0;
     if(reply->ticket!=s->clients[i].pending){atomic_store(&s->failed,1);return 0;}
-    s->clients[i].pending=0;return 1;
+    atomic_store_explicit(&s->clients[i].pending,0,memory_order_release);return 1;
 }
 
 int sunstone_net_cancel(struct sunstone_net *s,uint64_t ticket)
@@ -438,4 +440,30 @@ int sunstone_net_cancel(struct sunstone_net *s,uint64_t ticket)
     if(!s||!s->initialized||!ticket)return 0;int i=client(s);
     if(i<0||s->clients[i].pending!=ticket)return 0;
     atomic_store(&s->cancel[i],ticket);return 1;
+}
+
+void sunstone_net_ip_event(unsigned event,void *data)
+{
+    sunstone_net_ip_step();aic8800_network_ip_event(event,data);
+}
+int sunstone_net_offline(struct sunstone_net *s)
+{
+    if(!s||!s->initialized||!s->owned_poll||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||
+       atomic_load(&s->failed)||atomic_load(&s->offline))return 0;
+    unsigned unlocked=0;if(!atomic_compare_exchange_strong(&s->client_gate,&unlocked,1))return 0;
+    int ok=uxQueueMessagesWaiting(s->requests)==0;
+    for(unsigned i=0;i<SUNSTONE_NET_CLIENTS;++i)
+        if(s->clients[i].pending||s->pending[i].active||uxQueueMessagesWaiting(s->clients[i].reply_queue)||
+           atomic_load(&s->accept[i].state)!=SUNSTONE_ACCEPT_IDLE||
+           (atomic_load(&s->dns[i].state)!=SUNSTONE_DNS_IDLE&&atomic_load(&s->dns[i].state)!=SUNSTONE_DNS_CANCELED))ok=0;
+    for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)
+        if(s->sockets[i].socket||s->sockets[i].handle||s->sockets[i].parent||atomic_load(&s->sockets[i].disposal_address))ok=0;
+    if(ok){atomic_store(&s->offline,1);ok=aic8800_network_offline(&s->network);if(!ok)atomic_store(&s->offline,0);}
+    atomic_store(&s->client_gate,0);return ok;
+}
+int sunstone_net_resume(struct sunstone_net *s)
+{
+    if(!s||!s->owned_poll||xTaskGetCurrentTaskHandle()!=s->config.bootstrap||
+       !atomic_load(&s->offline)||!aic8800_network_address(&s->network,NULL))return 0;
+    atomic_store_explicit(&s->offline,0,memory_order_release);return 1;
 }
