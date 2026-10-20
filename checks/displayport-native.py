@@ -118,7 +118,13 @@ def main():
  assert m.call('displayport_board_prepare',m.record)==1
  assert m.call('displayport_session_prepare',m.record)==1
  assert m.call('a733_memory_uncached_commit_verified')==1
- m.call('a733_smp_diagnostic_start',budget=100000000)
+ # Hashing the complete immutable frame executes the linked SHA256 and
+ # byte-copy routines; keep a checkpoint if its instruction bound expires.
+ try:m.call('a733_smp_diagnostic_start',budget=1000000000)
+ except BaseException:
+  m.checkpoint(a.output,'stopped')
+  (a.output/'failure.json').write_text(json.dumps(dict(pc=m.u.reg_read(UC_ARM64_REG_PC),trace=m.trace[-40:],physical=False),indent=2)+'\n')
+  raise
  assert m.stopped and len(m.tasks)==6,(m.tasks,m.trace[-20:])
  f=m.app+m.af['memory'];fl=image.layouts['dp_memory'];el=image.layouts['device_memory_extent']
  cpu=m.get(f+fl['extent']+el['cpu']);physical=m.get(f+fl['extent']+el['physical']);size=m.get(f+fl['extent']+el['bytes'])
