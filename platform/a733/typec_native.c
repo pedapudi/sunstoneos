@@ -2,6 +2,7 @@
 #include "a733_typec_native.h"
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
+#include "a733_clock_reference.h"
 #include "aarch64_device_memory.h"
 #include "task.h"
 #include <stddef.h>
@@ -111,7 +112,7 @@ static int bus_read(void *p,uintptr_t a,uint32_t *out)
 static int bus_write(void *p,uintptr_t a,uint32_t v)
 {
     if(!bus_owned(p)||v>255||(a!=BASE+8&&a!=BASE+0xc)||
-       (a==BASE+0xc&&v!=0x48&&v!=0x58&&v!=0x68))return 0;
+       (a==BASE+0xc&&v!=0x48&&v!=0x4c&&v!=0x58&&v!=0x68))return 0;
     store(a,v);return 1;
 }
 static int at(uintptr_t a)
@@ -171,8 +172,13 @@ static int prepare(void *p,uint64_t d)
         n->held=1;
         /* S_TWI1 shares TWI0's register set. The PMU registers of S_TWI0 are
          * absent from its manual register map and are never probed here. */
-        if(!observed(n,APBS1,0x0700001f,0)||!observed(n,BGR,0x20002,0)||
-           !observed(n,0x07090160,0xc000,0))goto fault;
+        if(!observed(n,APBS1,0x0700001f,0)||!observed(n,BGR,0x20002,0)||!before(n))goto fault;
+        /* APBS1 source0 is raw DCXO, not the normalized PLL_REF output.
+         * The shared OSC/APBS1 leases and remote exclusion retain this image. */
+        uint32_t oscillator=load(UINT32_C(0x07090160));
+        if(!before(n)||(oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002))goto fault;
+        n->input_hz=a733_clock_dcxo_hz(oscillator);
+        if(!a733_twi_divider(n->input_hz,&n->divider,&n->rate_hz))goto fault;
         if(!update(n,BGR,0x20000,0x20000)||!update(n,BGR,2,2)||
            !observed(n,BASE+0xc,0xfc,0)||!observed(n,BASE+0x10,255,0xf8)||
            !observed(n,BASE+0x200,0x80000003,0)||!observed(n,BASE+0x210,3,0)||
@@ -232,7 +238,6 @@ int a733_typec_native_init(struct a733_typec_native *n,const struct a733_typec_n
      * be sourcing a partner and must be handled by a separate recovery path. */
     for(unsigned i=0;i<4;i++)if(c->expected[i].function!=0&&c->expected[i].function!=15)return 0;
     n->self=n;n->config=*c;n->sealed=*c;
-    if(!a733_twi_divider(24000000,&n->divider,&n->rate_hz))return 0;
     const unsigned pins[]={8,9,12,13};
     for(unsigned i=0;i<4;i++)n->pin_requests[i]=(struct a733_pin_request_banked){
         .bank=A733_PIN_L,.pin=pins[i],.expected=c->expected[i],

@@ -128,7 +128,7 @@ static int read32(void *v,uintptr_t a,uint32_t *out)
 static int write32(void *v,uintptr_t a,uint32_t x)
 {
     if(!held(v,A733_PLATFORM_I2C_LOCK) || !address(a,1) || healthy(v)!=1 || x>255 ||
-       (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x58 && x!=0x68))return 0;
+       (a==A733_TWI11_BASE+0xc && x!=0x48 && x!=0x4c && x!=0x58 && x!=0x68))return 0;
     store(a,x);return healthy(v)==1;
 }
 static int separate(const void *a,size_t an,const void *b,size_t bn)

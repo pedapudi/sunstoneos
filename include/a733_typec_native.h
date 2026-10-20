@@ -30,14 +30,15 @@ struct a733_typec_native {
     atomic_uint gpio_ready,command,result,output_state;
     atomic_uint_fast64_t command_deadline;
     uint64_t deadline,last_now,power_now,power_shutdown_deadline;
-    uint32_t divider,rate_hz;
+    uint32_t divider,rate_hz,input_hz;
     unsigned stage,index,held,bus_fault,setup_fault,power_fault;
 };
 /* One fixed TYPEC24 boot owner; zero private storage once before scheduling.
  * Physical qualification includes exact SY6280 population, source capacity,
  * comparator bounds, independent recovery, remote exclusion, Device mappings,
  * EL1 security access, and initialized bank-L latch authority in the pin manager.
- * APBS1 must already select DCXO24MHz with divider1; no shared parent retune.
+ * APBS1 must already select raw DCXO with divider1; no shared parent retune.
+ * Derive its24/19.2/26MHz rate from the enabled/stable XO_CTRL0 image.
  * DCDC1/DC1SW2 must be enabled at3.3V. Selected TWI gate/reset start asserted/off.
  * The PMIC provider has its independent task. This function performs no MMIO.
  */

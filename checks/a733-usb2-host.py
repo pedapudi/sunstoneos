@@ -56,7 +56,7 @@ def main():
         'drivers/power/a733_rail_leases.c','drivers/clock/a733_clock_leases.c',
         'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c',
         'runtime/device_memory_pool.c']]
-    units += [a.typec/'drivers/usb/a733_typec.c', a.twi/'drivers/i2c/a733_twi.c']
+    units += [a.typec/'drivers/usb/a733_typec.c', a.typec/'drivers/usb/a733_typec_pd.c', a.twi/'drivers/i2c/a733_twi.c']
     units += [tiny/u for u in ['host/hub.c','tusb.c','host/usbh.c','common/tusb_fifo.c','class/msc/msc_host.c','class/hid/hid_host.c']]
     native = [root/u for u in ['drivers/usb/a733_usb2_platform.c','drivers/usb/a733_usb2_native.c',
         'drivers/usb/a733_xhci.c','drivers/usb/a733_xhci_tinyusb.c','drivers/usb/a733_usb3_phy.c']]

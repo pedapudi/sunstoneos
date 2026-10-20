@@ -1,9 +1,11 @@
-# TYPEC24 fixed USB host power
+# TYPEC24 host power and DisplayPort negotiation
 
 The FUSB302 and SY6280 on the Orange Pi Zero 3W control attachment and VBUS
 for the exposed TYPEC24 connector. The native provider selects a fixed USB
 source/data-host role at default current. It supplies a fresh attachment token
-to the USB2 host controller. Physical operation remains unqualified.
+to the USB2 host controller. An optional USB Power Delivery (PD) profile negotiates
+a fixed 5 V contract and four-lane DisplayPort alternate mode. Both profiles
+remain physically unqualified.
 
 The implementation uses the shared byte I2C engine on S_TWI1, the native pin
 manager, common clock and rail leases, and read-only PMIC snapshots. It performs
@@ -46,9 +48,12 @@ and audio/debug accessories.
 The A733 manual section 18.11.7 gives S_TWI1 the TWI0 register map at
 `0x07084000`. Its R_CCU word `0x0701019c` uses gate bit 1 and reset bit 17.
 S_TWI0's additional PMU registers are absent from the S_TWI1 map and are never
-probed. The native adapter requires APBS1 to select the 24 MHz crystal oscillator
-(DCXO24M) with divider 1;
-it does not retune that shared parent. It observes both local gate/reset bits
+probed. The native adapter requires APBS1 source 0, raw DCXO, with divider 1.
+Manual section 4.2.5.3 and the pinned CCU driver identify this source separately
+from source 4, the normalized 24 MHz reference. Under its OSC/APBS1 leases,
+the provider verifies XO_CTRL0 enabled/stable bits and decodes the raw
+24, 19.2 or 26 MHz rate with `a733_clock_dcxo_hz`. It derives the I2C divider
+from that rate and does not retune the shared parent. It observes both local gate/reset bits
 clear, releases reset, enables the gate, and programs a source-derived divider
 at or below 100 kHz. Legacy, autonomous driver, DMA, FIFO and IRQ conditions
 must be inactive before transactions begin.
@@ -110,9 +115,69 @@ so discharge remains uncertain even if the GPIO task confirmed PL8 low. Every
 clock, rail, pin, PMIC request and bus reservation remains held. There is no
 resource release, automatic reattachment or reset retry in this profile.
 
+## Bounded PD and DisplayPort profile
+
+Set `electrical.displayport=1` before native construction to enable the PD2
+source/data-host profile. Its qualified source range is 4.75–5.25 V, with at least
+500 mA available. It advertises one fixed 5 V, 500 mA power object and accepts
+only a matching current request. The existing electrical qualification supplies
+the power budget; PD messages cannot increase it. The image must exclude USB3
+and hold COMB0 ownership before negotiation can configure the partner for DP.
+
+The existing Type-C task services the real FUSB302 through the already-owned
+S_TWI1 engine. Each FIFO transfer is one bounded I2C transaction, with a
+repeated START for reads, ACK for intermediate bytes, a final NACK, and completed
+STOP before publication. The maximum copied transfer is 40 bytes. The original
+single-byte API remains available. FUSB302 hardware sends GoodCRC acknowledgments;
+software verifies received CRC32, SOP framing, message identifiers, roles and
+protocol fields before advancing negotiation.
+
+After accepting the fixed power contract, the provider sends Discover Identity,
+Discover SVIDs, Discover Modes, Enter Mode, DP Status and DP Configure. SVID is
+the protocol's alternate-mode identifier; the DP value is `0xff01`. The provider
+selects a supported four-lane pin assignment C or E, accounts for partner plug
+versus receptacle capability fields, and requires the Configure acknowledgment.
+Both CC orientations select their corresponding FUSB302 transmit pin.
+
+Each message wait is bounded by 30 ms, including receive processing and duplicate
+traffic. Negotiation cannot outlive the original `a733_typec_begin` deadline or
+one second after PD service starts. There is one negotiation attempt. Unsupported
+requests, negative responses, malformed packets, bus failure or expiry permanently
+revoke Type-C admission and enter the existing retained shutdown path. Hardware
+packet retries are limited to the FUSB302's three retries; software does not
+restart the session. The independent GPIO task remains responsible for VBUS.
+
+`a733_typec_dp_snapshot` publishes a copied token after Configure succeeds.
+The token binds the permanent provider, owner, attachment generation, CC polarity,
+pin assignment, HPD level and HPD event sequence. HPD means Hot Plug Detect;
+its state comes from DP Status and Attention messages because the A733 HPD pad
+is unconnected. The attachment generation stays fixed. The event sequence increases on a published-mode HPD level change or an HPD
+interrupt, including level changes without an interrupt. This detects a low/high
+cycle between consumer validations.
+
+Validation requires a current CC/VBUS observation younger than 10 ms. A token's
+immutable acquisition timestamp may be older while the provider keeps publishing
+fresh observations of the same mode. The timestamp does not represent another
+HPD transition.
+Consumers validate before AUX, training, enable and continued display progress.
+A concurrent HPD change invalidates the old DP token without revoking CC power.
+Identity, freshness or underlying provider loss closes admission permanently.
+The DP consumer owns the separate exclusive COMB0 lease and retains display
+resources when its token becomes invalid.
+
+The limited profile excludes power/data-role swaps, VCONN, electronically marked
+cables, higher-power contracts and automatic renegotiation. A missing DP SVID in
+the bounded discovery response is a retained refusal. DP controller/PHY setup,
+AUX, link training and visible output belong to the display consumer.
+
+The [source manifest](typec-pd-sources.json) pins the board Linux FUSB302, TCPM,
+PD definitions and DisplayPort references. The adapted code runs on the native
+FreeRTOS CPU; Linux supplies no runtime service. The combined adaptation uses
+[GPL version 2](typec-pd-GPL-2.0.txt).
+
 ## Evidence and remaining integration
 
-The focused check passed with the actual native Type-C, TWI, PMIC, pin, rail,
+The original fixed-host focused check passed with the actual native Type-C, TWI, PMIC, pin, rail,
 clock, counter, translation and lock implementations. FreeRTOS task/queue
 behavior, MMIO responses and electrical qualification were modeled. Both cable
 orientations completed attachment and detach. Saved execution checkpoints also
@@ -146,7 +211,23 @@ A host fault must not suspend either Type-C task. The usable image also needs
 a qualified power source, exact switch population and threshold bounds, an
 attached USB device, and independent recovery.
 
-Full hardware support still requires dual-role/device operation, USB PD,
-role swaps, VCONN and applicable cable/accessory support, SuperSpeed and
-DisplayPort alternate modes. Those requirements remain separate from this
-initial fixed USB2 host path.
+The PD software evidence is under
+`~/.cache/sunstoneos/evidence/typec-pd-20261020/`. The real CC monitor, PD service,
+TWI state machine and copied-token APIs execute against modeled hardware.
+Both orientations complete a contract and DP configuration, selecting C and E.
+Checks cover HPD interrupts, old-token refusal, over-budget requests, negative
+VDM responses, CRC corruption, wrong SVIDs, late responses, duplicate traffic
+and the original negotiation deadline. Electrical admission and task authority
+are modeled; these results do not qualify a cable, power source or display.
+
+The native composition additionally executes the actual pin, PMIC, clock, rail,
+TWI and lower MMIO adapter paths with PD disabled. It verifies the byte API and
+a three-byte repeated-START read, intermediate ACKs, final NACK and completed
+STOP. The affected 26 MHz configuration verifies a source-derived 100 kHz I2C
+rate. Frozen inputs, artifacts and checkpoints preserve the exact executable
+for each case. The original independent GPIO/I2C-failure evidence remains
+applicable to the retained shutdown mechanism; a physical PD fault is untested.
+
+Full hardware support still requires dual-role/device operation, role swaps,
+VCONN and applicable cable/accessory support, further PD profiles, and physical
+SuperSpeed and DisplayPort qualification.

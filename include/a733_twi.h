@@ -36,6 +36,7 @@ struct a733_twi {
     uint32_t divider,last_status;
     uint16_t reg;
     uint8_t address,value,received,index,phase,reading,held,entered,register_bytes;
+    uint8_t block[40],length;
     enum a733_twi_state state;
 };
 /* Zero private storage, one serialized task, immutable disjoint arguments.
@@ -54,6 +55,12 @@ int a733_twi_init_controller(struct a733_twi *,const struct a733_twi_ops *,void 
 int a733_twi_divider(uint32_t input_hz,uint32_t *divider,uint32_t *rate_hz);
 int a733_twi_request(struct a733_twi *,uint8_t address,uint16_t reg,
     unsigned reading,uint8_t value,uint64_t deadline);
+/* Bounded FIFO transfer in one I2C transaction, with a repeated START for reads.
+ * Write input is copied before effects. Read output is copied only by take_block.
+ * Buffers must be disjoint from private engine storage. Maximum 40 bytes. */
+int a733_twi_request_block(struct a733_twi *,uint8_t,uint16_t,unsigned,
+    const uint8_t *,unsigned,uint64_t);
+int a733_twi_take_block(struct a733_twi *,uint8_t *,unsigned);
 /* One bounded protocol step; 0 pending,1 complete,-1 terminal retained fault.
  * NACK/arbitration/error/deadline/MMIO uncertainty retains the bus and every
  * lease. No STOP after an unexpected status, no retry, reset or bus pulses.

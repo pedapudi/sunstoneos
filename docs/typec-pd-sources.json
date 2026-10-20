@@ -1,0 +1,86 @@
+{
+  "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+  "execution": "Native FreeRTOS CPU; no Linux runtime",
+  "license": "GPL-2.0-only combined adaptation; FUSB302/TCPM references permit GPL-2.0-or-later. License text: docs/typec-pd-GPL-2.0.txt",
+  "adaptation": "Bounded fixed PD2 source and DP C/E initiator; FIFO framing, PD/VDM fields and discovery order adapted from the pinned sources.",
+  "sources": {
+    "drivers/usb/typec/tcpm/tcpm.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/typec/tcpm/tcpm.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "cf78e1174888a164864147ae2482ffdffdbe3052b8c99c1eea982455f04d4212",
+      "bytes": 181367
+    },
+    "drivers/usb/typec/altmodes/displayport.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/typec/altmodes/displayport.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "44a8fd0d883297ac798f470f61aa62731aa56e543a84d80cb785184b47327d09",
+      "bytes": 15559
+    },
+    "include/linux/usb/pd.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/usb/pd.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "4e9efcac21b4fa25a6f9bf6504cdf44b63d7e99c914ffed35db59ca36e6ceb4a",
+      "bytes": 16539
+    },
+    "include/linux/usb/pd_vdo.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/usb/pd_vdo.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "d420b9ac0434fbf89c0520d09945b2695cb55ecc6447870a645945175a22d131",
+      "bytes": 16554
+    },
+    "include/linux/usb/typec_dp.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/usb/typec_dp.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "9796168b920f4fcf276feaf3f1b75f68b395443dba3ed9e0f7599a2375d0dcef",
+      "bytes": 3998
+    },
+    "drivers/usb/typec/tcpm/fusb302.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/typec/tcpm/fusb302.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "e971831f8ceb99eea845bf4b62814da8699aca2394c566f68b63b11092b6275c",
+      "bytes": 49275
+    },
+    "drivers/usb/typec/tcpm/fusb302_reg.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/usb/typec/tcpm/fusb302_reg.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "533eed31b2209f26a81cff05e8b6db2ef388ea485beef4aab507f90abba3ebbe",
+      "bytes": 6760
+    },
+    "COPYING": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/COPYING",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "fb5a425bd3b3cd6071a3a9aff9909a859e7c1158d54d32e07658398cd67eb6a0",
+      "bytes": 496
+    },
+    "LICENSES/preferred/GPL-2.0": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/LICENSES/preferred/GPL-2.0",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79",
+      "bytes": 18729
+    },
+    "apbs1-clock-source": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu-sun60iw2-r.c",
+      "anchor": "r_apbs_parents and r_apbs1_clk; primary A733 manual4.2.5.3",
+      "cache": "board-kernel/ccu-sun60iw2-r.c",
+      "sha256": "9285e1b35bfae975e2c1257d477d843ad277916b9c555c12c5f88e1c7ea02554"
+    },
+    "lib/crc32.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/lib/crc32.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "1931b9dfc93e8aac20f8b81b930f9e9c59cabb90e16d6285774439789bc7a764",
+      "bytes": 9546
+    },
+    "lib/crc32defs.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/lib/crc32defs.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "b984b856770a4304e5f1113702b9e7976f549b5a2e715bba2717f6fadbddbf3b",
+      "bytes": 1619
+    },
+    "include/linux/crc32poly.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/crc32poly.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "9540461bfcfb7d38e04e6ad89150dfda645e38e85c56f1a77bf324b5d4d1e6e4",
+      "bytes": 610
+    }
+  }
+}

@@ -25,6 +25,7 @@ static TaskHandle_t queue_owner[2];
 uint64_t ullPortInterruptNesting;
 volatile uint64_t ullCriticalNesting;
 uint64_t typec_test_time=100;
+volatile unsigned typec_block_only;
 volatile unsigned typec_fault_case,typec_mmio_count,typec_translation_count,typec_checkpoint_id;
 volatile unsigned typec_wire_fault,typec_partner_cc=1,typec_external_vbus,typec_delay_stop;
 volatile uint64_t typec_monitor_request;
@@ -143,6 +144,20 @@ unsigned typec_native_check(void)
     assert(a733_typec_validate(&port.provider,&token,typec_test_time+1000)==1);
     assert(typec_translation_count>=8&&port.supplies[0].programmed_uv==3300000&&port.supplies[1].programmed_uv==3300000);
     typec_checkpoint(3);
+    if(typec_block_only){
+        uint8_t bytes[3]={0};
+        assert(a733_twi_request_block(&port.bus,0x22,1,1,NULL,3,typec_test_time+5000)==0);
+        int result=0;
+        for(unsigned i=0;i<200&&!result;i++){
+            typec_test_time+=25;current_task=3;
+            assert(a733_typec_native_power_poll(&port)>=0);current_task=1;
+            result=a733_twi_poll(&port.bus);
+        }
+        assert(result==1&&a733_twi_take_block(&port.bus,bytes,3)==1);
+        assert(bytes[0]==0x80&&bytes[1]==0x80&&bytes[2]==0x80);
+        assert(!port.bus.held&&!queue_owner[1]&&!port.bus_fault);
+        return 0;
+    }
     if(typec_fault_case==3){
         typec_wire_fault=1;
         for(unsigned k=0;k<1000&&!port.bus_fault;k++)service(1);

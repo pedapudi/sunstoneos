@@ -38,7 +38,8 @@ int a733_typec_init(struct a733_typec *s,const struct a733_typec_config *c)
 {
     if(!s||s->self||!c||!c->context||!c->bus||!c->owner||!c->generation||
        !c->qualification||!c->recovery||c->source_min_mv<4750||c->source_max_mv>5500||
-       c->source_min_mv>c->source_max_mv||c->source_ma<500||!c->zero_threshold_max_mv||
+       c->source_min_mv>c->source_max_mv||c->displayport>1||
+       (c->displayport&&c->source_max_mv>5250)||c->source_ma<500||!c->zero_threshold_max_mv||
        c->zero_threshold_max_mv>800||c->device_id<0x80||c->device_id>0x82||
        !c->ops.outside||!c->ops.now||!c->ops.servicing||!c->ops.prepare||!c->ops.live||
        !c->ops.vbus||!c->ops.irq||!disjoint(s,sizeof(*s),c,sizeof(*c))||
@@ -98,7 +99,12 @@ static int publish(struct a733_typec *s)
     uint64_t d;if(!add(s->cycle_start,A733_TYPEC_FRESH_US,&d)||s->now>=d)return -1;
     unsigned zero=0;if(!atomic_compare_exchange_strong_explicit(&s->publishing,&zero,1,memory_order_acquire,memory_order_relaxed))return 0;
     int ok=!atomic_load_explicit(&s->revoked,memory_order_acquire);
-    if(ok)s->published=(struct a733_typec_token){(uintptr_t)s,s->config.owner,s->config.generation,s->cycle_start,s->polarity};
+    if(ok){
+        s->published=(struct a733_typec_token){(uintptr_t)s,s->config.owner,s->config.generation,s->cycle_start,s->polarity};
+        if(s->pd.ready)s->dp_published=(struct a733_typec_dp_token){(uintptr_t)s,
+            s->config.owner,s->config.generation,s->cycle_start,s->pd.hpd_irq,
+            s->polarity,s->pd.pin_assignment,s->pd.hpd};
+    }
     atomic_store_explicit(&s->publishing,0,memory_order_release);
     if(ok)atomic_store_explicit(&s->power_until,d,memory_order_release);
     return ok?1:-1;
@@ -153,7 +159,8 @@ static int step(struct a733_typec *s)
     case A733_TYPEC_SETUP:
         if(s->step<sizeof(setup)/sizeof(*setup)){
             r=setting(s,setup[s->step][0],setup[s->step][1],setup[s->step][2]);
-            if(r==1)++s->step;return r<0?-1:0;
+            if(r==1)++s->step;
+            return r<0?-1:0;
         }
         s->step=0;s->state=A733_TYPEC_LOOK;return 0;
     case A733_TYPEC_LOOK:
@@ -235,7 +242,12 @@ static int step(struct a733_typec *s)
         if(s->step==5){r=setting(s,0xe,0x7f,255);if(r==1)++s->step;return r<0?-1:0;}
         if(s->step==6){r=setting(s,6,4,0x2f);if(r==1)++s->step;return r<0?-1:0;}
         s->state=A733_TYPEC_MONITOR;s->step=0;return 0;
-    case A733_TYPEC_MONITOR:return active(s);
+    case A733_TYPEC_MONITOR:
+        if(s->config.displayport&&s->pd_turn){
+            r=a733_typec_pd_service(s);if(r==1)s->pd_turn=0;
+            return r<0?-1:0;
+        }
+        return active(s);
     case A733_TYPEC_SHUTDOWN:
         if(!s->prepared){s->state=A733_TYPEC_UNCERTAIN;return -1;}
         r=output(s,0);
@@ -273,7 +285,7 @@ int a733_typec_poll(struct a733_typec *s)
     if(r==2&&!s->shutdown_attempted){
         int health=s->config.ops.live(s->config.context);
         if(health<0||!clock_read(s))fault(s);
-        else if(health==1){r=publish(s);if(r==1)s->step=0;else if(r<0)fault(s);}
+        else if(health==1){r=publish(s);if(r==1){s->step=0;s->pd_turn=s->config.displayport;}else if(r<0)fault(s);}
         else r=0;
     }
 done:
@@ -308,5 +320,38 @@ int a733_typec_validate(struct a733_typec *s,const struct a733_typec_token *toke
        token->provider!=t.provider||token->owner!=t.owner||token->generation!=t.generation||
        token->polarity!=t.polarity||token->observed_us>t.observed_us||now<token->observed_us||
        now-token->observed_us>=A733_TYPEC_FRESH_US){a733_typec_revoke(s);return -1;}
+    return atomic_load_explicit(&s->revoked,memory_order_acquire)?-1:1;
+}
+
+int a733_typec_dp_snapshot(struct a733_typec *s,struct a733_typec_dp_token *out,uint64_t deadline)
+{
+    if(!intact(s)||!out||!disjoint(s,sizeof(*s),out,sizeof(*out))||
+       !s->config.ops.outside(s->config.context,out,sizeof(*out)))return -1;
+    struct a733_typec_token cc;int r=observation(s,&cc,deadline);if(r!=1)return r;
+    unsigned zero=0;if(!atomic_compare_exchange_strong_explicit(&s->publishing,&zero,1,memory_order_acquire,memory_order_relaxed))return 0;
+    struct a733_typec_dp_token t=s->dp_published;
+    atomic_store_explicit(&s->publishing,0,memory_order_release);
+    if(!t.provider)return 0;
+    uint64_t now;
+    if(s->config.ops.now(s->config.context,&now)!=1||now>=deadline||now<t.observed_us||
+       now-t.observed_us>=A733_TYPEC_FRESH_US||atomic_load_explicit(&s->revoked,memory_order_acquire)){
+        a733_typec_revoke(s);return -1;
+    }
+    *out=t;return 1;
+}
+int a733_typec_dp_validate(struct a733_typec *s,const struct a733_typec_dp_token *t,uint64_t deadline)
+{
+    if(!intact(s)||!t||!disjoint(s,sizeof(*s),t,sizeof(*t))||
+       !s->config.ops.outside(s->config.context,t,sizeof(*t)))return -1;
+    struct a733_typec_dp_token current;int r=a733_typec_dp_snapshot(s,&current,deadline);if(r!=1)return r;
+    uint64_t now;
+    if(s->config.ops.now(s->config.context,&now)!=1||now>=deadline||
+       t->provider!=current.provider||t->owner!=current.owner||t->generation!=current.generation||
+       t->polarity!=current.polarity||t->pin_assignment!=current.pin_assignment||
+       t->observed_us>current.observed_us||
+       now<t->observed_us||now<current.observed_us||
+       now-current.observed_us>=A733_TYPEC_FRESH_US){a733_typec_revoke(s);return -1;}
+    /* An ordinary HPD event invalidates the consumer snapshot, not CC power. */
+    if(t->hpd!=current.hpd||t->hpd_irq!=current.hpd_irq)return -1;
     return atomic_load_explicit(&s->revoked,memory_order_acquire)?-1:1;
 }

@@ -9,6 +9,8 @@ from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X
 parser=argparse.ArgumentParser()
 parser.add_argument('--repository',type=Path,default=Path(__file__).resolve().parents[1])
 parser.add_argument('--output',type=Path,required=True)
+parser.add_argument('--dcxo26',action='store_true')
+parser.add_argument('--block-only',action='store_true')
 parser.add_argument('--mode',choices=['all','build','execute'],default='all')
 args=parser.parse_args();repo=args.repository.resolve();out=args.output.resolve()
 cache=Path.home()/'.cache/sunstoneos';source=cache/'sources'
@@ -37,7 +39,7 @@ if args.mode!='execute':
  (out/'assert.h').write_text('#pragma once\n_Noreturn void platform_panic(const char *,unsigned);\n#define assert(x) do {if(!(x))platform_panic(__FILE__,__LINE__);} while(0)\n')
  (out/'support.c').write_text('_Noreturn void platform_panic(const char *file,unsigned line){(void)file;(void)line;for(;;)__asm__ volatile("brk #0");}\n')
  (out/'link.ld').write_text('ENTRY(typec_native_check)\nSECTIONS { . = 0x40000000; .text : { *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }\n')
- units=['checks/a733-typec.c','drivers/usb/a733_typec.c','platform/a733/typec_native.c','drivers/i2c/a733_twi.c',
+ units=['checks/a733-typec.c','drivers/usb/a733_typec.c','drivers/usb/a733_typec_pd.c','platform/a733/typec_native.c','drivers/i2c/a733_twi.c',
   'drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/power/a733_pmic_native.c',
   'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/pinctrl/a733_pins_native.c','drivers/gpu/a733_gpu_resources.c',
   'platform/a733/counter_clock.c','arch/aarch64/device_memory.c','platform/a733/shared_locks.c','runtime/memory.c']
@@ -84,10 +86,10 @@ def put(a,v,n=4):u.mem_write(a,int(v).to_bytes(n,'little'))
 def get(a,n=4):return int.from_bytes(u.mem_read(a,n),'little')
 def variable(name,n=4):return get(symbols[name],n)
 def test_time():return variable('typec_test_time',8)
-put(0x07090160,0x10000002);put(0x0701019c,0x10001)
+put(0x07090160,0x10008002 if args.dcxo26 else 0x10000002);put(0x0701019c,0x10001)
 put(0x07025000,0x22);put(0x07025014,0x11);put(0x07025024,5)
 for base,control in [(0x07083000,0x40),(0x07084000,0)]:
- for off,v in [(0xc,control),(0x10,0xf8),(0x14,0x28),(0x20,0x30),(0x200,0xf81000),(0x210,0x80c0),(0x218,0x100010)]:put(base+off,v)
+ for off,v in [(0xc,control),(0x10,0xf8),(0x14,0x29 if args.dcxo26 and base==0x07083000 else 0x28),(0x20,0x30),(0x200,0xf81000),(0x210,0x80c0),(0x218,0x100010)]:put(base+off,v)
 u.cpr_write(3,3,14,0,0,24000000);u.reg_write(UC_ARM64_REG_PSTATE,0x345)
 u.reg_write(UC_ARM64_REG_SP,0x407ff000);u.reg_write(UC_ARM64_REG_LR,0x407fe000)
 state={'bus':{0x07083000:{'wire':0},0x07084000:{'wire':0}},'fusb':{1:0x80,0xa:255,0xe:255,0xf:1},
@@ -191,23 +193,23 @@ def write(uc,access,a,n,value,context):
  wire=b['wire'];data=b.get('data',0)
  if value==0x68:
   assert wire in (0,3);b['status']=8 if wire==0 else 0x10;b['wire']=wire+1
- elif value==0x48:
+ elif value in (0x48,0x4c):
   if wire==1:assert data==(0x6c if base==0x07083000 else 0x44);b['status']=0x18
   elif wire==2:b['selected']=data;b['status']=0x28
   elif wire==3:
    assert base==0x07084000;fusb_write(b['selected'],data);b['status']=0x28
   elif wire==4:assert data==(0x6d if base==0x07083000 else 0x45);b['status']=0x40
-  elif wire==5:b['data']=state['pmic'].get(b['selected'],0) if base==0x07083000 else fusb_read(b['selected']);b['status']=0x58
+  elif wire>=5:b['data']=state['pmic'].get(b['selected'],0) if base==0x07083000 else fusb_read(b['selected']);b['status']=0x50 if value==0x4c else 0x58
   else:raise AssertionError(('wire',base,wire,data))
   b['wire']=wire+1
  elif value==0x58:
-  assert wire in (4,6)
+  assert wire==4 or wire>=6
   delay=250 if base==0x07084000 and b['selected']==0x40 and variable('typec_delay_stop') else 25
   if delay==250:put(symbols['typec_delay_stop'],0);state['delayed_stop']=True
   b.update(control=0x58,stop=True,due=test_time()+delay);return
  else:raise AssertionError(('control',value))
  if base==0x07084000 and variable('typec_wire_fault'):b['status']=0x20
- b['control']=0x48;b['due']=test_time()+90
+ b['control']=0x48|(value&4);b['due']=test_time()+90
 # Only special instructions need callbacks; ordinary instructions execute natively.
 for base,data in segments:
  for i in range(0,len(data)-3,4):
@@ -234,7 +236,8 @@ def execute(name,start):
  if not passed:
   archive_state('stopped-'+name,[(b,bytes(u.mem_read(b,size))) for b,size in regions],state)
   raise SystemExit('Stopped without retry: inspect preserved CPU, hardware and memory state.')
-execute('attach-cc1-delayed-stop-detach',symbols['typec_native_check'])
+if args.block_only:put(symbols['typec_block_only'],1)
+execute('attach-cc1-block-read' if args.block_only else 'attach-cc1-delayed-stop-detach',symbols['typec_native_check'])
 assert state['delayed_stop']
 (out/'nominal-trace.json').write_text(json.dumps(state,indent=2)+'\n')
 # Source-derived expectations applied to the actual native trace, independently
@@ -244,10 +247,15 @@ enabled=next(t for kind,a,v,t in events if kind=='mmio' and a==0x07025010 and v&
 assert enabled-state['debounce_reads'][0][0]>=120000
 assert [v for kind,a,v,t in events if kind=='mmio' and a==0x0701019c]==[0x30001,0x30003]
 divider=[v for kind,a,v,t in events if kind=='mmio' and a==0x07084014]
-assert len(divider)==1 and 24000000==100000*(1<<(divider[0]&7))*(((divider[0]>>3)&15)+1)*10
+assert len(divider)==1 and (26000000 if args.dcxo26 else 24000000)==100000*(1<<(divider[0]&7))*(((divider[0]>>3)&15)+1)*10
 assert all(not(v&0x30) for kind,a,v,t in events if kind=='fusb' and a==2)
 assert [v for kind,a,v,t in events if kind=='fusb' and a==3]==[0xb0]
 
+if args.block_only:
+ assert sum(1 for kind,a,v,t in events if kind=='mmio' and a==0x0708400c and v==0x4c)==2
+ assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items())
+ (out/'completed.json').write_text(json.dumps({'result':'pass','physical':False,'scope':'actual native adapter: byte default-host regression, three-byte repeated-START block read, two ACKs, last NACK and completed STOP'},indent=2)+'\n')
+ raise SystemExit(0)
 assert all(which in checkpoints for which in (1,2,3,4))
 for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal'),(3,3,'retained-i2c-independent-power-off'),
  (4,3,'provider-stall-power-off'),(5,3,'invalid-host-token'),(6,3,'registry-busy-pending-shutdown'),(7,4,'pre-pin-authority-loss')]:

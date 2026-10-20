@@ -49,14 +49,20 @@ static int rd(struct a733_twi *s,unsigned off,uint32_t *v)
 {return tick(s) && s->ops.read(s->context,s->base+off,v)==1 && tick(s);}
 static int wr(struct a733_twi *s,unsigned off,uint32_t v)
 {return tick(s) && s->ops.write(s->context,s->base+off,v)==1 && tick(s);}
-int a733_twi_request(struct a733_twi *s,uint8_t address,uint16_t reg,unsigned reading,uint8_t value,uint64_t d)
+int a733_twi_request_block(struct a733_twi *s,uint8_t address,uint16_t reg,
+    unsigned reading,const uint8_t *data,unsigned length,uint64_t d)
 {
     if(!s || s->self!=s || s->state!=A733_TWI_READY || s->entered || reading>1 ||
+       !length || length>sizeof(s->block) || (!reading && (!data || !separate(s,sizeof(*s),data,length))) ||
        address<8 || address>0x77 || (s->register_bytes==1 && reg>255) || !d || d<=s->last_now ||
        s->ops.current(s->context)!=1)return -1;
-    s->deadline=d;s->address=address;s->reg=reg;s->reading=(uint8_t)reading;s->value=value;
+    s->deadline=d;s->address=address;s->reg=reg;s->reading=(uint8_t)reading;
+    s->length=(uint8_t)length;
+    for(unsigned i=0;i<length;i++)s->block[i]=reading?0:data[i];
     s->index=0;s->phase=0;s->received=0;s->last_status=0;s->state=A733_TWI_BEGIN;return 0;
 }
+int a733_twi_request(struct a733_twi *s,uint8_t address,uint16_t reg,unsigned reading,uint8_t value,uint64_t d)
+{return a733_twi_request_block(s,address,reg,reading,&value,1,d);}
 static int idle(struct a733_twi *s)
 {
     uint32_t v;
@@ -91,31 +97,33 @@ int a733_twi_poll(struct a733_twi *s)
         if(s->ops.authenticate(s->context)!=1)goto fault;
         if(s->index==0 || (s->reading && s->index==2u+s->register_bytes)) {
             if(!wr(s,0xc,ENABLE|FLAG|0x20))goto fault;
-        } else if(s->reading && s->index==4u+s->register_bytes) {
-            if(!wr(s,0xc,ENABLE|FLAG))goto fault; /* Last receive: NACK. */
+        } else if(s->reading && s->index>=4u+s->register_bytes) {
+            if(!wr(s,0xc,ENABLE|FLAG|(s->index==3u+s->register_bytes+s->length?0:4u)))goto fault; /* ACK all but last byte. */
         } else {
             v=s->index==1 ? (uint32_t)s->address<<1 :
                 s->index<2u+s->register_bytes ?
                   (s->reg>>(8u*(1u+s->register_bytes-s->index)))&255 :
-                s->reading ? ((uint32_t)s->address<<1)|1u : s->value;
+                s->reading ? ((uint32_t)s->address<<1)|1u : s->block[s->index-2u-s->register_bytes];
             if(!wr(s,8,v) || !wr(s,0xc,ENABLE|FLAG))goto fault;
         }
         s->state=A733_TWI_WAIT;break;
     case A733_TWI_WAIT:
         if(!rd(s,0xc,&v))goto fault;
         if(!(v&FLAG))break;
-        if((v&0xf5)!=ENABLE)goto fault;
+        if((v&0xf5)!=(ENABLE|((s->reading&&s->index>=4u+s->register_bytes&&
+            s->index<3u+s->register_bytes+s->length)?4u:0u)))goto fault;
         if(!rd(s,0x10,&v))goto fault;
         s->last_status=v;
         unsigned expected=s->index==0 ? 0x08 : s->index==1 ? 0x18 :
             s->index<2u+s->register_bytes ? 0x28 : !s->reading ? 0x28 :
-            s->index==2u+s->register_bytes ? 0x10 : s->index==3u+s->register_bytes ? 0x40 : 0x58;
+            s->index==2u+s->register_bytes ? 0x10 : s->index==3u+s->register_bytes ? 0x40 :
+            s->index==3u+s->register_bytes+s->length ? 0x58 : 0x50;
         if(v!=expected)goto fault; /* Includes arbitration loss: never STOP. */
-        if(s->reading && s->index==4u+s->register_bytes) {
+        if(s->reading && s->index>=4u+s->register_bytes) {
             if(!rd(s,8,&v) || v>255)goto fault;
-            s->received=(uint8_t)v;
+            s->received=(uint8_t)v;s->block[s->index-4u-s->register_bytes]=(uint8_t)v;
         }
-        s->state=++s->index==(s->reading?5u:3u)+s->register_bytes?A733_TWI_STOP:A733_TWI_SEND;break;
+        s->state=++s->index==(s->reading?4u:2u)+s->register_bytes+s->length?A733_TWI_STOP:A733_TWI_SEND;break;
     case A733_TWI_STOP:
         if(s->ops.authenticate(s->context)!=1 || !wr(s,0xc,ENABLE|FLAG|0x10))goto fault;
         s->state=A733_TWI_STOP_WAIT;break;
@@ -136,14 +144,16 @@ int a733_twi_poll(struct a733_twi *s)
 fault:
     s->entered=0;return fail(s);
 }
-int a733_twi_take(struct a733_twi *s,uint8_t *value)
+int a733_twi_take_block(struct a733_twi *s,uint8_t *value,unsigned length)
 {
-    if(!s || s->self!=s || s->state!=A733_TWI_COMPLETE || s->entered ||
-       (s->reading && (!value || !separate(s,sizeof(*s),value,1))) || s->ops.current(s->context)!=1)return -1;
+    if(!s || s->self!=s || s->state!=A733_TWI_COMPLETE || s->entered || length!=s->length ||
+       (s->reading && (!value || !separate(s,sizeof(*s),value,length))) || s->ops.current(s->context)!=1)return -1;
     if(!tick(s) || s->ops.authenticate(s->context)!=1)return fail(s);
-    if(s->reading)*value=s->received;
+    if(s->reading)for(unsigned i=0;i<length;i++)value[i]=s->block[i];
     s->received=0;s->state=A733_TWI_READY;return 1;
 }
+int a733_twi_take(struct a733_twi *s,uint8_t *value)
+{return a733_twi_take_block(s,value,1);}
 int a733_twi_retain(struct a733_twi *s)
 {
     if(!s || s->self!=s || s->state==A733_TWI_FAULT || s->entered || s->ops.current(s->context)!=1)return -1;

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include "a733_twi.h"
+#include "a733_typec_pd.h"
 
 #define A733_TYPEC_FRESH_US UINT64_C(10000)
 #define A733_TYPEC_SERVICE_GAP_US UINT64_C(1000)
@@ -36,6 +37,7 @@ struct a733_typec_config {
      * GPIO/bus initial ownership excludes all remote/other role writers.
      */
     unsigned source_min_mv,source_max_mv,source_ma,zero_threshold_max_mv;
+    unsigned displayport; /* Opt-in PD2 5V/500mA and four-lane DP C/E profile. */
     uint8_t device_id; /* Exact qualified FUSB302MPX version/revision, 0x80..0x82. */
 };
 enum a733_typec_state {
@@ -56,6 +58,9 @@ struct a733_typec {
     atomic_uint entered,publishing,revoked;
     atomic_uint_fast64_t progress_until,power_until;
     struct a733_typec_token published;
+    struct a733_typec_dp_token dp_published;
+    struct a733_typec_pd pd;
+    unsigned pd_turn;
     uint64_t now,last_service,startup_deadline,transaction_deadline,until,
         candidate_since,shutdown_deadline,cycle_start;
     enum a733_typec_state state,after_measure;
