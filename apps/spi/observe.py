@@ -16,7 +16,9 @@ def decode(frame,session):
         return dict(status=status,bytes=0)
     payload=frame[128:]
     if count!=96 or len(payload)!=96 or frame[64:96]!=hashlib.sha256(payload).digest():raise ValueError('SPI output hash/extent differs')
-    observed,hz,tx,rx,kind,port,cs=struct.unpack_from('<Q6I',payload)
-    if not observed or hz!=500000 or (tx,rx)!=struct.unpack_from('<2I',session,792) or (kind,port,cs)!=(3,3,0):raise ValueError('SPI exchange selection differs')
+    observed,hz,tx,rx,kind,port,notifications=struct.unpack_from('<Q6I',payload)
+    if not observed or hz!=500000 or (tx,rx)!=struct.unpack_from('<2I',session,792) or (kind,port)!=(3,3):raise ValueError('SPI exchange selection differs')
+    irq=struct.unpack_from('<Q',session,600)[0]==2
+    if (irq and not 1<=notifications<=32) or (not irq and notifications):raise ValueError('SPI interrupt observation differs')
     if payload[32:64]!=session[800:832] or payload[64+rx:96]!=bytes(32-rx):raise ValueError('SPI request or response padding differs')
-    return dict(status=1,bytes=96,copied_verified=True,observed_us=observed,actual_hz=hz,request_hex=payload[32:32+tx].hex(),response_hex=payload[64:64+rx].hex())
+    return dict(status=1,bytes=96,copied_verified=True,interrupt_notifications=notifications,observed_us=observed,actual_hz=hz,request_hex=payload[32:32+tx].hex(),response_hex=payload[64:64+rx].hex())

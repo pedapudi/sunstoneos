@@ -68,6 +68,7 @@ struct a733_spi_platform {
     uint64_t deadline,last_now,wait_since;
     uint32_t initial_clock,initial_bus;
     unsigned initialized,stage,fault,held,retained,core_call,pins_released;
+    unsigned interrupt_armed,interrupt_service;
 };
 /* Private zero-once state; objects/managers/input spans are disjoint and live.
  * Callbacks are bounded and cannot reenter. All providers share one monotonic
@@ -83,6 +84,17 @@ enum a733_spi_platform_result a733_spi_platform_poll(struct a733_spi_platform *,
 enum a733_spi_platform_result a733_spi_platform_submit(struct a733_spi_platform *,
     const struct a733_spi_transfer *,uint64_t deadline);
 enum a733_spi_platform_result a733_spi_platform_reap(struct a733_spi_platform *,uint64_t deadline);
+/* Fixed FIFO-sized interrupt completion: call after SETUP reaches ACTIVE and
+ * all TX bytes are queued. RX must fit the192-byte FIFO. Both functions run
+ * only in the owner task with the source masked/inactive at the GIC.
+ * start enables source-defined TC/RX-overflow/RX-underflow/TX-overflow IRQs.
+ * The caller then unmasks its configured source and waits for a real ISR claim.
+ * interrupt_poll requires that claim. It disables IER before bounded deferred
+ * FIFO/status/hold work; it never acknowledges a GIC interrupt or resets DMA.
+ * Polling without a claim is not an interrupt completion path. All leases and
+ * buffers remain held after uncertainty. */
+enum a733_spi_platform_result a733_spi_platform_interrupt_start(struct a733_spi_platform *);
+enum a733_spi_platform_result a733_spi_platform_interrupt_poll(struct a733_spi_platform *,unsigned budget);
 /* Only READY with no borrowed buffers can close. Mask/drain, restore pins with
  * CS inactive, disable controller, assert reset, restore clocks, release tokens.
  * No forced abort. Uncertainty retains every unreleased token and owned mutex. */

@@ -6,7 +6,7 @@
 int spi_session_valid(const struct spi_session *s)
 {
  if(!s||!a733_board_session_valid(&s->board,0)||s->board.workload!=2||
- s->magic!=A733_SPI_SESSION_MAGIC||s->version!=1||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
+ s->magic!=A733_SPI_SESSION_MAGIC||(s->version!=1&&s->version!=2)||s->bytes!=sizeof(*s)||!s->owner||!s->authority||
  s->owner==s->board.pmic_owner||s->owner==s->board.usb0_owner||
  s->operation_timeout_us<250000||s->operation_timeout_us>10000000||
  !s->tx_bytes||s->tx_bytes>16||!s->rx_bytes||s->rx_bytes>32||

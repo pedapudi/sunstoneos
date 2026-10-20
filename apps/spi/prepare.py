@@ -27,7 +27,7 @@ FACTS={
 def session_check(raw):
     require(len(raw)==832,'SPI session must be832bytes.')
     require(board.session_check(raw[:592])==2,'SPI requires USB0/provider selection2.')
-    require(struct.unpack_from('<3Q',raw,592)==(0x4153373353504131,1,832),'Invalid SPI session.')
+    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373353504131 and struct.unpack_from('<Q',raw,600)[0] in (1,2) and struct.unpack_from('<Q',raw,608)[0]==832,'Invalid SPI session.')
     owner,authority,timeout=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456) and
         250000<=timeout<=10000000,'Invalid SPI ownership or operation bound.')

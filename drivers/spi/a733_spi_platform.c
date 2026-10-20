@@ -11,6 +11,9 @@
 #define RETAINED A733_SPI_PLATFORM_RETAINED
 #define INVALID A733_SPI_PLATFORM_INVALID
 #define CLOCK_MASK UINT32_C(0x87001f1f)
+/* Pinned spi-ng enables TC plus ERR (TX overflow, RX under/overflow).
+ * TX underrun is deliberately excluded by that source. */
+#define INTERRUPTS UINT32_C(0x1700)
 enum { S_CLOCK,S_ADMIT,S_BASELINE,S_MASK_WAIT,S_ENABLE,S_HOLD_RESET,
     S_BEGIN,S_CONFIGURE,S_PIN_CHECK,S_PINS,S_READY,S_STOP_ADMIT,S_DRAIN,
     S_UNPIN,S_CLOSE,S_RESET,S_STOP_HOLD,S_RESTORE,S_UNCLOCK,S_CLOSED };
@@ -259,6 +262,7 @@ enum a733_spi_platform_result a733_spi_platform_poll(struct a733_spi_platform *s
     if(!s||!s->initialized||!budget||budget>64)return INVALID;if(!take(s))return BUSY;
     if(s->fault)return finish(s,fault(s));if(s->ops.current(s->context)!=1)return finish(s,INVALID);
     if(s->stage==S_CLOSED)return finish(s,CLOSED);
+    if(s->interrupt_armed&&!s->interrupt_service)return finish(s,INVALID);
     /* Idle status is cached. New commands supply fresh deadlines and validate
      * all live resources before acting; an expired prior command is not active. */
     if(s->stage==S_READY&&s->spi.state==A733_SPI_READY)return finish(s,READY);
@@ -269,6 +273,42 @@ enum a733_spi_platform_result a733_spi_platform_poll(struct a733_spi_platform *s
     if(s->stage==S_CLOCK||s->stage==S_ADMIT||s->stage==S_PINS||s->stage==S_STOP_ADMIT||s->stage==S_UNPIN||s->stage==S_UNCLOCK)r=metadata(s);
     else r=registers(s,budget);
     return finish(s,r);
+}
+enum a733_spi_platform_result a733_spi_platform_interrupt_start(struct a733_spi_platform *s)
+{
+    if(!s||!s->initialized)return INVALID;if(!take(s))return BUSY;
+    if(s->fault)return finish(s,fault(s));
+    if(s->ops.current(s->context)!=1||s->stage!=S_READY||s->spi.state!=A733_SPI_ACTIVE||
+       s->interrupt_armed||s->interrupt_service||s->spi.sent!=s->spi.transfer.tx_bytes||
+       s->spi.transfer.tx_bytes>64||s->spi.transfer.rx_bytes>192)return finish(s,INVALID);
+    int g=guard(s);if(g<=0)return finish(s,g==0?BUSY:fault(s));
+    int held=lock(s);if(held<0)return finish(s,fault(s));if(!held)return finish(s,BUSY);
+    uint32_t enabled;
+    /* Submission already cleared stale status. DONE may legitimately arrive
+     * before IER is enabled; its latched level must survive the later GIC arm. */
+    if(!profile(s)||!rd(s,s->spi.plan.base+0x10,&enabled)||enabled||
+       !wr(s,s->spi.plan.base+0x10,INTERRUPTS)||
+       !rd(s,s->spi.plan.base+0x10,&enabled)||enabled!=INTERRUPTS||!time_ok(s))
+        return finish(s,fault(s));
+    s->interrupt_armed=1;return finish(s,PENDING);
+}
+enum a733_spi_platform_result a733_spi_platform_interrupt_poll(struct a733_spi_platform *s,unsigned budget)
+{
+    if(!s||!s->initialized||!budget||budget>64)return INVALID;
+    if(!s->interrupt_service){
+        if(!take(s))return BUSY;if(s->fault)return finish(s,fault(s));
+        if(s->ops.current(s->context)!=1||s->stage!=S_READY||!s->interrupt_armed||
+           s->spi.state!=A733_SPI_ACTIVE)return finish(s,INVALID);
+        int g=guard(s);if(g<=0)return finish(s,g==0?BUSY:fault(s));
+        int held=lock(s);if(held<0)return finish(s,fault(s));if(!held)return finish(s,BUSY);
+        uint32_t enabled,status;
+        if(!profile(s)||!rd(s,s->spi.plan.base+0x10,&enabled)||enabled!=INTERRUPTS||
+           !wr(s,s->spi.plan.base+0x10,0)||!rd(s,s->spi.plan.base+0x10,&enabled)||enabled||
+           !rd(s,s->spi.plan.base+0x14,&status)||!(status&INTERRUPTS)||!time_ok(s))
+            return finish(s,fault(s));
+        s->interrupt_armed=0;s->interrupt_service=1;finish(s,PENDING);
+    }
+    return a733_spi_platform_poll(s,budget);
 }
 static enum a733_spi_platform_result command(struct a733_spi_platform *s,const struct a733_spi_transfer *t,uint64_t deadline,unsigned op)
 {
@@ -284,7 +324,9 @@ static enum a733_spi_platform_result command(struct a733_spi_platform *s,const s
         /* All fallible admission and time observations precede buffer release.
          * Reap success is final; no later callback can claim retained buffers. */
         if(!time_ok(s))return finish(s,fault(s));
-        return finish(s,a733_spi_reap(&s->spi)==A733_SPI_READY?READY:INVALID);
+        int reaped=a733_spi_reap(&s->spi)==A733_SPI_READY;
+        if(reaped)s->interrupt_service=0;
+        return finish(s,reaped?READY:INVALID);
     }
     s->core_call=1;int r=a733_spi_submit(&s->spi,t,deadline);s->core_call=0;
     if(r<0)return finish(s,INVALID);if(r==A733_SPI_FAULT||!time_ok(s))return finish(s,fault(s));

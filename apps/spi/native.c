@@ -1,4 +1,5 @@
 #include "spi.h"
+#include "irq.h"
 #include "boot.h"
 #include "aarch64_device_memory.h"
 #include "a733_storage_digest.h"
@@ -10,7 +11,7 @@ int spi_live(void)
  !atomic_load_explicit(&providers.shared.locks.retained,memory_order_acquire)&&
  a733_smp_counter()/24<board.session.deadline_us-10000;}
 void spi_cancel(void)
-{atomic_store_explicit(&spi.failed,1,memory_order_release);atomic_store_explicit(&spi.result,2,memory_order_release);}
+{spi_irq_stop();atomic_store_explicit(&spi.failed,1,memory_order_release);atomic_store_explicit(&spi.result,2,memory_order_release);}
 int spi_output_ready(void)
 {return spi_live()&&atomic_load_explicit(&spi.result,memory_order_acquire)==1;}
 static int mappings(void)

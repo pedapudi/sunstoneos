@@ -1,4 +1,5 @@
 #include "spi.h"
+#include "irq.h"
 #include "boot.h"
 #include "a733_storage_digest.h"
 #include <string.h>
@@ -33,7 +34,9 @@ static int supply_valid(void)
 int spi_publish(void)
 {
  memset(spi.payload,0,sizeof(spi.payload));uint64_t observed=a733_smp_counter()/24;
- memcpy(spi.payload,&observed,8);uint32_t values[]={spi.platform.spi.plan.actual_hz,spi.session.tx_bytes,spi.session.rx_bytes,A733_SPI_WRITE_READ,3,0};
+ unsigned notifications=spi.session.version==2?spi_irq_notifications():0;
+ if(spi.session.version==2&&!notifications)return retain_failure();
+ memcpy(spi.payload,&observed,8);uint32_t values[]={spi.platform.spi.plan.actual_hz,spi.session.tx_bytes,spi.session.rx_bytes,A733_SPI_WRITE_READ,3,notifications};
  memcpy(spi.payload+8,values,sizeof(values));memcpy(spi.payload+32,spi.tx,spi.session.tx_bytes);memcpy(spi.payload+64,spi.rx,spi.session.rx_bytes);
  storage_digest_bytes(spi.payload,sizeof(spi.payload),spi.digest);
  unsigned empty=0;
@@ -82,7 +85,23 @@ int spi_step(void)
   if(s==A733_SPI_PLATFORM_BUSY)return 0;
   if(s!=A733_SPI_PLATFORM_PENDING)return retain_failure();spi.stage=7;return 0;
  case 7:
+  if(spi.session.version==2&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
   s=a733_spi_platform_poll(&spi.platform,32);
+  if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
+  if(spi.session.version==2&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
+  if(s==A733_SPI_PLATFORM_PENDING||s==A733_SPI_PLATFORM_BUSY)return 0;
+  if(s!=A733_SPI_PLATFORM_COMPLETE||spi.session.version==2)return retain_failure();spi.stage=8;return 0;
+ case 12:
+   s=a733_spi_platform_interrupt_start(&spi.platform);
+   if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
+   if(s==A733_SPI_PLATFORM_BUSY)return 0;
+   if(s!=A733_SPI_PLATFORM_PENDING)return retain_failure();spi.stage=10;return 0;
+ case 10:
+  {int armed=spi_irq_arm();if(armed<0)return retain_failure();if(!armed)return 0;}
+  spi.stage=11;return 0;
+ case 11:
+  {int claimed=spi_irq_claim();if(claimed<0)return retain_failure();if(!claimed)return 0;}
+  s=a733_spi_platform_interrupt_poll(&spi.platform,32);
   if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
   if(s==A733_SPI_PLATFORM_PENDING||s==A733_SPI_PLATFORM_BUSY)return 0;
   if(s!=A733_SPI_PLATFORM_COMPLETE)return retain_failure();spi.stage=8;return 0;
@@ -98,4 +117,11 @@ int spi_step(void)
  }
 }
 void spi_task(void *context)
-{(void)context;for(;;){spi_step();vTaskDelay(1);}}
+{
+ (void)context;for(;;){
+  spi_step();
+  if(spi.session.version==2&&(spi.stage==10||spi.stage==11)&&
+     !atomic_load_explicit(&spi.result,memory_order_acquire))spi_irq_wait();
+  else vTaskDelay(1);
+ }
+}
