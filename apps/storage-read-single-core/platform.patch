@@ -53,7 +53,7 @@
      uint64_t sctlr;
      __asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
      sctlr |= (1UL << 12) | (1UL << 2) | 1;
-@@ -134,6 +149,22 @@
+@@ -134,6 +149,26 @@
 
  void vApplicationFPUSafeIRQHandler(uint64_t interrupt)
  {
@@ -68,6 +68,10 @@
 +#ifdef SUNSTONE_GPU_SINGLE_CORE
 +    extern void gpu_application_irq(void);
 +    if(interrupt==95){gpu_application_irq();return;}
++#endif
++#ifdef SUNSTONE_ACCELERATORS
++    extern void accelerator_gpu_irq(void);
++    if(interrupt==95){accelerator_gpu_irq();return;}
 +#endif
 +#ifdef SUNSTONE_NPU_INTERRUPT
 +    extern void npu_application_irq(void);

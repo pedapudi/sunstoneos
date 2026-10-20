@@ -198,6 +198,12 @@ void sd_single_core_monitor_init(void)
 #ifdef SUNSTONE_NPU_INTERRUPT
     if(!npu_irq_route_capture(&saved.npu_irq,admission.startup_deadline))finish(4);
 #endif
+#ifdef SUNSTONE_ACCELERATORS
+    /* A retained combined lifetime must begin without an inherited GPU
+     * interrupt. Disabling delivery alone cannot retire a pending/active owner. */
+    if((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|
+        mmio_read(GICD_BASE+0x308))&(1U<<31))finish(4);
+#endif
     saved.ready = 1;
     // Disable groups before changing routing or per-interrupt configuration.
     mmio_write(GICD_BASE, saved.ctlr & ~7U);
@@ -244,7 +250,7 @@ void sd_single_core_monitor_init(void)
                      "msr cptr_el3, xzr" :: "r"(value));
     value = 0x33ff;
     __asm__ volatile("msr cptr_el2, %0" :: "r"(value));
-#ifdef SUNSTONE_GPU_SINGLE_CORE
+#if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_ACCELERATORS)
     /* SPI95 stays disabled until the real service owns its interrupt binding. */
     mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1U<<31));
     mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1U<<31));
@@ -252,6 +258,16 @@ void sd_single_core_monitor_init(void)
     mmio_write(GICD_BASE+0x45c,(mmio_read(GICD_BASE+0x45c)&0x00ffffff)|0xd8000000);
     *(volatile uint64_t *)(GICD_BASE+0x62f8)=0;
     __asm__ volatile("dsb sy":::"memory");
+#ifdef SUNSTONE_ACCELERATORS
+    if(!(mmio_read(GICD_BASE+0x88)&(1U<<31))||
+       (mmio_read(GICD_BASE+0xd08)&(1U<<31))||
+       (mmio_read(GICD_BASE+0xc14)&(3U<<30))||
+       (mmio_read(GICD_BASE+0x45c)&0xff000000U)!=0xd8000000U||
+       *(volatile uint64_t *)(GICD_BASE+0x62f8)||
+       ((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|
+         mmio_read(GICD_BASE+0x308))&(1U<<31))||
+       counter()>=admission.startup_deadline)finish(4);
+#endif
 #endif
     mmio_write(GICD_BASE, (saved.ctlr & ~7U) | 0x33U);
     wait_clear(GICD_BASE, 1U << 31);

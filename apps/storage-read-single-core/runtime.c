@@ -12,7 +12,9 @@
 #include "aarch64_device_memory.h"
 #include <string.h>
 /* Immutable producer identity is checked alongside the existing service geometry. */
-#ifdef SUNSTONE_GPU_SINGLE_CORE
+#ifdef SUNSTONE_ACCELERATORS
+__attribute__((used,retain)) const uint64_t accelerator_single_core_geometry[4]={ACCELERATOR_SESSION_MAGIC,1,sizeof(struct accelerator_session),20};
+#elif defined(SUNSTONE_GPU_SINGLE_CORE)
 __attribute__((used,retain)) const uint64_t gpu_single_core_geometry[4]={UINT64_C(0x4153373347505331),1,592,60};
 #elif defined(SUNSTONE_THERMAL_SINGLE_CORE)
 __attribute__((used,retain)) const uint64_t thermal_single_core_geometry[4]={UINT64_C(0x4153373354485331),1,808,60};

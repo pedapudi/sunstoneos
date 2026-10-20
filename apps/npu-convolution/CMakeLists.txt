@@ -53,6 +53,7 @@ if(A733_NPU_SUPERVISED)
   configure_file("${npu_build}/boot-supervised.c" "${npu_build}/boot.c" COPYONLY)
   list(REMOVE_ITEM npu_sources "${a733_root}/platform/a733-smp-cached/admission.c")
   list(APPEND npu_sources "${a733_root}/apps/npu-convolution/admission.c"
+    "${a733_root}/apps/npu-convolution/session-valid.c"
     "${a733_root}/apps/npu-convolution/clock.c" "${a733_root}/drivers/npu/a733_npu_pll_native.c"
     "${a733_root}/drivers/storage/storage_digest.c")
 else()
