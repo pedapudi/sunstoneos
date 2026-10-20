@@ -83,9 +83,36 @@ def main():
   Path(__file__),ROOT/'checks/displayport-native.py',ROOT/'checks/displayport-controller.py')}
  save(a.output/'inputs.json',inputs)
  class Machine(base.Machine):
+  def eligible(self):
+   core=self.u.reg_read(UC_ARM64_REG_TPIDR_EL1)
+   if self.u.reg_read(UC_ARM64_REG_PSTATE)&0x80 or core>=8:return False
+   return all(self.get(self.image.address(symbol)+core*8)==0 for symbol in ('ullCriticalNestings','ullPortInterruptNestings'))
   def code(self,u,at,n,unused):
    name=self.hooks.get(at)
    assert name not in ('vTaskEnterCritical','vTaskExitCritical'), 'unexpected unmodeled critical-section API'
+   queue=self.u.reg_read(UC_ARM64_REG_X0)
+   if name=='xQueueSemaphoreTake':
+    wait=self.u.reg_read(UC_ARM64_REG_X0+1);held=self.holders.get(queue,0)
+    pending=self.waiters.get(self.task)
+    if pending:
+     assert pending['queue']==queue
+     if not held:del self.waiters[self.task]
+     elif self.time>=pending['until']:
+      del self.waiters[self.task];self.wait_events.append(['timeout',self.time,self.task,queue]);self.ret(0);return
+    if held and wait:
+     assert held!=self.task and self.eligible()
+     if not pending:
+      self.wait_sequence+=1
+      pending=dict(queue=queue,until=(self.time//1000+wait)*1000,ticket=self.wait_sequence,blocked=True)
+      self.waiters[self.task]=pending
+     elif not pending['blocked']:
+      # A woken call may find that another task took the mutex first. Its
+      # timeout stays fixed, but rejoining the event list gets a new ticket.
+      self.wait_sequence+=1;pending['ticket']=self.wait_sequence;pending['blocked']=True
+     self.wait_events.append(['block',self.time,self.task,queue,held,pending['until']])
+     # Keep PC at the take entry. On release or timeout, this same API call
+     # completes before its native caller proceeds.
+     self.boundary=('mutex',0);self.stopped=True;self.u.emu_stop();return
    inline=at in getattr(self,'yield_sites',set())
    if inline or name in ('vTaskDelay','vPortYield','vTaskSuspend'):
     ticks=self.u.reg_read(UC_ARM64_REG_X0) if name=='vTaskDelay' else 0
@@ -96,16 +123,22 @@ def main():
     self.stopped=True;self.u.emu_stop();return
    if name=='a733_counter_clock_now':self.time+=1;self.counter_calls+=1
    super().code(u,at,n,unused)
+   if name=='xQueueGenericSend':
+    pending=[(handle,slot) for handle,slot in self.waiters.items()
+     if slot['queue']==queue and slot['blocked'] and self.time<slot['until']]
+    if pending:
+     assert not self.holders.get(queue,0)
+     handle,slot=min(pending,key=lambda row:(-self.task_priorities[row[0]],row[1]['ticket']))
+     slot['blocked']=False
+     target=next(task for task in self.runnable_tasks if task['handle']==handle);target['wake']=self.time
+     self.wait_events.append(['wake',self.time,handle,queue,self.task])
+     if self.task_priorities[handle]>self.task_priorities[self.task] and self.eligible():
+      self.boundary=('unblock',0);self.stopped=True;self.u.emu_stop();return
    if name=='a733_counter_clock_now':
     # Complete the modeled counter function before considering an interrupt:
     # its out parameter, return value and caller PC are already coherent.
     if self.time>=self.next_tick:self.tick_pending=True
-    core=self.u.reg_read(UC_ARM64_REG_TPIDR_EL1)
-    unmasked=not(self.u.reg_read(UC_ARM64_REG_PSTATE)&0x80)
-    zero=core<8
-    for symbol in ('ullCriticalNestings','ullPortInterruptNestings'):
-     zero=zero and self.get(self.image.address(symbol)+core*8)==0
-    if self.tick_pending and unmasked and zero:
+    if self.tick_pending and self.eligible():
      self.next_tick=(self.time//1000+1)*1000;self.tick_pending=False
      self.tick_events.append([self.time,self.task]);self.boundary=('tick',0)
      self.stopped=True;self.u.emu_stop()
@@ -150,6 +183,8 @@ def main():
  m.tick_pending=scheduler.get('tick_pending',False);m.tick_events=scheduler.get('tick_events',[])
  m.counter_calls=0;slice_trace=[];wire_trace=[]
  tasks=scheduler['tasks'];last=scheduler['last'];sequence=scheduler['sequence']
+ m.runnable_tasks=tasks;m.task_priorities={task['handle']:task['priority'] for task in tasks}
+ m.waiters=scheduler.get('waiters',{});m.wait_sequence=scheduler.get('wait_sequence',0);m.wait_events=scheduler.get('wait_events',[])
  assert scheduler['phase'] in ('detached-validation-complete','scheduler-boundary','scheduler-task')
  interrupted=scheduler.get('active_handle') if scheduler['phase']=='scheduler-task' else None
  if scheduler['phase']=='scheduler-task':assert interrupted in [t['handle'] for t in tasks]
@@ -227,7 +262,8 @@ def main():
    active['context']=m.u.context_save();phase='scheduler-boundary';active['runs']+=1
    kind,ticks=m.boundary
    if kind=='yield':active['yields']+=1;active['wake']=m.time;m.time+=1
-   elif kind=='tick':active['wake']=m.time
+   elif kind in ('tick','unblock'):active['wake']=m.time
+   elif kind=='mutex':active['wake']=m.waiters[active['handle']]['until']
    elif kind=='suspend':active['wake']=1<<60
    else:assert ticks==1;active['delays']+=1;active['wake']=(m.time//1000+ticks)*1000
    last[active['handle']]=sequence;sequence+=1
@@ -241,7 +277,7 @@ def main():
     # Keep the last coherent application boundary before the first controller
     # operation, so later lower-model fixes need not repeat PD or supply work.
     point=a.output/'pre-controller';point.mkdir();m.checkpoint(point,'negotiated')
-    (point/'scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase='scheduler-boundary',tasks=tasks,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events)))
+    (point/'scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase='scheduler-boundary',tasks=tasks,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events)))
     (point/'hardware.pickle').write_bytes(pickle.dumps(hw.export()))
     save(point/'inputs.json',inputs);save(point/'expected.json',baseline)
     files={f.name:dict(bytes=f.stat().st_size,sha256=sha(f)) for f in point.iterdir() if f.is_file()}
@@ -276,12 +312,12 @@ def main():
    file=a.output/('terminal-ram-'+str(i)+'.bin');memory.append(dict(address=at,bytes=count,file=str(file),sha256=sha(file)))
   save(a.output/'terminal-memory.json',dict(image_sha256=image_hash,memory=memory,reply_sha256=sha(a.output/'reply.bin'),physical=False,scope=__doc__))
   save(a.output/'summary.json',dict(passed=True,physical=False,image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),
-   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,tick_events=m.tick_events,scope=__doc__))
+   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,tick_events=m.tick_events,mutex_events=m.wait_events,scope=__doc__))
   print('PASS actual composed native retained-stop reply')
  except BaseException as error:
   if active is not None and phase=='scheduler-task':active['context']=m.u.context_save()
   m.checkpoint(a.output,'stopped')
-  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events)))
+  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events,waiters=m.waiters,wait_sequence=m.wait_sequence,wait_events=m.wait_events)))
   (a.output/'stopped-hardware.pickle').write_bytes(pickle.dumps(hw.export()))
   (a.output/'stopped-display.pickle').write_bytes(pickle.dumps(display.export()))
   save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress))
