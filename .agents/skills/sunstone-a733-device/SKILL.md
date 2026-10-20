@@ -154,6 +154,13 @@ Prevent recurring fixture failures at setup:
   and deadlines together before running cases. A session-sealing fixture can
   leave provider fields unused; validate its pin and PMIC handoff before reusing
   it for application construction.
+  Select the USB reference mode from the compiled admission profile. Ordinary
+  cached-SMP board consumers require cold mode 1; ROM-takeover mode 2 is admitted
+  only by the explicit `SUNSTONE_SD_SINGLE_CORE` workload 2 branch. A generic
+  single-core provider fixture default does not authorize mode 2 for cached SMP.
+  Exercise the actual `a733_board_session_valid` before provider construction.
+  On a profile mismatch, audit the remaining provider predicates together before
+  retrying, preserving the failed setup and completed work.
   Derive modeled pin readbacks from the actual field helper. On A733 banked
   PIO, mux and drive fields use four-bit spacing, while pull fields use two-bit
   spacing. Two adjacent drive-code-1 pins therefore require `0x11`, not `0x5`.

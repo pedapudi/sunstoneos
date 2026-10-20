@@ -339,3 +339,32 @@ sample-selector field 3 and channel mask 1. It preserves the two existing
 64-byte observation groups; each uses only its channel-0 record and zeros the
 three unused records. The host validates raw codes 0–63, strictly later time
 and sequence, zero padding and the complete session/output digests.
+
+The focused software evidence contains 15 LRADC driver cases, one additive
+lease-conflict check, one GPADC denied-entry correction case, one linked native
+LRADC application path, four native write refusals and seven host refusals.
+The native path executes the actual session validator/publication, task wrapper,
+clock registry, register mutex, controller driver, native access adapter,
+collector, serializer and host capture. It copies fresh raw codes 0 and 63,
+then observes configured conversion and local-interrupt disable. PMIC/rail
+service results, board readiness, RTOS APIs, translations, analog conversion
+and USB transport are modeled. The function-call model runs at EL1h; it does
+not construct or validate actual FreeRTOS task contexts or SMP scheduling.
+
+The coordinator separately passed two SRAM admission cases and five inherited
+interrupt-state guard cases on the same image. The corrected model session
+reuses that exact launcher binary and its accepted publication fields; its
+runtime stamp is derived rather than another executed launcher result. The
+original fixture's single-core USB profile failed the native validator before
+publication, providers or MMIO. Its failed state and source remain preserved.
+The corrected fixture selects the cold-reference profile required by this
+cached-SMP image. No native rebuild or old device matrix replay was needed.
+
+Exact image, 171 linked objects, 451 actual compiler inputs, original and
+corrected typed bundles, checkpoints and copied response are retained under
+`~/.cache/sunstoneos/evidence/lradc-20261020/`. The `native-frozen` manifest
+records the compiled closure; `operation-frozen` records composed results and
+both fixture states. The electrical records in these bundles are explicitly
+fictitious and authorize no physical use. Physical conversion, voltage safety,
+reference accuracy, timing, IRQ delivery, analog drain and recovery remain
+unqualified. No hardware, USB device or queue was accessed.
