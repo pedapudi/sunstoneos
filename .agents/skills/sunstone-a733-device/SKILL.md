@@ -76,6 +76,12 @@ uses the intended mapping.
 Use the allocator's returned physical address when constructing device mappings.
 If a fixed profile instead uses CPU addresses as physical addresses, explicitly
 require equality before transferring ownership to the device.
+Check the concrete DMA adapter's admitted memory attributes before choosing a
+pool. The shared `dma_memory_accept` policy admits inner-shareable write-back
+RAM (`0xff`). A retained non-cacheable pool (`0x44`) needs a reviewed concrete
+adapter with exact allocation/role checks, every-page translation validation,
+descriptor write permission and ordering appropriate to immutable NC memory.
+Keep that exception within its actual consumer; preserve the shared policy.
 
 Cache publication must target the writer's physical address space. EL3 with its
 MMU disabled uses Secure addresses, even when `SCR_EL3.NS=1`; maintenance by
@@ -148,6 +154,10 @@ Prevent recurring fixture failures at setup:
   and deadlines together before running cases. A session-sealing fixture can
   leave provider fields unused; validate its pin and PMIC handoff before reusing
   it for application construction.
+  Derive modeled pin readbacks from the actual field helper. On A733 banked
+  PIO, mux and drive fields use four-bit spacing, while pull fields use two-bit
+  spacing. Two adjacent drive-code-1 pins therefore require `0x11`, not `0x5`.
+  Inspect all remaining provider readbacks together after a setup mismatch.
   Preserve cross-field bindings when changing fixture identities: the board
   qualification and recovery hashes must identify the same record. Check the
   resulting session with the actual validator before a longer application batch.

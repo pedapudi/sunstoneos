@@ -1,7 +1,7 @@
 # Finite HDMI PCM playback
 
-The opt-in HDMI audio image sends one immutable caller file through DMA0 and the
-internal I2S3 route to the HDMI audio sampler. It accepts interleaved signed
+The opt-in HDMI audio image sends one immutable caller file of pulse-code modulation (PCM)
+samples through DMA0 and the internal I2S3 serial audio controller to the HDMI audio sampler. It accepts interleaved signed
 16-bit little-endian stereo at 48 kHz, from one to 48,000 frames. The image uses
 the existing limited-range 720p TV0 pattern while audio runs. It has no streaming
 interface, reconnect, replay or resource-release path. Software execution over a
@@ -35,8 +35,8 @@ and the two 32-bit slots yield 48 kHz LRCK. An incompatible inherited audio
 parent is refused; this application does not retune it.
 
 HDMI retains its existing native VO1, rail, PMIC and resistor-word authority.
-The actual calculated TMDS rate is 74.25 MHz for raw 24 MHz DCXO or 73.9375 MHz
-for raw 26 MHz DCXO. The sampler programs N=6144 and hardware-generated CTS,
+The actual calculated HDMI link (TMDS) rate is 74.25 MHz for raw 24 MHz DCXO or 73.9375 MHz
+for raw 26 MHz DCXO. The sampler programs N=6144 and a hardware-generated CTS clock-recovery counter,
 following the source's automatic-CTS path. It does not substitute a nominal
 74.25 MHz CTS table for the raw 26 MHz clock. These configured rates do not
 measure clock error, qualify the non-nominal video timing or establish audio
@@ -63,8 +63,8 @@ RAM. This application validates its two exact non-cacheable ranges separately,
 including identity translations, inner shareability and descriptor write access
 on every 4096-byte page. Its cache callback accepts only CLEAN for those immutable
 ranges and uses DSB ordering; it never broadens the shared policy or accepts
-invalidation, unknown ranges or cacheable aliases. The allocation becomes DEVICE-owned before the DMA
-worker is created. Protected ranges exclude the remaining firmware, source
+invalidation, unknown ranges or cacheable aliases. The allocation becomes
+DEVICE-owned before the DMA worker is created. Protected ranges exclude the remaining firmware, source
 upload, session and CPU tables. No CPU edits or remapping occur after handoff;
 all memory remains reserved even after successful completion.
 
@@ -107,3 +107,54 @@ COMPLETE result or permits descriptor, PCM, clock or rail reuse. Further device
 writes stop after uncertainty. Buffers and hardware reservations remain owned
 until supervised whole-board power removal. The firmware provides no automatic
 reset or retry after that boundary.
+
+## Selected native software evidence
+
+The final audio image is SHA-256
+`432b7c104a2613b4870ca9e14c0753118a60474f099a6cfb564acb62c1094882`,
+with build ID
+`9acc54030f35e43da614065ce126f09dcfe967fa8312c0da054fe007eba4e650`.
+Its exact compiled source, headers, tools and primary references are preserved
+in 618 input snapshots under
+`~/.cache/sunstoneos/evidence/hdmi-audio-nc-20261020/compiled-inputs.json`.
+The host supplied one sealed model session and the coordinator supplied its
+exact armed contract. No physical admission records were manufactured for a
+board run; these inputs are explicitly MODEL evidence.
+
+`checks/hdmi-audio-native.py` executed the linked admission and constructor,
+then resumed the three actual PMIC, HDMI-output and DMA task bodies. An immutable
+2049-frame caller file crossed three source pages and ended with a partial DMA
+burst. The actual native path completed its FIFO job, observed DMA completion
+and drain, observed 128 free I2S FIFO slots, published the 160-byte result and
+ready word, and reached normal retained HDMI stop. The result reports 8196
+source bytes consumed, calculated TMDS 73,937,500 Hz, 48 kHz PCM and unknown wire
+drain. Its PCM and session hashes match the supplied inputs.
+
+The positive execution is saved in `native-run/`. Its runner source hash is
+`fc9c0ca68687099021c0b6e525f4a9ab54e94eab66995bb3debad6b7d61370a7`.
+A later runner fixed a Python byte-array conversion and terminal-state
+bookkeeping, restored that verified terminal checkpoint, and executed only two
+previously unexecuted failure continuations. `native-faults-final/` records a
+sink without the required LPCM capability and interruption after DMA submission
+but before FIFO requests. Both publish retained failure without claiming source
+consumption or drain, performing later device writes, or releasing the allocation.
+The interrupted case retains the enabled DMA channel and its held buffers.
+No preparation or successful playback interval was repeated for these cases.
+
+The model implements architectural services, queues, electrical readbacks and
+lower device effects. Scheduling is serialized and cooperative, with actual task
+contexts and selected SVC #105 yield sites, plus tick-relative delays. It does
+not qualify SMP scheduling, preemption, priority inheritance, real interrupt
+latency, MMIO stall recovery, electrical timing, transmitted packets or sound.
+The [host evidence](hdmi-audio-preparation.md) separately covers sealed packaging,
+offline decoding and bounded launcher cases. There is no live capture path.
+
+Earlier inputs and failures remain under `hdmi-audio-20261020`. The initial
+provider run correctly refused an incorrectly modeled PL1 drive field. The
+first integrated image later reached active video and sampler preparation but
+refused non-cacheable RAM through the shared write-back-only DMA policy. The
+reviewed audio-specific NC adapter required one affected successor build; no
+shared DMA policy or CPU mapping was changed. The inherited-DMA-interrupt guard
+cases were reused because generated boot source, object code and all 1340
+linked bytes of `a733_smp_boot` are identical between those images. No old image
+or result was relabeled as the successor.
