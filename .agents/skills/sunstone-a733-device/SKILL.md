@@ -184,6 +184,12 @@ Prevent recurring fixture failures at setup:
   delay and suspend sites; a yield may be an inline SVC rather than a function
   call. Save CPU, RAM, task and scheduler state on every execution-budget or
   failure stop so unfinished work can resume without repeating initialization.
+- Snapshot mutable model registers and state by value. Restore each case from
+  the preserved checkpoint without sharing dictionaries, lists or buffers with
+  a running case. Check pristine case-entry state before injecting a fault.
+  Before accepting a fault case, require the intended injection count, expected
+  submission count and matching native terminal classification. Retained buffers
+  alone cannot distinguish a fault from successful retained operation.
 - Use the configured tool paths and Python environment from accepted evidence.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.
