@@ -1,4 +1,5 @@
 #include "a733_media_clock.h"
+#include "a733_clock_reference.h"
 #include <stddef.h>
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
@@ -108,14 +109,14 @@ static int peri_rate(struct a733_media_clock *p,uint32_t v,unsigned mhz)
 }
 static int stable(struct a733_media_clock *p)
 {
-    uint32_t v;
-    if (!rd(p,OSC,&v) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
+    uint32_t v,osc;
+    if (!rd(p,OSC,&osc) || (osc&UINT32_C(0x10000002))!=UINT32_C(0x10000002) ||
         !bits(p,UINT32_C(0x070101ac),1,1)) return 0;
     if (p->shared&(A733_CLOCK_PERI0|A733_CLOCK_PLL_VIDEO0|A733_CLOCK_PLL_DE)) {
-        if (!rd(p,CCU,&v) || (v&UINT32_C(0xf8000000))!=UINT32_C(0xf8000000)) return 0;
-        unsigned n=((v>>8)&255)+1,m=((v>>16)&127)+1;
-        if (n<80 || n>116 || n!=m) return 0;
-    }
+        /* Module/fabric parent arithmetic uses normalized SYS_CLK24M,
+         * independently of the physical DCXO selected by the board. */
+        if (!rd(p,CCU,&v) || !a733_clock_ref24_valid(osc,v)) return 0;
+    } else if (a733_clock_dcxo_hz(osc)!=24000000) return 0;
     if (p->shared&A733_CLOCK_PERI0) {
         if (!integer_pll(p,0xa0,0xfe000000,&v) || (v&BIT(24))) return 0;
         for (unsigned i=0;i<3;++i) if (!peri_rate(p,v,p->selected_mhz[i])) return 0;
