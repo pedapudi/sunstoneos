@@ -318,5 +318,32 @@ An ambiguous initial state, lost authority, expiry or uncertain write ends the
 one attempt. The provider retains its token and any acquired register ownership;
 it performs no rollback, reset or release. Successful initialization also keeps
 all clock ownership reserved for the existing retained application lifecycle.
-Software readback establishes configuration consistency, not physical frequency,
-security permission, electrical timing or resolved predecessor DMA.
+Software readback establishes configuration consistency. Physical frequency,
+security permission, electrical timing and predecessor DMA require independent
+qualification.
+
+
+The focused cold-clock check passed 18 cases on the retained native image. It
+executes the linked clock provider and native writer, followed by one existing
+SHA request, allocator, CE client, cache adapter and copied response. Refusal
+cases cover ambiguous local state, a missing neighboring gate, invalid parent
+state, readback failure, lost authority, expiry and unauthorized native writes.
+The host accepts the actual version-3 response and refuses each missing cold
+clock fact. The prepared bundle preserves the original request and session.
+Existing arithmetic evidence is reused because the CE arithmetic sources are
+unchanged.
+
+These checks use an EL1h function-call model with modeled RTOS APIs,
+translations, inherited parent clocks and device completion. The SHA hardware
+result is supplied by the fixture. Actual task-context construction, CPU
+startup, SRAM launcher execution, PMIC and USB controller operation are outside
+this check. Two setup failures and their checkpoints remain preserved; the
+successful continuation starts from the authenticated request checkpoint.
+There was no hardware access. Physical permission, timing, cryptographic
+execution and DMA drain remain unqualified, and retained resources stay owned.
+
+The image, actual compiler-input closure, original request/session, model
+checkpoints, copied response and explicitly nondeployable bundle are preserved
+at `~/.cache/sunstoneos/evidence/ce-clock-20261020/`. The `native-frozen`
+manifest records the compiled image; `operation-frozen` records the composed
+check and its source inputs.
