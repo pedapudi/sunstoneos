@@ -206,14 +206,20 @@ def request_bytes(address,build,raw,profile):
     return request,contract+bytes(4096-len(contract))
 
 
-def build_launcher(output,clang,lld,objcopy):
+def build_launcher(output,clang,lld,objcopy,*,contract_magic=CONTRACT_MAGIC,
+                   contract_version=3,session_bytes=0):
+    require((contract_magic==CONTRACT_MAGIC and contract_version==3 and session_bytes==0) or
+        (contract_magic==0x4153373341434331 and contract_version==1 and
+         0<session_bytes<=65536 and session_bytes%8==0),'Unsupported retained launcher profile.')
     for name,path in [('launch.c',ROOT/'platform/a733-smp-supervised/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),
         ('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h')]:
         (output/name).write_bytes(path.read_bytes())
     commands=[]
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin',
         '-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror',
-        f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(output)]
+        f'-DA733_SMP_CONTRACT_MAGIC={contract_magic}ULL',
+        f'-DA733_SUPERVISED_CONTRACT_VERSION={contract_version}',
+        f'-DA733_SUPERVISED_SESSION_BYTES={session_bytes}','-I'+str(output)]
     def run(command):
         command=list(map(str,command));commands.append(command);result=subprocess.run(command,capture_output=True,text=True)
         with (output/'build.log').open('a') as f:f.write(result.stdout+result.stderr)

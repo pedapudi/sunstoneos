@@ -20,9 +20,16 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--focus-refusal', action='store_true')
     parser.add_argument('--frequency-only', action='store_true')
+    parser.add_argument('--accelerator-profile', action='store_true')
     args = parser.parse_args(); bundle = args.bundle
     image = (bundle / 'launch.bin').read_bytes()
     prepared = json.loads((bundle / 'prepared.json').read_text())
+    expected_magic = 0x4153373341434331 if args.accelerator_profile else 0x4153373353554333
+    if args.accelerator_profile:
+        template = (bundle / 'contract.bin').read_bytes()
+        assert struct.unpack_from('<Q', template, 8)[0] == 1
+        session_bytes = struct.unpack_from('<Q', template, 184)[0]
+        assert 0 < session_bytes <= 65536 and session_bytes % 8 == 0
     with (bundle / 'launch.elf').open('rb') as stream:
         elf = ELFFile(stream)
         park = next(s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols() if s.name == 'a733_smp_launch_park')
@@ -77,7 +84,7 @@ def main():
                 assert value == 0x41 and registers[FLAG] == 0xfa50392f and registers[ENTRY] == 0x20
                 assert registers[RTC] == 0x5aa5a55a and registers[CONFIG] == 1 and registers[OUTPUT] == 2
             if address in (RVBAR, RVBAR+4):
-                assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == 0x4153373353554333
+                assert struct.unpack('<Q', uc.mem_read(CONTRACT, 8))[0] == expected_magic
             if address != ignored: registers[address] = value
 
         def instruction(uc, address, size, unused):
@@ -124,7 +131,11 @@ def main():
             assert not writes and report[1:3] == (0,0)
         return {'case':name, 'reason':reason, 'stop':expected, 'mmio_writes':len(writes), 'counter_reads':ticks}
 
-    if args.frequency_only:
+    if args.accelerator_profile:
+        cases = [check('combined contract publishes the common twenty-second window',12),
+                 check('standalone NPU contract version refused',3,mutation=(CONTRACT+8,3)),
+                 check('incorrect combined session extent refused',3,mutation=(CONTRACT+184,session_bytes+8))]
+    elif args.frequency_only:
         cases=[check('ROM zero frequency declaration admitted',12,sysreg={0xee1e0f10:0}),
                check('incompatible nonzero frequency declaration refused',13,sysreg={0xee1e0f10:19200000})]
     else:

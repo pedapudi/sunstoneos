@@ -3,6 +3,12 @@
 #define REPORT ((volatile uint64_t *)0x52d00)
 #define CONTRACT ((volatile struct a733_smp_contract *)A733_SMP_CONTRACT_ADDRESS)
 #define REQUEST_MAGIC UINT64_C(0x4153373353554c33)
+#ifndef A733_SUPERVISED_CONTRACT_VERSION
+#define A733_SUPERVISED_CONTRACT_VERSION 3
+#endif
+#ifndef A733_SUPERVISED_SESSION_BYTES
+#define A733_SUPERVISED_SESSION_BYTES 0
+#endif
 #define LIMIT UINT64_C(24000)
 extern _Noreturn void a733_smp_launch_park(void);
 static uint32_t rd(uint32_t address) {uint32_t v=*(volatile uint32_t *)(uintptr_t)address;__asm__ volatile("dsb sy":::"memory");return v;}
@@ -38,7 +44,7 @@ int a733_smp_launch_prepare(void)
     uint64_t epoch=REQUEST[3],generation=REQUEST[4],lease=REQUEST[6],id=REQUEST[7];
     ADMIT(epoch && generation && REQUEST[5]==~generation && lease &&
         id>=0x41000000 && id<=0x411fffe0,2);
-    ADMIT(CONTRACT->magic==0 && CONTRACT->version==3 && CONTRACT->bytes==sizeof(*CONTRACT) &&
+    ADMIT(CONTRACT->magic==0 && CONTRACT->version==A733_SUPERVISED_CONTRACT_VERSION && CONTRACT->bytes==sizeof(*CONTRACT) &&
         CONTRACT->epoch==epoch && CONTRACT->generation==generation &&
         CONTRACT->inverse_generation==~generation && CONTRACT->lease==lease &&
         !CONTRACT->armed_at && !CONTRACT->startup_deadline && !CONTRACT->diagnostic_deadline &&
@@ -46,7 +52,7 @@ int a733_smp_launch_prepare(void)
         !CONTRACT->watchdog_configuration && !CONTRACT->watchdog_output &&
         !CONTRACT->fel_flag && !CONTRACT->redirect_flag &&
         !CONTRACT->redirect_entry && !CONTRACT->alternate_flag &&
-        CONTRACT->reserved[0] && !CONTRACT->reserved[1],3);
+        CONTRACT->reserved[0] && CONTRACT->reserved[1]==A733_SUPERVISED_SESSION_BYTES,3);
     uint64_t digest=0;
     for(unsigned i=0;i<4;++i){ADMIT(REQUEST[12+i]==CONTRACT->reserved[2+i],3);digest|=REQUEST[12+i];}
     ADMIT(digest,3);
