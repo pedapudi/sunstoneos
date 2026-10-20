@@ -13,7 +13,7 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
 def main():
-    names=('success','pending','fault','identity','short','oversize','raw-failure','copied-failure','journal-failure','deadline')
+    names=('success','pending','fault','identity','terminal-proof','pd-generation','short','oversize','raw-failure','copied-failure','journal-failure','deadline')
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','reply','native_session','output'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--case',action='append',choices=names)
@@ -42,6 +42,8 @@ def main():
         reply=bytearray(rebound)
         if name=='fault':struct.pack_into('<II',reply,16,2,1)
         if name=='identity':reply[72]^=1
+        if name=='terminal-proof':struct.pack_into('<I',reply,208,2)
+        if name=='pd-generation':struct.pack_into('<Q',reply,56,0)
         if name=='short':reply=reply[:-1]
         if name=='oversize':reply+=b'!'
         class Device:
@@ -63,7 +65,7 @@ def main():
             if name=='journal-failure' and record.get('displayport_result')=='observed-success' and not failed[0]:
                 failed[0]=True;raise OSError('Modeled final journal failure')
             caller.supervisor.save_json(out/'session.json',record)
-        failures=('identity','short','oversize','raw-failure','copied-failure','journal-failure','deadline')
+        failures=('identity','terminal-proof','pd-generation','short','oversize','raw-failure','copied-failure','journal-failure','deadline')
         with patch.object(host.supervisor,'durable_frame',durable):
             try:host.capture_device(Device(),lambda:None,100,session,out,record,save,allocation=prepared['_allocation'],now=lambda:clock[0],pause=lambda _:None)
             except (OSError,ValueError,TimeoutError):assert name in failures and record['displayport_result']=='unobserved'

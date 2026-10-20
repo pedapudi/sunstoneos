@@ -175,7 +175,7 @@ def allocation_check(proof,raw,table,allocation):
     span=dict(iova=0x10000000,physical=pa+32768,bytes=2097152-32768,access=1)
     require(proof.get('spans')==[span] and proof.get('table_physical')==pa and proof.get('table_bytes')==32768 and
         proof.get('pixel_physical')==pa+36864 and proof.get('pixel_bytes')==1843200 and
-        proof.get('scanned_masters')==0x100,'DisplayPort master-8 mapping differs.')
+        proof.get('scanned_masters')==0,'DisplayPort prelaunch mapping or unexecuted scan state differs.')
     words=[0]*8192;words[64]=((pa+16384)&0xfffff000)|1
     for offset in range(0,span['bytes'],4096):words[4096+offset//4096]=((pa+32768+offset)&0xfffff000)|6
     require(table==struct.pack('<8192I',*words) and hashlib.sha256(table).hexdigest()==proof.get('table_sha256'),
@@ -266,8 +266,9 @@ def _image_parts(data):
         'DisplayPort entry lacks executable file-backed bytes.')
     require('__bss_end' in symbols and symbols['__bss_end'][0]<=0x41f00000,'Extended DisplayPort session overlaps BSS.')
     def immutable(name,size):
-        require(sum(s.name==name for s in entries)==1,'DisplayPort immutable marker is not unique: '+name)
-        address,n=symbols.get(name,(0,0));require(n==size,'Extended DisplayPort immutable marker absent: '+name)
+        found=[symbol for symbol in entries if symbol.name==name and symbol['st_info']['type']=='STT_OBJECT']
+        require(len(found)==1,'DisplayPort immutable object marker is not unique: '+name)
+        address,n=found[0]['st_value'],found[0]['st_size'];require(n==size,'Extended DisplayPort immutable marker absent: '+name)
         match=[p for p in parts if not p['flags']&2 and p['address']<=address and address+size<=p['address']+len(p['data'])]
         require(len(match)==1,'Extended DisplayPort marker is not immutable/file-backed.')
         p=match[0];return address,p['data'][address-p['address']:address-p['address']+size]

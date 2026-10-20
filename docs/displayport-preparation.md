@@ -34,7 +34,9 @@ constructs the authenticated 288-byte retained contract. The application uses
 extended WB `0x48000000..0x78000000` and NC `0x78000000..0x79000000` ownership.
 The actual native allocator must supply the 2 MiB NC allocation, page table,
 master-8 mapping and pattern padding/guard proof. Broad reservation or IOVA
-values alone do not establish those mappings.
+values alone do not establish those mappings. The constructor proof records a
+zero scan mask because construction precedes IOMMU MMIO. The terminal runtime
+observation separately requires the completed master-8 scan mask `0x100`.
 
 The source clock profile uses a 26 MHz oscillator, normalized 24 MHz reference,
 1188 MHz VIDEO1 output and 74.25 MHz EDP pixel clock. The AUX APB rate requires
