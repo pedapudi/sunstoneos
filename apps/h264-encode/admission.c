@@ -30,7 +30,7 @@ int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
     const struct a733_device_memory_layout layout={A733_DEVICE_MEMORY_LAYOUT,
         A733_DEVICE_WB_START,A733_DEVICE_WB_END,A733_DEVICE_NC_START,A733_DEVICE_NC_END};
     uint8_t hash[32];storage_digest_bytes(s,sizeof(*s),hash);
-    if(!record||c->bytes!=sizeof(*record)||!a733_device_memory_handoff_valid(&layout,c->reserved)||
+    if(!record||c->reserved[1]!=s->board.memory_authority||c->bytes!=sizeof(*record)||!a733_device_memory_handoff_valid(&layout,c->reserved)||
        memcmp(hash,record->session_digest,32)||memcmp(record->entry_digest,s->board.qualification,32))return 0;
     /* The synchronous board validator sees its ordinary prefix. The protected
      * original record remains the sole source for extended-memory admission. */
