@@ -126,6 +126,8 @@ also preserved in `sources/dma-platform/manifest.json` and the existing source
 lock. No driver, application, startup, register access, build or runtime check
 was changed or executed for this audit.
 
+## The implemented encoder preserves DMA0 address fields
+
 Data address bits 32–34 occupy descriptor parameter bits 11–13 for the source
 and 15–17 for the destination. The encoder retains the original 64-bit input
 addresses until it writes both the low words and these high fields.
