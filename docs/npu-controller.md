@@ -93,6 +93,17 @@ and orders CPU visibility. Callback failure retains ownership. Successful
 bootstrap completion enters READY; successful application completion enters
 DONE until the caller reaps the result.
 
+The [pinned VIPLite source](npu.md#hardware-and-available-driver-source) uses a
+command tail containing semaphore/stall and state commands, a pixel-engine event,
+and END. The trusted native command encoders preserve that sequence. Native
+completion requires event zero, full idle, and a final event read that rejects
+late faults. Output invalidation and a CPU visibility barrier precede DONE and
+caller output access. The inspected Linux successful-completion path waits for
+idle and optionally suspends clocks; it does not require reset before output
+reads. Physical completion and output visibility remain unqualified. The local
+source audit and file hashes are recorded in
+`~/.cache/sunstoneos/evidence/npu-normal-completion-20261020/audit.json`.
+
 ## Cancellation and shutdown preserve ownership
 
 Cancellation asserts the request bit at `0x3a8`, keeps it asserted for at least
