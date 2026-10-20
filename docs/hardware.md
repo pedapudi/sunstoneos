@@ -60,30 +60,36 @@ implementation is **planned**. Partial results apply only to the stated scope:
   inputs match integration; existing display evidence was reused. Analog
   admission, physical DMA reachability, monitor output and broader modes remain
   required.
-  The [GPU-to-HDMI application](gpu-display.md) copies two trusted GPU render
-  results into separately owned 1280×720 RGB565 display frames. Actual linked
-  constructors, full-frame RGBA8 conversion, ticket/sequence ownership, display
-  IOMMU installation and immutable RCQ replay 0→1→0 pass software checks.
-  GPU CLOSE precedes HDMI start; concurrently active GPU/HDMI is not established.
-  Fresh queue completion, source-address readback and later frame-end gate each
-  observation. Healthy stop disables HDMI/TV0 and DE, then parks the PMIC owner;
-  uncertainty retains all allocations, mappings and identities. GPU uses its
-  private MMU; system-IOMMU master 8 maps only the display bank.
-  Final image `ae7c6ee1…` preserves 91 leaf objects from the checked initial image;
-  root separately checks changed DRAM-bound admission and linked layout. The
-  audit verifies 676 frozen files, 95 objects and 214 compiled inputs, including
-  all 179 repository inputs, under `gpu-display-20261020/root/integration.json`.
-  GPU completion/pixels, hardware, CPU/cache and RTOS effects remain modeled.
-  Host preparation and SRAM admission checks are implemented. Preparation binds
-  caller inputs, shader/firmware provenance and combined physical records; production
-  validation refuses the modeled positive fixture. Six actual generated AArch32
-  launcher cases cover handoff and malformed version/digest/layout/memory/input
-  refusals, stopping before reset. CPU state, counters and MMIO remain modeled.
-  Root verifies 451 frozen files and all 35 current sources under
-  `gpu-display-host-20261020/root-integration.json`; the native image is unchanged.
-  This target has no USB transport or capture path. Physical startup, output,
-  visibility and drain remain unqualified. Broader modes, streaming and frame
-  retirement remain required.
+  The [GPU-to-HDMI application](gpu-display.md#copied-usb-observations) copies
+  two trusted 720p RGBA8 renders into separate immutable RGB565 display frames.
+  GPU CLOSE precedes HDMI start. RCQ replay 0→1→0 requires fresh queue completion,
+  source-address readback and later frame-end. Healthy terminal state requires
+  GPU CLOSE, HDMI/TV0 stop, DE disable and PMIC park; all resources remain retained.
+  Version-2 admission binds typed USB authority and the full private session
+  digest. USB0 PIO borrows the existing providers and exposes one immutable
+  1,024-byte response: two input/output hash records, sixteen samples per frame,
+  three presentation records and terminal state. Hashes/samples establish neither
+  full pixel correctness nor visible output. GPU retains its private MMU;
+  system-IOMMU master 8 maps only the display bank. USB performs no DMA, and
+  all-master exclusion/drain remains separate from the display access mask.
+  Final image `70041393…` has 104 objects and 248 compiled inputs. Fifteen final
+  framing/refusal/expiry cases cover copied snapshots and full/high-speed packet
+  completion, including the terminating zero-length packet. Earlier component
+  and eight root native cases remain bound to `2f60a47e…` and are reused through
+  102 unchanged objects; seven exact SRAM launcher cases are reused separately.
+  Root's source audit at `f1c7e44` under
+  `gpu-display-capture-20261020/root-integration.json` confirms 194 native sources
+  and 24 host sources; the remaining host snapshot difference is instruction-only.
+  Native and host freezes retain 720 and 937 files respectively. Worker snapshot
+  verification was reused without another build or case replay.
+  The [host coordinator](gpu-display-preparation.md) durably saves copied replies
+  before decoding and checks frozen identity/input/terminal records. One 19-second
+  host deadline stays within native 20-second admission; no retry or frame reuse
+  follows. Production validation refuses modeled positive authority. Hardware,
+  arithmetic, RTOS, cache and USB transfer effects remain modeled at the recorded
+  boundaries. Physical GPU/HDMI/USB operation, startup, visibility, drain and
+  recovery remain unqualified. Concurrent live GPU/HDMI, broader formats/modes,
+  streaming and frame retirement remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
