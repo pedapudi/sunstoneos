@@ -66,8 +66,9 @@ A prepared directory can be created with the configured toolchain:
 Operational preparation rejects modeled authority. The isolated software fixture
 may substitute only the physical-authority predicate; actual image identity,
 clock predicates, typed fields, allocations and table validation remain active.
-Positive preparation and the single SRAM launcher compilation require the
-actual linked image and allocator proof.
+Positive preparation and SRAM launcher compilation require the actual linked
+image and allocator proof. Reuse the one accepted launcher binary after any
+documented size corrections.
 
 ## Retain one copied observation
 
@@ -81,8 +82,8 @@ Each query is byte zero. The host requests 1025 bytes for the fixed 1024-byte
 reply, consuming its terminal zero-length USB packet at full or high speed.
 Pending replies publish only their identity header, retain flag and zero
 diagnostics; their core length is zero. Terminal replies carry the 352-byte
-provider result. Every raw reply becomes durable before validation. A terminal observation is
-copied to a durable JSON artifact with its original session, build, lease,
+provider result. Every raw reply becomes durable before validation. A terminal
+observation is copied to a durable JSON artifact with its original session, build, lease,
 Type-C generation and link diagnostics. Polarity, pin assignment and HPD retain
 the negotiated snapshot from before revocation; they do not describe a live port
 after shutdown. Transport or persistence uncertainty
