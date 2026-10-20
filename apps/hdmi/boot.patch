@@ -30,10 +30,15 @@
      volatile uint64_t *r=(volatile uint64_t *)RESULT;
      for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
      RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;
-@@ -88,3 +80,5 @@
+@@ -88,3 +80,10 @@
 -    if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
 +    extern int hdmi_session_prepare(const struct a733_smp_contract *);
 +    if(!hdmi_session_prepare(&admission))a733_smp_stop(3,0x30b);
++#if SUNSTONE_HDMI_AUDIO
++    /* Polled DMA0 must have no inherited GIC delivery or active state. */
++    if((read32(0x03400110)|read32(0x03400210)|read32(0x03400310))&0x8000)
++        a733_smp_stop(3,0x30b);
++#endif
 +    if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
  #ifdef SUNSTONE_MIMUS_NATIVE
