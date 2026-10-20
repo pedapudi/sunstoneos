@@ -9,7 +9,7 @@
 struct hdmi_application app;
 static struct pmic_model model;
 static unsigned scheduler;
-static TaskHandle_t holders[2];
+static TaskHandle_t holders[A733_PLATFORM_LOCK_COUNT];
 uint64_t ullPortInterruptNestings[8];
 volatile uint64_t ullCriticalNestings[8];
 volatile uint64_t framebuffer_test_time=100;
@@ -24,7 +24,11 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void)
 QueueHandle_t xQueueCreateMutexStatic(const uint8_t type,StaticQueue_t *p)
 {(void)type;return (QueueHandle_t)p;}
 static unsigned queue(QueueHandle_t q)
-{if(q==app.locks.mutex[0])return 0;assert(q==app.locks.mutex[1]);return 1;}
+{
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        if(q==app.locks.mutex[i])return i;
+    assert(0);return 0;
+}
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q){return holders[queue(q)];}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t wait)
 {

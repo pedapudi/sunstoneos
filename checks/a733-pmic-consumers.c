@@ -23,7 +23,8 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)(mo
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q)
 {
     if(q==locks.mutex[0])return held ? (TaskHandle_t)1 : 0;
-    assert(q==locks.mutex[1]);return model.i2c_held ? (TaskHandle_t)2 : 0;
+    if(q==locks.mutex[1])return model.i2c_held ? (TaskHandle_t)2 : 0;
+    assert(q==locks.mutex[A733_PLATFORM_I2C1_LOCK]);return 0;
 }
 int a733_platform_lock_enter(struct a733_platform_locks *l,enum a733_platform_lock k,uint64_t d)
 {
@@ -83,7 +84,8 @@ static void setup(unsigned client)
     (void)pmic_model_setup;model.now=consumer_test_time=100;
     assert(a733_counter_clock_init(&source,24000000));
     locks.initialized=1;locks.now=a733_counter_clock_now;locks.context=&source;
-    locks.mutex[0]=(SemaphoreHandle_t)1;locks.mutex[1]=(SemaphoreHandle_t)2;
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        locks.mutex[i]=(SemaphoreHandle_t)(uintptr_t)(i+1);
     locks.callbacks=(struct a733_gpu_resource_locks){reg_enter,reg_leave,bus_enter,bus_leave,&locks};
     assert(a733_npu_startup_resources_init(&shared,&source,&locks));
     assert(a733_clock_leases_init(&model.clocks,a733_counter_clock_now,&source));

@@ -14,14 +14,18 @@ static struct a733_platform_locks locks;
 static struct a733_hdmi_native hdmi,copied;
 static struct a733_hdmi_native_config config;
 static unsigned scheduler;
-static TaskHandle_t queue_owner[2];
+static TaskHandle_t queue_owner[A733_PLATFORM_LOCK_COUNT];
 uint64_t ullPortInterruptNesting;
 volatile uint64_t ullCriticalNesting;
 uint64_t hdmi_test_time=100;
 volatile unsigned hdmi_fault_case,hdmi_mmio_count,hdmi_translation_count;
 static uint32_t *reg(uintptr_t a){return (uint32_t *)a;}
 static unsigned queue_index(QueueHandle_t q)
-{if(q==locks.mutex[0])return 0;assert(q==locks.mutex[1]);return 1;}
+{
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)
+        if(q==locks.mutex[i])return i;
+    assert(0);return 0;
+}
 BaseType_t xTaskGetSchedulerState(void)
 {return scheduler?taskSCHEDULER_RUNNING:taskSCHEDULER_NOT_STARTED;}
 TaskHandle_t xTaskGetCurrentTaskHandle(void)
