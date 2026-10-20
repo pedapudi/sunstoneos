@@ -97,6 +97,17 @@ busy clear, then scans the retained IOMMU state and guards before copying.
 It repeats those checks around each bounded copy chunk and hashes the copied
 output before publication. Partial copies are never exposed as healthy output.
 
+In pinned Linux revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`,
+`drv_div3x/di_driver.c:894–920` acknowledges successful finish, reads result
+history and wakes the caller. Reset occurs only on error or timeout
+(`di_driver.c:803,914`), with no successful-job stop or reset before buffer
+return. The current single-job native path keeps IRQs masked and preserves the
+matched finish latch throughout copying. The pinned source does not make finish
+acknowledgment a condition for output reads or DMA visibility. Future interrupt
+service or repeated jobs require their own acknowledgment and motion-flag
+lifecycle. The source-only audit, including exact source hashes and anchors, is
+preserved in `deinterlace-motion-20261020/completion-source-audit.json`.
+
 This is processing-completion evidence, not an independent fabric-drain
 mechanism. Neither finish, nonbusy nor a CPU barrier authorizes reclamation.
 Timeout, stale status, IOMMU/guard faults or uncertain accesses retain every
