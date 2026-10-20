@@ -1597,10 +1597,23 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `mimus-repeated-board-20261020/root/integration.json` and `root-frozen/manifest.json`.
   Final image `05c4b4d9…` was built once; unchanged arithmetic retains earlier
   model parity. Lifecycle, recognition, transport, hardware and scheduling are
-  modeled. Physical startup, concurrent operation, visibility, recovery and
+  modeled. Physical startup, concurrent operation, visibility, recovery,
   timing and performance remain unqualified. All memory remains retained; keyboard/hub/MSC
   and image-bound electrical/DDR/model-memory admission are still required.
   No desktop keyboard events are sent.
+  The [combined coordinator](../tools/check-a733-mimus-board-supervised.py)
+  validates the outer prepared bundle and supplies exact frozen assets through
+  the shared sealed-source/readback launcher. Workload 4 captures 1–32 generations
+  (default one); workload 0 remains one-shot. All generations share one 59-second
+  launch/capture deadline within the native 60-second session. Raw fragments,
+  complete frames, transcript, sector and trigger evidence are durable before
+  ACK. Failure preserves earlier outputs and observed ACK evidence; no retry or
+  relaunch follows. Host fixtures and actual supervisor readiness checks pass;
+  the final raw-ACK-fragment persistence-failure branch is source-reviewed.
+  Root verifies 1,102 frozen files and 16 current sources under
+  `mimus-board-supervised-host-20261020/root-integration.json`. Native image
+  `05c4b4d9…` is unchanged; no native execution, model-parity replay or physical
+  capture is established by these host checks.
   [Cold USB0 preparation](usb-platform.md) now supplies native clock/reset/PHY
   sequencing, detached-controller admission and shared-reference publication.
   Host checks, source comparisons and native instruction checks pass. It keeps
