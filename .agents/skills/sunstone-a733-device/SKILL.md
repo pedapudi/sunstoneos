@@ -164,6 +164,9 @@ Prevent recurring fixture failures at setup:
   `SUNSTONE_A733_USB=1` on the consuming target. Without that definition, the
   controller translation unit compiles without its `dcd_*` implementations.
   Check definitions when a derived target restores sources it previously removed.
+  Derive composition link inputs from the current target or accepted compiled
+  closure. An inherited manual source list can omit a dependency added to a
+  sibling service, even when the selected case does not execute that service.
 - Construct valid sessions and provider configurations with their actual producers.
   Resolve structure sizes, hashes, callback layouts, clock parents, rail ownership
   and deadlines together before running cases. A session-sealing fixture can
@@ -188,6 +191,12 @@ Prevent recurring fixture failures at setup:
   the accepted post-launch contract, or explicitly model arming once and share
   that exact artifact with downstream checks. Preserve the original template.
   Stubbed contract validation does not initialize deadlines used later by boot.
+- Retain the accepted timing budget for unchanged lifecycle phases. Account for
+  bounded work spread over scheduler ticks before adding a completion phase.
+  GPU shutdown, for example, performs one register operation per tick; a shorter
+  fixture CLOSE deadline can expire after valid cleanup. Do not relax production
+  deadlines to repair a model budget. Preserve the failed case and rerun only
+  affected or previously unexecuted cases after correcting setup.
 - Place emulator stack, scratch and return-trampoline memory outside the entire
   admitted device pools. An address outside the currently allocated pages may
   still violate the allocator's exclusion of its own pool from output arguments.
