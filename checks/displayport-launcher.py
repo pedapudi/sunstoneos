@@ -31,6 +31,7 @@ for name,offset,value,reason in [
     ('typec-source-overvoltage',916,struct.pack('<I',5251),14),
     ('memory-authority-mismatch',200,bytes(8),14),
     ('supervised-high-half-deadline',160,struct.pack('<Q',1<<40),14),
+    ('supervised-reserved-word',156,struct.pack('<I',1),14),
 ]:
     session=bytearray(template)
     if offset is not None:session[offset:offset+len(value)]=value
