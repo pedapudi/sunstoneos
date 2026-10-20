@@ -639,9 +639,24 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Physical sampling, voltage/reference accuracy and recovery remain unqualified.
   Repeated/concurrent monitoring, threshold modes and FIFO/DMA remain required.
   GPADC4 reaches the display connector; the remaining GPADC channels have no
-  documented usable connection. LRADC0 has a pull-up but no documented key ladder.
-  These usable accessory and LRADC functions remain outstanding. Fitted components,
-  analog supply and reference still require physical confirmation.
+  documented usable connection. Accessory GPADC4 qualification remains outstanding.
+  [LRADC0 raw observation](adc-application.md#lradc0-raw-observations-require-separate-electrical-authority)
+  is implemented as ADC session version 2, preserving GPADC version 1. It takes
+  two fresh channel-0 six-bit observations with timestamps/sequences, then verifies
+  configured disable while retaining all resources. It provides no key map,
+  voltage conversion or measured sample-frequency claim. Physical use is blocked:
+  the V1.2 drawing's R23 pull-up to nominal 1.8 V AVCC conflicts with the documented
+  0–1.35 V converter range; no idle-overrange authority or matching key ladder exists.
+  Final image `7f390582…` passes the linked function-call composition with raw 0/63
+  supplied by the model, plus scoped driver/lease/write/host refusals and separate
+  boot/SRAM guards. RTOS, PMIC, analog conversion, translations and USB transport
+  remain modeled; actual task contexts/SMP are unqualified. Root verifies all 185
+  compiled repository inputs at `a67f381` under
+  `lradc-20261020/root-integration.json`. The corrected cold-USB fixture reuses the
+  same ELF/launcher; its runtime stamp is derived, not a second launcher execution.
+  The operation-source difference adds configuration guidance only. Physical
+  safety, population, reference accuracy, timing, IRQ delivery, analog drain and
+  recovery remain unresolved.
   A separate finite ADC application now uses the actual CLDO3 provider and
   normalized clock decoder. Nine linked application/provider cases and fourteen
   sanitized clock cases pass; all 45 compiled inputs match integration under
@@ -696,6 +711,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   page-walk faults before publication. Native exclusion of all affected masters,
   bus drain, memory binding and physical translation remain unqualified.
 
+  DMA-copy [host admission](dma-pool-session.md#the-host-command-reuses-the-sealed-compact-launcher)
+  now requires external digest/session-bound authority for selected-channel
+  Nonsecure access, controller EL1 access and descriptor/data access through
+  recovery. Eight focused host cases pass under
+  `dma0-security-admission-20261020/root-integration.json`. Production refuses
+  modeled authority; the source establishes no safe Nonsecure read of DMA security-register (`+0x20`).
+  No native probe, build or physical authority is added. Other DMA0 consumer
+  admission paths still require separate integration.
+  [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved) remains
+  source-blocked. Its register layout, dedicated gates/reset and interrupts are
+  identified, but the CPUX request table does not establish the CPUS controller's
+  DRAM encoding. The pinned Linux DMA0 encoding differs from that table; neither
+  value authorizes DMA1. The bounded primary-source search found no resolution.
+  No DMA1 implementation, build, descriptor or launch is claimed.
 - Header pin ownership: **implemented** shared [bank-qualified pin leases](pins.md)
   across 201 documented pins in banks B–M, including GPIO, mux/pull/drive,
   interrupt configuration and shared debounce ownership. Host checks, source

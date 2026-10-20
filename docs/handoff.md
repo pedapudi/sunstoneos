@@ -111,6 +111,7 @@ functions and modes beyond these bounded applications.
 | [Gen1/companion leaf](usb2-host.md#one-gen1-hub-or-the-usb2-companion-root-serves-one-leaf) | One selected root, direct or one self-powered hub/leaf: workloads 6/8 Gen1 MSC/boot keyboard, 10/12 USB2 companion keyboard/HS MSC. Typed topology binds the unchanged 592-byte session. Actual stack/copied-client/host plus six identity/layout and two route cases model hardware/IRQ. Native linked, not physically executed. Root/topology/class, ≥900 mA and hub-power admission remain required; no physical bundle. Nested/simultaneous roots and wider USB remain required. Mimus remains USB2. | `usb-ss-hub-20261020/root/integration.json`, `handoff.md`; earlier direct HID: `usb-ss-hid-20261020/` |
 | [USB hub/dual leaf](usb2-host.md) | Workload 4: one self-powered HS USB2 hub, one LS/FS/HS HID plus one HS MSC. Joint immutable output requires both results and fresh attachment. Existing IRQ187 route retained; derived profiles keep workloads 0–3. Hub/TT, power, DMA and drain remain unqualified. | `usb-host-dual-leaf-20261019/root-integration.json`; earlier single leaf: `usb-host-hub-20261019/` |
 | [USB MSC/Gen1 BOT](usb2-host.md) | GET_MAX_LUN endpoint reset/dequeue precedes LUN0 fallback and copied READ10; eleven HS cases model hardware, SS recovery is source-reviewed only. Other stalls/uncertainty retain. Workload 6 Gen1 read-only LBA0 refuses USB2 fallback and requires authenticated ≥900 mA plus image-bound COMB0/rail/clock/route/source-switch admission; none exists. Wider modes and safe detach/drain remain required. Frozen recovery image retains the older clock policy. | `usb-msc-stall-20261020/root-integration.json`; Gen1: `usb-host-superspeed-20261019/` |
+| [LRADC0 raw observations](adc-application.md#lradc0-raw-observations-require-separate-electrical-authority) | ADC version 2 copies two fresh channel-0 raw codes, then configured disable with permanent retention. Final `7f390582…` passes composed/driver/host checks with analog/RTOS/USB effects modeled; raw 0/63 establish no measured value or sample rate. Physical use is blocked by nominal 1.8 V R23 pull-up versus documented 0–1.35 V range, without overrange authority. No key mapping or voltage conversion. | `lradc-20261020/root-integration.json`, `root-frozen/manifest.json`; original and corrected fixtures retain their scopes |
 | [Thermal](thermal-application.md), [ADC](adc-application.md), [finite USB](usb.md) | Finite applications and return adapters integrated. Thermal/ADC retain configuration and leases; ADC needs fitted-divider electrical admission. Physical operations/return remain unqualified. | `thermal-adc-returning-source-20261018/integration.json`; `usb-returning-20261018/integration.json` |
 | [RTC source/alarm](rtc-application.md) | Separate source initialization and external-source alarm paths. Source admission precedes alarm use; success requires verified Secure interrupt-state restoration, not only a completion message. | `rtc-source-returning-20261018/integration.json`; `rtc-alarm-returning-20261018/integration.json` |
 | [NPU runtime/IRQ](npu-application.md), [service](npu-service.md) | Retained same-model SUBMIT/READ/copied output/REAP/CLOSE; IRQ97 owner alone acknowledges. Bootstrap plus two finite inferences require three notified completions and stopped receipt. Source-off CLOSE/GIC stop precede release; retained runtime keeps OS/USB live without ROM return. | `npu-interrupt-service-20261019/root-integration.json`; `npu-runtime-input-20261019/dma-reconcile/root-integration.json` |
@@ -214,13 +215,16 @@ platform/clock-registry sanitizer cases pass under
 `dma-clock-reference-20261020/frozen/manifest.json`; no native image or physical
 DMA qualification is added. The overall goal remains incomplete.
 
-LRADC0 integration is under validation in the existing ADC application. Its
-driver and targeted GPADC mutex-denial checks pass; the native sampler still
-needs the corrected ordinary-SMP USB fixture. Interrupt guards and SRAM launcher
-checks retain their separate scopes. Physical sampling also needs an electrical
-determination for the board's 1.8 V pull-up and documented converter range.
-DMA1 remains at source audit: the CPUX request table does not establish the
-CPUS controller's DRAM request encoding. No DMA1 descriptor or launch is enabled.
+LRADC0 software integration is accepted within the modeled scope above;
+physical electrical authority remains unresolved. [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved)
+is source-blocked after the bounded primary-source search: the CPUX request table
+does not establish CPUS DRAM encoding. No DMA1 implementation, build, descriptor
+or launch is enabled.
+DMA-copy host admission now requires external session/digest-bound selected-channel,
+controller and descriptor/data Nonsecure access authority. Eight host cases pass
+under `dma0-security-admission-20261020/root-integration.json`; there is no safe
+DMA security-register (`+0x20`) probe or physical authority claim. Other DMA0 consumers still need
+separate admission integration.
 
 The [provider clock record](provider-clock-reference.md) covers normalized REF24
 admission in TWI11/USB2/radio/CE/I2S/PWM. [SPI](spi-platform.md) has separate
