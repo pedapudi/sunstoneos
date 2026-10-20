@@ -47,6 +47,22 @@ independent physical qualification in the analog/SERDES evidence. An inherited
 200 MHz software constant does not establish its physical rate. The admitted
 range is 10–400 MHz in whole megahertz steps.
 
+The ARM SRAM launcher uses `-Oz` and stays within its fixed `0xc00`-byte region.
+Preserve the successful binary and its compiler dependencies; reuse it for the
+launcher instruction cases and the final bundle. Main native code uses its
+separately accepted build configuration.
+
+A prepared directory can be created with the configured toolchain:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python -B apps/displayport/prepare.py \
+  --image /absolute/native.elf --manifest /absolute/manifest.json \
+  --admission /absolute/admission.json --template /absolute/session-template.bin \
+  --clang /usr/lib/llvm-21/bin/clang \
+  --lld ~/.cache/sunstoneos/host/usr/bin/ld.lld-21 \
+  --output /absolute/new-bundle
+```
+
 Operational preparation rejects modeled authority. The isolated software fixture
 may substitute only the physical-authority predicate; actual image identity,
 clock predicates, typed fields, allocations and table validation remain active.
@@ -63,7 +79,9 @@ The USB identity is VID `1f3a`, PID `efe8`, revision `0100`, product
 
 Each query is byte zero. The host requests 1025 bytes for the fixed 1024-byte
 reply, consuming its terminal zero-length USB packet at full or high speed.
-Every raw reply becomes durable before validation. A terminal observation is
+Pending replies publish only their identity header, retain flag and zero
+diagnostics; their core length is zero. Terminal replies carry the 352-byte
+provider result. Every raw reply becomes durable before validation. A terminal observation is
 copied to a durable JSON artifact with its original session, build, lease,
 Type-C generation and link diagnostics. Polarity, pin assignment and HPD retain
 the negotiated snapshot from before revocation; they do not describe a live port
@@ -80,3 +98,20 @@ the admitted whole-board power-removal plan.
 Copied hashes and status words establish their stated software observations.
 They do not establish visible pixels, physical link operation, DMA confinement,
 recovery or performance.
+
+## Focused software evidence
+
+`checks/displayport/preparation.py` consumes the actual native image, original
+session, constructor allocation JSON and binary memory artifacts. Its isolated
+fixture substitutes physical authority and preserves the native source-session
+hash before deriving typed modeled facts. `--case bundle --reuse-launcher`
+resumes packaging with the accepted launcher while retaining completed refusal
+evidence. Reuse checks the original compiled sources and deterministic generated
+adaptation; it does not compile another launcher.
+
+`checks/displayport/host.py` consumes that modeled bundle and an actual serialized
+native terminal reply. It validates the original reply against its original
+session and allocation proof before rebinding modeled transport identities.
+Capture cases cover pending and terminal observations, retained fault, malformed
+or stale identity, terminal proof, persistence failures and the absolute deadline.
+The production entry rejects the modeled bundle.

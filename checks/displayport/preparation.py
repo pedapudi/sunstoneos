@@ -6,7 +6,7 @@ JSON, table and complete 2 MiB allocation. This checker substitutes only the
 physical-authority predicate; all production image/layout/profile checks run.
 No board, USB, queue or main native-image build executes.
 """
-import argparse,copy,hashlib,importlib.util,json,struct
+import argparse,copy,hashlib,importlib.util,json,shutil,struct
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2]
@@ -17,13 +17,15 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','manifest','session','allocation','table','allocation_bytes','output','clang','lld'):
         p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--case',choices=('all','bundle'),default='all',help='Bundle resumes packaging without repeating completed refusal cases.')
+    p.add_argument('--reuse-launcher',type=Path,help='Reuse the exact already compiled launcher; never rebuild it.')
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     prep=module('displayport_fixture_prepare',ROOT/'apps/displayport/prepare.py')
     producer=module('displayport_fixture_producer',ROOT/'apps/displayport/producer.py')
     original=a.session.read_bytes();prep.session_check(original)
     ih=hashlib.sha256(a.image.read_bytes()).hexdigest();proof=json.loads(a.allocation.read_bytes())
-    assert proof['physical_authority'] is False and proof['modeled'] is True and proof['image']==ih
-    assert proof['session']==hashlib.sha256(original).hexdigest()
+    assert proof['physical_authority'] is False and proof['model'] is True and proof['image_sha256']==ih
+    assert proof['session_sha256']==hashlib.sha256(original).hexdigest()
     table=a.table.read_bytes();allocation=a.allocation_bytes.read_bytes()
     prep.allocation_check(proof,original,table,allocation)
     out=a.output/'MODEL-NOT-PHYSICAL-fixture';out.mkdir()
@@ -53,12 +55,12 @@ def main():
         pins=[original[at:at+3] for at in range(936,948,3)])
     raw=producer.extend(bytes(board),owner=owner,authority=authority,client=client,facts=facts,**profile)
     session_refusals=[]
-    for name,offset,value in [('pmic-function',564,0),('pmic-pull',568,3),('pmic-drive',569,4),('fabric-disabled',495,0)]:
+    for name,offset,value in ([('pmic-function',564,0),('pmic-pull',568,3),('pmic-drive',569,4),('fabric-disabled',495,0)] if a.case=='all' else []):
         bad=bytearray(raw);bad[offset]=value
         try:prep.session_check(bad)
         except ValueError:session_refusals.append(name)
         else:raise AssertionError('Unusable provider profile accepted: '+name)
-    th=hashlib.sha256(raw).hexdigest();proof['source_session']=proof['session'];proof['session']=th
+    th=hashlib.sha256(raw).hexdigest();proof['source_session']=proof['session_sha256'];proof['session_sha256']=th
     allocation_ref=record('allocation.json',proof)
     def binary(name,data):
         path=(out/name).resolve();path.write_bytes(data);return dict(path=str(path),sha256=hashlib.sha256(data).hexdigest())
@@ -76,7 +78,7 @@ def main():
     except ValueError as error:assert 'Modeled DisplayPort evidence' in str(error)
     else:raise AssertionError('Production accepted modeled authority')
     refused=[]
-    for name in ('table-permission','padding','pixel','mapping','extent'):
+    for name in (('table-permission','padding','pixel','mapping','extent') if a.case=='all' else ()):
         bad=copy.deepcopy(proof);badtable=bytearray(table);badallocation=bytearray(allocation)
         if name=='table-permission':badtable[16384]^=8
         if name=='padding':badallocation[32768]^=1
@@ -95,9 +97,26 @@ def main():
         except ValueError:refused.append(name)
         else:raise AssertionError('Invalid allocation accepted: '+name)
     bundle=a.output/'MODEL-NOT-PHYSICAL-bundle'
-    with patch.object(prep,'physical_authority',lambda value:None):
+    original_launcher=prep.build_launcher
+    def launcher(out,clang,lld):
+        if a.reuse_launcher is None:return original_launcher(out,clang,lld)
+        source=a.reuse_launcher
+        sources={'launch.c':'apps/displayport/launch.c','launch.S':'platform/a733-smp-observe/launch.S',
+            'launch.ld':'platform/a733-smp-observe/launch.ld','boot.h':'platform/a733-smp-cached/boot.h',
+            'a733_displayport_application.h':'include/a733_displayport_application.h',
+            'a733_board_application.h':'include/a733_board_application.h','a733_pins.h':'include/a733_pins.h',
+            'base-supervised-launch.c':'platform/a733-smp-supervised/launch.c'}
+        for name,relative in sources.items():assert (source/name).read_bytes()==(ROOT/relative).read_bytes(),name
+        assert (source/'displayport-launch-base.c').read_text()==prep.launcher_base_source((ROOT/'platform/a733-smp-supervised/launch.c').read_text())
+        resume=json.loads((source/'launcher-build-resume.json').read_bytes())
+        assert resume['passed'] is True and prep.base.digest(source/'launch.bin')==resume['sha256'] and 0<(source/'launch.bin').stat().st_size<=0xc00
+        names=[*sources,'displayport-launch-base.c','launch.c.o','launch.S.o','launch.c.d','launch.S.d',
+            'launch.elf','launch.bin','launcher-build.log','launcher-commands.json','launcher-build-resume.json']
+        for name in names:shutil.copy2(source/name,out/name)
+        prep.base.save_json(out/'launcher-reuse.json',dict(source=str(source.resolve()),sha256=resume['sha256'],recompiled=False))
+    with patch.object(prep,'physical_authority',lambda value:None),patch.object(prep,'build_launcher',launcher):
         prep.prepare(a.image,a.manifest,out/'admission.json',out/'session-template.bin',bundle,a.clang,a.lld)
-    result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
+    result=dict(passed=True,case=a.case,launcher_reused_from=str(a.reuse_launcher) if a.reuse_launcher else None,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
         original_session_sha256=hashlib.sha256(original).hexdigest(),allocation_source_sha256=hashlib.sha256(a.allocation.read_bytes()).hexdigest(),
         launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,session_refusals=session_refusals,bundle=str(bundle.resolve()))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))

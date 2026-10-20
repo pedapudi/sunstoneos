@@ -81,9 +81,7 @@ def request_bytes(address,identity,raw,epoch,generation,lease):
     require(len(contract)==288,'Extended DisplayPort contract ABI differs.')
     return request,contract+bytes(4096-len(contract))
 
-def build_launcher(out,clang,lld):
-    text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
-    (out/'base-supervised-launch.c').write_text(text)
+def launcher_base_source(text):
     require('REQUEST[1]==3' in text and 'CONTRACT->version==3' in text,'Unexpected supervised launcher version guards.')
     for anchor in ('0x4153373353554c33','REQUEST[1]==3','CONTRACT->version==3',
                    'CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->bytes==sizeof(*CONTRACT)',
@@ -93,9 +91,16 @@ def build_launcher(out,clang,lld):
     text=text.replace('CONTRACT->reserved[0] && !CONTRACT->reserved[1]','CONTRACT->reserved[0]==1 && CONTRACT->reserved[1] && CONTRACT->reserved[2]==0x48000000 && CONTRACT->reserved[3]==0x78000000 && CONTRACT->reserved[4]==0x78000000 && CONTRACT->reserved[5]==0x79000000')
     text=text.replace('CONTRACT->bytes==sizeof(*CONTRACT)','CONTRACT->bytes==288').replace('CONTRACT->reserved[2+i]','((volatile uint64_t *)((uintptr_t)CONTRACT+224))[i]')
     # The shared20-second native lifetime remains exact for DisplayPort.
+    return text
+
+
+def build_launcher(out,clang,lld):
+    text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
+    (out/'base-supervised-launch.c').write_text(text)
+    text=launcher_base_source(text)
     (out/'displayport-launch-base.c').write_text(text)
     for name,path in [('launch.c',ROOT/'apps/displayport/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('a733_displayport_application.h',ROOT/'include/a733_displayport_application.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h'),('a733_pins.h',ROOT/'include/a733_pins.h')]:shutil.copy2(path,out/name)
-    flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-MD','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1','-DA733_BOARD_SUPERVISED_SECONDS=20',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
+    flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Oz','-g','-MD','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1','-DA733_BOARD_SUPERVISED_SECONDS=20',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
     for command in commands:
@@ -106,7 +111,8 @@ def build_launcher(out,clang,lld):
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
 def physical_authority(record):
-    require(record.get('physical_authority') is True and record.get('modeled') is False,
+    model_flags=[record[key] for key in ('modeled','model') if key in record]
+    require(record.get('physical_authority') is True and model_flags and all(flag is False for flag in model_flags),
         'Modeled DisplayPort evidence cannot authorize physical execution.')
 
 
@@ -150,7 +156,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         'Extended DisplayPort DRAM exclusion evidence differs.')
     for ref in ddr['evidence']:evidence(ref)
     proof=json.loads(evidence(record['allocation']));physical_authority(proof)
-    require(proof.get('image')==image_hash and proof.get('session')==template_hash,
+    require(proof.get('schema')=='a733-displayport-allocation-v1' and
+        proof.get('image_sha256')==image_hash and proof.get('session_sha256')==template_hash,
         'DisplayPort allocation proof covers different image/session bytes.')
     allocation_check(proof,raw,evidence(record['page_table']),evidence(record['allocation_bytes']))
     return cache
