@@ -13,7 +13,8 @@ from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn.arm64_const import UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[1]
 s=importlib.util.spec_from_file_location('displayport_usb_stack_base',ROOT/'checks/g2d-usb-stack.py');stack=importlib.util.module_from_spec(s);s.loader.exec_module(stack)
-EXPECTED='318b128b6c8f8b3deb9280eabc7aa8cdd11c9a4b39d77e7d9ffb1f21ec4b4f40'
+EXPECTED='916462470c39d569d6a573cffbf33aa9d1f01117c534877eb46e65333289ddac'
+EXPECTED_REPLY='6026eb1670f39da4b99b6196650018b8d894ee2befd88768a6eb5a686357f364'
 def output_variables(path):
  result={}
  with path.open('rb') as f:
@@ -46,6 +47,7 @@ def main():
  checkpoint_raw=a.checkpoint.read_bytes();checkpoint=json.loads(checkpoint_raw)
  assert checkpoint['image_sha256']==EXPECTED
  reply=a.reply.read_bytes();assert len(reply)==1024
+ assert hashlib.sha256(reply).hexdigest()==checkpoint['reply_sha256']==EXPECTED_REPLY
  e=stack.base.Image(a.image,layout_names={'dp_application'});types,sizes,enums=stack.metadata(a.image)
  m=Machine(e,types,sizes,enums,2);uv=output_variables(a.image)
  for name in ['response','active','sent','transferred','zlp']:
@@ -96,7 +98,7 @@ def main():
  assert m.seen['tud_vendor_n_write']==1 and not m.failure
  assert all(m.seen[name] for name in ['tusb_rhport_init','dcd_event_handler','tud_task_ext','vendord_open','vendord_xfer_cb','tu_fifo_read_n_access_mode','tu_fifo_write_n_access_mode','usbd_edpt_claim','usbd_edpt_xfer','tud_vendor_tx_cb'])
  (a.output/'reply.bin').write_bytes(b''.join(m.transfers))
- result=dict(passed=True,image_sha256=EXPECTED,owner_checkpoint_sha256=hashlib.sha256(checkpoint_raw).hexdigest(),owner_reply_sha256=hashlib.sha256(reply).hexdigest(),terminal_status=int.from_bytes(reply[16:20],'little'),dcd_transfer_lengths=[512,512,0],single_fifo_write=True,next_query_admitted_only_after_zlp=True,host_read_bytes=1025,executed=dict(m.seen),scope=__doc__,modeled=['DCD physical transfer and completion effects','Native board/provider readiness','Scheduling and counter','Inherited device effects already modeled by terminal-checkpoint owner'],displayport_replay=False,native_build=False,physical_access=False)
+ result=dict(passed=True,image_sha256=EXPECTED,owner_checkpoint_sha256=hashlib.sha256(checkpoint_raw).hexdigest(),owner_reply_sha256=hashlib.sha256(reply).hexdigest(),terminal_status=int.from_bytes(reply[16:20],'little'),dcd_transfer_lengths=[512,512,0],single_fifo_write=True,next_query_admitted_only_after_zlp=True,host_read_bytes=1025,executed=dict(m.seen),scope=__doc__,owner_scope=checkpoint['scope'],modeled=['DCD physical transfer and completion effects','Native board/provider readiness','Scheduling and counter','Inherited device effects already modeled by terminal-checkpoint owner'],displayport_replay=False,native_build=False,physical_access=False)
  (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  print('PASS linked TinyUSB 512/512/ZLP ownership and next-query admission')
 if __name__=='__main__':main()
