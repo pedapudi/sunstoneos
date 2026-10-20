@@ -47,6 +47,10 @@ USB cold-reference mode 1; mode 2 ROM takeover is rejected. The ordinary 224-byt
 contract binds the complete session digest. The native lifetime is 20 seconds;
 the supervisor uses a single absolute 19-second host window.
 
+Launcher preparation checks that the explicit clang and lld paths name executable
+files before compiling. It preserves those invocation paths and writes the
+complete command journal before starting the first command.
+
 The prepared bundle freezes image, evidence, input, session, launch contract and
 upload bytes. Runtime upload contains a 32-byte little-endian typed header,
 followed by the exact Bayer input. The header binds magic `0x55495053`, version 1,
@@ -127,3 +131,7 @@ cold USB reference mode 1. Its deterministic Bayer pattern spans samples 0
 through 4095. The preceding mode-2 fixture is retained as rejected evidence;
 the ordinary SMP image does not admit ROM takeover. The native constructor
 allocation and table artifacts bind the accepted cold-reference session.
+
+The exact resumed link and objcopy commands are preserved beside the bundle in
+`host-prepared/launcher-resume-commands.json`. They consumed the original compiled
+objects and produced the retained launcher without recompilation.

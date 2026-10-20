@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
@@ -72,6 +73,9 @@ def request_bytes(address,identity,raw,epoch,generation,lease):
 
 
 def build_launcher(out,clang,lld):
+    for label,path in (('clang',clang),('lld',lld)):
+        require(Path(path).is_file() and os.access(path,os.X_OK),
+            'ISP0 launcher '+label+' must name an existing executable: '+str(path))
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
     require('REQUEST[1]==3' in text and 'CONTRACT->version==3' in text,'Unexpected supervised launcher version guards.')
@@ -87,11 +91,11 @@ def build_launcher(out,clang,lld):
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-MD','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1','-DA733_BOARD_SUPERVISED_SECONDS=20',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
+    base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     for command in commands:
         r=subprocess.run(list(map(str,command)),capture_output=True,text=True)
         with (out/'launcher-build.log').open('a') as f:f.write(r.stdout+r.stderr)
         require(r.returncode==0,'ISP0 launcher build failed; inspect retained log.')
-    base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
 def physical_authority(record):
