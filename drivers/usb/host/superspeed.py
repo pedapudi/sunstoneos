@@ -43,18 +43,23 @@ def prepare(source,out):
         s=replace(s,'usbh_edpt_control_open(new_addr, new_dev->desc_device.bMaxPacketSize0)', 'usbh_edpt_control_open(new_addr, new_dev->bus_info.speed==TUSB_SPEED_SUPER?512:new_dev->desc_device.bMaxPacketSize0)')
         s=replace(s,'desc_device->bMaxPacketSize0 >= 8)', '(dev0_bus->speed==TUSB_SPEED_SUPER?desc_device->bMaxPacketSize0==9:desc_device->bMaxPacketSize0>=8))')
         s=replace(s,'  ENUM_SET_CONFIG,','  ENUM_SS_BOS_HEADER, ENUM_SS_BOS_FULL, ENUM_SS_ISOCH, ENUM_SS_SEL,\n  ENUM_SET_CONFIG,')
-        s=replace(s,'static void    process_enumeration(tuh_xfer_t *xfer);','static void    process_enumeration(tuh_xfer_t *xfer);\nextern bool a733_tinyusb_ss_enumerate(uint8_t,unsigned,uint8_t *,tuh_xfer_cb_t,uintptr_t);')
+        s=replace(s,'static void    process_enumeration(tuh_xfer_t *xfer);','static void    process_enumeration(tuh_xfer_t *xfer);\nextern bool a733_tinyusb_ss_enumerate(uint8_t,unsigned,uint8_t *,tuh_xfer_cb_t,uintptr_t);\nextern bool a733_tinyusb_ss_direct(uint8_t);')
         a='''is_enum_failed = !tuh_descriptor_get_string_langid(daddr, _usbh_epbuf.ctrl, 2,
                                                          process_enumeration, ENUM_GET_STRING_LANGUAGE_ID);'''
         s=replace(s,a,'''if(dev->bus_info.speed==TUSB_SPEED_SUPER)
         is_enum_failed=!a733_tinyusb_ss_enumerate(daddr,0,_usbh_epbuf.ctrl,process_enumeration,ENUM_SS_BOS_HEADER);
       else '''+a)
+        s=replace(s,'dev0_bus->speed = (port_status.status.high_speed)  ? TUSB_SPEED_HIGH',
+          'dev0_bus->speed = tuh_speed_get(dev0_bus->hub_addr)==TUSB_SPEED_SUPER?TUSB_SPEED_SUPER:(port_status.status.high_speed)  ? TUSB_SPEED_HIGH')
         return replace(s,'    case ENUM_GET_STRING_LANGUAGE_ID: {','''    case ENUM_SS_BOS_HEADER:
       is_enum_failed=!a733_tinyusb_ss_enumerate(daddr,1,_usbh_epbuf.ctrl,process_enumeration,ENUM_SS_BOS_FULL);break;
     case ENUM_SS_BOS_FULL:
       is_enum_failed=!a733_tinyusb_ss_enumerate(daddr,2,_usbh_epbuf.ctrl,process_enumeration,ENUM_SS_ISOCH);break;
     case ENUM_SS_ISOCH:
-      is_enum_failed=!a733_tinyusb_ss_enumerate(daddr,3,_usbh_epbuf.ctrl,process_enumeration,ENUM_SS_SEL);break;
+      if(a733_tinyusb_ss_direct(daddr))
+        is_enum_failed=!a733_tinyusb_ss_enumerate(daddr,3,_usbh_epbuf.ctrl,process_enumeration,ENUM_SS_SEL);
+      else is_enum_failed=!tuh_descriptor_get_string_langid(daddr,_usbh_epbuf.ctrl,2,process_enumeration,ENUM_GET_STRING_LANGUAGE_ID);
+      break;
     case ENUM_SS_SEL:
       is_enum_failed=!tuh_descriptor_get_string_langid(daddr,_usbh_epbuf.ctrl,2,process_enumeration,ENUM_GET_STRING_LANGUAGE_ID);break;
     case ENUM_GET_STRING_LANGUAGE_ID: {''')

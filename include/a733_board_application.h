@@ -28,7 +28,7 @@
  * odd selections include radio. Supervised4 requires both USB leaf classes
  * without radio and is admitted only by the board target capability. */
 static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}
-static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6||workload==8;}
+static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6||workload==8||workload==10||workload==12;}
 /* Immutable little-endian image-owned input. No pointer or storage grant is
  * accepted. Evidence hashes identify externally qualified, reviewed facts;
  * producing this record does not itself establish those facts. */
@@ -46,7 +46,7 @@ struct a733_board_session {
     uint8_t sid_evidence[32];
     uint64_t radio_profile_address,radio_profile_bytes;
     uint8_t radio_profile_digest[32];
-    uint32_t workload,reserved_workload;
+    uint32_t workload,usb_topology; /* 0 direct,1 single self-powered hub for6/8/10/12. */
     uint64_t latch_identity,latch_owner;
     uint32_t latch_known_mask,latch_value;
     uint64_t latch_m_identity,latch_m_owner;
@@ -62,6 +62,8 @@ struct a733_board_session {
 _Static_assert(sizeof(struct a733_board_session)==592,"board session layout");
 struct a733_smp_contract;
 /* Pure input checks also used by the native EL3 admission and focused check. */
+_Static_assert(sizeof(struct a733_board_session)==592,"sealed board session geometry");
+_Static_assert(offsetof(struct a733_board_session,usb_topology)==404,"sealed USB topology offset");
 int a733_board_session_valid(const struct a733_board_session *,uint64_t now_ticks);
 int a733_board_contract_valid(const struct a733_smp_contract *,
     const struct a733_board_session *,const uint8_t build_id[32],uint64_t now_ticks);

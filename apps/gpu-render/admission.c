@@ -16,7 +16,7 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        !s->topology||!s->cold_master||!s->memory_authority||!s->recovery_authority||
        s->minimum_reload_us||s->maximum_recovery_us||s->guard_us||s->reset_by_us||
        s->rtc_control||s->rtc_divider||s->rtc_source||s->reserved0||s->deadline_us||
-       s->session_start_ticks||s->reload_after_ticks||s->workload!=2||s->reserved_workload||
+       s->session_start_ticks||s->reload_after_ticks||s->workload!=2||s->usb_topology||
        s->sid_authority||present(s->sid_evidence,32)||s->radio_profile_address||s->radio_profile_bytes||
        present(s->radio_profile_digest,32)||s->latch_m_identity||s->latch_m_owner||s->latch_m_known_mask||s->latch_m_value||
        s->latch_identity||s->latch_owner||s->latch_known_mask||s->latch_value||s->typec_owner||s->usb2_owner||
@@ -39,7 +39,7 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        !s->epoch||!s->generation||!s->lease||!present(s->image,32)||
        !present(s->qualification,32)||!present(s->wiring,32)||!present(s->memory,32)||
        !present(s->recovery,32)||memcmp(s->qualification,s->recovery,32)||
-       s->reserved0||s->reserved_workload||s->workload>1||present(s->reserved,sizeof(s->reserved))||
+       s->reserved0||s->usb_topology||s->workload>1||present(s->reserved,sizeof(s->reserved))||
        !s->latch_identity||!s->latch_owner||s->latch_known_mask!=0x3fff||(s->latch_value&~UINT32_C(0x3fff))||
        !s->sid_authority||!present(s->sid_evidence,32)||!s->topology||!s->cold_master||!s->memory_authority||!s->recovery_authority||
        !s->guard_us||s->minimum_reload_us<=s->guard_us||

@@ -71,7 +71,8 @@ void board_host_task(void *unused)
         enum a733_usb2_device_kind kind=a733_usb2_device_kind(&board.host);
         if(r==A733_USB2_READY&&
            ((board.session.workload==8&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed!=4||board.host.hid.protocol!=1))||
-            (board.session.workload==6&&kind!=A733_USB2_DEVICE_MSC)))break;
+            ((board.session.workload==6||board.session.workload==12)&&kind!=A733_USB2_DEVICE_MSC)||
+            (board.session.workload==10&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed>3||board.host.hid.protocol!=1))))break;
         if(board.session.workload==4){
             if(!dual_step(&issued,&reports,&sector_done))break;
         }else if(r==A733_USB2_READY&&!issued){
@@ -87,6 +88,8 @@ void board_host_task(void *unused)
             int done=a733_usb2_read_result(&board.host,board.sector);
             if(done<0)break;
             if(done==1){
+                if(board.session.workload==12&&board.host.core.ops.live(board.host.core.context,
+                    board.host.core.generation,board.host.platform.config.lifetime_deadline)!=1)break;
                 if(board.session.workload==6){
                     struct a733_usb2_native *n=&board.host;uint8_t *p=board.ss_result;
                     if(n->core.speed!=4||n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)!=1)break;
@@ -101,10 +104,11 @@ void board_host_task(void *unused)
             int done=a733_usb2_hid_result(&board.host,&report);if(done<0)break;
             if(done==1){
                 if(board.session.workload==8&&(report.speed!=4||report.protocol!=1))break;
+                if(board.session.workload==10&&(report.speed<1||report.speed>3||report.protocol!=1))break;
                 hid_append(board.sector,&report,reports);++reports;
                 if(reports==4){
                     struct a733_usb2_native *n=&board.host;
-                    if(board.session.workload==8&&n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)!=1)break;
+                    if((board.session.workload==8||board.session.workload==10)&&n->core.ops.live(n->core.context,n->core.generation,n->platform.config.lifetime_deadline)!=1)break;
                     atomic_store_explicit(&board.result,1,memory_order_release);issued=2;
                 }
                 else if(!a733_usb2_hid_receive(&board.host,board.host.platform.config.lifetime_deadline))break;

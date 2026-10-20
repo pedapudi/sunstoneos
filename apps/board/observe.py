@@ -19,7 +19,7 @@ def decode(frame, session, profile=None):
         raise ValueError('invalid copied sector extent')
     digest=session[368:400]
     workload=struct.unpack_from('<I',session,400)[0]
-    if workload in (4,6,8) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
+    if workload in (4,6,8,10,12) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
         raise ValueError('Combined workload requires supervised session')
     if frame[40:72]!=digest:
         raise ValueError('radio profile identity mismatch')
@@ -28,7 +28,7 @@ def decode(frame, session, profile=None):
             raise ValueError('disabled host is not admitted')
     elif workload in (2,3):
         raise ValueError('disabled host reported activity')
-    if workload in (0,2,4,6,8):
+    if workload in (0,2,4,6,8,10,12):
         if profile is not None or radio_state or radio_bytes:
             raise ValueError('unexpected radio result')
     elif workload in (1,3):
@@ -56,7 +56,7 @@ def decode(frame, session, profile=None):
                                radio_completion_scope='expected-response-and-socket-disposal',
                                tcp_wire_drain_established=False)
     if workload==4 and usb_state==1 and version!=3:raise ValueError('Combined workload requires combined result')
-    if workload==8 and usb_state==1 and version!=2:raise ValueError('SS keyboard workload requires copied HID result')
+    if workload in (8,10) and usb_state==1 and version!=2:raise ValueError('SS keyboard workload requires copied HID result')
     if workload==6 and usb_state==1 and version!=4:raise ValueError('SS-required workload needs SS result')
     if version==4:
         if workload!=6 or usb_state!=1:raise ValueError('SS result is not admitted')

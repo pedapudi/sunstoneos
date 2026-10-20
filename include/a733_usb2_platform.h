@@ -11,7 +11,8 @@
  */
 struct a733_usb2_platform_config {
     uint64_t owner,identity,topology,deadline,lifetime_deadline;
-    unsigned pck_client,superspeed;
+    unsigned pck_client,superspeed,companion_root;
+    unsigned topology_mode; /* 0 legacy,1 direct,2 one self-powered root hub. */
     uint32_t fabric[3],fabric_hz[3]; /* AHB/NSI/MBUS exact held profiles. */
     uint32_t supply_uv[A733_USB2_SUPPLIES]; /* DCDC1,DC1SW2,DCDC9,ELDO6,CLDO5. */
     uint32_t revision; /* Actual admitted DWC_usb31 release, checked after power. */

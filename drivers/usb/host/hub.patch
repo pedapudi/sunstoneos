@@ -1,24 +1,40 @@
 --- hub.c
 +++ hub-native.c
-@@ -249,6 +249,8 @@
+@@ -188,7 +188,7 @@
+   (void)rhport;
+   TU_VERIFY(TUSB_CLASS_HUB == itf_desc->bInterfaceClass && 0 == itf_desc->bInterfaceSubClass, 0);
+ 
+-  const uint16_t itf_ep_len = sizeof(tusb_desc_interface_t) + sizeof(tusb_desc_endpoint_t);
++  const uint16_t itf_ep_len = sizeof(tusb_desc_interface_t) + sizeof(tusb_desc_endpoint_t) + (tuh_speed_get(dev_addr)==TUSB_SPEED_SUPER?6:0);
+   uint16_t       drv_len    = itf_ep_len;
+   TU_ASSERT(drv_len <= max_len, 0);
+ 
+@@ -249,6 +249,12 @@
  // Set Configure
  //--------------------------------------------------------------------+
  static void config_set_port_power (tuh_xfer_t* xfer);
 +static void config_device_power(tuh_xfer_t* xfer);
 +static void config_hub_power(tuh_xfer_t* xfer);
++static void config_ss_u2(tuh_xfer_t* xfer);
++static void config_ss_power(tuh_xfer_t* xfer);
++static void config_ss_depth(tuh_xfer_t* xfer);
++static void config_port_start(uint8_t daddr,uint8_t port);
  static void config_port_power_complete (tuh_xfer_t* xfer);
  static void config_get_hub_descriptor(tuh_xfer_t* xfer);
  
-@@ -279,7 +281,7 @@
+@@ -279,9 +285,9 @@
        .direction = TUSB_DIR_IN
      },
      .bRequest = HUB_REQUEST_GET_DESCRIPTOR,
 -    .wValue   = 0,
-+    .wValue   = 0x2900,
++    .wValue   = tuh_speed_get(xfer->daddr)==TUSB_SPEED_SUPER?0x2a00:0x2900,
      .wIndex   = 0,
-     .wLength  = sizeof(hub_desc_cs_t)
+-    .wLength  = sizeof(hub_desc_cs_t)
++    .wLength  = tuh_speed_get(xfer->daddr)==TUSB_SPEED_SUPER?12:sizeof(hub_desc_cs_t)
    };
-@@ -305,9 +307,30 @@
+ 
+   xfer->setup       = &request;
+@@ -305,9 +311,52 @@
  
    // May need to GET_STATUS
  
@@ -48,7 +64,38 @@
 +static void config_hub_power(tuh_xfer_t* xfer) {
 +  TU_ASSERT(XFER_RESULT_SUCCESS == xfer->result, );
 +  // The HCD validates both power responses before either callback runs.
-+  hub_port_set_feature(xfer->daddr, 1, HUB_FEATURE_PORT_POWER, config_port_power_complete, 0);
++  if(tuh_speed_get(xfer->daddr)==TUSB_SPEED_SUPER){
++    const tusb_control_request_t request={.bmRequestType=0x20,.bRequest=12};
++    xfer->setup=&request;xfer->buffer=NULL;xfer->complete_cb=config_ss_depth;
++    TU_ASSERT(tuh_control_xfer(xfer),);
++  }else config_port_start(xfer->daddr,1);
++}
++
++static void config_port_start(uint8_t daddr,uint8_t port) {
++  if(tuh_speed_get(daddr)==TUSB_SPEED_SUPER)
++    hub_port_set_feature(daddr,port,23,config_ss_u2,0);
++  else hub_port_set_feature(daddr,port,HUB_FEATURE_PORT_POWER,config_port_power_complete,0);
++}
++static void config_ss_depth(tuh_xfer_t* xfer) {
++  TU_ASSERT(xfer->result==XFER_RESULT_SUCCESS,);
++  config_port_start(xfer->daddr,1);
++}
++static void config_ss_u2(tuh_xfer_t* xfer) {
++  TU_ASSERT(xfer->result==XFER_RESULT_SUCCESS,);
++  hub_port_set_feature(xfer->daddr,(uint8_t)xfer->setup->wIndex,24,config_ss_power,0);
++}
++static void config_ss_power(tuh_xfer_t* xfer) {
++  TU_ASSERT(xfer->result==XFER_RESULT_SUCCESS,);
++  hub_port_set_feature(xfer->daddr,(uint8_t)xfer->setup->wIndex,HUB_FEATURE_PORT_POWER,config_port_power_complete,0);
  }
  
  static void config_port_power_complete (tuh_xfer_t* xfer) {
+@@ -327,7 +376,7 @@
+   } else {
+     // power next port
+     uint8_t const hub_port = (uint8_t) (xfer->setup->wIndex + 1);
+-    hub_port_set_feature(daddr, hub_port, HUB_FEATURE_PORT_POWER, config_port_power_complete, 0);
++    config_port_start(daddr,hub_port);
+   }
+ }
+ 

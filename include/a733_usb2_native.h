@@ -21,7 +21,13 @@ struct a733_usb2_hid {
     uint8_t *pending_buffer;
     uint8_t descriptor[256],copied[A733_USB2_HID_REPORT_BYTES];
 };
+struct a733_usb2_ss {
+    uint8_t ss_bos_prefix[5],ss_sel[6];unsigned ss_bos_bytes,ss_bos_seen,ss_ready,ss_control,ss_request;
+    unsigned ss_u1,ss_u2,ss_burst[2];
+    uint8_t ss_bos[256];
+};
 struct a733_usb2_descriptor {
+    struct a733_usb2_ss ss;
     unsigned kind,device_probe,configuration_probe,string_bytes,string_id,string_language;
     uint8_t device_prefix[8],configuration_prefix[9];
 };
@@ -30,6 +36,7 @@ struct a733_usb2_hub {
     unsigned mark_pending,mark_address,configure_pending;
     unsigned device_power,local_power,alt_selected,powered_mask,selected_port,connected_mask;
     unsigned status_deferred,status_requested,status_bytes;
+    unsigned depth_set,hdr_latency,delay_ns,u1_disabled,u2_disabled;
     uint64_t power_good_deadline;
     uint8_t *status_buffer;
 };
@@ -50,9 +57,6 @@ struct a733_usb2_native {
     struct a733_usb2_hid hid;
     struct a733_usb2_hub hub;
     struct a733_usb2_descriptor descriptors[A733_XHCI_DEVICES];
-    uint8_t ss_bos_prefix[5],ss_sel[6];unsigned ss_bos_bytes,ss_bos_seen,ss_ready,ss_control,ss_request;
-    unsigned ss_u1,ss_u2,ss_burst[2];
-    uint8_t ss_bos[256];
     unsigned dual_leaf,msc_seen,hid_seen,msc_mounted,hid_mounted,hid_address,msc_in,msc_out;
     unsigned initialized,core_started,stack_started,failed,address,mounted,
         read_pending,read_complete,read_failed;

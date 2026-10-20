@@ -57,6 +57,18 @@ def usb3_hid_image_check(raw):
     require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373353484431,1,8,64),
             'Native SuperSpeed keyboard capability differs.')
 
+def usb3_topology_image_check(raw):
+    elf=ELFFile(io.BytesIO(raw));table=elf.get_section_by_name('.symtab')
+    matches=[v for v in table.iter_symbols() if v.name=='board_usb3_topology_capability'] if table else []
+    require(len(matches)==1 and matches[0]['st_size']==32,'Native USB topology capability is absent.')
+    address=int(matches[0]['st_value']);parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and
+        not p['p_flags']&2 and p['p_vaddr']<=address and address+32<=p['p_vaddr']+p['p_filesz']]
+    require(len(parts)==1,'USB topology capability must be immutable and file backed.')
+    offset=address-parts[0]['p_vaddr']
+    require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373353545031,1,0x1540,7),
+            'Native USB topology capability differs.')
+
+
 def single_core_platform(value,prepared,identity,port):
     require(value.get('schema')=='a733-board-single-core-platform-v1' and value.get('identity')==identity and
             value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
@@ -83,7 +95,9 @@ def session_check(raw,usb_reference_modes=(1,2)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
     require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
-    workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6,8) and (workload not in (4,6,8) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
+    workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6,8,10,12) and (workload not in (4,6,8,10,12) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
+    topology=struct.unpack_from('<I',raw,404)[0]
+    require(topology in (0,1) and (not topology or workload in (6,8,10,12)),'Unsupported fixed USB topology.')
     return workload
 
 def profile_spans(data,session,payload_spans=None):
@@ -171,15 +185,26 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,e
         'Explicit complete-power-removal/retention plan required.')
     if record.get('superspeed') is not None:
         ss=json.loads(evidence(record['superspeed']))
-        require(ss.get('schema')=='a733-usb3-gen1-physical-entry-v1' and ss.get('identity')==identity and ss.get('port')==port and
+        require(ss.get('schema') in ('a733-usb3-gen1-physical-entry-v1','a733-usb3-topology-physical-entry-v2') and ss.get('identity')==identity and ss.get('port')==port and
             ss.get('image_sha256')==image_hash and ss.get('session_template_sha256')==template_hash and
             ss.get('physical_access_performed') is True and type(ss.get('qualified_source_ma')) is int and ss['qualified_source_ma']>=900,
             'Actual SuperSpeed physical/source admission differs.')
+        topology=ss.get('topology','direct');protocol=ss.get('root_protocol','super-gen1')
         device_class=ss.get('device_class','msc')
         require(device_class in ('msc','hid-keyboard'),'Unsupported fixed SuperSpeed device class.')
         required={'typec24-comb0-fitted-route','dcdc2-comb0-core-stable-800mv','cldo5-comb0-analog-stable-1800mv',
             'comb0-rtc-reference-and-common-clocks-stable','comb0-dp-remote-writers-excluded',
-            ('reviewed-passive-gen1-cable-and-hid-keyboard' if device_class=='hid-keyboard' else 'reviewed-passive-gen1-cable-and-bot-device'),'source-switch-discharge-and-reverse-blocking-qualified'}
+            (('reviewed-typec24-usb2-companion-cable-and-hid-keyboard' if device_class=='hid-keyboard' else 'reviewed-typec24-usb2-companion-cable-and-bot-device') if protocol=='usb2-companion' else ('reviewed-passive-gen1-cable-and-hid-keyboard' if device_class=='hid-keyboard' else 'reviewed-passive-gen1-cable-and-bot-device')),'source-switch-discharge-and-reverse-blocking-qualified'}
+        require(topology in ('direct','self-powered-hub') and protocol in ('super-gen1','usb2-companion'),'USB topology differs.')
+        if ss['schema']=='a733-usb3-gen1-physical-entry-v1':
+            require(topology=='direct' and protocol=='super-gen1','Legacy authority admits only direct SuperSpeed.')
+        else:
+            required.add('reviewed-root-protocol-and-leaf-binding')
+            if topology=='self-powered-hub':
+                required.update({'hub-local-supply-qualified','hub-downstream-power-qualified','hub-single-leaf-and-no-nested-hub'})
+                require(type(ss.get('hub_ports')) is int and 1<=ss['hub_ports']<=7 and ss.get('hub_supply_evidence'),
+                        'Qualified self-powered hub supply and bounded ports required.')
+                for ref in ss['hub_supply_evidence']:evidence(ref)
         require(set(ss.get('conditions',{}))==required and all(v is True for v in ss['conditions'].values()) and ss.get('evidence'),
             'SuperSpeed route/power/exclusion evidence missing.')
         for ref in ss['evidence']:evidence(ref)
@@ -187,11 +212,13 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,e
 
 def superspeed_source_check(record,cache,session):
     workload=struct.unpack_from('<I',session,400)[0]
-    if workload not in (6,8):return
+    if workload not in (6,8,10,12):return
     ref=record.get('superspeed')
     require(ref is not None,'Actual SuperSpeed physical admission required.')
     fact=json.loads(cache[ref['path']]);capacity=fact.get('qualified_source_ma')
-    require(fact.get('device_class','msc')==('hid-keyboard' if workload==8 else 'msc'),'SuperSpeed class authority differs from session.')
+    require(fact.get('device_class','msc')==('hid-keyboard' if workload in (8,10) else 'msc'),'SuperSpeed class authority differs from session.')
+    require(fact.get('topology','direct')==('self-powered-hub' if struct.unpack_from('<I',session,404)[0] else 'direct'),'USB topology authority differs from session.')
+    require(fact.get('root_protocol','super-gen1')==('usb2-companion' if workload in (10,12) else 'super-gen1'),'Root protocol authority differs from session.')
     require(type(capacity) is int and 900<=struct.unpack_from('<I',session,552)[0]<=capacity,
             'Session source capacity exceeds actual SuperSpeed qualification.')
 
@@ -209,7 +236,12 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     require(workload!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
     require(workload!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
     if workload==8:usb3_hid_image_check(image_data)
+    if workload in (10,12):
+        require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')
+        usb3_topology_image_check(image_data)
     evidence_cache=validate_admission(admission,image_hash,template_hash,execution_profile=execution_profile)
+    if workload in (6,8) and struct.unpack_from('<I',raw,404)[0]:
+        usb3_topology_image_check(image_data)
     superspeed_source_check(admission,evidence_cache,raw)
     require(not workload&1 or admission.get('radio_ddr') is not None,'Radio profile/firmware DDR reservation missing.')
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
@@ -268,12 +300,17 @@ def validate_bundle(bundle):
     require(p.get('execution_profile','board-supervised-v2')==execution_profile,'Board execution profile changed.')
     validate_admission(admitted,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True,execution_profile)
     require(p['workload']!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
-    require(p['workload'] not in (6,8) or admitted.get('superspeed') is not None,'Actual SuperSpeed physical admission required.')
+    require(p['workload'] not in (6,8,10,12) or admitted.get('superspeed') is not None,'Actual SuperSpeed physical admission required.')
     require(p['workload']!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
     require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
     require(p['workload']!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
     raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
     if p['workload']==8:usb3_hid_image_check((bundle/'image.elf').read_bytes())
+    if p['workload'] in (10,12):
+        require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')
+        usb3_topology_image_check((bundle/'image.elf').read_bytes())
+    if p['workload'] in (6,8) and struct.unpack_from('<I',raw,404)[0]:
+        usb3_topology_image_check((bundle/'image.elf').read_bytes())
     superspeed_source_check(admitted,cache,raw)
     derived=bytearray((bundle/'session-template.bin').read_bytes())
     struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=bytes.fromhex(p['build_id'])

@@ -73,7 +73,7 @@ struct a733_xhci {
     unsigned context_bytes,scratchpads,cap_slots,cap_ports,usb2_port,ext_cursor,ext_steps,speed;
     unsigned command_index,command_cycle,event_index,event_cycle,command_kind,command_device,default_device;
     unsigned port_reset,connected,extra_endpoint_owner,require_ss,usb3_port,usb3_slot_type,usb3_seen;
-    unsigned root_u1,root_u2,usb2_companion_port;
+    unsigned root_u1,root_u2,usb2_companion_port,companion_root;
     unsigned slot_type,publication,notifying,port_power_control;
     unsigned irq_mode,irq_service,irq_events,irq_asserted;
     uint64_t reset_deadline;

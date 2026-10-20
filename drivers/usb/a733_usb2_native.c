@@ -116,7 +116,7 @@ static int write32(void *cookie,uint32_t off,uint32_t v)
     struct a733_xhci *h=&n->core;unsigned op=h->operational,rt=h->runtime,db=h->doorbell;
     int allowed=op&&(off==op||off==op+4||off==op+0x38||
         (h->usb2_port&&off==op+0x400+16*(h->usb2_port-1))||
-        (h->require_ss&&h->usb2_companion_port&&off==op+0x400+16*(h->usb2_companion_port-1)));
+        ((h->require_ss||h->companion_root)&&h->usb2_companion_port&&off==op+0x400+16*(h->usb2_companion_port-1)));
     allowed|=rt&&(off==rt+0x20||off==rt+0x24||off==rt+0x28);
     allowed|=db&&off==db;
     for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
@@ -200,7 +200,8 @@ enum a733_usb2_result a733_usb2_native_poll(struct a733_usb2_native *n)
         if(!a733_xhci_init(&n->core,&n->core_ops,n,&n->private_pool,n->memory,
             n->platform.attachment.generation,n->platform.config.deadline,n->platform.config.lifetime_deadline)){
             a733_usb2_native_lost(n);return A733_USB2_RETAINED;}}
-    n->core.require_ss=n->platform.config.superspeed;
+    n->core.require_ss=n->platform.config.superspeed&&!n->platform.config.companion_root;
+    n->core.companion_root=n->platform.config.companion_root;
     if(!n->stack_started){if(!a733_usb2_host_bind(n)){a733_usb2_native_lost(n);return A733_USB2_RETAINED;}n->stack_started=1;}
     int r=a733_usb2_host_poll(n);if(r<0){a733_usb2_native_lost(n);return A733_USB2_RETAINED;}
     return n->mounted?A733_USB2_READY:A733_USB2_PENDING;

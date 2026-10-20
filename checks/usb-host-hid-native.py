@@ -29,7 +29,7 @@ class Image:
     def address(self,name,unit=None):
         v=({a for (u,n),a in self.variables.items() if n==name and u.endswith(unit)} if unit else self.symbols.get(name,set())-{0})
         assert len(v)==1,(name,unit,v);return next(iter(v))
-def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=None):
+def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=None,companion=False,hub=False):
     out.mkdir(parents=True,exist_ok=False);image=Image(image_path)
     response_address=image.address('response','/apps/board/usb0.c');response_bytes_address=image.address('response_bytes','/apps/board/usb0.c')
     (out/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),response=response_address,response_bytes=response_bytes_address,defining_unit='apps/board/usb0.c'),indent=2)+'\n')
@@ -44,14 +44,15 @@ def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=Non
     session[session_layout['usb_supply_uv']:session_layout['usb_supply_uv']+20]=struct.pack('<5I',3300000,3300000,800000,800000,1800000)
     session[session_layout['fabric']:session_layout['fabric']+12]=struct.pack('<3I',0,0x83000002,0x84000001)
     session[session_layout['fabric_hz']:session_layout['fabric_hz']+12]=struct.pack('<3I',24000000,200000000,200000000)
+    session[404:408]=struct.pack('<I',1 if hub else 0)
     session[48:80]=bytes(cpu.mem_read(image.address('a733_smp_build_id'),32));cpu.mem_write(board,bytes(session))
     cpu.mem_write(board+layout['host']+native['platform']+platform['config']+config['lifetime_deadline'],struct.pack('<Q',10000000))
     cpu.mem_write(board+layout['host']+native['kind'],struct.pack('<I',2))
     core=board+layout['host']+native['core'];core_fields=image.layouts['a733_xhci']
-    if superspeed:
-        cpu.mem_write(board+session_layout['workload'],struct.pack('<I',8));session[session_layout['workload']:session_layout['workload']+4]=struct.pack('<I',8)
+    if superspeed or companion:
+        cpu.mem_write(board+session_layout['workload'],struct.pack('<I',10 if companion else 8));session[session_layout['workload']:session_layout['workload']+4]=struct.pack('<I',10 if companion else 8)
         cpu.mem_write(board+session_layout['source_ma'],struct.pack('<I',900));session[session_layout['source_ma']:session_layout['source_ma']+4]=struct.pack('<I',900)
-        cpu.mem_write(core+core_fields['speed'],struct.pack('<I',3 if fault=='hs-fallback' else 4))
+        cpu.mem_write(core+core_fields['speed'],struct.pack('<I',3 if companion or fault=='hs-fallback' else 4))
         hid=board+layout['host']+native['hid'];cpu.mem_write(hid+image.layouts['a733_usb2_hid']['protocol'],struct.pack('<I',1))
         cpu.mem_write(core+core_fields['ops']+image.layouts['a733_xhci_ops']['live'],image.address('board_live').to_bytes(8,'little'))
     report_bytes=reports_path.read_bytes();stride=image.sizes['a733_usb2_hid_report'];assert stride==96 and len(report_bytes)==4*stride
@@ -105,7 +106,7 @@ def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=Non
     if superspeed:assert result['device_speed']=='super-gen1'
     # Same arbitrary contents remain a storage sector under version1.
     storage=bytearray(frame);struct.pack_into('<I',storage,4,1)
-    if not superspeed:
+    if not superspeed and not companion:
         decoded=decoder.decode(storage,session);assert decoded['kind']=='storage-sector' and decoded['sector']==batch
     refused=[]
     for name,offset,value in [('batch-count',80,3),('speed',96,3 if superspeed else 4),('interface',97,1),('length',112,65),('reserved',100,1),('version',76,2)]:
@@ -120,5 +121,5 @@ def run(image_path,reports_path,out,resume_batch=None,superspeed=False,fault=Non
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('image','reports','output'):p.add_argument('--'+name,type=Path,required=True)
-    p.add_argument('--resume-batch',type=Path);p.add_argument('--superspeed',action='store_true');p.add_argument('--fault',choices=('hs-fallback','lost-after-copy'))
-    a=p.parse_args();run(a.image,a.reports,a.output,a.resume_batch,a.superspeed,a.fault)
+    p.add_argument('--resume-batch',type=Path);p.add_argument('--superspeed',action='store_true');p.add_argument('--companion',action='store_true');p.add_argument('--hub',action='store_true');p.add_argument('--fault',choices=('hs-fallback','lost-after-copy'))
+    a=p.parse_args();run(a.image,a.reports,a.output,a.resume_batch,a.superspeed,a.fault,a.companion,a.hub)

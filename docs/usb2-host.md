@@ -4,9 +4,9 @@ The USB2 host implementation connects the A733 DWC3/xHCI controller to TinyUSB
 and copied read-only storage and HID input APIs. It supports one directly attached
 high-speed mass-storage device or one low-, full- or high-speed HID interface,
 directly or behind one admitted high-speed USB2 hub. A separate supervised
-profile adds one directly attached SuperSpeed Gen1 Bulk-Only Transport (BOT)
-mass-storage device or one boot-keyboard HID interface on
-TYPEC24, using COMB0. The USB2 profiles keep their existing admission and wire
+profile adds one SuperSpeed Gen1 Bulk-Only Transport (BOT) mass-storage device
+or boot keyboard on TYPEC24, directly or through one self-powered Gen1 hub.
+It also supports the USB2 companion root through the same COMB0 preparation. The USB2 profiles keep their existing admission and wire
 contracts.
 The storage profile uses one configuration, interface 0, alternate 0, two bulk
 endpoints and LUN 0. Storage configuration descriptors must contain the standard
@@ -568,13 +568,70 @@ copied publication, fallback and lifetime refusal, immutable image capability
 and class-bound authority. Device, cache, RTOS and transport effects are modeled;
 physical keyboard, power, DMA and interrupt operation remain unqualified.
 
+## One Gen1 hub or the USB2 companion root serves one leaf
+
+Supervised workloads 6 and 8 admit the existing Gen1 MSC or boot-keyboard leaf
+through one self-powered Gen1 hub. Workloads 10 and 12 select a USB2 boot
+keyboard or high-speed MSC device on the USB2 companion root. That device may
+attach directly or through the existing bounded high-speed USB2 hub path.
+Only the selected root enumerates devices. A dual-bus hub exposes separate
+USB2 and SuperSpeed devices; its USB2 children belong to the companion root.
+The SuperSpeed hub provides no USB2 transaction translator.
+
+The sealed session remains 592 bytes. Its 32-bit field at offset 404 is
+`usb_topology`: zero selects direct attachment and one requires a single hub.
+Only workloads 6, 8, 10 and 12 may select one. Older workloads require zero
+and retain their existing topology behavior. The native root descriptor gate
+refuses a hub under direct authority or a leaf under hub authority before
+configuration. Workloads 9 and 11 remain refused.
+
+The Gen1 hub configuration is 31 bytes: one interface, one interrupt endpoint
+and its immediate six-byte companion. The class descriptor is exactly 12 bytes
+with type `0x2a`, one to seven ports, header-decode latency at most 1 microsecond
+and hub forwarding delay at most 400 nanoseconds. Hub configuration completes
+before a child receives a slot. Set Hub Depth selects zero for the root hub.
+Each downstream port receives explicit zero U1/U2 timeout settings before power.
+The existing power-good deadline governs the first status transfer.
+
+Every device retains its own BOS, enumeration request and readiness state.
+A SuperSpeed child uses the root port and one route-string port nibble, with
+zero TT fields. USB2 low/full-speed children retain the existing parent TT
+slot, port and multi-TT fields. Set Isochronous Delay uses 40 nanoseconds for a
+direct device and 80 nanoseconds plus the hub delay for a SuperSpeed child.
+This follows USB 3.2 Revision 1.1 section 9.4.11. The profile never enables
+device-initiated U1/U2. Children omit Set SEL, which section 9.4.12 requires
+before enabling those states; direct-device Set SEL behavior is preserved.
+
+All four TYPEC24 profiles require qualified source capacity of at least 900 mA.
+USB2 descriptors retain their 500 mA budget and two-milliampere units. Physical
+admission must bind the selected root protocol, direct or hub topology and leaf
+class. Hub admission additionally needs evidence for the actual local supply
+and downstream power. A self-powered descriptor does not establish those facts.
+The topology record uses `a733-usb3-topology-physical-entry-v2`; legacy version 1
+records admit only direct Gen1 attachment. Preparation also verifies the immutable
+read-only `board_usb3_topology_capability` marker for hub or companion operation.
+
+One owner retains the existing 128 KiB DMA parent, three device records and
+command/event rings. No allocation or ring is released after uncertain requests,
+wrong-slot events, removal or another leaf. The application returns the existing
+copied sector or four-report result through USB0 and host capture.
+
+Evidence in `~/.cache/sunstoneos/evidence/usb-ss-hub-20261020/` executes the actual
+TinyUSB hub/HID/MSC code and xHCI/provider composition with modeled device effects.
+Focused cases cover both root protocols, copied results, topology mismatch,
+depth-command loss, malformed status/delay, context mismatch, stale completions,
+removal and an extra leaf. Linked client/session/serializer and host checks cover
+the native application. Physical power, topology, DMA visibility, interrupt
+delivery and recovery remain unqualified. Nested hubs, simultaneous root
+enumeration and additional leaves remain unsupported in these profiles.
+
 ## Required wider modes and physical qualification
 
 The implementation supports the bounded storage, HID and hub profiles above. It
 refuses low/full-speed mass storage, deeper or bus-powered hubs, more than two
 leaves or two leaves of the same class,
 interrupt OUT, high-bandwidth periodic
-transfers, isochronous endpoints, SuperSpeed hubs, other SuperSpeed HID profiles, Gen2, streams,
+transfers, isochronous endpoints, other SuperSpeed HID profiles, Gen2, streams,
 nonstandard speed-ID tables, more than eight
 scratchpads and richer mass-storage configurations. GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
 profile. Bulk stalls, other control stalls and uncertain recovery retain the

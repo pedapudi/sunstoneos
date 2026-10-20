@@ -30,7 +30,7 @@ int a733_usb2_platform_outside(struct a733_usb2_platform *p,const void *v,size_t
 static int valid(const struct a733_usb2_platform_config *c)
 {
     if(!c->owner||!c->identity||!c->topology||!c->deadline||c->lifetime_deadline<c->deadline||
-        c->superspeed>1||c->pck_client>=A733_GPU_RESOURCE_CLIENTS||c->supply_uv[0]!=c->supply_uv[1])return 0;
+        c->topology_mode>2||(c->topology_mode&&!c->superspeed)||c->superspeed>1||c->companion_root>1||(c->companion_root&&!c->superspeed)||c->pck_client>=A733_GPU_RESOURCE_CLIENTS||c->supply_uv[0]!=c->supply_uv[1])return 0;
     for(unsigned i=0;i<A733_USB2_SUPPLIES;++i)if(!c->supply_uv[i])return 0;
     switch(c->revision){case 0x3131302a:case 0x3132302a:case 0x3136302a:case 0x3137302a:
         case 0x3138302a:case 0x3139302a:case 0x3230302a:break;default:return 0;}
