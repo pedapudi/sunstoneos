@@ -191,6 +191,10 @@ Prevent recurring fixture failures at setup:
   submission count and matching native terminal classification. Retained buffers
   alone cannot distinguish a fault from successful retained operation.
 - Use the configured tool paths and Python environment from accepted evidence.
+  Before the first configure, enumerate every required cached third-party
+  source/header path and effective feature flag from the accepted CMakeCache.
+  Verify those paths exist and preserve the generator, compiler and linker
+  invocations; copying compiler flags alone does not reproduce the configuration.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.
 
