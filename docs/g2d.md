@@ -96,3 +96,19 @@ reachability, parent stability and retained failure handling. INTID83 is
 identified by the pinned device tree; this first path polls its enabled RCQ
 status while retaining interrupt routing exclusion. Interrupt delivery remains
 unqualified.
+
+Software evidence is preserved under `g2d-native-20261020/`. The final native
+image has SHA256 `4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`.
+Its frozen closure contains 169 linked objects and 448 compiled dependencies.
+Focused source review covers RCQ layout, DMA ownership, clock fields, retained
+IOMMU admission and TinyUSB packet completion.
+
+The actual linked allocator, pool getters, upload constructor, G2D constructor
+and IOMMU validator pass a model-only 64 by 64 source-copy fixture. The check
+confirms exact source bytes, a zero destination, three bounded permission spans
+and intact guards. Separate cases refuse differing CPU/physical addresses and
+corrupted guards while retaining allocations. Prepared-pool authority and time
+are modeled; no peripheral MMIO is mapped. Host execution also checks actual
+RCQ fields, fragmented upload authentication and master10-only IOMMU programming
+and fault scans. These checks establish software behavior under their stated
+models. Physical G2D, USB and interrupt operation remain unqualified.
