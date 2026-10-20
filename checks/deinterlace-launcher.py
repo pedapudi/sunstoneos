@@ -10,6 +10,8 @@ MODE,CONFIG,FLAG,ALT,RVBAR=0x02050014,0x02050010,0x070501c0,0x070501d4,0x0800100
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bundle',type=Path,required=True)
 parser.add_argument('--output',type=Path,required=True)
+parser.add_argument('--motion-only',action='store_true',
+                    help='Check only motion-mode admission and unsupported-mode refusal')
 args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 image=args.bundle/'image.elf'
 with image.open('rb') as stream:
@@ -26,11 +28,18 @@ assert len(template)==888 and len(contract)==288
 assert struct.unpack_from('<3Q',template,592)==(0x4153373344494131,1,888)
 identity=struct.unpack_from('<3Q',template,24)
 results=[]
-for name,offset,value,reason in [
+cases=[
     ('bounded-handoff',None,None,12),
     ('invalid-weave-geometry',856,struct.pack('<I',641),14),
     ('memory-authority-mismatch',200,bytes(8),14),
-]:
+]
+if args.motion_only:
+    assert struct.unpack_from('<I',template,876)[0]==2
+    cases=[
+        ('motion-handoff',None,None,12),
+        ('unsupported-motion-mode',876,struct.pack('<I',3),14),
+    ]
+for name,offset,value,reason in cases:
     session=bytearray(template)
     if offset is not None:session[offset:offset+len(value)]=value
     cpu=Uc(UC_ARCH_ARM,UC_MODE_ARM);cpu.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_A15)
@@ -86,6 +95,8 @@ for name,offset,value,reason in [
         assert terminal==['handoff'] and writes==[(RVBAR,0x41000000),(RVBAR+4,0)] and len(ticks)==4
         assert struct.unpack_from('<4Q',published,80)==(ticks[0],ticks[0]+24000000,ticks[0]+480000000,ticks[0]+480000000)
         assert published[8:80]==contract[8:80] and published[112:]==contract[112:]
+        if args.motion_only:
+            (args.output/'runtime-contract.bin').write_bytes(published)
     else:
         assert terminal==['return'] and not writes and not ticks and published==contract
         assert report[1:7]==(0,0,*identity,0x4153373352454631) and not any(report[7:])
@@ -96,4 +107,4 @@ report=dict(passed=True,physical_access=False,cases=results,
     launcher_sha256=hashlib.sha256(code).hexdigest(),session_sha256=hashlib.sha256(template).hexdigest(),
     scope='Actual prepared AArch32 entry, deinterlacer geometry/authority predicates, fixed 20-second contract publication and refusal restoration. System registers, counter and MMIO are modeled. No rebuild, reset, CPU startup, USB or physical execution.')
 (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
-print('PASS three deinterlacer SRAM launcher cases')
+print(f'PASS {len(results)} deinterlacer SRAM launcher cases')
