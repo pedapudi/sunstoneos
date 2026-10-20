@@ -30,6 +30,7 @@ for name,offset,value,reason in [
     ('bounded-handoff',None,None,12),
     ('typec-source-overvoltage',916,struct.pack('<I',5251),14),
     ('memory-authority-mismatch',200,bytes(8),14),
+    ('supervised-high-half-deadline',160,struct.pack('<Q',1<<40),14),
 ]:
     session=bytearray(template)
     if offset is not None:session[offset:offset+len(value)]=value
@@ -96,4 +97,4 @@ report=dict(passed=True,physical_access=False,cases=results,
     launcher_sha256=hashlib.sha256(code).hexdigest(),session_sha256=hashlib.sha256(template).hexdigest(),
     scope='Actual prepared AArch32 entry, DisplayPort source/authority predicates, fixed 20-second contract publication and refusal restoration. System registers, counter and MMIO are modeled. No rebuild, reset, CPU startup, USB or physical execution.')
 (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n')
-print('PASS three DisplayPort SRAM launcher cases')
+print('PASS',len(results),'DisplayPort SRAM launcher cases')
