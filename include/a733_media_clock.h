@@ -40,8 +40,10 @@ struct a733_media_clock_ops {
         const struct a733_clock_token *,const struct a733_gpu_resource_lease *);
     int (*enter)(void *,uint64_t deadline); /* 1 held, 0 busy, otherwise uncertain. */
     void (*leave)(void *);
-    /* Called while held after any failed/uncertain observation or write.
-     * Keep the common mutex owned and prohibit subsequent register access. */
+    /* Called after uncertain entry (which may be unowned) or a fault while
+     * held. Determine actual task/mutex ownership before forwarding retention;
+     * a negative entry alone does not prove acquisition. Retain known ownership
+     * even when health has failed, and prohibit subsequent register access. */
     void (*retain)(void *);
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);

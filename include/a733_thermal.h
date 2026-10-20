@@ -45,7 +45,10 @@ struct a733_thermal_ops {
     int (*authorize)(void *,const struct a733_thermal_config *,const struct a733_clock_token *);
     int (*enter)(void *,uint64_t); /* 1 held; 0 busy; other result uncertain. */
     void (*leave)(void *);
-    void (*retain)(void *); /* Retain common register mutex after uncertainty. */
+    /* Entry uncertainty may be unowned. Check actual task/mutex ownership
+     * before forwarding retention; preserve known-held faults even when the
+     * health predicate has failed. Never release or resume register access. */
+    void (*retain)(void *);
     int (*read)(void *,uintptr_t,uint32_t *);
     int (*write)(void *,uintptr_t,uint32_t);
 };

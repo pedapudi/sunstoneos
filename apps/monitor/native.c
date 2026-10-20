@@ -14,7 +14,17 @@ static int enter(void *v,uint64_t d)
 static void leave(void *v)
 {struct monitor_owner *o=v;o->native.operations.leave(&o->native);}
 static void retain(void *v)
-{struct monitor_owner *o=v;o->native.operations.retain(&o->native);}
+{
+ struct monitor_owner *o=v;
+ if((o!=&monitor.owners[0]&&o!=&monitor.owners[1])||!o->handle||
+    !o->native.initialized||o->native.owner_task!=o->handle||!o->native.locks||
+    !o->native.locks->initialized||!o->native.operations.current||
+    !o->native.operations.retain||o->native.operations.current(&o->native)!=1)return;
+ /* Native current establishes normal task context before the holder query.
+  * Do not require access(): health may fail while this task still owns it. */
+ SemaphoreHandle_t mutex=o->native.locks->mutex[A733_PLATFORM_REGISTER_LOCK];
+ if(mutex&&xSemaphoreGetMutexHolder(mutex)==o->handle)o->native.operations.retain(&o->native);
+}
 static int read_register(void *v,uintptr_t a,uint32_t *out)
 {
  struct monitor_owner *o=v;if(!access(o))return 0;

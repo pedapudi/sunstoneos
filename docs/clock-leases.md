@@ -100,6 +100,15 @@ also protects register updates. The registry does not replace pin, regulator,
 DMA-channel or memory ownership. Its local audio scopes include module clocks,
 bus gates, reset and controller/FIFO routing.
 
+Media-clock and thermal entry callbacks return 1 for acquisition, 0 for busy,
+and another value for terminal uncertainty. That uncertainty can occur before
+or after acquisition. A retention adapter must establish actual task and mutex
+ownership before forwarding retention. It must retain known ownership even
+when the health check that admitted the operation has since failed. The camera
+adapter uses the shared provider's ownership check; the monitoring adapter
+checks its native task binding and register-mutex holder. Both drivers retain
+their clock authority and stop healthy register access after either fault.
+
 The registry has 128 fixed slots and a nonblocking atomic lock. A busy
 call returns immediately. The owner must poll against its own deadline; a
 conflicting acquisition does not call the clock callback. Successful metadata
@@ -327,3 +336,16 @@ as raw DCXO. PMIC APBS source0 also uses raw DCXO, while source4 uses the
 normalized reference. A shared clock lease does not make these rates equal.
 The manual text is pinned at SHA-256
 `219d3c21e5377d18a096765f429555d0693f7fa9b2ae2eb5bb3f225d8b6a09c2`.
+
+
+Four focused host cases compile the actual camera and monitoring adapters with
+the existing media-clock and thermal fixture setup. Each adapter refuses an
+unowned entry without forwarding retention and retains an acquired mutex once
+after health fails. Later polls make no register access or repeated retention.
+The cases also cover invalid binding and context guards. The held-fault cases
+return 1 from entry before health fails; other adapters' negative returns after
+acquisition keep their existing behavior because the driver algorithms are
+unchanged. RTOS, mutex and liveness boundaries are modeled. Sources, host
+executables and results are frozen under
+`~/.cache/sunstoneos/evidence/mutex-enter-20261020/frozen/`. No native image,
+USB path, startup or physical device was executed for this correction.

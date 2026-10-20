@@ -40,7 +40,12 @@ static int enter(void *v,uint64_t deadline)
 static void leave(void *v)
 {configASSERT(v==&app&&app.held);a733_platform_lock_leave(&app.shared.locks,A733_PLATFORM_REGISTER_LOCK);app.held=0;}
 static void retain(void *v)
-{configASSERT(v==&app&&app.held);configASSERT(a733_platform_lock_retain(&app.shared.locks,A733_PLATFORM_REGISTER_LOCK)==1);app.held=0;}
+{
+ /* A denied enter can be unowned. The provider checks normal task context and
+  * actual mutex ownership independently of the health predicate that failed. */
+ if(v==&app&&app.held&&
+    a733_platform_lock_retain(&app.shared.locks,A733_PLATFORM_REGISTER_LOCK)==1)app.held=0;
+}
 static int mapped(uintptr_t a)
 {
  struct aarch64_translation r,w;
