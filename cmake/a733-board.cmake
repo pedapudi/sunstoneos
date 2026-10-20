@@ -100,6 +100,14 @@ target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/u
   "${board_root}/include" "${board_root}/runtime/include" "${FREERTOS_DIR}/include"
   "${storage_base}" "${TINYUSB_DIR}/src" "${TINYUSB_DIR}/src/host")
 file(GLOB board_tcp_sources "${SUNSTONE_TCP_DIR}/source/*.c")
+set(board_tcp_return "${board_build}/FreeRTOS_TCP_Transmission_IPv4.c")
+apply_build_patch("${board_tcp_return}" "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c"
+  "${board_root}/patches/freertos-tcp-ipv4-return-checksum.patch")
+list(REMOVE_ITEM board_tcp_sources "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c")
+list(APPEND board_tcp_sources "${board_tcp_return}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c"
+  "${board_root}/patches/freertos-tcp-ipv4-return-checksum.patch")
 # DNS runs in the IP task; use its actual nonblocking socket internals.
 set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
   COMPILE_DEFINITIONS DNS_BindSocket=sunstone_net_dns_bind DNS_CloseSocket=sunstone_net_dns_close)

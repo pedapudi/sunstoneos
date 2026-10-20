@@ -2,7 +2,7 @@
 
 The network service runs FreeRTOS+TCP with the native AIC8800 Ethernet
 transport. It implements fixed IPv4 or DHCPv4 addressing, DNS client lookups, ARP,
-ICMP replies, UDP, and outgoing TCP connections. Applications submit copied
+ICMP replies, UDP, outgoing TCP connections, and one bounded IPv4 TCP listener. Applications submit copied
 requests through `sunstone_net.h`; the privileged service owns socket records
 and radio polling. This document assumes familiarity with FreeRTOS tasks and IP sockets.
 
@@ -22,9 +22,9 @@ release history with that archive before building.
 
 The private configuration enables software IP, UDP, and TCP checksums.
 It sets a 1500-byte MTU, a 1460-byte TCP MSS, and four MSS units for each
-TCP send and receive stream. IPv6, service discovery, and TCP server APIs remain required follow-on work.
+TCP send and receive stream. IPv6 and service discovery remain required follow-on work.
 The application API supports UDP open, TCP open, connect, send, receive, close,
-address status, DNS resolution, and cancellation.
+address status, DNS resolution, listen, accept, and cancellation.
 
 The optional `cmake/radio-network.cmake` builds `radio-network-model` with
 `SUNSTONE_TCP_DIR`, `SUNSTONE_RSN_DIR`, and `SUNSTONE_NETWORK_C_HEADERS`.
@@ -214,3 +214,90 @@ ready; the final composition passes, but does not establish timing robustness.
 These checks do not qualify physical RF, network credentials, entropy or radio
 operation. Run the focused checker's `--help` for pinned-source and tool inputs,
 including TinyUSB required by the root build configuration.
+
+## One IPv4 listener retains pending and accepted children
+
+LISTEN and ACCEPT append operations 9 and 10 without changing copied request or
+reply layouts. LISTEN takes a bound TCP handle and fixed backlog one. Its address,
+port and payload fields must be zero. Only one listener may exist in the service.
+ACCEPT takes that listener handle with the same zero fields. One successful
+accept returns a distinct opaque child handle and copied peer IPv4/port. The
+same registered task owns both handles. A second successful accept is refused.
+
+Before LISTEN, the owner reserves a second entry in the four-socket ledger.
+OPEN skips that entry even when its socket pointer is empty. The reservation
+covers the stack's pending child before ACCEPT transfers it to the application.
+It remains reserved after accepted-child disposal until the listener's own
+disposal. The stack can admit another pending child after the first child closes.
+A ledger reservation alone does not limit stack allocations: the pinned IPv4
+listen handler checks `usChildCount >= usBacklog` before allocating, and copies
+the child into the parent count in the sole IP task. Backlog one supplies the
+actual child bound. Socket reuse is disabled.
+
+LISTEN and ACCEPT run through a per-client handoff to the existing IP-task hook.
+The pinned public accept function queues an accept event with `portMAX_DELAY`
+after taking a child, even when its receive wait is zero. The event sender forces
+that wait to zero in IP-task context. The accept event remains best effort when
+the queue is full; the API ignores enqueue failure. This service accepts one
+child and does not depend on that event to admit another connection.
+
+Timeout, cancellation and link/address loss wait for the IP-task handoff fence.
+They cannot discard a running accept. Before publishing completion, the IP task
+registers the accepted allocation with the existing socket-free hook. The owner
+then publishes the copied peer tuple and fresh handle. A late accepted child
+remains independently closeable in its TIMEOUT, CANCELED or address-loss reply.
+No reply exposes the stack pointer.
+
+ACCEPT completion precedes a later listener CLOSE request on the IP queue.
+Listener close recursively disposes unaccepted children; its free-hook receipt
+therefore fences their disposal. Accepted children have left that automatic
+close set and require their own CLOSE. CLOSE remains available after address
+loss. Deadlines and software cancellation never establish disposal by themselves.
+
+These contracts follow the pinned FreeRTOS+TCP source at revision
+`b86ad086e9870099bb0ac18a75dcb7f6dd508cc7`: `FreeRTOS_Sockets.c`, lines 3888–4079
+and 4724–4780, implements accept/listen; lines 2280–2328 handles child disposal.
+`FreeRTOS_TCP_State_Handling_IPv4.c`, lines 125–160, checks backlog before child
+allocation. `FreeRTOS_TCP_State_Handling.c`, lines 1000–1040, records child
+ownership. `FreeRTOS_IP.c`, lines 1474–1481, bounds IP-task event submission.
+
+### The generated IPv4 return path checksums the outgoing extent
+
+The pinned stack computes an IPv4 TCP reply checksum before updating its network
+descriptor length. A minimal SYN occupies 54 Ethernet bytes; its option-bearing
+SYN-ACK occupies 66. The original checksum call supplies the shorter incoming
+length and returns an invalid-length result, leaving the reply checksum invalid.
+The generated-source adaptation in
+`patches/freertos-tcp-ipv4-return-checksum.patch` supplies the outgoing IP length
+plus the Ethernet header to that call. Both native board and network-model builds
+apply the patch to a separate generated file. The authenticated external source
+and its MIT notices remain preserved.
+
+This configuration uses fixed 1,536-byte buffers from
+`uxNetworkInterfaceAllocateRAMToBuffers` and disables zero-copy TX. The expanded
+reply fits the actual allocation after buffer padding. The adaptation does not
+admit variable buffers or a different zero-copy configuration. An independent
+peer checksum and a complete real-stack handshake exercise the changed path.
+
+### Bounded listener evidence
+
+The selected native board image links the actual service, IP stack, radio owner
+and providers. Seven AArch64 composition cases execute real FreeRTOS tasks,
+FreeRTOS+TCP and service ownership with modeled RF/security checkpoints and SDIO.
+They cover the copied exchange and backlog refusal, a full accept-event queue,
+cancellation and deadline fences, late and address-lost accepted children, and
+listener disposal with an unaccepted child. Initial burst input may be dropped
+by modeled RX; an additional SYN with the accepted child live exercises the
+actual backlog refusal branch. The model does not substitute accept or the
+listen handler's decisions.
+
+Four sanitizer cases execute the actual application/profile code with modeled
+socket replies. Five host cases consume the actual compiled USB result producer
+and check success, failure, pending output and profile opt-in binding. Those
+fixtures do not execute the full native image. Earlier outgoing-client and
+radio/entropy evidence remains in its original frozen scope.
+
+Inputs, exact linked objects, results and source-review notes are preserved under
+`~/.cache/sunstoneos/evidence/net-inbound-20261020/`. Physical radio networking,
+entropy quality, RF operation and platform recovery remain unqualified. Socket
+disposal and copied result delivery do not establish TCP or RF wire drain.

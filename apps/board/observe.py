@@ -35,8 +35,11 @@ def decode(frame, session, profile=None):
         if profile is None or hashlib.sha256(profile).digest()!=digest:
             raise ValueError('admitted radio profile required')
         expected_version=4 if struct.unpack_from('<Q',session)[0]==0x4153373342535332 else 3
-        if len(profile)!=1872 or struct.unpack_from('<QII',profile)!=(0x3152464f52545353,expected_version,len(profile)):
+        if len(profile)!=1872 or struct.unpack_from('<QII',profile) not in ((0x3152464f52545353,expected_version,len(profile)),(0x3152464f52545353,6 if expected_version==4 else 5,len(profile))):
             raise ValueError('invalid radio profile')
+        mode=struct.unpack_from('<H',profile,1338)[0];profile_version=struct.unpack_from('<I',profile,8)[0]
+        if mode!=(1 if profile_version in (5,6) else 0) or (mode and not any(profile[1328:1332])):
+            raise ValueError('invalid TCP client/listener mode or peer IPv4')
         policy,dns,reserved,address_timeout,lease_cap=struct.unpack_from('<B4s3sII',profile,1856)
         if policy not in (0,1) or reserved!=bytes(3) or (policy==0 and (address_timeout or lease_cap)) or (policy==1 and (not address_timeout or not lease_cap)):
             raise ValueError('invalid fixed/DHCP radio address policy')
@@ -48,6 +51,10 @@ def decode(frame, session, profile=None):
     result=dict(usb_state=usb_state,radio_state=radio_state,verified_radio_bytes=radio_bytes,
                 kind='storage-sector' if usb_state==1 else 'pending-or-failed',
                 sector=frame[72:] if usb_state==1 else None)
+    if workload&1 and mode:result.update(radio_tcp_mode='listener',
+                               radio_exchange_complete=radio_state==2,
+                               radio_completion_scope='expected-response-and-socket-disposal',
+                               tcp_wire_drain_established=False)
     if workload==4 and usb_state==1 and version!=3:raise ValueError('Combined workload requires combined result')
     if workload==6 and usb_state==1 and version!=4:raise ValueError('SS-required workload needs SS result')
     if version==4:

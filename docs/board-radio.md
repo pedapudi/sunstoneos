@@ -24,9 +24,10 @@ read-only range `0x43010000..0x43100000`. Boot authority must establish those
 mappings and exclude uploads, DMA and remote writers throughout the lifetime.
 The existing firmware engine verifies the pinned artifact lengths and hashes.
 
-The startup profile occupies 1,872 bytes. Runtime and watchdog profiles use
-version 3; supervised uploads use version 4 and convert to runtime version 3
-after authentication. Earlier sizes and versions are refused. The appended
+The startup profile occupies 1,872 bytes. Outgoing TCP uses runtime version 3
+or supervised upload version 4, which converts to runtime version 3 after
+authentication. The bounded listener uses runtime version 5 or supervised upload
+version 6, which converts to runtime version 5. Other versions are refused. The appended
 network fields preserve every preceding field offset, including the checked
 response length at byte 1,336 and response data at byte 1,596.
 
@@ -96,7 +97,7 @@ atomic lock. The watchdog supervisor receives no feed permission on contention,
 missing progress or application fault. It must require a strictly increasing
 count and enforce the immutable board session cap before each reload.
 
-The configured client task executes one TCP exchange through copied requests:
+The outgoing client task executes one TCP exchange through copied requests:
 open, connect, send, receive the supplied expected bytes and close. Partial sends
 and receives preserve their offsets. One absolute client deadline bounds the
 entire exchange, including queue contention; individual socket requests also
@@ -154,3 +155,34 @@ The image SHA-256 is
 The link establishes native composition. It supplies no physical radio evidence;
 bounded DNS timing also remains unqualified as recorded in
 [the network evidence](radio-network.md).
+
+## An admitted listener verifies one copied application exchange
+
+The listener profile preserves the 1,872-byte profile and 592-byte board session.
+It uses the existing radio workloads and their private boot admission. The
+session still authenticates the complete profile size, retained span and SHA-256
+digest before the application copies it. Runtime version 5 and uploaded version 6
+require `uint16_t tcp_mode` at byte 1,338 to equal one. Older versions require
+that field to be zero. The three reserved network bytes remain zero.
+
+For listener mode, `peer_port` is the local IPv4 listening port and must be
+nonzero. `peer_address` is the exact admitted remote IPv4 address; zero is refused.
+The caller's copied `request` and expected `response` each contain one through
+256 bytes. The remote client connects, reads the complete request and sends the
+expected response. The board does not accept arbitrary commands or additional
+connections.
+
+The existing application task opens the local socket, listens, accepts one peer,
+sends the request and verifies the response. Partial send and receive offsets
+remain private to that task. It closes the accepted child and then the listener.
+Only both actual socket-disposal receipts permit terminal USB success. A wrong
+peer, late acceptance or address loss starts bounded cleanup while authority
+remains valid. Failure is published after that attempt; loss of overall authority
+or deadline retains unresolved resources and uses the existing recovery policy.
+
+The existing launcher and capture protocol keep their wire layouts. Preparation
+accepts the authenticated listener profile. Copied USB results retain its digest,
+epoch and generation. Host decoding labels the listener mode and requires the
+native terminal state and expected verified-byte count. Stack send acceptance,
+radio bus completion and socket disposal do not prove TCP serial or RF drain.
+No physical station, entropy, power or recovery admission is relaxed.

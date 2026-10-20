@@ -16,6 +16,7 @@ static unsigned entropy_retains;
 static atomic_uint recovery_state;
 static int entropy_failed,boundary;
 static int client_model;
+static unsigned listener_variant,listener_closes;
 static struct sunstone_net_request copied_request;
 static uint64_t copied_ticket;
 static enum a733_radio_session_result session_result=A733_SESSION_MANAGEMENT;
@@ -89,6 +90,17 @@ int sunstone_net_receive(struct sunstone_net *s,struct sunstone_net_reply *r,Tic
 {
  assert(s==&app.session.sockets&&wait==(client_model?0:3));++received;memset(r,0,sizeof(*r));
  r->ticket=copied_ticket;r->result=client_model?SUNSTONE_NET_OK:SUNSTONE_NET_LINK_LOST;r->handle=5;
+ if(client_model==2){
+    r->handle=copied_request.operation==SUNSTONE_NET_OPEN_TCP?5:copied_request.handle;
+    if(copied_request.operation==SUNSTONE_NET_ACCEPT){r->handle=6;r->port=60000;memcpy(r->address,app.startup_profile->peer_address,4);
+        if(listener_variant==1)r->address[0]^=1;
+        if(listener_variant==2)r->result=SUNSTONE_NET_TIMEOUT;
+    }
+    if(copied_request.operation==SUNSTONE_NET_RECEIVE&&listener_variant==3)r->result=SUNSTONE_NET_ADDRESS_LOST;
+    if(copied_request.operation==SUNSTONE_NET_CLOSE){
+        assert(copied_request.handle==(listener_closes?5u:6u)&&!atomic_load(&app.client_status));++listener_closes;
+    }
+ }
  if(client_model&&copied_request.operation==SUNSTONE_NET_SEND)r->stack_result=2;
  if(client_model&&copied_request.operation==SUNSTONE_NET_RECEIVE){
     r->bytes=2;memcpy(r->payload,app.startup_profile->response+app.client_received,2);

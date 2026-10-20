@@ -21,7 +21,35 @@ static struct {uint8_t bytes[1514];unsigned length;} peer_rx[8];
 static unsigned peer_head,peer_count,udp_packets,tcp_packets,syn_packets;
 static uint64_t peer_pn;
 static uint32_t tcp_next,peer_next=9001;
-static int entropy_failure,case_entropy,case_late,case_alias;
+static int entropy_failure,case_entropy,case_late,case_alias,case_inbound;
+static unsigned inbound_resets,backlog_refusals;
+FreeRTOS_Socket_t *__real_prvHandleListen_IPV4(FreeRTOS_Socket_t *,NetworkBufferDescriptor_t *);
+FreeRTOS_Socket_t *__wrap_prvHandleListen_IPV4(FreeRTOS_Socket_t *parent,NetworkBufferDescriptor_t *packet)
+{
+ unsigned full=parent->u.xTCP.usChildCount>=parent->u.xTCP.usBacklog;
+ FreeRTOS_Socket_t *child=__real_prvHandleListen_IPV4(parent,packet);
+ if(case_inbound&&full){assert(!child&&parent->u.xTCP.usChildCount==1);++backlog_refusals;}
+ return child;
+}
+static int inbound_cancel,inbound_timeout,inbound_queue,inbound_late,inbound_loss,inbound_pending;
+static unsigned accept_full_queue;
+Socket_t __real_FreeRTOS_accept(Socket_t,struct freertos_sockaddr *,socklen_t *);
+Socket_t __wrap_FreeRTOS_accept(Socket_t socket,struct freertos_sockaddr *peer,socklen_t *bytes)
+{
+    assert(xIsCallingFromIPTask());
+    FreeRTOS_Socket_t *parent=socket;
+    if(inbound_queue&&parent->u.xTCP.pxPeerSocket&&parent->u.xTCP.pxPeerSocket->u.xTCP.bits.bPassAccept){
+        IPStackEvent_t event={eNoEvent,NULL};unsigned n=0;
+        while(n<ipconfigEVENT_QUEUE_LENGTH&&xSendEventStructToIPTask(&event,0)==pdPASS)++n;
+        assert(xSendEventStructToIPTask(&event,0)==pdFAIL);++accept_full_queue;
+    }
+    Socket_t child=__real_FreeRTOS_accept(socket,peer,bytes);
+    if(child&&child!=FREERTOS_INVALID_SOCKET){
+        if(inbound_loss){atomic_store(&net.network.address_ready,0);atomic_store(&net.network.address_failed,1);}
+        if(inbound_late)vTaskDelay(20); /* Explicit modeled post-accept scheduling delay. */
+    }
+    return child;
+}
 int32_t __real_FreeRTOS_sendto(Socket_t,const void *,size_t,BaseType_t,const struct freertos_sockaddr *,socklen_t);
 int32_t __wrap_FreeRTOS_sendto(Socket_t socket,const void *p,size_t n,BaseType_t flags,const struct freertos_sockaddr *peer,socklen_t bytes)
 {
@@ -46,6 +74,13 @@ static void ip_header(uint8_t *p,unsigned payload,unsigned proto)
     uint8_t *ip=p+14;ip[0]=0x45;store16(ip+2,(uint16_t)(20+payload));ip[8]=64;ip[9]=(uint8_t)proto;
     memcpy(ip+12,peer_ip,4);memcpy(ip+16,local_ip,4);store16(ip+10,checksum(sum(ip,20,0)));
 }
+static void inbound_packet(unsigned port,uint32_t seq,uint32_t ack,uint8_t flags,const void *bytes,unsigned count)
+{
+    uint8_t frame[1514]={0};assert(count<=1460);ip_header(frame,20+count,6);uint8_t *tcp=frame+34;
+    store16(tcp,(uint16_t)port);store16(tcp+2,7400);store32(tcp+4,seq);store32(tcp+8,ack);
+    tcp[12]=5<<4;tcp[13]=flags;store16(tcp+14,8192);if(count)memcpy(tcp+20,bytes,count);
+    store16(tcp+16,protocol_checksum(frame+14,tcp,20+count,6));enqueue(frame,54+count);
+}
 static void peer(const uint8_t *p,unsigned n)
 {
     assert(n>=14);assert(!memcmp(p+6,local_mac,6));
@@ -66,9 +101,18 @@ static void peer(const uint8_t *p,unsigned n)
         store16(reply+34,be16(payload+2));store16(reply+36,be16(payload));store16(reply+40,0);
         store16(reply+40,protocol_checksum(reply+14,reply+34,length,17));enqueue(reply,34+length);return;
     }
+    if(ip[9]!=6||length<20||protocol_checksum(ip,payload,length,6)){platform_puts("peer protocol/length/checksum/flags ");platform_hex(ip[9]);platform_hex(length);platform_hex(protocol_checksum(ip,payload,length,6));platform_hex(payload[13]);platform_puts("\n");}
     assert(ip[9]==6&&length>=20&&!protocol_checksum(ip,payload,length,6));
     unsigned header=(payload[12]>>4)*4;assert(header>=20&&header<=length);
     uint8_t flags=payload[13];unsigned data_bytes=length-header;
+    if(case_inbound){
+        if(flags&4){++inbound_resets;return;}
+        if(flags&2){assert((flags&0x12)==0x12&&be16(payload+2)==9000&&be32(payload+8)==peer_next);
+            ++syn_packets;tcp_next=be32(payload+4)+1;inbound_packet(9000,peer_next,tcp_next,0x10,NULL,0);return;}
+        if(data_bytes){assert(be32(payload+4)==tcp_next);++tcp_packets;tcp_next+=data_bytes;
+            inbound_packet(9000,peer_next,tcp_next,0x18,payload+header,data_bytes);peer_next+=data_bytes;}
+        return;
+    }
     if(!(flags&2)&&!data_bytes)return;
     uint8_t reply[1514]={0};ip_header(reply,20+data_bytes,6);uint8_t *tcp=reply+34;
     store16(tcp,be16(payload+2));store16(tcp+2,be16(payload));tcp[12]=5<<4;store16(tcp+14,8192);
@@ -168,6 +212,63 @@ static void application(void *context)
     assert(sunstone_net_activate(&net));
     for(unsigned i=0;i<100&&!aic8800_network_ready(&net.network);++i)vTaskDelay(1);
     assert(aic8800_network_ready(&net.network));
+    if(case_inbound){
+        uint64_t listener=open_socket(1,7400);
+        struct sunstone_net_request r={.operation=SUNSTONE_NET_LISTEN,.handle=listener,.timeout=1000};
+        assert(call(&r).result==SUNSTONE_NET_OK);
+        unsigned reserved=0;for(unsigned i=0;i<4;++i)reserved+=net.sockets[i].parent!=0;assert(reserved==1);
+        if(inbound_cancel||inbound_timeout){
+            vTaskSuspend(FreeRTOS_GetIPTaskHandle());r.operation=SUNSTONE_NET_ACCEPT;r.timeout=inbound_timeout?10:1000;
+            uint64_t ticket;assert(sunstone_net_submit(&net,&r,&ticket));vTaskDelay(15);
+            if(inbound_cancel){assert(sunstone_net_cancel(&net,ticket));vTaskDelay(2);}
+            struct sunstone_net_reply fenced;assert(!sunstone_net_receive(&net,&fenced,0));
+            vTaskResume(FreeRTOS_GetIPTaskHandle());assert(sunstone_net_receive(&net,&fenced,100));
+            assert(fenced.ticket==ticket&&fenced.handle==listener&&fenced.result==(inbound_timeout?SUNSTONE_NET_TIMEOUT:SUNSTONE_NET_CANCELED));
+            close_socket(listener);for(unsigned i=0;i<4;++i)assert(!net.sockets[i].parent&&!net.sockets[i].socket);
+            platform_puts("PASS inbound TCP: cancellation/deadline waits for IP-task fence before listener disposal\n");platform_exit(0);
+        }
+        inbound_packet(9000,9000,0,2,NULL,0);inbound_packet(9001,19000,0,2,NULL,0);
+        if(inbound_pending){
+            struct sunstone_net_socket *parent=NULL;for(unsigned i=0;i<4;++i)if(net.sockets[i].handle==listener)parent=&net.sockets[i];assert(parent);
+            unsigned n=0;while(!(xEventGroupGetBits(((FreeRTOS_Socket_t *)parent->socket)->xEventGroup)&eSOCKET_ACCEPT)){assert(++n<1000);vTaskDelay(1);}
+            assert(listCURRENT_LIST_LENGTH(&xBoundTCPSocketsList)==2);
+            close_socket(listener);assert(listCURRENT_LIST_LENGTH(&xBoundTCPSocketsList)==0);
+            for(unsigned i=0;i<4;++i)assert(!net.sockets[i].parent&&!net.sockets[i].socket);
+            platform_puts("PASS inbound TCP: listener disposal recursively closes unaccepted child before reservation release\n");platform_exit(0);
+        }
+        if(inbound_late){
+            struct sunstone_net_socket *parent=NULL;for(unsigned i=0;i<4;++i)if(net.sockets[i].handle==listener)parent=&net.sockets[i];assert(parent);
+            unsigned n=0;while(!(xEventGroupGetBits(((FreeRTOS_Socket_t *)parent->socket)->xEventGroup)&eSOCKET_ACCEPT)){assert(++n<1000);vTaskDelay(1);}
+            r.timeout=10;
+        }
+        r.operation=SUNSTONE_NET_ACCEPT;struct sunstone_net_reply accepted=call(&r);
+        if(inbound_late||inbound_loss){
+            assert(accepted.result==(inbound_late?SUNSTONE_NET_TIMEOUT:SUNSTONE_NET_ADDRESS_LOST)&&accepted.handle&&accepted.handle!=listener&&accepted.port==9000);
+            close_socket(accepted.handle);close_socket(listener);
+            for(unsigned i=0;i<4;++i)assert(!net.sockets[i].parent&&!net.sockets[i].socket);
+            platform_puts("PASS inbound TCP: late/address-lost accepted child identity survives through both disposal fences\n");platform_exit(0);
+        }
+        assert(accepted.result==SUNSTONE_NET_OK&&accepted.handle&&accepted.handle!=listener&&
+            accepted.port==9000&&!memcmp(accepted.address,peer_ip,4));
+        struct sunstone_net_socket *parent=NULL;for(unsigned i=0;i<4;++i)if(net.sockets[i].handle==listener)parent=&net.sockets[i];
+        assert(parent&&((FreeRTOS_Socket_t *)parent->socket)->u.xTCP.usChildCount==1);
+        /* A further arrival while the accepted child is live must reach the
+         * actual backlog check. Initial burst frames may be dropped by RX. */
+        inbound_packet(9002,29000,0,2,NULL,0);
+        unsigned waited=0;while(!backlog_refusals){assert(++waited<1000);vTaskDelay(1);}
+        r=(struct sunstone_net_request){.operation=SUNSTONE_NET_SEND,.handle=accepted.handle,.timeout=1000,.bytes=6,.payload={'c','o','p','i','e','d'}};
+        assert(call(&r).stack_result==6);memset(r.payload,0xa5,sizeof(r.payload));
+        for(unsigned off=0;off<6;off+=2){r.operation=SUNSTONE_NET_RECEIVE;r.bytes=2;
+            struct sunstone_net_reply copied=call(&r);assert(copied.result==SUNSTONE_NET_OK&&copied.bytes==2&&!memcmp(copied.payload,"copied"+off,2));}
+        platform_puts("inbound SYNACK/data/backlog/fullqueue counts ");platform_hex(syn_packets);platform_hex(tcp_packets);platform_hex(backlog_refusals);platform_hex(accept_full_queue);platform_hex(net.network.rx_packets);platform_puts("\n");
+        assert(syn_packets==1&&tcp_packets==1&&backlog_refusals>=1&&(!inbound_queue||accept_full_queue==1));
+        close_socket(accepted.handle);reserved=0;for(unsigned i=0;i<4;++i)reserved+=net.sockets[i].parent!=0;assert(reserved==1);
+        uint64_t extra[2]={open_socket(0,7500),open_socket(0,7501)};
+        r=(struct sunstone_net_request){.operation=SUNSTONE_NET_OPEN_UDP,.port=7502,.timeout=100};assert(call(&r).result==SUNSTONE_NET_BUSY);
+        close_socket(listener);for(unsigned i=0;i<4;++i)assert(!net.sockets[i].parent);
+        close_socket(extra[0]);close_socket(extra[1]);
+        platform_puts("PASS inbound TCP: actual SYN backlog cap, copied exchange, reserved ledger and both disposal fences\n");platform_exit(0);
+    }
     if(case_entropy){
         uint64_t tcp=open_socket(1,7400);entropy_failure=1;unsigned old_syn=syn_packets;
         struct sunstone_net_request r=(struct sunstone_net_request){.operation=SUNSTONE_NET_CONNECT,.handle=tcp,.timeout=1000,.port=9000};memcpy(r.address,peer_ip,4);
@@ -245,6 +346,13 @@ static void arguments(void)
         if(!memcmp(command+i,"entropy",7))case_entropy=1;
         if(!memcmp(command+i,"late",4))case_late=1;
         if(!memcmp(command+i,"alias",5))case_alias=1;
+        if(!memcmp(command+i,"inbound",7))case_inbound=1;
+        if(!memcmp(command+i,"cancel",6))inbound_cancel=1;
+        if(!memcmp(command+i,"timeout",7))inbound_timeout=1;
+        if(!memcmp(command+i,"queue",5))inbound_queue=1;
+        if(!memcmp(command+i,"pending",7))inbound_pending=1;
+        if(i+10<=sizeof(command)&&!memcmp(command+i,"late-child",10))inbound_late=1;
+        if(i+10<=sizeof(command)&&!memcmp(command+i,"lost-child",10))inbound_loss=1;
     }
 }
 void kernel_main(void)

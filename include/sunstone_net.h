@@ -10,7 +10,8 @@
 #define SUNSTONE_NET_STACK_WORDS 4096u
 #define SUNSTONE_NET_NAME_BYTES 254u
 enum sunstone_net_operation { SUNSTONE_NET_OPEN_UDP,SUNSTONE_NET_OPEN_TCP,SUNSTONE_NET_CONNECT,
-    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE,SUNSTONE_NET_EVENT,SUNSTONE_NET_ADDRESS,SUNSTONE_NET_RESOLVE };
+    SUNSTONE_NET_SEND,SUNSTONE_NET_RECEIVE,SUNSTONE_NET_CLOSE,SUNSTONE_NET_EVENT,SUNSTONE_NET_ADDRESS,SUNSTONE_NET_RESOLVE,
+    SUNSTONE_NET_LISTEN,SUNSTONE_NET_ACCEPT };
 enum sunstone_net_result { SUNSTONE_NET_OK,SUNSTONE_NET_INVALID,SUNSTONE_NET_BUSY,SUNSTONE_NET_TIMEOUT,
     SUNSTONE_NET_IO,SUNSTONE_NET_LINK_LOST,SUNSTONE_NET_ADDRESS_LOST,SUNSTONE_NET_CANCELED };
 struct sunstone_net_request {
@@ -42,6 +43,21 @@ struct sunstone_net_socket {
     atomic_uint disposed;
     atomic_uintptr_t disposal_address;
     uint8_t tcp,bound,closing,uncertain;
+    /* One listener reserves a ledger entry for its backlog-one child. The
+     * reservation survives accepted-child disposal until the listener closes. */
+    uint8_t listening,accepted;
+    unsigned parent; /* Reserved child's listener index plus one, or zero. */
+};
+enum sunstone_net_accept_state {SUNSTONE_ACCEPT_IDLE,SUNSTONE_ACCEPT_START,
+    SUNSTONE_ACCEPT_RUNNING,SUNSTONE_ACCEPT_DONE,SUNSTONE_ACCEPT_CANCEL,SUNSTONE_ACCEPT_CANCELED};
+struct sunstone_net_accept {
+    atomic_uint state;
+    enum sunstone_net_operation operation;
+    unsigned listener,child;
+    TickType_t submitted,timeout;
+    Socket_t socket;
+    struct freertos_sockaddr peer;
+    int result;
 };
 enum sunstone_net_dns_state {SUNSTONE_DNS_IDLE,SUNSTONE_DNS_START,SUNSTONE_DNS_WAIT,
     SUNSTONE_DNS_DONE,SUNSTONE_DNS_CANCEL,SUNSTONE_DNS_CANCELED};
@@ -65,6 +81,7 @@ struct sunstone_net {
     struct sunstone_net_socket sockets[SUNSTONE_NET_SOCKETS];
     struct sunstone_net_pending pending[SUNSTONE_NET_CLIENTS];
     struct sunstone_net_dns dns[SUNSTONE_NET_CLIENTS];
+    struct sunstone_net_accept accept[SUNSTONE_NET_CLIENTS];
     atomic_uint_fast64_t cancel[SUNSTONE_NET_CLIENTS];
     QueueHandle_t requests;StaticQueue_t request_queue;
     uint8_t request_storage[SUNSTONE_NET_CLIENTS*sizeof(struct sunstone_net_message)];
@@ -79,6 +96,13 @@ struct sunstone_net {
  * No API call exposes stack socket pointers or borrowed application buffers.
  * EVENT copies one ordered radio event, including after link revocation. A late
  * reply preserves that copied event with TIMEOUT; receipt does not authorize RF. */
+/* LISTEN accepts a bound TCP handle, zero bytes/address/port, and fixed backlog
+ * one. Only one listener exists at a time. ACCEPT takes that listener handle and
+ * returns a distinct client-owned child handle plus copied peer IPv4/port. Each
+ * listener permits one successful accept. LISTEN/ACCEPT execute in the IP task;
+ * cancellation, deadlines and address loss fence that handoff before replying.
+ * A late accepted child remains closeable in the non-OK reply. CLOSE of the
+ * listener fences unaccepted children; accepted children need their own CLOSE. */
 int sunstone_net_init(struct sunstone_net *,const struct sunstone_net_config *);
 /* Running-task admission for a native radio session. The current task must be
  * config.bootstrap and remains the only radio/socket polling owner. Creates

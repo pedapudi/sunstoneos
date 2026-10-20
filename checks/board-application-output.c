@@ -22,11 +22,21 @@ void board_check_run(unsigned mode)
     profile.magic=BOARD_RADIO_PROFILE_MAGIC;profile.version=3;profile.bytes=sizeof(profile);profile.response_bytes=5;
     board.session=(struct a733_board_session){.magic=A733_BOARD_SESSION_MAGIC,.version=1,.bytes=sizeof(board.session),.epoch=7,.generation=8,.workload=1};
     storage_digest_bytes(&profile,sizeof(profile),board.session.radio_profile_digest);
+    if(mode>=3){
+        profile.version=6;profile.tcp_mode=1;profile.peer_address[0]=10;profile.peer_address[3]=1;profile.peer_port=7400;
+        profile.request_bytes=5;memcpy(profile.request,"hello",5);memcpy(profile.response,"reply",5);
+        for(unsigned i=0;i<4;++i){profile.firmware_address[i]=0x43010000+i*0x10000;profile.firmware_bytes[i]=4;}
+        board.session.magic=UINT64_C(0x4153373342535332);board.session.version=2;board.session.workload=3;
+        board.session.radio_profile_address=0x43000000;board.session.radio_profile_bytes=sizeof(profile);
+        board.session.usb0_cold_reference=1;
+        storage_digest_bytes(&profile,sizeof(profile),board.session.radio_profile_digest);
+    }
     atomic_init(&board.result,mode==2?0:1);atomic_init(&board.radio_result,2);atomic_init(&board.radio_bytes,5);
     atomic_init(&board.watchdog_state,mode==1?5:1);
+    if(mode>=3){atomic_store(&board.result,3);atomic_store(&board.radio_result,mode==4?1:mode==5?3:2);}
     for(unsigned i=0;i<512;++i)board.sector[i]=(uint8_t)(i^0x5a);
     exchange();exchange();
-    unsigned expected=mode==2?72:584;
+    unsigned expected=mode==2||mode>=3?72:584;
     if(board_check_frame_bytes==expected&&response_sent==expected){
         tud_vendor_tx_cb(0,expected);
         if(!response_bytes)board_check_result=1;

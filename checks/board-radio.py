@@ -20,6 +20,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ['output', 'freertos', 'tcp', 'headers']:
         p.add_argument('--' + name, type=Path, required=True)
+    p.add_argument('--listener-only',action='store_true',help='Only the new listener profile and client sequence')
     p.add_argument('--cc', default='/usr/bin/clang-21')
     p.add_argument('--reuse-digest', type=Path,
                    help='Reuse only an unchanged preserved digest object from a stopped batch')
@@ -33,7 +34,7 @@ def main():
         dependencies = {Path(__file__).resolve(), ROOT / 'docs/board-radio.md'}
         dependencies.update(ROOT / path for path in [
             'apps/board/radio.c', 'apps/board/radio.h', 'apps/board/identity.h',
-            'checks/board-radio.c', 'checks/board-radio-session.c',
+            'checks/board-radio.c', 'checks/board-radio-session.c','checks/board-radio-listener.c','apps/board/radio_profile.c',
             'drivers/net/a733_radio_session.c', 'include/a733_radio_session.h',
             'drivers/net/aic8800_sdio_transport.c', 'include/aic8800_sdio_transport.h',
             'drivers/net/a733_radio_entropy.c', 'include/a733_radio_entropy.h',
@@ -66,7 +67,7 @@ def main():
 
     try:
         common = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                  '-DSUNSTONE_AIC8800_RSN=1', '-DINCLUDE_xSemaphoreGetMutexHolder=1',
+                  '-DSUNSTONE_AIC8800_RSN=1', *(['-DSUNSTONE_BOARD_SUPERVISED=1'] if a.listener_only else []), '-DINCLUDE_xSemaphoreGetMutexHolder=1',
                   '-ffunction-sections', '-fdata-sections',
                   '-Inetwork/include', '-Iinclude', '-I' + str(a.freertos / 'include'),
                   '-I' + str(a.freertos / 'portable/GCC/ARM_AARCH64_SRE'),
@@ -90,7 +91,7 @@ def main():
             run('host-digest', [a.cc, *common, '-fsanitize=address,undefined', '-MMD', '-MF',
                 str(out / 'host-digest.d'), '-c', 'drivers/storage/storage_digest.c', '-o', str(digest_object)])
         artifacts.append(digest_object)
-        for name in ['board-radio', 'board-radio-session']:
+        for name in (['board-radio-listener'] if a.listener_only else ['board-radio', 'board-radio-session']):
             artifact = out / name
             obj = out / (name + '.o')
             run(name + '-build', [a.cc, *common, '-fsanitize=address,undefined',
@@ -100,7 +101,7 @@ def main():
             run(name + '-link', [a.cc, '-fsanitize=address,undefined', '-Wl,--gc-sections',
                 str(obj), str(digest_object), '-o', str(artifact)])
             artifacts.append(artifact)
-        for index, source in enumerate(['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
+        for index, source in enumerate([] if a.listener_only else ['apps/board/radio.c', 'drivers/net/a733_radio_session.c',
                                         'drivers/net/aic8800_sdio_transport.c',
                                         'drivers/net/a733_radio_entropy.c','drivers/net/a733_radio_platform.c']):
             artifact = out / ('native-' + str(index) + '.o')
@@ -110,10 +111,11 @@ def main():
                 str(out / ('native-' + str(index) + '.d')), '-c', source, '-o', str(artifact)])
             artifacts.append(artifact)
         preserve()
-        for name in ['board-radio', 'board-radio-session']:
-            assert 'PASS board radio' in run(name, [str(out / name)])
+        for name in (['board-radio-listener'] if a.listener_only else ['board-radio', 'board-radio-session']):
+            for variant in (range(4) if a.listener_only else (None,)):
+                assert 'PASS board radio' in run(name+('-'+str(variant) if variant is not None else ''), [str(out / name)]+([str(variant)] if variant is not None else []))
         (out / 'result.json').write_text(json.dumps({'passed': True,
-            'scope': 'Actual coordinator/profile admission/client and session busy admission/retention with modeled lower protocol observations; five actual native source compilations.',
+            'scope': ('Actual new listener profile conversion/client with modeled socket replies; nominal and peer/late/address failures, both closes' if a.listener_only else 'Actual coordinator/profile admission/client and session busy admission/retention with modeled lower protocol observations; five actual native source compilations.'),
             'limits': 'No physical SID, CE quality, RF, firmware transfer, WPA2 or IPv4 hardware qualification.'}, indent=2) + '\n')
     finally:
         preserve()

@@ -75,8 +75,11 @@ def session_check(raw,usb_reference_modes=(1,2)):
     return workload
 
 def profile_spans(data,session,payload_spans=None):
-    require(len(data)==1872 and struct.unpack_from('<QII',data)==(0x3152464f52545353,4,1872),
+    require(len(data)==1872 and struct.unpack_from('<QII',data) in ((0x3152464f52545353,4,1872),(0x3152464f52545353,6,1872)),
         'Unsupported fixed radio profile geometry.')
+    mode=struct.unpack_from('<H',data,1338)[0];version=struct.unpack_from('<I',data,8)[0]
+    require(mode==(1 if version==6 else 0) and (not mode or any(data[1328:1332])),
+        'Invalid admitted TCP client/listener mode or peer IPv4.')
     policy,dns,reserved,address_timeout,lease_cap=struct.unpack_from('<B4s3sII',data,1856)
     require(policy in (0,1) and reserved==bytes(3) and
         ((policy==0 and address_timeout==lease_cap==0) or

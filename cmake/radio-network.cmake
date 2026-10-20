@@ -22,6 +22,15 @@ if(SUNSTONE_TCP_DIR AND SUNSTONE_RSN_DIR)
     list(APPEND network_sources "${source}")
   endforeach()
   file(GLOB tcp_sources "${SUNSTONE_TCP_DIR}/source/*.c")
+  # A minimal incoming SYN can be shorter than its option-bearing SYN-ACK.
+  set(tcp_return "${CMAKE_CURRENT_BINARY_DIR}/FreeRTOS_TCP_Transmission_IPv4.c")
+  apply_build_patch("${tcp_return}" "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c"
+    "${network_root}/patches/freertos-tcp-ipv4-return-checksum.patch")
+  list(REMOVE_ITEM tcp_sources "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c")
+  list(APPEND tcp_sources "${tcp_return}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${SUNSTONE_TCP_DIR}/source/FreeRTOS_TCP_Transmission_IPv4.c"
+    "${network_root}/patches/freertos-tcp-ipv4-return-checksum.patch")
 # DNS runs in the IP task; use its actual nonblocking socket internals.
 set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
   COMPILE_DEFINITIONS DNS_BindSocket=sunstone_net_dns_bind DNS_CloseSocket=sunstone_net_dns_close)
@@ -45,6 +54,6 @@ set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
   get_target_property(network_link_options radio-network-model LINK_OPTIONS)
   list(FILTER network_link_options EXCLUDE REGEX "Map,")
   set_property(TARGET radio-network-model PROPERTY LINK_OPTIONS "${network_link_options}")
-  target_link_options(radio-network-model PRIVATE "-Wl,--wrap=FreeRTOS_sendto" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/radio-network-model.map")
+  target_link_options(radio-network-model PRIVATE "-Wl,--wrap=FreeRTOS_sendto" "-Wl,--wrap=FreeRTOS_accept" "-Wl,--wrap=prvHandleListen_IPV4" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/radio-network-model.map")
   set_target_properties(radio-network-model PROPERTIES SUFFIX ".elf")
 endif()

@@ -35,9 +35,9 @@ struct board_radio {
     atomic_uint snapshot_busy;
     atomic_uint client_status,verified_received;
     const struct board_radio_profile *startup_profile;
-    uint64_t client_ticket,client_handle;
+    uint64_t client_ticket,client_handle,listener_handle;
     size_t client_sent,client_received;
-    unsigned client_stage,client_pending;
+    unsigned client_stage,client_pending,client_error;
     struct sunstone_net_request client_request;
     struct sunstone_net_reply client_reply;
     /* Owner-task diagnostic copies. Startup events drain before socket clients
@@ -53,6 +53,8 @@ struct board_radio {
  * Firmware addresses name retained read-only image spans, not upload commands. */
 #define BOARD_RADIO_PROFILE_VERSION 3u
 #define BOARD_RADIO_PROFILE_SUPERVISED_VERSION 4u
+#define BOARD_RADIO_PROFILE_LISTENER_VERSION 5u
+#define BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION 6u
 #define BOARD_RADIO_PROFILE_BYTES 1872u
 #define BOARD_RADIO_PROFILE_RESPONSE_BYTES_OFFSET 1336u
 #define BOARD_RADIO_PROFILE_NETWORK_OFFSET 1856u
@@ -78,7 +80,7 @@ struct board_radio_profile {
     uint64_t startup_deadline_us,association_timeout_us,security_timeout_us;
     uint32_t queue_timeout_ticks,client_timeout_ticks;
     uint64_t client_deadline_us;
-    uint8_t peer_address[4];uint16_t peer_port,request_bytes,response_bytes,reserved;
+    uint8_t peer_address[4];uint16_t peer_port,request_bytes,response_bytes,tcp_mode;
     uint8_t request[256],response[256];
     _Alignas(8) uint8_t network_dhcp;
     uint8_t network_dns[4],network_reserved[3];
@@ -89,6 +91,10 @@ struct board_radio_profile {
 static inline int board_radio_profile_network_valid(const struct board_radio_profile *p)
 {
     if(!p||p->network_dhcp>1||p->network_reserved[0]||p->network_reserved[1]||p->network_reserved[2])return 0;
+    if(p->version==BOARD_RADIO_PROFILE_VERSION||p->version==BOARD_RADIO_PROFILE_SUPERVISED_VERSION){if(p->tcp_mode)return 0;}
+    else if(p->version==BOARD_RADIO_PROFILE_LISTENER_VERSION||p->version==BOARD_RADIO_PROFILE_LISTENER_SUPERVISED_VERSION){
+        if(p->tcp_mode!=1||!(p->peer_address[0]|p->peer_address[1]|p->peer_address[2]|p->peer_address[3]))return 0;
+    }else return 0;
     if(!p->network_dhcp)return !p->address_timeout_ticks&&!p->lease_cap_ticks;
     return p->address_timeout_ticks&&p->lease_cap_ticks&&
         (TickType_t)p->address_timeout_ticks<=portMAX_DELAY/2&&

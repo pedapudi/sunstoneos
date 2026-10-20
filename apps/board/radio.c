@@ -224,7 +224,7 @@ static int startup_profile_valid(const struct board_radio_profile *f,const uint8
     const struct board_radio_chip_id *id)
 {
     if(!f||!expected||!id||
-        f->magic!=BOARD_RADIO_PROFILE_MAGIC||f->version!=BOARD_RADIO_PROFILE_VERSION||f->bytes!=sizeof(*f)||f->reserved||!board_radio_profile_network_valid(f)||
+        f->magic!=BOARD_RADIO_PROFILE_MAGIC||(f->version!=BOARD_RADIO_PROFILE_VERSION&&f->version!=BOARD_RADIO_PROFILE_LISTENER_VERSION)||f->bytes!=sizeof(*f)||!board_radio_profile_network_valid(f)||
         !f->platform_authority||!f->ce_authority||!f->secure_ce_authority||
         !evidence(f->platform_evidence)||!evidence(f->ce_evidence)||!evidence(f->entropy_evidence)||
         !f->entropy_record||!f->characterization_record||!f->startup_test_record||!f->health_enable_epoch||
@@ -305,6 +305,57 @@ int board_radio_client_result(const struct board_radio *r,unsigned *verified)
         (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     return status==1?1:0;
 }
+/* One admitted listener and one accepted peer. SEND copies the challenge;
+ * RECEIVE verifies the peer's application response before either CLOSE. */
+static int listener_poll(struct board_radio *r)
+{
+    const struct board_radio_profile *f=r->startup_profile;
+    if(r->client_stage==7)return 1;
+    uint64_t now;if(!a733_counter_clock_now(&r->config.shared->counter,&now)||now>=f->client_deadline_us)return client_failure(r);
+    if(!atomic_load_explicit(&r->network_started,memory_order_acquire))return 0;
+    if(r->client_pending){
+        struct sunstone_net_reply reply;if(!board_radio_receive(r,&reply,0))return 0;
+        r->client_reply=reply;r->client_pending=0;
+        if(reply.ticket!=r->client_ticket)return client_failure(r);
+        if(r->client_stage==0&&reply.handle)r->listener_handle=reply.handle;
+        if(r->client_stage==2&&reply.handle&&reply.handle!=r->listener_handle)r->client_handle=reply.handle;
+        uint64_t expected=r->client_stage==1||r->client_stage==6?r->listener_handle:r->client_handle;
+        int ok=reply.result==SUNSTONE_NET_OK&&(r->client_stage==0?r->listener_handle!=0:reply.handle==expected);
+        if(r->client_stage==2)ok=ok&&r->client_handle&&reply.port&& !memcmp(reply.address,f->peer_address,4);
+        if(r->client_stage==3)ok=ok&&reply.stack_result>0&&(unsigned)reply.stack_result<=f->request_bytes-r->client_sent;
+        if(r->client_stage==4)ok=ok&&reply.bytes&&reply.bytes<=f->response_bytes-r->client_received&&
+            !memcmp(reply.payload,f->response+r->client_received,reply.bytes);
+        if(!ok){
+            r->client_error=1;
+            if(r->client_stage==6)return client_failure(r);
+            r->client_stage=r->client_stage==5?6:r->client_handle?5:r->listener_handle?6:7;
+            if(r->client_stage==7)return client_failure(r);
+        }else if(r->client_stage==3){
+            r->client_sent+=(unsigned)reply.stack_result;if(r->client_sent==f->request_bytes)++r->client_stage;
+        }else if(r->client_stage==4){
+            r->client_received+=reply.bytes;
+            atomic_store_explicit(&r->verified_received,(unsigned)r->client_received,memory_order_release);
+            if(r->client_received==f->response_bytes)++r->client_stage;
+        }else{
+            ++r->client_stage;
+            if(r->client_stage==7){
+                if(r->client_error)return client_failure(r);
+                atomic_store_explicit(&r->client_status,1,memory_order_release);return 1;
+            }
+        }
+    }
+    struct sunstone_net_request request={.timeout=f->client_timeout_ticks};
+    if(r->client_stage==0){request.operation=SUNSTONE_NET_OPEN_TCP;request.port=f->peer_port;}
+    else if(r->client_stage==1){request.operation=SUNSTONE_NET_LISTEN;request.handle=r->listener_handle;}
+    else if(r->client_stage==2){request.operation=SUNSTONE_NET_ACCEPT;request.handle=r->listener_handle;}
+    else if(r->client_stage==3){request.operation=SUNSTONE_NET_SEND;request.handle=r->client_handle;
+        request.bytes=(uint16_t)(f->request_bytes-r->client_sent);memcpy(request.payload,f->request+r->client_sent,request.bytes);}
+    else if(r->client_stage==4){request.operation=SUNSTONE_NET_RECEIVE;request.handle=r->client_handle;
+        request.bytes=(uint16_t)(f->response_bytes-r->client_received);}
+    else{request.operation=SUNSTONE_NET_CLOSE;request.handle=r->client_stage==5?r->client_handle:r->listener_handle;}
+    uint64_t ticket;if(board_radio_submit(r,&request,&ticket)){r->client_ticket=ticket;r->client_pending=1;}
+    return 0;
+}
 int board_radio_client_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||!r->startup_profile||
@@ -312,6 +363,7 @@ int board_radio_client_poll(struct board_radio *r)
     if(atomic_load_explicit(&r->failed,memory_order_acquire)||
         (atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4))return -1;
     const struct board_radio_profile *f=r->startup_profile;
+    if(f->tcp_mode)return listener_poll(r);
     if(r->client_stage==5)return 1;
     uint64_t now;if(!a733_counter_clock_now(&r->config.shared->counter,&now)||now>=f->client_deadline_us)
         return client_failure(r);
