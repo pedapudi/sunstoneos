@@ -151,7 +151,7 @@ static int admitted(const struct a733_iommu *s)
         a->powered_masters==s->accessible_masters && a->inherited_resolved==1 &&
         a->transactions_drained==1 && a->clocks_held==1 &&
         (s->camera_supervised ? (a->recovery_qualified==0 && a->retained_power_removal==1) :
-         (a->recovery_qualified==1 || ((s->translated_masters==0x8 || s->translated_masters==0xc0 || s->translated_masters==0x100) &&
+         (a->recovery_qualified==1 || ((s->translated_masters==0x8 || s->translated_masters==0xc0 || s->translated_masters==0x100 || s->translated_masters==0x400) &&
           a->recovery_qualified==0 && a->retained_power_removal==1)));
 }
 int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
@@ -187,6 +187,13 @@ int a733_iommu_init_encoder(struct a733_iommu *s,const struct a733_iommu_ops *op
 {
     int r=a733_iommu_init(s,ops,ctx,tables);
     if(r==1){s->translated_masters=0x8;s->accessible_masters=0x8;}
+    return r;
+}
+int a733_iommu_init_g2d(struct a733_iommu *s,const struct a733_iommu_ops *ops,
+    void *ctx,const struct a733_iommu_tables *tables)
+{
+    int r=a733_iommu_init(s,ops,ctx,tables);
+    if(r==1){s->translated_masters=0x400;s->accessible_masters=0x400;}
     return r;
 }
 int a733_iommu_init_display(struct a733_iommu *s,const struct a733_iommu_ops *ops,

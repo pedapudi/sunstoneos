@@ -1,0 +1,50 @@
+{
+  "schema": "a733-g2d-references-v1",
+  "runtime": "Native FreeRTOS CPU adapter submits GPL-derived RCQ commands to the A733 G2D mixer. No Linux kernel, firmware blob or opaque graphics library executes.",
+  "license": "GPL-2.0-or-later; original notices preserved in the copied register header and adapted controller.",
+  "reference_pins": {
+    "g2d_mixer_type.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_mixer_type.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "edbd977ae722b94fbeda5d1ada489acc2b06acd7f4bdfacdfb2ba61e0762464b"
+    },
+    "g2d_rcq.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "1074ee37ceb0787ec1f359c6f05cc3c67313e3a371c3d4675edadcdb455c91a8"
+    },
+    "g2d_rcq/g2d_mixer.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_mixer.c",
+      "sha256": "62186cf2412e916d99ebe25d202c989262be6f283d9e9e32280bf6a53d02b33c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+    },
+    "g2d_rcq/g2d_top.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_top.c",
+      "sha256": "2e67e9be74bf18bfb8d1c0aeb914147976a6e04b3a056d61229d797970f50d59",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+    },
+    "g2d_rcq/g2d_top_type.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_top_type.h",
+      "sha256": "31cf3487643d42312986056948bf22b792e173d5a963f107510d27438591e812",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+    },
+    "g2d_rcq/g2d_wb.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_wb.c",
+      "sha256": "97f7f0f6679a92c045f1c1506e191ead23bc8b2f87ea1c39646265263304c30d",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f"
+    },
+    "g2d_rcq/g2d_ovl_v.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_ovl_v.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "63dd0ce55a3120d86717bc2c7b337c7ae983fcaba9b9e24f4d429348c62d6286"
+    },
+    "g2d_rcq/g2d_bld.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_bld.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "19e67ee9de3a27f9229c2e879dc8e8b3eedf15cb238e753d15069e6d4b4d2d24"
+    }
+  },
+  "manual": "A733 User Manual V1.00 sections 4.1.6.108\u2013109 (G2D CCU) and 14.5 (fill and blit). Existing sources.lock.json pins the manual.",
+  "dtsi": "Pinned sun60iw2p1.dtsi selects MMIO0x05440000, INTID83, DE_SYS/PCK1, four clocks/resets and IOMMU master10.",
+  "limits": "Physical pixels, RCQ completion/counter semantics, bus reachability, clock stability and DMA visibility require a supervised board test; software checks cannot qualify them."
+}
