@@ -60,6 +60,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   inputs match integration; existing display evidence was reused. Analog
   admission, physical DMA reachability, monitor output and broader modes remain
   required.
+  The [clock-source correction](provider-clock-reference.md#hdmi-native-evidence)
+  admits authenticated raw 24/26 MHz for the TOP PLL, selects normalized 24 MHz
+  for SFR, and retains REF ownership. Raw 19.2 MHz and reference mismatches are
+  refused. Actual compiled objects pass modeled raw-26 720p prepare/start/retained
+  stop and three saved-state refusals. Its calculated pixel rate is 73.9375 MHz;
+  the 147.875 MHz 1080p plan has source-row and host-profile checks only.
+  Neither rate establishes nominal timing compliance or physical output.
+  Root verifies 75 repository inputs at `c8c214b` under
+  `hdmi-ref26-20261020/root-integration.json`; the initial checker and corrected
+  continuation remain separately preserved. GPU consumer source was updated;
+  its earlier frozen image and evidence retain their original scope.
   The [GPU-to-HDMI application](gpu-display.md#copied-usb-observations) copies
   two trusted 720p RGBA8 renders into separate immutable RGB565 display frames.
   GPU CLOSE precedes HDMI start. RCQ replay 0→1→0 requires fresh queue completion,
@@ -96,15 +107,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   TYPEC16 remains USB0/power input; PD messages supply HPD because the dedicated
   pad is unconnected. COMB0/SERDES/VO1 ownership excludes USB3 and PCIe sharing
   in this profile; retained master-8 memory supplies the display frames.
-  Earlier-image actual tasks reached CC1/pin C/HPD high, and construction passed
-  before controller initialization. These checkpoints are preserved under
-  `displayport-native-20261020/typec-negotiated-9164/negotiated-manifest.json` and
-  `constructor-9164/constructor-manifest.json`. Full composed integration remains
-  pending; these checkpoints do not establish controller/PHY/AUX/DE operation. No final
-  composition hash or trained-link/output result is claimed. Actual board
-  revision, physical negotiation, AUX/link operation, visible output, memory
-  visibility/drain and recovery remain unqualified. Broader rates/modes, audio,
-  HDCP, MST and live-frame replacement remain required.
+  Final image `91646247…` passes actual linked construction, Type-C negotiation,
+  controller/PHY/AUX/DE lifecycle and retained shutdown with modeled device effects.
+  Twelve host capture cases and one linked high-speed TinyUSB 512/512/zero-length
+  packet case pass. Evidence: `displayport-native-20261020/root-integration.json`.
+  Its 177 objects and 463 compiled inputs remain frozen; root verifies 195 source
+  matches and classifies three later generic-board/DI-only differences. Earlier
+  admission, boot, launcher and controller checks retain their recorded image scopes.
+  The nominal schedule defers ticks while the register mutex is held; it establishes
+  one noncontending ordering, without SMP or contention qualification. Native
+  deadlines and conservative shutdown remain unchanged. AUX APB frequency still
+  requires independent source/rate/stability authority; no 200 MHz rate is assumed.
+  All resources remain retained. Actual board revision, physical negotiation,
+  trained link, visible output, memory visibility/drain and recovery remain
+  unqualified. Broader rates/modes, audio, HDCP, MST and live-frame replacement
+  remain required.
 - Boot ROM: **tested** for identity, SRAM transfer, a returning AArch32 probe,
   restoration of the modified SRAM bytes, and forced-FEL return from AArch64.
   See [boot evidence](boot.md).
@@ -508,8 +525,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   retaining each consumer's selected parent and divider arithmetic. CE retains
   separate TRNG RC16M requirements. Type-C S_TWI1 source 0 is raw DCXO. Optional
   LED APBS0 source 0 and S_SPI source 0 remain raw-24-only; LED source 4 and
-  SPI0–4 source 0 use normalized REF24. HDMI's selected raw SFR path remains
-  24 MHz-only pending its independent source/lease correction.
+  SPI0–4 source 0 use normalized REF24. HDMI selects normalized 24 MHz SFR,
+  retains REF, and binds authenticated raw 24/26 MHz separately for its TOP PLL.
+  Its compiled-object model evidence is recorded above; earlier GPU images retain
+  their frozen clock scope.
+
   Actual-function sanitizer/source evidence is under
   `provider-clock-reference-20261020/root-integration.json` and
   `audio-pwm-hdmi-clock-20261020/root-integration.json`; SPI's separate fourteen

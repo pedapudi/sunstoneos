@@ -85,7 +85,7 @@ functions and modes beyond these bounded applications.
 | --- | --- | --- |
 | [PCIe endpoint COPY](pcie-test-application.md) | One trusted direct `pci-epf-test` endpoint: selected BAR/iATU, 4,096-byte DMA COPY, one-shot MSI and immutable copied USB output. Hardware/scheduling are modeled. Requires endpoint-specific DMA-before-unmap and data-before-status/MSI authority; none exists yet. All resources remain retained; physical DMA/MSI, all-core startup and recovery remain unqualified. | `pcie-endpoint-20261019/root-integration.json`; `root/review.json` in that directory |
 | [GPU→HDMI copied USB observations](gpu-display.md#copied-usb-observations) | Two immutable 720p converted frames and ordered 0→1→0 replay; GPU CLOSE precedes HDMI start. Typed USB authority and full-session digest bind copied hashes/16 samples per frame, three presentations and healthy GPU/HDMI/DE/PMIC terminal state. Final `70041393…`: fifteen framing cases; earlier components/eight root cases reused via 102 unchanged objects, seven SRAM cases separately. Durable host capture uses 19 s/native 20 s. Effects remain modeled; no full-pixel, visible-output, physical or concurrent GPU/HDMI qualification. All resources retained. | `gpu-display-capture-20261020/root-integration.json`; host: `gpu-display-observation-host-20261020/`, [capture scope](gpu-display-preparation.md#bundle-and-evidence-limits) |
-| [DisplayPort implementation](displayport-native.md) | Four-lane 1.62 Gb/s, 720p60 RGB8/C-or-E profile. Accepted task checkpoints reach CC1/C/HPD high; construction passes before controller initialization. Full composed integration remains pending. COMB0/SERDES excludes USB3/PCIe; resources retained. No final hash, trained-link, visible-output or physical qualification claim. | `displayport-native-20261020/typec-negotiated-9164/negotiated-manifest.json`, `constructor-9164/constructor-manifest.json`; [preparation limits](displayport-preparation.md) |
+| [DisplayPort implementation](displayport-native.md) | Four-lane 1.62 Gb/s, 720p60 RGB8/C-or-E profile. Final `91646247…` passes linked constructor/PD/controller/PHY/AUX/DE lifecycle and retained shutdown, twelve host cases and one linked HS USB packet-completion case with modeled effects. Nominal schedule defers ticks under the register mutex; no contention/SMP guarantee. AUX APB source/rate authority remains required. COMB0 excludes USB3/PCIe; resources retained. No trained physical link or visible-output qualification. | `displayport-native-20261020/root-integration.json`; earlier admission/boot/launcher checks retain their image scopes; [preparation limits](displayport-preparation.md) |
 | [DSI immutable-frame replay](display-scanout.md#caller-uploaded-immutable-frame-replay) | Two authenticated XRGB8888 uploads selected 0→1→0 through the register command queue (RCQ) at modeled 720p/1080p. Fresh RCQ completion plus later DE frame-end bind copied results; full USB delivery precedes next request. Frames/command pages stay immutable: no retirement, recycling or arbitrary new-frame streaming. No attached panel, physical pixels, electrical qualification or shared startup execution. | `display-frame-present-20261019/root-integration.json`; `root/layout-review.json` in that directory |
 | [SPI3 polling/deferred IRQ](spi-application.md#deferred-interrupt-software-evidence) | One authenticated FIFO-sized WRITE_READ on PE0–3; version 2 uses CPU0 INTID59, ISR mask/notify and owner-only completion. Final `149f7635…`: five linked native cases and separate host/root checks. Fourteen clock-parent cases remain separate. Frozen workload-2 image excludes the differing Type-C task. Register/device/scheduler effects modeled; resources retained, physical exchange/IRQ/timing/recovery unqualified. | `spi-irq-20261020/root-integration.json`, `root-frozen/manifest.json` |
 | [UART2 FIFO/IRQ/DMA](uart-application.md#finite-dma-transfers) | Finite 1–1,024-byte DMA echo: both channels active before requests; success requires stopped DMA, requests off, true TEMT/RX-empty/idle, copied echo, REAP/CLOSE and UART release. Known-live faults cancel boundedly; uncertainty retains. DMA0 parent/allocation stay owned for board lifetime. Device/cache/RTOS effects are modeled; physical wiring, DMA visibility and inherited startup remain unqualified. | `uart-dma-20261019/root-integration.json`, `root/layout-review.json`; earlier FIFO/IRQ evidence remains separate |
@@ -196,16 +196,20 @@ The shared launcher correction `6407e26` preserves exact legacy preprocessed
 templates and the combined binary; it adds no physical launch evidence.
 GPU→HDMI copied USB observation is accepted within its modeled boundaries;
 physical startup/output remain unqualified. G2D fill/copy native/host software
-integration is accepted within the model scopes above. DP is implemented with
-accepted predecessor PD/constructor checkpoints; final composed execution remains
-pending full composed integration. HDMI 24/26 MHz correction and DI301 offline
-weave are active implementations, without accepted integration evidence. The
-overall goal remains incomplete.
+integration and DP composed native/host observation are accepted within their
+recorded model scopes. DI301 offline weave remains an active implementation
+without accepted integration evidence. The overall goal remains incomplete.
 
 The [provider clock record](provider-clock-reference.md) covers normalized REF24
 admission in TWI11/USB2/radio/CE/I2S/PWM. [SPI](spi-platform.md) has separate
-parent checks. Raw S_TWI1, LED source 0, S_SPI source 0 and HDMI retain their
-recorded restrictions. Function checks do not qualify images or physical clocks.
+parent checks. Raw S_TWI1, LED source 0 and S_SPI source 0 retain their recorded
+restrictions. [HDMI](provider-clock-reference.md#hdmi-native-evidence) now binds
+raw 24/26 MHz TOP input separately from normalized 24 MHz SFR and retains REF.
+Actual compiled-object raw-26 720p prepare/start/retained-stop and saved-state
+refusals pass under `hdmi-ref26-20261020/root-integration.json`. Calculated pixel
+rates are 73.9375/147.875 MHz; 1080p has source/host evidence only. Physical timing
+and output remain unqualified; the earlier GPU image retains its frozen scope.
+Other function checks do not qualify images or physical clocks.
 
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and

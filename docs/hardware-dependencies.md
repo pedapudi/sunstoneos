@@ -43,9 +43,13 @@ Clock admission follows each consumer's selected source. The
 [provider clock reference](provider-clock-reference.md) distinguishes normalized
 REF24 from raw DCXO for TWI11/USB2/radio/CE/I2S/PWM. SPI0–4 use normalized
 source 0; S_SPI and LED APBS0 source 0 retain raw-24-only plans. Type-C S_TWI1
-keeps source-derived raw-DCXO timing. HDMI remains raw-24-only until its separate
-correction is accepted. A shared nominal rate authorizes neither another selector
-nor a measured-frequency claim.
+keeps source-derived raw-DCXO timing. HDMI selects normalized 24 MHz SFR,
+retains REF ownership and binds authenticated raw 24/26 MHz separately for its
+TOP PLL. The raw-26 pixel plans calculate 73.9375/147.875 MHz; these establish no
+standard-compliance or physical-frequency claim. The 720p compiled-object model
+and separate 1080p source/host scope are recorded in the
+[clock evidence](provider-clock-reference.md#hdmi-native-evidence).
+A shared nominal rate authorizes neither another selector nor another image.
 
 Qualification conditions describe physical equipment, electrical evidence or recovery
 that a mode needs. They are not claims that accessories are currently available.
@@ -94,7 +98,7 @@ plan based on those records; it is not a new claim of hardware qualification.
 | display-engine | Display engine | clocks-resets-regulators-power-domains, system-iommu | Framebuffer scanout, composition, synchronization and formats. | Verify buffers, bandwidth and visible output through an admitted display interface. | display-engine.md |
 | hdmi | HDMI | display-engine, clocks-resets-regulators-power-domains | Detection, modes, PHY, framebuffer output and HDMI audio. Colorbars can precede framebuffer integration. | Attach a monitor and cable; qualify video modes and audio with a compatible sink. | hdmi-framebuffer.md |
 | mipi-dsi | MIPI DSI | display-engine, clocks-resets-regulators-power-domains, pin-control-and-gpio | DSI1 host, PHY, panel command sequences, scanout and backlight. Command transport can precede scanout; touch is separate. | No panel is selected or attached. Admit panel timings, power sequencing and cable before physical output. | dsi.md |
-| displayport | DisplayPort | display-engine, type-c-and-display-multiplexing | Complete output through the documented V1.2 TYPEC24 COMB0 lanes and AUX/SBU route; TYPEC16 is separate USB0/power input. | Qualify actual revision, Type-C negotiation/orientation, HPD handling, COMB0 exclusion against USB3, link training and sink output. | displayport-native.md |
+| displayport | DisplayPort | display-engine, type-c-and-display-multiplexing | Implemented retained 720p native/host path through documented V1.2 TYPEC24 COMB0 lanes and AUX/SBU; TYPEC16 is separate USB0/power input. Broader rates/modes, audio, HDCP, MST and frame replacement remain. | Independent AUX APB source/rate authority remains required. Qualify actual revision, negotiation/orientation, HPD, COMB0 exclusion, physical training/output and drain; modeled composition is not physical proof. | displayport-native.md |
 | g2d | G2D | clocks-resets-regulators-power-domains, single-core-runtime, system-iommu | Native 2D fill, copy, scaling, blending, rotation and format conversion; register-command queues and owned buffers. Current application uses system-IOMMU master 10, independently of the GPU. | Establish typed global IOMMU exclusion/drain, shared DE_SYS/PCK/rail ownership and image-bound mappings; qualify actual pixels, visibility and retained failures. | g2d.md |
 | gpu-software | GPU firmware and compiler/runtime | - | Pin compatible firmware, command ABI, shader compiler and runtime dependencies with provenance and licenses; preserve per-job cache, partial-render and cleanup contracts. | Confirm BVNC hardware revision compatibility and artifact identities. | gpu-application.md |
 | gpu | GPU | clocks-resets-regulators-power-domains, single-core-runtime, gpu-software | Private MMU, cache ownership, firmware startup, graphics/compute submission and recovery. Rendering needs geometry/partial-fragment/final-fragment completion and retained depth/input/output ownership before reuse. | Verify power and memory geometry; demonstrate useful outputs and safe shutdown. A compute fixture alone does not qualify graphics. | gpu-platform.md |
