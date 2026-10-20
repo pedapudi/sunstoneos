@@ -103,12 +103,20 @@ and cyclic modes need no admission in this first operation. Existing DMA0
 descriptor bytes and its single-controller-per-image service remain supported.
 
 Physical admission must independently exclude and drain every prior CPU,
-remote-processor, channel, route and peripheral producer. The selected channel's
-nonsecure bit must also be read after reset release and before activation;
-the documented reset default cannot substitute for that observation. Existing
-startup omits this security read and its allowlist excludes `+0x20`. No security
-write, remote-core shutdown, inherited drain or recovery can be inferred from
-an idle controller. Failure must retain the pool, controller and parent leases.
+remote-processor, channel, route and peripheral producer. It must also establish
+nonsecure controller access, selected-channel permissions and descriptor/data
+firewall access through the admitted lifecycle. The security register's reset
+default cannot supply those facts. Section 13.1.4.4 describes secure-only DMAC
+access with TrustZone enabled and secure channel defaults, conflicting with the
+nonsecure reset bits in section 13.1.7.1. Neither passage authorizes a nonsecure
+CPU read of `+0x20`. The zero readback described in section 13.1.4.4 concerns
+DMA reads of secure memory, not CPU reads of protected registers.
+
+The native allowlist therefore excludes `+0x20`. A future security observation
+needs separate source-backed access authority or a qualified trusted-firmware
+record; startup must not probe unknown register visibility. No security write,
+remote-core shutdown, inherited drain or recovery can be inferred from an idle
+controller. Failure must retain the pool, controller and parent leases.
 Remote ownership remains a physical blocker without reopening the separate
 management-core investigation.
 

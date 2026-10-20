@@ -57,6 +57,16 @@ The record must refer to the corresponding board evidence. Setting its flags or
 assigning a matching identity does not prove those conditions. Every earlier
 controller and route writer must remain stopped while the DMA0 reservation lives.
 
+Channel security and controller access require independent admission. The
+handoff's quiet/drain/interrupt flags do not establish nonsecure permissions.
+The manual's security overview conflicts with its channel reset-value table,
+and neither passage authorizes nonsecure reads of `DMA_SEC_REG`. Startup keeps
+that register outside its allowlist. A trusted external record must establish
+controller access, selected-channel nonsecure state and descriptor/data firewall
+access, including validity after reset release and exclusion of security writers
+through recovery. It must not infer these facts from reset defaults or idle
+registers. Physical security and access remain unqualified.
+
 The adapter registers one bootstrap task before scheduling starts. Acquisition
 requires that task, EL1 execution, the copied configuration, and the derived
 shared-clock mask. It then requests one combined registry token for stable

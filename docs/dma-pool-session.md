@@ -221,6 +221,38 @@ binds the current USB instance, image, boot identity and DMA/USB evidence IDs.
 It includes the inherited cached-entry/USB requirements plus actual DMA startup,
 drain and ownership evidence.
 
+The platform record also requires a `dma-nonsecure-access` condition referencing
+a digest-bound JSON record with schema `a733-dma-nonsecure-access-v1`. The record
+binds identity, port, image SHA256, epoch, generation, lease, controller,
+`service_channels`, `dma_evidence` and `dma_handoff` to the prepared image/session.
+Its 16-bit `nonsecure_channels` mask must cover every selected service channel.
+`reviewed` and `physical_authority` must be true, and `modeled` must be false.
+It requires nonempty digest-bound supporting `evidence` and these true assertions:
+
+- `controller_access_nonsecure_el1`: the controller is accessible to the native
+  nonsecure EL1 provider.
+- `descriptor_data_access_nonsecure`: every descriptor, source and destination
+  memory extent admitted by the image is accessible through its DMA/firewall path.
+- `valid_after_reset_release`: these permissions cover the selected cold/adopt
+  lifecycle, including reset deassertion, operation and recovery.
+- `security_writers_excluded_until_recovery`: no external writer can invalidate
+  the admitted security configuration before recovery.
+
+The host verifies declarations and identity; it does not establish their physical
+truth. Secure-firmware attestation or separately authorized observations must
+supply that authority. Missing or modeled security evidence refuses launch before
+device transactions. The verified record bytes are preserved with launch
+evidence. No nonsecure security-register probe or native rebuild is introduced.
+
+The focused `checks/dma-copy-security.py` check passes eight host cases against
+the immutable profile in the preserved `49397dc7…` image. Missing authority,
+modeled production evidence, absent channel coverage, differing controller or
+session, a boolean mask and missing post-reset validity are refused. Positive
+validation substitutes only the physical-authority decision in the checker;
+the production path accepts no modeled override. Records are preserved under
+`dma0-security-admission-20261020/`. No native, capture, launcher or device case
+was replayed.
+
 The command reuses sealed uploads, SRAM preservation, qualification checks,
 refusal recovery and quarantine helpers. It holds the existing board flock,
 performs one launch, accepts only the protected port's expected USB identity and

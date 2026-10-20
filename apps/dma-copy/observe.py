@@ -235,7 +235,8 @@ def validate_platform(value, prepared, identity, port):
             value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'], 'Observer platform admission differs.')
     required={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
               'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
-              'usb-device-mapping','physical-counter-continuity','dma-startup-drain-ownership'}
+              'usb-device-mapping','physical-counter-continuity','dma-startup-drain-ownership',
+              'dma-nonsecure-access'}
     require(set(value.get('conditions',{}))==required, 'Observer entry conditions are incomplete.')
     for item in value['conditions'].values(): artifact(item)
     require(value.get('usb_evidence')==prepared['usb_evidence'] and value.get('dma_evidence')==prepared['dma_evidence'] and
@@ -243,6 +244,33 @@ def validate_platform(value, prepared, identity, port):
             value.get('lease')==prepared['lease'],'Platform evidence does not bind immutable DMA/USB admission.')
     require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
             'Platform record must establish entry conditions without claiming the experiment already passed.')
+    item=value['conditions']['dma-nonsecure-access']
+    # Parse the exact digest-verified buffer, not another unchecked path read.
+    data=artifact(item).read_bytes()
+    require(hashlib.sha256(data).hexdigest()==item['sha256'],'DMA security evidence changed.')
+    security=json.loads(data)
+    require(security.get('schema')=='a733-dma-nonsecure-access-v1' and
+            security.get('identity')==identity and security.get('port')==port and
+            security.get('image_sha256')==prepared['image_sha256'],
+            'DMA security authority covers a different image or target.')
+    require(security.get('physical_authority') is True and security.get('modeled') is False and
+            security.get('reviewed') is True,'DMA security requires reviewed physical authority.')
+    for name in ('epoch','generation','lease','controller','service_channels','dma_evidence','dma_handoff'):
+        expected=prepared['channels' if name=='service_channels' else name]
+        require(type(expected) is int and 0<expected<1<<64 and type(security.get(name)) is int and
+                security[name]==expected,'DMA security session/controller binding differs: '+name)
+    mask=security.get('nonsecure_channels')
+    require(type(mask) is int and 0<mask<=0xffff and 0<security['service_channels']<=0xffff and
+            security['service_channels']&mask==security['service_channels'],
+            'DMA security evidence omits selected nonsecure channels.')
+    require(all(security.get(name) is True for name in
+            ('controller_access_nonsecure_el1','descriptor_data_access_nonsecure',
+             'valid_after_reset_release','security_writers_excluded_until_recovery')),
+            'DMA security access/lifetime authority is incomplete.')
+    require(isinstance(security.get('evidence'),list) and security['evidence'],
+            'DMA security observations are missing.')
+    for reference in security['evidence']:artifact(reference)
+    return data
 
 
 def launch_once(transaction, observe, bundle, prepared, evidence, record, save, ready):
@@ -318,7 +346,9 @@ def main(argv=None):
                 'DDR reservation/publication contract is incomplete.')
         require(ddr.get('evidence'), 'DDR initialization evidence is missing.')
         for item in ddr['evidence']: artifact(item)
-        validate_platform(platform,prepared,identity,port.name)
+        security=validate_platform(platform,prepared,identity,port.name)
+        (args.evidence/'dma-nonsecure-access.json').write_bytes(security)
+        sync_file(args.evidence/'dma-nonsecure-access.json')
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
