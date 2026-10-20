@@ -16,6 +16,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | Multicore implementation | [CPU skill](../.agents/skills/sunstone-a733-multicore/SKILL.md), then its boundary-specific source table |
 | Peripheral implementation | [Device skill](../.agents/skills/sunstone-a733-device/SKILL.md) |
 | Architectural constraints | [Arm/Linux audit](a733-multicore-reference-audit.md): the relevant named section |
+| Boot0 monitor header, cleanup and guarded cold entry | [Cold-entry recorder](cold-entry.md): mutable header/loadword, actual parser→main-tail cleanup, independent reset-state model and parked report; [boot evidence](boot.md) and [ordinary-file packaging](microsd-boot-package.md) retain separate limits |
 | CPU diagnostic result | [Supervised startup](a733-smp-supervised.md): the matching checkpoint heading |
 | Cache mappings and publication | [CPU coherence](cpu-coherence.md): “EL3 and nonsecure EL1 use matching memory attributes” and “Cache entry requires published immutable memory”; also the audit's “Publication must cover the executable physical address space” |
 | Evidence reuse | [Validation](validation.md): “Reuse valid evidence” |

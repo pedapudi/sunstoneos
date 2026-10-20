@@ -177,11 +177,16 @@ functions and modes beyond these bounded applications.
 
 The [microSD container packager](microsd-boot-package.md) creates regular files
 only; one actual packer invocation and seventeen host checks pass. Root audit:
-`microsd-boot-package-20261020/wrapper-root-integration.json`. The monitor-only
-boot0 parser/reset-request model executes no payload. No native cold-entry
-payload, media write or physical boot is qualified; packer license/source
-equivalence remains unresolved. The primary agent owns the cold-entry/component
-contract and CPU integration. Recovery and hardware access remain unavailable.
+`microsd-boot-package-20261020/wrapper-root-integration.json`. The
+[cold-entry recorder](cold-entry.md) now supplies a guarded 4,164-byte native
+monitor that captures header/exception state and parks. Actual boot0 parser,
+cleanup/main-tail and eight AArch64 entry cases pass with independent reset-state
+models; one ordinary-file container contains the actual monitor. Evidence:
+`cold-entry-20261020/frozen/manifest.json`, `instructions/result.json`.
+No FreeRTOS entry, remote-writer exclusion, memory ownership, physical boot,
+media write or recovery is established. Standalone OS boot remains incomplete;
+packer license/source equivalence remains unresolved. The primary agent owns
+cold-entry/component authority and CPU integration. Hardware access remains unavailable.
 
 The shared launcher correction `6407e26` preserves exact legacy preprocessed
 templates and the combined binary; it adds no physical launch evidence.

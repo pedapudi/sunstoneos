@@ -17,6 +17,9 @@ pin control enable I2C; I2C then enables PMIC regulator control. This distinctio
 avoids a circular dependency between complete power management and its own bus.
 A working single-core runtime supports independent peripheral integration. Full
 multicore scheduling remains a separate completion requirement.
+Cold-start application entry also requires remote-writer exclusion, memory
+publication and application authority. A [guarded entry recorder](cold-entry.md)
+or packaged container alone does not establish those prerequisites.
 
 DMA controllers move data between memory and peripherals. The system IOMMU maps
 addresses for particular device masters. They are separate prerequisites. GPU and

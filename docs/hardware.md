@@ -92,9 +92,16 @@ implementation is **planned**. Partial results apply only to the stated scope:
   caller-supplied flat monitor. It inserts no stock monitor, U-Boot or SCP.
   One actual packer invocation and seventeen host checks pass; root verifies
   27 frozen files and five current sources under
-  `microsd-boot-package-20261020/wrapper-root-integration.json`. The separate
-  boot0 parser/reset-request model accepts monitor-only handoff but executes no
-  payload. No native cold-entry payload, media write or physical boot is qualified;
+  `microsd-boot-package-20261020/wrapper-root-integration.json`.
+  The [cold-entry recorder](cold-entry.md) supplies a 4,164-byte native monitor
+  that guards CPU entry, captures the boot0-mutated header and exception state,
+  publishes a retained report and parks. The actual boot0 parser, cleanup and
+  main-tail instructions plus eight guarded AArch64 entry cases pass with
+  independently modeled reset registers. One ordinary-file package contains this
+  actual monitor. Evidence is under `cold-entry-20261020/frozen/manifest.json`
+  and `instructions/result.json`. It does not enter FreeRTOS or establish
+  remote-writer exclusion, memory ownership/publication, physical reset/boot,
+  media loading/writes or recovery. Standalone OS boot remains incomplete;
   packer licensing and exact source equivalence remain unresolved.
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and
   AArch64 EL3 and nonsecure EL1, including counter reads and SMC return.
