@@ -39,7 +39,7 @@ struct pvr_render_service {
     uint64_t texture_ticket,texture_epoch,texture_generation,texture_draft_deadline;
     uint64_t texture_output_ticket;
     uint32_t texture_client,texture_output_client,texture_output_frame;
-    uint32_t texture_received,texture_total,texture_previous,texture_cursor;
+    uint32_t texture_received,texture_total,texture_previous,texture_cursor,texture_render_state;
     uint32_t texture_draft,texture_preparing,texture_output_offset,texture_output_bytes;
 };
 int pvr_render_service_begin(struct pvr_render_service *, uint64_t deadline);

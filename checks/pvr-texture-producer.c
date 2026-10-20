@@ -10,7 +10,10 @@
 #include "texture-stage.inc"
 #include "pvr_descriptor_set.h"
 #include "csbgen/rogue/texstate.h"
+#include "vk_blend.h"
+#include "vk_graphics_state.h"
 #include "texture-descriptors.inc"
+static unsigned blending;
 
 /* Restricted pvr_arch_tex_state.c/pvr_arch_sampler.c path: RGBA8, one linear
  * layer/mip/sample, normalized nearest clamp-edge, explicit LOD zero. */
@@ -53,11 +56,11 @@ static void texture_control(const pco_data *vs,const pco_data *fs)
         .pres_pds_state_ptr3=true,.pres_ispctl_fb=true,.pres_ispctl_fa=true,.pres_ispctl=true,.pres_ispctl_dbsc=true);
     EMIT(TA_STATE_ISPCTL,.scenable=true,.bpres=true);
     EMIT(TA_STATE_ISPA,.pointlinewidth=15,.dcmpmode=ROGUE_TA_CMPMODE_ALWAYS,
-        .dwritedisable=true,.passtype=ROGUE_TA_PASSTYPE_OPAQUE,.objtype=ROGUE_TA_OBJTYPE_TRIANGLE);
+        .dwritedisable=true,.passtype=fs->fs.uses.fbfetch?ROGUE_TA_PASSTYPE_TRANSLUCENT:ROGUE_TA_PASSTYPE_OPAQUE,.objtype=ROGUE_TA_OBJTYPE_TRIANGLE);
     EMIT(TA_STATE_ISPB,.sop1=ROGUE_TA_ISPB_STENCILOP_KEEP,.sop2=ROGUE_TA_ISPB_STENCILOP_KEEP,
         .sop3=ROGUE_TA_ISPB_STENCILOP_KEEP,.scmpmode=ROGUE_TA_CMPMODE_ALWAYS);
     EMIT(TA_STATE_ISPDBSC,.dbindex=0,.scindex=0);
-    EMIT(TA_STATE_PDS_SHADERBASE,.addr=PVR_DEV_ADDR(DRAW_FRAGMENT_PDS));
+    EMIT(TA_STATE_PDS_SHADERBASE,.addr=PVR_DEV_ADDR(blending?PVR_RENDER_PDS_ADDRESS+2560:DRAW_FRAGMENT_PDS));
     EMIT(TA_STATE_PDS_TEXUNICODEBASE,.addr=PVR_DEV_ADDR(DRAW_UNIFORM_PDS+sizes.uniform_code));
     EMIT(TA_STATE_PDS_SIZEINFO1,
         .pds_uniformsize=DIV_ROUND_UP(sizes.uniform_data,ROGUE_TA_STATE_PDS_SIZEINFO1_PDS_UNIFORMSIZE_UNIT_SIZE),
@@ -195,11 +198,11 @@ static void texture_pds(pco_shader *vertex,pco_shader *pixel)
     fprintf(stderr,"DRAW_COEFFICIENT_PDS data=%u code=%u temps=%u code_offset=%u\n",coeff.data_size,coeff.code_size,coeff.temps_used,ccode);
 
     struct pvr_pds_kickusc_program kick={0};
-    pvr_pds_setup_doutu(&kick.usc_task_control,DRAW_FRAGMENT_USC+fs->common.entry_offset,fs->common.temps,0,fs->fs.uses.phase_change);
+    pvr_pds_setup_doutu(&kick.usc_task_control,(blending?3072:DRAW_FRAGMENT_USC)+fs->common.entry_offset,fs->common.temps,0,fs->fs.uses.phase_change);
     memset(scratch,0,sizeof(scratch));pvr_pds_kick_usc(&kick,scratch,0,false,PDS_GENERATE_CODEDATA_SEGMENTS);
     unsigned fcode=ALIGN_POT(kick.data_size*4,16);assert(fcode+kick.code_size*4<=128);
-    memcpy(pds(DRAW_FRAGMENT_PDS),scratch,kick.data_size*4);
-    memcpy(pds(DRAW_FRAGMENT_PDS+fcode),scratch+kick.data_size,kick.code_size*4);
+    memcpy(pds(blending?2560:DRAW_FRAGMENT_PDS),scratch,kick.data_size*4);
+    memcpy(pds((blending?2560:DRAW_FRAGMENT_PDS)+fcode),scratch+kick.data_size,kick.code_size*4);
     fprintf(stderr,"DRAW_FRAGMENT_PDS data=%u code=%u code_offset=%u\n",kick.data_size,kick.code_size,fcode);
 
     memset(entries,0,sizeof(entries));
@@ -251,8 +254,9 @@ static nir_shader *texture_fragment(void)
     tex->src[2]=(nir_tex_src){.src_type=nir_tex_src_coord,.src=nir_src_for_ssa(coord)};
     tex->src[3]=(nir_tex_src){.src_type=nir_tex_src_lod,.src=nir_src_for_ssa(lod)};
     nir_def_init(&tex->instr,&tex->def,4,32);nir_builder_instr_insert(&b,&tex->instr);
-    nir_variable *output=nir_create_variable_with_location(b.shader,nir_var_shader_out,FRAG_RESULT_DATA0,glsl_uint_type());
-    nir_store_var(&b,output,nir_pack_unorm_4x8(&b,&tex->def),1);
+    nir_variable *output=nir_create_variable_with_location(b.shader,nir_var_shader_out,FRAG_RESULT_DATA0,
+        blending?glsl_vec4_type():glsl_uint_type());
+    nir_store_var(&b,output,blending?&tex->def:nir_pack_unorm_4x8(&b,&tex->def),blending?15:1);
     nir_jump(&b,nir_jump_return);
     return b.shader;
 }
@@ -271,6 +275,9 @@ static pco_shader *texture_compile(pco_ctx *ctx,nir_shader *nir,pco_data *data,s
     ralloc_steal(s,nir);pco_process_ir(ctx,s);pco_encode_ir(ctx,s);
     const pco_common_data *c=&pco_shader_data(s)->common;
     assert(!c->scratch && !c->spilled_temps && !c->uses.barriers && !c->uses.atomics);
+    if(nir->info.stage==MESA_SHADER_FRAGMENT)fprintf(stderr,"BLEND_USAGE fbfetch=%u phase_change=%u olchk_skip=%u blend_consts=%u\n",
+        pco_shader_data(s)->fs.uses.fbfetch,pco_shader_data(s)->fs.uses.phase_change,
+        pco_shader_data(s)->fs.uses.olchk_skip,pco_shader_data(s)->fs.blend_consts.count);
     fprintf(stderr,"TEXTURE_DESCRIPTOR stage=%u shareds=%u range=%u:%u binding=%u:%u:%u spill_reservation=%u:%u\n",
         nir->info.stage,c->shareds,c->desc_sets[0].range.start,c->desc_sets[0].range.count,
         c->desc_sets[0].bindings?c->desc_sets[0].bindings[0].range.start:0,
@@ -280,7 +287,7 @@ static pco_shader *texture_compile(pco_ctx *ctx,nir_shader *nir,pco_data *data,s
 }
 int main(int argc,char **argv)
 {
-    assert(argc==4);glsl_type_singleton_init_or_ref();
+    assert(argc==4 || (argc==5 && !strcmp(argv[4],"blend")));blending=argc==5;glsl_type_singleton_init_or_ref();
     struct pvr_device_runtime_info runtime={.core_count=1};pco_ctx *ctx=pco_ctx_create(dev,&runtime,NULL);assert(ctx);
     struct pvr_descriptor_set_layout_binding binding={.type=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptor_count=1,.stage_flags=BITFIELD_BIT(MESA_SHADER_FRAGMENT),.stride=sizeof(struct pvr_combined_image_sampler_descriptor)};
@@ -290,13 +297,22 @@ int main(int argc,char **argv)
     nir_shader *vs=texture_vertex(),*fs=texture_fragment();pco_data vd={0},fd={0};
     vd.vs.attrib_formats[VERT_ATTRIB_GENERIC0]=PIPE_FORMAT_R32G32B32A32_FLOAT;
     vd.vs.attrib_formats[VERT_ATTRIB_GENERIC1]=PIPE_FORMAT_R32G32_FLOAT;
-    fd.fs.output_formats[FRAG_RESULT_DATA0]=PIPE_FORMAT_R32_UINT;fd.fs.z_replicate=~0u;
+    fd.fs.output_formats[FRAG_RESULT_DATA0]=blending?PIPE_FORMAT_R8G8B8A8_UNORM:PIPE_FORMAT_R32_UINT;fd.fs.z_replicate=~0u;
+    if(blending) {
+        struct vk_color_blend_state cb={.attachment_count=1};
+        cb.attachments[0]=(struct vk_color_blend_attachment_state){.blend_enable=true,
+            .color_blend_op=VK_BLEND_OP_ADD,.src_color_blend_factor=VK_BLEND_FACTOR_SRC_ALPHA,
+            .dst_color_blend_factor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alpha_blend_op=VK_BLEND_OP_ADD,.src_alpha_blend_factor=VK_BLEND_FACTOR_ONE,
+            .dst_alpha_blend_factor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,.write_mask=15};
+        pvr_init_fs_blend(&fd,&cb);
+    }
     pco_preprocess_nir(ctx,vs,&vd);pco_preprocess_nir(ctx,fs,&fd);
     pco_link_nir(ctx,vs,fs,&vd,&fd);pco_rev_link_nir(ctx,vs,fs);
     pco_shader *vertex=texture_compile(ctx,vs,&vd,&layout),*pixel=texture_compile(ctx,fs,&fd,&layout);
     record(vertex,MESA_SHADER_VERTEX,argv[1]);record(pixel,MESA_SHADER_FRAGMENT,argv[2]);
     programs();fragment();
-    upload(vertex,DRAW_VERTEX_USC,256);upload(pixel,DRAW_FRAGMENT_USC,256);
+    upload(vertex,DRAW_VERTEX_USC,256);upload(pixel,blending?3072:DRAW_FRAGMENT_USC,blending?1024:256);
     texture_pds(vertex,pixel);
     texture_descriptor(64,64,64);
     FILE *f=fopen(argv[3],"wb");assert(f);assert(fwrite(payload,1,sizeof(payload),f)==sizeof(payload));assert(!fclose(f));

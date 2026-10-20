@@ -91,6 +91,93 @@ coordinator's identity-validated, locked, already running USB handle. It does
 not discover, open, launch or reset a device. Host input and output selection
 require no firmware rebuild. CLOSE uses the existing normal GPU shutdown.
 
+## Depth testing and source-over blending
+
+The same retained texture application supports graphics profile 3. Pass
+`profile=3` to `texture.session()`, `input_bytes()` and `capture_frames()`.
+The session envelope remains 632 bytes and uses version 2. Its authenticated
+geometry selects the depth allocation before OPEN. The runtime protocol uses
+version 5 with the same 64-byte header. Version-1 sessions retain graphics
+profile 2 and version-4 requests.
+
+The last request word carries render state on BEGIN. Bits 0–1 select depth
+comparison: 0 disables depth testing, 1 selects LESS, 2 selects LESS_OR_EQUAL,
+and 3 selects ALWAYS. Bit 2 enables depth writes; it requires enabled depth
+testing. Bit 3 selects straight-alpha source-over blending. Other bits and
+state on other operations are refused. State applies to every triangle in the
+submitted indexed list. Each accepted frame clears color and depth.
+
+For example, state 5 draws with LESS and depth writes. State 10 draws with
+LESS_OR_EQUAL, depth writes disabled and source-over blending. The blend
+computes RGB as `src.rgb * src.a + dst.rgb * (1 - src.a)` and alpha as
+`src.a + dst.a * (1 - src.a)`. Profile-3 vertex positions admit finite z in
+[0, 1], with w equal to one. The existing position/UV layout, texture bounds,
+index limits and framebuffer dimensions apply. State is captured with the
+copied draft and revalidated before input replacement or output revocation.
+
+A single D32_SFLOAT depth attachment uses twiddled F32Z storage. Its physical
+width and height round up to powers of two, with a minimum of 32 pixels per
+axis from the pinned GPU's depth load/store tile geometry. The allocation
+reserves 16 MiB for depth plus two unmapped guard pages. At 1080p, the physical
+extent is 2048 × 2048 pixels. The GPU mapping at `0x800d000000` is writable;
+the CPU initializes and publishes it in bounded page batches before each frame.
+Hardware clears logical depth to one and stores it without an initial depth
+load. Depth contents do not persist between frames or appear in copied output.
+
+The additional depth mapping increases the native maximum to sixteen mappings
+and 27 table pages. Actual construction and admission derive the entire VM
+plan, including the eight additional leaf tables. The existing graphics lease
+retains depth, shaders, input, commands and output through both final timelines
+and every uncertain failure. Completion precedes depth-guard acquisition and
+framebuffer copying. Existing output-slot ownership and healthy CLOSE apply.
+
+The resident source-over fragment shader contains 344 instruction bytes plus
+32 prefetch bytes. It uses 32 temporaries, eight coefficients and 27 shared
+registers, matching the existing replacement shader's resource allocation.
+It occupies USC offset 3072; replacement remains at offset 2560. Its separate
+36-byte PDS kick program occupies PDS offset 2560. PPP data selects between
+the resident programs after previous completion. No USC code is rewritten.
+The compiler reports framebuffer fetch, no phase change and enabled output-lock
+checks. The translucent pass and disabled pixel merging preserve source-order
+blending. Both variants retain zero scratch, spills, barriers and atomics.
+
+Mesa's `pvr_arch_pipeline.c:2247–2288` supplies the actual blend initializer;
+`pco_nir.c:1061` lowers blending and `pco_trans_nir.c:904–938` reads the previous
+on-chip pixel with output-lock checks. `pvr_arch_job_render.c:958–1025` defines
+depth load/store state. `pvr_arch_cmd_buffer.c:1080–1111,1767,1878–1908` supports
+CLEAR backgrounds, final-color storage for partial renders, and depth
+CLEAR/STORE without an initial load. The single stored attachment has no resolve
+or separate color scratch requirement.
+
+Focused evidence is retained in
+`~/.cache/sunstoneos/evidence/gpu-depth-blend-20261019/`. The source comparison
+checks resident shader/PDS bytes, every admitted state, firmware offsets and
+padded depth geometry with sanitizers. Native service cases cover two changing
+1080p frames, legacy-profile reuse, invalid-state refusal, depth guards and an
+uncertain final kick. GPU writes and firmware effects remain explicit models.
+These checks do not establish physical depth testing or blending.
+
+## Geometry, partial renders and final completion
+
+The shared render worker follows pinned Mesa's geometry/partial-render/final
+sequence. It first publishes a combined geometry and partial-fragment kick.
+Geometry carries its cleanup reference; the partial-fragment kick has none.
+A separate final-fragment kick carries one fragment cleanup reference. The
+partial render uses the same depth state and final color PBE/EOT programs for
+this single stored attachment. Normal and partial background programs both
+implement CLEAR, following the upstream load operation.
+
+For API frame n, geometry updates its timeline to n. Partial fragment updates
+to 2n−1 and final fragment updates to 2n. Only the final values admit output
+or replacement. The pair retains both rings through the final kick and checks
+their exact serials before reuse. An uncertain final kick faults both rings.
+This follows `pvr_drm_job_render.c:488–604`, pinned Linux `pvr_queue.c:699–705`
+and the cleanup rule in `pvr_cccb.c:257`.
+
+Earlier frozen rendering evidence used one combined final-fragment kick. It
+remains historical software evidence; the corrected native legacy-profile case
+covers the changed sequencing. Compute queues retain their separate behavior.
+
 ## Compiler contract and evidence
 
 The producer uses Mesa revision
@@ -128,7 +215,7 @@ service checks model only unchanged architectural admission and GPU/firmware
 effects. The application checks model service replies, GPU results and USB
 endpoint hardware. These checks establish no physical rasterization claim.
 
-Arbitrary shaders, perspective and depth/stencil rendering, blending, other
+Arbitrary shaders, perspective rendering, stencil, general blend equations, other
 topologies/index modes, mipmaps, other texture formats/filtering, arrays/cubes,
 multisampling, display presentation and context disposal remain required work.
 
@@ -187,8 +274,9 @@ remains available. CLOSE follows the final completed frame and normal shutdown.
 The same geometry and fragment contexts retain their two 2 KiB command rings,
 read/write cursors and monotonic serials. They are formatted only before the
 first submission. A new paired submission requires the original accepted pair
-and both successful IDLE rings. Frame n sets both completion updates and the
-fragment dependency to n, and its geometry partial-render reference to n−1.
+and both successful IDLE rings. Frame n sets geometry completion and the
+partial-fragment dependency to n, and its geometry partial-render reference to
+n−1. Its partial and final fragment updates are 2n−1 and 2n.
 The two existing render-target data records alternate between frames. Both job
 pointers and both cleanup references select the same record. CPU code preserves
 firmware-owned render-target state and cleanup counters. FIRST/LAST geometry
@@ -311,16 +399,14 @@ page tables. It registers all firmware objects alongside fixed compute resources
 in the same firmware mapping. Private native-owner checks reject substituted
 providers and pool identities.
 
-The worker formats both command rings and publishes their commands before one
-combined firmware kick. Geometry includes its timeline update. Fragment waits
-on that geometry timeline, then executes its render and its own update. Both
-kick records reference the actual render-target cleanup counter. Single-core
-mode and service admission prevent overlap with fixed compute execution while
-retaining both resource sets in one service.
+The worker formats both command rings once, then uses the geometry/partial/final
+sequence above. Geometry and final fragment retain the actual render-target
+cleanup counter. Single-core mode and service admission prevent overlap with
+fixed compute execution while retaining both resource sets in one service.
 
 The worker samples the dependent fragment timeline before geometry, preventing
-a false ordering failure if completion occurs between loads. After both reach
-the submitted value, it invalidates the five output allocation pages and checks
+a false ordering failure if completion occurs between loads. After geometry
+reaches n and final fragment reaches 2n, it invalidates the five output allocation pages and checks
 every pixel plus the surrounding guards. Output begins poisoned. CPU code never
 writes the expected clear pixels into the device output.
 

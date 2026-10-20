@@ -102,7 +102,8 @@ struct pvr_cccb_pair {
     struct pvr_cccb *geometry, *fragment;
     struct pvr_ccb_token token;
     uint64_t epoch, deadline, last_now;
-    uint32_t phase, status;
+    uint32_t phase, status, fragment_tail;
+    uint64_t geometry_serial,fragment_serial;
     unsigned char kick[PVR_CCB_COMMAND_BYTES];
 };
 /* Fresh zero pair, or a previously accepted pair with its original IDLE rings.
@@ -116,4 +117,9 @@ int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *);
 /* One bounded client step or one combined submit/collect. Return 1 accepted,
  * 0 pending, -1 fault. Acceptance does not establish either GPU timeline. */
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *);
+/* Append the single final-fragment job after accepted paired geometry/PR.
+ * Both clients remain pair-owned; uncertainty faults both. Reuse is permitted
+ * only after this tail is accepted and the producer acquires final GPU output. */
+int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *,
+    const struct pvr_cccb_command *,unsigned,const uint32_t *,unsigned,uint64_t);
 #endif

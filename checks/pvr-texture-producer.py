@@ -17,9 +17,11 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     for name in ('mesa-source','mesa-archive','mesa-build','evidence'):
         ap.add_argument('--'+name,type=Path,required=True)
+    ap.add_argument('--blend',action='store_true')
+    ap.add_argument('--resume',action='store_true',help='Reuse the two completed upstream PDS objects after a producer-only setup failure.')
     args=ap.parse_args();src=args.mesa_source.resolve();build=args.mesa_build.resolve();out=args.evidence.resolve()
     assert sha(args.mesa_archive)=='ca5e3ac4b61b8dc659cc489c7eb3c7bcc750f6820fbf39f0b831ac87fb00da58'
-    out.mkdir(parents=True,exist_ok=False)
+    out.mkdir(parents=True,exist_ok=args.resume)
     pipeline=src/'src/imagination/vulkan/pvr_arch_pipeline.c'
     assert sha(pipeline)=='4e2742f0534d9de7783cb1f7180b22f5c9ada27802c23a253d3143d73171c4e8'
     text=pipeline.read_text()
@@ -34,7 +36,7 @@ def main():
         return text[start:end]
     functions=('allocate_var','try_allocate_var','allocate_val','try_allocate_vars','check_unused_sysvals',
         'pvr_alloc_vs_sysvals','pvr_alloc_vs_attribs','pvr_alloc_vs_varyings','pvr_alloc_fs_sysvals','pvr_alloc_fs_varyings')
-    (out/'texture-descriptors.inc').write_text('\n'.join(extract(name) for name in ('pvr_init_descriptors','pvr_setup_descriptors'))+'\n')
+    (out/'texture-descriptors.inc').write_text('\n'.join(extract(name) for name in ('pvr_init_descriptors','pvr_setup_descriptors','pvr_init_fs_blend'))+'\n')
     (out/'draw-allocators.inc').write_text('\n'.join(extract(name) for name in functions)+'\n')
     cmd_source=src/'src/imagination/vulkan/pvr_arch_cmd_buffer.c'
     command_text=cmd_source.read_text()
@@ -55,7 +57,7 @@ def main():
     flags=shlex.split(entry['command']);flags=flags[:flags.index('-MD')];flags=[f for f in flags if f!='-DNDEBUG']
     flags+=['-I'+str(build/'src/vulkan/util'),'-I'+str(src/'src/vulkan/runtime'),'-I'+str(build/'src/vulkan/runtime'),'-I'+str(ROOT/'checks'),'-I'+str(ROOT/'include'),'-I'+str(src/'src/imagination/vulkan/pds'),
         '-I'+str(src/'src/imagination/vulkan'),'-I'+str(out),'-DPVR_BUILD_ARCH_ROGUE','-ffunction-sections','-fdata-sections']
-    commands=[]
+    commands=json.loads((out/'commands.json').read_text())[:2] if args.resume else []
     def run(cmd,name):
         commands.append(cmd)
         result=subprocess.run(cmd,cwd=build,capture_output=True,text=True,env={**os.environ,'PCO_DEBUG':'no_pred_cf'})
@@ -64,8 +66,11 @@ def main():
         if result.returncode:raise RuntimeError(name+': '+result.stderr[-5000:])
     objects=[]
     for source,name in ((out/'mesa-pds.c','pds'),(src/'src/imagination/vulkan/pds/pvr_pipeline_pds.c','pipeline-pds'),
-                        (ROOT/'checks/pvr-texture-producer.c','producer')):
+                        (src/'src/vulkan/runtime/vk_blend.c','vk-blend'),(ROOT/'checks/pvr-texture-producer.c','producer')):
         obj=out/(name+'.o');objects.append(str(obj))
+        if args.resume and name in ('pds','pipeline-pds'):
+            assert obj.is_file()
+            continue
         run(flags+['-MD','-MF',str(out/(name+'.d')),'-c',str(source),'-o',str(obj)],name)
     ninja=(build/'build.ninja').read_text();start=ninja.index('build src/imagination/pco/uscgen/pco_clc:')
     link=shlex.split(re.search(r'\n LINK_ARGS = (.*)',ninja[start:])[1])
@@ -82,6 +87,6 @@ def main():
             if path.is_relative_to(src):
                 assert path.read_bytes()==archive.extractfile('mesa-'+REVISION+'/'+str(path.relative_to(src))).read(),path
     (out/'inputs.json').write_text(json.dumps([{'path':str(p),'sha256':sha(p)} for p in sorted(inputs)],indent=2)+'\n')
-    run([str(out/'producer'),str(out/'vertex.bin'),str(out/'fragment.bin'),str(out/'payload.bin')],'generate')
+    run([str(out/'producer'),str(out/'vertex.bin'),str(out/'fragment.bin'),str(out/'payload.bin')]+(['blend'] if args.blend else []),'generate')
     print((out/'generate.log').read_text(),end='')
 if __name__=='__main__':main()

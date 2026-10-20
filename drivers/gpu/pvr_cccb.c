@@ -224,7 +224,9 @@ int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *p)
     const struct pvr_cccb *g=p->geometry,*f=p->fragment;
     return range(g,sizeof(*g)) && range(f,sizeof(*f)) && g!=f &&
         g->phase==PVR_CCCB_IDLE && f->phase==PVR_CCCB_IDLE && g->status==1 && f->status==1 &&
-        g->paired==1 && f->paired==1 && g->serial && g->serial==f->serial && g->serial<UINT64_MAX &&
+        g->paired==1 && f->paired==1 && g->serial &&
+        g->serial==p->geometry_serial && f->serial==p->fragment_serial &&
+        g->serial<UINT64_MAX && f->serial<UINT64_MAX &&
         g->queue==f->queue && g->queue && g->queue->phase==PVR_CCB_ACTIVE &&
         p->epoch==g->epoch && g->epoch==f->epoch && g->epoch==g->queue->epoch &&
         g->context==f->context && g->ops.now==f->ops.now &&
@@ -265,7 +267,24 @@ int pvr_cccb_pair_begin(struct pvr_cccb_pair *p, struct pvr_cccb *g, struct pvr_
     g->paired = f->paired = 1;
     p->geometry = g; p->fragment = f; p->epoch = g->epoch;
     p->deadline = deadline; p->last_now = g->last_now > f->last_now ? g->last_now : f->last_now;
+    p->geometry_serial=g->serial;p->fragment_serial=f->serial;p->fragment_tail=0;
     p->phase = 1; return 1;
+}
+int pvr_cccb_pair_fragment_tail_begin(struct pvr_cccb_pair *p,
+    const struct pvr_cccb_command *commands,unsigned count,const uint32_t *cleanup,unsigned cleanups,uint64_t deadline)
+{
+    if(!pvr_cccb_pair_reusable(p) || p->fragment_tail || !count || count>PVR_CCCB_MAX_COMMANDS ||
+        cleanups>PVR_CCCB_MAX_CLEANUPS || deadline>p->deadline ||
+        !outside(p->geometry,commands,count*sizeof(*commands)) ||
+        !disjoint(p,sizeof(*p),commands,count*sizeof(*commands)) ||
+        (cleanups && (!outside(p->geometry,cleanup,cleanups*sizeof(*cleanup)) ||
+                     !disjoint(p,sizeof(*p),cleanup,cleanups*sizeof(*cleanup)))))return 0;
+    for(unsigned i=0;i<count;++i)if(commands[i].bytes &&
+        (!outside(p->geometry,commands[i].payload,commands[i].bytes) ||
+         !disjoint(p,sizeof(*p),commands[i].payload,commands[i].bytes)))return 0;
+    if(!pvr_cccb_begin(p->fragment,commands,count,cleanup,cleanups,deadline))return 0;
+    p->fragment->paired=0;p->fragment_serial=p->fragment->serial;
+    p->deadline=deadline;p->phase=5;return 1;
 }
 int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
 {
@@ -281,7 +300,13 @@ int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
         now < g->last_now || now < f->last_now || now < q->last_now || now >= p->deadline)
         return pair_fault(p);
     p->last_now = now;
-    if (p->phase == 1) {
+    if(p->phase==5) {
+        if(g->phase!=PVR_CCCB_IDLE || g->serial!=p->geometry_serial ||
+            f->serial!=p->fragment_serial || f->paired)return pair_fault(p);
+        enum pvr_cccb_result result=pvr_cccb_poll(f);
+        if(result==PVR_CCCB_FAULT || result==PVR_CCCB_INVALID)return pair_fault(p);
+        if(result==PVR_CCCB_OK){f->paired=1;p->fragment_tail=1;p->phase=3;}
+    } else if (p->phase == 1) {
         if (g->phase != PVR_CCCB_STAGED) {
             if (pvr_cccb_poll(g) == PVR_CCCB_FAULT) return pair_fault(p);
         } else if (f->phase != PVR_CCCB_STAGED) {

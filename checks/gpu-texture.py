@@ -21,10 +21,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--build-only',action='store_true')
+    parser.add_argument('--cases',default='0,2,3,4,5')
     parser.add_argument('--resume', action='store_true', help='Resume a failed build before any mode ran')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
+    modes=[int(x) for x in args.cases.split(',')];assert modes and all(x in (0,1,2,3,4,5) for x in modes)
     out = args.output.resolve()
     if args.resume and (not out.is_dir() or any(k in json.loads((out/'results.json').read_text()) for k in ('0','1','2','3'))):
         raise RuntimeError('resume requires a failed build without executed modes')
@@ -151,11 +153,11 @@ set_property(TARGET gpu-service-model PROPERTY LINK_DEPENDS "{linker}")
             inputs[str(source)] = {'snapshot': str(target.relative_to(out)), 'sha256': sha(target)}
         (out / 'inputs.json').write_text(json.dumps(inputs, indent=2) + '\n')
         (out / 'execution-input.json').write_text(json.dumps({'elf_sha256': sha(binary),
-            'qemu_sha256': sha(args.qemu.resolve()), 'modes': [0, 1, 2, 3]}, indent=2) + '\n')
+            'qemu_sha256': sha(args.qemu.resolve()), 'modes': modes}, indent=2) + '\n')
         if args.build_only:
             results.update(status='compiled-not-executed',physical_access=False)
             return
-        for mode in (0, 1, 2, 3):
+        for mode in modes:
             payload = bytearray(binary.read_bytes())
             payload[selector_offset:selector_offset + 4] = mode.to_bytes(4, 'little')
             selected = out / ('mode-' + str(mode) + '.elf')

@@ -3,6 +3,12 @@
 #include "pvr_render_draw.h"
 /* Separate trusted shader/profile ABI; existing draw bytes retain profile 1. */
 #define PVR_RENDER_TEXTURE_PROFILE 2u
+#define PVR_RENDER_DEPTH_BLEND_PROFILE 3u
+#define PVR_RENDER_DEPTH_BYTES (16u*1024u*1024u)
+#define PVR_RENDER_DEPTH_ADDRESS UINT64_C(0x800d000000)
+/* State bits: compare OFF/LESS/LEQUAL/ALWAYS, depth write, straight source-over. */
+#define PVR_RENDER_DEPTH_WRITE 4u
+#define PVR_RENDER_SOURCE_OVER 8u
 #define PVR_RENDER_TEXTURE_MAX_WIDTH 1920u
 #define PVR_RENDER_TEXTURE_MAX_HEIGHT 1080u
 #define PVR_RENDER_TEXTURE_MAX_PIXELS (1920u*1080u)
@@ -28,6 +34,7 @@ struct pvr_render_texture_input {
 struct pvr_render_texture_layout {
     uint32_t output,image,geometry,draft,copy,upload,download,total;
     uint32_t output_bytes,output_allocation;
+    uint32_t depth;
 };
 enum pvr_render_texture_operation { PVR_TEXTURE_BEGIN, PVR_TEXTURE_WRITE,
     PVR_TEXTURE_SUBMIT, PVR_TEXTURE_READ, PVR_TEXTURE_RELEASE };
@@ -35,10 +42,19 @@ struct pvr_render_texture_request {
     uint64_t generation;
     uint32_t operation,previous,offset,bytes;
     struct pvr_render_texture_input input;
+    uint32_t state;
 };
 int pvr_render_texture_layout(uint32_t,uint32_t,struct pvr_render_texture_layout *);
+int pvr_render_texture_layout_profile(uint32_t,uint32_t,uint32_t,struct pvr_render_texture_layout *);
+int pvr_render_texture_state_valid(uint32_t profile,uint32_t state);
+int pvr_render_texture_input_valid_profile(uint32_t,const struct pvr_render_texture_input *,
+    const void *,const void *,size_t);
 int pvr_render_texture_geometry(uint32_t,uint32_t,uint32_t *stride,uint32_t *bytes);
 int pvr_render_texture_descriptor(void *,const struct pvr_render_texture_input *);
+struct pvr_render_job_image;
+int pvr_render_texture_programs_build_profile(void *,size_t,uint32_t,uint32_t,uint32_t,struct pvr_render_program_image *);
+int pvr_render_texture_state_apply(void *,uint32_t);
+int pvr_render_texture_depth_job(uint32_t,uint32_t,struct pvr_render_job_image *);
 int pvr_render_texture_programs_build(void *,size_t,uint32_t,uint32_t,struct pvr_render_program_image *);
 int pvr_render_texture_input_valid(const struct pvr_render_texture_input *,const void *vertices,
     const void *indices,size_t texture_bytes);

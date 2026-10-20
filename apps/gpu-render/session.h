@@ -11,6 +11,7 @@ struct gpu_texture_session {
 };
 #define GPU_APPLICATION_SESSION_BYTES sizeof(struct gpu_texture_session)
 int gpu_application_texture_geometry(uint32_t *,uint32_t *);
+unsigned gpu_application_texture_profile(void);
 #elif defined(SUNSTONE_GPU_PROGRAM_APPLICATION)
 struct gpu_program_session {
     struct a733_board_session base;

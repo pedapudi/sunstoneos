@@ -3,6 +3,7 @@
  * Copyright (c) 2022, 2025 Imagination Technologies Ltd. See LICENSE.pvr.
  */
 #include "pvr_render_texture.h"
+#include "pvr_render_job.h"
 #include <string.h>
 static const unsigned char texture_pds[768]={
     0x00,0x09,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x00,0x00,0x00,
@@ -108,28 +109,64 @@ static const unsigned char texture_descriptor[80]={
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0xff,0x0f,0x00,0x00,0x50,0x24,0x00,0x02,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 };
+static const unsigned char texture_blend_fragment[376]={
+    0x04,0x80,0x78,0x10,0x00,0x00,0x20,0x00,0x57,0xc0,0x00,0xf3,0xb0,0xf2,0x40,0x80,
+    0x40,0x00,0x00,0x00,0x00,0xff,0x04,0x81,0x60,0x00,0x08,0x00,0x00,0x00,0x04,0x81,
+    0x61,0x00,0x08,0x00,0x00,0x00,0x02,0x80,0x6a,0xff,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x52,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x53,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x54,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x55,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x56,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x57,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x58,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x59,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x5a,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x5b,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x5c,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x5d,0x34,0x82,0x00,0x87,0x00,0x00,
+    0x00,0x5e,0x34,0x82,0x00,0x87,0x00,0x00,0x00,0x5f,0x67,0xa0,0x00,0xf4,0x5e,0x80,
+    0x84,0x70,0x80,0x0c,0x88,0x80,0xa0,0x00,0x02,0x80,0x6a,0xff,0x34,0x8a,0x00,0x87,
+    0x20,0x00,0x00,0x44,0x35,0x82,0x06,0x9c,0x20,0x44,0x00,0x00,0x45,0xff,0x35,0x82,
+    0x00,0x10,0xc3,0x80,0x00,0x00,0x44,0xff,0x35,0x82,0x00,0x10,0xc0,0x80,0x00,0x00,
+    0x49,0xff,0x35,0x82,0x00,0x08,0xc4,0xc0,0x02,0x00,0x00,0x4a,0x35,0x82,0x00,0x40,
+    0xc5,0xaa,0x00,0x00,0x4b,0xff,0x36,0x82,0x00,0xc0,0xc9,0x64,0x00,0x4b,0x00,0x00,
+    0x50,0xff,0x35,0x82,0x00,0x10,0xc1,0x80,0x00,0x00,0x49,0xff,0x35,0x82,0x00,0x40,
+    0xc6,0xaa,0x00,0x00,0x4b,0xff,0x36,0x82,0x00,0xc0,0xc9,0x64,0x00,0x4b,0x00,0x00,
+    0x51,0xff,0x35,0x82,0x00,0x10,0xc2,0x80,0x00,0x00,0x40,0xff,0x35,0x82,0x00,0x40,
+    0xc7,0xaa,0x00,0x00,0x41,0xff,0x36,0x82,0x00,0xc0,0xc0,0x64,0x00,0x41,0x00,0x00,
+    0x52,0xff,0x36,0x82,0x00,0xc0,0xc8,0x6a,0x00,0x44,0x00,0x00,0x53,0xff,0x59,0x92,
+    0x06,0x9c,0x20,0x80,0x40,0xa0,0x50,0x10,0x00,0x2c,0x40,0xff,0xf2,0xff,0xff,0xff,
+    0x34,0x8a,0x80,0x87,0x40,0x00,0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+};
+static const unsigned char texture_blend_pds[36]={
+    0x00,0x0c,0x00,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x02,0x00,0x00,0xf4,
+};
 static void put32(void *p,uint32_t n) { memcpy(p,&n,4); }
 static void put64(void *p,uint64_t n) { memcpy(p,&n,8); }
 /* n/2 is exactly representable for admitted positive dimensions. Construct its
  * binary32 bits without enabling floating-point state in privileged tasks. */
 static uint32_t half_bits(uint32_t n)
 { unsigned exponent=31u-(unsigned)__builtin_clz(n);return (exponent+126u)<<23 | ((n<<(23u-exponent))&0x7fffffu); }
-int pvr_render_texture_layout(uint32_t width,uint32_t height,struct pvr_render_texture_layout *out)
+int pvr_render_texture_layout_profile(uint32_t width,uint32_t height,uint32_t profile,struct pvr_render_texture_layout *out)
 {
     uint32_t stride,bytes;
-    if(!out || !pvr_render_texture_geometry(width,height,&stride,&bytes))return 0;
+    if(!out || (profile!=2 && profile!=3) || !pvr_render_texture_geometry(width,height,&stride,&bytes))return 0;
     struct pvr_render_texture_layout l={0};
     l.output=PVR_RENDER_PROGRAM_BYTES+4096;
     l.output_bytes=bytes+128;l.output_allocation=(l.output_bytes+4095)&~4095u;
     l.image=l.output+l.output_allocation;
     l.geometry=l.image+((PVR_RENDER_TEXTURE_MAX_BYTES+4095)&~4095u);
     l.draft=l.geometry+PVR_RENDER_TEXTURE_GEOMETRY_BYTES;
+    if(profile==3){l.depth=l.draft;l.draft+=PVR_RENDER_DEPTH_BYTES+8192;}
     l.copy=l.draft+((PVR_RENDER_TEXTURE_GEOMETRY_BYTES+PVR_RENDER_TEXTURE_MAX_BYTES+4095)&~4095u);
     l.upload=l.copy+((bytes+4095)&~4095u);
     l.download=l.upload+PVR_RENDER_TEXTURE_CHUNK;
     l.total=l.download+PVR_RENDER_TEXTURE_CHUNK;
     *out=l;return 1;
 }
+int pvr_render_texture_layout(uint32_t width,uint32_t height,struct pvr_render_texture_layout *out)
+{ return pvr_render_texture_layout_profile(width,height,2,out); }
+int pvr_render_texture_state_valid(uint32_t profile,uint32_t state)
+{ return profile==2?state==0:profile==3 && !(state&~15u) && ((state&3) || !(state&PVR_RENDER_DEPTH_WRITE)); }
 int pvr_render_texture_geometry(uint32_t width,uint32_t height,uint32_t *stride,uint32_t *bytes)
 {
     if(!width || !height || width>PVR_RENDER_TEXTURE_MAX_WIDTH || height>PVR_RENDER_TEXTURE_MAX_HEIGHT || !stride || !bytes)return 0;
@@ -146,17 +183,19 @@ int pvr_render_texture_descriptor(void *out,const struct pvr_render_texture_inpu
     put64(descriptor,w);memcpy(&w,descriptor+8,8);w=(w&~UINT64_C(0x7fff))|(stride-1);
     put64(descriptor+8,w);put32(descriptor+16,bytes);memcpy(out,descriptor,80);return 1;
 }
-int pvr_render_texture_programs_build(void *payload,size_t bytes,uint32_t width,uint32_t height,
-    struct pvr_render_program_image *image)
+int pvr_render_texture_programs_build_profile(void *payload,size_t bytes,uint32_t width,uint32_t height,
+    uint32_t profile,struct pvr_render_program_image *image)
 {
     uint32_t stride,output;
-    if(!payload || bytes!=PVR_RENDER_PROGRAM_BYTES || !image ||
+    if((profile!=2 && profile!=3) || !payload || bytes!=PVR_RENDER_PROGRAM_BYTES || !image ||
         !pvr_render_texture_geometry(width,height,&stride,&output) ||
         !pvr_render_programs_build(payload,bytes,image))return 0;
     unsigned char *p=payload;
     memcpy(p+1792,texture_pds,768);
     memcpy(p+6400,texture_vertex,104);
     memcpy(p+6656,texture_fragment,232);
+    if(profile==3){memcpy(p+4096+3072,texture_blend_fragment,sizeof(texture_blend_fragment));
+        memcpy(p+2560,texture_blend_pds,sizeof(texture_blend_pds));}
     memcpy(p+5888,texture_eot,72);
     memcpy(p+69632,texture_vdm,44);
     memcpy(p+69888,texture_ppp,104);
@@ -171,17 +210,17 @@ int pvr_render_texture_programs_build(void *payload,size_t bytes,uint32_t width,
     image->pbe[1]=(uint64_t)(width-1)<<32 | (height-1);
     return 1;
 }
-int pvr_render_texture_input_valid(const struct pvr_render_texture_input *input,const void *vertices,
+int pvr_render_texture_input_valid_profile(uint32_t profile,const struct pvr_render_texture_input *input,const void *vertices,
     const void *indices,size_t texture_bytes)
 {
     uint32_t stride,bytes;
-    if(!input || !vertices || !indices || !pvr_render_texture_geometry(input->width,input->height,&stride,&bytes) ||
+    if((profile!=2 && profile!=3) || !input || !vertices || !indices || !pvr_render_texture_geometry(input->width,input->height,&stride,&bytes) ||
         input->stride!=stride || texture_bytes!=bytes || !input->vertex_count || input->vertex_count>PVR_RENDER_TEXTURE_VERTICES ||
         input->index_count<3 || input->index_count>PVR_RENDER_TEXTURE_INDICES || input->index_count%3)return 0;
     for(uint32_t v=0;v<input->vertex_count;++v) {
         uint32_t w[6];memcpy(w,(const unsigned char *)vertices+v*24,24);
         if((w[0]&0x7fffffff)>0x3f800000 || (w[1]&0x7fffffff)>0x3f800000 ||
-            (w[2]&0x7fffffff) || w[3]!=0x3f800000)return 0;
+            (profile==2?(w[2]&0x7fffffff):((w[2]&0x7fffffff)>0x3f800000 || ((w[2]&0x80000000) && (w[2]&0x7fffffff)))) || w[3]!=0x3f800000)return 0;
         for(unsigned k=4;k<6;++k)if((w[k]&0x7fffffff)>0x3f800000 ||
             ((w[k]&0x80000000) && (w[k]&0x7fffffff)))return 0;
     }
@@ -189,4 +228,37 @@ int pvr_render_texture_input_valid(const struct pvr_render_texture_input *input,
         uint16_t index;memcpy(&index,(const unsigned char *)indices+i*2,2);if(index>=input->vertex_count)return 0;
     }
     return 1;
+}
+
+int pvr_render_texture_input_valid(const struct pvr_render_texture_input *input,const void *vertices,
+    const void *indices,size_t bytes)
+{ return pvr_render_texture_input_valid_profile(2,input,vertices,indices,bytes); }
+
+int pvr_render_texture_programs_build(void *payload,size_t bytes,uint32_t width,uint32_t height,
+    struct pvr_render_program_image *image)
+{ return pvr_render_texture_programs_build_profile(payload,bytes,width,height,2,image); }
+/* Both immutable USC programs and PDS kick programs are resident. Only PPP
+ * data selects a program, after prior acquired completion and before publish. */
+int pvr_render_texture_state_apply(void *payload,uint32_t state)
+{
+    if(!payload || !pvr_render_texture_state_valid(3,state))return 0;
+    uint32_t *ppp=(void *)((unsigned char *)payload+8192+0xf100);
+    static const uint32_t compare[]={7,1,3,7};
+    ppp[2]=(ppp[2]&~((7u<<17)|(1u<<21)|(7u<<24))) | compare[state&3]<<17 |
+        ((state&PVR_RENDER_DEPTH_WRITE)?0:1u<<21) | ((state&PVR_RENDER_SOURCE_OVER)?1u<<24:0);
+    ppp[5]=(state&PVR_RENDER_SOURCE_OVER)?2560:2304;
+    return 1;
+}
+int pvr_render_texture_depth_job(uint32_t width,uint32_t height,struct pvr_render_job_image *job)
+{
+    uint32_t stride,bytes;
+    if(!job || !pvr_render_texture_geometry(width,height,&stride,&bytes))return 0;
+    /* Pinned BXM ZLS minimum is a 2x2 block of 16-pixel ISP tiles. Power-of-two
+     * twiddled extents cover that minimum, avoiding small-surface transfers. */
+    uint32_t x=32,y=32;while(x<width)x*=2;while(y<height)y*=2;
+    uint64_t zls=(uint64_t)(y/16-1)<<27 | (uint64_t)(x/16-1)<<3 |
+        (1u<<19)|(1u<<17)|(1u<<13)|4u;
+    put64(job->fragment+136,zls);put64(job->fragment+144,PVR_RENDER_DEPTH_ADDRESS);
+    uint32_t flags;memcpy(&flags,job->fragment+464,4);put32(job->fragment+464,flags|(1u<<7));
+    put32(job->fragment+468,x*y*4);return 1;
 }

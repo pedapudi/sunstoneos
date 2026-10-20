@@ -7,6 +7,8 @@ static unsigned session_sealed;
 static struct gpu_texture_session texture_session __attribute__((section(".gpu_texture_session_retained")));
 #define sealed_session texture_session.base
 #define session_storage texture_session
+unsigned gpu_application_texture_profile(void)
+{ return session_sealed?(texture_session.version==2?3:2):0; }
 int gpu_application_texture_geometry(uint32_t *width,uint32_t *height)
 {
     if(!session_sealed || !width || !height)return 0;
@@ -35,7 +37,7 @@ int gpu_application_seal_session(const struct a733_smp_contract *c)
     if(!bound)return 0;
     for(unsigned i=0;i<32;++i)if(digest[i]!=bound[i])return 0;
 #ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
-    if(texture_session.magic!=UINT64_C(0x4153373347545831) || texture_session.version!=1 ||
+    if(texture_session.magic!=UINT64_C(0x4153373347545831) || (texture_session.version!=1 && texture_session.version!=2) ||
         texture_session.bytes!=sizeof(texture_session) || !texture_session.width || !texture_session.height ||
         texture_session.width>PVR_RENDER_TEXTURE_MAX_WIDTH || texture_session.height>PVR_RENDER_TEXTURE_MAX_HEIGHT)return 0;
 #endif

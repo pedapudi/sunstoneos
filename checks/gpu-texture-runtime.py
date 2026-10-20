@@ -18,8 +18,8 @@ layout=module('texture_layout',ROOT/'checks/storage-read-native.py')
 host=module('texture_host',ROOT/'apps/gpu-render/texture.py')
 
 class Machine(transport.Machine):
-    def __init__(self,image,speed):
-        super().__init__(image);self.speed=speed;self.contexts={};self.incoming=bytearray()
+    def __init__(self,image,speed,profile=2):
+        super().__init__(image);self.speed=speed;self.profile=profile;self.states=[];self.contexts={};self.incoming=bytearray()
         self.pending=None;self.claimed=False;self.closed=False;self.frame=0;self.ticket=0;self.generation=0
         self.draft=bytearray();self.shape=None;self.snapshot=b'';self.borrow=None;self.reply={}
         self.zlps=0;self.packets=0;self.inputs=[];self.operations=[];self.reads=0
@@ -37,7 +37,7 @@ class Machine(transport.Machine):
             'tud_speed_get','usbd_edpt_open','usbd_edpt_claim','usbd_edpt_release','usbd_edpt_xfer'):
             self.hooks[image.address(name)]=name
         sealed=image.address('texture_session');self.write(image.address('session_sealed'),1)
-        self.cpu.mem_write(sealed,bytes(632));self.write(sealed+616,1920,8);self.write(sealed+624,1080,8)
+        self.cpu.mem_write(sealed,bytes(632));self.write(sealed+600,profile-1,8);self.write(sealed+616,1920,8);self.write(sealed+624,1080,8)
         self.call('vendord_init')
         configuration=self.call('tud_descriptor_configuration_cb',0)
         assert self.call('vendord_open',0,configuration+9,23)==23
@@ -102,11 +102,12 @@ class Machine(transport.Machine):
             self.ticket+=1;self.write(args[3],self.ticket,8);self.reply={};self.ret(1);return
         if name=='pvr_gpu_service_texture':
             assert args[1]==123 and not self.closed
-            generation,op,previous,offset,n,*shape=struct.unpack('<Q4I5I',cpu.mem_read(args[2],44))
+            generation,op,previous,offset,n,*fields=struct.unpack('<Q4I6I',cpu.mem_read(args[2],48))
+            shape,state=fields[:5],fields[5]
             assert previous==self.frame;self.ticket+=1;self.write(args[6],self.ticket,8)
             self.reply={};self.operations.append(10)
             if op==0:
-                assert not self.borrow;self.shape=shape;self.draft=bytearray();self.generation+=1
+                assert not self.borrow;self.shape=shape;self.state=state;self.states.append(state);self.draft=bytearray();self.generation+=1
             elif op==1:
                 assert generation==self.generation and offset==len(self.draft) and n<=65536
                 self.draft.extend(cpu.mem_read(args[3],n))
@@ -151,24 +152,29 @@ class Machine(transport.Machine):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--image',type=Path,required=True)
+    ap.add_argument('--profile',type=int,choices=(2,3),default=2)
     ap.add_argument('--output',type=Path,required=True);ap.add_argument('--speed',choices=('high','full'),required=True)
     a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=False)
-    image=layout.Image(a.image);image.path=a.image;m=Machine(image,2 if a.speed=='high' else 1)
+    image=layout.Image(a.image);image.path=a.image;m=Machine(image,2 if a.speed=='high' else 1,a.profile)
     host.time=types.SimpleNamespace(monotonic=lambda:m.now/1000000)
     inputs=[]
     for scene in range(2):
         width,height=(16,8) if scene==0 else (32,16)
         vertices=[[-1,-1,0,1,scene,0],[1,-1,0,1,1-scene,0],[-1,1,0,1,scene,1],[1,1,0,1,1-scene,1]]
         pixels=bytes(c for y in range(height) for x in range(width) for c in ((x*17+scene*31)&255,y*13,scene*73,255))
-        inputs.append(host.input_bytes(vertices,[0,1,3,0,3,2],width,height,pixels))
-    outputs=host.frames(m.write_request,m.read,123,inputs,timeout=50)
+        if a.profile==3:
+            for vertex in vertices:vertex[2]=0.25+scene*0.25
+        inputs.append(host.input_bytes(vertices,[0,1,3,0,3,2],width,height,pixels,
+            profile=a.profile,state=(5 if scene==0 else 10) if a.profile==3 else 0))
+    outputs=host.frames(m.write_request,m.read,123,inputs,timeout=50,profile=a.profile)
     for _ in range(20):
         if not m.field('runtime_state'):break
         m.pump()
     assert len(outputs)==2 and outputs[0]['pixels']!=outputs[1]['pixels'] and m.closed and m.borrow is None
-    assert m.inputs==[data for shape,data in inputs] and not m.field('fatal') and m.field('runtime_closed')==1
+    assert m.states==([5,10] if a.profile==3 else [0,0])
+    assert m.inputs==[item[1] for item in inputs] and not m.field('fatal') and m.field('runtime_closed')==1
     assert m.zlps and m.pending is None
-    record=dict(passed=True,physical_access=False,speed=a.speed,frames=2,width=1920,height=1080,
+    record=dict(passed=True,physical_access=False,profile=a.profile,states=m.states,speed=a.speed,frames=2,width=1920,height=1080,
         image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),zlps=m.zlps,endpoint_completions=m.packets,
         input_sha256=[hashlib.sha256(x).hexdigest() for x in m.inputs],
         output_sha256=[hashlib.sha256(x['pixels']).hexdigest() for x in outputs],

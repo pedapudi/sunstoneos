@@ -47,3 +47,12 @@ int pvr_render_job_build_frame(const struct pvr_render_program_image *p,
 int pvr_render_job_build(const struct pvr_render_program_image *p,
     uint32_t hwrt,uint32_t gufo,uint32_t fufo,struct pvr_render_job_image *out)
 { return pvr_render_job_build_frame(p,hwrt,gufo,fufo,1,out); }
+
+int pvr_render_job_build_frame_pr(const struct pvr_render_program_image *p,
+    uint32_t hwrt,uint32_t gufo,uint32_t fufo,uint32_t sequence,struct pvr_render_job_image *out)
+{
+    if(!pvr_render_job_build_frame(p,hwrt,gufo,fufo,sequence,out))return 0;
+    put(out->fragment+464,(1u<<3)|(1u<<15)|(1u<<26),4);
+    put(out->fragment_pr_update,fufo,4);put(out->fragment_pr_update+4,sequence*2u-1,4);
+    put(out->fragment_update+4,sequence*2u,4);return 1;
+}

@@ -26,7 +26,7 @@ static void response(unsigned operation,unsigned result,uint32_t bytes)
     uint32_t width,height,stride,total;
     if(!gpu_application_texture_geometry(&width,&height) || !pvr_render_texture_geometry(width,height,&stride,&total))fault();
     uint8_t *p=app.texture_header;memset(p,0,64);
-    put32(p,0x4f585047);put32(p+4,4);put32(p+8,result);put32(p+12,operation);
+    put32(p,0x4f585047);put32(p+4,gpu_application_texture_profile()==3?5:4);put32(p+8,result);put32(p+12,operation);
     put32(p+16,atomic_load_explicit(&app.runtime_sequence,memory_order_acquire));
     put32(p+20,width);put32(p+24,height);put32(p+28,stride);put32(p+32,total);
     put32(p+40,bytes);put32(p+44,atomic_load_explicit(&app.runtime_closed,memory_order_acquire));
@@ -165,11 +165,12 @@ void gpu_application_texture_usb(void)
         unsigned n=tud_vendor_available();if(n>payload_bytes-payload_received)n=payload_bytes-payload_received;
         payload_received+=tud_vendor_read(app.runtime_input+payload_received,n);if(payload_received<payload_bytes)return;
     }
-    unsigned operation=get32(header+8),valid=get32(header)==0x49585047 && get32(header+4)==4 &&
-        get64(header+16)==app.session.epoch && !get32(header+60) && operation<=5;
+    unsigned operation=get32(header+8),valid=get32(header)==0x49585047 && get32(header+4)==(gpu_application_texture_profile()==3?5u:4u) &&
+        get64(header+16)==app.session.epoch && operation<=5;
     struct pvr_render_texture_request q={.previous=get32(header+12),.generation=get64(header+24),
         .offset=get32(header+32),.bytes=payload_bytes,
-        .input={get32(header+40),get32(header+44),get32(header+48),get32(header+52),get32(header+56)}};
+        .input={get32(header+40),get32(header+44),get32(header+48),get32(header+52),get32(header+56)},.state=get32(header+60)};
+    if((operation!=1 && q.state) || !pvr_render_texture_state_valid(gpu_application_texture_profile(),q.state))valid=0;
     if(operation!=2 && payload_bytes)valid=0;
     if(operation && atomic_load_explicit(&app.runtime_closed,memory_order_acquire))valid=0;
     if((operation==4 || operation==5) && (q.generation || q.offset || q.bytes ||

@@ -469,7 +469,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     if (s->phase != PVR_GPU_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
     if(r->operation==PVR_GPU_SERVICE_TEXTURE) {
         struct pvr_render_service *d=s->config.render;
-        if(!d || !d->owner || d->owner->draw!=2 || !s->config.compute ||
+        if(!d || !d->owner || d->owner->draw<2 || !s->config.compute ||
             atomic_load_explicit(&d->texture_state,memory_order_acquire)!=2 ||
             d->texture_ticket!=m->ticket || d->texture_client!=m->client || d->texture_epoch!=s->epoch)return PVR_GPU_SERVICE_INVALID;
         if((d->phase!=PVR_RENDER_SERVICE_READY && d->phase!=PVR_RENDER_SERVICE_COMPLETE) ||
@@ -483,7 +483,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     if(r->operation==PVR_GPU_SERVICE_CLOSE && s->config.render &&
         atomic_load_explicit(&s->config.render->texture_output_state,memory_order_acquire))return PVR_GPU_SERVICE_BUSY;
     if (r->operation == PVR_GPU_SERVICE_RENDER_OUTPUT) {
-        if (!s->config.render || (s->config.render->owner && s->config.render->owner->draw==2) || m->render_first_pixel >= 4096 || (m->render_first_pixel & 63))
+        if (!s->config.render || (s->config.render->owner && s->config.render->owner->draw>=2) || m->render_first_pixel >= 4096 || (m->render_first_pixel & 63))
             return PVR_GPU_SERVICE_INVALID;
         if(m->render_sequence && m->render_sequence!=s->config.render->sequence)return PVR_GPU_SERVICE_INVALID;
         return s->config.render->phase == PVR_RENDER_SERVICE_COMPLETE ? PVR_GPU_SERVICE_OK : PVR_GPU_SERVICE_BUSY;
@@ -799,9 +799,9 @@ int pvr_gpu_service_texture(struct pvr_gpu_service *s,uint64_t epoch,const struc
         (request->operation==PVR_TEXTURE_WRITE && !span(data,request->bytes)))return 0;
     unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
     if(!client || client->pending || client->next_ticket==UINT64_MAX || !s->config.render || !s->config.graphics ||
-        s->config.graphics->draw!=2 || s->config.graphics!=s->config.render->owner)return 0;
+        s->config.graphics->draw<2 || s->config.graphics!=s->config.render->owner)return 0;
     struct pvr_render_service *d=s->config.render;struct pvr_render_texture_layout l;
-    if(!pvr_render_texture_layout(d->owner->profile.render.width,d->owner->profile.render.height,&l) ||
+    if(!pvr_render_texture_layout_profile(d->owner->profile.render.width,d->owner->profile.render.height,d->owner->draw,&l) ||
         !separate(request,sizeof(*request),d,sizeof(*d)))return 0;
     uintptr_t base=d->owner->payload_extent.cpu+d->owner->render.payload_bytes;
     if(request->operation==PVR_TEXTURE_WRITE &&
@@ -828,7 +828,7 @@ int pvr_gpu_service_texture_output(struct pvr_gpu_service *s,uint64_t ticket,con
     if(atomic_load_explicit(&d->texture_output_state,memory_order_acquire)!=1 ||
         d->texture_output_ticket!=ticket || d->texture_output_client!=slot)return 0;
     struct pvr_render_texture_layout l;
-    if(!pvr_render_texture_layout(d->owner->profile.render.width,d->owner->profile.render.height,&l))return 0;
+    if(!pvr_render_texture_layout_profile(d->owner->profile.render.width,d->owner->profile.render.height,d->owner->draw,&l))return 0;
     *data=(const void *)(d->owner->payload_extent.cpu+d->owner->render.payload_bytes+l.download);
     *bytes=d->texture_output_bytes;return 1;
 }

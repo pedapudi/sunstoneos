@@ -89,13 +89,13 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
             {PVR_CCB_MAGIC|213,8,0,0,im->geometry_update}};
         struct pvr_cccb_command frag[]={
             {PVR_CCB_MAGIC|215,8,0,0,im->fragment_fence},
-            {PVR_CCB_MAGIC|PVR_CCCB_TASK|203,480,1,1,im->fragment},
-            {PVR_CCB_MAGIC|213,8,0,0,im->fragment_update}};
+            {PVR_CCB_MAGIC|PVR_CCCB_TASK|204,480,1,1,im->fragment},
+            {PVR_CCB_MAGIC|213,8,0,0,im->fragment_pr_update}};
         commands((void *)(shared+4096),geom,2);commands((void *)(shared+8192),frag,3);
         configASSERT(word(command+8,4)==A733_GPU_RENDER_FW && word(command+40,4)==A733_GPU_RENDER_FW+152);
         configASSERT(word(command+12,4)==200 && word(command+44,4)==616);
-        configASSERT(word(command+20,4)==1 && word(command+52,4)==1);
-        configASSERT(word(command+24,4)==graphics.target.data_firmware[0]+320 && word(command+56,4)==word(command+24,4));
+        configASSERT(word(command+20,4)==1 && !word(command+52,4));
+        configASSERT(word(command+24,4)==graphics.target.data_firmware[0]+320);
         configASSERT(!word((void *)(shared+1408),8));
         /* Model only firmware acknowledgement/timelines. The GPU output stays
          * poisoned in every case; no CPU implementation supplies clear pixels. */
@@ -105,6 +105,16 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
             __atomic_store_n((uint32_t *)(shared+1412),1,__ATOMIC_RELEASE);
         }
         if(gpu_render_case==3)offset_time=1000000;
+    } else if(type==(PVR_CCB_MAGIC|101)) {
+        uintptr_t shared=a733_gpu_graphics_memory_render_shared(&graphics);
+        const struct pvr_render_job_image *im=&graphics.submission.image;
+        struct pvr_cccb_command final[]={
+            {PVR_CCB_MAGIC|PVR_CCCB_TASK|203,480,1,1,im->fragment},
+            {PVR_CCB_MAGIC|213,8,0,0,im->fragment_update}};
+        commands((void *)(shared+8192+616),final,2);
+        configASSERT(word(command+8,4)==A733_GPU_RENDER_FW+152 && word(command+20,4)==1 &&
+            word(command+24,4)==graphics.target.data_firmware[0]+320);
+        if(gpu_render_case==0)__atomic_store_n((uint32_t *)(shared+1412),2,__ATOMIC_RELEASE);
     } else configASSERT(type==PVR_CCB_HEALTH);
     put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);return 1;
 }
