@@ -5,7 +5,9 @@ function(sunstone_gpu_display_application target)
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/main.c"
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/input.c"
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/render.c"
-    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/display.c")
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/display.c"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/usb.c"
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/observation.c")
   target_include_directories(${target} BEFORE PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
   target_compile_definitions(${target} PRIVATE SUNSTONE_GPU_DISPLAY=1 SUNSTONE_HDMI_FRAMEBUFFER=1)
 endfunction()
