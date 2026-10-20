@@ -36,13 +36,15 @@ def main():
         elf=ELFFile(stream);symbols={s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols()}
     assert symbols['a733_smp_launch']==0x52000 and 0<len(binary)<=0xc00
     cases=[]
-    def check(name,template,version,expected_reason,mutation=None,session_mutation=None,code=binary):
+    def check(name,template,version,expected_reason,mutation=None,session_mutation=None,replace_session=None,code=binary):
         session=bytearray(template);struct.pack_into('<3Q',session,48,31,37,41);session[72:104]=identity
         # Mutate the unsupported case after the actual producer accepts its template.
-        prepare.validate_inputs(session[704:])
+        prepare.validate_inputs(session[840:])
         request,contract=prepare.request_bytes(id_address,identity,session,31,37,41)
         struct.pack_into('<Q',session,8,version)
         if session_mutation is not None:session[session_mutation]^=1
+        if replace_session is not None:
+            at,value=replace_session;session[at:at+len(value)]=value
         if mutation:
             contract=bytearray(contract);contract[mutation]^=1;contract=bytes(contract)
         folder=a.output/name;folder.mkdir()
@@ -102,17 +104,18 @@ def main():
             for reg,value in saved.items():assert cpu.reg_read(reg)==value,(name,reg)
         cases.append({'case':name,'session_version':version,'reason':report[0],'stop':stop[0],
             'mmio_reads':[hex(x) for x in reads],'mmio_writes':writes,'counter_reads':ticks})
-    if not a.skip_positive:check('gpu-display-version1',template,1,12)
-    check('unsupported-version2',template,2,14)
-    check('bad-entry-digest',template,1,14,mutation=256)
-    check('bad-layout',template,1,3,mutation=192)
-    check('different-memory-authority',template,1,14,mutation=184)
-    check('bad-input-extent',template,1,14,session_mutation=716)
+    if not a.skip_positive:check('gpu-display-version2',template,2,12)
+    check('legacy-version1',template,1,14)
+    check('USB-owner-conflict',template,2,14,replace_session=(704,template[240:248]))
+    check('USB-takeover-mode',template,2,14,replace_session=(816,struct.pack('<I',1)))
+    check('USB-reserved',template,2,14,session_mutation=820)
+    check('USB-supply',template,2,14,session_mutation=824)
+    check('bad-input-extent',template,2,14,session_mutation=852)
     assert image.read_bytes()==native
     report={'passed':True,'physical_access':False,'native_image_sha256':digest(native),'native_image_rebuilt':False,
         'launcher_sha256':digest(binary),'session_sha256':digest(template),
         'producer_source_sha256':digest((ROOT/'apps/gpu-display/prepare.py').read_bytes()),'cases':cases,
-        'coverage':'GPU display version1 handoff and malformed session/entry/layout refusal use the actual generated launcher and host request producer.',
+        'coverage':'GPU display version2 handoff, legacy-version refusal and new USB authority/input-offset predicates use the actual generated launcher and producer. Earlier unchanged contract/layout cases are not replayed.',
         'scope':'Actual generated AArch32 launcher entry/admission/publication/refusal/restoration instructions. CPU system-register/counter values and MMIO are modeled. Stops before reset/hardware handoff; no AArch64 startup, USB or physical qualification.'}
     (a.output/'result.json').write_text(json.dumps(report,indent=2)+'\n');print('PASS GPU display actual AArch32 admission and refusal')
 if __name__=='__main__':main()
