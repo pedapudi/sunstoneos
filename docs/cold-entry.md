@@ -80,3 +80,35 @@ publication before constructing application authority. Existing USB-loader
 admission records cannot supply those facts for a cold boot. Media loading,
 package authentication, DDR training, full boot0 initialization, sustained
 FreeRTOS operation and recovery remain outside this evidence.
+
+## Remote-processor exclusion needs the effective A733 register map
+
+The A733 manual identifies an E902 configuration block at `0x07032000`
+(sections 5.2.3 and 5.2.4.8). The shipped monitor agrees with that address.
+Its instructions at `0x4800af54..0x4800af9c` perform these writes:
+
+| Address | Operation in the shipped monitor |
+| --- | --- |
+| `0x0701021c` | Write `0x10003` to the RISC-V configuration reset and bus gates |
+| `0x07032204` | Write the E902 entry address `0x40004000` |
+| `0x07050008` | Preserve other fields and set bit 0 |
+| `0x07010210` | Preserve other fields and enable clock bit 31 |
+
+The manual documents the first, second and fourth registers. The role of
+`0x07050008` bit 0 in starting the core is inferred from the instruction sequence;
+its reset and outstanding-transaction semantics remain unresolved.
+Reversing these writes would not establish a safe shutdown or memory drain.
+
+The published U-Boot directory `drivers/riscv/sun60iw2` supplies a different
+configuration base, `0x07130000`, and different clock/reset offsets. Its directory
+name does not make those definitions valid for this board. Use the manual and
+effective monitor evidence when resolving cold-start ownership.
+
+The [source pins](../sources.lock.json) identify manual revision
+`d0dc4d615be00b76e3a0818d0818eff8f69ffa15`, U-Boot revision
+`b791be842935b27268ae3d00e943a9075495f30a` and the shipped monitor.
+The monitor hash and execution location are documented in
+[CPU startup](cpu-start.md#published-firmware-corroborates-the-register-sequence).
+The local `remote-source-assessment.json` and `monitor-e902-start.txt` preserve
+the compared file hashes, exact instructions and unresolved requirement.
+This assessment adds no MMIO operation to the cold-entry recorder.
