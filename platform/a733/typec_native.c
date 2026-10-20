@@ -84,17 +84,17 @@ static int bus_enter(void *p,uint64_t d)
     enum a733_pins_result pins=a733_pins_held_banked(n->config.pins,&n->pin,&held,d);
     if(pins==A733_PINS_BUSY)return 0;
     if(pins!=A733_PINS_OK||!held)return -1;
-    if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C_LOCK,d))return 0;
-    n->held=2;return 1;
+    if(!a733_platform_lock_enter(n->config.locks,A733_PLATFORM_I2C1_LOCK,d))return 0;
+    n->held=(unsigned)A733_PLATFORM_I2C1_LOCK+1;return 1;
 }
 static int bus_owned(struct a733_typec_native *n)
-{return current(n)&&n->held==2&&!n->bus_fault&&live(n)==1&&
+{return current(n)&&n->held==(unsigned)A733_PLATFORM_I2C1_LOCK+1&&!n->bus_fault&&live(n)==1&&
     !atomic_load_explicit(&n->config.clocks->failed,memory_order_acquire)&&
-    !(atomic_load_explicit(&n->config.locks->retained,memory_order_acquire)&2)&&
-    xSemaphoreGetMutexHolder(n->config.locks->mutex[A733_PLATFORM_I2C_LOCK])==(TaskHandle_t)n->config.provider_task;}
+    !(atomic_load_explicit(&n->config.locks->retained,memory_order_acquire)&(1u<<A733_PLATFORM_I2C1_LOCK))&&
+    xSemaphoreGetMutexHolder(n->config.locks->mutex[A733_PLATFORM_I2C1_LOCK])==(TaskHandle_t)n->config.provider_task;}
 static void bus_leave(void *p)
 {struct a733_typec_native *n=p;if(!bus_owned(n)){n->bus_fault=1;return;}
- a733_platform_lock_leave(n->config.locks,A733_PLATFORM_I2C_LOCK);n->held=0;}
+ a733_platform_lock_leave(n->config.locks,A733_PLATFORM_I2C1_LOCK);n->held=0;}
 static void bus_retain(void *p)
 {struct a733_typec_native *n=p;if(!current(n))return;
  if(n->held)configASSERT(a733_platform_lock_retain(n->config.locks,(enum a733_platform_lock)(n->held-1))==1);

@@ -21,7 +21,7 @@ static struct a733_typec_native port,copied;
 static struct a733_typec_native_config config;
 static struct a733_typec_token token;
 static unsigned scheduler,current_task=1;
-static TaskHandle_t queue_owner[2];
+static TaskHandle_t queue_owner[A733_PLATFORM_LOCK_COUNT];
 uint64_t ullPortInterruptNesting;
 volatile uint64_t ullCriticalNesting;
 uint64_t typec_test_time=100;
@@ -35,7 +35,7 @@ TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)(uintptr_t)cur
 QueueHandle_t xQueueCreateMutexStatic(const uint8_t type,StaticQueue_t *buffer)
 {(void)type;return (QueueHandle_t)buffer;}
 static unsigned queue_index(QueueHandle_t q)
-{if(q==locks.mutex[0])return 0;assert(q==locks.mutex[1]);return 1;}
+{for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;i++)if(q==locks.mutex[i])return i;assert(0);return 0;}
 TaskHandle_t xQueueGetMutexHolder(QueueHandle_t q){return queue_owner[queue_index(q)];}
 BaseType_t xQueueSemaphoreTake(QueueHandle_t q,TickType_t wait)
 {
@@ -155,13 +155,13 @@ unsigned typec_native_check(void)
         }
         assert(result==1&&a733_twi_take_block(&port.bus,bytes,3)==1);
         assert(bytes[0]==0x80&&bytes[1]==0x80&&bytes[2]==0x80);
-        assert(!port.bus.held&&!queue_owner[1]&&!port.bus_fault);
+        assert(!port.bus.held&&!queue_owner[A733_PLATFORM_I2C1_LOCK]&&!port.bus_fault);
         return 0;
     }
     if(typec_fault_case==3){
         typec_wire_fault=1;
         for(unsigned k=0;k<1000&&!port.bus_fault;k++)service(1);
-        assert(port.bus_fault&&atomic_load(&locks.retained)==2&&queue_owner[1]==(void *)1);
+        assert(port.bus_fault&&atomic_load(&locks.retained)==(1u<<A733_PLATFORM_I2C1_LOCK)&&queue_owner[A733_PLATFORM_I2C1_LOCK]==(void *)1);
         for(unsigned k=0;k<10&&atomic_load(&port.output_state)!=1;k++)service(1);
         retained();return 0;
     }
@@ -187,6 +187,6 @@ unsigned typec_native_check(void)
     assert(atomic_load(&port.output_state)==1&&atomic_load(&port.provider.revoked));
     current_task=1;
     for(unsigned k=0;k<2000&&port.provider.state!=A733_TYPEC_OFF_RETAINED;k++)service(1);
-    assert(port.provider.state==A733_TYPEC_OFF_RETAINED&&!queue_owner[0]&&!queue_owner[1]);
+    assert(port.provider.state==A733_TYPEC_OFF_RETAINED&&!queue_owner[0]&&!queue_owner[1]&&!queue_owner[2]);
     retained();return 0;
 }

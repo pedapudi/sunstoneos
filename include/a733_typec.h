@@ -77,7 +77,7 @@ int a733_typec_begin(struct a733_typec *,uint64_t deadline);
 /* Independent provider task continues this call after host failure. 0 pending,
  * 1 active observation, -1 permanently revoked (shutdown may still be pending).
  * Keep polling until OFF_RETAINED or UNCERTAIN; neither permits resource reuse.
- * If I2C faults, GPIO shutdown remains independent of the retained I2C mutex;
+ * If I2C faults, GPIO shutdown remains independent of the retained controller I2C mutex;
  * discharge cannot then be observed and remains uncertain.
  */
 int a733_typec_poll(struct a733_typec *);

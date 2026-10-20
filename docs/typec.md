@@ -66,7 +66,9 @@ must be distinct: one runs `a733_typec_poll`, and the other runs
 `a733_typec_native_power_poll`. The PMIC provider uses its own existing task.
 All three use the same monotonic counter and shared lock services.
 
-The native path acquires exclusive S_TWI1 ownership, stable APBS1/REF/OSC,
+The native path acquires exclusive S_TWI1 ownership and its dedicated controller
+mutex, separately from the PMIC's S_TWI0 mutex. Both controllers use the common
+register mutex for shared clock/reset words. It holds stable APBS1/REF/OSC,
 DCDC1/DC1SW2 rail leases, and PL8/9/12/13 pin leases. The rail ledger also reserves
 the aliases of DCDC1's voltage word. Actual PMIC reads must report both supplies
 enabled at 3.3 V. Their requests and rail borrows stay held. Pin acquisition
@@ -105,7 +107,7 @@ transactions. Physical scheduler latency remains unqualified. The GPIO task obse
 PL9 and checks deadlines renewed only by real provider progress and attachment
 observations. Host activity never extends them. Detach, expiry or failure closes
 host admission permanently. The GPIO task lowers PL8 independently of the I2C
-task and continues even when that task retains the common I2C mutex.
+task and continues even when that task retains the S_TWI1 mutex.
 
 Ordinary metadata or pin-lock contention before effects leaves shutdown pending
 for at most 5 ms. A return of `-1` revokes host admission but does not terminate
