@@ -828,6 +828,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Wider dispatch geometry, shape/program replacement, graphics, concurrency,
   physical computation and mimus acceleration remain required. The accepted
   fixed-workload returning profile is preserved separately.
+  The [combined GPU/NPU application](accelerator-composition.md) retains the
+  trusted GPU compute service and complete ShuffleNetV2 NPU graph in one image.
+  Both reuse one counter, clock registry, locks, PMIC owner and global resource
+  manager; NPU reservations precede GPU reservations. One USB owner interleaves
+  copied GPU results/input replacement and two NPU tensor/result exchanges, then
+  closes each engine independently within the original absolute session deadline.
+  Shared-provider failure revokes both engines; local faults retain that engine's
+  resources. Actual constructors, clients and response ownership checks pass with
+  admission, CPU/RTOS, device results and USB effects modeled. Saved NPU SDK outputs
+  are saturated and do not establish input-sensitive accuracy. The native image
+  is linked; combined host launch preparation remains pending. Physical execution,
+  graphics composition and broader concurrent workloads remain unqualified or
+  required. Evidence is under `gpu-npu-composition-20261020/handoff.json` and its
+  provider/runtime/ownership results; component firmware/compiler dependencies
+  remain unchanged. Root verifies all 270 compiled inputs and 114 objects at
+  `214f3fe` under `gpu-npu-composition-20261020/root/integration.json`.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The
@@ -1234,6 +1250,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   software coverage, not input-sensitive classification, accuracy, physical
   inference or unchanged mimus acceleration. Broader operators, models,
   concurrency, physical confinement and numerical qualification remain required.
+  The complete graph also shares providers and copied USB ownership with the
+  GPU in the [combined application](accelerator-composition.md); its host launch
+  preparation and physical execution remain separate outstanding steps.
   The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
   through one shader (SH) operation and three neural-transpose (NT) operations, with an
   external intermediate pool. Four heads and 128 steps use 522,240 input bytes
@@ -1581,8 +1600,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   changes. Admission requires an authenticated source of at least 900 mA and
   image-bound physical COMB0 route, rail, clock and source-switch evidence. No such
   physical admission record exists. Physical link operation, source capacity,
-  DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs/HID,
-  Gen2, streams, wider classes, power budgets and safe detach/drain remain required.
+  DMA, interrupt delivery and recovery remain unqualified. SuperSpeed hubs, wider
+  HID profiles, Gen2, streams, wider classes, power budgets and safe detach/drain
+  remain required.
+  [Direct Gen1 keyboard reports](usb2-host.md#direct-gen1-keyboard-reports-use-an-explicit-workload)
+  are implemented under explicit supervised workload 8. One boot keyboard with
+  a zero-burst companion and 1–64-byte packets supplies four copied raw reports;
+  fresh ownership precedes publication. High-speed fallback, malformed companions
+  and uncertain completions refuse success. Nine actual TinyUSB/xHCI/provider
+  cases, linked native client/serializer/host checks and workload/route admission
+  checks pass with device, RTOS and interrupt effects modeled. The native image
+  is linked, not executed. Preparation requires an immutable ELF capability plus
+  image-bound keyboard/cable and ≥900 mA source admission; no physical record
+  exists. Mimus keyboard profiles remain USB2. Evidence and exact scope are in
+  `usb-ss-hid-20261020/handoff.md`, `root/identity.json` and
+  `root-route/route-ss-hid.json`. Root verifies 436 compiled inputs and 163
+  objects at `214f3fe` under `usb-ss-hid-20261020/root/integration.json`.
   GET_MAX_LUN protocol-stall recovery now resets endpoint zero and sets its
   dequeue pointer before notifying TinyUSB, which falls back to LUN 0 and
   completes the copied READ10 path. Eleven affected high-speed TinyUSB/provider
