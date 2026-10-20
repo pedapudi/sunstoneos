@@ -93,7 +93,7 @@ functions and modes beyond these bounded applications.
 | [Bluetooth caller PCM](bluetooth-native.md#caller-pcm-playback-and-duplex) | mSBC playback-only and recognition duplex; two immutable 2,400-byte periods, full USB delivery and ticket ACK before reuse. END seals admission; CANCEL can truncate audio. Credits/disconnect account for buffers, not rendering or wire drain. Image-specific case boundary is below. | `bluetooth-pcm-duplex-20261019/root-integration.json`, `profile-gate-delta.json` |
 | [Read-only SD](storage-read-application.md) | Legacy one-bit 400 kHz, four-bit default up to CSD/25 MHz, or required high speed at 50 MHz. USB-layout reconciliation was accepted at `894051d`; later headers do not invalidate that frozen image. No writes or physical mode qualification. | `sd-bus-modes-20261019/`; `sd-shared-usb-20261019/root-integration.json` |
 | [Optional eMMC reads](emmc-read-application.md) | SDC2/SDC3 identification, EXT_CSD and copied reads pass instruction/host checks. Neither current board has a qualification target. The single-core image retains resources and has no qualified ROM return. | `emmc-native-20261018/` |
-| [Full-HD H.264](h264-native.md#full-hd-streaming-and-extended-memory) | Baseline IDR/P, one reference/POC2; coded 1920×1088 retains references, copied 1920×1080 removes eight bottom rows. At most 256 AUs, 4 MiB each. Six-picture allocator/table/controller/crop/copy composition is modeled; normal mode checks one picture. Private entry checks exclude shared startup. | `h264-fullhd-20261019/root-integration.json`, `root-startup-layout-review.json` |
+| [High/Baseline H.264](h264-native.md#high-profile-runtime-clips-and-presentation-ordering) | High profile 100, progressive 8-bit 4:2:0: CABAC/scaling/weights, I/P/B/reference-B; two full-HD or four HD short-term references, four active list entries, five reordered copied-output slots. Twelve full-HD + twelve refB-HD + twelve four-ref-HD pictures complete in models; normal mode decodes three/copies two. Physical decode/cache/confinement/drain remain unqualified; POC wrap/MMCO5 are unexecuted; long-term refs, unrestricted streaming and encoding remain required. Separate Baseline scopes retained. | `h264-high-20261019/root-integration.json`, `closure.json`, `root/layout-review.json`; Baseline: `h264-fullhd-20261019/` |
 | [VGA/legacy H.264](h264-native.md) | VGA admits 256 prepared 640×480 pictures, 512 KiB/AU; legacy 48×32 IDR/P remains separate. Input refill, reference retirement and copied-output ACK are distinct. Corrected launcher and supervisor-policy evidence are bounded as below. Physical pixels, reference visibility, confinement and drain remain unqualified; no reclamation. | `h264-vga-20261019/root-integration.json`; `h264-launcher-20261019/root-integration.json`; `h264-supervisor-entry-20261019/result.json` |
 | [JPEG](jpeg-application.md) | Authenticated supplied baseline YCbCr420 image and copied pixels with dimensions; independent oracle optional. Pixel correctness and confinement remain physically unqualified. | `jpeg-runtime-input-20261018/` |
 | [Crypto](crypto-application.md) | Bounded caller SHA-256/AES-128 ECB, private input and request-bound output; key-cleanup and fragment-handling review resolved. Physical engine operation, secure access and drain remain unqualified. | `crypto-runtime-input-20261018/` |
@@ -167,11 +167,8 @@ functions and modes beyond these bounded applications.
 
 Current implementation owners are finishing these offline changes:
 
-- H.264: `h264-high-assess` implements High-profile decoding with bounded
-  references and reordered output. Root static session/layout review passes for
-  unchanged candidate `ecd05003…` under
-  `h264-high-20261019/root/layout-review.json`; decoding checks and final
-  integration remain pending. Static review establishes no device execution.
+- Video encoding: research-only proposal for a native path, preferably caller
+  YUV420→JPEG, using cached A733 authority.
 - GPU: depth/blend implementation is active; physical graphics remains
   unqualified.
 

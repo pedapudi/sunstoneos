@@ -1302,6 +1302,33 @@ implementation is **planned**. Partial results apply only to the stated scope:
   digest before provider startup. USB failure revokes board liveness before
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
+  The [High-profile H.264 build](h264-native.md#high-profile-runtime-clips-and-presentation-ordering)
+  is implemented for progressive profile 100, 8-bit 4:2:0, with CABAC, scaling
+  matrices, weighted prediction and I/P/B pictures including reference B pictures.
+  Fixed storage admits two short-term references at full HD or four at HD, with
+  at most four active entries per list. Authenticated 128-byte picture descriptors
+  bind decode/presentation order; five copied-output slots support reorder and
+  ACK backpressure. Copy acknowledgment, reference retirement and healthy input
+  refill remain separate. Uncertain completion retains all allocations.
+  Native compositions complete twelve full-HD, twelve reference-B HD and twelve
+  four-reference HD pictures; normal mode decodes three and copies two.
+  FFmpeg-derived register oracles and host capture pass. Device pixels, MMIO,
+  readiness, translation/fault scans and USB are modeled; shared startup is not
+  executed. Root verifies 462 inputs and 175 objects at revision `32826e2`, with
+  no compiled-source divergence, under `h264-high-20261019/root-integration.json`.
+  Its unchanged ELF is `ecd05003…`; `closure.json` and `root/layout-review.json`
+  preserve the accepted case and static layout boundaries.
+  Selected GStreamer 1.26.0 parser/DPB routines, pinned at
+  `d31ce8e5e1aacf8f5e5beabb5c81ce2e4da5c202`, execute as adapted FreeRTOS CPU code;
+  no GStreamer/GLib/V4L2/Linux runtime is linked. `apps/h264/sources.json` and
+  `apps/h264/LICENSE.gstreamer` preserve upstream LGPL and Chromium BSD notices.
+  The original build-identity manifest remains in
+  `h264-high-20261019/compiled/build-identity-sources.json`; final provenance-only
+  edits require no rebuild and extend no execution claim. Physical decoding,
+  cache/reference visibility, confinement, timing and drain remain unqualified.
+  POC wrap and MMCO5 are source-reviewed but unexecuted. Long-term references,
+  unrestricted streaming, broader formats and encoding remain required. Baseline
+  builds retain their separate scopes.
   The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
   is implemented for progressive Baseline IDR/P clips with one short-term reference
   and picture-order count type 2. Its coded 1920-by-1088 references retain all rows;
