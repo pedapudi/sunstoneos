@@ -1,4 +1,7 @@
 #include "a733_npu_application.h"
+#ifdef SUNSTONE_ACCELERATORS
+#include "../accelerators/application.h"
+#endif
 #ifdef SUNSTONE_NPU_INTERRUPT
 #include "../npu-interrupt/irq.h"
 #endif
@@ -91,6 +94,9 @@ static _Noreturn void fatal(void *unused)
 unsigned a733_npu_application_health(void)
 {
     if(!app.used)return 0;
+#ifdef SUNSTONE_ACCELERATORS
+    if(!accelerator_shared_live())return 0;
+#endif
     if(atomic_load_explicit(&app.reserved.convolution.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
        atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
@@ -154,15 +160,55 @@ static int finish(void *p,const struct a733_npu_command *c,int canceled)
 {return worker(p) && a733_npu_native_operations.finish(p,c,canceled);}
 const struct a733_npu_ops a733_npu_application_operations={read_reg,write_reg,ticks,delay,barrier,publish,finish};
 
+#ifdef SUNSTONE_ACCELERATORS
+static atomic_uint shared_failed;
+void accelerator_shared_fail(unsigned reason)
+{
+    atomic_store_explicit(&shared_failed,1,memory_order_release);
+    a733_npu_application_fail(reason);
+    accelerator_gpu_fail();
+}
+int accelerator_shared_live(void)
+{
+    uint64_t now=a733_smp_counter();
+    if(!app.used || !app.registry.initialized || !app.locks.initialized)return 0;
+    /* The manager's failed flag is protected by its existing nonblocking
+     * busy lock. BUSY leaves this observation pending; it never authorizes a
+     * concurrent metadata read or clears the permanent shared fault latch. */
+    unsigned expected=0,manager_failed=0;
+    if(app.resources.initialized && atomic_compare_exchange_strong_explicit(
+       &app.resources.manager.busy,&expected,1,memory_order_acquire,memory_order_relaxed)){
+        manager_failed=app.resources.manager.failed;
+        atomic_store_explicit(&app.resources.manager.busy,0,memory_order_release);
+    }
+    if(manager_failed || atomic_load_explicit(&app.clock.failed,memory_order_acquire) ||
+       atomic_load_explicit(&app.registry.failed,memory_order_acquire) ||
+       atomic_load_explicit(&app.locks.retained,memory_order_acquire) ||
+       now<a733_observe_identity.armed_at || now>=a733_observe_identity.deadline)
+        accelerator_shared_fail(21);
+    return !atomic_load_explicit(&shared_failed,memory_order_acquire);
+}
+int accelerator_providers_get(struct accelerator_providers *out)
+{
+    if(!out || !app.used || !app.resources.initialized || !app.pmic_task ||
+       !accelerator_shared_live())return 0;
+    *out=(struct accelerator_providers){&app.clock,&app.registry,&app.locks,
+        &app.resources.manager,&app.resources.native,&app.pmic};
+    return 1;
+}
+#define provider_live accelerator_shared_live
+#else
+#define provider_live live
+#endif
 static int pin_enter(void *cookie,uint64_t deadline)
 {
-    return cookie==&app && live() && xTaskGetCurrentTaskHandle()==app.pmic_task &&
+    return cookie==&app && provider_live() && xTaskGetCurrentTaskHandle()==app.pmic_task &&
         a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline);
 }
 static void pin_leave(void *cookie)
 {if(cookie!=&app)fatal(NULL);a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);}
 static int pin_now(void *cookie,uint64_t *out)
-{return cookie==&app && live() && a733_counter_clock_now(&app.clock,out);}
+{return cookie==&app && provider_live() && a733_counter_clock_now(&app.clock,out);}
 
 BaseType_t a733_npu_application_task_privileged(TaskFunction_t entry,void *argument)
 {
@@ -186,12 +232,18 @@ static void pmic_task(void *argument)
             }
         }
 #endif
-        if(!live())break;
+        /* Shared owner outlives either engine's local failure or CLOSE. */
+        if(!provider_live())break;
         enum a733_pmic_status r=a733_pmic_poll(&app.pmic);
         if(r!=A733_PMIC_READY && r!=A733_PMIC_PENDING && r!=A733_PMIC_BUSY)break;
         vTaskDelay(1);
     }
-    a733_npu_application_fail(3);vTaskSuspend(NULL);fatal(NULL);
+#ifdef SUNSTONE_ACCELERATORS
+    accelerator_shared_fail(3);
+#else
+    a733_npu_application_fail(3);
+#endif
+    vTaskSuspend(NULL);fatal(NULL);
 }
 static void bootstrap(void *argument)
 {
@@ -412,7 +464,11 @@ static int usb_transport_live(void)
     /* A failed convolution still needs its terminal diagnostic frame. Keep
      * USB conditional on its own authenticated lifetime and shared resources;
      * a retained clock, register or I2C lock still forbids further USB work. */
-    return app.used && app.registry.initialized && app.locks.initialized &&
+    return
+#ifdef SUNSTONE_ACCELERATORS
+        accelerator_shared_live() &&
+#endif
+        app.used && app.registry.initialized && app.locks.initialized &&
         !atomic_load_explicit(&app.clock.failed,memory_order_acquire) &&
         !atomic_load_explicit(&app.registry.failed,memory_order_acquire) &&
         !atomic_load_explicit(&app.locks.retained,memory_order_acquire) &&

@@ -75,6 +75,10 @@ static void client(void *unused)
 failed:
  npu_runtime_fail(40);vTaskSuspend(NULL);platform_panic("NPU runtime retained",40);
 }
+#ifdef SUNSTONE_ACCELERATORS
+TaskHandle_t accelerator_npu_client_create(void)
+{return xTaskCreateStaticAffinitySet(client,"npu-runtime",4096,NULL,2,client_stack,&client_state,1);}
+#else
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)
 {(void)task;platform_panic(name,0);}
 void a733_smp_diagnostic_start(void)
@@ -84,3 +88,5 @@ void a733_smp_diagnostic_start(void)
  configASSERT(task&&a733_npu_application_init(task));a733_observe_service_start();
  vTaskStartScheduler();platform_panic("scheduler returned",0);
 }
+
+#endif
