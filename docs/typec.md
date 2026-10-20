@@ -96,7 +96,12 @@ request, before any receive or STOP delay. Tokens expire after 10 ms. A short
 atomic publication lock and permanent revocation flag protect concurrent host
 snapshot/validation calls; the host never reads mutable service fields.
 
-Both Type-C tasks must run at least once per millisecond. The GPIO task observes
+Both Type-C tasks target one service interval per millisecond. The provider
+revokes admission when entry gaps exceed 2 ms, allowing headroom around a 1 ms
+RTOS tick. This scheduling guard does not extend the 5 ms I2C deadline or 10 ms
+attachment and power-health bounds. An active CC or PD transaction requires
+continued polling with task yields; a one-tick sleep is permitted only between
+transactions. Physical scheduler latency remains unqualified. The GPIO task observes
 PL9 and checks deadlines renewed only by real provider progress and attachment
 observations. Host activity never extends them. Detach, expiry or failure closes
 host admission permanently. The GPIO task lowers PL8 independently of the I2C

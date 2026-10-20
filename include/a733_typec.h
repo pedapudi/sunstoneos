@@ -7,7 +7,7 @@
 #include "a733_typec_pd.h"
 
 #define A733_TYPEC_FRESH_US UINT64_C(10000)
-#define A733_TYPEC_SERVICE_GAP_US UINT64_C(1000)
+#define A733_TYPEC_SERVICE_GAP_US UINT64_C(2000)
 struct a733_typec;
 /* Copied observation, valid only for this permanent provider and attachment.
  * No USB operation may advance from an expired or revoked observation. */
