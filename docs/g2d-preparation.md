@@ -161,3 +161,13 @@ allocation/table refusals and the actual supervisor entry readiness boundary.
 Production refused modeled authority. The single preserved SRAM launcher has
 SHA-256 `1f0fa59aacced824403a7d0b380b59e47629ce3c19c805bfc7a43c28dd184f84`.
 These results establish software behavior only; physical admission remains absent.
+
+The DE_SYS-capable image is separately bound in
+`g2d-power-20261020/host-authority/`. Seven focused checks cover the accepted
+power profile, missing or differing profiles, absent whole-domain exclusion or
+prior-drain facts, and missing or differing immutable image markers. The actual
+producer reseals each altered record before validation. The check substitutes
+unchanged board authority and stops before DDR/allocation validation; it claims
+no complete physical admission or capture. Launcher generation, request format
+and every launcher source/header match the preserved launcher above. Its binary
+and object artifacts are reused without recompilation or instruction-case replay.

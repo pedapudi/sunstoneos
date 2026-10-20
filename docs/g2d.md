@@ -115,8 +115,24 @@ identified by the pinned device tree; this first path polls its enabled RCQ
 status while retaining interrupt routing exclusion. Interrupt delivery remains
 unqualified.
 
-Software evidence is preserved under `g2d-native-20261020/`. The final native
-image has SHA256 `4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`.
+The image with DE_SYS initialization has SHA256
+`819165376f652c8353dc53aebee9d9c842d44957ea806c2e9bb0cbaac428e0c5`.
+Evidence under `g2d-power-20261020/` records five focused cases on that image.
+The linked task passes coherent OFF-to-ON initialization followed by RCQ source
+copy, and adopts coherent ON without domain writes. Initial incoherence, status
+timeout and uncertainty after the first delay write produce retained terminal
+failures without submitting G2D work. The timeout keeps its original request
+bound, and clean pending polls release the shared register mutex.
+
+These cases use fresh function-call boundaries at EL1t. PMIC read-service
+results, task identity, counter, Device translations, mutexes and peripheral
+effects are modeled. They establish neither actual scheduling nor SMP behavior.
+Every stopped case preserves CPU context, RAM, MMIO and model state. Root's
+static comparison confirms unchanged boot object sections and symbolic
+relocations; accepted startup checks retain their original scope.
+
+Broader unchanged evidence is preserved under `g2d-native-20261020/` for image
+SHA256 `4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328`.
 Its frozen closure contains 169 linked objects and 448 compiled dependencies.
 Focused source review covers RCQ layout, DMA ownership, clock fields, retained
 IOMMU admission and TinyUSB packet completion.
@@ -131,7 +147,7 @@ RCQ fields, fragmented upload authentication and master10-only IOMMU programming
 and fault scans. These checks establish software behavior under their stated
 models. Physical G2D, USB and interrupt operation remain unqualified.
 
-Twelve saved task cases execute the final linked AArch64 task, clock and rail
+Twelve saved task cases execute that image's linked AArch64 task, clock and rail
 registries, GPU resource manager, native clock accesses, IOMMU and copied-output
 logic. They cover fresh completion, stale status refusal, global and master10
 faults, configuration-only timeout, failure after copying, unchanged terminal
