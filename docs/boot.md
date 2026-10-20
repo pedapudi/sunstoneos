@@ -64,9 +64,11 @@ on the development host; its source equivalence and individual redistribution
 terms remain unresolved. Evidence is in
 `microsd-boot-package-20261020/actual-packer/`.
 
-A cold-entry implementation must still establish EL3 state, remote-processor
-exclusion, resource ownership, application admission and recovery. No standalone
-SunstoneOS payload, storage write or physical boot qualification has occurred.
+The [cold-entry recorder](cold-entry.md) now supplies a SunstoneOS monitor payload.
+It checks primary CPU privilege and cache state, captures inherited metadata and
+parks. The actual boot0 parser, cleanup and recorder instructions pass bounded
+software checks. Remote-processor exclusion, resource ownership, FreeRTOS entry
+and recovery remain required. No storage write or physical cold boot has occurred.
 
 ## SRAM probe result
 
