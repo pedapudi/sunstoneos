@@ -1,8 +1,8 @@
 # Prepare and capture one recorded Bayer frame with ISP0
 
 The ISP0 application processes one recorded 640×480 BGGR12 frame and retains a
-CPU-owned copy of its NV16 output. Preparation and capture are implemented drafts
-pending checks against the native ELF and allocator artifacts. Physical operation
+CPU-owned copy of its NV16 output. Preparation validates the actual linked ELF, allocator extents and complete IOMMU
+page table. The retained SRAM launcher is built from those prepared inputs. Physical operation
 and numerical pixel correctness remain unqualified. No camera is required for
 this recorded-input path.
 
@@ -56,8 +56,11 @@ pixel upload.
 Physical preparation requires typed, reviewed target and image evidence with
 `physical_authority: true` and `modeled: false`. It also requires the actual native
 allocator rows and page-table artifact, including permissions, guards and the
-prefetch tail. Allocation admission currently refuses all records until the
-actual artifacts establish that layout. Software fixtures cannot authorize a
+prefetch tail. Allocation admission derives WB bounds from the linked ELF, checks every native
+allocation row and reconstructs every descriptor in the 32,768-byte table.
+The input mapping includes the prefetch tail; source, load and VIPP are read-only.
+Output and parameter-save mappings permit reads and writes. Guard pages and
+unmapped descriptor entries must remain absent. Software fixtures cannot authorize a
 physical launch.
 
 ## Capture retained output
@@ -100,10 +103,27 @@ The fixed SRAM launcher is compiled once and preserved in the resulting bundle.
 exercise transport and digest authentication; they are not an ISP model. Cases
 cover both USB packet sizes, pending queries, malformed identities and geometry,
 proof refusal, digest corruption, premature termination, failed durability,
-upload failure and retained ACK identity. These checks remain unexecuted until
-actual native artifacts are supplied.
+upload failure and retained ACK identity. Preparation passed against the preserved ELF and constructor artifacts. The focused host batch passed fifteen capture cases, eight geometry refusals,
+four input refusals and thirteen completion-proof refusals. The actual supervisor
+entry reached readiness and stopped before queue or device callbacks.
 
 The processing source defaults and setters come from the pinned open GPL-2.0
 implementation. Source provenance and native behavior belong to the component
 record. Host checks cannot establish physical DMA confinement, cache visibility,
 ISP execution, interrupt delivery, recovery or performance.
+
+The preserved model preparation is
+`~/.cache/sunstoneos/evidence/isp0-native-20261020/host-prepared/`.
+It binds ELF SHA-256
+`32eb5b933c9e6146618e16724a59405e86ed79ccae92888b989ed7ae1f82e2c1`.
+The retained SRAM launcher SHA-256 is
+`6fb4c903dba60c6b200c92a81cf2c732b81c5153371e5c7d35f246636546a217`.
+Production refuses the model-only authority. Allocation checks refuse aliases,
+permission changes, shifted guarded mappings, populated descriptor holes,
+changed geometry and a truncated prefetch mapping. These are software results.
+
+The model fixture uses the pinned shared workload-2 provider producer with
+cold USB reference mode 1. Its deterministic Bayer pattern spans samples 0
+through 4095. The preceding mode-2 fixture is retained as rejected evidence;
+the ordinary SMP image does not admit ROM takeover. The native constructor
+allocation and table artifacts bind the accepted cold-reference session.

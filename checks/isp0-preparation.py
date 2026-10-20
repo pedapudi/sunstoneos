@@ -64,7 +64,9 @@ def main():
     refused=[]
     for change in a.allocation_case or ('alias','permission','guard','table-hole','geometry','prefetch'):
         bad=copy.deepcopy(proof);badtable=bytearray(table);wrong=bytearray(raw)
-        if change=='alias':bad['allocations']['boot_pool'][1]['physical']=bad['allocations']['boot_pool'][0]['physical']
+        if change=='alias':
+            bad['allocations']['boot_pool'][1]['physical']=bad['allocations']['boot_pool'][0]['physical']
+            bad['allocations']['boot_pool'][1]['cpu']=bad['allocations']['boot_pool'][0]['cpu']
         if change=='permission':bad['spans'][0]['access']=3
         if change=='guard':bad['spans'][1]['physical']-=4096
         if change=='table-hole':badtable[4]=1
