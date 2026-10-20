@@ -85,6 +85,12 @@ visibility. Keep monitor writes away from unpublished dirty application lines.
 Startup must retain and validate session inputs before provider initialization.
 The [session contract](../../../docs/board-session-seal.md) binds identities and
 geometry; test fixtures that fabricate its authority cannot become launch evidence.
+When adding an application workload, trace its mode through the launcher, session
+validator and private boot identity hook before building. The combined Mimus
+keyboard workload passed application checks while its inherited identity hook
+still rejected every nonzero workload. Its private-hook check is
+`checks/mimus-board-identity.py`; it excludes shared CPU startup and models
+publication, so it establishes only that hook's admission behavior.
 When adapting startup, trace where validated inputs live across exception-level
 transitions and BSS clearing. Preserve those inputs until their consumers finish;
 matching structure layouts alone do not establish their lifetime.
