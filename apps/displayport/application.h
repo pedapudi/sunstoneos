@@ -45,13 +45,16 @@ struct dp_application {
  StaticTask_t tasks[3];StackType_t stacks[3][4096];TaskHandle_t handles[3];
  struct a733_displayport_reply reply;
  uint64_t deadline;
- atomic_uint terminal,pd_enabled,typec_off;
+ /* Stop is requested by display and completed by the Type-C task. */
+ atomic_uint terminal,pd_enabled,typec_stop;
  unsigned fresh_frame,guards,padding_valid;
  unsigned initialized;
 };
+enum dp_typec_stop { DP_TYPEC_RUNNING,DP_TYPEC_STOP_REQUESTED,DP_TYPEC_OFF };
 extern struct dp_application dp_app;
 int dp_current(void);
 int dp_live(void);
+int dp_clock_live(const struct a733_clock_token *);
 int dp_now(void *,uint64_t *);
 void dp_retain(void);
 int dp_native_reserve(void);

@@ -23,7 +23,7 @@ int board_application_start(void)
  if(!s||memcmp(&s->board,&board.admitted_session,sizeof(s->board))||!a733_displayport_session_valid(s)||
  memcmp(s->board.image,a733_smp_build_id,32)||board.session.deadline_us<50000)return 0;
  dp_app.session=*s;dp_app.deadline=board.session.deadline_us-50000;
- atomic_init(&dp_app.terminal,0);atomic_init(&dp_app.pd_enabled,0);atomic_init(&dp_app.typec_off,0);
+ atomic_init(&dp_app.terminal,0);atomic_init(&dp_app.pd_enabled,0);atomic_init(&dp_app.typec_stop,DP_TYPEC_RUNNING);
  dp_app.memory.self=&dp_app.memory;dp_app.initialized=1;
  if(!dp_memory_boot())return 0;
  TaskFunction_t fn[]={display_task,typec_task,power_task};const char *names[]={"dp-output","dp-typec","dp-power"};
@@ -50,10 +50,16 @@ static void typec_task(void *unused)
      atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
    if(a733_typec_begin(&dp_app.typec.provider,dp_app.deadline)<0)a733_typec_revoke(&dp_app.typec.provider);started=1;
   }
+  /* Normal completion waits for the provider-owned transfer boundary.
+   * Faults and expired authority still revoke immediately above. */
+  if(started&&atomic_load_explicit(&dp_app.typec_stop,memory_order_acquire)==DP_TYPEC_STOP_REQUESTED&&
+     !dp_app.typec.provider.transaction&&!dp_app.typec.provider.pd.transaction&&
+     !dp_app.typec.bus.held&&dp_app.typec.bus.state==A733_TWI_READY)
+   a733_typec_revoke(&dp_app.typec.provider);
   if(started)(void)a733_typec_poll(&dp_app.typec.provider);
   if(dp_app.typec.provider.state==A733_TYPEC_OFF_RETAINED&&
      atomic_load_explicit(&dp_app.typec.output_state,memory_order_acquire)==1)
-   atomic_store_explicit(&dp_app.typec_off,1,memory_order_release);
+   atomic_store_explicit(&dp_app.typec_stop,DP_TYPEC_OFF,memory_order_release);
   /* Keep a pending byte/block transfer moving within its5ms deadline.
    * Yield to the independent equal-priority power task between polls. */
   if(started&&dp_app.typec.provider.state!=A733_TYPEC_OFF_RETAINED&&
@@ -100,13 +106,17 @@ static void display_task(void *unused)
   case 2:result=dp_native_prepare();if(result<0)goto fault;if(result)stage=3;break;
   case 3:result=dp_memory_prepare();if(result<0)goto fault;if(result){
     if(dp_memory_frame(1)!=1||dp_native_start()!=1)goto fault;stop_at=a733_smp_counter()/24+250000;stage=4;}break;
-  case 4:if(!a733_dp_service(&dp_app.native.controller)||dp_memory_service()<0)goto fault;
-   result=dp_memory_frame(0);if(result<0)goto fault;if(result)dp_app.fresh_frame=1;
+  case 4:if(!a733_dp_service(&dp_app.native.controller))goto fault;
+   result=dp_memory_service();if(result<0)goto fault;
+   /* An incremental IOMMU scan keeps source admission pending. Observe the
+    * frame only after that scan has returned to ACTIVE without a fault. */
+   if(result>0){result=dp_memory_frame(0);if(result<0)goto fault;if(result)dp_app.fresh_frame=1;}
    if(a733_smp_counter()/24>=stop_at){if(!dp_app.fresh_frame||dp_native_stop()!=1)goto fault;stage=5;}break;
   case 5:result=dp_memory_stop();if(result<0)goto fault;if(result){
     if(dp_app.memory.iommu.fault.scanned_masters!=0x100||!dp_memory_guards())goto fault;
-    dp_app.guards=1;dp_app.padding_valid=1;a733_typec_revoke(&dp_app.typec.provider);stage=6;}break;
-  case 6:if(atomic_load_explicit(&dp_app.typec_off,memory_order_acquire))dp_publish(1);break;
+    dp_app.guards=1;dp_app.padding_valid=1;
+    atomic_store_explicit(&dp_app.typec_stop,DP_TYPEC_STOP_REQUESTED,memory_order_release);stage=6;}break;
+  case 6:if(atomic_load_explicit(&dp_app.typec_stop,memory_order_acquire)==DP_TYPEC_OFF)dp_publish(1);break;
   default:goto fault;
   }
   vTaskDelay(1);continue;

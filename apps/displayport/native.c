@@ -21,10 +21,20 @@ int dp_current(void)
 int dp_now(void *v,uint64_t *out)
 {(void)v;uint64_t t;if(!intact()||!dp_current()||!board_live(NULL)||!out||a733_counter_clock_now(&providers.shared.counter,&t)!=1||t<n.last_now||t>=app.deadline)return 0;n.last_now=t;*out=t;return 1;}
 static int timely(void){uint64_t t;return dp_now(NULL,&t)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire);}
+/* Retry only read-only authority observations. No device operation or partial
+ * controller sequence is repeated, and the original deadline remains binding. */
+int dp_clock_live(const struct a733_clock_token *token)
+{
+ for(;;){
+  enum a733_clock_result r=a733_clock_token_status(&providers.shared.clocks,token);
+  if(r!=A733_CLOCK_BUSY)return r==A733_CLOCK_OK;
+  if(!timely())return 0;taskYIELD();
+ }
+}
 static int tokens(void)
 {
  return intact()&&!n.failed&&n.clock.id&&n.clock.owner==app.session.owner&&n.clock.shared==SHARED&&n.clock.exclusive==EXCLUSIVE&&
- a733_clock_token_status(&providers.shared.clocks,&n.clock)==A733_CLOCK_OK;
+ dp_clock_live(&n.clock);
 }
 int dp_live(void)
 {return tokens()&&board_live(NULL)&&!n.failed;}
@@ -91,13 +101,25 @@ static int wait_io(void *v,uint32_t us,uint64_t deadline)
  return 1;
 }
 static int supplies(void)
-{return a733_rail_status(&providers.shared.rails,&n.rail)==A733_RAIL_READY&&
- a733_pmic_live(&providers.shared.pmic,&n.pmic_lifetime)==A733_PMIC_READY&&
- a733_gpu_resources_status(&providers.shared.gpu,app.session.pck_client,&n.pck_lease)==A733_GPU_RESOURCE_OK;}
+{
+ for(;;){
+  enum a733_rail_result rail=a733_rail_status(&providers.shared.rails,&n.rail);
+  if(rail!=A733_RAIL_BUSY&&rail!=A733_RAIL_READY)return 0;
+  if(rail==A733_RAIL_BUSY)goto busy;
+  enum a733_pmic_status pmic=a733_pmic_live(&providers.shared.pmic,&n.pmic_lifetime);
+  if(pmic!=A733_PMIC_BUSY&&pmic!=A733_PMIC_READY)return 0;
+  if(pmic==A733_PMIC_BUSY)goto busy;
+  enum a733_gpu_resource_result gpu=a733_gpu_resources_status(&providers.shared.gpu,app.session.pck_client,&n.pck_lease);
+  if(gpu!=A733_GPU_RESOURCE_BUSY)return gpu==A733_GPU_RESOURCE_OK;
+ busy:
+  if(!timely())return 0;taskYIELD();
+ }
+}
 int dp_native_source(void *v,unsigned starting)
 {
- (void)v;if(!tokens()||!timely()||!supplies()||!n.token.generation||
- a733_typec_dp_validate(&app.typec.provider,&n.token,app.deadline)!=1||!n.token.hpd)return 0;
+ (void)v;if(!tokens()||!timely()||!supplies()||!n.token.generation||!n.token.hpd)return 0;
+ for(;;){int valid=a733_typec_dp_validate(&app.typec.provider,&n.token,app.deadline);
+  if(valid<0)return 0;if(valid==1)break;if(!timely())return 0;taskYIELD();}
  if(starting==1)return n.tv_prepared&&dp_memory_source(&app.memory,1)==1;
  return starting==0;
 }

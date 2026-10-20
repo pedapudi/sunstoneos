@@ -35,17 +35,14 @@ static int owns(void)
     if(framebuffer.exclusion.id&&(framebuffer.exclusion.owner!=app.session.owner||
        framebuffer.exclusion.exclusive!=EXCLUSION||
        framebuffer.exclusion.shared!=(A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC)||
-       a733_clock_token_status(&providers.shared.clocks,&framebuffer.exclusion)!=A733_CLOCK_OK))return 0;
+       !dp_clock_live(&framebuffer.exclusion)))return 0;
     if(framebuffer.media.token.id&&(framebuffer.media.self!=&framebuffer.media||
        framebuffer.media.registry!=&providers.shared.clocks||framebuffer.media.pck_manager!=&providers.shared.gpu||
        framebuffer.media.cookie!=&framebuffer||framebuffer.media.token.owner!=app.session.owner||
        framebuffer.media.token.exclusive!=A733_CLOCK_DE_SYS||
        memcmp(&framebuffer.media.config,&framebuffer.media_config,sizeof(framebuffer.media_config))||
-       a733_clock_token_status(&providers.shared.clocks,&framebuffer.media.token)!=A733_CLOCK_OK))return 0;
-    return a733_clock_token_status(&providers.shared.clocks,&app.native.clock)==A733_CLOCK_OK&&
-        a733_rail_status(&providers.shared.rails,&app.native.rail)==A733_RAIL_READY&&
-        a733_pmic_live(&providers.shared.pmic,&app.native.pmic_lifetime)==A733_PMIC_READY&&
-        a733_gpu_resources_status(&providers.shared.gpu,app.session.pck_client,&app.native.pck_lease)==A733_GPU_RESOURCE_OK;
+       !dp_clock_live(&framebuffer.media.token)))return 0;
+    return dp_native_source(NULL,0);
 }
 static int mapped(uintptr_t a)
 {
