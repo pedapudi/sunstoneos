@@ -29,11 +29,42 @@ monitor would require an explicit memory reservation and a compatible CPU
 entry contract. SCP activity also needs an ownership decision before the OS
 can claim exclusive control of shared clocks and power.
 
-The primary agent must establish the cold-entry component roles, loading
-addresses, retained firmware, initial resource state and recovery behavior
-before implementing the packager. Existing host tools are preferred; their
-individual provenance and redistribution terms remain to be established.
-No standalone image, storage write or boot qualification has occurred.
+The selected standalone design uses a SunstoneOS monitor payload and omits
+U-Boot, the published monitor and SCP firmware. A focused instruction check
+executes the pinned boot0 package parser and its final monitor handoff with
+that component list. The parser loads the monitor and the handoff requests
+an AArch64 warm reset to its address. It accepts zero U-Boot and OP-TEE
+entry pointers. The payload itself does not execute in this check.
+
+Boot0 takes the monitor load address from payload offset `0x2c`; the TOC1
+item's `run_addr` does not select it. After copying the payload, boot0 replaces
+that word with the DRAM size in MiB. It also writes eight boot-header bytes
+at `0x24`, 128 DRAM-parameter bytes at `0x30`, U-Boot and OP-TEE pointers
+at `0x10` and `0x18`, and sixteen identity bytes at `0xb8`.
+The entry branch must skip this mutable header. The selected payload reservation
+is `0x47000000..0x47400000`, outside boot0's package staging at `0x42e00000`,
+the existing application/monitor allocations, and the extended device pool.
+Container capacity further limits the payload length.
+
+The check uses a synthetic package already in RAM. Storage loading, checksum
+admission, DRAM training and cache cleanup are outside its executed interval.
+It models the identity source and reset-mode control; register writes do not
+establish a physical reset or entry at EL3. Omitting an SCP item also does not
+prove that remote processors remain stopped throughout cold boot.
+The reusable check is [boot0-monitor-handoff.py](../checks/boot0-monitor-handoff.py);
+its result is `microsd-boot-package-20261020/boot0-monitor-handoff.json`
+under the evidence directory.
+
+The pinned board packer produces a sole-monitor TOC1 package from synthetic
+bytes. Its output matches the assessed item geometry, padding and additive
+checksum. This establishes host container generation only. The packer runs
+on the development host; its source equivalence and individual redistribution
+terms remain unresolved. Evidence is in
+`microsd-boot-package-20261020/actual-packer/`.
+
+A cold-entry implementation must still establish EL3 state, remote-processor
+exclusion, resource ownership, application admission and recovery. No standalone
+SunstoneOS payload, storage write or physical boot qualification has occurred.
 
 ## SRAM probe result
 
