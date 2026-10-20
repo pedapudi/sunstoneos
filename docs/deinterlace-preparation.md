@@ -60,3 +60,24 @@ reply produced for the final prepared session. Mutated replies and transport
 faults test refusal and acknowledgment ordering. These checks establish software
 behavior; physical clock, DMA visibility, completion and recovery evidence
 remain required before hardware qualification.
+
+Host preparation and capture passed the focused offline checks on 20 October
+2026. Preparation consumed the actual native constructor's allocation proof and
+complete page table for the emitted session. It rejected physical launch from
+modeled authority and refused altered allocation aliases, permissions, guards,
+table holes and geometry. Capture passed thirteen cases using the actual native
+TinyUSB copied response for the sealed session. Those cases covered full-speed
+and high-speed framing, pending responses, identity and completion failures,
+truncated streams, durability failures, upload failure and deadline expiry.
+The actual supervisor caller reached readiness with its 19-second policy and
+stopped before queue or device access.
+
+The retained host results are
+`~/.cache/sunstoneos/evidence/deinterlace-host-20261020/result.json` and
+`capture/result.json` beneath the same directory. The supervisor result is
+`~/.cache/sunstoneos/evidence/deinterlace-supervisor-entry-20261020.json`.
+The snapshot at
+`~/.cache/sunstoneos/evidence/deinterlace-host-20261020/frozen/manifest.json`
+preserves the host sources, sealed bundle and captured evidence. Native device
+effects and entry authority were modeled; these results establish host software
+behavior and do not qualify physical DI301 operation.
