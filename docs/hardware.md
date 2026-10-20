@@ -838,12 +838,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   resources. Actual constructors, clients and response ownership checks pass with
   admission, CPU/RTOS, device results and USB effects modeled. Saved NPU SDK outputs
   are saturated and do not establish input-sensitive accuracy. The native image
-  is linked; combined host launch preparation remains pending. Physical execution,
-  graphics composition and broader concurrent workloads remain unqualified or
-  required. Evidence is under `gpu-npu-composition-20261020/handoff.json` and its
+  is linked. Physical execution remains unqualified; graphics composition and
+  broader concurrent workloads remain required. Evidence is under `gpu-npu-composition-20261020/handoff.json` and its
   provider/runtime/ownership results; component firmware/compiler dependencies
   remain unchanged. Root verifies all 270 compiled inputs and 114 objects at
   `214f3fe` under `gpu-npu-composition-20261020/root/integration.json`.
+  Host preparation and supervised capture are implemented. The actual linked
+  producer yields 666 durable frames, four copied outputs and both healthy CLOSE
+  states; six affected host refusals pass. The actual 19-second supervisor policy
+  reaches readiness and stops before queue/USB access. Positive bundle fixtures
+  substitute the NPU physical validator; production refuses synthetic proofs.
+  Root verifies 3,433 frozen files and all 24 current sources at `f645c89` under
+  `accelerator-host-20261020/root-integration.json`; no native rebuild or physical
+  execution occurred. Hardware, arithmetic and RTOS effects remain modeled.
   The [core-mode check](gpu-compute-mode.md) requires observed single-core compute
   capability after power-up and before submission. Instruction and focused
   service checks pass; physical identity remains unobserved. The
@@ -1251,8 +1258,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   inference or unchanged mimus acceleration. Broader operators, models,
   concurrency, physical confinement and numerical qualification remain required.
   The complete graph also shares providers and copied USB ownership with the
-  GPU in the [combined application](accelerator-composition.md); its host launch
-  preparation and physical execution remain separate outstanding steps.
+  GPU in the [combined application](accelerator-composition.md). Host preparation
+  and copied capture are software-checked; physical execution remains unqualified.
   The [fixed FP32 relative-attention shift](npu-relative-shift.md) is implemented
   through one shader (SH) operation and three neural-transpose (NT) operations, with an
   external intermediate pool. Four heads and 128 steps use 522,240 input bytes

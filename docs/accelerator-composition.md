@@ -114,7 +114,12 @@ ELF and ABI checks, synthetic-admission refusal, frozen bundle validation and th
 actual supervisor entry policy. The positive bundle parser fixture explicitly
 substitutes the existing NPU physical validator; it is not an admitted bundle.
 The entry-policy check stops at readiness before queue or USB access. Root launcher
-and native component results remain separate, unchanged evidence.
+and native component results remain separate, unchanged evidence. Root verifies
+all 3,433 frozen files and 24 current sources at `f645c89` in
+`accelerator-host-20261020/root-integration.json`. The actual linked producer
+capture records 666 durable frames, four copied outputs and both healthy CLOSE
+states; six affected host refusal cases pass. No native image rebuild or physical
+execution was performed.
 
 ## Native component checks
 
@@ -142,7 +147,10 @@ Its 114 objects and 270 actual compiled inputs are recorded in
 `runtime/result.json` and `ownership/result.json`. Astra reviewed the concrete
 provider and response ownership corrections before execution. Existing compiler,
 service and cache publication evidence is reused where its inputs and behavior
-are unchanged.
+are unchanged. Root verifies the native frozen closure under
+`gpu-npu-composition-20261020/root/integration.json`; metadata emission is checked
+separately in `accelerator-composition-20261020/root/manifest-check/result.json`
+without rebuilding the image.
 
 Graphics composition, simultaneous submitted workloads beyond the existing
 service queues, broader compute limits, further NPU models and the remaining
