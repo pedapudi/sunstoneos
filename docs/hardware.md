@@ -1417,23 +1417,27 @@ implementation is **planned**. Partial results apply only to the stated scope:
   programmed-I/O implementation, inherited clock state, and remaining modes.
   The [native mimus session](mimus-usb.md) also passes asset loading, status polling
   during recognition, repeated results, and host-lease return with automatic access.
-  The [combined recorded-recognition application](../apps/mimus-board/README.md)
-  is implemented in one supervised OS image with the existing PMIC, Type-C,
-  USB0 and USB2 owners. The unchanged EL0 recognizer processes authenticated
-  recorded input while the storage owner reads one read-only sector. Combined
-  success requires the checked sector copy to complete during recognition,
-  successful recognition and fresh attachment/liveness checks. USB0 returns copied
-  transcript and sector data; service owners continue polling after completion.
-  Root verifies all 744 compiled inputs and 202 objects, disjoint memory, input
-  identity publication and the linked EL0 classifier under
-  `mimus-board-20261019/root-integration.json`. The native fixture executes actual
-  storage-copy and serialization instructions but injects recognition-active state
-  and transcript, and models hardware and scheduling. A separate host recognizer
-  check matches the historical recording's features, log probabilities and formatted
-  text. These checks establish neither physical concurrent operation nor native
-  scheduling or timing. Fresh image-bound DDR/model-memory admission, Type-C power,
-  USB/DMA and recovery qualification remain required. The image retains all memory
-  and does not replace the existing standalone mimus session.
+  The [combined keyboard/recognition/storage application](../apps/mimus-board/README.md)
+  now accepts workloads 0 and 4. Workload 4 requires a boot-protocol keyboard and
+  HS storage behind the existing self-powered HS hub. After input authentication,
+  a neutral report followed by unmodified Enter triggers one unchanged recorded
+  recognition. The same privileged USB2 owner handles HID and MSC; EL0 consumes
+  only the copied mailbox. Success requires the checked read-only sector copy
+  during recognition and fresh attachment/liveness. USB0 returns copied transcript,
+  sector and trigger evidence; owners keep polling. Models and weights are unchanged.
+  Root verifies 748 inputs and 203 objects against revision `7383e16`, with no
+  compiled-source divergence, under `mimus-keyboard-20261019/root-integration.json`.
+  Application fixtures retain earlier image `7cdf72a9…`; only identity/build-ID
+  objects differ in final `bd200754…`, as `identity-object-delta.json` records.
+  Six final linked identity-hook cases admit only workloads 0/4 and refuse 1/2/6/8,
+  with exception/cache/session/publication facts modeled; shared startup is excluded.
+  HID/MSC completion, recognition-active state/transcript, scheduling and FIFOs
+  are modeled in the
+  application checks. Seventy-four unchanged mimus dependencies retain earlier
+  recognizer parity under its separate scope. Physical concurrent operation,
+  visibility, startup, recovery and timing remain unqualified. A supported keyboard,
+  hub/storage and fresh image-bound electrical/DDR/model-memory admission remain
+  prerequisites. All memory stays retained; no desktop keyboard events are sent.
   [Cold USB0 preparation](usb-platform.md) now supplies native clock/reset/PHY
   sequencing, detached-controller admission and shared-reference publication.
   Host checks, source comparisons and native instruction checks pass. It keeps
