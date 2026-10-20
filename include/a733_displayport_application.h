@@ -58,7 +58,7 @@ static inline int a733_displayport_fields_valid(const volatile struct a733_displ
        s->reserved0)return 0;
     for(unsigned i=0;i<4;++i)
         if(s->reserved[i]||
-           (s->typec_pins[i][0]!=0&&s->typec_pins[i][0]!=7)||
+           (s->typec_pins[i][0]!=0&&s->typec_pins[i][0]!=15)||
            s->typec_pins[i][1]>2||s->typec_pins[i][2]>3)return 0;
     return 1;
 }
