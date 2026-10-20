@@ -61,6 +61,63 @@ only after all four copied results are complete. The original absolute host
 session deadline bounds the entire sequence. The consumer performs no device
 discovery, launch or recovery.
 
+## Offline preparation and supervised capture
+
+`apps/accelerators/prepare.py` freezes the image, session, launcher and admission
+proofs. It accepts a complete combined session with `--session`, or copies an
+embedded NPU session and GPU package with `--npu-session` and `--package`.
+The latter form derives the four GPU record digests from the admission references.
+Both forms require the exact image manifest, admission file and output directory,
+plus the configured Clang, LLD and objcopy paths. The output directory is created
+only after admission validation succeeds.
+
+The supported image exports its combined layout and single-core geometry. The
+preparer also verifies the embedded NPU structure sizes and member offsets from
+the image's DWARF information. It refuses stripped images and unsupported layouts.
+The complete 64 KiB session reservation must be disjoint from every image load
+allocation. The 224-byte launch contract binds the full session digest and size;
+its launcher preserves the existing 20-second admission window.
+
+The outer admission schema is `a733-accelerators-supervised-entry-v1`. Its
+`npu` reference retains the existing NPU admission format and physical validators.
+The `gpu_initial`, `gpu_memory`, `gpu_electrical` and `gpu_supervision` references
+must bind the same image, target identity, USB port, whole-platform owner and
+supervisor, with `combined_lifetime` true. Their condition sets are defined beside
+`GPU_CONDITIONS` in the preparer. They cover interrupt and register ownership,
+clock and power exclusion, all GPU address paths, cache visibility, and retention
+through combined shutdown or whole-board power removal. Shared memory proof covers
+the actual write-back and noncacheable pools at 0x41600000 through 0x41a00000 and
+0x41c00000 through 0x41e00000. Each condition references immutable proof bytes.
+
+The `gpu_program` reference binds the reviewed package, source and compiler
+digests, and includes hashed `source` and `compiler` artifact references. The
+`gpu_firmware` reference must match the pinned firmware embedded in the ELF.
+Digests do not establish physical authority. The root instruction fixtures use
+synthetic evidence and are refused by ordinary preparation. No physically admitted
+combined bundle is supplied by the software checks.
+
+`tools/check-a733-accelerators-supervised.py` uses the existing coordinator launch
+and capture flow. It requires one `--gpu-input` and two `--npu-input` files.
+Optional pairs of `--gpu-oracle` and `--npu-oracle` files qualify numerical outputs
+separately. The host retains the original 19-second capture deadline, copies every
+reply durably, and reports success only after both result pairs and both healthy
+CLOSE states. Oracle mismatch preserves copied results and refuses success.
+The host keeps GPU response capacity above a full-speed packet multiple so the
+terminal zero-length packet completes before another request. NPU replies may
+arrive in bounded fragments. Neither USB completion nor healthy native CLOSE
+establishes physical accelerator execution or releases the retained board lifetime.
+
+The host evidence is preserved at
+`~/.cache/sunstoneos/evidence/accelerator-host-20261020/`. It covers the actual
+linked producer sequence through the new durable capture callback, failure replay,
+ELF and ABI checks, synthetic-admission refusal, frozen bundle validation and the
+actual supervisor entry policy. The positive bundle parser fixture explicitly
+substitutes the existing NPU physical validator; it is not an admitted bundle.
+The entry-policy check stops at readiness before queue or USB access. Root launcher
+and native component results remain separate, unchanged evidence.
+
+## Native component checks
+
 Focused checks pass on the combined linked image. The actual constructors
 allocate the NPU parent first, then all GPU firmware, payload and table parents;
 they bind one counter, clock registry, lock set, PMIC and global PCK manager.
