@@ -23,6 +23,12 @@ REQUEST_MAGIC=0x4153373344504c31
 def session_check(raw):
     require(len(raw)==952,'DisplayPort session must contain 952 bytes.')
     require(board.session_check(raw[:592])==2,'DisplayPort requires PMIC and USB0 workload 2.')
+    for at in (564,567):
+        function,pull,drive=raw[at:at+3]
+        require(function==2 and pull<=2 and drive<=3,'DisplayPort PMIC PL0/PL1 require valid inherited function-2 configurations.')
+    fabric=struct.unpack_from('<3I',raw,488)
+    require(fabric[1]&0x80000000 and fabric[2]&0x80000000,
+        'DisplayPort USB0 inherited fabric clocks require their enable bits.')
     require(raw[80:112]==raw[280:312] and any(raw[80:112]),'Board qualification/recovery identity differs.')
     require(struct.unpack_from('<3Q',raw,592)==(0x4153373344504131,1,952),'DisplayPort extension differs.')
     owner,authority,client=struct.unpack_from('<3Q',raw,616)

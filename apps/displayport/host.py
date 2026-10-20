@@ -30,8 +30,11 @@ def decode(raw,session,*,allocation):
     keys=('pixel_iova','pitch','width','height','de_state','iommu_state','scanned_masters','guards',
         'polarity','pin_assignment','hpd','padding_valid','core_bytes','reserved0','reserved1','reserved2')
     result=dict(zip(keys,values))
-    require(result['core_bytes']==352 and not any(raw[244:256]) and not any(raw[608:]),
+    require(result['core_bytes']==(0 if status==0 else 352) and not any(raw[244:256]) and not any(raw[608:]),
         'DisplayPort copied core or reserved bytes differ.')
+    if status==0:
+        require((error,stage,retained)==(0,0,1) and not any(raw[56:72]) and not any(raw[136:]),
+            'DisplayPort pending response claims unpublished native diagnostics.')
     require(result['polarity'] in (0,1,2) and result['hpd'] in (0,1) and
         result['guards'] in (0,1) and result['padding_valid'] in (0,1),'Invalid DisplayPort observation flags.')
     core_words=struct.unpack_from('<16I',raw,256)

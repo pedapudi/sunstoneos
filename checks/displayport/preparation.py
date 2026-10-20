@@ -52,6 +52,12 @@ def main():
         latch=struct.unpack_from('<2Q2I',original,888),source=struct.unpack_from('<6I',original,912),
         pins=[original[at:at+3] for at in range(936,948,3)])
     raw=producer.extend(bytes(board),owner=owner,authority=authority,client=client,facts=facts,**profile)
+    session_refusals=[]
+    for name,offset,value in [('pmic-function',564,0),('pmic-pull',568,3),('pmic-drive',569,4),('fabric-disabled',495,0)]:
+        bad=bytearray(raw);bad[offset]=value
+        try:prep.session_check(bad)
+        except ValueError:session_refusals.append(name)
+        else:raise AssertionError('Unusable provider profile accepted: '+name)
     th=hashlib.sha256(raw).hexdigest();proof['source_session']=proof['session'];proof['session']=th
     allocation_ref=record('allocation.json',proof)
     def binary(name,data):
@@ -77,6 +83,14 @@ def main():
         if name=='pixel':badallocation[36864]^=1
         if name=='mapping':bad['spans'][0]['access']=3
         if name=='extent':bad['allocation']['physical']+=4096
+        # Preserve internal digest consistency so these cases exercise mapping,
+        # sentinel and pattern semantics rather than only stale hashes.
+        if name=='table-permission':
+            badallocation[:32768]=badtable
+            bad['table_sha256']=hashlib.sha256(badtable).hexdigest()
+        if name in ('table-permission','padding','pixel'):
+            bad['allocation_sha256']=hashlib.sha256(badallocation).hexdigest()
+        if name=='pixel':bad['pixel_sha256']=hashlib.sha256(badallocation[36864:36864+1843200]).hexdigest()
         try:prep.allocation_check(bad,raw,bytes(badtable),bytes(badallocation))
         except ValueError:refused.append(name)
         else:raise AssertionError('Invalid allocation accepted: '+name)
@@ -85,6 +99,6 @@ def main():
         prep.prepare(a.image,a.manifest,out/'admission.json',out/'session-template.bin',bundle,a.clang,a.lld)
     result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
         original_session_sha256=hashlib.sha256(original).hexdigest(),allocation_source_sha256=hashlib.sha256(a.allocation.read_bytes()).hexdigest(),
-        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
+        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,session_refusals=session_refusals,bundle=str(bundle.resolve()))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()

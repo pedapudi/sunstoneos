@@ -26,7 +26,10 @@ The producer reads an explicit JSON profile with these arrays:
 The source range stays within 4750–5250 mV and supplies at least 500 mA. The zero
 threshold is 1–800 mV. The FUSB device ID is 0x80–0x82. The bank-L latch mask is
 0x3fff; initial pin functions are 0 or 15. These fields express the admitted
-configuration; they do not establish physical electrical conditions.
+configuration; they do not establish physical electrical conditions. The board
+prefix must also carry valid PMIC PL0/PL1 function-2 configurations and enabled
+inherited fabric clocks. The actual native provider remains authoritative for
+its complete clock, pin and supply prerequisites.
 
 `apps/displayport/prepare.py` consumes the actual ELF, image manifest, session
 and reviewed entry records. It binds the immutable thirteen-word geometry and

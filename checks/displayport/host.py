@@ -53,7 +53,8 @@ def main():
                 assert endpoint==0x81 and capacity==1025 and timeout>0;reads.append(capacity);count[0]+=1
                 if name=='deadline':clock[0]=100
                 if name=='pending' and count[0]==1:
-                    pending=bytearray(rebound);struct.pack_into('<I',pending,16,0);return bytes(pending)
+                    pending=bytearray(rebound);struct.pack_into('<4I',pending,16,0,0,0,1)
+                    pending[56:72]=bytes(16);pending[136:]=bytes(1024-136);return bytes(pending)
                 return bytes(reply)
         original_durable=host.supervisor.durable_frame
         def durable(path,data):
