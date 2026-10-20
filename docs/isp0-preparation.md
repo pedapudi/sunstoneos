@@ -42,7 +42,8 @@ derives fresh runtime identities and preserves the native build identity.
 `apps/isp0/prepare.py` consumes the actual native ELF, image manifest, session
 template, reviewed admission record and exact Bayer input file. It validates the
 immutable eleven-word `isp0_geometry` marker, executable entry, ordinary board
-memory reservations and protected session region. The ordinary 224-byte boot
+memory reservations and protected session region. The ordinary SMP image requires
+USB cold-reference mode 1; mode 2 ROM takeover is rejected. The ordinary 224-byte boot
 contract binds the complete session digest. The native lifetime is 20 seconds;
 the supervisor uses a single absolute 19-second host window.
 

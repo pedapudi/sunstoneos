@@ -4,7 +4,7 @@
 Requires an ordinary bundle prepared from the actual frozen ISP0 ELF and source.
 Sessions use its real board/build/lease identity and the actual producer;
 they are software-only wire fixtures, not additional physical admissions.
-Device completions and pixels are modeled. No native code, USB or queue executes.
+USB cold initialization, device completions and pixels are modeled. No native code, USB or queue executes.
 """
 import argparse
 import hashlib

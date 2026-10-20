@@ -49,6 +49,8 @@ def embedded_reference(image,session):
     """Bind immutable native geometry before preparation or runtime upload."""
     session_check(session)
     _image_parts(image)
+    require(struct.unpack_from('<I',session,532)[0]==1,
+        'Ordinary ISP0 SMP image requires cold USB reference mode1.')
     return None
 
 def upload_bytes(pixels,session):
@@ -205,7 +207,10 @@ def _image_parts(data):
     import io
     elf=ELFFile(io.BytesIO(data));require(elf['e_machine']=='EM_AARCH64' and elf['e_entry']==0x41000000,'Native ISP0 ELF required.')
     table=elf.get_section_by_name('.symtab');require(table is not None,'Native ISP0 symbol table required.')
-    entries=list(table.iter_symbols());symbols={s.name:(s['st_value'],s['st_size']) for s in entries}
+    entries=list(table.iter_symbols())
+    require(not any(s.name=='board_single_core_geometry' for s in entries),
+        'ISP0 ordinary SMP profile excludes the single-core image capability.')
+    symbols={s.name:(s['st_value'],s['st_size']) for s in entries}
     parts=[]
     for s in elf.iter_segments():
         if s['p_type']!='PT_LOAD':continue

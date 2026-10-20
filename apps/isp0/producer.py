@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seal one fixed 640x480 BGGR12 input for native ISP0 processing."""
+"""Seal one fixed 640x480 BGGR12 input; ordinary ISP0 uses cold USB reference."""
 import argparse
 import hashlib
 import importlib.util

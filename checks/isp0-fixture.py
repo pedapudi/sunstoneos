@@ -2,7 +2,7 @@
 """Produce deterministic ISP0 input and typed MODEL-NOT-PHYSICAL session artifacts.
 
 Requires the actual native ELF. Copies the pinned shared workload-2 provider
-profile, then calls the production ISP0 session and upload producers. It emits
+profile with an explicit USB reference mode, then calls the production ISP0 session and upload producers. It emits
 an unarmed ordinary contract; native instruction checks must arm that exact
 contract using the actual ELF layout. It computes no reference output pixels.
 """
@@ -22,7 +22,7 @@ def module(name,path):
 
 
 def bayer_pattern():
-    """BGGR phase biases over a deterministic ramp spanning samples0 through4095."""
+    """BGGR phase biases over a deterministic ramp spanning samples 0 through 4095."""
     output=bytearray(640*480*2)
     for y in range(480):
         for x in range(640):
@@ -32,7 +32,7 @@ def bayer_pattern():
     return bytes(output)
 
 
-def produce(image,output):
+def produce(image,output,usb_reference_mode=1):
     prep=module('isp0_model_preparation',ROOT/'apps/isp0/prepare.py')
     producer=module('isp0_model_producer',ROOT/'apps/isp0/producer.py')
     providers=module('isp0_model_providers',ROOT/'checks/a733-provider-fixture.py')
@@ -40,7 +40,7 @@ def produce(image,output):
     image_bytes=image.read_bytes();image_hash=hashlib.sha256(image_bytes).hexdigest()
     segments,address,identity=prep.image_parts(image)
     accepted=providers.source_bytes()
-    board=providers.nominal_provider_session(accepted[:592],usb_reference_mode=2)
+    board=providers.nominal_provider_session(accepted[:592],usb_reference_mode=usb_reference_mode)
     # These are software fixture identities, without target or physical authority.
     epoch,generation,lease=101,102,103
     struct.pack_into('<3Q',board,24,epoch,generation,lease);board[48:80]=identity
@@ -65,7 +65,7 @@ def produce(image,output):
     pixels=bayer_pattern();prep.input_check(pixels)
     owner,authority,client=201,202,3
     raw=producer.extend(bytes(board),pixels,owner=owner,authority=authority,client=client,**facts)
-    providers.validate_nominal_providers(raw,usb_reference_mode=2)
+    providers.validate_nominal_providers(raw,usb_reference_mode=usb_reference_mode)
     prep.embedded_reference(image_bytes,raw)
     request,contract=prep.request_bytes(address,identity,raw,epoch,generation,lease)
     data.update({'session.bin':raw,'input.bggr12':pixels,'upload.bin':prep.upload_bytes(pixels,raw),
@@ -82,7 +82,7 @@ def produce(image,output):
         sample_min=min(v[0] for v in struct.iter_unpack('<H',pixels)),
         sample_max=max(v[0] for v in struct.iter_unpack('<H',pixels)),
         fabric=list(struct.unpack_from('<3I',raw,488)),rates=list(struct.unpack_from('<3I',raw,500)),
-        supplies=list(struct.unpack_from('<4I',raw,512)),usb_reference_mode=2,pmic_pins=list(raw[564:570]),
+        supplies=list(struct.unpack_from('<4I',raw,512)),usb_reference_mode=usb_reference_mode,usb_profile=('cold-reference' if usb_reference_mode==1 else 'rom-takeover'),pmic_pins=list(raw[564:570]),
         contract_armed=False,numerical_qualified=False,
         files={name:hashlib.sha256(value).hexdigest() for name,value in data.items()})
     out.mkdir(parents=True,exist_ok=False)
@@ -95,7 +95,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();print(json.dumps(produce(args.image,args.output),indent=2))
+    parser.add_argument('--usb-reference-mode',type=int,choices=(1,2),default=1,
+        help='1: modeled cold reference for ordinary SMP image; 2: requires a capable image')
+    args=parser.parse_args();print(json.dumps(produce(args.image,args.output,args.usb_reference_mode),indent=2))
 
 
 if __name__=='__main__':main()
