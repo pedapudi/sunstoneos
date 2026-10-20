@@ -156,7 +156,8 @@ int a733_de_replay_valid(const void *pages,uint64_t base,uint64_t f)
 int a733_de_replay_request(struct a733_de *d,unsigned slot,uint64_t f,uint64_t deadline)
 {
  if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||slot>1||
- d->config.output!=A733_DE_LCD1_XRGB8888||!d->config.ops.rcq_submit||deadline<=d->last_now||
+ (d->config.output!=A733_DE_LCD1_XRGB8888&&d->config.output!=A733_DE_TV0_RGB565)||
+ !d->config.ops.rcq_submit||deadline<=d->last_now||
  !replay_shape(d->config.surface.device_address,f)||f<d->plan.padded_bytes||
  d->config.surface.mapped_bytes!=2*f+8192)return 0;
  d->replay_slot=slot;d->replay_frame_bytes=f;d->replay_rcq_done=d->replay_frame_end=0;

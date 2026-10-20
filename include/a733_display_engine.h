@@ -92,7 +92,8 @@ int a733_de_request(struct a733_de *, enum a733_de_action, uint64_t deadline);
 enum a733_de_state a733_de_poll(struct a733_de *);
 /* Optional closed two-frame replay bank: [F0][F1][4KiB RCQ0][4KiB RCQ1].
  * F is page aligned and covers the admitted padded surface. Both frames and
- * command pages stay immutable, mapped READ and permanently owned. The queue
+ * command pages stay immutable, mapped READ and permanently owned. Both closed
+ * LCD1/XRGB8888 and TV0/RGB565 profiles use the same DE1 queue. The queue
  * changes only UCH3 layer0 low address; it grants no retirement or reuse. */
 int a733_de_replay_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes);
