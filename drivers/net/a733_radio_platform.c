@@ -1,3 +1,4 @@
+#include "a733_clock_reference.h"
 #include "a733_radio_platform.h"
 #define CCU UINT32_C(0x02002000)
 #define SDC UINT32_C(0x04021000)
@@ -114,11 +115,9 @@ static int clock_live(struct a733_radio_platform *p)
 static int profile(struct a733_radio_platform *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
-    if(!rd(p,UINT32_C(0x07090160),&osc)||(osc&(BIT(28)|BIT(1)))!=(BIT(28)|BIT(1))||
-        (((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||!rd(p,CCU,&ref)||
-        (ref&0xf8000000u)!=0xf8000000u)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if(n<80||n>116||n!=m)return 0;
+    /* Selected fabric and SMHC1 routes use SYS24M/PERI0, not raw DCXO. */
+    if(!rd(p,UINT32_C(0x07090160),&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+    unsigned n;
     for(unsigned i=0;i<3;++i)
         if(!rd(p,CCU+fabric_off[i],&a)||(a&fabric_mask[i])!=p->config.fabric[i])return 0;
     if(!rd(p,CCU+0x5c0,&a)||(a&(BIT(29)|BIT(24)))!=BIT(24)||

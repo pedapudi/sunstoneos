@@ -4,6 +4,7 @@
  * Authors: Felipe Balbi <balbi@ti.com>,
  *          Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  */
+#include "a733_clock_reference.h"
 #include "a733_usb2_platform.h"
 #include "a733_usb3_phy.h"
 #define B(n) (UINT32_C(1)<<(n))
@@ -118,9 +119,9 @@ static int enter(struct a733_usb2_platform *p)
 static int parents(struct a733_usb2_platform *p)
 {
     uint32_t osc,ref,pll,a,b,g,s;
-    if(!rd(p,0x07090160,&osc)||(osc&(B(28)|B(1)))!=(B(28)|B(1))||
-        (((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||!rd(p,CCU,&ref)||(ref&0xf8000000u)!=0xf8000000u)return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;if(n<80||n>116||n!=m)return 0;
+    /* USB2 reference/MF/suspend select SYS24M, not raw DCXO. */
+    if(!rd(p,0x07090160,&osc)||!rd(p,CCU,&ref)||!a733_clock_ref24_valid(osc,ref))return 0;
+    unsigned n;
     for(unsigned i=0;i<3;++i)if(!ck(p,CCU+fabric_off[i],fabric_mask[i],p->config.fabric[i]))return 0;
     if(!rd(p,CCU+0xa0,&pll)||(pll&0xfe000000u)!=0xfe000000u||(pll&(B(24)|B(1)))||
         !rd(p,CCU+0xa8,&a)||(a&B(31))||!rd(p,CCU+0xac,&b)||(b&B(27))||

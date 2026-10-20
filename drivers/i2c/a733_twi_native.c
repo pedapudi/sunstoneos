@@ -1,3 +1,4 @@
+#include "a733_clock_reference.h"
 #include "a733_twi.h"
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
@@ -187,9 +188,9 @@ int a733_twi_native_prepare(struct a733_twi_native *n,uint64_t d)
     n->held=1;
     if(!observed(n,A733_TWI11_BGR,0x10001,0,d) ||
        !observed(n,CCU+0x518,0x0300001f,n->config.apb1,d))goto fault;
-    uint32_t v=load(0x07090160),ref=load(CCU),nn=((ref>>8)&255)+1,mm=((ref>>16)&127)+1;
-    if((((v>>14)&3)!=0 && ((v>>14)&3)!=3) || (ref&0xf8000000)!=0xf8000000 ||
-       nn<80 || nn>116 || nn!=mm || !before(n,d))goto fault;
+    uint32_t v=load(0x07090160),ref=load(CCU),nn;
+    /* TWI11 uses APB1: SYS24M or PERI0, both normalized by PLL_REF. */
+    if(!a733_clock_ref24_valid(v,ref) || !before(n,d))goto fault;
     if(n->config.apb1>>24==3) {
         v=load(CCU+0xa0);nn=((v>>8)&255)+1;
         if((v&0xfe000000)!=0xfe000000 || (v&0x01000002) || nn<53 || nn>105 ||

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* Copyright(c) 2020 - 2023 Allwinner Technology Co.,Ltd. All rights reserved. */
 /* Register/descriptor definitions adapted from the A733 CE v5 source. */
+#include "a733_clock_reference.h"
 #include "a733_ce.h"
 #include <stddef.h>
 #define CCU UINT32_C(0x02002000)
@@ -77,10 +78,11 @@ static int clocks(struct a733_ce *p)
 {
     uint32_t v,ref;
     if (!rd(p,UINT32_C(0x07090160),&v) ||
-        ((a733_ce_capabilities(p->config.profile)&A733_CE_CAP_TRNG) && !(v&1)) || (((v>>14)&3)!=0 && ((v>>14)&3)!=3) ||
-        !rd(p,CCU,&ref) || (ref&0xf8000000u)!=0xf8000000u) return 0;
-    unsigned n=((ref>>8)&255)+1,m=((ref>>16)&127)+1;
-    if (n<80 || n>116 || n!=m || !rd(p,CCU+0xa0,&v) ||
+        ((a733_ce_capabilities(p->config.profile)&A733_CE_CAP_TRNG) && !(v&1)) ||
+        !rd(p,CCU,&ref) || !a733_clock_ref24_valid(v,ref)) return 0;
+    /* CE/PERI0 consume normalized PLL_REF; TRNG still requires RC16M above. */
+    unsigned n;
+    if (!rd(p,CCU+0xa0,&v) ||
         (v&0xfe000000u)!=0xfe000000u || (v&(BIT(24)|BIT(1))) ||
         !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0)) return 0;
     n=((v>>8)&255)+1;
