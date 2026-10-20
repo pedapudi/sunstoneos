@@ -136,12 +136,23 @@ to qualify USB observation. The focused preparation check is
 `checks/gpu-display-preparation.py`. Its positive bundle
 fixture substitutes only the explicit physical-record predicate, while retaining
 the new binding, provenance, assembly and freeze checks. The same fixture must
-fail ordinary production validation. Separate linked input checks use the actual
-application/GPU validators with address and undefined-behavior sanitizers. Root's six actual generated AArch32 launcher cases cover the valid handoff and
-refuse unsupported version, entry digest, layout, memory authority and input
-extent. They use the preserved 2,420-byte wrapper and stop before reset with
-CPU state, counter and MMIO modeled. Native CPU startup and physical operation
-remain unqualified. Evidence is under
-`gpu-display-host-20261020/root-launcher/result.json` and `root-frozen/manifest.json`.
-The host audit at `gpu-display-host-20261020/root-integration.json` verifies
-451 frozen files and all 35 current sources without rebuilding the native image.
+fail ordinary production validation. Earlier linked input checks use the actual
+application/GPU validators with address and undefined-behavior sanitizers.
+
+Version-2 preparation and capture results are retained under
+`gpu-display-observation-host-20261020`. Preparation, USB-admission refusals,
+supervisor readiness and copied-reply identity, deadline and persistence checks
+remain bound to the first image, `2f60a47e…`. The final USB framing correction
+produces image `70041393…`; its affected native framing cases are recorded under
+`gpu-display-capture-20261020/framing-cases`. The host cases are not replayed or
+relabeled as final-image execution. `identity-reuse.json` records the unchanged
+host sources and the native object delta. `final-rebinding.json` records the
+final-image bundle assembly with unchanged SRAM launcher bytes and explicitly
+modeled physical proofs; production validation still refuses that bundle.
+
+Root's seven changed version-2 AArch32 launcher cases are preserved under
+`gpu-display-observation-host-20261020/root-launcher/result.json`. The earlier
+six version-1 cases and 451-file host audit remain historical evidence under
+`gpu-display-host-20261020`. These instruction checks model CPU state, counter
+and MMIO and stop before board startup. Physical GPU, HDMI, USB and recovery
+operation remain unqualified.
