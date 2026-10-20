@@ -4,8 +4,9 @@
 The input is the native Type-C negotiation checkpoint, including its pending
 PMIC request, independent bus owners, real task stacks and negotiated token.
 Only architectural scheduling, elapsed time, MMIO, sink replies and frame-end
-events are modeled. Scheduling is serialized and cooperative; SMP concurrency,
-tick preemption and priority inheritance are not exercised. Injected frame-end
+events are modeled. Scheduling is serialized, with modeled one-millisecond tick
+preemption at eligible counter returns. SMP concurrency and priority inheritance
+are not exercised. Injected frame-end
 events establish application handling, not scanout. No physical link, pixel
 output or DMA drain is qualified.
 """
@@ -13,7 +14,7 @@ import argparse,hashlib,importlib.util,json,pickle,struct
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from unicorn import UC_HOOK_CODE
-from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
+from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE,UC_ARM64_REG_TPIDR_EL1
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
@@ -73,14 +74,18 @@ def main():
  assert manifest['session_sha256']==sha(a.session) and manifest['contract_sha256']==sha(a.contract)
  directory=a.checkpoint.resolve()
  for name,row in manifest['files'].items():
-  file=(directory/name).resolve();assert file.parent==directory
+  file=(directory/name).resolve();assert directory in file.parents
   assert file.stat().st_size==row['bytes'] and sha(file)==row['sha256'],name
+ assert manifest['sources'][str(a.hardware_source.resolve())]==sha(a.hardware_source)
+ pd_inputs=json.loads((directory/'inputs.json').read_text())
+ assert pd_inputs[str((ROOT/'checks/displayport-native.py').resolve())]==sha(ROOT/'checks/displayport-native.py')
  inputs={str(x.resolve()):sha(x) for x in (a.image,a.session,a.contract,a.checkpoint_manifest,a.hardware_source,
   Path(__file__),ROOT/'checks/displayport-native.py',ROOT/'checks/displayport-controller.py')}
  save(a.output/'inputs.json',inputs)
  class Machine(base.Machine):
   def code(self,u,at,n,unused):
    name=self.hooks.get(at)
+   assert name not in ('vTaskEnterCritical','vTaskExitCritical'), 'unexpected unmodeled critical-section API'
    inline=at in getattr(self,'yield_sites',set())
    if inline or name in ('vTaskDelay','vPortYield','vTaskSuspend'):
     ticks=self.u.reg_read(UC_ARM64_REG_X0) if name=='vTaskDelay' else 0
@@ -91,6 +96,19 @@ def main():
     self.stopped=True;self.u.emu_stop();return
    if name=='a733_counter_clock_now':self.time+=1
    super().code(u,at,n,unused)
+   if name=='a733_counter_clock_now':
+    # Complete the modeled counter function before considering an interrupt:
+    # its out parameter, return value and caller PC are already coherent.
+    if self.time>=self.next_tick:self.tick_pending=True
+    core=self.u.reg_read(UC_ARM64_REG_TPIDR_EL1)
+    unmasked=not(self.u.reg_read(UC_ARM64_REG_PSTATE)&0x80)
+    zero=core<8
+    for symbol in ('ullCriticalNestings','ullPortInterruptNestings'):
+     zero=zero and self.get(self.image.address(symbol)+core*8)==0
+    if self.tick_pending and unmasked and zero:
+     self.next_tick=(self.time//1000+1)*1000;self.tick_pending=False
+     self.tick_events.append([self.time,self.task]);self.boundary=('tick',0)
+     self.stopped=True;self.u.emu_stop()
  image=base.base.Image(a.image);m=Machine(image,raw,contract)
  m.yield_sites=set()
  for start,data in image.parts:
@@ -104,7 +122,7 @@ def main():
   previous=json.loads((source/'manifest.json').read_text())
   assert previous['image_sha256']==image_hash and previous['session_sha256']==sha(a.session) and previous['contract_sha256']==sha(a.contract)
   for name,row in previous['files'].items():
-   file=(source/name).resolve();assert file.parent==source
+   file=(source/name).resolve();assert source in file.parents
    assert file.stat().st_size==row['bytes'] and sha(file)==row['sha256']
   assert json.loads((source/'failure.json').read_text())['resumable']
  state=pickle.loads((source/('stopped.pickle' if a.resume else 'negotiated.pickle')).read_bytes())
@@ -128,6 +146,8 @@ def main():
  assert bytes(m.u.mem_read(m.record,len(contract)))==contract
  assert bytes(m.u.mem_read(0x42004000,len(contract)))==contract
  scheduler=pickle.loads((source/('stopped-scheduler.pickle' if a.resume else 'scheduler.pickle')).read_bytes())
+ m.next_tick=scheduler.get('next_tick',(m.time//1000+1)*1000)
+ m.tick_pending=scheduler.get('tick_pending',False);m.tick_events=scheduler.get('tick_events',[])
  tasks=scheduler['tasks'];last=scheduler['last'];sequence=scheduler['sequence']
  assert scheduler['phase'] in ('detached-validation-complete','scheduler-boundary','scheduler-task')
  interrupted=scheduler.get('active_handle') if scheduler['phase']=='scheduler-task' else None
@@ -143,6 +163,7 @@ def main():
  expected['build_id']=bytes(m.u.mem_read(image.address('a733_smp_build_id'),32))
  for name in ('generation','hpd_irq','polarity','pin_assignment','hpd'):expected['token_'+name]=m.get(token_at+tf[name],8 if name in ('generation','hpd_irq') else 4)
  baseline={key:value.hex() if isinstance(value,bytes) else value for key,value in expected.items()}
+ if (directory/'expected.json').is_file():assert baseline==json.loads((directory/'expected.json').read_text())
  if a.resume:
   # An interrupted continuation cannot promote corrupted restored fields into
   # new expected values. Keep the original negotiated baseline unchanged.
@@ -201,9 +222,21 @@ def main():
    active['context']=m.u.context_save();phase='scheduler-boundary';active['runs']+=1
    kind,ticks=m.boundary
    if kind=='yield':active['yields']+=1;active['wake']=m.time;m.time+=1
+   elif kind=='tick':active['wake']=m.time
    elif kind=='suspend':active['wake']=1<<60
    else:assert ticks==1;active['delays']+=1;active['wake']=(m.time//1000+ticks)*1000
    last[active['handle']]=sequence;sequence+=1
+   if (active['role']=='display' and m.get(native_at+nf['stage'],4)==6 and
+       not m.get(native_at+nf['controller']+image.layouts['a733_dp']['self']) and
+       not (a.output/'pre-controller').exists()):
+    # Keep the last coherent application boundary before the first controller
+    # operation, so later lower-model fixes need not repeat PD or supply work.
+    point=a.output/'pre-controller';point.mkdir();m.checkpoint(point,'negotiated')
+    (point/'scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase='scheduler-boundary',tasks=tasks,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events)))
+    (point/'hardware.pickle').write_bytes(pickle.dumps(hw.export()))
+    save(point/'inputs.json',inputs);save(point/'expected.json',baseline)
+    files={f.name:dict(bytes=f.stat().st_size,sha256=sha(f)) for f in point.iterdir() if f.is_file()}
+    save(point/'negotiated-manifest.json',dict(schema='a733-displayport-pre-controller-checkpoint-v1',image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),sources={str(a.hardware_source.resolve()):sha(a.hardware_source)},files=files,physical=False))
    if m.get(terminal,4):break
   else:raise AssertionError(('bounded completion not reached',m.time,sequence))
   reply=bytes(m.u.mem_read(m.app+m.af['reply'],1024));(a.output/'reply.bin').write_bytes(reply)
@@ -234,18 +267,18 @@ def main():
    file=a.output/('terminal-ram-'+str(i)+'.bin');memory.append(dict(address=at,bytes=count,file=str(file),sha256=sha(file)))
   save(a.output/'terminal-memory.json',dict(image_sha256=image_hash,memory=memory,reply_sha256=sha(a.output/'reply.bin'),physical=False,scope=__doc__))
   save(a.output/'summary.json',dict(passed=True,physical=False,image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),
-   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,scope=__doc__))
+   time_us=m.time,sequence=sequence,frame_ends=display.frame_ends,clears=display.clears,tick_events=m.tick_events,scope=__doc__))
   print('PASS actual composed native retained-stop reply')
  except BaseException as error:
   if active is not None and phase=='scheduler-task':active['context']=m.u.context_save()
   m.checkpoint(a.output,'stopped')
-  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None)))
+  (a.output/'stopped-scheduler.pickle').write_bytes(pickle.dumps(dict(sequence=sequence,last=last,phase=phase,tasks=tasks,active_handle=active['handle'] if active is not None and phase=='scheduler-task' else None,next_tick=m.next_tick,tick_pending=m.tick_pending,tick_events=m.tick_events)))
   (a.output/'stopped-hardware.pickle').write_bytes(pickle.dumps(hw.export()))
   (a.output/'stopped-display.pickle').write_bytes(pickle.dumps(display.export()))
   save(a.output/'failure.json',dict(error=repr(error),time_us=m.time,sequence=sequence,phase=phase,task=active['role'] if active else None,trace=m.trace[-40:],physical=False,resumable=not m.mmio_in_progress))
   raise
  finally:
   for path,digest in inputs.items():assert sha(path)==digest,('input changed',path)
-  files={p.name:dict(bytes=p.stat().st_size,sha256=sha(p)) for p in a.output.iterdir() if p.is_file()}
+  files={str(p.relative_to(a.output)):dict(bytes=p.stat().st_size,sha256=sha(p)) for p in a.output.rglob('*') if p.is_file()}
   save(a.output/'manifest.json',dict(image_sha256=image_hash,session_sha256=sha(a.session),contract_sha256=sha(a.contract),files=files,physical=False))
 if __name__=='__main__':main()
