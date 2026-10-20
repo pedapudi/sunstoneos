@@ -94,3 +94,11 @@ string(REPLACE ";" "\n" acc_input_lines "${acc_inputs}")
 file(WRITE "${acc_build}/identity-inputs.txt" "${acc_input_lines}\n")
 target_sources(sunstone-a733-accelerators PRIVATE "${acc_build}/build-id.c")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${acc_inputs})
+set(acc_manifest_script [=[
+file(SHA256 "${IMAGE}" digest)
+file(WRITE "@acc_build@/manifest.json" "{\"target\":\"sunstone-a733-accelerators\",\"execution_profile\":\"accelerators-single-core-supervised-v1\",\"workload\":\"interleaved-gpu-compute-complete-nn\",\"build_id\":\"@acc_build_id@\",\"final_elf\":\"${digest}\"}\n")
+]=])
+string(CONFIGURE "${acc_manifest_script}" acc_manifest_script @ONLY)
+file(WRITE "${acc_build}/finish-manifest.cmake" "${acc_manifest_script}")
+add_custom_command(TARGET sunstone-a733-accelerators POST_BUILD COMMAND "${CMAKE_COMMAND}"
+  "-DIMAGE=$<TARGET_FILE:sunstone-a733-accelerators>" -P "${acc_build}/finish-manifest.cmake")
