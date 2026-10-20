@@ -1738,6 +1738,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `crypto-runtime-input-20261018/`. Messages are bounded to 2048 bytes; AES requires
   a positive multiple of 16 bytes. Each retained session accepts one request.
   Optional output references do not replace physical numerical qualification.
+  [Fixed cold CE provisioning](crypto-application.md#fixed-cold-clock-provisioning-for-caller-requests)
+  now supports version-3 caller sessions. After request authentication, it admits
+  independently excluded, reset-held/gated CE state, preserves neighboring MBUS
+  gates and uses retained parent/CE ownership to program the fixed CE400 profile.
+  A restricted writer verifies each transition; uncertainty retains ownership
+  without retry or rollback. Versions 1/2 keep their inherited-clock behavior.
+  Eighteen owner cases execute the linked provider, writer, registry, allocator
+  and existing SHA client; the SHA device result and RTOS/device effects are
+  modeled. Two root SRAM cases have separate scope. Root's
+  `ce-clock-20261020/root-integration.json` verifies all 179 compiled repository
+  inputs and declared native/operation sources at `8a7aedb`; one image was built.
+  Unchanged arithmetic evidence is reused. Physical prior-DMA exclusion, secure
+  access, timing, clock rate and cryptographic operation remain unqualified;
+  reset-held readback establishes no drain or production authority.
 
 - USB0 device channel: **tested** at high speed for status, packet-boundary
   echoes, logs, and commanded ROM return. [USB evidence](usb.md) records the
