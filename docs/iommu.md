@@ -7,7 +7,7 @@ addresses into physical RAM addresses and checks device read/write permissions.
 This component has host and source-comparison evidence. It has no physical
 qualification or native platform handoff.
 
-The controller provides camera, decoder, encoder and display profiles. Each
+The controller provides camera, decoder, encoder, display and G2D profiles. Each
 installs fixed translations under a retained global lease. The component cannot
 replace an enabled inherited directory, release that lease, remap live tables,
 or reclaim buffers. Supervised profiles can retain all resources until planned
@@ -58,8 +58,9 @@ USB, video, or display paths.
 The controller's `accessible_masters` mask and the admission record's
 `powered_masters` mask identify the authorized micro-register sets, not every
 engine receiving power. The camera profile authorizes all ten sets; the decoder
-uses `0x00c0`, encoder `0x0008`, and display `0x0100`. The pinned device tree
-assigns DE0, the deinterlacer, G2D and e-paper to the same display power domain.
+uses `0x00c0`, encoder `0x0008`, display `0x0100`, and G2D `0x0400`.
+The pinned device tree assigns DE0, the deinterlacer, G2D and e-paper to the same
+display power domain.
 Powering that domain does not authorize accesses to all four micro-register
 sets. The USB master has no power-domain property in that device tree.
 
@@ -67,6 +68,9 @@ The GPU/display application can therefore use USB0 programmed I/O while retainin
 the display mask `0x0100`. It does not enable USB DMA, install USB translations,
 or inspect USB micro-register faults. Initial exclusion and drain still cover
 every DMA master, and unexpected global bank faults retain the session.
+The [G2D fill/copy application](g2d.md) uses the same exclusion rule with its
+master-10 profile. Its fixed source, output and command mappings remain owned
+until whole-board power removal.
 
 ## Page construction has explicit size and address limits
 

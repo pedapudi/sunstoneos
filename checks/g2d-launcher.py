@@ -18,7 +18,9 @@ with image.open('rb') as stream:
 code=(args.bundle/'launch.bin').read_bytes()
 assert 0<len(code)<=0xc00
 template=(args.bundle/'session.bin').read_bytes()
-contract=(args.bundle/'contract.bin').read_bytes()
+contract_page=(args.bundle/'contract.bin').read_bytes()
+assert len(contract_page)==4096 and not any(contract_page[288:])
+contract=contract_page[:288]
 request=(args.bundle/'request.bin').read_bytes()
 assert len(template)==904 and len(contract)==288
 assert struct.unpack_from('<3Q',template,592)==(0x4153373347324131,1,904)
