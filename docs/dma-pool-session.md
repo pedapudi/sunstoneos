@@ -244,6 +244,46 @@ supply that authority. Missing or modeled security evidence refuses launch befor
 device transactions. The verified record bytes are preserved with launch
 evidence. No nonsecure security-register probe or native rebuild is introduced.
 
+The shared host validator is `tools/dma-nonsecure-access.py`. DMA-copy software
+admission also binds that file through its `dma_nonsecure_helper` reference.
+The UART DMA, I2S and finite HDMI audio admissions use the same security schema,
+referenced by a top-level `dma_nonsecure_access` object with an absolute `path`
+and `sha256`. These consumers additionally require `configuration_sha256` over
+their complete immutable DMA configuration: UART's 96 bytes at offset 1824,
+I2S's 104-byte `dma` field, or HDMI audio's 104 bytes at offset 552.
+The admission and every supporting security record are frozen and rechecked;
+frozen validation cannot reopen missing evidence from its original path.
+
+UART DMA also requires `session_template_sha256` over the complete 1952-byte
+input template. Its independently reviewed security record supplies nonzero
+integer epoch, generation and lease values. Preparation validates that record
+before adopting those values, and bundle/capture validation checks them against
+the actual runtime session. Existing UART records continue to bind the original
+template, image, circuit, request and DMA configuration. Only runtime IDs and the
+linked image identity may replace template bytes 24 through 79. FIFO UART keeps
+its existing random IDs and requires no DMA security record.
+Externally assigned IDs do not establish freshness; the existing one-attempt
+admission and retained recovery requirements still apply.
+
+I2S and HDMI audio already carry immutable session IDs. Their security records
+bind those IDs, the image and exact DMA configuration; their admission digests
+then bind the security reference into the session. A full-session digest inside
+the security record would create a digest cycle and is not required.
+HDMI audio admission also names the reviewed board `identity` and `port`.
+Its result decoder remains an offline observation entry and supplies no physical
+execution authority. No wire layout, register access or native image changes.
+Earlier frozen images and evidence retain their original admission scope.
+
+The focused consumer check passed 30 host cases using the preserved UART DMA,
+I2S duplex and HDMI audio images. It covers added authority refusals, UART's
+actual ID-adoption producer, and HDMI's evidence loader and frozen bundle.
+Model positives replace only explicit modeled/nonphysical decisions; production
+refuses modeled security records. Evidence is under
+`~/.cache/sunstoneos/evidence/dma-consumer-security-20261020/`.
+Declared input digests and imported source bytes were checked before use and
+verified unchanged afterward. No native instructions, launcher build, device
+access or earlier component matrix ran for this host-only change.
+
 The focused `checks/dma-copy-security.py` check passes eight host cases against
 the immutable profile in the preserved `49397dc7…` image. Missing authority,
 modeled production evidence, absent channel coverage, differing controller or

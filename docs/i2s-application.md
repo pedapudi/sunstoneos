@@ -17,6 +17,12 @@ native policy admits each bank only for its direction's exact memory role and
 FIFO route. The existing RAM-copy constructor keeps its original API
 and admission requirements.
 
+Every I2S admission also requires the shared
+[DMA0 Nonsecure access authority](dma-pool-session.md), bound to its exact
+104-byte DMA configuration and session IDs. Duplex authority must cover both
+service channels. Preparation and supervised capture preserve and recheck all
+supporting bytes; this adds no native register probe or image rebuild.
+
 The protected session binds shared provider settings, DMA prior-drain and remote
 exclusion evidence, audio pin configuration, bank voltage and clock evidence,
 memory coherence, recorded PCM identity and supervised recovery to the linked

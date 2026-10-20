@@ -22,6 +22,7 @@ _spec.loader.exec_module(base)  # Library import; the old tool's main guard stay
 require, digest, artifact, save_json = base.require, base.digest, base.artifact, base.save_json
 image_parts, module, sync_file = base.image_parts, base.module, base.sync_file
 observer = base.module('dma_reused_observer', ROOT / 'tools/check-a733-smp-observe.py')
+security_authority=base.module('dma_nonsecure_authority',ROOT/'tools/dma-nonsecure-access.py')
 CONTRACT = base.CONTRACT
 REQUEST_MAGIC = 0x415337334f4c4331
 MESSAGE_MAGIC, FRAME_MAGIC = 0x53534f53, 0x41533733444d4131
@@ -207,7 +208,8 @@ def validate_software(value, bundle):
         require(artifact(value[key]) == (bundle/name).resolve(), 'Software evidence covers different artifacts.')
     require(artifact(value['host_tool']) == Path(__file__).resolve() and
             artifact(value['base_host_tool']) == Path(base.__file__).resolve() and
-            artifact(value['observer_helper']) == Path(observer.__file__).resolve(), 'Software evidence covers different host tools.')
+            artifact(value['observer_helper']) == Path(observer.__file__).resolve() and
+            artifact(value['dma_nonsecure_helper']) == Path(security_authority.__file__).resolve(), 'Software evidence covers different host tools.')
     require(value.get('evidence'), 'Observer evidence is missing.')
     for item in value['evidence']: artifact(item)
 
@@ -248,28 +250,10 @@ def validate_platform(value, prepared, identity, port):
     # Parse the exact digest-verified buffer, not another unchecked path read.
     data=artifact(item).read_bytes()
     require(hashlib.sha256(data).hexdigest()==item['sha256'],'DMA security evidence changed.')
-    security=json.loads(data)
-    require(security.get('schema')=='a733-dma-nonsecure-access-v1' and
-            security.get('identity')==identity and security.get('port')==port and
-            security.get('image_sha256')==prepared['image_sha256'],
-            'DMA security authority covers a different image or target.')
-    require(security.get('physical_authority') is True and security.get('modeled') is False and
-            security.get('reviewed') is True,'DMA security requires reviewed physical authority.')
-    for name in ('epoch','generation','lease','controller','service_channels','dma_evidence','dma_handoff'):
-        expected=prepared['channels' if name=='service_channels' else name]
-        require(type(expected) is int and 0<expected<1<<64 and type(security.get(name)) is int and
-                security[name]==expected,'DMA security session/controller binding differs: '+name)
-    mask=security.get('nonsecure_channels')
-    require(type(mask) is int and 0<mask<=0xffff and 0<security['service_channels']<=0xffff and
-            security['service_channels']&mask==security['service_channels'],
-            'DMA security evidence omits selected nonsecure channels.')
-    require(all(security.get(name) is True for name in
-            ('controller_access_nonsecure_el1','descriptor_data_access_nonsecure',
-             'valid_after_reset_release','security_writers_excluded_until_recovery')),
-            'DMA security access/lifetime authority is incomplete.')
-    require(isinstance(security.get('evidence'),list) and security['evidence'],
-            'DMA security observations are missing.')
-    for reference in security['evidence']:artifact(reference)
+    expected={k:prepared['channels' if k=='service_channels' else k]
+        for k in security_authority.NUMBERS}
+    expected.update(identity=identity,port=port,image_sha256=prepared['image_sha256'])
+    security_authority.validate(data,expected,lambda ref:artifact(ref).read_bytes(),require)
     return data
 
 

@@ -15,6 +15,7 @@ def module(name,path):
     s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 supervisor=module('i2s_prepare_supervisor',ROOT/'tools/check-a733-smp-supervised.py')
 protocol=module('i2s_protocol',ROOT/'apps/i2s/observe.py')
+security_authority=module('i2s_dma_security',ROOT/'tools/dma-nonsecure-access.py')
 require,digest,save_json=supervisor.require,supervisor.digest,supervisor.save_json
 SCHEMA='a733-i2s-supervised-bundle-v1'
 SESSION_ADDRESS=0x41f00000
@@ -136,6 +137,13 @@ def validate_admission(admission_raw,raw,layout,identity,pcm,image_hash,cache=No
         if str(p) not in cache:require(not frozen,'Missing frozen I2S entry evidence');cache[str(p)]=p.read_bytes()
         data=cache[str(p)];require(sha(data)==ref['sha256'],'I2S entry evidence changed');return data
     target,port=record.get('identity'),record.get('port');require(target and port,'Explicit I2S target/port required')
+    require('dma_nonsecure_access' in record,'I2S DMA nonsecure authority is missing')
+    expected={k:profile[k] for k in ('epoch','generation','lease')}
+    expected.update(identity=target,port=port,image_sha256=image_hash,
+        controller=number(raw,layout,'dma.controller'),service_channels=number(raw,layout,'dma.service_channels'),
+        dma_evidence=number(raw,layout,'dma.evidence'),dma_handoff=number(raw,layout,'dma.allowed.handoff'),
+        configuration_sha256=sha(field(raw,layout,'dma')))
+    security_authority.validate(evidence(record['dma_nonsecure_access']),expected,evidence,require)
     ddr_raw=evidence(record['ddr']);ddr=json.loads(ddr_raw)
     require(field(raw,layout,'memory')==hashlib.sha256(ddr_raw).digest() and ddr.get('schema')=='a733-ddr-reservation-v1' and
         ddr.get('identity')==target and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and

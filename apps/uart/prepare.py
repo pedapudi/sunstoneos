@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('uart_board_prepare',ROOT/'apps/board/prepare.py')
+security_authority=module('uart_dma_security',ROOT/'tools/dma-nonsecure-access.py')
 base=board.base
 require=base.require
 SCHEMA='a733-uart-supervised-bundle-v1'
@@ -80,7 +81,7 @@ def build_launcher(out,clang,lld,dma=False):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,runtime=None):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-uart-supervised-entry-v1','Wrong UART admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
@@ -110,6 +111,24 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
         require(all(fact.get(k) is True for k in ('cpu_dma0_users_stopped','remote_mcu_users_stopped',
             'other_fifo_producers_stopped','prior_bus_writes_drained','irq143_owned_masked_inactive',
             'manual_power_removal_retains_all_dma_resources','four_private_dma_pages_exclusive')),'DMA physical prerequisite absent.')
+        def evidence(ref):
+            require(isinstance(ref,dict) and set(ref)=={'path','sha256'},'Invalid DMA security reference.')
+            path=Path(ref['path']);require(path.is_absolute(),'DMA security path must be absolute.')
+            if str(path) not in cache:
+                require(not frozen,'Missing frozen DMA security evidence.');cache[str(path)]=path.read_bytes()
+            data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==ref['sha256'],'DMA security evidence changed.')
+            return data
+        require('dma_nonsecure_access' in record,'UART DMA nonsecure authority is missing.')
+        data=evidence(record['dma_nonsecure_access']);proposed=json.loads(data)
+        require(isinstance(proposed,dict),'Invalid UART DMA security authority.')
+        ids=struct.unpack_from('<3Q',runtime,24) if runtime is not None else tuple(proposed.get(k) for k in ('epoch','generation','lease'))
+        _,handoff,controller,dma_evidence=struct.unpack_from('<4Q',raw,1872)
+        expected=dict(zip(('epoch','generation','lease'),ids))
+        expected.update(identity=record['identity'],port=record['port'],image_sha256=image_hash,
+            controller=controller,service_channels=struct.unpack_from('<H',raw,1910)[0],
+            dma_evidence=dma_evidence,dma_handoff=handoff,
+            configuration_sha256=hashlib.sha256(raw[1824:1920]).hexdigest(),session_template_sha256=template_hash)
+        security_authority.validate(data,expected,evidence,require)
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
@@ -119,7 +138,10 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     mf=json.loads(snapshots['image-input-manifest.json'])
     require(mf.get('target')=='sunstone-a733-uart' and mf.get('execution_profile')==execution_profile(raw) and mf.get('final_elf')==ih,'Tested UART image manifest required.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
-    epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
+    if dma_mode(raw):
+        authority=json.loads(cache[str(Path(record['dma_nonsecure_access']['path']))])
+        epoch,generation,lease=(authority[k] for k in ('epoch','generation','lease'))
+    else:epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
     for name,data in snapshots.items():(out/name).write_bytes(data)
@@ -153,7 +175,7 @@ def validate_bundle(bundle):
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'UART initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,runtime=raw)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'UART build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
     require(raw==expected_raw,'UART session differs from admitted derivation.')

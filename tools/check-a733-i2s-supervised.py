@@ -325,7 +325,8 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,pcm,direc
 
 def source_files():
     return [('i2s-host-tool.py',Path(__file__)),('i2s-preparation.py',Path(preparation.__file__)),
-            ('i2s-decoder.py',Path(decoder.__file__))]
+            ('i2s-decoder.py',Path(decoder.__file__)),
+            ('dma-nonsecure-access.py',Path(preparation.security_authority.__file__))]
 
 
 def reference_bytes(value):

@@ -80,7 +80,7 @@ def capture_device(device,same,deadline,session,evidence,record,save):
 def source_files():
     return [('uart-host-tool.py',Path(__file__)),('uart-preparation.py',Path(preparation.__file__)),
         ('uart-decoder.py',Path(decoder.__file__)),('board-preparation.py',Path(preparation.board.__file__)),
-        ('usb-access.py',ROOT/'tools/usb-access.py')]
+        ('usb-access.py',ROOT/'tools/usb-access.py'),('dma-nonsecure-access.py',Path(preparation.security_authority.__file__))]
 
 
 def freeze_bundle(bundle):
@@ -165,7 +165,7 @@ def main(argv=None):
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
     evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):
-        preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True)
+        preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True,runtime=session)
         require(admission['identity']==identity and admission['port']==port,'UART entry covers another instance.')
     return supervisor.run_session(args,bundle,prepared,
         lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,

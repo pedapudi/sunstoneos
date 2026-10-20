@@ -13,6 +13,8 @@ from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('hdmi_audio_base',ROOT/'apps/hdmi/prepare.py')
 base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
+spec=importlib.util.spec_from_file_location('hdmi_audio_dma_security',ROOT/'tools/dma-nonsecure-access.py')
+security_authority=importlib.util.module_from_spec(spec);spec.loader.exec_module(security_authority)
 SCHEMA='a733-hdmi-audio-supervised-bundle-v1'
 GEOMETRY=(1,656,440,216,0x41f10000,192000,48000,2,16,32)
 MEMORY_FACTS=('full_pool_and_pcm_window_exclusive','no_physical_aliases',
@@ -141,6 +143,30 @@ def validate_data(image,raw,admission,pcm,records):
         all(record.get(key)==fields[key] for key in ('epoch','generation','lease','supervisor')),
         'HDMI audio admission names another image/session.')
     physical_authority(record)
+    require('dma_nonsecure_access' in record,'HDMI audio DMA nonsecure authority is missing.')
+    reference=record['dma_nonsecure_access']
+    require(isinstance(reference,dict) and set(reference)=={'path','sha256'} and
+        isinstance(reference['path'],str) and Path(reference['path']).is_absolute(),
+        'Invalid HDMI audio DMA security reference.')
+    data=records['dma_nonsecure_access']
+    require(sha(data)==reference['sha256'],'HDMI audio DMA security evidence changed.')
+    security=json.loads(data)
+    require(isinstance(security,dict) and isinstance(security.get('evidence'),list),
+        'Invalid HDMI audio DMA security authority.')
+    require(len({json.dumps(ref,sort_keys=True) for ref in security['evidence']})==len(security['evidence']),
+        'Duplicate HDMI audio DMA security evidence references.')
+    def evidence(ref):
+        matches=[i for i,item in enumerate(security['evidence']) if item==ref]
+        require(bool(matches),'Unsealed HDMI audio DMA security evidence.')
+        key='dma_security_evidence_'+str(matches[0])
+        require(key in records,'Missing frozen HDMI audio DMA security evidence.')
+        return records[key]
+    controller,dma_evidence,_,_,service=struct.unpack_from('<2QI2H',raw,632)
+    expected={k:fields[k] for k in ('epoch','generation','lease')}
+    expected.update(identity=record.get('identity'),port=record.get('port'),image_sha256=image_hash,
+        controller=controller,service_channels=service,dma_evidence=dma_evidence,
+        dma_handoff=struct.unpack_from('<Q',raw,608)[0],configuration_sha256=sha(raw[552:656]))
+    security_authority.validate(data,expected,evidence,require)
     require(record.get('audio')=='48khz-stereo-s16le-retained-v1' and
         record.get('audio_authority')==fields['authority'] and record.get('pcm_sha256')==sha(pcm) and
         record.get('pcm_bytes')==len(pcm),'HDMI audio source/authority admission differs.')
@@ -174,6 +200,20 @@ def validate(image,session,admission,pcm):
     for key in ('analog','power','supervision','audio_memory','audio_electrical'):
         records[key]=(admission.parent/record[key]).resolve().read_bytes()
     records['sink_edid']=(admission.parent/record['sink_edid']['path']).resolve().read_bytes()
+    require('dma_nonsecure_access' in record,'HDMI audio DMA nonsecure authority is missing.')
+    reference=record['dma_nonsecure_access']
+    def load(ref):
+        require(isinstance(ref,dict) and set(ref)=={'path','sha256'} and
+            isinstance(ref['path'],str) and Path(ref['path']).is_absolute(),
+            'Invalid HDMI audio DMA security reference.')
+        data=Path(ref['path']).read_bytes()
+        require(sha(data)==ref['sha256'],'HDMI audio DMA security evidence changed.')
+        return data
+    records['dma_nonsecure_access']=load(reference)
+    security=json.loads(records['dma_nonsecure_access'])
+    require(isinstance(security,dict) and isinstance(security.get('evidence'),list),
+        'Invalid HDMI audio DMA security authority.')
+    for i,ref in enumerate(security['evidence']):records['dma_security_evidence_'+str(i)]=load(ref)
     validated=validate_data(image_data,raw,admission_data,pcm_data,records)
     snapshots=dict(image_elf=image_data,session=raw,admission=admission_data,pcm=pcm_data,**records)
     return validated,snapshots
@@ -228,11 +268,19 @@ def validate_bundle(bundle):
     for name,expected in metadata['files'].items():
         require(Path(name).name==name,'Invalid HDMI audio bundle filename.')
         frozen[name]=(bundle/name).read_bytes();require(sha(frozen[name])==expected,'HDMI audio bundle changed: '+name)
-    required={key+'.bin' for key in ('image_elf','admission','pcm','analog','power','supervision','audio_memory','audio_electrical','sink_edid')}
+    required={key+'.bin' for key in ('image_elf','admission','pcm','analog','power','supervision','audio_memory','audio_electrical','sink_edid','dma_nonsecure_access')}
     required.update(('source-session.bin','session.bin','input.pcm','request.bin','contract.bin',
         'result-zero.bin','report-zero.bin','launch.bin'))
     require(required<=set(frozen),'HDMI audio bundle omits admitted inputs.')
     records={key:frozen[key+'.bin'] for key in ('analog','power','supervision','audio_memory','audio_electrical','sink_edid')}
+    records['dma_nonsecure_access']=frozen['dma_nonsecure_access.bin']
+    security=json.loads(records['dma_nonsecure_access'])
+    require(isinstance(security,dict) and isinstance(security.get('evidence'),list),
+        'Invalid HDMI audio DMA security authority.')
+    for i in range(len(security['evidence'])):
+        key='dma_security_evidence_'+str(i)
+        require(key+'.bin' in frozen,'Missing frozen HDMI audio DMA security evidence.')
+        records[key]=frozen[key+'.bin']
     parts,address,identity,fields,locations=validate_data(frozen['image_elf.bin'],frozen['session.bin'][:656],frozen['admission.bin'],frozen['pcm.bin'],records)
     require(len(frozen['session.bin'])==4096 and not any(frozen['session.bin'][656:]) and frozen['session.bin'][:656]==frozen['source-session.bin'],'Invalid HDMI audio session page.')
     require(frozen['input.pcm']==frozen['pcm.bin'],'HDMI audio PCM upload differs.')

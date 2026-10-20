@@ -25,6 +25,13 @@ settled rails, clock and I2S3 route ownership, and sink support for stereo
 48 kHz 16-bit LPCM. The digest-bound sink EDID must advertise that support through
 a CTA audio descriptor or the CTA Basic Audio flag.
 
+Admission also requires the shared [DMA0 Nonsecure access
+record](dma-pool-session.md) through `dma_nonsecure_access`. It binds the reviewed
+board identity and port, image, session IDs and complete 104-byte DMA handoff.
+The packer freezes the record and every digest-bound supporting observation.
+Repeated supporting references are refused. These prerequisites authorize no
+live capture transport or security-register probe.
+
 These records describe prerequisites; nonzero IDs and asserted flags do not
 establish physical facts. Production preparation rejects modeled authority.
 Software fixtures mark their records as models and replace only that authority

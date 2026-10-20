@@ -151,6 +151,12 @@ template and caller input; `prepare.py` requires image-bound authority for the
 exact configuration and input. Producing these records establishes no physical
 prerequisites. The authenticated session is copied before provider construction.
 
+DMA preparation additionally requires the shared
+[Nonsecure access authority](dma-pool-session.md), including the exact DMA
+configuration and input-template digests. The reviewed record supplies runtime
+IDs; preparation and capture recheck their complete binding before use.
+FIFO preparation is unchanged.
+
 One UART task owns both the port and the DMA client slot. The existing privileged
 DMA worker owns DMA registers and cache operations. Four permanently reserved
 pages hold RX/TX descriptors and RX/TX data. Each descriptor transfers the logical
