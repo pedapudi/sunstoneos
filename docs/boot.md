@@ -12,6 +12,29 @@ microSD cards whose contents must be preserved. Boot-security configuration
 remains unconfirmed. The original board's DDR initialization reported 12 GiB;
 full capacity testing remains outstanding.
 
+## Standalone microSD boot remains unimplemented
+
+The pinned board packaging recipe places boot0 at byte 8,192 and a TOC1
+package at byte 16,793,600 in a zero-filled 20 MiB file. Its package contains
+U-Boot, monitor and SCP firmware. This describes the published container;
+it does not establish a SunstoneOS boot chain or authorize writing either card.
+The source assessment and exact reference hashes are preserved under
+`~/.cache/sunstoneos/evidence/microsd-boot-package-20261020/`.
+
+The current SunstoneOS entry requires EL3 and a sealed launch contract supplied
+by the RAM loader. Packing that ELF as U-Boot does not establish either
+precondition. The pinned monitor's header and inspected code use `0x48000000`,
+which is also the start of the current extended device pool. Retaining that
+monitor would require an explicit memory reservation and a compatible CPU
+entry contract. SCP activity also needs an ownership decision before the OS
+can claim exclusive control of shared clocks and power.
+
+The primary agent must establish the cold-entry component roles, loading
+addresses, retained firmware, initial resource state and recovery behavior
+before implementing the packager. Existing host tools are preferred; their
+individual provenance and redistribution terms remain to be established.
+No standalone image, storage write or boot qualification has occurred.
+
 ## SRAM probe result
 
 The 60-byte probe in [checks/a733-sram.S](../checks/a733-sram.S) executes in
