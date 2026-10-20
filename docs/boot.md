@@ -1,13 +1,16 @@
 # A733 recovery and first code execution
 
-The attached device answers FEL requests with SoC ID `0x1903`, the A733 identifier
-in the proposed recovery-tool support. The successful identity response on
-2026-10-15 reported protocol version 1 and scratchpad address `0x000ee800`.
-USB bus/address was `003:029`; rediscover the device before each session.
+The original board answered FEL requests with SoC ID `0x1903`, the A733 identifier
+in the recovery tool. Its successful identity response on 2026-10-15 reported
+protocol version 1 and scratchpad address `0x000ee800`. USB bus/address was
+`003:029`; that address supplies no current access authority.
 
-Board revision, populated storage, and boot-security configuration remain
-unconfirmed. DDR initialization reports 12 GiB; full capacity testing remains
-outstanding.
+The results below describe the initial boot probes and their limits at execution.
+The [current handoff](handoff.md) records subsequent CPU results and whether board
+access is available. Neither current board has populated eMMC or UFS; both have
+microSD cards whose contents must be preserved. Boot-security configuration
+remains unconfirmed. The original board's DDR initialization reported 12 GiB;
+full capacity testing remains outstanding.
 
 ## SRAM probe result
 
