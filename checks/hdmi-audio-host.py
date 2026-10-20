@@ -26,23 +26,29 @@ def main():
     result=args.result.read_bytes();ready=args.ready.read_bytes()
     nominal=capture.capture(image,session,pcm,result,ready,args.output/'nominal')
     assert nominal['result']['stage']=='input-ended-retained' and not nominal['result']['wire_drained']
+    failure=bytearray(result);struct.pack_into('<Q',failure,24,3)
+    assert capture.decode(bytes(failure),ready,session,pcm)['stage']=='fault-retained'
     refused=[]
-    for case in ('not-ready','short-result','running-result','wrong-frames','wrong-pcm','wrong-session-digest','partial-consumption',
+    for case in ('not-ready','short-result','running-result','wrong-frames','wrong-pcm','wrong-session-digest','cross-session-same-pcm','partial-consumption',
         'dma-failed','fifo-not-empty','wrong-tmds','wrong-rate','wire-drain'):
-        raw=bytearray(result);publication=ready
+        raw=bytearray(result);publication=ready;trial_session=session
         if case=='not-ready':publication=bytes(4)
         elif case=='short-result':raw=raw[:-1]
         elif case=='running-result':struct.pack_into('<Q',raw,24,1)
         elif case=='wrong-frames':struct.pack_into('<Q',raw,32,1+len(pcm)//4)
         elif case=='wrong-pcm':raw[96]^=1
         elif case=='wrong-session-digest':raw[128]^=1
+        elif case=='cross-session-same-pcm':
+            trial_session=bytearray(session);epoch=struct.unpack_from('<Q',session,24)[0]
+            struct.pack_into('<Q',trial_session,24,1 if epoch!=1 else 2)
+            trial_session=bytes(trial_session)
         elif case=='partial-consumption':struct.pack_into('<Q',raw,48,len(pcm)-4)
         elif case=='dma-failed':struct.pack_into('<Q',raw,56,3)
         elif case=='fifo-not-empty':struct.pack_into('<Q',raw,64,0)
         elif case=='wrong-tmds':struct.pack_into('<Q',raw,72,74250001)
         elif case=='wrong-rate':struct.pack_into('<Q',raw,80,44100)
         elif case=='wire-drain':struct.pack_into('<Q',raw,88,1)
-        try:capture.decode(bytes(raw),publication,session,pcm)
+        try:capture.decode(bytes(raw),publication,trial_session,pcm)
         except ValueError:refused.append(case)
         else:raise AssertionError('Bad result accepted: '+case)
     records={key:frozen[key+'.bin'] for key in ('analog','power','supervision','audio_memory','audio_electrical','sink_edid')}
