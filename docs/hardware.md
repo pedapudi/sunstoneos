@@ -1053,8 +1053,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is accepted; all 569 frozen inputs match integration. Physical startup and
   operation remain untested. Entropy qualification, wider modes,
   shutdown and physical topology/recovery remain outstanding.
-  [Native IPv4 networking](radio-network.md) implements UDP and TCP clients
-  through the actual FreeRTOS+TCP stack. Emulator checks cover packet exchange,
+  [Native IPv4 networking](radio-network.md) implements UDP/TCP clients and one
+  admitted IPv4 TCP listener through the actual FreeRTOS+TCP stack. Emulator checks
+  cover packet exchange,
   deadlines, socket disposal and association revocation. Native linking passes.
   The [receive dispatcher](radio-dispatch.md) supplies one receive owner, copied
   scan/station events and bounded retirement of unsupported records. Emulator
@@ -1062,8 +1063,22 @@ implementation is **planned**. Partial results apply only to the stated scope:
   records. DHCP lease authority and copied DNS requests are integrated; four
   focused stack cases and the combined board link pass. Fixed-address and DHCP
   startup profiles pass sanitizer checks. An unexplained earlier DNS deadline
-  miss remains a timing limitation. Physical networking, IPv6, server sockets,
-  reconnection and wider Wi-Fi security modes remain open.
+  miss remains a timing limitation. The [listener application](board-radio.md#an-admitted-listener-verifies-one-copied-application-exchange)
+  accepts one profile-selected peer IPv4 address, exchanges 1–256 copied bytes each
+  way and requires child/listener disposal receipts before terminal USB success.
+  Backlog one bounds pending children; cancellation, deadlines and address loss
+  retain ownership until the IP-task handoff completes. Seven actual-stack model
+  cases, four application sanitizer cases and five compiled-producer/host cases
+  pass under `net-inbound-20261020/`; their modeled boundaries are in `closure.json`.
+  The native image is linked, not executed. The pinned MIT FreeRTOS+TCP revision
+  `b86ad086e9870099bb0ac18a75dcb7f6dd508cc7` uses a generated-source IPv4 reply
+  checksum patch; the original external source and notices remain preserved.
+  Frozen radio-only workload 3 retains earlier USB host inputs, inactive in that
+  selection, as classified in `bringup-impact.json`. Root verifies 431 compiled
+  dependencies and 161 objects under `root-integration.json`; do not mix current
+  objects into that image. Physical networking, entropy quality and RF/wire drain remain
+  unqualified. IPv6, broader server operation, reconnection and wider Wi-Fi
+  security modes remain open.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
 
