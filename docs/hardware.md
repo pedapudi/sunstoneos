@@ -98,9 +98,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   in this profile; retained master-8 memory supplies the display frames.
   Earlier-image actual tasks reached CC1/pin C/HPD high, and construction passed
   before controller initialization. These checkpoints are preserved under
-  `displayport-native-20261020/typec-negotiated-ae83/frozen/manifest.json` and
-  `constructor-ae83/constructor-manifest.json`. The wrapper changed afterward;
-  full final-image composition awaits a CC-step cadence correction. No final
+  `displayport-native-20261020/typec-negotiated-9164/negotiated-manifest.json` and
+  `constructor-9164/constructor-manifest.json`. Full composed integration remains
+  pending; these checkpoints do not establish controller/PHY/AUX/DE operation. No final
   composition hash or trained-link/output result is claimed. Actual board
   revision, physical negotiation, AUX/link operation, visible output, memory
   visibility/drain and recovery remain unqualified. Broader rates/modes, audio,
@@ -503,15 +503,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   provider disables their competing inherited-bus readers. Emulator checks pass
   for both consumers and retained failures. Cold bus startup, recovery, regulator
   writes and electrical qualification remain open.
-  [Provider clock admission](provider-clock-reference.md) now validates the
-  normalized 24 MHz reference for generic TWI11, USB2, radio and CE instead of
-  requiring a 24 MHz raw oscillator. Each consumer retains its selected parent
-  and existing divider arithmetic; CE retains separate TRNG RC16M requirements.
-  Type-C S_TWI1 is different: APBS1 source 0 is raw DCXO and keeps its existing
-  source-derived timing. Four actual-function sanitizer checks and source review
-  are accepted under `provider-clock-reference-20261020/root-integration.json`.
-  Ownership/time/register observations are modeled; this supplies no new native
-  application, measured-frequency or physical qualification.
+  [Provider clock admission](provider-clock-reference.md) validates normalized
+  REF24 for generic TWI11, USB2, radio, CE, I2S AUDIO1 and PWM core/APB0 paths,
+  retaining each consumer's selected parent and divider arithmetic. CE retains
+  separate TRNG RC16M requirements. Type-C S_TWI1 source 0 is raw DCXO. Optional
+  LED APBS0 source 0 and S_SPI source 0 remain raw-24-only; LED source 4 and
+  SPI0–4 source 0 use normalized REF24. HDMI's selected raw SFR path remains
+  24 MHz-only pending its independent source/lease correction.
+  Actual-function sanitizer/source evidence is under
+  `provider-clock-reference-20261020/root-integration.json` and
+  `audio-pwm-hdmi-clock-20261020/root-integration.json`; SPI's separate fourteen
+  parent cases are recorded in [its platform record](spi-platform.md).
+  These checks model dependency observations and qualify no native application,
+  measured frequency or physical operation. Earlier frozen image scopes remain intact.
 - UART: **implemented** bounded [FIFO control](uart.md) for UART0–6 and both
   always-on UARTs, with format planning, flow control where supported, interrupts,
   error reporting and transmit drain. Host checks, source comparisons and native compilation
@@ -559,13 +563,21 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Focused host checks and native compilation pass. SPI4 route activation refuses
   its unproven package signal mapping. Board admission, physical peers, DMA,
   advanced modes and SPIF remain outstanding.
-  The [supervised SPI3 application](spi-application.md) now connects the native
-  providers to an authorized header peer exchange and copied USB response.
-  It verifies the BLDO1 configuration for the 1.8 V PE signal bank without
-  changing its voltage. One image link, admission checks, thirteen modeled native
-  cases and four host groups pass. Integration reuses those artifacts with
-  documented default-startup and additive-header differences. Physical exchange,
-  electrical compatibility and peer recovery remain unqualified.
+  The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
+  supports polling version 1 and deferred-IRQ version 2 for one authenticated
+  FIFO-sized WRITE_READ exchange on the 1.8 V PE0–3 route. CPU0 INTID59 masks
+  and notifies; the owner alone handles SPI/FIFO/CS checks and copied output.
+  A missing ISR cannot be replaced by active polling. Route deferral and the
+  operation deadline are bounded; uncertainty retains resources.
+  Five linked native cases and three host groups pass, with root routing/private
+  boot checks separate. Fourteen parent cases cover the earlier clock-source
+  correction, not IRQ-image execution. Evidence is under
+  `spi-irq-20261020/root-integration.json` and `root-frozen/manifest.json`.
+  Frozen image `149f7635…` remains authoritative. The sole source-audit difference
+  is in a later Type-C task body, not created for SPI workload 2; no hypothetical
+  rebuilt-image equivalence is claimed. SPI/GIC, PMIC, scheduling and transport
+  effects are modeled. Physical exchange, IRQ delivery, signal timing, electrical
+  compatibility and recovery remain unqualified; DMA and broader modes remain required.
 - PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
   The complete application has a boot-CPU-only profile under
   `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and

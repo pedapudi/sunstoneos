@@ -41,8 +41,11 @@ Bluetooth wired PCM uses I2S1, while voice transported through HCI can proceed i
 
 Clock admission follows each consumer's selected source. The
 [provider clock reference](provider-clock-reference.md) distinguishes normalized
-REF24 from raw DCXO; a shared nominal rate does not authorize another selector
-or establish measured frequency.
+REF24 from raw DCXO for TWI11/USB2/radio/CE/I2S/PWM. SPI0–4 use normalized
+source 0; S_SPI and LED APBS0 source 0 retain raw-24-only plans. Type-C S_TWI1
+keeps source-derived raw-DCXO timing. HDMI remains raw-24-only until its separate
+correction is accepted. A shared nominal rate authorizes neither another selector
+nor a measured-frequency claim.
 
 Qualification conditions describe physical equipment, electrical evidence or recovery
 that a mode needs. They are not claims that accessories are currently available.
@@ -73,7 +76,7 @@ plan based on those records; it is not a new claim of hardware qualification.
 | system-iommu | System IOMMU | clocks-resets-regulators-power-domains, single-core-runtime | Device address translation, stream ownership, invalidation and fault handling. | Exclude other masters, including the exclusive encoder scope, when installing mappings through generic or private media paths; establish recovery before fault tests. | iommu.md |
 | dma-and-device-address-translation | DMA and device address translation | dma-controllers, system-iommu | Complete both shared transfer and translation paths; consumers use only the path they need. | Check address widths, alignment, cache maintenance and device drain per master. | dma-startup.md |
 | uart | UART | basic-clock-reset, pin-control-and-gpio, single-core-runtime | Console and exposed serial ports, baud rates, flow control and overrun handling. | Attach a compatible peer for end-to-end exchanges. | uart-platform.md |
-| spi | SPI | basic-clock-reset, pin-control-and-gpio, single-core-runtime | Exposed transfer modes, chip selects and bounded completion; DMA modes also require DMA controllers. | Attach an electrically compatible peer and establish pin ownership. | spi-platform.md |
+| spi | SPI | basic-clock-reset, pin-control-and-gpio, single-core-runtime | Exposed transfer modes, chip selects and bounded polling/deferred-IRQ completion; DMA modes also require DMA controllers. | Attach an electrically compatible peer and establish pin ownership. | spi-platform.md |
 | pwm-and-adc | PWM and ADC | clocks-resets-regulators-power-domains, pin-control-and-gpio, single-core-runtime | Routed PWM outputs and ADC sampling, acquisition timing and interrupts. | Confirm ADC resistor population, reference voltage and allowable source impedance; measure PWM with a suitable peer. | adc-application.md |
 | sd-emmc-ufs-spi-storage | SD, eMMC, UFS, SPI storage | clocks-resets-regulators-power-domains, pin-control-and-gpio, single-core-runtime, spi | Populated or exposed block devices; SPI applies only to SPI storage. Include durable update and recovery behavior. eMMC and UFS media are absent on both current boards. | Preserve both microSD cards; establish backups before writes. Do not probe absent eMMC or UFS devices. Their media qualification is not required on these boards. | storage.md |
 | type-c-and-display-multiplexing | Type-C and display multiplexing | clocks-resets-regulators-power-domains, pin-control-and-gpio, single-core-runtime, i2c | CC/VBUS, roles, orientation, power switching, PD negotiation and copied DP-mode/HPD authority; FUSB302 uses S_TWI1 separately from PMIC S_TWI0. | Establish electrical power budget, VBUS cutoff, fresh mode/HPD observations and shared COMB0 exclusion; software negotiation does not qualify physical power or display operation. | typec.md |
