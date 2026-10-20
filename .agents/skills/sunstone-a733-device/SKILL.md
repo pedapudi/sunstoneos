@@ -167,6 +167,9 @@ Prevent recurring fixture failures at setup:
   ELF symbols by object/function type when locating retained data. Match MMIO
   access widths to the instructions; an eight-byte fixture read can combine
   two independent four-byte hardware registers.
+  A noinline checkpoint marker can lose its argument setup when the callee
+  does not use that argument. Verify the linked call sites and bind checkpoint
+  classification to actual native state, or keep the marker input live.
   Before modeling task execution, enumerate the selected port's actual yield,
   delay and suspend sites; a yield may be an inline SVC rather than a function
   call. Save CPU, RAM, task and scheduler state on every execution-budget or

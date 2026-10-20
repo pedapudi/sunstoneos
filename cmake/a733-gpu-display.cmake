@@ -50,7 +50,7 @@ target_link_options(sunstone-a733-gpu-display PRIVATE -nostdlib -static -Wl,--gc
 set_target_properties(sunstone-a733-gpu-display PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${gd_build}/link-devices.ld")
 get_target_property(gd_sources sunstone-a733-gpu-display SOURCES)
 file(GLOB gd_headers "${gd_root}/apps/gpu-display/*.h" "${gd_root}/apps/hdmi/*.h")
-set(gd_inputs ${gpu_app_inputs} ${gd_sources} ${gd_headers} "${CMAKE_CURRENT_LIST_FILE}"
+set(gd_inputs "${gd_root}/apps/hdmi/prepare.py" ${gpu_app_inputs} ${gd_sources} ${gd_headers} "${CMAKE_CURRENT_LIST_FILE}"
  "${gd_root}/apps/gpu-display/native/CMakeLists.txt" "${gd_root}/apps/gpu-display/CMakeLists.txt"
  "${gd_root}/apps/gpu-display/boot.patch" "${gd_root}/apps/gpu-display/platform.patch"
  "${gd_root}/apps/gpu-display/link.patch" "${gd_build}/link-devices.ld")

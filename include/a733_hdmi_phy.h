@@ -35,6 +35,10 @@ struct a733_hdmi_reservation {
      * until manual power removal. framebuffer_epoch distinguishes DMA ownership. */
     uint64_t supervision_epoch;
     uint64_t framebuffer_epoch; /* Distinct retained DMA authority; zero for pattern. */
+    /* Acquired parent rates, not nominal mode clocks. TOP PLL uses raw DCXO;
+     * SFR uses the normalized SYS24M parent. These are runtime authority facts,
+     * not serialized session or initial analog-profile fields. */
+    uint32_t phy_reference_hz,sfr_hz;
 };
 enum a733_hdmi_source { A733_HDMI_PATTERN=0,A733_HDMI_FRAMEBUFFER=1 };
 struct a733_hdmi_request {
@@ -42,14 +46,20 @@ struct a733_hdmi_request {
     enum a733_hdmi_mode mode;
     enum a733_hdmi_range range;
     enum a733_hdmi_source source;
+    /* Authenticated expected raw TOP PLL reference. Occupies former tail
+     * padding; new images refuse old sessions whose padding was zero. */
+    uint32_t phy_reference_hz;
 };
+_Static_assert(sizeof(struct a733_hdmi_request)==72&&
+    offsetof(struct a733_hdmi_request,phy_reference_hz)==68,"HDMI request wire layout");
 struct a733_hdmi_ops {
     int (*now_us)(void *,uint64_t *);
     /* Persistent output, including partial acquisition on 0/-1. May return 0
      * while pending. All other callbacks return exactly1 on success.
      * Resolve actual common clock token status, owner/generation, exclusive
      * VO1 (both TV paths, HDMI/eDP and shared TOP/PLL/domain/reset writers),
-     * stable OSC/FABRIC, 24MHz DCXO/SFR and actual PMIC rail reservations.
+     * stable OSC/REF/FABRIC, supported raw24/26MHz TOP PLL reference,
+     * normalized24MHz SFR and actual PMIC rail reservations.
      * Own the complete system-control resistor words 03000160/164 through a
      * common authority used by EVERY writer. HDMI-local ownership is not
      * sufficient. Hold all reservations through stop/fault; no implicit release.

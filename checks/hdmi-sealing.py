@@ -60,10 +60,10 @@ def run(image,out):
  def put(field,value):
   item=layout['fields'][field];value=value if isinstance(value,bytes) else value.to_bytes(item['size'],'little');assert len(value)==item['size'];raw[item['offset']:item['offset']+item['size']]=value
  for field,value in dict(magic=prep.SESSION_MAGIC,version=1,bytes=session_bytes,epoch=31,generation=37,lease=41,supervisor=43,owner=47,pck_client=3).items():put(field,value)
- for field,value in {'request.mode':4,'request.range':0,'request.source':1,'request.initial.id':53,'request.initial.generation':59,'pmic.owner':61,'pmic.identity':37,'framebuffer.authority':67}.items():put(field,value)
+ for field,value in {'request.mode':4,'request.range':0,'request.source':1,'request.phy_reference_hz':24000000,'request.initial.id':53,'request.initial.generation':59,'pmic.owner':61,'pmic.identity':37,'framebuffer.authority':67}.items():put(field,value)
  put('request.initial.words',struct.pack('<8I',8,0xa0,0x00110001,0x10000000,0x76543210,0,0,0x001f0040))
  put('framebuffer.fabric',struct.pack('<3I',0,0x80000000,0x80000000));put('framebuffer.fabric_hz',struct.pack('<3I',24000000,24000000,24000000));put('framebuffer.iommu_gates',struct.pack('<2I',0x10007,0x10007));put('image',identity)
- record=dict(schema='a733-hdmi-supervised-admission-v1',image_sha256=hashlib.sha256(image_bytes).hexdigest(),epoch=31,generation=37,lease=41,supervisor=43,framebuffer='720p60-rgb565-retained-v1',framebuffer_authority=67)
+ record=dict(clock_profile=dict(raw_dcxo_hz=24000000, reference_hz=24000000, sfr_source=0, sfr_hz=24000000, pixel_hz={'720p60':74250000,'1080p60':148500000}), schema='a733-hdmi-supervised-admission-v1',image_sha256=hashlib.sha256(image_bytes).hexdigest(),epoch=31,generation=37,lease=41,supervisor=43,framebuffer='720p60-rgb565-retained-v1',framebuffer_authority=67)
  for field,kind in [('analog','analog'),('power','power'),('supervision','supervision'),('framebuffer.isolation','isolation'),('framebuffer.memory','memory')]:
   data=json.dumps(dict(schema='hdmi-binding-model-v1',kind=kind,image_sha256=record['image_sha256'],physical_access=False,purpose='Software fixture only; no physical authority.'),sort_keys=True).encode();filename=kind+'.json';(out/filename).write_bytes(data);record[kind]=filename;put(field,hashlib.sha256(data).digest())
  admission=json.dumps(record,sort_keys=True).encode();(out/'admission.json').write_bytes(admission);put('evidence',hashlib.sha256(admission).digest());raw=bytes(raw);(out/'nominal-session.bin').write_bytes(raw)

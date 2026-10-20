@@ -79,15 +79,22 @@ existing LED plan. On a 26 MHz board, that LED configuration is refused; source
 4 can use the existing normalized 24 MHz plan. This patch does not silently
 reinterpret a caller's fixed 24 MHz APBS0 rate as 26 MHz.
 
-The HDMI native restriction is deliberately unchanged. Its `CCU_PREPARE` stage
-selects HDMI_SFR source 1 at CCU offset 0x1690, which manual §4.1.6.232 and Linux
-`hdmi_sfr_parents` identify as raw DCXO. The native binding reserves OSC and
-FABRIC, without a REF lease. The S_PPU register at 0x070101ac is only a gate
-(manual §4.2.5.17); it does not establish a 24 MHz source. Replacing the baseline
-restriction with normalized-reference validation would leave that raw-SFR
-consumer inconsistent. Supporting 26 MHz requires a separate complete audit of
-HDMI's selected SFR source, parent leases and actual consumer behavior, with
-appropriate affected native evidence.
+HDMI uses two independent references. Manual §4.1.6.232 and Linux
+`hdmi_sfr_parents` define SFR source 0 as SYS24M and source 1 as raw DCXO.
+The native binding selects source 0 while its gate is off, obtains shared REF,
+OSC and FABRIC ownership, and validates normalized 24 MHz before VO1 writes.
+The S_PPU register at 0x070101ac remains a gate, not a frequency observation.
+
+The TOP PLL still consumes raw DCXO. The pinned `phy_top.c` selects its table
+from `clk_dcxo`, and `_top_phy_cal_clk()` computes that independent rate.
+The authenticated request binds the expected raw rate. Native baseline checks
+that equality, and the reservation records observed raw 24 or 26 MHz and
+normalized 24 MHz SFR.
+The PHY uses the corresponding published factor row. At raw 26 MHz, the rows
+produce 73.9375 and 147.875 MHz, approximately 0.421% below the nominal mode
+rates. Raw 19.2 MHz is refused. DDC timing retains its normalized 24 MHz basis;
+mode totals, internal PHY words and bounded lock handling retain their source
+sequences. See [HDMI timing](hdmi.md) and [native ownership](hdmi-native.md).
 
 The added cases are selected without replaying the earlier four providers:
 
@@ -103,3 +110,34 @@ readback mismatch. Astra's delta source review found no remaining mismatch.
 Evidence is under `audio-pwm-hdmi-clock-20261020`. Earlier provider evidence
 remains under its original frozen inputs. No HDMI, whole-image, startup or
 physical checks were executed for this follow-up.
+
+## HDMI native evidence
+
+`checks/hdmi-clock-native.py` builds the native TV0 pattern target once and
+reuses its compiled provider, controller, PHY and ownership objects in a focused
+composition. On modeled raw 26 MHz hardware, the actual native path prepares,
+starts and stops the 720p pattern while retaining REF and the other resources.
+The native requests and supplied record name the same raw reference. Separate
+continuations from the saved baseline refuse raw 19.2 MHz, a missing REF lock,
+and an observed raw rate that differs from the admitted request. Refusal occurs
+before VO1 or local HDMI writes.
+
+The executed trace matches the pinned 26 MHz TOP row, internal PHY words
+and color conversion. The source audit retains DDC's normalized 24 MHz timing
+basis. The calculated 720p pixel rate is
+73.9375 MHz. Source-row and host-profile checks also cover the 147.875 MHz
+1080p plan; that mode was not executed in this affected native case. The
+24 MHz protocol/reference evidence remains under its original frozen inputs.
+
+Evidence is under `~/.cache/sunstoneos/evidence/hdmi-ref26-20261020/`.
+The pattern ELF SHA-256 is
+`3eadec9b7c6e53962baa6ee39abc728e35f5ee9b75c19885fd3cb77e9647328f`.
+`manifest.json` binds the image, composition, sources, artifacts, CPU/RAM
+checkpoints and results. The initial nominal case completed before a
+postprocessing checkpoint-label error. The corrected check verified saved
+executable bytes and resumed only the unfinished comparison and refusal cases;
+it did not rebuild or repeat the nominal path. Both check versions remain in
+the evidence. Firmware boot, GIC/startup and physical HDMI operation were not
+executed. Architectural services, scheduling, MMIO, electrical state and analog
+admission were modeled. No electrical or standard-compliance qualification is
+claimed for either nominal mode or the approximate raw-26 MHz clocks.

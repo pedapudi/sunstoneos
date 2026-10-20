@@ -26,6 +26,11 @@ python apps/gpu-display/prepare.py \
   --objcopy /usr/lib/llvm-21/bin/llvm-objcopy
 ```
 
+The combined admission also requires the HDMI `clock_profile` described in
+[HDMI preparation](hdmi-application.md). Both producers use the same validator,
+including during frozen GPU bundle validation. A prior image's physical record
+does not qualify a newly selected SFR parent or TOP PLL profile.
+
 The image manifest must name `sunstone-a733-gpu-display`, execution profile
 `gpu-display-supervised-v2`, workload
 `copied-two-frame-HDMI-720p60-usb-observation`, and the

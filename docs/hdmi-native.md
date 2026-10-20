@@ -57,11 +57,19 @@ The caller supplies absolute deadlines from the shared architectural counter
 and schedules pending calls. The separate PMIC worker advances bus requests.
 No unconditional readiness callback is supplied by this binding.
 
-The binding acquires exclusive VO1 bit 63 and shared oscillator/fabric scopes
+The binding acquires exclusive VO1 bit 63 and shared oscillator/reference/fabric scopes
 from the actual common registry. VO1 covers both TV paths, HDMI/eDP, their TOP
 and PLL controls, local clocks/resets and PCK domain 10. Common-registry
-admission prohibits shared VO1 ownership. The selected DCXO source requires
-explicit oscillator stability; the native binding obtains that reservation.
+admission prohibits shared VO1 ownership. The TOP PLL uses raw DCXO; the SFR clock uses normalized SYS24M. The native
+binding checks enabled/stable oscillator state and enabled/locked PLL_REF
+through the shared decoder. It admits raw 24 or 26 MHz only, records both
+parent rates in the runtime reservation, and retains all three shared scopes.
+The expected raw rate occupies the request's former four-byte tail padding.
+The request remains 72 bytes, and serialized session sizes and existing field
+offsets remain unchanged. New images reject a zero expected rate or an observed
+rate that differs from the authenticated request. The runtime reservation gains
+two rate fields; native providers and their controller consumers must be
+compiled against the same header.
 
 Shared DCDC2 and CLDO2 leases come from the rail ledger. Real PMIC requests
 read both outputs and retain their provider borrows for platform lifetime.
@@ -110,7 +118,8 @@ helper calls `0x010000ff` a key, those bits overlap other live gates; this bindi
 does not copy that broad OR operation.
 
 The binding then enables the VO1 AHB gate, deasserts the selected resets,
-selects DCXO for the 24 MHz SFR clock, and enables the selected bus/SFR gates.
+selects SYS24M source 0 for the 24 MHz SFR clock, and enables the selected
+bus/SFR gates. The selection changes only while the SFR gate is off.
 Every update preserves unrelated fields and verifies readback. The controller
 then verifies the complete analog profile and performs its existing bounded
 EDID, PHY, TV0 and output sequence.
@@ -121,7 +130,7 @@ runs after mutex admission and before register access, including when a task
 waited for the mutex. A late failure retains an owned mutex and all tokens.
 Subsequent fault polling performs retention metadata only.
 
-Stop preserves rail, PCK and clock ownership. Neither clock gating nor TV
+Stop preserves rail, PCK and clock ownership, including REF. Neither clock gating nor TV
 completion proves independent output drain. Releasing those resources, changing
 rails, restarting after uncertainty, or assigning VO1 to eDP needs additional
 completion and recovery evidence.

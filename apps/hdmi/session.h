@@ -30,6 +30,7 @@ _Static_assert(sizeof(struct hdmi_session)<=4096,"immutable HDMI session page");
 _Static_assert(offsetof(struct hdmi_session,image)==48 &&
     offsetof(struct hdmi_session,evidence)==80 && offsetof(struct hdmi_session,analog)==112 &&
     offsetof(struct hdmi_session,power)==144 && offsetof(struct hdmi_session,supervision)==176 &&
-    offsetof(struct hdmi_session,supervisor)==208,"offline session prefix ABI");
+    offsetof(struct hdmi_session,supervisor)==208&&offsetof(struct hdmi_session,request)==232,
+    "offline session prefix ABI");
 int hdmi_session_valid(const struct hdmi_session *);
 #endif

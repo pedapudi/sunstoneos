@@ -65,7 +65,7 @@ void hdmi_check_run(unsigned unused)
  *s=(struct hdmi_session){.magic=HDMI_SESSION_MAGIC,.version=1,.bytes=sizeof(*s),
   .epoch=1,.generation=2,.lease=3,.image={1},.evidence={2},.analog={3},.power={4},
   .supervision={5},.supervisor=4,.owner=5,.request={.mode=A733_HDMI_720P60,
-  .range=A733_HDMI_LIMITED,.initial={.id=1,.generation=2}},.pmic={.owner=6,.identity=2}};
+  .range=A733_HDMI_LIMITED,.phy_reference_hz=24000000,.initial={.id=1,.generation=2}},.pmic={.owner=6,.identity=2}};
  struct a733_smp_contract c={.magic=HDMI_CONTRACT_MAGIC,.version=3,.bytes=sizeof(c),
   .epoch=1,.generation=2,.inverse_generation=~UINT64_C(2),.lease=3,.build_id={1},
   .armed_at=24,.startup_deadline=24+24000000,.diagnostic_deadline=24+HDMI_WINDOW_TICKS,
@@ -103,7 +103,7 @@ void hdmi_check_run(unsigned mode)
  pmic.self=&pmic;pmic.clocks=&clocks;pmic.rails=&rails;pmic.ops.outside=outside;
  c=(struct a733_hdmi_native_config){.clocks=&clocks,.rails=&rails,.pmic=&pmic,.locks=&locks,
   .pck=&pck,.task=(void *)1,.owner=1,.epoch=2,.recovery=mode==0||mode==2?3:0,
-  .request={.mode=mode==4?A733_HDMI_1080P60:A733_HDMI_720P60,.range=A733_HDMI_LIMITED,
+  .request={.mode=mode==4?A733_HDMI_1080P60:A733_HDMI_720P60,.range=A733_HDMI_LIMITED,.phy_reference_hz=24000000,
     .initial={.id=1,.generation=1}},.recovery_mode=mode?A733_HDMI_SUPERVISED_PATTERN:0,
   .supervision=mode==1||mode==2||mode==4?4:0};
  int r=a733_hdmi_native_init(&n,&c);
@@ -118,7 +118,8 @@ static int now(void *v,uint64_t *t){(void)v;*t=1;return 1;}
 static int acquire(void *v,const struct a733_hdmi_request *q,uint64_t d,struct a733_hdmi_reservation *r)
 {
  (void)v;(void)q;(void)d;
- *r=(struct a733_hdmi_reservation){.clock={.id=1,.owner=2,.exclusive=A733_CLOCK_VO1,.shared=A733_CLOCK_OSC},
+ *r=(struct a733_hdmi_reservation){.clock={.id=1,.owner=2,.exclusive=A733_CLOCK_VO1,
+  .shared=A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC},.phy_reference_hz=24000000,.sfr_hz=24000000,
   .generation=1,.rail_owner=2,.rail_generation=1,.system_owner=2,.system_generation=1,.inactive_epoch=1,
   .recovery_epoch=mode==0||mode==2?1:0,.supervision_epoch=mode==1||mode==2||mode==4?2:0};return 1;
 }
@@ -135,7 +136,7 @@ void hdmi_check_run(unsigned selected)
  mode=selected;struct a733_hdmi h={0};
  struct a733_hdmi_config c={.ops={now,acquire,validate,read8,write8,read32,write32,barrier,retain},
   .context=&mode,.request={.mode=selected==4?A733_HDMI_1080P60:A733_HDMI_720P60,
-  .range=A733_HDMI_LIMITED,.initial={.id=1,.generation=1}}};
+  .range=A733_HDMI_LIMITED,.phy_reference_hz=24000000,.initial={.id=1,.generation=1}}};
  check(a733_hdmi_init(&h,&c)==1&&a733_hdmi_prepare(&h,100)==1,40);
  int r=a733_hdmi_poll(&h);
  if(mode<2)check(r==0&&h.state==A733_HDMI_PREFLIGHT&&!retained&&!io_count,41);

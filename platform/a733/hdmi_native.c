@@ -5,6 +5,7 @@
 #include "a733_hdmi_native.h"
 #include "a733_platform_locks.h"
 #include "a733_counter_clock.h"
+#include "a733_clock_reference.h"
 #include "aarch64_device_memory.h"
 #include "task.h"
 #include <stdatomic.h>
@@ -12,7 +13,7 @@
 #define PCK UINT32_C(0x0706a000)
 #define BIT(n) (UINT32_C(1)<<(n))
 #define RAILS (A733_RAIL_BIT(A733_RAIL_DCDC2)|A733_RAIL_BIT(A733_RAIL_CLDO2))
-#define SHARED (A733_CLOCK_OSC|A733_CLOCK_FABRIC)
+#define SHARED (A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC)
 _Static_assert(A733_HDMI_VO1_SCOPE==A733_CLOCK_VO1,"common VO1 scope");
 enum { CLOCK,RAIL,RAIL_WAIT,PMIC_ID,SUPPLY0,SUPPLY1,MAPPINGS,PCK_ACQUIRE,BASELINE,RESET_ASSERT,RESET_HOLD,
        POWER_DELAY,POWER_ON,POWER_WAIT,CCU_PREPARE,COMPLETE };
@@ -143,8 +144,10 @@ static int mapped(uintptr_t a)
 static int baseline(struct a733_hdmi_native *n)
 {
     int r=lock(n);if(r!=1)return r;
-    uint32_t osc=load32(0x07090160),pck=load32(0x070101ac);
-    if((((osc>>14)&3)!=0&&((osc>>14)&3)!=3)||!(pck&1))return fail(n);
+    uint32_t osc=load32(0x07090160),reference=load32(CCU),pck=load32(0x070101ac);
+    uint32_t raw=a733_clock_dcxo_hz(osc);
+    if(raw!=n->config.request.phy_reference_hz||
+       (raw!=24000000&&raw!=26000000)||!a733_clock_ref24_valid(osc,reference)||!(pck&1))return fail(n);
     /* PCK token protects its source; these words verify the selected native
      * gates before accessing domain10. No unrelated domain is modified. */
     uint32_t control=load32(PCK),status=load32(PCK+8);
@@ -158,6 +161,7 @@ static int baseline(struct a733_hdmi_native *n)
     for(unsigned i=0;i<sizeof(buses)/sizeof(*buses);++i)
         if(load32(CCU+buses[i])&1)return fail(n);
     if(load32(CCU+0x1690)&BIT(31))return fail(n);
+    n->grant.phy_reference_hz=raw;n->grant.sfr_hz=24000000;
     n->domain_on=(status&15)==8;n->step=0;
     return unlock(n);
 }
@@ -246,7 +250,7 @@ static int acquire(void *v,const struct a733_hdmi_request *request,uint64_t dead
             {0x5c0,BIT(4),BIT(4)}, {0x16ec,BIT(16),BIT(16)},
             {0x16cc,BIT(16),BIT(16)}, {0x1604,BIT(16),BIT(16)},
             {0x168c,BIT(16)|BIT(17),BIT(16)|BIT(17)},
-            {0x1690,0x07000000,0x01000000},
+            {0x1690,0x07000000,0}, /* SYS24M, independent of raw TOP PLL DCXO */
             {0x16cc,1,1},{0x1604,1,1},{0x168c,1,1},{0x1690,BIT(31),BIT(31)}};
         r=update(n,CCU+steps[n->step].offset,steps[n->step].mask,steps[n->step].value);
         if(r<0)return fail(n);

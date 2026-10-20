@@ -12,6 +12,7 @@ int hdmi_session_valid(const struct hdmi_session *s)
         present(s->supervision)&&s->pck_client<A733_GPU_RESOURCE_CLIENTS&&
         s->request.mode==A733_HDMI_720P60&&s->request.range==A733_HDMI_LIMITED&&
         s->request.initial.id&&s->request.initial.generation&&
+        (s->request.phy_reference_hz==24000000||s->request.phy_reference_hz==26000000)&&
         s->pmic.owner&&s->pmic.owner!=s->owner&&s->pmic.identity==s->generation&&
         !s->pmic.startup_deadline
 #if SUNSTONE_HDMI_FRAMEBUFFER

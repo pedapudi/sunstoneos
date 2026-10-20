@@ -91,6 +91,8 @@ int a733_hdmi_phy_init(struct a733_hdmi_phy *p,struct a733_hdmi_io *b){
 int a733_hdmi_phy_preflight(struct a733_hdmi_phy *p){
     uint32_t x;struct a733_hdmi_io *b;
     if(!p || p->self!=p || !(b=p->io) || b->self!=b || b->fault)return -1;
+    if((b->reservation.phy_reference_hz!=24000000&&b->reservation.phy_reference_hz!=26000000)||
+       b->reservation.sfr_hz!=24000000)return a733_hdmi_fail(b);
     if(p->preflight)return 1;
     if(p->stage==0){
         uintptr_t a;uint32_t expected;
@@ -176,6 +178,9 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
     switch(p->stage){
     case 3:{
         struct a733_hdmi_step s=pll_steps[p->index];
+        /* Pinned phy_top.c has separate raw-DCXO24/26 table rows. The26MHz
+         * rows produce73.9375/147.875MHz; mode totals remain nominal720/1080. */
+        if(p->index==3)s.value=b->reservation.phy_reference_hz==26000000?0x5a00:0x6200;
         if(p->index==4)s.value=b->request.mode==A733_HDMI_720P60?0x1f0000:0x0f0000;
         if(a733_hdmi_field(b,&s)!=1)return -1;
         if(++p->index==sizeof(pll_steps)/sizeof(pll_steps[0])){

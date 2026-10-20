@@ -16,6 +16,27 @@ REQUEST_MAGIC = 0x4153373353554c33
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+def clock_profile(record, expected_raw):
+    """Require the parent/rate contract bound by the admission record."""
+    p = record.get('clock_profile')
+    if not isinstance(p, dict) or set(p) != {'raw_dcxo_hz', 'reference_hz', 'sfr_source', 'sfr_hz', 'pixel_hz'}:
+        raise ValueError('HDMI clock profile is required')
+    raw = p['raw_dcxo_hz']
+    if type(raw) is not int or raw not in (24000000, 26000000):
+        raise ValueError('Unsupported HDMI TOP PLL raw reference')
+    if type(expected_raw) is not int or raw != expected_raw:
+        raise ValueError('HDMI raw reference differs from the authenticated request')
+    n = 99 if raw == 24000000 else 91
+    pixels = {'720p60': raw*n//32, '1080p60': raw*n//16}
+    if p != dict(raw_dcxo_hz=raw, reference_hz=24000000, sfr_source=0,
+                 sfr_hz=24000000, pixel_hz=pixels):
+        raise ValueError('HDMI clock profile differs from the published parent/rate plan')
+    if any(type(p[key]) is not int for key in ('reference_hz', 'sfr_source', 'sfr_hz')):
+        raise ValueError('HDMI clock rates and selector must be integers')
+    if not isinstance(p['pixel_hz'], dict) or any(type(v) is not int for v in p['pixel_hz'].values()):
+        raise ValueError('HDMI calculated pixel rates must be integers')
+    return p
+
 def image_data(image):
     raw = image if isinstance(image, bytes) else image.read_bytes()
     with io.BytesIO(raw) as f:
@@ -87,6 +108,7 @@ def validate(image, session, admission):
     if raw[48:80] != build or raw[80:112] != hashlib.sha256(admission_bytes).digest():
         raise ValueError('Session does not bind this image and admission record')
     record = json.loads(admission_bytes)
+    clock_profile(record, struct.unpack_from('<I', raw, 300)[0])
     if record.get('schema') != 'a733-hdmi-supervised-admission-v1' or record.get('image_sha256') != hashlib.sha256(image_bytes).hexdigest():
         raise ValueError('Admission record does not name this image')
     if any(record.get(k) != v for k, v in dict(epoch=epoch, generation=generation, lease=lease, supervisor=supervisor).items()):

@@ -17,6 +17,7 @@ static unsigned scheduler;
 static TaskHandle_t queue_owner[A733_PLATFORM_LOCK_COUNT];
 uint64_t ullPortInterruptNesting;
 volatile uint64_t ullCriticalNesting;
+volatile uint64_t ullCriticalNestings[8],ullPortInterruptNestings[8];
 uint64_t hdmi_test_time=100;
 volatile unsigned hdmi_fault_case,hdmi_mmio_count,hdmi_translation_count;
 static uint32_t *reg(uintptr_t a){return (uint32_t *)a;}
@@ -63,14 +64,14 @@ static void setup(void)
     assert(a733_counter_clock_init(&counter,24000000));
     assert(a733_platform_locks_init(&locks,a733_counter_clock_now,&counter));
     model.now=hdmi_test_time;
-    *pmic_model_word(&model,0x07090160)=0x10000002;
+    *pmic_model_word(&model,0x07090160)=*reg(0x07090160);
     *pmic_model_word(&model,0x0701019c)=0x10001;
     *pmic_model_word(&model,0x07025000)=0x22;
     *pmic_model_word(&model,0x07025014)=0x11;
     *pmic_model_word(&model,0x07025024)=5;
     *pmic_model_word(&model,0x0708300c)=0x40;
     *pmic_model_word(&model,0x07083010)=0xf8;
-    *pmic_model_word(&model,0x07083014)=0x28;
+    *pmic_model_word(&model,0x07083014)=0x29;
     *pmic_model_word(&model,0x07083020)=0x30;
     *pmic_model_word(&model,0x07083200)=0x00f81000;
     *pmic_model_word(&model,0x07083210)=0x80c0;
@@ -94,7 +95,7 @@ static void setup(void)
     assert(a733_pmic_init(&model.provider,&power,&ops,&model,&model.clocks,&model.rails,&model.pins));
     config=(struct a733_hdmi_native_config){.clocks=&model.clocks,.rails=&model.rails,
         .pmic=&model.provider,.locks=&locks,.pck=&model.gpu,.pck_client=0,.task=(void *)1,
-        .owner=42,.epoch=200,.recovery=201,.request={.mode=A733_HDMI_720P60,
+        .owner=42,.epoch=200,.recovery=201,.request={.mode=A733_HDMI_720P60,.phy_reference_hz=26000000,
         .range=A733_HDMI_LIMITED,.initial={.id=7,.generation=8,
         .words={8,0xa0,0x00110001,0x10000000,0x76543210,0,0,0x001f0040},
         .resistor_control=0xa5a50000,.resistor_manual=0xabcdef12}}};
@@ -133,14 +134,19 @@ unsigned hdmi_native_check(void)
         if(hdmi_fault_case){
             assert(r==-1&&hdmi.controller.state==A733_HDMI_FAULT_RETAINED&&hdmi.failed);
             assert(hdmi.clock.id&&hdmi.rail.id&&hdmi.pck_lease.token&&hdmi.requests[0].id&&hdmi.requests[1].id);
-            assert(hdmi_mmio_count==accesses);
+            if(hdmi_fault_case<4)assert(hdmi_mmio_count==accesses);
             if(hdmi_fault_case==1)assert(atomic_load(&locks.retained)&1);
+            accesses=hdmi_mmio_count;
             assert(a733_hdmi_poll(&hdmi.controller)==-1&&hdmi_mmio_count==accesses);
             return 0;
         }
         assert(r>=0);
     }
     assert(hdmi.controller.state==A733_HDMI_PREPARED);
+    hdmi_checkpoint(3);
+    assert(hdmi.grant.phy_reference_hz==26000000&&hdmi.grant.sfr_hz==24000000);
+    assert((hdmi.clock.shared&(A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC))==
+        (A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC));
     assert(hdmi.supplies[0].programmed_uv==800000&&hdmi.supplies[1].programmed_uv==1800000);
     assert(hdmi.requests[0].id&&hdmi.requests[1].id&&hdmi.pck_lease.token);
     assert(a733_rail_release(&model.rails,&hdmi.rail,1000000)!=A733_RAIL_READY);
@@ -153,5 +159,6 @@ unsigned hdmi_native_check(void)
     for(unsigned i=0;i<100&&hdmi.controller.state!=A733_HDMI_STOPPED_RETAINED;++i){provider_step();assert(a733_hdmi_poll(&hdmi.controller)>=0);}
     assert(hdmi.controller.state==A733_HDMI_STOPPED_RETAINED);
     assert(hdmi.rail.id&&hdmi.clock.id&&a733_clock_token_status(&model.clocks,&hdmi.clock)==A733_CLOCK_OK);
-    assert(!queue_owner[0]&&!queue_owner[1]);return 0;
+    assert(a733_clock_acquire(&model.clocks,44,0,A733_CLOCK_REF,3000000,&other)==A733_CLOCK_BUSY);
+    for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;++i)assert(!queue_owner[i]);return 0;
 }

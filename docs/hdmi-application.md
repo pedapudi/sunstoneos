@@ -72,6 +72,23 @@ the admission file. The session binds SHA-256 digests of this admission file and
 all three records. The coordinator must review those records for the actual board
 and linked image before physical launch.
 
+The admission record also requires `clock_profile`, validated by both HDMI and
+GPU-to-HDMI preparation. For a raw 26 MHz board it contains:
+
+```json
+{"raw_dcxo_hz":26000000,"reference_hz":24000000,"sfr_source":0,"sfr_hz":24000000,"pixel_hz":{"720p60":73937500,"1080p60":147875000}}
+```
+
+For raw 24 MHz, the calculated pixel rates are 74250000 and 148500000 Hz.
+The request's `phy_reference_hz` at byte offset 68 uses former tail padding;
+it must match `clock_profile.raw_dcxo_hz`. Its session byte offset is 300.
+The request remains 72 bytes, and all session sizes and existing field offsets
+remain unchanged. New images refuse the zero padding of an older session.
+The record binds the selected parent/rate plan into the existing admission
+digest. Native baseline also requires the observed raw rate to match. It does not measure either clock or qualify the approximate raw-26 MHz
+pixel rates. Native baseline reads and retained parent ownership remain required.
+Old frozen images and their original admission records remain separate.
+
 The analog record establishes the complete post-reset PHY image, charge-pump
 and reserved/test-field provenance, resistor-control words and inactive output
 consumers. The power record establishes the required rails, oscillator,

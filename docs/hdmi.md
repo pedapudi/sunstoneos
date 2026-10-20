@@ -23,7 +23,7 @@ Requests, callback context and reservation storage remain private and live.
 The clock registry and controller must share one monotonic time history.
 
 The acquire callback must provide an authentic common clock token, stable
-24 MHz oscillator and SFR clocks, VO1 power domain 10, released bus resets,
+24 or 26 MHz raw oscillator, normalized 24 MHz SFR, VO1 power domain 10, released bus resets,
 and held PMIC rail reservations. Its exclusive VO1 scope covers both TV
 controllers, HDMI/eDP, shared TOP registers, PLL consumers and domain/reset
 writers. The common registry assigns bit 63 to this exclusive scope. The native
@@ -72,8 +72,14 @@ limited range. Explicit full-range output bypasses conversion, advertises full
 range, and requires the EDID RGB quantization-selectable flag. Physical color
 accuracy and sub-code rounding remain unqualified.
 
-The TOP PLL uses the published 24 MHz table rows for 74.25 and 148.5 MHz.
-Both use a 2376 MHz VCO, divided by 32 or 16. The source's automatic search
+The TOP PLL uses the pinned driver's table for the acquired raw oscillator.
+At 24 MHz, N=99 gives a 2376 MHz VCO, divided by 32 or 16 for exact
+74.25 or 148.5 MHz. At 26 MHz, the published N=91 rows give a 2366 MHz
+VCO and calculated outputs of 73.9375 or 147.875 MHz. These are about 0.421%
+below the nominal 720p60 and 1080p60 pixel rates; the mode totals remain
+unchanged. The approximate frame rates are 59.7475 Hz. No electrical, sink
+or standard-compliance qualification follows from those table rows.
+Raw 19.2 MHz remains unsupported. The source's automatic search
 limit of 2250 MHz contradicts these rows; the manual allows 2520 MHz. This
 implementation admits only the exact rows and does not use the search algorithm.
 It programs the documented factor and analog fields, observes lock within

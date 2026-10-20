@@ -16,6 +16,7 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 gpu=module('gpu_display_source_contracts',ROOT/'apps/gpu-render/prepare.py')
 packer=module('gpu_display_input_packer',ROOT/'apps/gpu-display/host.py')
+hdmi_clock=module('gpu_display_hdmi_clock_admission',ROOT/'apps/hdmi/prepare.py')
 require,save_json=gpu.require,gpu.save_json
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def digest(path):return sha(Path(path).read_bytes())
@@ -72,6 +73,7 @@ def image_data(raw):
     require(elf.has_dwarf_info(),'Native DWARF ABI information required.')
     wanted={'gpu_display_session':(984,{'hdmi':24,'gpu_initial':568,'gpu_memory':600,'gpu_electrical':632,'gpu_supervision':664,'memory_authority':696,'usb':704,'inputs':840}),
         'hdmi_session':(544,{'image':48,'evidence':80,'analog':112,'power':144,'supervision':176,'supervisor':208,'owner':216,'pck_client':224,'request':232,'pmic':304,'pins':336,'framebuffer':440}),
+        'a733_hdmi_request':(72,{'phy_reference_hz':68}),
         'hdmi_framebuffer_session':(104,{'isolation':0,'memory':32,'authority':64}),
         'gpu_display_usb_authority':(136,{'owner':0,'handoff':8,'initial':16,'electrical':48,'supervision':80,'cold_reference':112,'reserved':116,'supply_uv':120}),
         'gpu_display_inputs':(144,{'frame':16})};found=set()
@@ -142,6 +144,7 @@ def validate_admission(admission_raw,hdmi,inputs,build,image_hash,cache=None,fro
             require(not frozen,'Missing frozen physical proof.');cache[name]=Path(name).read_bytes()
         require(sha(cache[name])==ref['sha256'],'Physical proof bytes changed.');return cache[name]
     record=json.loads(admission_raw);profile=session_profile(hdmi);validate_inputs(inputs);physical_record(record)
+    hdmi_clock.clock_profile(record,struct.unpack_from('<I',hdmi,300)[0])
     require(record.get('schema')==ADMISSION and record.get('execution_profile')==PROFILE and record.get('image_sha256')==image_hash and
         all(record.get(k)==v for k,v in profile.items()) and record.get('identity') and record.get('port') and
         type(record.get('memory_authority')) is int and 0<record['memory_authority']<2**64 and record.get('session_seconds')==20 and

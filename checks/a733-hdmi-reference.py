@@ -35,12 +35,16 @@ def verify(record, root, dts):
     pll = (low / "phy_top.c").read_text()
     header = (low / "phy_top.h").read_text()
     rate = 74250 if record["mode"] == 4 else 148500
-    row = re.search(r"\{\s*" + str(rate) + r"\s*,([^}]+)\}", block(pll, "sun60i_phypll_24m"))
+    reference = record.get("phy_reference_hz", 24000000)
+    assert reference in (24000000, 26000000)
+    row = re.search(r"\{\s*" + str(rate) + r"\s*,([^}]+)\}", block(pll, "sun60i_phypll_"+str(reference//1000000)+"m"))
     assert row
     values = [int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]+", row.group(1))]
     assert len(values) == 4
     factors = values[0]
-    assert 24000 * (((factors >> 8) & 255)+1) == rate * (((factors >> 16) & 127)+1) * (((factors >> 1) & 1)+1)
+    calculated = reference * (((factors >> 8) & 255)+1) // ((((factors >> 16) & 127)+1) * (((factors >> 1) & 1)+1))
+    expected_rate = rate*1000 if reference == 24000000 else (73937500 if rate == 74250 else 147875000)
+    assert calculated == expected_rate
     events = record["writes"]
     # Initial TOP values are observed from preflight writes, before the PLL
     # factor sequence. This comparison makes no claim about their provenance.
@@ -109,7 +113,7 @@ def verify(record, root, dts):
     assert image[0x0552101b] & 12 == (0 if record["range"] == 0 else 8)
     assert coeff[0] * 0 // 8192 + coeff[3] // 2 == 16
     assert coeff[0] * 255 // 8192 + coeff[3] // 2 == 235
-    return {"vic": record["mode"], "exact_pixel_khz": rate,
+    return {"vic": record["mode"], "nominal_pixel_khz": rate, "calculated_pixel_hz": calculated,
             "top_pll_source_writes": len(expected), "verified_phy_words": len(internal),
             "csc_byte_writes": len(actual_coeff), "nominal_csc_endpoints": [16, 235]}
 

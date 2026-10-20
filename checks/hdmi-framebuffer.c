@@ -52,7 +52,7 @@ static void setup(void)
 {
     app.deadline=20000000;app.stop_at=18000000;app.handles[1]=(TaskHandle_t)1;
     app.session.owner=11;app.session.epoch=22;app.session.supervisor=33;app.session.pck_client=3;
-    app.session.request=(struct a733_hdmi_request){.mode=A733_HDMI_720P60,.range=A733_HDMI_LIMITED,
+    app.session.request=(struct a733_hdmi_request){.mode=A733_HDMI_720P60,.range=A733_HDMI_LIMITED,.phy_reference_hz=24000000,
         .source=A733_HDMI_FRAMEBUFFER,.initial={.id=44,.generation=55,
             .words={8,0xa0,0x00110001,0x10000000,0x76543210,0,0,0x001f0040},
             .resistor_control=0xa5a50000,.resistor_manual=0xabcdef12}};

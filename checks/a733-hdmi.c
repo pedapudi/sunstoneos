@@ -112,12 +112,12 @@ static void setup(enum a733_hdmi_mode mode,enum a733_hdmi_range range){
     m->tv[0]=0x80000000;m->tv[0xa4/4]=0x5a5a8000;
     m->top[0]=0x80000000;m->top[8]=0x00200000;
     m->grant=(struct a733_hdmi_reservation){
-        .clock={1,2,A733_CLOCK_OSC|A733_CLOCK_FABRIC|A733_POWER_DCDC2,A733_HDMI_VO1_SCOPE},
+        .clock={1,2,A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC|A733_POWER_DCDC2,A733_HDMI_VO1_SCOPE},
         .generation=3,.rail_owner=4,.rail_generation=5,.system_owner=6,.system_generation=7,
-        .inactive_epoch=8,.recovery_epoch=9};
+        .inactive_epoch=8,.recovery_epoch=9,.phy_reference_hz=24000000,.sfr_hz=24000000};
     live.c=(struct a733_hdmi_config){
         .ops={now,acquire,validate,read8,write8,read32,write32,barrier,retain},
-        .context=m,.request={.initial=initial,.mode=mode,.range=range}};
+        .context=m,.request={.initial=initial,.mode=mode,.range=range,.phy_reference_hz=24000000}};
     m->expected=live.c.request;
     static const uint8_t sig[]={0,255,255,255,255,255,255,0};
     memcpy(m->edid,sig,8);m->edid[18]=1;m->edid[19]=4;m->edid[20]=0x80;m->edid[126]=3;

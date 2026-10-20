@@ -100,8 +100,8 @@ def main():
  else:raise AssertionError('overlapping session geometry accepted')
  packdir=out/'pack-input';packdir.mkdir();(packdir/'image.elf').write_bytes(raw)
  session=bytearray(size);struct.pack_into('<6Q',session,0,pack.SESSION_MAGIC,1,size,1,2,3)
- session[48:80]=identity;struct.pack_into('<2Q',session,208,4,5)
- record=dict(schema='a733-hdmi-supervised-admission-v1',image_sha256=sha(image),epoch=1,generation=2,lease=3,supervisor=4,
+ session[48:80]=identity;struct.pack_into('<2Q',session,208,4,5);struct.pack_into('<I',session,300,24000000)
+ record=dict(clock_profile=dict(raw_dcxo_hz=24000000, reference_hz=24000000, sfr_source=0, sfr_hz=24000000, pixel_hz={'720p60':74250000,'1080p60':148500000}), schema='a733-hdmi-supervised-admission-v1',image_sha256=sha(image),epoch=1,generation=2,lease=3,supervisor=4,
   framebuffer='720p60-rgb565-retained-v1',framebuffer_authority=6)
  for name,position in [('analog',112),('power',144),('supervision',176),('isolation',offset),('memory',offset+32)]:
   data=('Modeled '+name+' evidence, not physical admission').encode();(packdir/name).write_bytes(data)

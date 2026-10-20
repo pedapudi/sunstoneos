@@ -55,11 +55,11 @@ def main():
  packdir=out/'pack-input';packdir.mkdir(exist_ok=a.continue_package)
  original=image.read_bytes();(packdir/'image.elf').write_bytes(original)
  raw=bytearray(size);struct.pack_into('<6Q',raw,0,pack.SESSION_MAGIC,1,size,1,2,3);raw[48:80]=identity
- struct.pack_into('<2Q',raw,208,4,5)
+ struct.pack_into('<2Q',raw,208,4,5);struct.pack_into('<I',raw,300,24000000)
  proof=b'explicit modeled proof, not physical qualification'
  for name,offset in (('analog',112),('power',144),('supervision',176)):
   (packdir/name).write_bytes(proof);raw[offset:offset+32]=hashlib.sha256(proof).digest()
- record=dict(schema='a733-hdmi-supervised-admission-v1',image_sha256=hashlib.sha256(original).hexdigest(),
+ record=dict(clock_profile=dict(raw_dcxo_hz=24000000, reference_hz=24000000, sfr_source=0, sfr_hz=24000000, pixel_hz={'720p60':74250000,'1080p60':148500000}), schema='a733-hdmi-supervised-admission-v1',image_sha256=hashlib.sha256(original).hexdigest(),
   epoch=1,generation=2,lease=3,supervisor=4,analog='analog',power='power',supervision='supervision')
  save(packdir/'admission.json',record);raw[80:112]=hashlib.sha256((packdir/'admission.json').read_bytes()).digest()
  (packdir/'session.bin').write_bytes(raw)
