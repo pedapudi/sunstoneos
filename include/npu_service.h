@@ -36,6 +36,12 @@ struct npu_service_message {
     uint64_t ticket;
     unsigned client;
 };
+/* Private per-client record in shared mode; one outstanding job each. */
+struct npu_service_member {
+    struct npu_service_message wait;
+    uint64_t job_ticket, timeout_us;
+    unsigned state, command, has_wait, refused;
+};
 struct npu_service_client {
     TaskHandle_t task;
     uint32_t commands;
@@ -93,6 +99,8 @@ struct npu_service {
     UBaseType_t affinity;
     StaticTask_t worker_state;
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
+    unsigned shared, members, running, next;
+    struct npu_service_member member[NPU_SERVICE_CLIENTS];
 };
 
 /* One statically configured service for the single NPU. Call init/bind before
@@ -125,6 +133,23 @@ int npu_service_init_deferred(struct npu_service *,const struct a733_npu_ops *,v
  * Bootstrap task, callback context and prepared resources remain live/pinned. */
 enum npu_service_result npu_service_activate(struct npu_service *);
 int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t command_mask);
+/* Optional shared mode, after init and before scheduling. Every bound client
+ * then opens its own session on the one controller instead of claiming it
+ * exclusively. The first OPEN boots the controller; later OPENs join it. Each
+ * member has at most one job. SUBMIT queues it and replies at once; the worker
+ * starts queued jobs one at a time in round-robin client order, beginning
+ * after the client it served last, so every member with queued work runs once
+ * before any member runs twice. On completion the worker finishes the job's
+ * cache maintenance and frees the controller for the next member; the result
+ * stays with its member until that member's REAP, so an unreaped result never
+ * blocks other members. Replies report the member's own view: READY when it
+ * has no job, RUNNING while its job is queued or executing, DONE or CANCELED
+ * until REAP, BOOTING until the bootstrap completes. WAIT is held per member.
+ * CANCEL removes only a job that has not started; a started job is bounded by
+ * its deadline, and a controller fault retains the shared session for every
+ * member. CLOSE leaves the session; the last member's CLOSE closes the
+ * controller as in exclusive mode. Commands must lie outside internal SRAM. */
+int npu_service_share(struct npu_service *);
 
 /* Optional private binding after init, before scheduling. The route/cookie and
  * worker remain pinned. ISR entry follows root-owned mask of INTID97; it never
