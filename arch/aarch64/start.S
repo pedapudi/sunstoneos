@@ -4,8 +4,9 @@
 _start:
     msr daifset, #0xf
     mrs x0, mpidr_el1
-    and x0, x0, #0xff
-    cbnz x0, .Lpark
+    // A733 numbers cores in Aff1 and QEMU virt in Aff0; park either.
+    tst x0, #0xffff
+    b.ne .Lpark
     // The first platform expects a firmware handoff at EL1, MMU disabled.
     mrs x0, CurrentEL
     cmp x0, #4

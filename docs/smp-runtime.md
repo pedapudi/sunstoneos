@@ -132,6 +132,9 @@ One session passed on 2026-10-18, with a one-second guest deadline per task and
 the existing ten-second host bound. Evidence, the compiled dependency snapshot
 and inspection of the actual wrapped destructor are under
 `~/.cache/sunstoneos/evidence/smp-runtime-cleanup-20261018/`.
-This closes the modeled library-cleanup gap. Native secondary startup, cache
-coherence and all-core scheduling remain physically unproven; the failed
-secondary interrupt-preparation attempt has no identified cause.
+This closes the modeled library-cleanup gap. All eight cores have physically
+reached their first task context; sustained all-core scheduling and cache
+coherence under load remain unproven. The earlier secondary interrupt-preparation
+failure came from requiring all 32 `GICR_IGROUPR0` bits, including read-as-zero
+unimplemented PPIs; the [reference audit](a733-multicore-reference-audit.md)
+records the cause and the physical correction.

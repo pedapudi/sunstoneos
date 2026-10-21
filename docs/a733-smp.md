@@ -1,5 +1,12 @@
 # Eight-core diagnostic image awaits physical recovery qualification
 
+> **Superseded.** Use the cached base in [supervised startup](a733-smp-supervised.md)
+> and [cached SMP](a733-smp-cached.md). This uncached image predates two physical
+> corrections that exist only in `platform/a733-smp-cached/continue.S`: Secure
+> `ICC_PMR_EL1` initialization at EL3 and `SCTLR_EL1.nTWE`. Its continuation in
+> `platform/a733/cpu_continue.S` still lacks both, so it must not be launched
+> unchanged. The text below describes the image as it was built.
+
 The dedicated `a733-smp-diagnostic` target links the A733 CPU power controller,
 secondary entry, EL3-to-EL1 continuation and eight-core FreeRTOS scheduler.
 Its intended check covers six Cortex-A55 cores and two Cortex-A76 cores.

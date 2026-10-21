@@ -35,7 +35,8 @@ static inline void mmio_write(uintptr_t address, uint32_t value)
 static inline uint64_t counter(void)
 {
     uint64_t value;
-    __asm__ volatile("mrs %0, cntpct_el0" : "=r"(value));
+    // The ISB keeps the read in program order; deadlines bracket MMIO polls.
+    __asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(value) :: "memory");
     return value;
 }
 #endif
