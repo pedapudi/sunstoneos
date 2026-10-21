@@ -2,7 +2,8 @@
 #include "../mimus/recorded.h"
 extern "C" {
 #include "a733_storage_digest.h"
-#include "runtime.h"
+// Named by path: this image puts its unrelated apps/i2s/runtime.h first.
+#include "../../include/runtime.h"
 #include "FreeRTOS.h"
 #include "task.h"
 void runtime_smp_init(void);

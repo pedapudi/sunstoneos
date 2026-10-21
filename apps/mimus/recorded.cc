@@ -3,7 +3,8 @@
 #include "task.h"
 #include "platform.h"
 #include "timing.h"
-#include "runtime.h"
+// Named by path: the I2S image puts its unrelated apps/i2s/runtime.h first.
+#include "../../include/runtime.h"
 #ifdef SUNSTONE_MIMUS_NATIVE
 #include "native.h"
 #endif
