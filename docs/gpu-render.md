@@ -537,6 +537,8 @@ qualification.
 
 `apps/gpu-render/lifecycle.py` supplies opt-in `Triangle` and `Texture` clients.
 Triangle uses protocol version 7; texture and depth use versions 8 and 9.
+The corresponding supervised single-core runtime-draw or texture image must
+be built with `-DSUNSTONE_GPU_LIFECYCLE=ON`.
 They reuse the existing vertex and texture input builders. A queue epoch binds
 all requests to one queue lifetime within the original sealed session epoch.
 CLOSE retains resources; DISPOSE and OPEN require explicit calls.

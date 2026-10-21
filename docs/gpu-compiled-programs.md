@@ -411,7 +411,9 @@ unqualified.
 ## Copy output across explicit disposal and reopening
 
 The opt-in compute lifecycle client in `apps/gpu-program/lifecycle.py` uses
-protocol version 6. Its queue epoch identifies one GPU queue lifetime within
+protocol version 6. It requires a supervised single-core runtime-input image
+built with `-DSUNSTONE_GPU_LIFECYCLE=ON`.
+Its queue epoch identifies one GPU queue lifetime within
 the original sealed session epoch. STATUS discovers that queue epoch; every
 mutation and copied-output read binds it. Successful OPEN advances it by one,
 executes the sealed initial input and publishes sequence one. Epoch wrap is
