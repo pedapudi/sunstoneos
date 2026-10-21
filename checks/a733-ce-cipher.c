@@ -140,9 +140,14 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
         for (size_t i=384;i<3520;++i) assert(!((uint8_t *)mem)[i]);
         memcpy(m->visible+384,(uint8_t *)mem+384,3520-384);++m->key_cleans;
     } else if (op==A733_CE_SCRUB) {
-        assert(!(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4));
+        assert(!(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4) && le(m->visible+4,4)==3);
         for (size_t i=256;i<2432;++i) assert(!((uint8_t *)mem)[i]);
         memcpy(m->visible+256,(uint8_t *)mem+256,2432-256);++m->scrubs;
+    } else if (op==A733_CE_RANDOM_SCRUB) {
+        /* A TRNG task scrubs only the random block it wrote. */
+        assert(!(*reg(m,NS+12)&0x30) && !(*reg(m,NS+8)&4) && le(m->visible+4,4)==0x203);
+        for (size_t i=256;i<320;++i) assert(!((uint8_t *)mem)[i]);
+        memcpy(m->visible+256,(uint8_t *)mem+256,64);++m->scrubs;
     } else {
         assert(op==A733_CE_ACQUIRE || op==A733_CE_CIPHER_ACQUIRE);
         assert(m->pending && (*reg(m,NS+12)&0x30)==0x10);++m->acquired;

@@ -213,12 +213,16 @@ static enum a733_ce_result poll(struct a733_ce *p,uint8_t *output,size_t output_
             if (p->operation!=2) for (unsigned i=0;i<32;++i) bytes[i]=p->memory->output[i];
             if (!wr(p,NS+12,0x30) || !update(p,NS+8,4,0) || !bits(p,NS+8,15,0)) goto fail;
             /* The task completed and its result is copied. Do not leave the
-             * random block, digest or (HMAC) hash state in the retained page. */
+             * random block, digest or (HMAC) hash state in the retained page.
+             * TRNG writes only the output; IV and input hold no TRNG data. */
             if (p->operation!=2) {
                 zero(p->memory->output,sizeof(p->memory->output));
-                zero(p->memory->iv,sizeof(p->memory->iv));
-                zero(p->memory->input,sizeof(p->memory->input));
-                if (p->ops.sync(p->cookie,p->memory,A733_CE_SCRUB)!=1 || !timely(p)) goto fail;
+                if (p->operation==1) {
+                    zero(p->memory->iv,sizeof(p->memory->iv));
+                    zero(p->memory->input,sizeof(p->memory->input));
+                }
+                if (p->ops.sync(p->cookie,p->memory,p->operation==1?A733_CE_SCRUB:A733_CE_RANDOM_SCRUB)!=1 ||
+                    !timely(p)) goto fail;
             }
             ready=1;next=DONE;
         }
@@ -280,6 +284,12 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     if (!timely(p)) return failed(p);
     p->stage=PREPARE;
 configure:
+    /* A TRNG request replacing an unadmitted SHA request clears the hash
+     * input and IV here, because its own scrub covers only the output. */
+    if (!operation && p->operation==1) {
+        zero(p->memory->iv,sizeof(p->memory->iv));
+        zero(p->memory->input,sizeof(p->memory->input));
+    }
     p->operation=operation;p->task_configured=1;
     if (operation) {
         zero(p->memory->input,sizeof(p->memory->input));

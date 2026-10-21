@@ -50,7 +50,12 @@ descriptor and cleans and invalidates the output allocation. After successful
 task completion, it invalidates the output allocation and completes barriers
 before the CPU reads it. Once the random block is copied and the task stopped,
 the controller zeros the output line and cleans it, so the block does not
-remain in the retained page. The driver copies bytes to the caller
+remain in the retained page. A TRNG task neither reads nor writes the IV and
+input lines, so its scrub does not zero or clean them; the SHA-256 scrub described in
+[crypto-hash.md](crypto-hash.md) already zeros them after each digest. When a
+TRNG request replaces a SHA-256 request that was configured but not yet
+admitted, the controller zeros the IV and input lines before the TRNG task is
+prepared. The driver copies bytes to the caller
 only after its final deadline check. It returns the result once; subsequent
 polls report that the result was consumed.
 

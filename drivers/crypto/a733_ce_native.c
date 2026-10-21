@@ -107,6 +107,7 @@ static const struct {
     {A733_CE_KEY_CLEAN,AARCH64_CACHE_CLEAN,FIELD(input),FIELD(key)+64-FIELD(input)},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
     {A733_CE_SCRUB,AARCH64_CACHE_CLEAN,FIELD(iv),FIELD(cipher_output)-FIELD(iv)},
+    {A733_CE_RANDOM_SCRUB,AARCH64_CACHE_CLEAN,FIELD(output),64},
 };
 #undef FIELD
 _Static_assert(offsetof(struct a733_ce_memory,input)+A733_CE_HASH_INPUT_BYTES==offsetof(struct a733_ce_memory,cipher_output) &&
@@ -115,7 +116,7 @@ int a733_ce_native_sync(void *cookie,struct a733_ce_memory *m,enum a733_ce_sync 
 {
     (void)cookie;
     if (!m || ((uintptr_t)m&63) || sizeof(*m)>UINTPTR_MAX-(uintptr_t)m ||
-        mode>A733_CE_SCRUB || (int)mode<0) return 0;
+        mode>A733_CE_RANDOM_SCRUB || (int)mode<0) return 0;
     /* The shared helper refuses an unknown or larger-than-64-byte writeback
      * granule, a non-EL1 caller and a disabled MMU or data cache. */
     for (unsigned i=0;i<sizeof(ranges)/sizeof(ranges[0]);++i)
