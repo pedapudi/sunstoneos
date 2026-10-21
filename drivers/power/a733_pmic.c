@@ -8,14 +8,17 @@ enum { S_CLOCK,S_BASELINE,S_PINS,S_VERIFY,S_READY };
 enum { FREE,QUEUED,ACTIVE,DONE,EXPIRED };
 enum { P_START,P_WAIT_START,P_ADDRESS,P_WAIT_ADDRESS,P_REGISTER,P_WAIT_REGISTER,
     P_RESTART,P_WAIT_RESTART,P_READ_ADDRESS,P_WAIT_READ_ADDRESS,P_RECEIVE,
-    P_WAIT_RECEIVE,P_DATA,P_STOP,P_WAIT_STOP,P_PUBLISH };
+    P_WAIT_RECEIVE,P_DATA,P_STOP,P_WAIT_STOP,P_PUBLISH,P_WRITE,P_WAIT_WRITE };
+#define WRITE_INDEX 6u /* Byte index of the selector write; 7 reads it back. */
 struct profile { uint8_t enable,bit,selector,mask; };
 static int profile(enum a733_rail rail,struct profile *p)
 {
     switch(rail) {
     case A733_RAIL_DCDC1:*p=(struct profile){0x10,0,0x12,31};break;
     case A733_RAIL_DCDC2:*p=(struct profile){0x10,1,0x13,127};break;
+    case A733_RAIL_DCDC3:*p=(struct profile){0x10,2,0x14,127};break;
     case A733_RAIL_DCDC4:*p=(struct profile){0x10,3,0x15,127};break;
+    case A733_RAIL_DCDC5:*p=(struct profile){0x10,4,0x16,127};break;
     case A733_RAIL_DCDC8:*p=(struct profile){0x10,7,0x19,127};break;
     case A733_RAIL_DCDC9:*p=(struct profile){0x11,0,0x1a,127};break;
     case A733_RAIL_BLDO1:*p=(struct profile){0x20,6,0x2a,31};break;
@@ -173,14 +176,25 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *p,const struct a733_pmic_
     int live=clock_live(p);
     return leave(p,live==1 ? A733_PMIC_READY : live==0 ? A733_PMIC_BUSY : fault(p));
 }
-enum a733_pmic_status a733_pmic_submit(struct a733_pmic *p,uint64_t owner,
-    const struct a733_rail_token *rail,enum a733_rail which,uint64_t deadline,struct a733_pmic_request *out)
+/* Only the CPU rails accept writes, and only within the pinned CPU operating
+ * points' 800-1050 mV, so a wrong caller value cannot leave that range. */
+static int writable(enum a733_rail which,uint8_t target)
+{
+    struct a733_pmic_snapshot s;
+    return (which==A733_RAIL_DCDC3 || which==A733_RAIL_DCDC5) && target<=127 &&
+        a733_pmic_decode(which,0,target,&s) && s.decoded &&
+        s.programmed_uv>=800000 && s.programmed_uv<=1050000;
+}
+static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,
+    const struct a733_rail_token *rail,enum a733_rail which,unsigned write,uint8_t expected,
+    uint8_t target,uint64_t deadline,struct a733_pmic_request *out)
 {
     struct profile f;
     if(!p || p->self!=p || !rail)return A733_PMIC_INVALID;
     const struct a733_rail_token parent=*rail;
     if(!owner || parent.owner!=owner || !profile(which,&f) ||
-       !(parent.shared&A733_RAIL_BIT(which)) || !outside(p,rail,sizeof(*rail)) ||
+       !((write ? parent.exclusive : parent.shared|parent.exclusive)&A733_RAIL_BIT(which)) ||
+       (write && (!writable(which,target) || expected>f.mask)) || !outside(p,rail,sizeof(*rail)) ||
        !outside(p,out,sizeof(*out)) || !separate(rail,sizeof(*rail),out,sizeof(*out)))return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     if(p->failed)return leave(p,A733_PMIC_RETAINED);
@@ -197,8 +211,16 @@ enum a733_pmic_status a733_pmic_submit(struct a733_pmic *p,uint64_t owner,
         r==A733_RAIL_RETAINED ? fault(p) : A733_PMIC_INVALID);
     s->request=(struct a733_pmic_request){identity(p),p->next_id++,owner};
     s->snapshot=(struct a733_pmic_snapshot){.rail=which};s->deadline=deadline;s->state=QUEUED;
+    s->write=write;s->expected=expected;s->target=target;
     *out=s->request;return leave(p,A733_PMIC_PENDING);
 }
+enum a733_pmic_status a733_pmic_submit(struct a733_pmic *p,uint64_t owner,
+    const struct a733_rail_token *rail,enum a733_rail which,uint64_t deadline,struct a733_pmic_request *out)
+{return submit(p,owner,rail,which,0,0,0,deadline,out);}
+enum a733_pmic_status a733_pmic_submit_write(struct a733_pmic *p,uint64_t owner,
+    const struct a733_rail_token *rail,enum a733_rail which,uint8_t expected,uint8_t target,
+    uint64_t deadline,struct a733_pmic_request *out)
+{return submit(p,owner,rail,which,1,expected,target,deadline,out);}
 static struct a733_pmic_slot *request(struct a733_pmic *p,const struct a733_pmic_request *r)
 {
     if(!same(p,&r->lifetime) || !r->id)return 0;
@@ -241,7 +263,8 @@ static int await_status(struct a733_pmic *p,unsigned expected)
 static enum a733_pmic_status phase(struct a733_pmic *p)
 {
     struct a733_pmic_slot *s=&p->slots[p->active];struct profile f;profile(s->snapshot.rail,&f);
-    const uint8_t regs[]={0xff,0x0e,0x0f,f.enable,f.selector,0xff};
+    const uint8_t regs[]={0xff,0x0e,0x0f,f.enable,f.selector,0xff,f.selector,f.selector};
+    const uint8_t written=(uint8_t)((p->values[4]&~f.mask)|s->target);
     int ok=1;uint32_t value;
     switch(p->phase) {
     case P_START:case P_RESTART:ok=wr(p,TWI+0xc,0x68);break;
@@ -255,6 +278,8 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     case P_WAIT_RESTART:ok=await_status(p,0x10);break;
     case P_WAIT_READ_ADDRESS:ok=await_status(p,0x40);break;
     case P_WAIT_RECEIVE:ok=await_status(p,0x58);break;
+    case P_WRITE:ok=wr(p,TWI+8,written) && wr(p,TWI+0xc,0x48);break;
+    case P_WAIT_WRITE:ok=await_status(p,0x28);break;
     case P_DATA:if(!rd(p,TWI+8,&value))return fault(p);p->values[p->byte_index]=(uint8_t)value;break;
     case P_STOP:ok=wr(p,TWI+0xc,0x58);break;
     case P_WAIT_STOP:
@@ -263,13 +288,19 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
         if(!bus_idle(p))return fault(p);
         if((p->byte_index==0 && p->values[0]!=0) || (p->byte_index==1 && p->values[1]!=3) ||
            (p->byte_index==2 && p->values[2]!=0) || (p->byte_index==5 && p->values[5]!=0))return fault(p);
-        if(++p->byte_index<6){p->phase=P_START;return A733_PMIC_PENDING;}break;
+        /* A write needs the enabled output at the selector the client read.
+         * After the data byte, only an exact readback ends the request. */
+        if(s->write && p->byte_index==5 && (!(p->values[3]&BIT(f.bit)) ||
+           (p->values[4]&f.mask)!=s->expected))return fault(p);
+        if(p->byte_index==WRITE_INDEX)p->values[WRITE_INDEX]=written;
+        if(p->byte_index==WRITE_INDEX+1 && p->values[WRITE_INDEX+1]!=p->values[WRITE_INDEX])return fault(p);
+        if(++p->byte_index<(s->write ? 8u : 6u)){p->phase=P_START;return A733_PMIC_PENDING;}break;
     case P_PUBLISH: {
         enum a733_rail_result r=a733_rail_borrow_status(p->rails,&s->borrow);
         if(r==A733_RAIL_BUSY)return A733_PMIC_BUSY;
         if(r!=A733_RAIL_READY || !baseline(p) || !timely(p))return fault(p);
         struct a733_pmic_snapshot snapshot;
-        a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[4],&snapshot);
+        a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[s->write ? 7 : 4],&snapshot);
         snapshot.page_before=p->values[0];snapshot.chip=p->values[1];snapshot.revision=p->values[2];snapshot.page_after=p->values[5];
         p->ops.leave(p->cookie);p->held=0;
         if(!timely(p))return fault(p);
@@ -279,8 +310,10 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
     }
     if(ok<0 || (!ok && p->phase!=P_WAIT_START && p->phase!=P_WAIT_ADDRESS &&
        p->phase!=P_WAIT_REGISTER && p->phase!=P_WAIT_RESTART && p->phase!=P_WAIT_READ_ADDRESS &&
-       p->phase!=P_WAIT_RECEIVE))return fault(p);
-    if(ok>0)++p->phase;
+       p->phase!=P_WAIT_RECEIVE && p->phase!=P_WAIT_WRITE))return fault(p);
+    /* The write byte sends its data after the register index, then STOP. */
+    if(ok>0)p->phase=p->phase==P_WAIT_REGISTER && p->byte_index==WRITE_INDEX ? P_WRITE :
+        p->phase==P_WAIT_WRITE ? P_STOP : p->phase+1;
     return A733_PMIC_PENDING;
 }
 /* One poll advances consecutive bus phases while the I2C mutex stays held, so

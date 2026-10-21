@@ -41,7 +41,7 @@ shutil.copy2(__file__, args.evidence / "runner.py")
 inputs[str(args.native)] = hashlib.sha256(args.native.read_bytes()).hexdigest()
 inputs[str(Path(__file__).resolve())] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 pmic = texts[paths[0]]
-names = ["dcdc1", "dcdc2", "dcdc4", "dcdc8", "bldo5", "cldo1"]
+names = ["dcdc1", "dcdc2", "dcdc3", "dcdc4", "dcdc5", "dcdc8", "bldo5", "cldo1"]
 code = pmic[:pmic.index("#include")]
 code += r'''
 #include <assert.h>
@@ -58,7 +58,7 @@ static unsigned selector;
 static int pmic_bus_read(unsigned a,unsigned r,u8 *out) {
     assert(a==0x36);
     if(r==0x10 || r==0x21)*out=255;
-    else {assert(r==0x12 || r==0x13 || r==0x15 || r==0x19 || r==0x2e || r==0x2f);*out=selector;}
+    else {assert(r==0x12 || r==0x13 || r==0x14 || r==0x15 || r==0x16 || r==0x19 || r==0x2e || r==0x2f);*out=selector;}
     return 0;
 }
 '''
@@ -97,8 +97,17 @@ cursor = 0
 for symbol in ordered:
     cursor = body.index(symbol, cursor) + len(symbol)
 assert "twi_send_data(" not in body
+# The CPU-rail selector write follows the helper's write order: one data byte
+# after the register index, acknowledged with I2C_DATAWRITE_ACK, then STOP.
+body = block(texts[paths[2]], r"static int sunxi_i2c_write\(")
+cursor = 0
+for symbol in ["twi_start(", "twi_send_slave_addr(", "twi_send_addr(", "twi_send_data(", "twi_stop("]:
+    cursor = body.index(symbol, cursor) + len(symbol)
+assert "twi_restart(" not in body
+body = block(texts[paths[2]], r"static int twi_send_data\(")
+assert "twi_wait_status(bus_num, I2C_DATAWRITE_ACK, timeout)" in body
 result = {"status": "PASS", "decoded_cases": len(output.splitlines()), "inputs": inputs,
-          "command": command, "scope": "actual bootloader voltage getter on supported selectors; static I2C helper order/status definitions",
+          "command": command, "scope": "actual bootloader voltage getter on supported selectors; static I2C read and write helper order/status definitions",
           "native_sha256": inputs[str(args.native)],
           "reference_sha256": hashlib.sha256((args.evidence / "reference").read_bytes()).hexdigest(),
           "limitations": ["DCDC8 selectors >=102 remain undecoded", "no physical timing/electrical proof", "I2C MMIO helper instructions not executed"]}
