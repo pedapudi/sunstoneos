@@ -125,9 +125,12 @@ fails while running. That case needs the rollback procedure below.
 ## Cold SD admission starts from boot0's controller state
 
 boot0 reads the monitor package from the card through SDC0 immediately before
-the cold entry, and it calls no storage exit before the handoff. The
-controller, its clock and its pins are therefore still in boot0's transfer
-state. `a733_stage2_card_admission` in
+the cold entry. No SDC0 teardown was found on boot0's handoff path: its call
+at `0x5e35c` reaches a stub at `0x49bbc` that returns 0. The controller, its
+clock and its pins are therefore expected to remain in boot0's transfer
+state. Admission does not depend on that observation, because it reads the
+bus and clock registers and refuses a closed bus or a gated clock.
+`a733_stage2_card_admission` in
 [admission.c](../boot/a733/stage2/admission.c) runs once, before the SD core's
 first controller access, and compares that state with the pinned boot0 and the
 A733 manual. It refuses unless every check below holds.
@@ -161,14 +164,37 @@ PF0..PF6 configuration and bank voltage checks against the selected values,
 then samples PF6. Any change, or a card that leaves, freezes the SD core with
 an admission fault.
 
-Two conditions rest on the cold path itself and have no register to check.
-The card supply has no read-only observation, because reading the PMIC needs
-bus transactions. Its rails served boot0's read of this card, and the pinned
-boot0 header selects operation without PMIC access. Exclusive use of SDC0
-rests on the single started core: the cold-entry gate requires zero U-Boot and
-OP-TEE pointers, and the monitor package holds no other image. A board run is
-needed to confirm both, together with the boot0 module clock value, which the
+Two conditions have no register to check, and neither is verified.
+
+- **Card supply.** Reading the PMIC needs bus transactions, so the supply has
+  no read-only observation. The only evidence is that its rails served
+  boot0's read of this card. boot0 is configured for the AXP2202 PMIC and may
+  program its rails. The pinned boot0 header holds `power_mode` 1. The pinned
+  board configuration (`sys_config.fex`, `[target]` comment) reads the low
+  three bits of that byte as `axp_id`, where 1 selects the AXP2202, while
+  U-Boot's older generic `private_boot0.h` reads 1 as no PMIC. The boot0
+  binary contains PMU driver code for the DCDC, ALDO and CLDO rails. The card
+  rail state after boot0 needs a board observation.
+- **Exclusive use of SDC0.** The cold path starts only one application core:
+  the cold-entry gate requires zero U-Boot and OP-TEE pointers, and the
+  monitor package holds no other image. No other agent, such as the E902
+  core, is known to use SDC0, but that is not established; it depends on the
+  [remote-writer exclusion](#the-loader-stops-before-entering-the-image)
+  prerequisite.
+
+A board run is also needed to confirm the boot0 module clock value, which the
 models represent with an assumed transfer rate.
+
+A board run of the cold path must account for two properties of admission.
+First, admission writes the PF6 configuration and the SMHC0 module clock, so
+it changes hardware state before any card access. The writes reach only
+SDC0 registers, every write is read back, and SD commands stay read-only.
+Second, once admission accepts, the loader reads each
+slot at the 400 kHz identification module clock, which gives a 200 kHz
+card clock on a 1-bit bus, about 25 KB/s. A cold boot with a valid slot
+therefore reads the full image and its assets before the forced-FEL return:
+about 40 seconds per megabyte, or several minutes for a multi-megabyte
+slot.
 
 ## The loader stops before entering the image
 

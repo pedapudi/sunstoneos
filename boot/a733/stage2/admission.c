@@ -14,19 +14,27 @@ int a733_stage2_entry_state(void);
  * so the controller, its clock and its pins are in boot0's transfer state.
  * The checks compare that state with the pinned boot0 and the A733 manual:
  * - boot0 programs the SMHC0 clock and bus registers (resource setup at
- *   0x5d60c) and calls no storage exit before the monitor handoff (0x49bbc
- *   returns at once); manual 4.1.6.128 and 4.1.6.129;
+ *   0x5d60c); manual 4.1.6.128 and 4.1.6.129. No SDC0 teardown was found on
+ *   boot0's handoff path (its call at 0x5e35c reaches a stub at 0x49bbc that
+ *   returns 0). Admission does not rely on that observation: it reads the
+ *   bus and clock state and refuses a closed bus or a gated clock;
  * - boot0's header configures PF0..PF5 as function 2 with pull-up and does
  *   not list PF6, which keeps its IO-disabled reset value; manual 18.14.6.68
  *   and PF_PUL0;
  * - PF is a 3.3 V bank, as the native SD platform requires; manual 18.14.6.1
  *   to 18.14.6.3;
  * - no command, transfer or internal DMA is in progress.
- * The cold path starts only this core: the cold-entry gate requires zero
- * U-Boot and OP-TEE pointers, and the monitor package holds no other image.
+ * The cold path starts only this application core: the cold-entry gate
+ * requires zero U-Boot and OP-TEE pointers, and the monitor package holds no
+ * other image. No other agent, such as the E902, is known to use SDC0, but
+ * that is not established (see a733_stage2_remote_writers_excluded).
  * The card supply has no read-only observation, because the PMIC needs bus
- * transactions. Its rails served boot0's own read of this card, and boot0
- * runs without PMIC access (header power_mode 1).
+ * transactions. The only evidence for it is that its rails served boot0's
+ * own read of this card. boot0 is configured for the AXP2202 and may program
+ * PMIC rails: its header power_mode is 1, which the pinned sys_config.fex
+ * reads as axp_id 1 (AXP2202) and U-Boot's older private_boot0.h reads as
+ * no PMIC, and the binary contains PMU rail code. The card rail state after
+ * boot0 is unverified and needs a board observation.
  * Admission then makes two writes to registers that serve only SDC0: PF6
  * becomes an input with pull-up for card detection, and the module clock
  * moves from boot0's transfer rate to the identification rate that the SD
