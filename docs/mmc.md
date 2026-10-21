@@ -17,9 +17,20 @@ This implementation has issued no physical commands.
 ## Supported profile
 
 The controller transfers data through its FIFO with programmed I/O. Each poll
-consumes at most sixteen 32-bit FIFO words. There is no allocation, DMA mapping,
-interrupt dependency or filesystem requirement. Read buffers can be unaligned.
-The caller supplies an absolute deadline in monotonic microseconds.
+reads the status register once and moves at most one 512-byte block, 128
+32-bit words, as one burst. A read takes the FIFO fill level from status bits
+27:17, or one word when the level reads zero but the FIFO-empty flag is clear.
+A write takes the free space, 256 words minus the fill level, and nothing while
+FIFO-full is set. The platform admits each burst once. There is no allocation,
+DMA mapping, interrupt dependency or filesystem requirement. Read buffers can
+be unaligned. The caller supplies an absolute deadline in monotonic
+microseconds.
+
+The manual describes the level field as the number of filled FIFO locations.
+That interpretation has not been confirmed on the board. A level that overstates
+the filled words would underrun the FIFO; the raw FIFO underrun/overflow bit 11
+is a terminal error, so the read retains its buffer and leases instead of
+returning data.
 
 The initial profile uses one data line, single-data-rate signaling and a
 100–400 kHz card clock. The platform must admit an even 200–800 kHz module clock;
@@ -62,8 +73,9 @@ blocks. Admission checks the entire range against capacity and the 32-bit
 command argument before any controller access. SDSC/eMMC byte addressing also
 checks the last requested block against byte-address overflow. A separate
 [bounded write primitive](mmc-write.md) requires explicit policy authority.
-The native platform remains read-only. There is no erase, partition-switch,
-generic-command or automatic fallback API.
+The default native platform entry points are read-only; only the bound
+[storage update service](storage-update.md) can admit writes. There is no
+erase, partition-switch, generic-command or automatic fallback API.
 CMD16 changes the volatile read block length; it does not write media contents.
 
 ## SD can negotiate four-bit default and high-speed operation
@@ -167,6 +179,14 @@ A successful read requires all of the following:
    and no late controller error.
 4. A subsequent CMD13 response reporting both ready-for-data and transfer state.
 
+A card may set R1 OUT_OF_RANGE (bit 31) after an open-ended CMD18 whose
+last block is the last user-area sector. SD physical layer 4.10 section 4.3.3
+and JESD84-B51 section 6.8.3 tell the host to ignore it there, and the pinned
+Linux block driver does so. For a CMD18 ending at the last sector, the driver
+ignores bit 31 in the automatic CMD12 response and in the following CMD13. Every
+other card error bit stays terminal. OUT_OF_RANGE in the CMD18 response itself,
+in a CMD17 response, or after a read that ends earlier still faults.
+
 The automatic stop argument is explicitly zeroed before CMD18. The manual gives
 its register a reset value of `0xffff`; inherited contents cannot select the
 argument. CMD12 is sent by the controller after the finite transfer. The driver
@@ -207,6 +227,7 @@ The reference kernel is `orangepi-xunlong/linux-orangepi` at revision
 | [drivers/mmc/core/sd.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/sd.c) | CSD structure, capacity and addressing |
 | [drivers/mmc/core/mmc.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/mmc.c) | eMMC CSD and EXT_CSD capacity/revision handling |
 | `include/linux/mmc/mmc.h` | Card status bits and EXT_CSD byte offsets |
+| [drivers/mmc/core/block.c](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/mmc/core/block.c) | OUT_OF_RANGE ignored on open-ended multiple-block stop status (`mmc_blk_stop_err_bits`) |
 | `bsp/drivers/mmc/sunxi-mmc.c` | Explicit zero automatic-stop argument in `sunxi_mmc_set_a12a` |
 | `bsp/drivers/mmc/sunxi-mmc-v5p3x.c` | Controller version, legacy sampling phases, HS400 and CRC controls |
 
@@ -238,7 +259,11 @@ failed automatic stop, card-state errors and retained partial reads. It also
 passed CRC, response-timeout, removal, admission, uncertain-write, monotonic-time
 and callback-reentry cases under AddressSanitizer and UndefinedBehaviorSanitizer.
 A subsequent focused check passed explicit zero automatic-stop arguments for
-both SD and eMMC. Only that changed behavior and the affected native object
+both SD and eMMC. The current model also reports the FIFO fill level. An
+8-block read now takes 16 core polls, 8 of them moving data; the previous
+16-word step took 72 polls, 64 of them moving data. The model also covers a
+level limited to five words, a level field that stays zero, and
+OUT_OF_RANGE at the card end for SD and eMMC, with refusal cases elsewhere. Only that changed behavior and the affected native object
 were rebuilt after the original batch.
 
 Preserved evidence is under
@@ -259,10 +284,11 @@ identification/read attempt. Only the read-only SD service permits its explicit
 first CMD0 policy in place of cold card history. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
 CMD1 timeout require new evidence before another physical attempt.
 
-SD v1 identification, SDUC, wider buses, higher rates, voltage switching,
-tuning, DMA, interrupts, native write policy, wider write/erase modes, eMMC boot/alternate partitions,
+SD v1 identification, SDUC, eight-bit buses, UHS rates, voltage switching,
+tuning, DMA, interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
 4 KiB sectors, command queuing, hotplug/recovery and power management remain
-outside the implemented profile. UFS remains tracked separately in
+outside the implemented profile. Four-bit default-speed and high-speed SD reads
+are implemented but physically unqualified, as is the update-bound writer. UFS remains tracked separately in
 [storage.md](storage.md). Completing this component does not complete board
 storage support or the full OS goal. Performance qualification follows
 functional hardware coverage under the [validation policy](validation.md).

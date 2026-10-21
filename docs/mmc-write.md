@@ -1,14 +1,17 @@
 # Bounded writes require separate storage authority
 
 The [MMC core](../drivers/storage/sunxi_mmc.c) implements a bounded write
-primitive for identified SD and eMMC cards. The [native storage platform](mmc-platform.md)
-continues to expose read-only sessions. Its command and FIFO filters reject
-writes. No physical media write has been attempted with this primitive.
+primitive for identified SD and eMMC cards. The default entry points of the
+[native storage platform](mmc-platform.md) expose read-only sessions, and its
+command and FIFO filters reject writes. The
+[storage update service](storage-update.md) is the only writer. It binds one
+platform instance and owns one granted range, a durable host backup, an intent
+and result record per write, and a readback comparison. Only that binding opens
+the native CMD24 and FIFO filters. No physical media write has been attempted.
 
-This is a controller dependency for recoverable boot and update. The OS-owned
-range ledger, durable backup, update journal, recovery qualification and native
-writer binding remain unimplemented. A callback returning success does not
-establish those conditions.
+Physical recovery qualification, power-loss durability and boot selection remain
+prerequisites for recoverable boot and update. A callback returning success does
+not establish those conditions.
 
 ## Requests preserve an exact input and range
 
@@ -65,7 +68,8 @@ A request begins with CMD13 confirming ready-for-data and transfer state. Each
 CMD24 then follows this bounded sequence:
 
 1. Require a successful command response before supplying payload words.
-2. Submit at most sixteen FIFO words per poll, stopping when the FIFO is full.
+2. Submit at most one 512-byte burst per poll, sized from one status sample:
+   256 words minus the FIFO fill level, and nothing while FIFO-full is set.
 3. Require command and data completion, an empty FIFO, idle controller/card
    busy state and no late controller error.
 4. Poll CMD13 until the card reports ready-for-data and transfer state. A
@@ -77,8 +81,8 @@ inconsistent write transfer. The core faults before another FIFO write.
 The following sector cannot start until the preceding sector's status confirms
 completion. The final deadline check precedes publication of a completed result.
 
-`submitted` counts attempted FIFO bytes, including a word whose callback may
-have failed after taking effect. `confirmed_blocks` counts sectors followed by
+`submitted` counts attempted FIFO bytes. A failed burst counts every word it
+attempted, because any prefix may have reached the FIFO. `confirmed_blocks` counts sectors followed by
 successful ready/transfer status. `write_started` becomes true before attempting
 the first command-register write, because a failed callback may still issue it.
 These fields diagnose partial progress; they do not prove media contents.
@@ -89,8 +93,8 @@ Result collection copies fault diagnostics without releasing anything. There
 is no retry, reset, rollback or implicit continuation through another controller.
 
 READY status does not establish power-loss durability, atomic updates or a
-verified backup. Readback verification, durable journal rules and boot selection
-must be implemented by the update service before native writes are admitted.
+verified backup. The update service supplies readback comparison and the host
+intent and result records; boot selection remains unimplemented.
 
 ## Sources and focused validation
 
@@ -143,7 +147,7 @@ call chain. Physical execution and worst-case task stack use remain unqualified.
 
 ## Required storage work
 
-Native range/backup/recovery authority, verified updates and physical storage
+Physical recovery qualification of the update service and physical storage
 qualification remain prerequisites for recoverable boot. CMD25/CMD23 writes,
 reliable writes, cache/flush support, erase, protection management and alternate
 eMMC partitions remain required modes. Wider buses, faster clocks, voltage
