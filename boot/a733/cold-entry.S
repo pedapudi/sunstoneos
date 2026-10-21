@@ -1,5 +1,6 @@
 /* Boot0 monitor-only entry. This first stage captures the inherited state;
- * application admission and remote-writer exclusion are not established yet. */
+ * application admission and remote-writer exclusion are not established yet.
+ * A733_COLD_STAGE2 selects the stage-2 slot loader build (boot/a733/stage2). */
 #include "a733_cpu_entry.h"
 .arch armv8-a
 .section .text.cold_header,"ax"
@@ -98,6 +99,22 @@ a733_cold_entry:
     dsb sy
     str x0, [x23]
     dsb sy
+#ifdef A733_COLD_STAGE2
+    // Only an admitted capture continues to the stage-2 loader. Refused
+    // metadata and exceptions, including stage-2 faults, park as before.
+    ldr x0, [x23, #24]
+    cmp x0, #1
+    b.ne a733_cold_park
+    ldr x0, =a733_stage2_stack_top
+    mov sp, x0
+    ldr x0, =a733_stage2_bss_start
+    ldr x1, =a733_stage2_bss_end
+3:  cmp x0, x1
+    b.hs 4f
+    str xzr, [x0], #8
+    b 3b
+4:  bl a733_stage2_main
+#endif
 .global a733_cold_park
 a733_cold_park:
     wfe

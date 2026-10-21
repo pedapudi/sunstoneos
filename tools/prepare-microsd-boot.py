@@ -223,6 +223,13 @@ def prepare(args):
                 'monitor': identity,
                 'layout': {'bytes': IMAGE_BYTES, 'fill': 0, 'boot0_offset': BOOT0_OFFSET,
                            'package_offset': PACKAGE_OFFSET, 'backup_emitted': False},
+                # Only these extents carry container data. Its zero gaps are not
+                # card contents; a card install must not write them over slot headers.
+                'card_writes': [
+                    {'name': 'boot0', 'offset': BOOT0_OFFSET, 'bytes': len(boot0),
+                     'sha256': digest(boot0)},
+                    {'name': 'monitor-package', 'offset': PACKAGE_OFFSET,
+                     'bytes': len(package), 'sha256': digest(package)}],
                 'dependencies': {'boot0': {'url': BOOT0_URL, 'sha256': BOOT0_HASH},
                                  'packer': {'url': PACKER_URL, 'sha256': PACKER_HASH}},
                 'provenance_limit': 'Exact packer/source equivalence and individual tool license '
