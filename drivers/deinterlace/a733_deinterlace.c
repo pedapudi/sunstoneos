@@ -75,6 +75,14 @@ static const struct a733_deinterlace_word tnr_words[]={
  {0x4068,0x07ff07ff},{0x406c,0x07ff07ff}};
 const struct a733_deinterlace_word *a733_deinterlace_tnr_words(size_t *n)
 {if(!n)return NULL;*n=sizeof(tnr_words)/sizeof(*tnr_words);return tnr_words;}
+/* Source fixed strength, then the pinned adaptive initial gains for the
+ * LOW, MIDDLE and HIGH levels, indexed by session strength. */
+static const uint32_t strengths[]={0x003a3a3a,0x00262626,0x00303030,0x003e3e3e};
+static int tnr_strength(uint32_t word)
+{
+ for(unsigned i=0;i<sizeof(strengths)/sizeof(*strengths);++i)if(word==strengths[i])return 1;
+ return 0;
+}
 static int tnr_valid(const uint32_t *w)
 {
  return w[0x24/4]==0x91001011&&w[0x34/4]==0x00000110&&
@@ -92,7 +100,7 @@ static int tnr_valid(const uint32_t *w)
   w[0x60/4]==640&&w[0x64/4]==320&&w[0x68/4]==320&&
   w[0x120/4]==A733_DEINTERLACE_FLAG_IN_IOVA&&w[0x124/4]==A733_DEINTERLACE_TNR_FLAG_OUT_IOVA&&
   !w[0x128/4]&&w[0x1000/4]==0x21360c04&&w[0x1024/4]==(639u<<16)&&w[0x1028/4]==(479u<<16)&&
-  w[0x4000/4]==0x003a3a3a&&w[0x405c/4]==0&&
+  tnr_strength(w[0x4000/4])&&w[0x405c/4]==0&&
   w[0x4060/4]==(639u<<16)&&w[0x4064/4]==(479u<<16)&&
   w[0x4068/4]==(639u<<16)&&w[0x406c/4]==(479u<<16);
 }
@@ -136,6 +144,10 @@ int a733_deinterlace_commands(struct a733_deinterlace_plan *p,const struct a733_
  if(tnr)c.dit_mode=(struct di_dit_mode){DI_DIT_INTP_MODE_INVALID,DI_DIT_OUT_0FRAME};
  c.md_en=motion;c.tnr_en=tnr;
  if(tnr)c.tnr_mode=(struct di_tnr_mode){DI_TNR_MODE_FIX,DI_TNR_LEVEL_MIDDLE};
+ /* A selected strength uses the source's adaptive mode, whose initial gain
+  * comes from the level. Only this first operation's gain is programmed. */
+ static const u32 levels[]={DI_TNR_LEVEL_MIDDLE,DI_TNR_LEVEL_LOW,DI_TNR_LEVEL_MIDDLE,DI_TNR_LEVEL_HIGH};
+ if(tnr&&s->strength)c.tnr_mode=(struct di_tnr_mode){DI_TNR_MODE_ADAPTIVE,levels[s->strength]};
  c.fb_arg.is_interlace=1;c.fb_arg.top_field_first=1;
  c.md_out_crop=c.dit_out_crop=c.tnr_out_crop=c.fmd_out_crop=(struct di_rect){0,0,640,480};
  c.dit_demo_crop=c.tnr_demo_crop=(struct di_rect){0,0,640,480};
@@ -158,9 +170,13 @@ int a733_deinterlace_commands(struct a733_deinterlace_plan *p,const struct a733_
  if(di_dev_apply_fixed_para(&c)||di_port_violation)return 0;
  /* One initial operation: retain the explicitly selected WEAVE, MOTION or TNR
   * hardware mode. No CPU ITD/FMD feedback or steady-state history is admitted.
-  * alg_en==0 preserves fixed hardware settings; it does not disable MD. */
- data.proc_rst.di_para.alg_para.alg_en=0;
+  * alg_en==0 preserves fixed hardware settings; it does not disable MD.
+  * A selected TNR strength keeps alg_en==1 so the source writes the initial
+  * gain. Sequence zero runs no algorithm, and the only other writes are DIT
+  * fields that the TNR register list never submits. */
+ data.proc_rst.di_para.alg_para.alg_en=tnr&&s->strength;
  if(di_dev_apply_para(&c)||di_port_violation)return 0;
  p->self=(uintptr_t)p;p->ready=1;
- return a733_deinterlace_plan_valid(p);
+ return a733_deinterlace_plan_valid(p)&&
+  (!tnr||p->words[0x4000/4]==strengths[s->strength]);
 }

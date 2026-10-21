@@ -33,7 +33,8 @@ def decode(raw,session):
     require(count==(MAXIMUM if status==1 else 0) and len(raw)==HEADER+count,
         'Deinterlace copied extent differs.')
     result=dict(status=status,bytes=count,width=640,height=480,y_stride=640,uv_stride=320 if geometry[5]==3 else 640,
-        format='YUV420' if geometry[5]==3 else 'NV12',mode={1:'WEAVE',2:'MOTION-OUT_1FRAME',3:'TNR-FIXED'}[geometry[5]],top_field_first=True,matched_finish=finish,
+        format='YUV420' if geometry[5]==3 else 'NV12',top_field_first=True,matched_finish=finish,
+        mode={1:'WEAVE',2:'MOTION-OUT_1FRAME',3:('TNR-FIXED','TNR-INITIAL-LOW','TNR-INITIAL-MIDDLE','TNR-INITIAL-HIGH')[geometry[7]]}[geometry[5]],
         hardware_status=hardware_status,scanned_masters=scanned,guards=guards,
         physical_qualified=False)
     if geometry[5]==3:
@@ -100,11 +101,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             if result['status']==2:
                 record['deinterlace_result']='observed-failure';record['durable_result']=entry.copy();save();return result
             require(result['status']==1,'Unexpected already-acknowledged deinterlace output.')
-            output=evidence/('output.yuv420' if result['mode']=='TNR-FIXED' else 'output.nv12');supervisor.durable_frame(output,frame[HEADER:])
+            output=evidence/('output.yuv420' if result['format']=='YUV420' else 'output.nv12');supervisor.durable_frame(output,frame[HEADER:])
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
                 matches_cpu_reference=frame[HEADER:]==expected if expected is not None else None,
                 pixel_reference_checked=expected is not None,wire_header_hex=frame[:HEADER].hex())
-            if result['mode']=='TNR-FIXED':
+            if result['format']=='YUV420':
                 copied.update(format='YUV420',layout=result['layout'],y_stride=640,u_stride=320,v_stride=320,
                     plane_offsets=result['plane_offsets'])
             record['deinterlace_output']=copied;save()
