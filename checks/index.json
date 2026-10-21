@@ -2,7 +2,8 @@
  "a64-entry-probe.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -243,7 +244,8 @@
    "host"
   ],
   "docs": [
-   "docs/a733-device-launch.md"
+   "docs/a733-device-launch.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -793,7 +795,8 @@
  "a733-smp-observe.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-observe-host.md"
+   "docs/a733-smp-observe-host.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -835,7 +838,8 @@
    "host"
   ],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -869,7 +873,18 @@
   "required_arguments": [
    "--output"
   ],
-  "summary": "One focused SPI source, host-transfer/native-admission, and object batch.",
+  "summary": "One focused SPI source, host-transfer and object batch.",
+  "usb": false
+ },
+ "a733-storage-launch-chain.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check that launch preparation accepts the commitment table the update writer seals.",
   "usb": false
  },
  "a733-storage-maintenance.py": {
@@ -1433,6 +1448,82 @@
   "summary": "Execute the returning 32-round FreeRTOS workload with modeled hardware.",
   "usb": false
  },
+ "audit-device-minors-usb-control.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/usb.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--tinyusb",
+   "--headers",
+   "--output"
+  ],
+  "summary": "Check which control requests reset the RAM diagnostics channel.",
+  "usb": false
+ },
+ "audit-host-fixtures-hold.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "A closed console cannot end the shared ownership hold or skip quarantine; host only.",
+  "usb": false
+ },
+ "audit-host-tools-hevc-journal.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check HEVC capture journal cost and durability with a modeled USB device.",
+  "usb": false
+ },
+ "audit-host-tools-launcher.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check that every adapted supervised launcher refuses a changed shared anchor.",
+  "usb": false
+ },
+ "audit-host-tools-snapshot.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Check linked-dependency collection over archives and linker inputs with a fixture tree.",
+  "usb": false
+ },
+ "audit-host-tools-transport.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [],
+  "summary": "Check host transport bounds with fixtures only; no USB, FEL or board access.",
+  "usb": true
+ },
+ "audit-security-watchdog-rtc.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--object",
+   "--output"
+  ],
+  "summary": "Execute the native maintenance-watchdog admission and reload comparison.",
+  "usb": false
+ },
  "bluetooth-application.py": {
   "cache_areas": [
    "host"
@@ -1895,6 +1986,17 @@
   "summary": "Build a focused L2CAP/UART model using wire structures from pinned Linux source.",
   "usb": false
  },
+ "bt-memory.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Build and run the shared Bluetooth range-helper unit check under ASan/UBSan.",
+  "usb": false
+ },
  "bt-rfcomm-server.py": {
   "cache_areas": [],
   "docs": [],
@@ -1973,6 +2075,19 @@
   "summary": "Check native SDP against the real lower stack and pinned reference header.",
   "usb": false
  },
+ "build-identity.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/build.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--work"
+  ],
+  "summary": "Check that board and storage build identities follow contents and flags, not paths.",
+  "usb": false
+ },
  "cached-device-reservations.py": {
   "cache_areas": [],
   "docs": [
@@ -2005,6 +2120,17 @@
    "--tinyusb"
   ],
   "summary": "Build the native camera image and exercise its application boundaries.",
+  "usb": false
+ },
+ "camera-observe.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the offline NV16 decoder, color-bar structure test and review image.",
   "usb": false
  },
  "camera-sealing.py": {
@@ -2115,6 +2241,7 @@
  "cold-entry.py": {
   "cache_areas": [],
   "docs": [
+   "docs/boot-slots.md",
    "docs/cold-entry.md"
   ],
   "library": false,
@@ -2661,6 +2788,23 @@
   "summary": "Check the private DMA image's EL1t exception routes in actual instructions.",
   "usb": false
  },
+ "dma-interrupt.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/dma-service.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--freertos",
+   "--tinyusb",
+   "--qemu",
+   "--lld"
+  ],
+  "summary": "Build the DMA0 interrupt wake model and run its cases in fresh QEMU processes.",
+  "usb": false
+ },
  "dma-platform-reference.py": {
   "cache_areas": [],
   "docs": [],
@@ -2804,6 +2948,19 @@
   "summary": "Run private DSI profile and application checks with explicit model authority.",
   "usb": false
  },
+ "elf-memory-hazards.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/runtime.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "images"
+  ],
+  "summary": "Reject final ELFs whose string routines or EL3 boot code can fault on Device memory.",
+  "usb": false
+ },
  "fel-input.py": {
   "cache_areas": [],
   "docs": [
@@ -2826,6 +2983,29 @@
    "source"
   ],
   "summary": "Compile the patched FEL receive function against bounded and short-response fixtures.",
+  "usb": false
+ },
+ "fetch-sources.py": {
+  "cache_areas": [
+   "bad",
+   "pair",
+   "tree-1"
+  ],
+  "docs": [
+   "docs/board-wiring.md",
+   "docs/build.md",
+   "docs/gpu.md",
+   "docs/runtime.md",
+   "docs/smp-runtime.md",
+   "docs/sources.md",
+   "docs/usb.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--work"
+  ],
+  "summary": "Check tools/fetch-sources.py against a local file:// lock in a scratch tree.",
   "usb": false
  },
  "g2d-admission.py": {
@@ -4897,7 +5077,8 @@
   "cache_areas": [],
   "docs": [
    ".agents/skills/sunstone-a733-board/SKILL.md",
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -5090,6 +5271,23 @@
   "summary": "Build the root-configured mimus image; execute only new supervised cases.",
   "usb": false
  },
+ "mimus-warm.py": {
+  "cache_areas": [
+   "evidence",
+   "inputs"
+  ],
+  "docs": [
+   "docs/mimus-usb.md",
+   "docs/mimus.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Build and run the host warm-engine check, then compare both warm results with the host reference.",
+  "usb": false
+ },
  "monitor-application-fixture.py": {
   "cache_areas": [
    "evidence"
@@ -5135,7 +5333,8 @@
   "cache_areas": [],
   "docs": [
    ".agents/skills/sunstone-a733-multicore/SKILL.md",
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/board-test-queue.md"
   ],
   "library": false,
   "pure_host": false,
@@ -5941,6 +6140,7 @@
   "cache_areas": [],
   "docs": [
    "README.md",
+   "docs/board-test-queue.md",
    "docs/progress-ui.md"
   ],
   "library": false,
@@ -6484,6 +6684,19 @@
   "summary": "",
   "usb": false
  },
+ "radio-bootstrap-budget.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-radio.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--firmware"
+  ],
+  "summary": "Compare the minimum radio firmware bus time with the supervised bootstrap bound.",
+  "usb": false
+ },
  "radio-dhcp-reconnect.py": {
   "cache_areas": [
    "evidence",
@@ -6585,7 +6798,8 @@
   "required_arguments": [
    "--evidence",
    "--freertos-port",
-   "--pmic-source"
+   "--pmic-source",
+   "--compile-commands"
   ],
   "summary": "Run the focused rail ownership batch and preserve all executed inputs.",
   "usb": false
@@ -6779,6 +6993,21 @@
    "--output"
   ],
   "summary": "Execute the frozen RTC serializer, TinyUSB device stack and USB service bodies.",
+  "usb": false
+ },
+ "runtime-string-routines.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [
+   "docs/runtime.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Differential and access check of runtime memcpy, memmove and memset.",
   "usb": false
  },
  "sdio-controller.py": {
@@ -7039,6 +7268,47 @@
    "--output"
   ],
   "summary": "Check the linked SPI3 interrupt route and CPU dispatch with modeled GIC state.",
+  "usb": false
+ },
+ "standalone-boot-loader.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/boot-slots.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--boot0",
+   "--output"
+  ],
+  "summary": "Execute the stage-2 monitor against modeled card images.",
+  "usb": false
+ },
+ "standalone-boot-slots.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/boot-slots.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Exercise tools/boot-slots.py on sparse ordinary card image files.",
+  "usb": false
+ },
+ "storage-digest.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Compare the portable storage SHA-256 with hashlib on the host and AArch64.",
   "usb": false
  },
  "storage-read-binding.py": {
@@ -7369,6 +7639,19 @@
   "summary": "Root-only linked UART route/dispatch checks; no physical or scheduling evidence.",
   "usb": false
  },
+ "uart-native-fcr.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Execute the linked native UART write policy for FCR values on ports 0-2.",
+  "usb": false
+ },
  "usb-board-lock.py": {
   "cache_areas": [],
   "docs": [],
@@ -7558,6 +7841,46 @@
    "image"
   ],
   "summary": "Exercise the compiled AArch64 DCD's zero-length IN submission against MMIO memory.",
+  "usb": false
+ },
+ "usb0-service-burst.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/usb.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--tinyusb",
+   "--output"
+  ],
+  "summary": "Build and run the host model of the shared USB0 service loop.",
+  "usb": false
+ },
+ "usb0-service-descriptors.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/usb.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--pair",
+   "--output"
+  ],
+  "summary": "Compare the USB0 descriptors that two linked AArch64 images return.",
+  "usb": false
+ },
+ "usb0-service-npu-expiry.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Check that an NPU USB owner poll latches request expiry without hashing.",
   "usb": false
  },
  "watchdog-configuration.py": {
