@@ -181,7 +181,11 @@ separate cache lines. Initial publication cleans and invalidates them; later CPU
 access only reads them. The worker copies a completed period into a private
 4,096-byte staging buffer. It invalidates the raw range and issues a barrier
 before copying, using the existing native INVALIDATE operation without cleaning
-DMA-written data. The CPU only reads the raw range, and the next copy of the same
+DMA-written data. A second barrier after the copy completes its memory loads
+before the postcheck reads the package-count, destination and remaining-byte
+registers. Without it, the processor could read those registers before the
+copy finished, and a DMA overwrite of the period could reach staging
+undetected. The CPU only reads the raw range, and the next copy of the same
 period invalidates it again, so no cache maintenance follows the copy.
 No raw pointer reaches the application. `CAPTURED_COPY` grants the immutable
 staging copy until its exact ticket is returned. The application copies staging

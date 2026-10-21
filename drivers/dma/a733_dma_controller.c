@@ -343,11 +343,14 @@ int a733_dma_cyclic_rx_copy(struct a733_dma_controller *c,unsigned channel,uint6
     if(s->packages>=period+t->count)return -1;
     if(!rx_position(c,channel))return 0;
     const struct a733_dma_mapping *m=&t->mappings[period%t->count];
-    /* The barrier orders the copy after invalidation. The CPU only reads the
-     * raw range and never dirties it; the next copy of this period invalidates
-     * it again, so no maintenance follows the copy. */
+    /* The first barrier orders the copy after invalidation. The second
+     * completes the copy's Normal-memory loads before the package-count and
+     * cursor postcheck reads Device registers, so an overwrite the postcheck
+     * misses cannot reach the staging copy. The CPU only reads the raw range
+     * and never dirties it; the next copy of this period invalidates it again,
+     * so no maintenance follows the copy. */
     c->operations.cache(c->cookie,A733_DMA_INVALIDATE,m->cpu,m->bytes);barrier(c);
-    memcpy(out,m->cpu,bytes);
+    memcpy(out,m->cpu,bytes);barrier(c);
     if(!cyclic_progress(c,channel) || s->packages>=period+t->count ||
        !rx_position(c,channel) || (read_channel(c,channel,PENDING)&~3u))return -1;
     return 1;
