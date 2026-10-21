@@ -9,6 +9,15 @@
 
 #define MESSAGE_MAGIC 0x53534f53U
 #define BODY_MAX 2048U
+// Response command for a header with a bad magic or an oversized length.
+#define MESSAGE_REJECTED 0xfffffffeU
+// Vendor control request (host to device, no data) that discards transfers.
+#define RESET_REQUEST 0x01U
+// One service burst: 200 us of counter time, one high-speed microframe
+// without progress, or 64 passes, whichever ends first.
+#define SERVICE_BUDGET (COUNTER_HZ / 5000U)
+#define SERVICE_IDLE (COUNTER_HZ / 8000U)
+#define SERVICE_PASSES 64U
 static StaticTask_t task_state;
 static StackType_t task_stack[2048];
 static uint8_t request[16 + BODY_MAX] __attribute__((aligned(64)));
@@ -86,11 +95,30 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t language)
     return descriptor;
 }
 void tud_mount_cb(void) { platform_puts("USB configured\n"); }
-void tud_umount_cb(void)
+// Discard a partial request and any unsent response. Bytes of a packet the
+// controller already holds still reach the host, which drains them.
+static void reset_channel(void)
 {
     received = response_size = sent = 0;
+    response_complete = false;
     recover_requested = false;
+    tud_vendor_read_flush();
+    tud_vendor_write_clear();
+}
+void tud_umount_cb(void)
+{
+    reset_channel();
     platform_puts("USB unmounted\n");
+}
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *setup)
+{
+    if (setup->bmRequestType_bit.direction != TUSB_DIR_OUT || setup->bRequest != RESET_REQUEST ||
+        setup->wValue || setup->wIndex || setup->wLength)
+        return false;
+    if (stage != CONTROL_STAGE_SETUP) return true;
+    a733_usb_trace(13, received, response_size);
+    reset_channel();
+    return tud_control_status(rhport, setup);
 }
 void tud_vendor_tx_cb(uint8_t interface, uint32_t transferred)
 {
@@ -133,11 +161,16 @@ static void dispatch(void)
         length = in[3];
         memcpy(response + 16, request + 16, length);
         break;
-    case 3:
-        length = (unsigned)RESULT->log_length;
+    case 3: {
+        // An optional little-endian 32-bit payload selects the log offset.
+        unsigned log = (unsigned)RESULT->log_length, offset = 0;
+        if (log > RESULT_SIZE - LOG_OFFSET) log = RESULT_SIZE - LOG_OFFSET;
+        if (in[3] >= 4) memcpy(&offset, request + 16, 4);
+        length = offset < log ? log - offset : 0;
         if (length > BODY_MAX) length = BODY_MAX;
-        memcpy(response + 16, (const void *)(RESULT_BASE + LOG_OFFSET), length);
+        memcpy(response + 16, (const void *)(RESULT_BASE + LOG_OFFSET + offset), length);
         break;
+    }
     case 4:
         recover_requested = true;
         break;
@@ -154,6 +187,69 @@ static void dispatch(void)
     received = 0;
 }
 
+// A header with a bad magic or an oversized length cannot delimit its body.
+// Discard every queued byte and reply with MESSAGE_REJECTED. Bytes of the
+// same request still in flight are rejected in turn; the host resynchronizes
+// with RESET_REQUEST and drains the IN endpoint before its next request.
+static void reject(void)
+{
+    uint32_t *in = (uint32_t *)request;
+    uint32_t *out = (uint32_t *)response;
+    a733_usb_trace(12, in[0], in[3]);
+    out[0] = MESSAGE_MAGIC;
+    out[1] = in[1];
+    out[2] = MESSAGE_REJECTED;
+    out[3] = 0;
+    tud_vendor_read_flush();
+    received = sent = 0;
+    response_complete = false;
+    response_size = 16;
+}
+
+static void service(void)
+{
+    if (response_size) {
+        if (sent < response_size) {
+            sent += tud_vendor_write(response + sent, response_size - sent);
+            tud_vendor_write_flush();
+        }
+        if (response_complete) {
+            response_size = 0;
+            if (recover_requested) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                tud_disconnect();
+                vTaskDelay(pdMS_TO_TICKS(150));
+                platform_puts("PASS USB: host requested recovery\n");
+                platform_exit(0);
+            }
+        }
+    } else if (tud_mounted() && tud_vendor_available()) {
+        // A complete header is validated before its length is used.
+        unsigned needed = 16;
+        if (received >= 16) needed += ((uint32_t *)request)[3];
+        if (received < needed)
+            received += tud_vendor_read(request + received, needed - received);
+        if (received >= 16) {
+            uint32_t *header = (uint32_t *)request;
+            if (header[0] != MESSAGE_MAGIC || header[3] > BODY_MAX) reject();
+            else if (received == 16 + header[3]) dispatch();
+        }
+    }
+}
+
+// One pass polls the controller, runs TinyUSB and the protocol. It reports
+// progress when it handled controller events or moved vendor FIFO bytes.
+static bool service_pass(void)
+{
+    a733_usb_poll();
+    bool pending = tud_task_event_ready();
+    uint32_t rx = tud_vendor_available(), tx = tud_vendor_write_available();
+    tud_task_ext(0, false);
+    service();
+    return pending || tud_task_event_ready() || rx != tud_vendor_available() ||
+           tx != tud_vendor_write_available();
+}
+
 static void usb_task(void *argument)
 {
     (void)argument;
@@ -165,39 +261,16 @@ static void usb_task(void *argument)
     last_command = start;
     for (;;) {
         renew_recovery_timer();
-        a733_usb_poll();
-        tud_task_ext(0, false);
-        if (response_size) {
-            if (sent < response_size) {
-                sent += tud_vendor_write(response + sent, response_size - sent);
-                tud_vendor_write_flush();
+        uint64_t begin = counter(), active = begin;
+        bool moved = false;
+        for (unsigned pass = 0; pass < SERVICE_PASSES; ++pass) {
+            bool progress = service_pass();
+            uint64_t now = counter();
+            if (progress) {
+                moved = true;
+                active = now;
             }
-            if (response_complete) {
-                response_size = 0;
-                if (recover_requested) {
-                    vTaskDelay(pdMS_TO_TICKS(20));
-                    tud_disconnect();
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                    platform_puts("PASS USB: host requested recovery\n");
-                    platform_exit(0);
-                }
-            }
-        } else if (tud_mounted() && tud_vendor_available()) {
-            unsigned needed = 16;
-            if (received >= 16) {
-                uint32_t *header = (uint32_t *)request;
-                if (header[0] != MESSAGE_MAGIC || header[3] > BODY_MAX)
-                    platform_panic("invalid USB message", header[3]);
-                needed += header[3];
-            }
-            if (received < needed)
-                received += tud_vendor_read(request + received, needed - received);
-            if (received >= 16) {
-                uint32_t *header = (uint32_t *)request;
-                if (header[0] != MESSAGE_MAGIC || header[3] > BODY_MAX)
-                    platform_panic("invalid USB message", header[3]);
-                if (received == 16 + header[3]) dispatch();
-            }
+            if (!moved || now - begin >= SERVICE_BUDGET || now - active >= SERVICE_IDLE) break;
         }
         // Mode 2 bounds an unattended bring-up attempt; mode 3 stays resident.
         if (RESULT->mode == 2 && xTaskGetTickCount() - start > pdMS_TO_TICKS(8000))
