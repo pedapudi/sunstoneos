@@ -2,8 +2,9 @@
 #ifndef SUNSTONE_A733_CSI_RECEIVER_H
 #define SUNSTONE_A733_CSI_RECEIVER_H
 #include <stdint.h>
+#include "a733_camera_common.h"
 
-/* Local D-PHY, packet-port and parser controller for the OV5640 VGA profile.
+/* Local D-PHY, packet-port and parser controller for two-lane OV5640 YUV422.
  * One privileged serialized owner. Fresh zeroed storage; no callback reentry.
  * All callbacks are bounded by deadline (absolute monotonic microseconds).
  * Returns: 1 complete, 0 pending for admission/producer/drain/release only,
@@ -60,12 +61,19 @@ struct a733_csi_receiver {
     void *context;
     uint64_t token, deadline, now;
     uint32_t saved, mipi_events, parser_events;
+    struct a733_camera_format format;
     enum a733_csi_state state;
     uint16_t index;
     uint8_t phase, initialized, image_mode;
 };
+/* The 640x480 UYVY profile. */
 int a733_csi_init(struct a733_csi_receiver *, const struct a733_csi_ops *,
                   void *context, const struct a733_csi_config *);
+/* Any valid YUV422 format: the packet port and parser take its byte order
+ * and the parser its output size. */
+int a733_csi_init_format(struct a733_csi_receiver *, const struct a733_csi_ops *,
+                         void *context, const struct a733_csi_config *,
+                         const struct a733_camera_format *);
 int a733_csi_open(struct a733_csi_receiver *, uint64_t deadline);
 /* Prepare SCAP instead of continuous video. Producer must stay quiet through
  * ARMED. SCAP captures one frame and self-clears; never re-arm automatically.

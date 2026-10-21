@@ -2,9 +2,11 @@
 #ifndef SUNSTONE_A733_CAMERA_DMA_H
 #define SUNSTONE_A733_CAMERA_DMA_H
 #include <stdint.h>
+#include "a733_camera_common.h"
 
 /* One serialized privileged owner, fresh zeroed storage, no callback reentry.
- * One NV16 640x480 frame: separate Y and interleaved UV planes, stride 640.
+ * One NV16 frame: separate Y and interleaved UV planes, stride width, each
+ * width x height bytes. a733_camera_dma_init selects 640x480.
  * This is a DMA140 component; route/VIPP and single-frame gating are required.
  */
 enum a733_camera_dma_state {
@@ -38,7 +40,8 @@ struct a733_camera_dma_ops {
      * clocks, reset, full physical block, route and one-frame producer fence.
      * Prove CSI master-1 mapping, guard spans, cache isolation and independent
      * recovery. Prepare cache for device writes. Producer remains quiet.
-     * VIPP must deliver progressive YUV422 640x480 without scale/crop/OSD.
+     * VIPP must deliver progressive YUV422 of the configured size without
+     * scale/crop/OSD.
      * Native route/VIPP/gating implementations are not supplied by this API.
      */
     int (*admit)(void *, const struct a733_camera_dma_config *, uint64_t,
@@ -76,6 +79,7 @@ struct a733_camera_dma {
     void *context;
     uint64_t token, now, deadline;
     uint32_t saved, events;
+    struct a733_camera_format format;
     enum a733_camera_dma_state state;
     enum a733_camera_frame_owner owner;
     uint16_t index;
@@ -83,6 +87,10 @@ struct a733_camera_dma {
 };
 int a733_camera_dma_init(struct a733_camera_dma *,
     const struct a733_camera_dma_ops *, void *, const struct a733_camera_dma_config *);
+/* Same, for any valid format; each plane span must cover its plane bytes. */
+int a733_camera_dma_init_format(struct a733_camera_dma *,
+    const struct a733_camera_dma_ops *, void *, const struct a733_camera_dma_config *,
+    const struct a733_camera_format *);
 int a733_camera_dma_open(struct a733_camera_dma *, uint64_t deadline_us);
 int a733_camera_dma_capture(struct a733_camera_dma *, uint64_t deadline_us);
 int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
@@ -91,8 +99,8 @@ int a733_camera_dma_close(struct a733_camera_dma *, uint64_t deadline_us);
  * must authenticate self-cleared SCAP, no rearm, source/error observations and
  * the same retained mappings. Fresh DMA status and CPU synchronization still
  * execute. No disable, drain, status acknowledgement or release occurs.
- * READABLE keeps DEVICE ownership; only the 307,200-byte payload of each plane
- * may be read. Neither padding nor guards are image data. No close/release or
+ * READABLE keeps DEVICE ownership; only the width x height payload of each
+ * plane may be read. Neither padding nor guards are image data. No close/release or
  * mapping change is authorized; only rearm starts another image in the planes. */
 int a733_camera_dma_readout(struct a733_camera_dma *,uint64_t deadline_us);
 /* Return a READABLE channel to ARMED for one more image into the same planes

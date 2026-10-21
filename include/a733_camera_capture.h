@@ -52,6 +52,9 @@ struct a733_camera_capture_config {
     uint32_t *table_words; /* Exclusive 32KiB CPU/physical arena, 16KiB aligned. */
     uint64_t table_physical,frame_id;
     struct a733_csi_config receiver; /* Matching port/parser 0 or 1. */
+    /* From ov5640_mode_get in UYVY or YUYV; sets every controller's frame
+     * size, and each image span must cover one width x height plane. */
+    struct ov5640_mode mode;
     int color_bars;
     /* Existing native components execute through these platform operations.
      * now_us members are ignored in favor of the shared clock above.
@@ -84,9 +87,10 @@ enum a733_capture_state {
     A733_CAPTURE_REARM_QUIET,A733_CAPTURE_REARM_SAMPLE,A733_CAPTURE_REARM_DMA,
     A733_CAPTURE_REARM_WAIT,A733_CAPTURE_REARM_RECEIVER
 };
-/* Stopped-producer interval before each rearm status check: three periods of
- * the nominal 30 frame/s profile, so a frame the sensor finishes after its
- * stop readback ends inside the first interval. */
+/* Shortest stopped-producer interval before each rearm status check. The
+ * interval is three frame periods of the selected mode, and at least this,
+ * so a frame the sensor finishes after its stop readback ends inside the
+ * first interval. Three periods of the 30 frame/s VGA mode equal it. */
 #define A733_CAPTURE_QUIET_US 100000u
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
@@ -97,7 +101,7 @@ struct a733_camera_capture {
     struct a733_camera_route route;
     struct a733_csi_receiver receiver;
     struct a733_camera_dma dma;
-    uint64_t token,deadline,now,quiet_from;
+    uint64_t token,deadline,now,quiet_from,quiet_us;
     /* Packet-port 0x118 and parser 0x44 status read after CAPTURE_DONE and
      * before the sensor stop, for each image. Diagnostic only: an error
      * found by the later sample but absent here arrived during the stop. */
@@ -124,7 +128,7 @@ int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
  * scan IOMMU faults, and perform fresh DMA status and CPU cache
  * synchronization. No packet-quiet/drain/close/release callback
  * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
- * Only the 307,200-byte payload per plane may be read, without mutation. Only
+ * Only the width x height payload per plane may be read, without mutation. Only
  * the rearm below reuses the planes.
  * A privileged const view cannot be revoked: its consumer must serialize use
  * with this owner and stop on a later fault. Only a completed separate copy
@@ -140,7 +144,7 @@ int a733_camera_capture_open_retained(struct a733_camera_capture *,uint64_t dead
  * image; global, analog and IOMMU leases and mappings stay held throughout. */
 int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
 /* One platform/MMIO/cache operation at most, plus nested monotonic clock reads.
- * READY transfers the 640x480 NV16 Y/UV payloads to this caller, stride640 each.
+ * READY transfers the NV16 Y/UV payloads to this caller, stride width each.
  * Global/analog/IOMMU tokens and mappings remain retained even after READY.
  * No close-path restart, dispose, cancellation or automatic rollback; only the
  * retained readout can rearm. FAULT retains every unreleased sublease and the

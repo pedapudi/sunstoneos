@@ -101,6 +101,25 @@ int main(int argc,char **argv) {
         assert(s.state==A733_CAM_DMA_CLOSED && !s.token);
         assert(a733_camera_dma_open(&s,m.now+1000)==-1);
     }
+    /* Further sizes on block 0; each plane span covers exactly its bytes. */
+    static const struct a733_camera_format sizes[]={
+        {320,240,A733_CAMERA_UYVY},{1280,720,A733_CAMERA_YUYV},
+        {2592,1944,A733_CAMERA_UYVY},{176,144,A733_CAMERA_YUYV}
+    };
+    for(unsigned i=0;i<sizeof(sizes)/sizeof(sizes[0]);i++) {
+        uint64_t bytes=a733_camera_plane_bytes(&sizes[i]);
+        struct a733_camera_dma_config c={.y={0x140000000,bytes},.uv={0x141000000,bytes},
+            .frame_id=19,.block=0};
+        memset(&s,0,sizeof(s));memset(&m,0,sizeof(m));m.now=1;
+        m.reg[0]=0x80000000;m.reg[0x204/4]=0x40000000;m.reg[0x254/4]=0x2fe0e7;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&sizes[i])==1);
+        assert(a733_camera_dma_open(&s,10000)==1);arm(&s,&m);
+        if(f)assert(fwrite(m.reg,1,sizeof(m.reg),f)==sizeof(m.reg));
+        memset(&s,0,sizeof(s));c.uv.mapped_bytes=bytes-1;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&sizes[i])==-1);
+        struct a733_camera_format bad=sizes[i];bad.width+=8;c.uv.mapped_bytes=UINT64_C(1)<<24;
+        assert(a733_camera_dma_init_format(&s,&ops,&m,&c,&bad)==-1 && !s.initialized);
+    }
     if(f)assert(!fclose(f));
     /* Full mapping spans, not only first addresses, must fit and be disjoint. */
     for(unsigned i=0;i<7;i++) {

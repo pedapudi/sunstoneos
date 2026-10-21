@@ -116,7 +116,12 @@ static int callbacks(const struct a733_camera_capture_config *c){
         c->dma.sync_cpu && c->dma.release;
 }
 static int initialize(struct a733_camera_capture *s,const struct a733_camera_capture_config *c,unsigned supervised){
+    const struct ov5640_mode *mode=c?&c->mode:NULL;
+    struct a733_camera_format format={mode?mode->width:0,mode?mode->height:0,
+        (uint8_t)(mode && mode->format==OV5640_YUYV?A733_CAMERA_YUYV:A733_CAMERA_UYVY)};
     if(!s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
+       (mode->format!=OV5640_UYVY && mode->format!=OV5640_YUYV) ||
+       !mode->pixel_hz || !a733_camera_format_valid(&format) ||
        a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
        (c->context && a733_camera_overlap(s,sizeof(*s),c->context,1)) ||
        !callbacks(c) || !c->frame_id || !c->table_words || ((uintptr_t)c->table_words&16383) ||
@@ -130,7 +135,7 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         const struct a733_capture_span *m=&c->memory[i];
         if(!m->cpu || ((uintptr_t)m->cpu&4095) || !m->iova ||
            m->iova>=UINT64_C(0x100000000) || m->bytes>UINT64_C(0x100000000)-m->iova ||
-           m->bytes<(i?307200u:4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
+           m->bytes<(i?a733_camera_plane_bytes(&format):4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
            a733_camera_overlap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
            a733_camera_overlap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
            a733_camera_overlap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))
@@ -141,6 +146,9 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         spans[i]=(struct a733_iommu_span){m->iova,m->physical,m->bytes,i?A733_IOMMU_WRITE:A733_IOMMU_READ};
     }
     s->config=*c;s->initialized=1;
+    /* Three frame periods, rounded up, and never below the VGA interval. */
+    uint64_t period=((uint64_t)mode->htotal*mode->vtotal*1000000u+mode->pixel_hz-1)/mode->pixel_hz;
+    s->quiet_us=3*period>A733_CAPTURE_QUIET_US?3*period:A733_CAPTURE_QUIET_US;
     if(a733_iommu_build(&s->tables,c->table_words,c->table_physical,spans,3)!=1)return fail(s);
     struct a733_camera_platform_ops a={clock_read,analog_admit,analog_read,analog_write};
     struct a733_iommu_ops i={clock_read,mmu_admit,mmu_read,mmu_write,mmu_publish};
@@ -153,8 +161,10 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
     struct a733_camera_dma_config dc={
         {c->memory[1].iova,c->memory[1].bytes},{c->memory[2].iova,c->memory[2].bytes},c->frame_id,0};
     if((supervised?a733_camera_platform_supervised_init(&s->analog,&a,s):a733_camera_platform_init(&s->analog,&a,s))!=1 || (supervised?a733_iommu_init_camera_supervised(&s->iommu,&i,s,&s->tables):a733_iommu_init(&s->iommu,&i,s,&s->tables))!=1 ||
-       ov5640_init(&s->sensor,&o,s,c->color_bars)!=1 || a733_camera_route_init(&s->route,&r,s,&rc)!=1 ||
-       a733_csi_init(&s->receiver,&v,s,&c->receiver)!=1 || a733_camera_dma_init(&s->dma,&d,s,&dc)!=1)return fail(s);
+       ov5640_init(&s->sensor,&o,s,c->color_bars)!=1 || ov5640_select(&s->sensor,mode)!=1 ||
+       a733_camera_route_init_format(&s->route,&r,s,&rc,&format)!=1 ||
+       a733_csi_init_format(&s->receiver,&v,s,&c->receiver,&format)!=1 ||
+       a733_camera_dma_init_format(&s->dma,&d,s,&dc,&format)!=1)return fail(s);
     return 1;
 }
 int a733_camera_capture_init(struct a733_camera_capture *s,const struct a733_camera_capture_config *c)
@@ -239,7 +249,7 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
     /* The sensor stays stopped from here until the next packet handoff. */
     case A733_CAPTURE_REARM_QUIET:
     case A733_CAPTURE_REARM_WAIT:
-        if(s->now-s->quiet_from>=A733_CAPTURE_QUIET_US)
+        if(s->now-s->quiet_from>=s->quiet_us)
             next(s,s->state==A733_CAPTURE_REARM_QUIET?A733_CAPTURE_REARM_SAMPLE:A733_CAPTURE_REARM_RECEIVER);
         break;
     case A733_CAPTURE_REARM_SAMPLE:

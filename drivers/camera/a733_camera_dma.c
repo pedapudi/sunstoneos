@@ -9,21 +9,20 @@
 #include "a733_camera_common.h"
 #include <stddef.h>
 #define COUNT(a) (sizeof(a)/sizeof((a)[0]))
-#define PLANE_BYTES UINT64_C(307200)
 #define BUS_LIMIT (UINT64_C(1)<<34)
 #define EVENTS UINT32_C(0x2fe0e7)
 #define NORMAL UINT32_C(0xa3)
 struct step { uint16_t off; uint8_t kind; uint32_t mask, value; };
-/* kind 1: Y address, 2: UV address, 3: write-one-to-clear. */
+/* kind 1: Y address, 2: UV address, 3: write-one-to-clear, 4: geometry. */
 static const struct step setup[] = {
     {0x000,0,0x70007301,1}, /* TOP enabled, auto length, no VE handshake. */
     {0x004,0,1,0}, /* Online, channel 0 only. */
     {0x200,0,0x183,0}, /* No compression, FIFO addresses or frame drop. */
     {0x204,0,0x002f3ffc,0x00040800}, /* Progressive NV16, FIELD_EITHER. */
-    {0x210,0,0x3fff3fff,640u<<16},
-    {0x214,0,0x3fff3fff,480u<<16},
-    {0x238,0,0x3fff3fff,(640u<<16)|640u},
-    {0x23c,0,0x3fff3fff,(480u<<16)|1280u},
+    {0x210,4,0x3fff3fff,0}, /* Width, start 0. */
+    {0x214,4,0x3fff3fff,0}, /* Height, start 0. */
+    {0x238,4,0x3fff3fff,0}, /* Y and UV strides of width bytes. */
+    {0x23c,4,0x3fff3fff,0}, /* Height and two bytes per pixel. */
     {0x220,1,UINT32_MAX,0},
     {0x228,2,UINT32_MAX,0},
     {0x230,0,UINT32_MAX,0}, /* Third plane unused by NV16. */
@@ -38,16 +37,25 @@ static int tick(struct a733_camera_dma *s)
 {
     return a733_camera_clock(s->ops.now_us,s->context,&s->now,s->deadline)?1:fail(s);
 }
-static int plane_valid(const struct a733_camera_plane *p)
+static int plane_valid(const struct a733_camera_plane *p,uint64_t bytes)
 {
-    return p->bus_address && !(p->bus_address&63) && p->mapped_bytes>=PLANE_BYTES &&
+    return p->bus_address && !(p->bus_address&63) && p->mapped_bytes>=bytes &&
         p->bus_address<BUS_LIMIT && p->mapped_bytes<=BUS_LIMIT-p->bus_address;
 }
 int a733_camera_dma_init(struct a733_camera_dma *s,
     const struct a733_camera_dma_ops *o,void *ctx,const struct a733_camera_dma_config *c)
 {
+    struct a733_camera_format f=A733_CAMERA_VGA;
+    return a733_camera_dma_init_format(s,o,ctx,c,&f);
+}
+int a733_camera_dma_init_format(struct a733_camera_dma *s,
+    const struct a733_camera_dma_ops *o,void *ctx,const struct a733_camera_dma_config *c,
+    const struct a733_camera_format *f)
+{
     if(!s || !o || !c || s->initialized || s->state!=A733_CAM_DMA_NEW ||
-       c->block>5 || !c->frame_id || !plane_valid(&c->y) || !plane_valid(&c->uv) ||
+       !a733_camera_format_valid(f) || a733_camera_overlap(s,sizeof(*s),f,sizeof(*f)) ||
+       c->block>5 || !c->frame_id || !plane_valid(&c->y,a733_camera_plane_bytes(f)) ||
+       !plane_valid(&c->uv,a733_camera_plane_bytes(f)) ||
        (c->y.bus_address<c->uv.bus_address+c->uv.mapped_bytes &&
         c->uv.bus_address<c->y.bus_address+c->y.mapped_bytes) ||
        a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
@@ -55,7 +63,7 @@ int a733_camera_dma_init(struct a733_camera_dma *s,
        (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) || !o->now_us || !o->admit ||
        !o->read || !o->write || !o->start_one || !o->producer_stop || !o->drain ||
        !o->sync_cpu || !o->release)return -1;
-    *s=(struct a733_camera_dma){.ops=*o,.config=*c,.context=ctx,.initialized=1};
+    *s=(struct a733_camera_dma){.ops=*o,.config=*c,.context=ctx,.format=*f,.initialized=1};
     return 1;
 }
 static int begin(struct a733_camera_dma *s,enum a733_camera_dma_state state,uint64_t d)
@@ -108,6 +116,10 @@ static int program(struct a733_camera_dma *s,const struct step *p,size_t n)
     uint32_t v,value=e->value;
     if(e->kind==1)value=(uint32_t)(s->config.y.bus_address>>2);
     if(e->kind==2)value=(uint32_t)(s->config.uv.bus_address>>2);
+    if(e->kind==4) {
+        uint32_t w=s->format.width,h=s->format.height;
+        value=e->off==0x210?w<<16:e->off==0x214?h<<16:e->off==0x238?(w<<16)|w:(h<<16)|(2*w);
+    }
     if(e->kind==3) {
         if(!s->phase) {
             if(write_reg(s,e->off,value)!=1)return -1;

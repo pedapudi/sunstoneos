@@ -13,7 +13,8 @@
 struct step { uint16_t off; uint8_t region, special; uint32_t mask, value; };
 /* special: 1 caller settle, 2 caller deskew, 3 lane map, 4 port-0 debounce,
  * 5 W1C status (no read/verification), 6 direct write + verification,
- * 7 parser capture mode (SCAP for image, VCAP for existing video API). */
+ * 7 parser capture mode (SCAP for image, VCAP for existing video API),
+ * 8 port YUV order, 9 parser YUV order, 10 output width, 11 output height. */
 static const struct step configure[] = {
     {0x118,A733_CSI_PORT,5,0,0x1fff},
     {0x044,A733_CSI_PARSER,5,0,7},
@@ -35,7 +36,7 @@ static const struct step configure[] = {
     {0x000,A733_CSI_PORT,0,0x80030f00,0x00000200},
     {0x004,A733_CSI_PORT,3,UINT32_MAX,0},
     {0x008,A733_CSI_PORT,0,0xffff,0},
-    {0x100,A733_CSI_PORT,0,0x00030041,0x00020001},
+    {0x100,A733_CSI_PORT,8,0x00030041,0x00000001},
     {0x108,A733_CSI_PORT,0,UINT32_MAX,0x1e},
     /* The parser has no memory-bus master; downstream admission precedes it. */
     {0x000,A733_CSI_PARSER,0,0x8000,0x8000},
@@ -43,11 +44,11 @@ static const struct step configure[] = {
     {0x000,A733_CSI_PARSER,0,1,0},
     {0x000,A733_CSI_PARSER,0,1,1},
     {0x000,A733_CSI_PARSER,0,2,2},
-    {0x008,A733_CSI_PARSER,0,0xe0,0x80},
+    {0x008,A733_CSI_PARSER,9,0xe0,0},
     {0x000,A733_CSI_PARSER,0,0x80000000,0x80000000},
     {0x024,A733_CSI_PARSER,6,UINT32_MAX,3},
-    {0x028,A733_CSI_PARSER,0,0x1fff1fff,640u<<16},
-    {0x02c,A733_CSI_PARSER,0,0x1fff1fff,480u<<16},
+    {0x028,A733_CSI_PARSER,10,0x1fff1fff,0},
+    {0x02c,A733_CSI_PARSER,11,0x1fff1fff,0},
     {0x00c,A733_CSI_PARSER,0,0x3c3c3c3c,0},
     {0x00c,A733_CSI_PARSER,7,3,2},
     /* Port enable is last, after all local setup and downstream admission. */
@@ -88,15 +89,25 @@ static int tick(struct a733_csi_receiver *s)
 int a733_csi_init(struct a733_csi_receiver *s,const struct a733_csi_ops *ops,
                   void *context,const struct a733_csi_config *cfg)
 {
+    struct a733_camera_format f=A733_CAMERA_VGA;
+    return a733_csi_init_format(s,ops,context,cfg,&f);
+}
+int a733_csi_init_format(struct a733_csi_receiver *s,const struct a733_csi_ops *ops,
+                         void *context,const struct a733_csi_config *cfg,
+                         const struct a733_camera_format *format)
+{
     if (!s || !ops || !cfg || s->initialized || s->state!=A733_CSI_NEW ||
+        !a733_camera_format_valid(format) ||
         cfg->port>1 || cfg->parser!=cfg->port || !cfg->settle ||
         !cfg->deskew || cfg->deskew>31 || cfg->top_hz!=324000000 ||
         a733_camera_overlap(s,sizeof(*s),ops,sizeof(*ops)) ||
         a733_camera_overlap(s,sizeof(*s),cfg,sizeof(*cfg)) ||
+        a733_camera_overlap(s,sizeof(*s),format,sizeof(*format)) ||
         (context && a733_camera_overlap(s,sizeof(*s),context,1)) || !ops->now_us ||
         !ops->admit || !ops->read || !ops->write || !ops->producer_stop ||
         !ops->drain || !ops->release) return -1;
-    *s=(struct a733_csi_receiver){.ops=*ops,.config=*cfg,.context=context,.initialized=1};
+    *s=(struct a733_csi_receiver){.ops=*ops,.config=*cfg,.context=context,
+                                  .format=*format,.initialized=1};
     return 1;
 }
 static int begin(struct a733_csi_receiver *s,enum a733_csi_state state,uint64_t d)
@@ -151,6 +162,11 @@ static int program(struct a733_csi_receiver *s,const struct step *plan,size_t co
     if(e->special==2)value|=(uint32_t)s->config.deskew<<20;
     if(e->special==3)value=s->config.port ? 0x54 : 0x10;
     if(e->special==7)value=s->image_mode?1:2;
+    /* The source sequence codes are YUYV 0 and UYVY 2 in both blocks. */
+    if(e->special==8)value|=(s->format.order==A733_CAMERA_UYVY?2u:0u)<<16;
+    if(e->special==9)value=(s->format.order==A733_CAMERA_UYVY?2u:0u)<<6;
+    if(e->special==10)value=(uint32_t)s->format.width<<16;
+    if(e->special==11)value=(uint32_t)s->format.height<<16;
     /* The source enables debounce only for PHY0; PHY1 stays at reset. */
     if(e->special==4 && !s->config.port)value=0x10000;
     if(e->special==5) {
