@@ -71,11 +71,27 @@
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d.c",
       "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
       "sha256": "abc5f9f6ae61013ba1c88b44ef9929c1fc48818cb06facb1065e4f73e7750612"
+    },
+    "g2d_rcq/g2d_scal.c": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_scal.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "91c0411a0edbd296a6a5197e27d501c4e35d63d4a9f16320af9030300678612c"
+    },
+    "g2d_rcq/g2d_scal.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_scal.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "4d9f25c74a204b410f53bde7330335eb9b1f5739068a4f0fdbd5aa22cd4524fe"
+    },
+    "g2d_rcq/g2d_bsp.h": {
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/g2d/g2d_rcq/g2d_bsp.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "edb75b982d37716e1d3d1e4a382b5d905ab17be7f07d5d97c7cca6531c63c398"
     }
   },
   "manual": "A733 User Manual V1.00 sections 4.1.6.108\u2013109 (G2D CCU) and 14.5 (fill and blit). Existing sources.lock.json pins the manual.",
   "dtsi": "Pinned sun60iw2p1.dtsi selects MMIO0x05440000, INTID83, DE_SYS/PCK1, four clocks/resets and IOMMU master10.",
   "limits": "Physical pixels, RCQ completion/counter semantics, bus reachability, clock stability and DMA visibility require a supervised board test; software checks cannot qualify them.",
   "source_over_solid": "g2d_bsp_bld and independent bitblt route source through V0/pipe0 and destination through UI2/pipe1. UI2 fill-color mode supplies opaque background without another DMA buffer. Effective image validation forces bpremul=0; pixel-alpha mode0 and straight blender/output flags are retained. SRCOVER uses03010301. UAPI formula comments are contradictory and are not an arithmetic oracle. Host /255 nearest reference does not establish hardware rounding.",
-  "normal_success_lifecycle": "Effective RCQ success IRQ acknowledges task-end then pulses only mixer AHB reset bit0 at TOP+0x08 before signaling completion, including retained TASK_APPLY. Native finish follows that order before copy, preserves neighbor bits, requires the reset initially deasserted, and retains all resources on uncertainty. Raw task-end is latched before acknowledgment. Post-ack stability checks readiness, reset readback and no new task-end; no frame-counter or DMA drain/reclamation semantics are inferred."
+  "normal_success_lifecycle": "Effective RCQ success IRQ acknowledges task-end then pulses only mixer AHB reset bit0 at TOP+0x08 before signaling completion, including retained TASK_APPLY. Native finish follows that order before copy, preserves neighbor bits, requires the reset initially deasserted, and retains all resources on uncertainty. Raw task-end is latched before acknowledgment. Post-ack stability checks readiness, reset readback and no new task-end; no frame-counter or DMA drain/reclamation semantics are inferred.",
+  "scale2x": "Exact2x ARGB8888 enlargement uses existing COPY output with straight source alpha. V0 size is half destination size; RGB coarse downsampling is disabled. Full VSU register image uses effective g2d_vsu_para_set RGB branch: Q19 half-step shifted once, zero phases, global255, lan2 coefficient set1 for both horizontal channels and linear vertical set. Coefficients execute on G2D, not CPU. Native does not define interpolation rounding or physical edge behavior."
 }
