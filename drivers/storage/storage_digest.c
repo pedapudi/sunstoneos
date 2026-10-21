@@ -14,15 +14,29 @@ static const uint32_t k[64]={
 0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
 static void compress(uint32_t h[8],const uint8_t p[64])
 {
-    uint32_t w[64];for(unsigned i=0;i<16;++i)w[i]=be32(p+4*i);
+    uint32_t w[64];
+#if defined(__BYTE_ORDER__)&&__BYTE_ORDER__==__ORDER_LITTLE_ENDIAN__
+    /* Word loads and byte reversal; strict-alignment targets need 4-byte alignment. */
+    if(!((uintptr_t)p&3)){const uint8_t *q=__builtin_assume_aligned(p,4);
+        for(unsigned i=0;i<16;++i){uint32_t v;__builtin_memcpy(&v,q+4*i,4);w[i]=__builtin_bswap32(v);}}
+    else
+#endif
+    for(unsigned i=0;i<16;++i)w[i]=be32(p+4*i);
     for(unsigned i=16;i<64;++i){uint32_t a=w[i-15],b=w[i-2];
         w[i]=w[i-16]+(ror(a,7)^ror(a,18)^(a>>3))+w[i-7]+(ror(b,17)^ror(b,19)^(b>>10));}
     uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],z=h[7];
-    for(unsigned i=0;i<64;++i){
-        uint32_t t=z+(ror(e,6)^ror(e,11)^ror(e,25))+((e&f)^((~e)&g))+k[i]+w[i];
-        uint32_t u=(ror(a,2)^ror(a,13)^ror(a,22))+((a&b)^(a&c)^(b&c));
-        z=g;g=f;f=e;e=d+t;d=c;c=b;b=a;a=t+u;
+    /* Eight rounds per iteration rename the working variables instead of
+     * shifting all eight through registers after every round. */
+#define ROUND(a,b,c,d,e,f,g,z,i) do{ \
+        uint32_t t=z+(ror(e,6)^ror(e,11)^ror(e,25))+((e&f)^((~e)&g))+k[i]+w[i]; \
+        d+=t;z=t+(ror(a,2)^ror(a,13)^ror(a,22))+((a&b)^(a&c)^(b&c));}while(0)
+    for(unsigned i=0;i<64;i+=8){
+        ROUND(a,b,c,d,e,f,g,z,i);ROUND(z,a,b,c,d,e,f,g,i+1);
+        ROUND(g,z,a,b,c,d,e,f,i+2);ROUND(f,g,z,a,b,c,d,e,i+3);
+        ROUND(e,f,g,z,a,b,c,d,i+4);ROUND(d,e,f,g,z,a,b,c,i+5);
+        ROUND(c,d,e,f,g,z,a,b,i+6);ROUND(b,c,d,e,f,g,z,a,i+7);
     }
+#undef ROUND
     h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;h[5]+=f;h[6]+=g;h[7]+=z;
 }
 
@@ -33,7 +47,10 @@ int storage_digest_add(struct storage_digest *d,const void *data,size_t n)
     const uint8_t *p=data;
     if(!d||(!p&&n)||n>UINT64_MAX/8-d->bytes)return 0;
     d->bytes+=n;
-    while(n){size_t k=64-d->used;if(k>n)k=n;memcpy(d->tail+d->used,p,k);d->used+=(unsigned)k;p+=k;n-=k;
+    while(n){
+        /* Compress complete blocks in place; copy only partial blocks. */
+        if(!d->used&&n>=64){compress(d->h,p);p+=64;n-=64;continue;}
+        size_t k=64-d->used;if(k>n)k=n;memcpy(d->tail+d->used,p,k);d->used+=(unsigned)k;p+=k;n-=k;
         if(d->used==64){compress(d->h,d->tail);d->used=0;}}
     return 1;
 }
