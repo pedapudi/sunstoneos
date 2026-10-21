@@ -57,11 +57,9 @@ static int clocks(struct a733_lradc *p,int enabled)
         !a733_clock_ref24_valid(oscillator,ref) ||
         !bits(p,CCU+0x518,0x0300001f,p->config.apb1)) return 0;
     if (p->config.apb1>>24==3) {
-        if (!rd(p,CCU+0xa0,&v) || (v&0xfe000000u)!=0xfe000000u || (v&BIT(1)) ||
+        if (!rd(p,CCU+0xa0,&v) || !a733_clock_peri0_valid(v) ||
             !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0) ||
             !bits(p,CCU+0x1908,0x0a000a00,0x0a000a00) || !bits(p,CCU+0x1988,0x0a000000,0x0a000000)) return 0;
-        unsigned n=((v>>8)&255)+1;
-        if (n<53 || n>105 || 24u*n!=600u*(((v>>20)&7)+1)*2) return 0;
     }
     if (enabled && !bits(p,CCU+0x1024,0x10001,0x10001))return 0;
     uint32_t control,status,prescaler=0,calibration=0,osc=0;

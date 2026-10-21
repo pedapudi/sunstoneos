@@ -151,6 +151,10 @@ int main(void)
         assert(reads==m.reads && writes==m.writes);
         memset(out,0xa5,sizeof(out));
     }
+    /* Reserved PERI0 bit 24, as observed on the board, is not a selector. */
+    setup(&m,0);*reg(&m,CCU+0xa0)|=1u<<24;submit(&m,out);
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING);*reg(&m,NS+12)=0x10;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM);memset(out,0xa5,sizeof(out));
     /* Hardware failure status and errors in either security bank. */
     for (unsigned k=0;k<7;++k) {
         setup(&m,0);submit(&m,out);*reg(&m,NS+12)=0x10;

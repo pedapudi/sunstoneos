@@ -81,12 +81,8 @@ static int clocks(struct a733_ce *p)
         ((a733_ce_capabilities(p->config.profile)&A733_CE_CAP_TRNG) && !(v&1)) ||
         !rd(p,CCU,&ref) || !a733_clock_ref24_valid(v,ref)) return 0;
     /* CE/PERI0 consume normalized PLL_REF; TRNG still requires RC16M above. */
-    unsigned n;
-    if (!rd(p,CCU+0xa0,&v) ||
-        (v&0xfe000000u)!=0xfe000000u || (v&(BIT(24)|BIT(1))) ||
+    if (!rd(p,CCU+0xa0,&v) || !a733_clock_peri0_valid(v) ||
         !bits(p,CCU+0xa8,BIT(31),0) || !bits(p,CCU+0xac,0x8e000000,0)) return 0;
-    n=((v>>8)&255)+1;
-    if (n<53 || n>105 || 24u*n!=1200u*(((v>>20)&7)+1)) return 0;
     uint32_t gates=BIT(11)|BIT(2)|BIT(1);
     for (unsigned i=0;i<3;++i) {
         if (parent_mhz[i][(p->config.fabric[i]>>24)&7]==600) gates|=BIT(9);
