@@ -226,17 +226,84 @@ static void incoming_data(void)
     uint64_t untouched=99;uint8_t peer[]={1,2,3,4,5,6};
     assert(bt_acl_listen(&a,peer,5000,&untouched)==-1 && untouched==99);
 }
+static void reject_once(struct fixture *f,struct bt_acl *a,const uint8_t address[6],unsigned slot)
+{
+    uint64_t generation=a->next_link;
+    request(f,address,1);astep(a);
+    assert(a->links[slot].generation==generation && a->links[slot].reason==0x0e && a->next_link==generation+1);
+    command(f,a,slot,HCI_OP_REJECT_CONN_REQ);cs(f,HCI_OP_REJECT_CONN_REQ,1,0);astep(a);
+    assert(a->links[slot].state==BT_ACL_REJECTING && a->links[slot].handle==0xffff);
+    terminal(f,&a->links[slot],0x0e,0);astep(a);
+    /* The matched failure frees the slot without a handle or generation. */
+    assert(a->links[slot].state==BT_ACL_UNUSED && !a->links[slot].generation &&
+           !a->links[slot].handle_valid && a->command_link==BT_ACL_LINKS && !bt_acl_receive(a));
+}
 static void rejected(void)
 {
     struct fixture f;struct bt_acl a;enable(&f,&a);uint8_t peer[]={7,2,3,4,5,6};
-    request(&f,peer,1);astep(&a);assert(a.links[0].reason==0x0e);
-    command(&f,&a,0,HCI_OP_REJECT_CONN_REQ);cs(&f,HCI_OP_REJECT_CONN_REQ,1,0);astep(&a);
-    assert(a.links[0].state==BT_ACL_REJECTING && a.links[0].handle==0xffff);
-    terminal(&f,&a.links[0],0x16,0);astep(&a);assert(a.links[0].state==BT_ACL_CLOSED);
-    request(&f,f.hci.identity.address,1);astep(&a);assert(a.links[1].reason==0x0f);
-    command(&f,&a,1,HCI_OP_REJECT_CONN_REQ);cs(&f,HCI_OP_REJECT_CONN_REQ,1,0x0c);astep(&a);
-    assert(a.links[1].state==BT_ACL_CLOSED && a.links[1].status==0x0c && a.credits==2);
-    request(&f,peer,1);assert(bt_acl_step(&a,64,10000)==-1 && a.links[0].state==BT_ACL_CLOSED);
+    reject_once(&f,&a,peer,0);
+    request(&f,f.hci.identity.address,1);astep(&a);assert(a.links[0].reason==0x0f);
+    command(&f,&a,0,HCI_OP_REJECT_CONN_REQ);cs(&f,HCI_OP_REJECT_CONN_REQ,1,0x0c);astep(&a);
+    assert(a.links[0].state==BT_ACL_CLOSED && a.links[0].status==0x0c && a.credits==2);
+    /* A refused Reject leaves the controller request open; that address stays retained. */
+    request(&f,f.hci.identity.address,1);assert(bt_acl_step(&a,64,10000)==-1 && a.links[0].state==BT_ACL_CLOSED);
+}
+static void repeated_rejections(void)
+{
+    /* Repeated and distinct unknown pages, more than the slot count, are each
+     * refused on air without consuming capacity; the admitted peer still connects. */
+    struct fixture f;struct bt_acl a;enable(&f,&a);uint64_t g=listen_peer(&a,1);
+    uint8_t unknown[]={7,2,3,4,5,6};
+    for(unsigned i=0;i<6;++i){unknown[0]=(uint8_t)(i<2 ? 7 : 20+i);reject_once(&f,&a,unknown,1);}
+    assert(a.next_link==8 && a.links[0].generation==g && a.links[0].state==BT_ACL_WAIT_REQUEST);
+    for(unsigned i=1;i<BT_ACL_LINKS;++i)assert(a.links[i].state==BT_ACL_UNUSED);
+    accept_link(&f,&a,0,0x23);
+    assert(a.links[0].generation==g && a.links[0].handle==0x23 && a.credits==2);
+}
+static struct bt_acl_link *slot_of(struct bt_acl *a,uint64_t generation)
+{for(unsigned i=0;i<BT_ACL_LINKS;++i)if(a->links[i].generation==generation)return &a->links[i];return 0;}
+static uint64_t create(struct fixture *f,struct bt_acl *a,unsigned address)
+{
+    struct bt_acl_peer peer={{(uint8_t)address,2,3,4,5,6},1,0,0x8123};uint64_t generation=0;
+    assert(bt_acl_connect(a,&peer,5000,&generation)==1);astep(a);astep(a);
+    assert(f->hci.command==BT_HCI_WAITING && slot_of(a,generation)->state==BT_ACL_CONNECT_STATUS);
+    return generation;
+}
+static void failed_attempt_retry(void)
+{
+    /* An attempt that closed before any handle existed lets the same peer take
+     * its slot again under a fresh generation; a connected peer never does. */
+    struct fixture f;struct bt_acl a;enable(&f,&a);uint8_t peer[]={1,2,3,4,5,6};
+    uint64_t first=listen_peer(&a,1);
+    request(&f,peer,1);astep(&a);command(&f,&a,0,HCI_OP_ACCEPT_CONN_REQ);
+    cs(&f,HCI_OP_ACCEPT_CONN_REQ,1,0);astep(&a);terminal(&f,&a.links[0],0x22,0);astep(&a);
+    assert(a.links[0].state==BT_ACL_CLOSED && a.links[0].status==0x22 && !a.links[0].handle_valid);
+    /* Before the new reservation, the peer's next page gets no reply and its
+     * accept-timeout completion matches nothing. */
+    size_t before=f.tn;request(&f,peer,1);astep(&a);
+    assert(f.tn==before && !bt_acl_receive(&a) && a.links[0].state==BT_ACL_CLOSED);
+    struct hci_ev_conn_complete timeout={0x10,0,{{1,2,3,4,5,6}},1,0};
+    event(&f,HCI_EV_CONN_COMPLETE,&timeout,sizeof(timeout));astep(&a);
+    assert(f.tn==before && !bt_acl_receive(&a) && a.links[0].status==0x22);
+    uint64_t second=0;assert(bt_acl_listen(&a,peer,5000,&second)==1);
+    assert(second==first+1 && slot_of(&a,first)==0 && slot_of(&a,second)==&a.links[0] &&
+           a.links[0].state==BT_ACL_WAIT_REQUEST && !a.links[0].status && a.links[1].state==BT_ACL_UNUSED);
+    accept_link(&f,&a,0,0x23);assert(a.links[0].generation==second);
+    /* Outbound: a refused Create and a failed page each leave the slot to that peer. */
+    uint64_t out=create(&f,&a,7);struct bt_acl_link *o=slot_of(&a,out);
+    cs(&f,HCI_OP_CREATE_CONN,1,0x0c);astep(&a);assert(o->state==BT_ACL_CLOSED && o->status==0x0c);
+    uint64_t again=create(&f,&a,7);assert(again==out+1 && slot_of(&a,again)==o);
+    cs(&f,HCI_OP_CREATE_CONN,1,0);astep(&a);assert(o->state==BT_ACL_CONNECTING);
+    terminal(&f,o,0x04,0);astep(&a);assert(o->state==BT_ACL_CLOSED && o->status==0x04);
+    uint64_t third=create(&f,&a,7);assert(slot_of(&a,third)==o);
+    cs(&f,HCI_OP_CREATE_CONN,1,0);astep(&a);terminal(&f,o,0,0x24);astep(&a);
+    assert(o->state==BT_ACL_CONNECTED && o->handle==0x24 && o->generation==third);
+    assert(a.links[2].state==BT_ACL_UNUSED && a.links[3].state==BT_ACL_UNUSED);
+    /* After a handle existed, the peer stays retained through disconnect. */
+    disconnect_event(&f,0x24);astep(&a);assert(o->state==BT_ACL_CLOSED && o->handle_valid);
+    struct bt_acl_peer retained={{7,2,3,4,5,6},1,0,0x8123};uint64_t untouched=99;
+    assert(bt_acl_connect(&a,&retained,5000,&untouched)==-1 && untouched==99);
+    peer[0]=7;assert(bt_acl_listen(&a,peer,5000,&untouched)==-1 && untouched==99);
 }
 static void interleaved(void)
 {
@@ -299,9 +366,15 @@ static void refusal_paths(void)
     struct hci_ev_conn_complete reserved={0,0x23,{{1,2,3,4,5,6}},1,2};
     event(&f,HCI_EV_CONN_COMPLETE,&reserved,sizeof(reserved));
     assert(bt_acl_step(&a,64,10000)==-1 && a.links[0].handle==0xffff && !a.links[0].encryption);
+    /* With every slot reserved, an unknown peer gets no reply. The controller's
+     * accept-timeout completion for it matches nothing and is released. */
     enable(&f,&a);for(unsigned i=1;i<=4;++i)listen_peer(&a,i);
-    peer[0]=9;request(&f,peer,1);size_t before=f.tn;
-    assert(bt_acl_step(&a,64,10000)==-1 && f.tn==before && a.next_link==5);
+    peer[0]=9;request(&f,peer,1);size_t before=f.tn;astep(&a);
+    assert(f.tn==before && a.next_link==5 && !bt_acl_receive(&a) && f.hci.command==BT_HCI_IDLE);
+    struct hci_ev_conn_complete timeout={0x10,0,{{9,2,3,4,5,6}},1,0};
+    event(&f,HCI_EV_CONN_COMPLETE,&timeout,sizeof(timeout));astep(&a);
+    assert(f.tn==before && !bt_acl_receive(&a));
+    for(unsigned i=0;i<BT_ACL_LINKS;++i)assert(a.links[i].state==BT_ACL_WAIT_REQUEST);
     enable(&f,&a);listen_peer(&a,1);f.now=5000;before=f.accesses;
     assert(bt_acl_step(&a,64,10000)==-1 && f.accesses==before && a.links[0].state==BT_ACL_WAIT_REQUEST);
     enable(&f,&a);peer[0]=1;request(&f,peer,1);astep(&a);f.now=2001;
@@ -335,7 +408,7 @@ static void synchronous_and_stale(void)
 }
 int main(void)
 {
-    incoming_data();rejected();interleaved();refusal_paths();synchronous_and_stale();
-    puts("Incoming ACL UART/H4/HCI composition: copied peer admission, actual Accept/Reject wire commands, terminal correlation, ACL credits, security retention, bounded quarantine and fault paths passed.");
+    incoming_data();rejected();repeated_rejections();failed_attempt_retry();interleaved();refusal_paths();synchronous_and_stale();
+    puts("Incoming ACL UART/H4/HCI composition: copied peer admission, actual Accept/Reject wire commands, terminal correlation, rejected-slot and failed-attempt reuse, ACL credits, security retention, bounded quarantine and fault paths passed.");
     return 0;
 }

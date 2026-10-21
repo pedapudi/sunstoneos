@@ -36,8 +36,11 @@ struct bt_security {
 int bt_security_init(struct bt_security *,struct bt_acl *,TaskHandle_t,
                      atomic_uint *recovery,const struct bt_security_policy *,uint64_t timeout_us);
 /* Attach a reserved actual ACL generation before lower connection polling.
- * Handles are borrowed only from that exact connected slot. No address/handle
- * reuse or key-slot reclamation is admitted during the controller lifetime. */
+ * Handles are borrowed only from that exact connected slot. No handle reuse or
+ * key-slot reclamation is admitted during the controller lifetime. The peer is
+ * attached again only after its earlier attempt closed before any handle
+ * existed, with no key, borrow, result or queued command; each such retry
+ * retains one more of the BT_ACL_LINKS entries, and exhaustion returns 0. */
 int bt_security_attach(struct bt_security *,uint64_t acl_generation);
 /* One ACL/HCI step, then at most one queued command submission. */
 int bt_security_step(struct bt_security *,unsigned budget,uint64_t deadline);

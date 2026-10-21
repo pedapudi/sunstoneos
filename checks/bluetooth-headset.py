@@ -21,7 +21,7 @@ p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence'])
+p.add_argument('--case',action='append',choices=['success','retry','retry-limit','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence'])
 a=p.parse_args();
 if a.playback:a.msbc=True;a.recognition_profile=True
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
@@ -99,7 +99,7 @@ for name,identity in json.loads((out/'setup-inputs.json').read_text()).items():
     if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=identity['sha256'] or hashlib.sha256((out/identity['snapshot']).read_bytes()).hexdigest()!=identity['sha256']:
         sys.exit('Refused changed fixture input: '+name)
 executing_cases=True
-for case in a.case or ('success','justworks','keyreplace','deadline','loss','handoff','security-pending'):
+for case in a.case or ('success','retry','retry-limit','justworks','keyreplace','deadline','loss','handoff','security-pending'):
     cmd=[exe,case]
     if case=='speech':
         assert a.speech_input and a.speech_output

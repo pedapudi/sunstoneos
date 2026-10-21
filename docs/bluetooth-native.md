@@ -174,8 +174,16 @@ its Just Works policy also governs upstream initiator auto-confirmation.
 
 One task drives the existing local SDP server, RFCOMM registry, hands-free audio
 gateway and synchronous-audio provider. Incoming mode listens for the admitted
-peer. Outgoing mode discovers the peer's hands-free service and closes the SDP
-client while continuing its close work beside RFCOMM. The retained bootstrap
+peer; outgoing mode pages it. When an attempt closes before the controller
+assigns a handle, for example on a page timeout or a failed accept, the
+application reserves the peer again under a new ACL generation and attaches that
+generation to security. Before each retry it waits until no security command
+is queued or outstanding, and it stops at the connection stage deadline. The
+security owner keeps the failed attempt's entry, which must hold no key or
+result, so its four entries allow at most three retries. A link that has
+connected and then closes still ends the session. After connecting, outgoing
+mode discovers the peer's hands-free service and closes the SDP client while
+continuing its close work beside RFCOMM. The retained bootstrap
 initializer claims L2CAP once without discarding partial H4 framing or staged
 bytes. Its ordinary strict initializer retains its existing empty-input rule.
 Every service admission checks actual security again.

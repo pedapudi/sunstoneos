@@ -248,8 +248,7 @@ static void command_ownership(void)
     assert(!f.hci.credits && a.links[0].state==BT_ACL_CONNECT_STATUS && !bt_acl_receive(&a));
     cs(&f,HCI_OP_CREATE_CONN,1,0x0c);astep(&a);
     assert(a.links[0].state==BT_ACL_CLOSED && a.links[0].status==0x0c && !bt_acl_receive(&a));
-    struct bt_acl_peer prior={{1,2,3,4,5,6},1,0,0};uint64_t unchanged=99;
-    assert(bt_acl_connect(&a,&prior,5000,&unchanged)==-1 && unchanged==99);
+    /* That peer may retake only this slot; checks/bt-acl-incoming.c covers it. */
     l=begin_connect(&f,&a,2);cc(&f,HCI_OP_CREATE_CONN,1,1,1);astep(&a);
     assert(a.links[l-1].state==BT_ACL_CLOSED && a.links[l-1].status==1);
     l=begin_connect(&f,&a,3);connected(&f,&a,l,0x33);
@@ -257,6 +256,9 @@ static void command_ownership(void)
     cs(&f,HCI_OP_DISCONNECT,1,0x0c);astep(&a);
     assert(a.links[l-1].state==BT_ACL_CONNECTED);
     disconnect_event(&f,0x33);astep(&a);
+    /* A peer that once held a handle stays retained after disconnect. */
+    struct bt_acl_peer closed={{3,2,3,4,5,6},1,0,0};uint64_t unchanged=99;
+    assert(bt_acl_connect(&a,&closed,5000,&unchanged)==-1 && unchanged==99);
     l=begin_connect(&f,&a,4);cs(&f,HCI_OP_CREATE_CONN,1,0x0c);astep(&a);
     struct bt_acl_peer peer={{5,2,3,4,5,6},1,0,0};uint64_t output=123;
     assert(bt_acl_connect(&a,&peer,5000,&output)==0 && output==123 && l==4);
