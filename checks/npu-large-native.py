@@ -119,7 +119,7 @@ def check_constructor(a,out,image,inputs,outputs,bad=False):
  cpus=(0x41600000,0,0x41702000,0x41782000,0x41802000,0x41843000,0x41602000,0x41601000)
  devices=(0xe0000000,0,0xe0105000,0xe0186000,0xe0207000,0xe0249000,0xe0004000,0xe0002000)
  sizes=(4096,0,524288,524288,266240,524288,1048576,4096)
- roles=(0,0,2,0,1,3,1,0)
+ roles=(4,0,2,0,1,3,1,4)
  tables=0x418c3000
  assert m.get(memory+ml['arena'])==tables and m.get(memory+ml['capacity'])==20480
  assert m.get(memory+ml['count'])==7
@@ -139,14 +139,19 @@ def check_constructor(a,out,image,inputs,outputs,bad=False):
  m.hooks.pop(image.address('npu_convolution_send'));m.scheduler=2
  m.put(c+cl['bound'],1,4);m.put(c+cl['client'],m.task);m.put(c+cl['opened'],1,4);m.put(c+cl['ready'],1,4)
  command=c+cl['commands']+image.layouts['a733_npu_command']['token']+8
+ # A job publication follows a bootstrap publication, which maintains every
+ # buffer including the CONSTANT shader; jobs maintain only input and outputs.
+ boot=c+cl['commands'];m.cache=[]
+ assert m.call('a733_npu_memory_publish',memory,image_at,boot,1)==1
+ assert [0,cpus[7],sizes[7]] in m.cache and [1,cpus[6],sizes[6]] in m.cache
+ assert m.call('a733_npu_memory_finish',memory,boot,0)==1
  for index,data in enumerate(inputs):
   m.u.mem_write(cpus[6],bytes([0xa5+index])*sizes[6]);m.u.mem_write(0x43010000,data)
   assert m.call('npu_convolution_send',c,2,0x43010000,len(data),5000000,5,0x43e00100)==0
   assert m.data(cpus[6],sizes[6])==bytes(sizes[6]) and m.data(cpus[3],len(data))==data
   m.cache=[]
   assert m.call('a733_npu_memory_publish',memory,image_at,command,0)==1
-  assert [1,cpus[6],sizes[6]] in m.cache and [1,cpus[4],sizes[4]] in m.cache
-  assert [0,cpus[7],sizes[7]] in m.cache
+  assert sorted(m.cache)==sorted([[0,cpus[3],sizes[3]],[1,cpus[4],sizes[4]],[1,cpus[6],sizes[6]]]),m.cache
   assert m.call('a733_npu_memory_finish',memory,command,0)==1
   assert [2,cpus[6],sizes[6]] in m.cache and [2,cpus[4],sizes[4]] in m.cache
  (out/'tables.bin').write_bytes(m.data(tables,20480))
@@ -180,7 +185,7 @@ def check_runtime(a,out,image,inputs,outputs):
   if value['state']==host.CLOSED:break
   sequence+=1;value=host.decode(m.exchange(host.packet(sequence,host.READ,m.prepared,3)),sequence,m.prepared,3)
  assert value['state']==host.CLOSED and value['jobs']==2 and value['irq_completions']==3 and m.closed
- assert m.operations==[1,2,0,4,2,0,4,5] and m.inputs==inputs
+ assert m.operations==[1,2,6,4,2,6,4,5] and m.inputs==inputs
  assert m.ticks<480000000+24000000
  return dict(result='pass',inputs=2,copied_outputs=2,healthy_close=True,usb_task_polls=m.polls,tick_hz=1000,polls_per_delay=8,request_deadlines=deadlines,numerical_output_and_irq_modeled=True)
 

@@ -3,7 +3,7 @@
 #include "a733_npu_mmu.h"
 
 #define A733_NPU_FETCH_BYTES 524280u
-#define A733_NPU_BOOTSTRAP_BYTES 192u
+#define A733_NPU_BOOTSTRAP_BYTES 208u
 
 enum a733_npu_state {
     A733_NPU_COLD, A733_NPU_BOOTING, A733_NPU_READY, A733_NPU_RUNNING,
@@ -78,8 +78,9 @@ enum a733_npu_state a733_npu_check_timeout(struct a733_npu_controller *);
 int a733_npu_cancel(struct a733_npu_controller *, uint64_t stop_timeout);
 int a733_npu_reap(struct a733_npu_controller *, void **token, int *canceled);
 int a733_npu_close(struct a733_npu_controller *);
-/* Encode flush + reference initialization + event + END. No MMIO. Writes
- * exactly A733_NPU_BOOTSTRAP_BYTES; capacity and alignment are checked first.
+/* Encode flush + reference initialization, including zero AXI SRAM base/end
+ * states, + event + END and one END padding pair. No MMIO. Writes exactly
+ * A733_NPU_BOOTSTRAP_BYTES; capacity and alignment are checked first.
  * The caller supplies a larger mapped allocation for the reference prefetch. */
 int a733_npu_bootstrap(void *, size_t);
 #endif

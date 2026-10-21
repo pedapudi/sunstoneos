@@ -57,6 +57,14 @@ pointer into its stack. These are task APIs and must not run from an interrupt.
 | CANCEL | Requires the owner and an active bootstrap or job. It starts the controller's bounded cancellation sequence. |
 | REAP | Requires the owner and a completed or canceled job. It consumes one result and returns the job ticket and cancellation status. |
 | CLOSE | Requires the owner and READY or DRAINED state. Only successful controller shutdown releases the session. |
+| WAIT | Requires the owner and a zero timeout. The reply has the same fields as STATUS. While a bootstrap, job or cancellation is active, the worker holds the reply and sends it after the first poll or interrupt pass that finds the controller in another state, such as READY, DONE, CANCELED or a FAULT from the controller deadline. |
+
+A held WAIT occupies a separate owner slot. Requests from other clients,
+including STATUS, are still answered while it is held. Without WAIT, a client
+learns of completion only by sending STATUS after its own delay, so each job
+costs at least one extra tick and a STATUS round trip. With WAIT the reply is
+sent within one worker poll period in the polled profile, or when the worker
+handles the completion interrupt in the interrupt profile.
 
 A bootstrap reaches READY automatically. Successful job completion remains DONE
 until the owner reaps it. Cancellation requires acknowledgment and full bus idle;
@@ -128,6 +136,11 @@ The final check passed:
   acknowledgment before idle, output guards, and required close after cancellation.
 - Idle counter maintenance, autonomous job expiry, retained owner and memory,
   and no register or clock callbacks after the retained fault.
+- WAIT: refusal for a non-owner and a nonzero timeout, a READY reply after
+  bootstrap, one held DONE reply carrying the job ticket while another client
+  still receives STATUS replies, and a FAULT reply when the job deadline
+  expires. The interrupt check also uses WAIT for bootstrap and both jobs with
+  the worker on core 1, and for the missing-notification deadline case.
 
 The initial integration run passed. Review added idle counter maintenance and
 an explicit one-second idle case. That case exposed a fixture startup deadline
@@ -171,6 +184,15 @@ scheduling through `npu_service_bind_irq`. The existing unbound service remains
 polled. The binding and worker remain pinned; successful terminal CLOSE cannot
 reopen an interrupt binding. Requests and replies retain their existing layout.
 
+The callbacks run in the worker task and must act on the CPU that receives
+interrupt 97. The caller therefore passes the affinity mask of that one CPU,
+and binding is refused unless the worker was created pinned to exactly that
+CPU. The board binding passes CPU0, where the EL3 installer routes the
+interrupt and the only CPU on which its callbacks run. An all-core profile
+that pins the worker to core 1 therefore cannot bind the interrupt and keeps
+polled completion. Routing the interrupt to another core would also require
+the EL3 installer, its restore path and the callbacks to target that core.
+
 The platform ISR masks interrupt 97 and calls
 `npu_service_irq_notify_from_isr`. This latches an event notification or a sticky
 mask failure and wakes the worker. The ISR performs no NPU register read, output
@@ -212,7 +234,9 @@ and cache adapter with modeled register effects and IRQ notifications. They
 cover pending notification during rearm, three completions and output acquisition,
 deferred mask/stop, missing IRQ deadlines, mask/rearm/device/stop failures,
 diagnostic replies after a deferred-mask timeout and cancellation without an
-event IRQ. Changed controller cases also pass address/undefined-behavior
+event IRQ. They also refuse binding with a route of no CPU, two CPUs or a CPU
+other than the worker's, and complete bootstrap plus two jobs with the worker
+and the modeled route both on core 1. Changed controller cases also pass address/undefined-behavior
 sanitizers. Results and exact inputs reside under
 `~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`. Physical delivery,
 cache visibility, numerical execution and recovery remain unqualified.

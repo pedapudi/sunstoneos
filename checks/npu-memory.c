@@ -28,7 +28,7 @@ static struct a733_npu_command boot, job;
 static struct a733_npu_controller controller;
 
 struct model {
-    unsigned translations, cache_calls, barriers, cache_failure, ordered;
+    unsigned translations, cache_calls, barriers, cache_failure, ordered, cleaned;
     uintptr_t bad_cpu;
     unsigned bad_kind;
     uint32_t regs[0x800 / 4];
@@ -69,11 +69,11 @@ static int cache(void *cookie, enum a733_npu_cache_op op, uintptr_t cpu, size_t 
     d->ordered = 0;
     if (cpu == (uintptr_t)arena) {
         assert(op == A733_NPU_CACHE_CLEAN && bytes <= sizeof(device_arena));
-        memcpy(device_arena, arena, bytes); return 1;
+        d->cleaned |= 16; memcpy(device_arena, arena, bytes); return 1;
     }
     for (unsigned i = 0; i < 4; ++i) {
         if (cpu != maps[i].cpu) continue;
-        assert(bytes == maps[i].bytes);
+        assert(bytes == maps[i].bytes); d->cleaned |= 1u << i;
         if (maps[i].role == A733_NPU_BUFFER_WRITE)
             assert(op == A733_NPU_CACHE_CLEAN_INVALIDATE || op == A733_NPU_CACHE_INVALIDATE);
         else assert(op == A733_NPU_CACHE_CLEAN);
@@ -253,6 +253,29 @@ int main(void)
     assert(a733_npu_reap(&controller, &token, &canceled) && token == job.token && !canceled);
     assert(a733_npu_close(&controller)); guards();
 
+    /* The bootstrap publication maintains the tables and every buffer; a job
+     * publication maintains only READ and WRITE buffers. A CONSTANT input is
+     * published once and is not cleaned again, so a later CPU write stays
+     * invisible to the device model. */
+    for (unsigned constant = 0; constant < 2; ++constant) {
+        prepare();
+        if (constant) input[2].role = maps[2].role = A733_NPU_BUFFER_CONSTANT;
+        initialize();
+        assert(a733_npu_memory_publish(&memory, &memory.image, &boot, 1));
+        assert(model.cleaned == 31 && model.cache_calls == 5);
+        assert(a733_npu_memory_finish(&memory, &boot));
+        memset(input_cpu, 0x3c, DATA_BYTES); model.cleaned = 0; model.cache_calls = 0;
+        unsigned translations = model.translations;
+        assert(a733_npu_memory_publish(&memory, &memory.image, &job, 0));
+        assert(model.cleaned == (constant ? 1u : 5u) && model.cache_calls == (constant ? 1u : 2u));
+        assert(model.translations > translations); /* Mappings are still checked per job. */
+        assert(input_device[0] == (constant ? 0x12 : 0x3c));
+        assert(a733_npu_memory_finish(&memory, &job));
+    }
+    /* A job publication before any bootstrap publication is refused. */
+    fresh(); assert(!a733_npu_memory_publish(&memory, &memory.image, &job, 0));
+    assert(!model.cache_calls); retained();
+
     /* CPU translations can change after admission, including interior pages. */
     for (unsigned kind = 1; kind <= 5; ++kind) {
         fresh(); model.bad_cpu = (uintptr_t)OUTPUT_CPU + 4096; model.bad_kind = kind;
@@ -285,6 +308,8 @@ int main(void)
     assert(!a733_npu_memory_command(&memory, JOB_VA, (void *)arena));
     assert(!a733_npu_memory_command(&memory, JOB_VA, (void *)OUTPUT_CPU));
     assert(!a733_npu_memory_command(&memory, JOB_VA, &memory.active));
+    prepare(); input[2].role = maps[2].role = A733_NPU_BUFFER_CONSTANT; initialize();
+    assert(!a733_npu_memory_command(&memory, INPUT_VA, &wrong));
 
     /* Failure at each cache operation must stop subsequent maintenance. */
     for (unsigned failure = 1; failure <= 5; ++failure) {
@@ -320,6 +345,10 @@ int main(void)
     prepare(); input[1].role = A733_NPU_BUFFER_BOOTSTRAP; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[1].bytes = 4096; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); input[0].role = (enum a733_npu_buffer_role)-1; refused_init(arena, sizeof(arena), TABLE_PA);
+    prepare(); input[0].role = (enum a733_npu_buffer_role)(A733_NPU_BUFFER_CONSTANT + 1);
+    refused_init(arena, sizeof(arena), TABLE_PA);
+    /* CONSTANT is not a command role: it cannot stand in for a bootstrap. */
+    prepare(); input[3].role = A733_NPU_BUFFER_CONSTANT; refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); model.bad_cpu = (uintptr_t)input_cpu + 4096; model.bad_kind = 1;
     refused_init(arena, sizeof(arena), TABLE_PA);
     prepare(); refused_init(arena + 64, sizeof(arena) - 64, TABLE_PA);
@@ -332,6 +361,6 @@ int main(void)
     assert(walk(UINT32_MAX, 1) == output_device + DATA_BYTES - 1);
     assert(!walk(0xffffdfff, 0));
     assert(a733_npu_memory_finish(&memory, &boot)); guards();
-    puts("PASS NPU private mappings, canonical tables, noncoherent publication, controller ownership, and fault retention");
+    puts("PASS NPU private mappings, canonical tables, noncoherent publication, per-job cache scope, controller ownership, and fault retention");
     return 0;
 }

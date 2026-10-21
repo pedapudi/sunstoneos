@@ -281,9 +281,10 @@ int a733_npu_bootstrap(void *memory, size_t capacity)
         0x08010e55, 0x03010006, 0x08010e55, 0x03010007,
         0x08010e21, 0x20000, 0x08010e02, 0x701, 0x48000000, 0x701,
         0x0801022c, 0x1f, 0x08010e4e, SRAM_BASE,
+        0x08010e4f, 0, 0x08010e50, 0, /* AXI SRAM base/end stay zero. */
         0x08010e02, 0x30000701, 0x48000000, 0x30000701,
         0x08010e01, 0x40, 0x10000000, 0,
-        0, 0 /* Prefetch padding after END. */
+        0x10000000, 0 /* Prefetch padding after END repeats END. */
     };
     _Static_assert(sizeof(words) == A733_NPU_BOOTSTRAP_BYTES, "bootstrap size");
     uint8_t *out = memory;

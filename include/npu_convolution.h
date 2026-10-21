@@ -24,7 +24,6 @@
 #define NPU_CONVOLUTION_INPUT_BYTES 192u
 #define NPU_CONVOLUTION_OUTPUT_BYTES 72u
 #define NPU_CONVOLUTION_COMMAND_BYTES 524288u
-#define NPU_CONVOLUTION_BOOTSTRAP_BYTES 208u
 enum npu_convolution_buffer {
     NPU_CONVOLUTION_NN, NPU_CONVOLUTION_COEFF, NPU_CONVOLUTION_COMMAND,
     NPU_CONVOLUTION_INPUT, NPU_CONVOLUTION_OUTPUT, NPU_CONVOLUTION_BOOTSTRAP,
@@ -55,6 +54,8 @@ struct npu_convolution {
     unsigned model_index;
     struct a733_npu_buffer buffers[NPU_CONVOLUTION_BUFFERS];
     unsigned char immutable_digest[4][32];
+    size_t stream_bytes[2]; /* Command, then bootstrap payload before END fill. */
+    unsigned char stream_digest[2][32];
     struct a733_npu_native native;
     struct a733_npu_command commands[2];
     struct npu_service service;
@@ -70,16 +71,18 @@ struct npu_convolution {
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
  * accepts only the reviewed complete UINT8 compiled models in the private
  * catalogue. Select once for the context lifetime; no runtime upload or switch.
- * Six buffers have exact sizes 4K,4K,512K,4K,4K,512K and roles READ,READ,
- * COMMAND,READ,WRITE,BOOTSTRAP. CPU/PA/device ranges must be exclusive and
+ * Buffer sizes and roles must match the selected profile's table in
+ * npu_convolution_layout.h; unused slots are zero. CPU/PA/device ranges must be exclusive and
  * disjoint from context, source/config, tables and device registers. Native
  * initialization validates mappings; general pointer validity is a caller
  * prerequisite. No peripheral register access occurs.
  *
  * Any admitted initialization failure is terminal; reservations remain owned.
- * No teardown/reinitialization is provided. Model/weights/commands stay immutable;
- * publication checks their digests. Input/output are accessed only through the
- * client API below. Full mapped command tails contain END pairs.
+ * No teardown/reinitialization is provided. Model/weights/commands stay immutable.
+ * Startup, activation, bootstrap publication and stop check the model copy,
+ * weight digests and both command streams; a job publication checks the
+ * weights and the job command stream only. Input/output are accessed only
+ * through the client API below. Full mapped command tails contain END pairs.
  *
  * Successful preparation admits the selected trusted compiled artifact only;
  * hashes and checksums do not prove hardware access extents or confinement. Physical PD-mode
@@ -108,10 +111,12 @@ int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
  * bypass this wrapper through the embedded startup object. */
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
-/* Single designated client task, finite queue waits. Only OPEN, STATUS, SUBMIT,
- * REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
+/* Single designated client task, finite queue waits. Only OPEN, STATUS, WAIT,
+ * SUBMIT, REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
  * command 1. Other operations require NULL/zero input. OPEN/SUBMIT require
- * finite positive microsecond deadlines; STATUS/REAP/CLOSE use zero timeout.
+ * finite positive microsecond deadlines; STATUS/WAIT/REAP/CLOSE use zero
+ * timeout. WAIT after OPEN or SUBMIT replies once the bootstrap or job has
+ * left BOOTING/RUNNING, without STATUS polling.
  *
  * CLOSE requires READY after every job has been reaped. Its copied reply must
  * report CLOSED with no session/job ownership. It permanently stops admission;
