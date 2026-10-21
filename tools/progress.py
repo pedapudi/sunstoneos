@@ -28,6 +28,7 @@ ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
           '/app.css': ('app.css', 'text/css; charset=utf-8')}
 MAX_DOCUMENT = 2 * 1024 * 1024
+NEXT_SECTIONS = ('next actions', 'continuation and evidence reuse')
 # These aliases join prose updates to inventory rows. They contain no status.
 ALIASES = {
     'boot rom and boot firmware': ('boot rom',),
@@ -300,9 +301,11 @@ def parse_hardware(markdown):
 
 def parse_handoff(markdown):
     parts = sections(markdown)
-    next_section = next((s['markdown'] for s in parts if s['title'].casefold() == 'next actions'), '')
+    # The current handoff keeps its ordered list under the continuation heading.
+    next_section = next((s['markdown'] for s in parts if s['title'].casefold() in NEXT_SECTIONS), '')
+    # An item ends at the next item or at an unindented paragraph after a blank line.
     actions = [{'order': int(m.group(1)), 'text': m.group(2).strip()}
-               for m in re.finditer(r'^(\d+)\.\s+(.*?)(?=^\d+\.\s|\Z)', next_section, re.M | re.S)]
+               for m in re.finditer(r'^(\d+)\.\s+(.*?)(?=^\d+\.\s|\n[ \t]*\n(?=\S)|\Z)', next_section, re.M | re.S)]
     blockers = []
     for part in parts:
         for paragraph in re.split(r'\n\s*\n', part['markdown']):
