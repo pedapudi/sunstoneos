@@ -97,6 +97,13 @@ selection and CPU0 ROM redirect ownership until reset. All platform participants
 share the register mutex. The supervisor does not grant other RTC or legacy
 watchdog writers permission to change those resources.
 
+Admission and every reload compare the RTC control word at `0x07090000` with
+the recorded value except bits 8:7. Those bits report a pending calendar
+day or time write and remain set while an RTC owner's write settles; they do
+not select the low-speed or watchdog clock path. A calendar write that overlaps
+a reload therefore does not revoke the lease. Every other control bit and the
+words at `0x07090060` and `0x07090160` must match exactly.
+
 ## Source and validation boundaries
 
 The register plan follows the pinned A733 User Manual V1.00, watchdog section

@@ -32,7 +32,8 @@ static int same(const struct a733_watchdog_window *t)
         (read32(0x02050018)&0xffff)==2 && !(read32(0x03000024)&0x100) &&
         read32(0x070501c0)==0xfa50392f && read32(0x070501c4)==0x20 &&
         !read32(0x070501d4) && read32(0x07090108)==0x5aa5a55a &&
-        read32(0x07090000)==t->rtc_control && read32(0x07090060)==t->rtc_divider &&
+        !((read32(0x07090000)^t->rtc_control)&~A733_WATCHDOG_RTC_BUSY) &&
+        read32(0x07090060)==t->rtc_divider &&
         read32(0x07090160)==t->rtc_source;
 }
 int a733_watchdog_hw_admit(const struct a733_watchdog_window *t)
