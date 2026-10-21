@@ -324,10 +324,11 @@ expired deadline nor uncertain completion authorizes reuse.
 Focused lifecycle evidence is retained in
 `~/.cache/sunstoneos/evidence/gpu-resource-disposal-20261020/`. Native child
 allocation/disposal/reconstruction and application protocol checks have separate
-model boundaries. The selected linked consumer covers texture/depth; compute
-and triangle application leaves have additional compilation coverage. These
-checks do not establish physical cache visibility, firmware execution, rasterized
-pixels, SMP scheduling or mixed-device disposal.
+model boundaries. Separate linked consumers cover texture/depth and compute. The compute-only
+[three-parent lifecycle check](gpu-compute-service.md#compute-only-disposal-and-reopening)
+also exercises copied output across reopening. Triangle application leaves have
+compilation coverage only. These checks do not establish physical cache visibility,
+firmware execution, rasterized pixels, SMP scheduling or mixed-device disposal.
 
 ## Copied triangle submission
 

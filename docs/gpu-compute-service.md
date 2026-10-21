@@ -120,6 +120,7 @@ for render contexts, render-target datasets and free lists. An unexpected multic
 context state and command support; the documented A733 GPU is MC1. Power OFF
 alone does not prove that outstanding memory transactions have drained.
 
+
 With `config.compute == NULL`, existing requests use their previous lifecycle.
 The optional field appends no automatic compute operation. Service configuration,
 state, and reply layouts have changed, so callers must rebuild against the header.
@@ -201,3 +202,46 @@ precede input overwrite and EL1 cache publication. The program and geometry stay
 immutable. Exact-sequence copied reads reject output from another submission.
 Focused runtime-input case 13 covers the changed path and healthy shutdown;
 unchanged compiler, dispatch and physical checks are reused.
+
+## Compute-only disposal and reopening
+
+The supervised runtime-input application supports explicit disposal with
+`SUNSTONE_GPU_LIFECYCLE=ON`. Build the existing
+`sunstone-a733-gpu-compute-single-core` target with compute, program, runtime-input,
+single-core and supervised options enabled; runtime-draw and runtime-texture
+remain disabled. The manifest workload is `trusted-compiled-program-lifecycle`.
+The optional compute wire version is 6; retained version 2 remains compatible.
+
+After acknowledged healthy CLOSE, the native worker removes six compute MIPS
+objects and its GPU VM mappings, invalidates complete WB child extents, then
+releases the payload, NC firmware/context and VM-table parent leases. OPEN
+reconstructs all three with fresh generations and the next queue epoch. Global
+firmware leases and shared providers stay pinned. The complete authenticated
+8,288-byte package, including original input, remains outside these children.
+The new context executes that sealed input and copies sequence-one output before
+publishing READY.
+
+During pending OPEN, the application reports the previous queue epoch and
+sequence. Completed output, the new identity and mailbox availability publish
+under one bounded single-core critical section; USB snapshots the corresponding
+fields under the same exclusion. STATUS requests carry expected sequence zero
+and still validate the returned sequence and queue identity. Mutations and reads
+retain exact epoch binding.
+
+Focused evidence is in
+`~/.cache/sunstoneos/evidence/gpu-compute-lifecycle-20261020/`. The native owner
+check executes three-parent release, old-generation refusal, reconstruction and
+new VM/program publication. CPU admission/cache/translation, the accepted full
+healthy shutdown and provider construction are modeled. A separate application
+check executes the actual mailbox/client and pinned TinyUSB FIFO/callback path
+with modeled GPU/service completion and previously retained result bytes.
+
+The application check copies 65 words as pages of 32, 32 and 1 word before and
+after CLOSE, DISPOSE and OPEN. It holds the reopened compute completion until
+STATUS copies the previous pending identity, then checks an immediate READ after
+READY. Reply sizes are 176, 176 and 52 bytes; control replies are 48 bytes. These
+selected replies end with a short packet at either supported USB speed and need
+no terminal ZLP. Host replay and four new partial-page refusal cases validate
+page index, tail count, acquired extent and sequence without repeating arithmetic.
+Physical GPU execution, healthy reclamation, SMP timing and mixed-device disposal
+remain unqualified.
