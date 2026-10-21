@@ -21,7 +21,8 @@ SOURCES = [
     'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
     'drivers/pinctrl/a733_pin_tables.c', 'runtime/device_memory_pool.c']
 CHANGED = ['drivers/camera/a733_camera_native.c', 'drivers/camera/a733_camera_capture.c',
-           'drivers/camera/a733_camera_dma.c', 'drivers/i2c/a733_twi.c',
+           'drivers/camera/a733_camera_dma.c', 'drivers/camera/a733_csi_receiver.c',
+           'drivers/camera/ov5640.c', 'drivers/i2c/a733_twi.c',
            'drivers/i2c/a733_twi_native.c']
 
 def main():

@@ -41,6 +41,15 @@ most one I2C or platform operation, plus clock reads. Masked register updates
 use separate read and write polls. Delays yield to the worker; the driver neither
 spins nor allocates memory.
 
+A platform can supply an optional block-write operation. The driver then writes
+a run of up to 40 configuration entries at consecutive register addresses in
+one I2C transaction, relying on the sensor's register-address auto-increment.
+Masked entries, entries followed by a delay and the test-pattern register are
+always written alone. Every register receives the same value in the same order
+as with single writes. With block writes, configuration takes 125 write
+transactions instead of 308. The native binding supplies the operation; the
+sensor's auto-increment behavior on this board has not been observed.
+
 The platform acquire callback must reserve the sensor, bus, pins, clocks and
 power resources. It publishes a nonzero lease before any change that could
 require recovery. Successful admission proves stable 24 MHz XCLK, suitable
@@ -180,7 +189,10 @@ The fixture passes under AddressSanitizer and UndefinedBehaviorSanitizer.
 It checks minimum delays, chip mismatch before writes, bounded polls,
 pending admissions, normal stop/restart/close, receiver retention, uncertain
 GPIO/register/release operations, clock failure/regression, deadline expiry,
-changed lease identity, readback mismatch and terminal silence.
+changed lease identity, readback mismatch and terminal silence. A block-write
+run must reproduce the single-write access sequence register for register, with
+no masked or delayed entry inside a block; failed and overdue block writes
+retain the lease.
 An independent harness executes unchanged Linux clock, timing and control
 functions with the pinned initialization tables. Its complete modeled 65,536-byte
 sensor image matches the native driver for the selected color-bar profile.

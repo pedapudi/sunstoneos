@@ -63,7 +63,16 @@ struct ov5640_ops {
      * irrevocably releases the lease; an overdue success still faults locally.
      */
     int (*release)(void *context, uint64_t token, uint64_t deadline);
+    /* Optional. One SCCB write of count (2..OV5640_BLOCK_BYTES) values to
+     * consecutive registers from reg, relying on the sensor's register-address
+     * auto-increment. Same retention rules as write. NULL keeps one write per
+     * register. Masked, delayed and test-pattern entries always use write.
+     */
+    int (*write_block)(void *context, uint64_t token, uint8_t address,
+                       uint16_t reg, const uint8_t *values, unsigned count,
+                       uint64_t deadline);
 };
+#define OV5640_BLOCK_BYTES 40u
 struct ov5640 {
     struct ov5640_ops ops;
     void *context;
@@ -84,7 +93,8 @@ int ov5640_start(struct ov5640 *, uint64_t receiver_token, uint64_t deadline);
 int ov5640_stop(struct ov5640 *, uint64_t deadline);
 int ov5640_close(struct ov5640 *, uint64_t deadline);
 /* At most one platform/I2C operation per poll, plus pre/post clock reads.
- * A masked register update consumes separate read and write polls.
+ * A masked register update consumes separate read and write polls. With
+ * write_block, one poll writes a run of plain consecutive table entries.
  * Fault is terminal and performs no further callbacks.
  */
 int ov5640_poll(struct ov5640 *);

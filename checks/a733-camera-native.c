@@ -24,6 +24,7 @@ static struct device_memory_pool pool;
 static uint32_t common[0x2000/4],parser[0x1000/4],route[0x100/4],vipp[0x140/4],dma[0x1000/4],mmu[0x20000/4];
 static uint8_t sensor[65536],device_image[2*(307200+4096)];
 static unsigned wire,selected,frames,cache_syncs,io_count,stops,mode,fills,busy_seen;
+static unsigned reading_bus,block_writes,longest_block;
 static uint64_t pwdn_released,identity_read,busy_until;
 static void *const camera_task=(void *)0x1234;
 static unsigned preparation=1,reject_camera;
@@ -109,21 +110,27 @@ void a733_camera_model_store(uintptr_t a,uint32_t value)
     if(a==A733_TWI11_BASE+0xc && value!=0x40){
         assert(pm.i2c_held && !pm.register_held);
         unsigned data=WORD(A733_TWI11_BASE+8),status=0;
-        if(value==0x68){assert(wire==0 || wire==4);status=wire?0x10:8;++wire;}
+        /* A write sends any number of data bytes to auto-incremented registers;
+         * a read restarts after the register address and returns one byte. */
+        if(value==0x68){assert(wire==0 || (wire==4 && !reading_bus));status=wire?0x10:8;reading_bus=wire!=0;++wire;}
         else if(value==0x48){
-            switch(wire){
-            case 1:assert(data==0x78);status=0x18;break;
-            case 2:selected=data<<8;status=0x28;break;
-            case 3:selected|=data;status=0x28;break;
-            case 4:sensor[selected]=(uint8_t)data;status=0x28;
-                if(selected==0x4202 && !data && sensor[0x300e]==0x45)emit();break;
-            case 5:assert(data==0x79);status=0x40;break;
-            case 6:WORD(A733_TWI11_BASE+8)=sensor[selected];status=0x58;
-                if(selected==0x300a && !identity_read)identity_read=pm.now;break;
-            default:assert(0);
-            }++wire;
+            if(wire==1){assert(data==0x78);status=0x18;}
+            else if(wire==2){selected=data<<8;status=0x28;}
+            else if(wire==3){selected|=data;status=0x28;}
+            else if(!reading_bus){
+                assert(wire<4+OV5640_BLOCK_BYTES);sensor[selected]=(uint8_t)data;status=0x28;
+                if(selected==0x4202 && !data && sensor[0x300e]==0x45)emit();
+                ++selected;
+            }
+            else if(wire==5){assert(data==0x79);status=0x40;}
+            else if(wire==6){WORD(A733_TWI11_BASE+8)=sensor[selected];status=0x58;
+                if(selected==0x300a && !identity_read)identity_read=pm.now;}
+            else assert(0);
+            ++wire;
         }else{
-            assert(value==0x58 && (wire==5 || wire==7));++stops;wire=0;
+            assert(value==0x58 && (reading_bus?wire==7:wire>=5));++stops;
+            if(!reading_bus && wire>5){++block_writes;if(wire-4>longest_block)longest_block=wire-4;}
+            wire=0;reading_bus=0;
             WORD(a)=0x40;WORD(A733_TWI11_BASE+0x10)=0xf8;return;
         }
         WORD(a)=0x48;WORD(A733_TWI11_BASE+0x10)=mode==1 && wire==2?0x38:status;
@@ -347,6 +354,8 @@ int main(int argc,char **argv)
     if(nominal){
         /* PWDN release to identity keeps 1 ms + 20 ms with or without RESETB. */
         assert(fills==1 && pwdn_released && identity_read && identity_read-pwdn_released>=21000);
+        /* Plain consecutive configuration entries reach the sensor in blocks. */
+        assert(block_writes==36 && longest_block==OV5640_BLOCK_BYTES);
         unsigned claimed=0;for(unsigned b=0;b<A733_PIN_BANKS;b++)claimed+=(unsigned)__builtin_popcount(camera.pin.masks[b]);
         assert(claimed==(mode==11?14u:15u) && !camera.pin.masks[A733_PIN_G]==(mode==11));
     }

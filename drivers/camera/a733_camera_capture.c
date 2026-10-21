@@ -30,6 +30,9 @@ static int sensor_acquire(void *p,uint64_t d,uint64_t *t){BEGIN;return CALL(sens
 static int sensor_line(void *p,uint64_t t,enum ov5640_line l,int a,uint64_t d){BEGIN;return CALL(sensor,line,t,l,a,d);}
 static int sensor_read(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t *v,uint64_t d){BEGIN;return CALL(sensor,read,t,a,r,v,d);}
 static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){BEGIN;return CALL(sensor,write,t,a,r,v,d);}
+static int sensor_write_block(void *p,uint64_t t,uint8_t a,uint16_t r,const uint8_t *v,unsigned n,uint64_t d){
+    BEGIN;return CALL(sensor,write_block,t,a,r,v,n,d);
+}
 static int sensor_receiver(void *p,uint64_t t,uint64_t rt,const struct ov5640_mode *m,uint64_t d){
     BEGIN;
     if(!s->packets_granted || rt!=s->receiver.token || s->receiver.state!=A733_CSI_ARMED ||
@@ -140,7 +143,8 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
     if(a733_iommu_build(&s->tables,c->table_words,c->table_physical,spans,3)!=1)return fail(s);
     struct a733_camera_platform_ops a={clock_read,analog_admit,analog_read,analog_write};
     struct a733_iommu_ops i={clock_read,mmu_admit,mmu_read,mmu_write,mmu_publish};
-    struct ov5640_ops o={clock_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,sensor_release};
+    struct ov5640_ops o={clock_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,sensor_release,
+        c->sensor.write_block?sensor_write_block:NULL};
     struct a733_route_ops r={clock_read,route_admit,route_publish,route_read,route_write,stopped,route_drain,route_release};
     struct a733_csi_ops v={clock_read,csi_admit,csi_read,csi_write,stopped,csi_drain,csi_release};
     struct a733_camera_dma_ops d={clock_read,dma_admit,dma_read,dma_write,dma_start,stopped,dma_drained,dma_sync,dma_release};

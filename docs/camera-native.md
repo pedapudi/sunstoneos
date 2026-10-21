@@ -72,10 +72,13 @@ referenced providers and leases remain private and valid for the image lifetime.
 ## Sensor bus and capture ownership
 
 The bounded byte-transfer engine supports TWI11 at `0x0251b000` and S_TWI1 at
-`0x07084000`. CAM1 uses seven-bit address `0x3c`, two-byte big-endian register
-addresses and one data byte per transaction. The Type-C controller uses the
-same engine with one-byte register addresses and its separate native provider.
-S_TWI1 does not use the extra PMU registers documented only for S_TWI0.
+`0x07084000`. CAM1 uses seven-bit address `0x3c` and two-byte big-endian
+register addresses. Reads and single writes carry one data byte; the sensor's
+block writes carry up to 40 bytes to consecutive registers in one transaction. A
+40-byte block takes about 4 ms at 100 kHz, within the 10 ms limit for one
+transaction. The Type-C controller uses the same engine with one-byte register
+addresses and its separate native provider. S_TWI1 does not use the extra PMU
+registers documented only for S_TWI0.
 
 The native TWI11 provider authenticates real clock, pin and rail leases. It
 observes the leased APB1 source and divider, releases the initially asserted

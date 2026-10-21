@@ -230,22 +230,29 @@ static int sensor_line(void *v,uint64_t t,enum ov5640_line line,int asserted,uin
         timely(n,d) && authority(n)?1:-1;
 }
 static int sensor_bus(struct a733_camera_native *n,uint64_t t,uint8_t address,uint16_t reg,
-    unsigned reading,uint8_t *value,uint64_t d)
+    unsigned reading,uint8_t *data,unsigned count,uint64_t d)
 {
-    if(t!=n->boot.lease || address!=0x3c || !value || !authority(n) || !timely(n,d))return -1;
+    if(t!=n->boot.lease || address!=0x3c || !data || !authority(n) || !timely(n,d))return -1;
     /* Bounded synchronous bridge preserves the sensor controller's current
-     * callback contract. One transaction gets at most 10 ms within capture time. */
+     * callback contract. One transaction gets at most 10 ms within capture time;
+     * a 40-byte block write takes about 4 ms at 100 kHz. */
     uint64_t limit=d;
     if(d-n->last_now>10000)limit=n->last_now+10000;
-    if(a733_twi_request(&n->twi,address,reg,reading,*value,limit)<0)return -1;
+    if(a733_twi_request_block(&n->twi,address,reg,reading,data,count,limit)<0)return -1;
     int r;
     do {r=a733_twi_poll(&n->twi);}while(r==0);
-    return r==1 && a733_twi_take(&n->twi,value)==1 && timely(n,d) && authority(n)?1:-1;
+    return r==1 && a733_twi_take_block(&n->twi,data,count)==1 && timely(n,d) && authority(n)?1:-1;
 }
 static int sensor_read(void *v,uint64_t t,uint8_t a,uint16_t r,uint8_t *x,uint64_t d)
-{uint8_t byte=0;int ok=sensor_bus(v,t,a,r,1,&byte,d);if(ok==1)*x=byte;return ok;}
+{uint8_t byte=0;int ok=sensor_bus(v,t,a,r,1,&byte,1,d);if(ok==1)*x=byte;return ok;}
 static int sensor_write(void *v,uint64_t t,uint8_t a,uint16_t r,uint8_t x,uint64_t d)
-{return sensor_bus(v,t,a,r,0,&x,d);}
+{return sensor_bus(v,t,a,r,0,&x,1,d);}
+static int sensor_write_block(void *v,uint64_t t,uint8_t a,uint16_t r,const uint8_t *x,unsigned count,uint64_t d)
+{
+    uint8_t block[OV5640_BLOCK_BYTES];
+    if(!x || count<2 || count>OV5640_BLOCK_BYTES)return -1;
+    memcpy(block,x,count);return sensor_bus(v,t,a,r,0,block,count,d);
+}
 static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mode *m,uint64_t d)
 {
     struct a733_camera_native *n=v;
@@ -410,7 +417,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
             p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
         .table_words=(void *)p,.table_physical=p,.frame_id=n->boot.lease,
         .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.color_bars=n->boot.test_pattern,
-        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain},
+        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
