@@ -70,11 +70,20 @@ endforeach()
 # touch one another's stack state or owner-dependent time implementation.
 apply_build_patch("${board_build}/hub-native.c" "${TINYUSB_DIR}/src/host/hub.c"
   "${board_root}/drivers/usb/host/hub.patch")
-set(board_cadence_source "$ENV{HOME}/.cache/sunstoneos/sources/pcie/kernel/bsp/drivers/phy/sunxi-cadence-combophy.c")
+# fetch-sources.py stores the Cadence PHY source at its lock archive path. Older
+# caches hold the same file in an extracted board-kernel tree; cadence-source.py
+# checks the pinned digest of whichever copy is used.
+file(READ "${board_root}/sources.lock.json" board_lock)
+string(JSON board_cadence_archive GET "${board_lock}" pcie-sunxi-cadence-combophy-c archive)
+set(board_cadence_source "${SUNSTONE_SOURCE_CACHE}/${board_cadence_archive}")
+if(NOT EXISTS "${board_cadence_source}")
+  set(board_cadence_source "${SUNSTONE_SOURCE_CACHE}/pcie/kernel/bsp/drivers/phy/sunxi-cadence-combophy.c")
+endif()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${board_root}/drivers/usb/host/cadence-source.py"
   --source "${board_cadence_source}" --output "${board_build}/ss-cadence.inc" RESULT_VARIABLE ss_source_status)
 if(NOT ss_source_status EQUAL 0)
-  message(FATAL_ERROR "Pinned Cadence USB source preparation failed")
+  message(FATAL_ERROR "Pinned Cadence USB source preparation failed; "
+    "run tools/fetch-sources.py pcie-sunxi-cadence-combophy-c")
 endif()
 set(board_host_tiny "${board_build}/tinyusb-ss")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${board_root}/drivers/usb/host/superspeed.py"
@@ -83,7 +92,7 @@ if(NOT ss_stack_status EQUAL 0)
   message(FATAL_ERROR "Pinned TinyUSB SuperSpeed preparation failed")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${board_root}/drivers/usb/host/superspeed.py"
-  "${board_root}/drivers/usb/host/cadence-source.py" "${board_cadence_source}")
+  "${board_root}/drivers/usb/host/cadence-source.py" "${board_cadence_source}" "${board_root}/sources.lock.json")
 set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
   "${board_build}/hub-native.c"
   "${board_host_tiny}/tusb.c" "${board_host_tiny}/host/usbh.c"
@@ -93,7 +102,7 @@ add_library(a733-board-usb2-host OBJECT ${board_host_sources})
 target_include_directories(a733-board-usb2-host BEFORE PRIVATE "${board_host_tiny}")
 get_target_property(board_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET a733-board-usb2-host PROPERTY COMPILE_OPTIONS "${board_options}")
-target_compile_definitions(a733-board-usb2-host PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1;SUNSTONE_BOARD_USB3=1>" SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
+target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1)
 target_compile_options(a733-board-usb2-host PRIVATE -include "${board_root}/apps/board/host-symbols.h")
 target_include_directories(a733-board-usb2-host PRIVATE "${board_root}/drivers/usb/host"
   "${board_root}/apps/board" "${board_root}/platform/a733-smp-cached"
@@ -133,20 +142,12 @@ file(GLOB_RECURSE board_external_headers "${SUNSTONE_TCP_DIR}/source/*.h" "${SUN
 set(board_inputs "${board_cadence_source}" "${board_root}/drivers/usb/host/cadence-source.py" "${board_root}/drivers/usb/host/superspeed.py" ${board_all_sources} ${board_external_headers} ${board_host_sources} ${storage_inputs}
   "${board_root}/apps/board/boot.patch" "${board_root}/drivers/usb/host/hub.patch"
   "${TINYUSB_DIR}/src/host/hub.c" "${CMAKE_CURRENT_LIST_FILE}")
-file(GLOB board_headers "${board_root}/apps/board/*.h")
-list(APPEND board_inputs ${board_headers})
+# The board, its host objects and its network stack also include these private headers.
+file(GLOB board_headers "${board_root}/apps/board/*.h" "${board_root}/network/include/*.h"
+  "${board_root}/drivers/usb/*.h" "${board_root}/drivers/usb/host/*.h")
+list(APPEND board_inputs ${board_headers} "${board_root}/cmake/radio-security.cmake")
 list(REMOVE_DUPLICATES board_inputs)
-set(board_identity "native-board-1;${SUNSTONE_BOARD_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;USB0-device;USB2-host;NC;fixed-watchdog-window")
-foreach(input IN LISTS board_inputs)
-  file(SHA256 "${input}" board_digest)
-  string(APPEND board_identity "${board_digest}")
-endforeach()
-string(SHA256 board_build_id "${board_identity}")
-string(REGEX REPLACE "(..)" "0x\\1," board_id_bytes "${board_build_id}")
-file(WRITE "${board_build}/build-id.c" "const unsigned char a733_smp_build_id[32]={${board_id_bytes}};\n")
-file(WRITE "${board_build}/build-id.txt" "${board_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${board_inputs})
-target_sources(sunstone-a733-board PRIVATE "${board_build}/build-id.c")
 set_property(TARGET sunstone-a733-board PROPERTY COMPILE_OPTIONS "${board_options}")
 target_compile_options(sunstone-a733-board PRIVATE "$<$<COMPILE_LANGUAGE:C>:-include;stdint.h>")
 target_include_directories(sunstone-a733-board BEFORE PRIVATE "${board_root}/apps/board"
@@ -171,3 +172,25 @@ target_include_directories(sunstone-a733-board PRIVATE "${board_root}/network/in
   "${SUNSTONE_NETWORK_C_HEADERS}" "${SUNSTONE_TCP_DIR}/source/include"
   "${SUNSTONE_TCP_DIR}/source/portable/Compiler/GCC")
 set_target_properties(sunstone-a733-board PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
+# Identify the image by its input contents and its effective options, which
+# select code such as the USB2 IRQ path or extended device memory through
+# CMAKE_C_FLAGS. Checkout and build paths are replaced by fixed names.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" board_config)
+set(board_flags "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${board_config}};${CMAKE_ASM_FLAGS};${CMAKE_ASM_FLAGS_${board_config}}")
+foreach(target sunstone-a733-board a733-board-usb2-host)
+  foreach(property COMPILE_OPTIONS COMPILE_DEFINITIONS)
+    get_target_property(board_value ${target} ${property})
+    string(APPEND board_flags ";${property}=${board_value}")
+  endforeach()
+endforeach()
+sunstone_portable_text(board_flags "${board_flags}")
+set(board_identity "native-board-1;${SUNSTONE_BOARD_SUPERVISED};USB2_IRQ=${SUNSTONE_BOARD_USB2_IRQ};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;USB0-device;USB2-host;NC;fixed-watchdog-window;${board_flags}")
+foreach(input IN LISTS board_inputs)
+  file(SHA256 "${input}" board_digest)
+  string(APPEND board_identity "${board_digest}")
+endforeach()
+string(SHA256 board_build_id "${board_identity}")
+string(REGEX REPLACE "(..)" "0x\\1," board_id_bytes "${board_build_id}")
+file(WRITE "${board_build}/build-id.c" "const unsigned char a733_smp_build_id[32]={${board_id_bytes}};\n")
+file(WRITE "${board_build}/build-id.txt" "${board_build_id}\n")
+target_sources(sunstone-a733-board PRIVATE "${board_build}/build-id.c")

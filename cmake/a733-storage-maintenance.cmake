@@ -73,7 +73,8 @@ list(APPEND storage_sources ${storage_extra} "${storage_build}/boot.c" "${storag
   "${storage_build}/continue.S" "${storage_build}/port.c" "${storage_build}/tinyusb/dcd_sunxi_musb.c"
   "${TINYUSB_DIR}/src/tusb.c" "${TINYUSB_DIR}/src/common/tusb_fifo.c"
   "${TINYUSB_DIR}/src/device/usbd.c" "${TINYUSB_DIR}/src/class/vendor/vendor_device.c")
-file(GLOB storage_headers "${storage_root}/include/*.h" "${storage_root}/runtime/include/*.h")
+file(GLOB storage_headers "${storage_root}/include/*.h" "${storage_root}/runtime/include/*.h"
+  "${storage_root}/drivers/usb/*.h")
 file(GLOB_RECURSE storage_usb_headers "${TINYUSB_DIR}/src/*.h")
 set(storage_inputs ${storage_sources} ${storage_headers} ${storage_usb_headers}
   "${CMAKE_CURRENT_LIST_FILE}" "${storage_build}/link.ld"
@@ -88,7 +89,12 @@ set(storage_inputs ${storage_sources} ${storage_headers} ${storage_usb_headers}
 file(GLOB storage_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND storage_inputs ${storage_kernel_headers})
 list(REMOVE_DUPLICATES storage_inputs)
-set(storage_identity "storage-maintenance-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;8")
+# The literal profile names the intended code generation; the effective flags
+# and inherited options record what the compiler actually receives.
+get_target_property(storage_compile_options a733-smp-cached-diagnostic COMPILE_OPTIONS)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" storage_config)
+sunstone_portable_text(storage_flags "${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_${storage_config}};${CMAKE_ASM_FLAGS};${CMAKE_ASM_FLAGS_${storage_config}};${storage_compile_options}")
+set(storage_identity "storage-maintenance-1;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};armv8-a;O2;WBWA;8;${storage_flags}")
 foreach(input IN LISTS storage_inputs)
   file(SHA256 "${input}" storage_digest)
   string(APPEND storage_identity "${storage_digest}")
@@ -100,7 +106,6 @@ configure_file("${storage_build}/build-id.c.tmp" "${storage_build}/build-id.c" C
 file(WRITE "${storage_build}/build-id.txt" "${storage_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${storage_inputs})
 add_executable(${storage_target} EXCLUDE_FROM_ALL ${storage_sources} "${storage_build}/build-id.c")
-get_target_property(storage_compile_options a733-smp-cached-diagnostic COMPILE_OPTIONS)
 set_property(TARGET ${storage_target} PROPERTY COMPILE_OPTIONS "${storage_compile_options}")
 target_include_directories(${storage_target} PRIVATE
   "${storage_root}/platform/a733-storage-maintenance" "${storage_root}/platform/a733-storage-update"
