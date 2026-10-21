@@ -175,6 +175,45 @@ eligibility immediately. Only the owner retries clock/rail retention metadata;
 it never continues healthy sampling to obtain a fault. Output checks run before
 snapshot, after copy and before queued transmission.
 
+## Compare windows report low and high threshold events
+
+The GPADC driver also implements the controller's compare-window threshold
+mode for channels 0 to 3. No application selects windows yet, and the native
+adapter refuses access to the compare registers, so this mode runs only in the
+host check below.
+
+The owner task calls `a733_adc_configure_thresholds` after initialization and
+before the first poll. Each selected channel needs a low code below its high
+code, with the high code at most 4,095; unselected channels keep zero codes.
+Manual section 18.12.8.14 names the statuses: low pending reports a code under
+the low value and high pending reports a code over the high value. The manual
+does not define the comparison at the boundary codes. Following the manual's
+initialization order, startup writes the compare data registers, compare
+enables and low/high interrupt enables before it sets ADC_EN.
+
+Each read verifies the windows and enables, copies the selected low/high
+statuses, acknowledges only the observed bits and latches them in driver state.
+A status for an unselected channel, or a changed window or enable, retains the
+controller before any acknowledgement. The statuses clear automatically when
+the condition fails and reassert while an input stays outside its window, so
+they show that at least one conversion crossed a limit and do not count
+crossings. A read with only a threshold status returns AGAIN and still
+latches it.
+`a733_adc_thresholds` returns and clears the latched low and high channel
+masks without register access. Configured disable clears the compare interrupt
+enables with the data interrupt enable and keeps latched events readable.
+
+`checks/adc-threshold.c` links the actual driver and clock registry with
+modeled MMIO. Nine cases cover programmed windows, latched events with and
+without fresh data, configured disable, window refusals, unselected-channel
+status, changed windows or enables, inherited compare enables, a failed window
+write and a non-owner query. Mutating the window verification, the high-status
+acknowledgement, the disable of high interrupts or the startup programming
+makes the check fail. The passive GPADC, clock-reference, configured-disable
+and LRADC host checks still pass, as does the linked ADC application model
+(`checks/adc-application-native.py`) on a rebuilt image. Physical comparison,
+boundary behavior and interrupt delivery remain unqualified.
+
 ## Build and capture one authenticated report
 
 Configure the pinned board/toolchain dependencies with
@@ -209,7 +248,9 @@ board power removal; cable reconnection alone permits no resource reuse. There
 is no automatic reset or retry.
 
 Repeated/concurrent monitoring services, calibrated voltage/reference accuracy,
-threshold modes, FIFO/DMA and other usable ADC operating modes remain required.
+an application that selects compare windows, burst/FIFO and DMA operation and
+other usable ADC operating modes remain required. The driver-level threshold
+mode is described in the compare-window section above.
 The accessory-dependent GPADC4, separate LRADC0 interface and actual populations
 remain tracked independently. This profile does not claim complete ADC support.
 
