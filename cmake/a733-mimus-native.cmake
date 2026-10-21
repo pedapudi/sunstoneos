@@ -49,6 +49,7 @@ get_target_property(mimus_native_asr_sources mimus_asr_smp SOURCES)
 file(GLOB_RECURSE mimus_native_model_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
   "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
 list(APPEND mimus_native_inputs ${mimus_native_asr_sources} ${mimus_native_model_headers}
+  "${SUNSTONE_SOURCE_ROOT}/cmake/mimus.cmake" "${SUNSTONE_SOURCE_ROOT}/cmake/mimus-smp.cmake"
   "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
   "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a"
