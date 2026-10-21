@@ -1,4 +1,5 @@
 #include "replay_runtime.h"
+#include "recorded.h"
 #include "platform.h"
 #include "timing.h"
 #include "runtime.h"
@@ -13,7 +14,7 @@
 
 namespace {
 struct Recognition {
-    mimus::asr::Recognizer &engine;
+    const mimus::asr::Recognizer &engine;
     mimus::asr::Arena &arena;
     mimus::pipeline::Formatter formatter;
     unsigned segments = 0;
@@ -93,16 +94,12 @@ bool consume(void *context, std::span<const int16_t> pcm,
 }
 }
 
-bool mimus_transcribe_paced(std::span<const uint8_t> inputs[3]) {
+bool mimus_paced_run(const mimus::asr::Recognizer &engine, std::span<const uint8_t> wav) {
     using namespace mimus;
-    auto model = asr::Model::Load(inputs[0], inputs[1], true, asr::kTargetOrangePi);
-    if (!model) return error(asr::ErrorName(model.error()));
-    auto engine = asr::Recognizer::Create(*model);
-    if (!engine) return error(asr::ErrorName(engine.error()));
-    auto audio = asr::ParseWav(inputs[2]);
+    auto audio = asr::ParseWav(wav);
     if (!audio) return error(asr::ErrorName(audio.error()));
-    asr::Arena arena({reinterpret_cast<uint8_t *>(0x46000000), 16 * 1024 * 1024});
-    Recognition state{*engine, arena, pipeline::Formatter{}, 0};
+    asr::Arena arena({reinterpret_cast<uint8_t *>(kMimusArenaBase), kMimusArenaBytes});
+    Recognition state{engine, arena, pipeline::Formatter{}, 0};
     if (!mimus_replay_run(*audio, consume, &state)) return false;
     const auto tail = state.formatter.ReleaseHeld();
     platform_puts("FLUSH "); platform_puts(tail.c_str()); platform_puts("\n");
@@ -112,4 +109,15 @@ bool mimus_transcribe_paced(std::span<const uint8_t> inputs[3]) {
     platform_puts(line);
     platform_puts("PASS mimus: paced utterance replay completed\n");
     return true;
+}
+
+// Self-contained cold replay for the host reference, which links only the
+// replay sources. Device images use the shared engine in recorded.cc.
+bool mimus_transcribe_paced(std::span<const uint8_t> inputs[3]) {
+    using namespace mimus;
+    auto model = asr::Model::Load(inputs[0], inputs[1], true, asr::kTargetOrangePi);
+    if (!model) return error(asr::ErrorName(model.error()));
+    auto engine = asr::Recognizer::Create(*model);
+    if (!engine) return error(asr::ErrorName(engine.error()));
+    return mimus_paced_run(*engine, inputs[2]);
 }

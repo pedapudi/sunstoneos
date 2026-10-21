@@ -97,7 +97,7 @@ extern "C" int i2s_recognition_copy(unsigned offset,unsigned bytes,void *out,i2s
  for(unsigned i=0;i<2;++i)if(!i2s_copy_target(destinations[i],sizes[i])||
     !separate(destinations[i],sizes[i],&retained,sizeof(retained))||
     !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(I2S_MODEL_BASE),2*I2S_MODEL_SLOT)||
-    !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(0x46000000),16*1024*1024))return -1;
+    !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(kMimusArenaBase),kMimusArenaBytes))return -1;
  unsigned state=terminal.load(std::memory_order_acquire);
  if(!live()||state==3)return -1;if(state!=2)return 0;
  if(offset>retained.used||bytes>retained.used-offset)return -1;

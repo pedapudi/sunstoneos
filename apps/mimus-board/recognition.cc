@@ -46,7 +46,8 @@ void recognize(void *)
         }
         unsigned current=generation.load(std::memory_order_acquire);
         started.store(current,std::memory_order_release);
-        bool ok=mimus_transcribe_recorded(input,scratch,&stopped);
+        /* Authenticated above: load once, then reuse the retained engine. */
+        bool ok=mimus_transcribe_recorded(input,scratch,&stopped,kMimusWarm|kMimusVerified);
         started.store(0,std::memory_order_release);
         if(!ok||!mimus_board_live()||state.load(std::memory_order_acquire)==2){failed();}
         /* A read finishing after recognition is not overlap. */
