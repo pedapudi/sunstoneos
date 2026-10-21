@@ -36,11 +36,18 @@ After enumeration, an owner may request four-bit default speed with
 (CCCR address 7) to four bits. The controller then waits for an idle command
 path and card, stops the card clock and calls the platform's module callback.
 That callback selects the 400 MHz PERI0 parent with a linear divisor of 8 to 32.
-The controller applies the pinned v5p3x phases for clocks up to 26 MHz: command
-drive at 180 degrees, data drive at 90 degrees and both sample phases at zero.
-It sets four-bit width, restarts the clock and verifies clock, width and phase
-readback before READY. With divisor 8 the module runs at 50 MHz and the card
-clock at 25 MHz, the default-speed maximum for a full-speed SDIO card. A failed
+The controller then sets four-bit width and restarts the clock. With divisor 8
+the module runs at 50 MHz and the card clock at 25 MHz, the default-speed
+maximum for a full-speed SDIO card.
+
+Widening keeps the controller in the old timing mode (NTSR bit 31 clear) and
+leaves the delay settings from preparation unchanged. For default speed at
+both 400 kHz and 25 MHz, the [pinned bootloader timing implementation][timing]
+uses command and data output at 180 degrees (DRV_DL bits 16 and 17 set) and a
+sample delay of zero with the delay-enable bit set. The phase fields in NTSR
+apply only in the newer 2x timing mode, so widening does not write them. Before
+READY, the controller verifies clock control, width, both delay settings and
+that NTSR bit 31 is still clear. A failed
 step is terminal; the card keeps its four-bit setting and there is no one-bit
 fallback. High-speed (50 MHz) timing is not implemented.
 
@@ -230,8 +237,9 @@ callback counts remain unchanged.
 
 A later case, selected with `--case widen`, covers four-bit widening: refusal of
 out-of-range divisors and repeated requests, the module callback with the card
-clock stopped, width/phase/clock readback, a level-sized 128-word read burst
-from one status sample, and a terminal fault when the module change fails.
+clock stopped, readback of clock, width, delays and timing mode, a level-sized
+128-word read burst from one status sample, and terminal faults when the
+module change fails or the sample delay no longer matches preparation.
 
 Raw evidence is under `~/.cache/sunstoneos/evidence/sdio-controller-20261016/`.
 `results.json` identifies the initial successful direct build/run;

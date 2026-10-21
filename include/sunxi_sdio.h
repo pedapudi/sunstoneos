@@ -75,9 +75,11 @@ int sunxi_sdio_prepare(struct sunxi_sdio *, uint64_t deadline);
 int sunxi_sdio_submit(struct sunxi_sdio *, const struct sunxi_sdio_request *, uint64_t deadline);
 /* READY only, once, after the owner has set the card's CCCR bus width to four
  * bits. Poll stops the card clock, has ops.module select PERI0 400 MHz divided
- * by 8..32, applies the pinned default-speed drive/sample phases and four-bit
- * width, then restarts the clock: card clock is 400 MHz / (2 x divisor), at most
- * 25 MHz. READY follows verified readback. Failure is terminal like any request;
+ * by 8..32, sets four-bit width, then restarts the clock: card clock is
+ * 400 MHz / (2 x divisor), at most 25 MHz. The controller stays in the old
+ * timing mode with the drive/sample delays from prepare, which the pinned tm4
+ * table also gives for 25 MHz default speed. READY follows readback of clock,
+ * width, delays and timing mode. Failure is terminal like any request;
  * the card keeps its four-bit setting and no automatic one-bit fallback exists. */
 int sunxi_sdio_widen(struct sunxi_sdio *, unsigned divisor, uint64_t deadline);
 /* One bounded step. Pending controller conditions return immediately. */

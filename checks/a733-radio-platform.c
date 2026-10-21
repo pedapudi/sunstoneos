@@ -208,7 +208,7 @@ int main(void)
     for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
     assert(status==A733_RADIO_READY && r.radio.host.wide && r.radio.host.card_hz==25000000);
     assert((r.card[0][7]&3)==2 && r.sdc[0xc/4]==1 && r.sdc[0x4/4]==(1u<<16));
-    assert(((r.sdc[0x140/4]>>16)&3)==1 && !(r.sdc[0x5c/4]&0x80000330u));
+    assert(((r.sdc[0x140/4]>>16)&3)==3 && r.sdc[0x144/4]==(1u<<7) && !(r.sdc[0x5c/4]&0x80000000u));
     assert((*pmic_model_word(&r.power,0x02002d10)&0x87001f1f)==0x81000007 && !r.power.register_held);
     assert(r.radio.shared&A733_CLOCK_PERI0);
     assert(a733_radio_platform_borrow(&r.radio,80,&token,&card) && card==&r.radio.card);

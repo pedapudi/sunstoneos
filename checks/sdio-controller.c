@@ -289,8 +289,10 @@ static void widen(void)
     for (unsigned i = 0; i < 20 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
     assert(host.state == SUNXI_SDIO_READY && host.wide && host.card_hz == 25000000 && !host.deadline);
     assert(m.module_calls == 1 && m.module_divisor == 8 && m.regs[0x0c / 4] == 1);
-    assert(m.regs[0x04 / 4] == 1u << 16 && ((m.regs[0x140 / 4] >> 16) & 3) == 1);
-    assert(!(m.regs[0x5c / 4] & 0x80000330u) && !sunxi_sdio_widen(&host, 8, m.now + 100));
+    /* Old timing mode keeps the tm4 default-speed delays from preparation. */
+    assert(m.regs[0x04 / 4] == 1u << 16 && ((m.regs[0x140 / 4] >> 16) & 3) == 3);
+    assert(m.regs[0x144 / 4] == 1u << 7 && !(m.regs[0x5c / 4] & 0x80000000u));
+    assert(!sunxi_sdio_widen(&host, 8, m.now + 100));
     uint8_t bytes[1024]; struct sunxi_sdio_request request;
     assert(sdio_card_cmd53(&card, 1, 0x0f, 0, 0, 512, bytes, sizeof(bytes), &request));
     m.report_level = 1; unsigned reads = m.status_reads;
@@ -305,6 +307,11 @@ static void widen(void)
     assert(sunxi_sdio_widen(&host, 8, m.now + 100));
     for (unsigned i = 0; i < 4 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
     assert(host.result.error == SUNXI_SDIO_IO_ERROR && !host.wide && host.card_hz == 375000); retained();
+    /* A sample delay that no longer matches preparation fails readback. */
+    reset_model(); prepare(); m.regs[0x144 / 4] = 0;
+    assert(sunxi_sdio_widen(&host, 8, m.now + 100));
+    for (unsigned i = 0; i < 20 && host.state == SUNXI_SDIO_WIDENING; ++i) tick_host();
+    assert(host.result.error == SUNXI_SDIO_SETUP_ERROR && !host.wide); retained();
 }
 static void cis_shape(void)
 {

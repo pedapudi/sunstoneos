@@ -190,10 +190,11 @@ static void issue_step(struct sunxi_sdio *h)
         !barrier(h) || !wr(h, CMD, command)) return;
     h->state = SUNXI_SDIO_ACTIVE;
 }
-/* Default-speed (26 MHz class) phases from the pinned v5p3x table: command
- * drive 180 degrees, data drive 90 degrees, command/data sample phase zero. */
-#define WIDE_DRIVE (1u << 16)
-#define SAMPLE_PHASES 0x330u
+/* Old-mode (NTSR bit 31 clear) default speed at 25 MHz uses the same delays
+ * as identification in the pinned tm4 table: command and data output at 180
+ * degrees, sample delay zero with the enable bit. Preparation set both. */
+#define DRIVE_PH180 (3u << 16)
+#define SAMPLE_DELAY 0xbfu
 static int controller_errors(struct sunxi_sdio *h)
 {
     uint32_t raw;
@@ -232,17 +233,18 @@ static void widen_step(struct sunxi_sdio *h)
         if (!time_limit(h)) return;
         h->step = 2; return;
     case 2:
-        if (!rd(h, DRIVE, &value) || !wr(h, DRIVE, (value & ~(3u << 16)) | WIDE_DRIVE) ||
-            !rd(h, NTSR, &value) || !wr(h, NTSR, value & ~SAMPLE_PHASES) ||
-            !wr(h, WIDTH, 1) || !wr(h, CLKCR, 1u << 16) || !barrier(h) || !wr(h, CMD, UPDATE)) return;
+        if (!wr(h, WIDTH, 1) || !wr(h, CLKCR, 1u << 16) || !barrier(h) || !wr(h, CMD, UPDATE)) return;
         h->step = 3; return;
     default:
         if (!rd(h, CMD, &value) || (value & START)) return;
         if (!controller_errors(h)) return;
-        uint32_t clock, width, drive, timing;
-        if (!rd(h, CLKCR, &clock) || !rd(h, WIDTH, &width) || !rd(h, DRIVE, &drive) || !rd(h, NTSR, &timing)) return;
-        if (clock != (1u << 16) || width != 1 || (drive & (3u << 16)) != WIDE_DRIVE ||
-            (timing & (START | SAMPLE_PHASES))) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
+        uint32_t clock, width, drive, sample, timing;
+        if (!rd(h, CLKCR, &clock) || !rd(h, WIDTH, &width) || !rd(h, DRIVE, &drive) ||
+            !rd(h, SAMPLE, &sample) || !rd(h, NTSR, &timing)) return;
+        if (clock != (1u << 16) || width != 1 || (drive & DRIVE_PH180) != DRIVE_PH180 ||
+            (sample & SAMPLE_DELAY) != (1u << 7) || (timing & START)) {
+            sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return;
+        }
         h->card_hz = 400000000u / (2u * divisor); h->wide = 1; h->state = SUNXI_SDIO_READY; return;
     }
 }
