@@ -133,8 +133,7 @@ class Machine:
         return self.cpu.reg_read(UC_ARM64_REG_X0)
 def run(image,session,out):
     out.mkdir(parents=True,exist_ok=False)
-    native=module('sd_single_core_image',ROOT/'checks/storage-read-native.py')
-    e=native.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
+    e=harness.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
     disassembly=subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True)
     for line in disassembly.splitlines():
         match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)

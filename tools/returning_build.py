@@ -384,12 +384,12 @@ class ReturningPlatform:
         save(e, 'input-identities.json', record)
 
     def copy_helpers(self, app, names=('check.py', 'README.md')):
-        """Copy the app's checks and the ELF layout helper beside the image."""
+        """Copy the app's checks and the ELF layout reader, checks/harness.py, beside the image."""
         for name in names:
             source = ROOT / 'apps' / app / name
             if source.exists():
                 shutil.copy2(source, self.evidence / name)
-        shutil.copy2(ROOT / 'checks/storage-read-native.py', self.evidence / 'layout-helper.py')
+        shutil.copy2(ROOT / 'checks/harness.py', self.evidence / 'layout-helper.py')
 
 
 def platform_arguments(parser):

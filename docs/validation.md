@@ -87,6 +87,12 @@ follow:
   the same command is skipped. A retried step appends its command to the existing
   command log and writes `<label>-attempt<N>.log` beside the earlier log. Its
   earlier record moves into the step's `history`.
+- **One reader supplies ELF layouts.** `Image(path, layout_names)` returns an
+  image's loadable segments, symbol addresses, DWARF function addresses and
+  structure member offsets. Checks and the returning-image builders use it;
+  the builders copy `checks/harness.py` beside each image as
+  `layout-helper.py`. `checks/storage-read-native.py` re-exports it for the
+  checks that load that module.
 - **Emulation hooks only the addresses a model handles.** A Unicorn code hook
   without an address range calls into Python before every emulated
   instruction. `hook_addresses(uc, addresses, callback)` registers one ranged
