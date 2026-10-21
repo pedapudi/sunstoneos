@@ -40,15 +40,20 @@ def require(ok, message):
     if not ok: raise ValueError(message)
 
 
+def transfer_timeout(moved):
+    """Bound one request that moves this many bytes; refuse one that cannot finish."""
+    timeout = FEL_REQUEST_SECONDS + -(-moved // FEL_BYTES_PER_SECOND)
+    require(timeout <= FEL_TIMEOUT_LIMIT, 'FEL request exceeds the bounded transfer time.')
+    return timeout
+
+
 def fel_timeout(arguments):
     """Bound one request by the bytes it moves; refuse one that cannot finish."""
     arguments = [str(x) for x in arguments]; moved = 0
     for index, value in enumerate(arguments):
         if value == 'write': moved += Path(arguments[index + 2]).stat().st_size
         elif value == 'read': moved += int(arguments[index + 2])
-    timeout = FEL_REQUEST_SECONDS + -(-moved // FEL_BYTES_PER_SECOND)
-    require(timeout <= FEL_TIMEOUT_LIMIT, 'FEL request exceeds the bounded transfer time.')
-    return timeout
+    return transfer_timeout(moved)
 
 
 def fel_request(fel, node, arguments, entry, pass_fds=()):
@@ -66,10 +71,11 @@ def fel_request(fel, node, arguments, entry, pass_fds=()):
 
 
 def present_instance(access, config):
-    """Return the port's FEL node and identity from one lstat, or (None, None).
+    """Return the port's FEL node and its identity, or (None, None).
 
-    session_node maps the expected disconnect to absence, but the node can still
-    disappear before a second lstat. Treat only that absence as an absent node.
+    session_node already lstats the node and maps the expected disconnect to
+    absence. The node can still disappear before the identity lstat here;
+    treat only that absence as an absent node.
     """
     candidate = access.session_node(config)
     if candidate is None: return None, None
@@ -81,6 +87,7 @@ def present_instance(access, config):
 
 def require_queue_port(database, port):
     """A board queue authorizes only the physical port recorded at its creation."""
+    require(Path(database).is_file(), f'Queue {database} does not exist.')
     db = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True)
     try: row = db.execute("SELECT value FROM settings WHERE key='port'").fetchone()
     finally: db.close()
@@ -223,6 +230,7 @@ def validate_bundle(bundle):
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
     require(0 < (bundle / 'launch.bin').stat().st_size <= 0xc00 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
     prepared['_sizes'] = sizes
+    require_upload_bounds(prepared)
     return prepared
 
 
@@ -286,17 +294,31 @@ def sealed_source(data):
         os.close(descriptor)
 
 
+def uploads(prepared):
+    """Preload order: image segments, then result, contract, request, report and launcher."""
+    return ([(item['name'],item['address']) for item in prepared['segments']] +
+            [('result-zero.bin',0x42000000),('contract.bin',CONTRACT),('request.bin',0x52c00),('report-zero.bin',0x52d00),('launch.bin',0x52000)])
+
+
+def require_upload_bounds(prepared):
+    """Refuse a bundle with an upload whose write and readback exceed the FEL bound."""
+    for name,_ in uploads(prepared):
+        require(name in prepared['_sizes'], 'Upload lacks a validated identity.')
+        transfer_timeout(2 * prepared['_sizes'][name])
+
+
 def preload(transaction, bundle, prepared, evidence):
     """No enabling writes: all transfers finish and match before the sole exe."""
+    # Validation already checks this for bundles it admits; repeat it before
+    # the first transfer for callers with their own bundle validation.
+    require_upload_bounds(prepared)
     for name,address,length in REGIONS:
         backup = evidence / f'before-{name}.bin'
         transaction('read', hex(address), length, backup)
         require(backup.stat().st_size == length, 'SRAM backup is incomplete.')
         sync_file(backup)
         prepared.setdefault('_backup_hashes', {})[name] = digest(backup)
-    uploads = [(item['name'],item['address']) for item in prepared['segments']]
-    uploads += [('result-zero.bin',0x42000000),('contract.bin',CONTRACT),('request.bin',0x52c00),('report-zero.bin',0x52d00),('launch.bin',0x52000)]
-    for name,address in uploads:
+    for name,address in uploads(prepared):
         require(int(transaction('readl','0x02050014').strip(),16)&1 == 0, 'Watchdog enabled during preload.')
         source = bundle / name; destination = evidence / ('readback-' + name)
         require(name in prepared['files'] and name in prepared['_sizes'], 'Upload lacks a validated identity.')

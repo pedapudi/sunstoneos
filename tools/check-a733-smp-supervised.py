@@ -109,6 +109,7 @@ def validate_bundle(bundle):
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
     require(0 < (bundle / 'launch.bin').stat().st_size <= 0xc00 and prepared['launcher_sha256'] == digest(bundle / 'launch.bin'), 'Invalid launcher identity or size.')
     prepared['_sizes'] = sizes
+    base.require_upload_bounds(prepared)
     prepared['_frozen'] = frozen
     prepared['_prepared_sha256'] = hashlib.sha256(metadata).hexdigest()
     return prepared
@@ -282,8 +283,10 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
     try:
         record['manual_reconnect_required']=True
         save()
-        print('Diagnostic: '+str(record.get(record.get('result_key'),'unobserved'))+
-              '. Manual reconnection required. Queue claim remains with coordinator.',flush=True)
+        try:
+            print('Diagnostic: '+str(record.get(record.get('result_key'),'unobserved'))+
+                  '. Manual reconnection required. Queue claim remains with coordinator.',flush=True)
+        except OSError: pass  # A closed console must not skip quarantine.
         quarantine()
     finally:
         hold()
@@ -319,14 +322,16 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
         validate_entry(identity,port.name)
+        # A queue bound to no port or another port is refused here, before
+        # any FEL request and outside the quarantining handler below. Launch
+        # parsers require --database; offline transport fixtures omit it.
+        if getattr(args,'database',None) is not None: base.require_queue_port(args.database,port.name)
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
         save()
         def ready_on_port():
-            # The final claim check before entry also binds the claim's queue to
-            # this locked physical port. Launch parsers require --database;
-            # offline transport fixtures omit it.
+            # Repeat the port binding with the final claim check before entry.
             ready()
             if getattr(args,'database',None) is not None: base.require_queue_port(args.database,port.name)
         def transaction(*arguments,pass_fds=()):

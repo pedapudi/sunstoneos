@@ -50,7 +50,7 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    nonlocal node,identity
    old=identity;deadline=time.monotonic()+30
    while True:
-    # One lstat per poll: a node removed by the expected disconnect is absent.
+    # Identity comes from one guarded lstat; a node removed by the expected disconnect is absent.
     candidate,current=base.present_instance(access,config)
     if candidate is not None and current!=old and os.access(candidate,os.R_OK|os.W_OK):break
     require(time.monotonic()<deadline,'No new ROM instance within return window; no retry.');time.sleep(.05)

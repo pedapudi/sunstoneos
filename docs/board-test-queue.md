@@ -40,13 +40,36 @@ can run independent device work after its own recovery and platform admission.
 
 Queue and token files are under `~/.cache/sunstoneos/`. Use the matching
 `--database` and `--token-file` arguments. Each database records the physical
-USB port of its board. Immediately before native entry, a supervised runner
-refuses the launch when the `--database` it was given records a port other
-than the one it has locked. A claim in one board's queue therefore cannot
-authorize a launch on the other board. A failure halts that board's queue;
-recovery evidence and admission never transfer between boards. Do not copy a
-live device identity, RAM reservation or electrical qualification to the second
-board. USB enumeration numbers change; the physical port identifies ownership.
+USB port of its board.
+
+These runners check that binding:
+
+- The protected multicore launcher, `tools/check-a733-smp.py`.
+- Every runner built on the shared supervised session, `run_session` in
+  `tools/check-a733-smp-supervised.py`. These include each
+  `tools/check-a733-*-supervised.py` runner and the application capture hosts
+  that call it, such as `apps/adc/capture.py`.
+
+Each of these runners takes the board lock and reads the locked port. It then
+refuses the launch when the `--database` it was given does not exist, records
+no port, or records a different port. The refusal happens before the first FEL
+request, so the board keeps its ROM identity and SRAM contents and is not
+quarantined. Supervised runners repeat the check with the final claim check
+immediately before native entry. A claim in one board's queue therefore cannot
+authorize a launch through these runners on the other board.
+
+The other runners that read queue claims do not check the binding:
+`tools/check-a733-device-launch.py`, `tools/check-a733-storage-launch.py`,
+`tools/check-a733-smp-observe.py`, `tools/run-a64-entry-probe.py`,
+`tools/run-launch-survey.py`, `tools/run-native-startup-probe.py`,
+`apps/dma-copy/observe.py` and `apps/npu-convolution/observe.py`. Before using
+one of them, the coordinator must confirm that the claim belongs to the queue
+of the board on the selected port.
+
+A failure halts that board's queue; recovery evidence and admission never
+transfer between boards. Do not copy a live device identity, RAM reservation or
+electrical qualification to the second board. USB enumeration numbers change;
+the physical port identifies ownership.
 
 ## Initialize once and submit immutable proposals
 
@@ -60,8 +83,10 @@ python3 tools/board-test-queue.py \
 
 Initialization refuses to overwrite either the database or token file. The
 port uses the same format check as the board lock. A database created before
-ports were recorded has no port, and supervised runners refuse its claims. The
-coordinator records the port once; the tool refuses to change it afterwards:
+ports were recorded has no port. The runners that check the binding refuse its
+claims before any device request, so bind the port before the next launch from
+such a queue. The coordinator records the port once; the tool refuses to
+change it afterwards:
 
 ```sh
 python3 tools/board-test-queue.py \

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check host transport bounds with fixtures only; no USB, FEL or board access.
 
-Covers size-aware FEL timeouts through the real preload, the single-lstat
-instance helper during observation, queue port binding, named lock contention
-and the console summary printed before a retained hold.
+Covers size-aware FEL timeouts through the real preload and their refusal
+before any transfer, the guarded identity lstat during observation, queue port
+binding before the first FEL request, named lock contention and the console
+summary printed before a retained hold, including a closed console.
 """
 from contextlib import contextmanager, redirect_stdout
 import errno
@@ -59,6 +60,18 @@ def timeouts(directory):
         source.unlink()
     refused(lambda: base.fel_timeout(['read', '0x41000000', 80 * 1024 * 1024, directory / 'r']),
             'bounded transfer time')
+    # An oversized later segment is refused before the first request.
+    sizes = {'segment-0.bin': 4096, 'segment-1.bin': 40 * 1024 * 1024, 'result-zero.bin': 16384,
+             'contract.bin': 4096, 'request.bin': 128, 'report-zero.bin': 128, 'launch.bin': 1024}
+    oversized = {'segments': [{'name': 'segment-0.bin', 'address': 0x41000000},
+                              {'name': 'segment-1.bin', 'address': 0x41100000}], '_sizes': sizes}
+    refused(lambda: base.require_upload_bounds(oversized), 'bounded transfer time')
+    calls = []
+    refused(lambda: base.preload(lambda *a, **k: calls.append(a), directory, oversized, directory),
+            'bounded transfer time')
+    assert not calls
+    sizes['segment-1.bin'] = 14758784
+    base.require_upload_bounds(oversized)
 
 
 def preload(directory):
@@ -159,7 +172,7 @@ def queue(path, port):
 
 
 def observe(directory, scenario):
-    """Drive run_session's observe() through a disconnect race, or a port mismatch."""
+    """Drive run_session's observe() through a disconnect race, or refuse an unbound queue."""
     old, native = Path('/fixture-usb/003/056'), Path('/fixture-usb/003/057')
     port = directory / scenario / '3-1'
     port.mkdir(parents=True)
@@ -195,7 +208,12 @@ def observe(directory, scenario):
         yield
     guard.reenumeration = reenumeration
     database = directory / scenario / 'queue.sqlite3'
-    queue(database, '3-3' if scenario == 'wrong-port' else '3-1')
+    queue(database, {'wrong-port': '3-3', 'unbound': None}.get(scenario, '3-1'))
+    requests = []
+
+    def fel(*arguments, **kwargs):
+        requests.append(arguments)
+        return types.SimpleNamespace(returncode=0, stdout='soc=00001903(A733)', stderr='')
 
     def launch(transaction, observe, bundle, prepared, evidence, record, save, ready, *, result_key):
         ready()
@@ -217,8 +235,7 @@ def observe(directory, scenario):
         clock[0] += 0.01
         return clock[0]
     with patch.object(host, 'module', lambda *a: access), patch.object(base, 'FEL_HASH', base.digest(args.fel)), \
-            patch.object(subprocess, 'run', lambda *a, **k: types.SimpleNamespace(
-                returncode=0, stdout='soc=00001903(A733)', stderr='')), \
+            patch.object(subprocess, 'run', fel), \
             patch.object(host, 'launch_once', launch), patch.object(host, 'finish_after_observation', lambda *a: None), \
             patch.object(base, 'stop_after_failure', lambda *a: events.append('stopped')), \
             patch.object(host.os, 'access', lambda *a: True), patch.object(host.time, 'monotonic', now), \
@@ -229,10 +246,13 @@ def observe(directory, scenario):
                                     capture, product='fixture product', serial='fixture serial', bcd_device=0x0100,
                                     capture_seconds=5, result_key='board_result')
         except ValueError as error:
-            assert scenario == 'wrong-port' and 'not bound to locked USB port 3-1' in str(error), error
-            assert 'capture' not in events and polls[0] == 0
+            # Refused before any FEL request and without the quarantining handler.
+            assert scenario != 'disconnect-race' and 'not bound to locked USB port 3-1' in str(error), error
+            assert events == ['entry'] and not requests and polls[0] == 0, (events, requests)
+            assert not (args.evidence / 'session.json').exists()
             return
     assert scenario == 'disconnect-race' and code == 0 and events == ['entry', 'capture'], events
+    assert len(requests) == 1
     record = json.loads((args.evidence / 'session.json').read_text())
     assert record['observer_identity'] == [1, 57] and record['result_key'] == 'board_result'
 
@@ -266,6 +286,16 @@ def summary():
     assert events[0] == 'save' and events[2] == 'hold'
     assert 'Diagnostic: observed-success. Manual reconnection required.' in events[1]
 
+    # A closed console must not skip the persistent quarantine.
+    class Closed(io.StringIO):
+        def write(self, text):
+            raise BrokenPipeError(errno.EPIPE, 'closed')
+    events.clear()
+    with redirect_stdout(Closed()):
+        host.retain_after_capture(record, lambda: events.append('save'), lambda: events.append('quarantine'),
+                                  lambda: events.append('hold'))
+    assert events == ['save', 'quarantine', 'hold'], events
+
 
 def generations():
     caller = module('audit_transport_mimus_board', ROOT / 'tools/check-a733-mimus-board-supervised.py')
@@ -283,11 +313,13 @@ def main():
         instances()
         observe(directory, 'disconnect-race')
         observe(directory, 'wrong-port')
+        observe(directory, 'unbound')
         lock(directory)
         summary()
         generations()
-    print('PASS: size-aware FEL timeouts through preload, disconnect-race absence, queue port binding, '
-          'named lock contention, summary before hold and lifetime-bounded generations; no device access.')
+    print('PASS: size-aware FEL timeouts through preload and before any transfer, disconnect-race absence, '
+          'queue port binding before any FEL request, named lock contention, summary before hold with a closed '
+          'console and lifetime-bounded generations; no device access.')
 
 
 if __name__ == '__main__':
