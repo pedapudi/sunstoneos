@@ -45,6 +45,14 @@ struct Assets {
     uint32_t crc[3];
 };
 #endif
+#if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
+// Paced replay with the engine storage shared with whole-recording recognition.
+static bool paced_replay(std::span<const uint8_t> inputs[3], unsigned options)
+{
+    const auto *recognizer = mimus_engine_open(inputs, options);
+    return mimus_engine_finish(options, recognizer && mimus_paced_run(*recognizer, inputs[2]));
+}
+#endif
 static void keep_recovery(void *)
 {
     for (;;) {
@@ -73,12 +81,10 @@ static void recognize(void *)
         const bool paced = mimus_service_wait(inputs);
         application_deadline.store(counter() + 180 * COUNTER_HZ, std::memory_order_relaxed);
         mimus::asr::SetInternalArena(internal_arena);
-        mimus::asr::SetYieldHook([] {
-#ifdef SUNSTONE_MIMUS_SUPERVISED
-        mimus_native_checkpoint();
-#endif
-        taskYIELD(); });
-        bool success = paced ? mimus_transcribe_paced(inputs) : mimus_transcribe_recorded(inputs,internal_arena);
+        mimus_yield_install();
+        // The service invalidates the retained engine before model slots change.
+        bool success = paced ? paced_replay(inputs, kMimusWarm)
+                             : mimus_transcribe_recorded(inputs, internal_arena, nullptr, kMimusWarm);
         application_deadline.store(UINT64_MAX, std::memory_order_relaxed);
         mimus_service_finish(success);
     }
@@ -97,15 +103,11 @@ static void recognize(void *)
     }
 #ifdef SUNSTONE_MIMUS_PACED
     asr::SetInternalArena(internal_arena);
-    asr::SetYieldHook([] {
-#ifdef SUNSTONE_MIMUS_SUPERVISED
-        mimus_native_checkpoint();
-#endif
-        taskYIELD(); });
+    mimus_yield_install();
 #ifdef SUNSTONE_MIMUS_NATIVE
-    const bool success = mimus_native_paced() ? mimus_transcribe_paced(inputs) : mimus_transcribe_recorded(inputs,internal_arena);
+    const bool success = mimus_native_paced() ? paced_replay(inputs, 0) : mimus_transcribe_recorded(inputs,internal_arena);
 #else
-    const bool success = mimus_transcribe_paced(inputs);
+    const bool success = paced_replay(inputs, 0);
 #endif
 #else
     const bool success = mimus_transcribe_recorded(inputs,internal_arena);

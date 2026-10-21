@@ -57,6 +57,9 @@ bool model_hash(unsigned i)
 void recognize(void *)
 {
     const bool repeated=bluetooth_headset_repeated(retained.app)==1;
+    // USB cannot replace model assets during this lifetime, so one bounded
+    // hash before the first capture authenticates every later load and use.
+    if(!model_hash(0)||!model_hash(1)){failed();}
     for(;;){
         bluetooth_pcm_snapshot capture{};bluetooth_segment_snapshot segment{};
         size_t copied=0;uint8_t chunk[1024];int result=0;
@@ -90,17 +93,19 @@ void recognize(void *)
     size_t wav_bytes=0;
     int converted=identity.state==2?bluetooth_pcm16_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes):
         bluetooth_pcm_wav(retained.pcm,identity.bytes,retained.wav,sizeof(retained.wav),&wav_bytes);
-    if(converted!=1||!live()||!model_hash(0)||!model_hash(1)){
+    if(converted!=1||!live()){
         failed();
     }
     std::span<const uint8_t> inputs[3]={
         {reinterpret_cast<const uint8_t *>(BLUETOOTH_MODEL_BASE),static_cast<size_t>(retained.models.bytes[0])},
         {reinterpret_cast<const uint8_t *>(BLUETOOTH_MODEL_BASE+BLUETOOTH_MODEL_SLOT),static_cast<size_t>(retained.models.bytes[1])},
         {retained.wav,wav_bytes}};
-    // The shared recorded engine destroys all temporary objects before return.
-    // Loading remains finite; revocation denies publication even before its
-    // next existing recognition cancellation checkpoint can run.
-    bool success=live()&&mimus_transcribe_recorded(inputs,retained.scratch,&stopped);
+    // Repeated segments reuse one engine loaded from the authenticated models;
+    // a finite capture destroys it before return. Loading remains finite;
+    // revocation denies publication even before its next existing recognition
+    // cancellation checkpoint can run.
+    bool success=live()&&mimus_transcribe_recorded(inputs,retained.scratch,&stopped,
+        repeated?kMimusWarm|kMimusVerified:kMimusVerified);
     if(!success||!live()){failed();}
     retained.snapshot.firmware=identity.firmware;retained.snapshot.uart=identity.uart;
     retained.snapshot.acl=identity.acl;retained.snapshot.audio=identity.audio;
@@ -165,7 +170,7 @@ extern "C" int bluetooth_recognition_copy(bluetooth_application *app,uint32_t of
     const void *buffers[]={out,copied,snapshot};size_t sizes[]={1024,sizeof(*copied),sizeof(*snapshot)};
     for(unsigned i=0;i<3;++i)if(bluetooth_recognition_output(app,buffers[i],sizes[i])!=1||!separate(buffers[i],sizes[i],&retained,sizeof(retained))||
         !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(BLUETOOTH_MODEL_BASE),2*BLUETOOTH_MODEL_SLOT)||
-        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(0x46000000),16*1024*1024))return -1;
+        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(kMimusArenaBase),kMimusArenaBytes))return -1;
     *copied=0;std::memset(snapshot,0,sizeof(*snapshot));
     unsigned state=terminal.load(std::memory_order_acquire);
     if(!live()||state==2)return -1;if(!state)return 0;
@@ -183,7 +188,7 @@ extern "C" int bluetooth_recognition_segment_copy(bluetooth_application *app,uin
     for(unsigned i=0;i<3;++i)if(sizes[i]&&(bluetooth_recognition_output(app,buffers[i],sizes[i])!=1||
         !separate(buffers[i],sizes[i],&retained,sizeof(retained))||
         !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(BLUETOOTH_MODEL_BASE),2*BLUETOOTH_MODEL_SLOT)||
-        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(0x46000000),16*1024*1024)))return -1;
+        !separate(buffers[i],sizes[i],reinterpret_cast<const void *>(kMimusArenaBase),kMimusArenaBytes)))return -1;
     if(bytes&&(!separate(out,1024,copied,sizeof(*copied))||!separate(out,1024,snapshot,sizeof(*snapshot))))return -1;
     *copied=0;std::memset(snapshot,0,sizeof(*snapshot));
     unsigned state=terminal.load(std::memory_order_acquire);

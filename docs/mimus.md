@@ -33,7 +33,22 @@ The prepared base contains 7,501,968 bytes and has content hash prefix
 `3d7c25e823ff98a0`. The input manifest records complete hashes for the originals,
 prepared files, audio, and combined bundle. `Model::Load` receives the Orange Pi
 target and checks tensor CRCs. The application also checks each input’s transfer
-CRC before parsing it.
+CRC before parsing it. The board and Bluetooth recognition tasks authenticate
+the exact model bytes with SHA-256 first, so their loads skip the tensor CRC pass.
+
+The engine libraries `mimus_asr` and `mimus_asr_smp` add compute options after
+the shared kernel options: `-march=armv8.2-a+nolse -mtune=cortex-a55
+-mno-strict-align` and, for C++, `-fbuiltin`. Every A733 core is a Cortex-A55 or
+Cortex-A76, both ARMv8.2-A implementations. The library runs only after the MMU
+maps its code, heap, models and arena as Normal memory with alignment checking
+off, so it needs no strict alignment. Builtins let the compiler inline
+fixed-size copies; the bench recognition library no longer calls `memcpy` for
+any constant size of 16 bytes or less. Floating-point contraction stays
+disabled, and LSE atomics stay off as in the rest of the system. The dot-product
+extension stays off until the cores' `ID_AA64ISAR0_EL1` values are recorded and
+an int8 kernel exists to use it. Boot, monitor, driver and application sources
+keep the shared options. Recognition output matches the host reference in the
+emulator with these options; their speed effect on the board is unmeasured.
 
 ## Runtime and memory
 
@@ -66,6 +81,41 @@ are additional reservations. The bench recording uses a peak of 1,761,840 bytes
 in the recognition arena, matching the host. The allocator obtains at most
 105,984 bytes from the runtime heap through `_sbrk`. That figure includes free
 allocator blocks and overhead; it does not measure live object sizes.
+
+## Retained engine and timing records
+
+The shared recorded engine in `apps/mimus/recorded.cc` loads the model and
+creates the recognizer for a request. A one-shot caller destroys both before
+the request returns. A repeated caller passes `kMimusWarm`: the recognition task
+keeps both in static storage and reuses them while the model buffers stay the
+same. The keyboard-triggered board image, repeated Bluetooth segments and the
+[native USB service](mimus-usb.md#task-ownership-and-recovery) use this mode.
+Each loads the model once, and again only after its model buffers change. A failed request marks the
+retained objects stale; the next request reloads them, and a task that parks
+after the failure retains them. The USB service also marks them stale before
+model buffers change. One-shot images and the I2S transcription task keep the
+per-request load.
+
+A request that loads the model logs `LOAD load_us=<time> verify_crc=<0|1>`.
+Whole-recording results add `TIMING total_us=<time> compute_us=<time>`.
+`total_us` runs from WAV parsing through the final formatting flush. It is the
+PCM-to-formatted-text time without model loading. `compute_us` covers
+recognition alone, as in the `RESULT` record. Paced replay reports formatting
+completion per utterance in its [`SEGMENT` records](mimus-replay.md#protocol-and-measurements).
+
+The engine calls its yield hook once per matrix row. The hook runs the
+supervised liveness checkpoint on every call where the image defines one. It
+yields the processor at most once per millisecond, because preemption and time
+slicing already serve equal-priority tasks. The whole-recording `MEMORY` record
+reports `yields`, the number of actual yields. The emulator bench recording
+yields 2,256 times in 2.95 seconds of emulated compute.
+
+`checks/mimus-warm.py --output <directory>` runs the actual recorded engine on
+the bench bundle with the host portable library. Two retained-engine requests
+load once, skip the tensor CRC pass and both match the host reference. Marking
+the engine stale, other model buffers, a failed request and a cold request each
+cause a new load. The check models the clock and requires at most one yield
+per millisecond of modeled time.
 
 ## Build and execute
 
@@ -169,8 +219,8 @@ and kernel checks retain their earlier evidence.
 
 These measurements identify linear kernels as the first optimization target.
 The following section records the implemented Arm kernels and their screen.
-Broader audio qualification, multicore execution, and GPU/NPU backends remain
-separate requirements.
+The [performance plan](#performance-plan-for-the-005-target) orders the remaining
+CPU work and records why GPU and NPU evaluation is deferred.
 
 The runtime reads the oscillator selection, little-core PLL control, and CPU
 selection registers without modifying them. Values were `0x983fb0f7`,
@@ -252,6 +302,53 @@ Transactions, readbacks, logs, and source identities reside under
 `~/.cache/sunstoneos/evidence/mimus-neon-packed-20261016/`. The host comparison is
 `~/.cache/sunstoneos/evidence/mimus-neon-packed-parity.json`. The board returned
 to ROM with stage 5, status 0, and automatic USB access.
+
+## Performance plan for the 0.05 target
+
+The bench recording is 8.87 seconds long, so 0.05 times its duration allows
+0.4435 seconds from PCM to formatted text. The single-core NEON measurement took
+19.476 seconds of recognition compute, which requires a total speedup of about
+44. Model loading is reported separately and is not part of that budget.
+
+| Stage on the NEON image | Time | Share |
+| --- | --- | --- |
+| Linear matrix products and output scaling | 14.894 s | 76% |
+| Attention matrix products | 1.634 s | 8% |
+| Remaining recognition time, including quantization and the frontend | 2.948 s | 15% |
+
+The linear stage performs 4,167,910,560 multiply-accumulates. At the target,
+linear work alone must sustain about 9.4 billion per second; the NEON image
+reaches about 0.28 billion per second on one core at the configured 494 MHz.
+
+The CPU factors multiply. Each estimate below is unmeasured:
+
+- Clock: the configured clock is 494 MHz. The datasheet lists cores up to
+  2.0 GHz, a factor of up to about 4. Frequency transitions are unimplemented,
+  and the rate each core type reaches is unrecorded.
+- Workers: recognition uses two inference workers. Eight cores could add a
+  factor of up to about 4 on the parallel stages. The serial stages limit the
+  overall gain.
+- Core placement: the two Cortex-A76 cores have higher per-clock throughput than
+  the Cortex-A55 cores; placing the serial stages on them is unmeasured.
+- Kernel: the linear kernel widens int8 weights and multiplies them by int16
+  activations into int64 sums. A kernel that splits each int16 activation into
+  two int8 parts for the dot-product instruction keeps the sums exact. It needs
+  the dot-product ID evidence and is estimated at about 2 on the linear stage.
+- Serial overhead: the retained engine already removes per-request loading.
+  Quantization, attention and formatting still run once per recording.
+
+Clock, workers and kernel together give about 32 at best, short of 44, so
+attention and the remaining serial stages also need reduction.
+
+GPU and NPU evaluation is deferred, and it remains a goal requirement. The
+linear layers need exact integer sums followed by a fixed-order float scale,
+which keeps results identical to the host reference. The
+[NPU path](npu-two-stage.md) runs only UINT8 graphs with requantized outputs and
+does not support this model's mixed precision. The
+[GPU compute service](gpu-compute-service.md) runs only fixed trusted programs and
+excludes mimus. Either would need a new exact-integer program to keep parity.
+The NPU becomes worth revisiting if it exposes raw 32-bit or 48-bit accumulators
+for exact subgraphs.
 
 ## Bounded FEL reads and recovery
 

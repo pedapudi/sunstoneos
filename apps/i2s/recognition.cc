@@ -2,7 +2,8 @@
 #include "../mimus/recorded.h"
 extern "C" {
 #include "a733_storage_digest.h"
-#include "runtime.h"
+// Named by path: this image puts its unrelated apps/i2s/runtime.h first.
+#include "../../include/runtime.h"
 #include "FreeRTOS.h"
 #include "task.h"
 void runtime_smp_init(void);
@@ -38,10 +39,13 @@ bool model(unsigned i)
 }
 void infer(void *)
 {
- while(live()&&i2s_capture_valid()==0)vTaskDelay(1);
+ // The models are immutable for the session; hashing them during capture
+ // removes that work from the capture-to-transcript latency.
+ const bool models=model(0)&&model(1);
+ while(models&&live()&&i2s_capture_valid()==0)vTaskDelay(1);
  unsigned bytes=i2s_capture_bytes();bool success=false;
- if(i2s_capture_valid()==1&&bytes>=2*I2S_CAPTURE_MIN_SAMPLES&&bytes<=I2S_CAPTURE_MAX_BYTES&&
-    !(bytes&1)&&i2s_capture_copy(retained.wav+44,bytes)&&model(0)&&model(1)){
+ if(models&&i2s_capture_valid()==1&&bytes>=2*I2S_CAPTURE_MIN_SAMPLES&&bytes<=I2S_CAPTURE_MAX_BYTES&&
+    !(bytes&1)&&i2s_capture_copy(retained.wav+44,bytes)){
   auto *wav=retained.wav;std::memcpy(wav,"RIFF",4);put32(wav+4,36+bytes);
   std::memcpy(wav+8,"WAVEfmt ",8);put32(wav+16,16);put16(wav+20,1);put16(wav+22,1);
   put32(wav+24,16000);put32(wav+28,32000);put16(wav+32,2);put16(wav+34,16);
@@ -96,7 +100,7 @@ extern "C" int i2s_recognition_copy(unsigned offset,unsigned bytes,void *out,i2s
  for(unsigned i=0;i<2;++i)if(!i2s_copy_target(destinations[i],sizes[i])||
     !separate(destinations[i],sizes[i],&retained,sizeof(retained))||
     !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(I2S_MODEL_BASE),2*I2S_MODEL_SLOT)||
-    !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(0x46000000),16*1024*1024))return -1;
+    !separate(destinations[i],sizes[i],reinterpret_cast<const void *>(kMimusArenaBase),kMimusArenaBytes))return -1;
  unsigned state=terminal.load(std::memory_order_acquire);
  if(!live()||state==3)return -1;if(state!=2)return 0;
  if(offset>retained.used||bytes>retained.used-offset)return -1;

@@ -131,7 +131,10 @@ The model and temporary objects are destroyed before successful publication.
 
 The unchanged prepared base model occupies 7,501,968 bytes at `0x44000000`;
 the overlay occupies 6,560,592 bytes at `0x44800000`. Admission fixes both lengths
-and SHA-256 values, and inference verifies the actual bytes before loading.
+and SHA-256 values. The inference task hashes the actual model bytes when it
+starts, while capture runs, and fails before waiting for the capture if either
+hash differs. Model loading therefore never sees unverified bytes, and the
+roughly 14 MB of hashing is outside the capture-to-transcript latency.
 The session authenticates those fields. Offline preparation freezes the exact
 model files and requires exclusive DDR ownership of `0x44000000..0x45000000`
 and the ASR arena at `0x46000000..0x47000000`, including exclusion of remote writers
