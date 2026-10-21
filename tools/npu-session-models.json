@@ -310,6 +310,60 @@
    "state_patches": 125,
    "command_body_bytes": 3056,
    "compiler": "published A733 SDK example (examples/vpm_run/operator/v3), not the pinned compiler"
+  },
+  {
+   "name": "mimus-linear-q",
+   "model": {
+    "bytes": 34248,
+    "sha256": "4872524cf2bd0681e9b17c8a8bcaa61615dc925e31313d6d1f0dba2fea4eacb0"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      176,
+      8
+     ],
+     "logical_bytes": 2816,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 2,
+     "scale_bits": 956301568,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2816,
+      "sha256": "3a3e9a8df2b4f5d97a0db8241bc78b7d790828de26413171a67b45c28627e7f7"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      176,
+      8
+     ],
+     "logical_bytes": 2816,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 5,
+     "quantization": 2,
+     "scale_bits": 972337583,
+     "fixed_position": 0,
+     "zero_point": 0,
+     "reference": {
+      "bytes": 2816,
+      "sha256": "f46b34dec3bc41355214222f9582a72766f21d3d0076901a0c81ba2d66b05c53"
+     }
+    }
+   ],
+   "vip_sram_bytes": 135936,
+   "pool_bytes": 0,
+   "nn_operations": 3,
+   "descriptor_patches": 11,
+   "state_patches": 3,
+   "command_body_bytes": 144,
+   "compiler": "tools/npu-mimus-linear.sh, mimus encoder.layers.0.self_attn.linear_q, int16 activations, mimus int8 codes and per-row scales"
   }
  ]
 }

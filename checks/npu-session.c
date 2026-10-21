@@ -12,7 +12,8 @@
  * after admission, which must retain every session.
  *
  * Built with NPU_SESSION_RESERVED_CHECK, the check adds the published
- * ShuffleNet graph with its external working pool, takes the parent from the
+ * ShuffleNet graph with its external working pool and one mimus encoder
+ * linear layer with INT16 tensors and transpose steps, takes the parent from the
  * reservation constructor and a 48 MiB stand-in for the platform pool, and
  * requires a parent larger than the 4 MiB image-RAM window. Case 3 offers a
  * 4 MiB pool, which must refuse the reservation and leave the pool unused. */
@@ -29,7 +30,7 @@
 #define WINDOW_BYTES (4u << 20)
 
 #if defined(NPU_SESSION_RESERVED_CHECK)
-_Static_assert(FIXTURES == 4, "four catalogue models");
+_Static_assert(FIXTURES == 5, "five catalogue models");
 static struct a733_npu_session_reserved reserved;
 #define sessions (reserved.sessions)
 #define POOL_BASE 0x44000000u
@@ -105,6 +106,19 @@ static unsigned tensor_index(const struct npu_session *n, uint32_t va, unsigned 
 }
 static uint8_t expected(unsigned m, unsigned output, uint8_t input)
 { return (uint8_t)(input + 17 * (m + 1) + 5 * output); }
+/* The model input whose descriptor writes output j directly, or UINT32_MAX
+ * when the output comes from intermediate memory. Mirrors execute(). */
+static unsigned source_of_output(unsigned m, unsigned j)
+{
+    const struct npu_session *n = &sessions.session[m];
+    uint32_t va = n->buffers[NBG_ALLOC_INPUT + n->layout.inputs + j].device;
+    for (unsigned k = 0; k < n->layout.nn_operations; ++k) {
+        const uint8_t *descriptor = (const uint8_t *)n->buffers[NBG_ALLOC_NN].cpu + k * 192;
+        if (word(descriptor + 28) == va)
+            return tensor_index(n, word(descriptor + 24), 0, n->layout.inputs);
+    }
+    platform_panic("output without a producing descriptor", j);
+}
 /* Execute the triggered command. Each NN descriptor whose output is a model
  * output writes it from the model input it reads, or from zero when it reads
  * intermediate memory. A working pool must arrive cleared through the device
@@ -277,14 +291,13 @@ static void client(void *argument)
         struct nbg_tensor t;
         configASSERT(npu_session_tensor(&sessions, m, i < f->inputs ? NBG_INPUT : NBG_OUTPUT,
                                         i < f->inputs ? i : i - f->inputs, &t));
-        configASSERT(t.logical_bytes == f->tensor_bytes[i] && (t.format == 2 || t.format == 3) &&
+        configASSERT(t.logical_bytes == f->tensor_bytes[i] && (t.format == 2 || t.format == 3 || t.format == 5) &&
                      t.quantization == 2);
     }
     struct nbg_tensor unused;
     configASSERT(!npu_session_tensor(&sessions, m, NBG_INPUT, f->inputs, &unused));
     /* Client refusals change nothing. */
     uint8_t (*inputs)[FIXTURE_MAX_TENSOR] = inputs_storage[m], *output = output_storage[m];
-    int pooled = sessions.session[m].buffers[NBG_ALLOC_POOL].bytes != 0;
     struct nbg_span spans[2];
     uint64_t ticket = 77;
     for (unsigned i = 0; i < f->inputs; ++i) spans[i] = (struct nbg_span){inputs[i], f->tensor_bytes[i]};
@@ -330,13 +343,12 @@ static void client(void *argument)
         configASSERT(r.result == NPU_SERVICE_OK && r.state == A733_NPU_DONE &&
                      r.job_ticket == submitted.ticket);
         for (unsigned j = 0; j < f->outputs; ++j) {
-            /* Output j of every pool-free catalogue graph is computed from
-             * input j; a pooled graph's output comes from its intermediates. */
             size_t bytes = f->tensor_bytes[f->inputs + j];
+            unsigned i = source_of_output(m, j);
             configASSERT(!npu_session_output(&sessions, m, j, output, bytes + 1));
             configASSERT(npu_session_output(&sessions, m, j, output, bytes));
             for (size_t x = 0; x < bytes; ++x)
-                configASSERT(output[x] == expected(m, j, pooled ? 0 : inputs[j][x % f->tensor_bytes[j]]));
+                configASSERT(output[x] == expected(m, j, i == UINT32_MAX ? 0 : inputs[i][x % f->tensor_bytes[i]]));
         }
         configASSERT(!npu_session_output(&sessions, m, f->outputs, output, 1));
         r = call(m, NPU_SERVICE_REAP, NULL, 0, 0);
@@ -407,7 +419,7 @@ static void bootstrap_run(void *unused)
     configASSERT(sessions.service.controller.state == A733_NPU_CLOSED);
     configASSERT(npu_session_stop_poll(&sessions) == A733_NPU_PLATFORM_READY && stops == 1);
 #if defined(NPU_SESSION_RESERVED_CHECK)
-    platform_puts("PASS NPU sessions: four models in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
+    platform_puts("PASS NPU sessions: five models, including a mimus linear layer, in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
 #else
     platform_puts(npu_case == 1 ?
         "PASS NPU sessions: three models, interrupt completion, copied multi-tensor outputs, close and stop\n" :
@@ -484,7 +496,7 @@ void kernel_main(void)
     memcpy(mutated, fixtures[0].model, fixtures[0].bytes); mutated[fixtures[0].bytes - 1] ^= 1;
     struct npu_session_model wrong[2] = {{mutated, fixtures[0].bytes}, models[1]};
     configASSERT(!npu_session_requirements(wrong, 2) && !npu_session_requirements(models, 0));
-    models[3] = models[4] = models[0];
+    for (unsigned m = FIXTURES; m <= NPU_SESSION_MODELS; ++m) models[m] = models[0];
     configASSERT(!npu_session_requirements(models, NPU_SESSION_MODELS + 1));
     struct npu_session_config config = {.count = FIXTURES, .cpu = (uintptr_t)parent,
         .physical = (uintptr_t)parent, .bytes = bytes, .register_cpu = REGISTER_CPU,

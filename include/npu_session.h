@@ -4,12 +4,12 @@
 #include "a733_npu_startup.h"
 #include "nbg_assembly.h"
 
-/* Several trusted compiled models sharing the one NPU through the shared
- * service mode. Each model has its own client task, allocations, command
+/* Up to eight trusted compiled models, one per service client, sharing the
+ * one NPU through the shared service mode. Each model has its own client task, allocations, command
  * stream and session group; the controller runs their jobs one at a time in
  * round-robin order. Models come from the privileged build-time catalogue
  * in drivers/npu/npu_session_models.inc; a caller hash cannot add one. */
-#define NPU_SESSION_MODELS 4u
+#define NPU_SESSION_MODELS NPU_SERVICE_CLIENTS
 #define NPU_SESSION_DEVICE_BASE 0x10000000u
 #define NPU_SESSION_BOOTSTRAP_BYTES 524288u
 

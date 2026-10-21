@@ -39,7 +39,8 @@ MODES = {
                     marker='PASS NPU sessions', cases=[0, 1, 2],
                     port_define='npu_service_task_privileged=npu_session_task_privileged',
                     wraps=['a733_npu_native_operations', 'aarch64_device_translate']),
-    # The same check with the published ShuffleNet graph added, its parent
+    # The same check with the published ShuffleNet graph and a mimus linear
+    # layer added, its parent
     # taken from the reservation constructor: case 0 runs every model and
     # case 3 offers a pool smaller than the parent.
     'reserved': dict(sources=['checks/npu-session.c', 'drivers/npu/npu_session.c',
@@ -52,7 +53,7 @@ MODES = {
                      wraps=['a733_npu_native_operations', 'aarch64_device_translate']),
 }
 SESSION_NAMES = {'session': ('conv8', 'dual-u8', 'dual-i8'),
-                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published')}
+                 'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
 
 
 def flags(build):
