@@ -17,7 +17,7 @@ REFERENCES = {
 }
 SOURCES = ["checks/aic8800-runtime.c", "drivers/net/aic8800_runtime.c", "drivers/net/aic8800_wifi.c", "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c",
            "drivers/net/aic8800_firmware.c", "drivers/net/aic8800_sdio_transport.c",
-           "drivers/net/aic8800_sdio_codec.c", "drivers/storage/sunxi_sdio.c", "drivers/storage/sdio_card.c"]
+           "drivers/net/aic8800_sdio_codec.c", "drivers/storage/storage_digest.c", "drivers/storage/sunxi_sdio.c", "drivers/storage/sdio_card.c"]
 INCLUDES = ["include/aic8800_runtime.h", "include/aic8800_wifi.h", "include/aic8800_security.h", "include/aic8800_data.h", "include/aic8800_firmware.h", "include/aic8800_sdio_transport.h",
             "include/aic8800_sdio_codec.h", "include/sdio_card.h", "include/sunxi_sdio.h",
             "checks/aic8800-sdio-transport.c", "checks/sdio-controller.c"]

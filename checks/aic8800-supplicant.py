@@ -18,7 +18,7 @@ EXTERNAL = ["rsn_supp/wpa.c", "rsn_supp/wpa_ie.c", "rsn_supp/pmksa_cache.c",
 NATIVE = ["drivers/net/aic8800_supplicant.c", "drivers/net/aic8800_supplicant_os.c",
     "drivers/net/aic8800_security.c", "drivers/net/aic8800_data.c", "drivers/net/aic8800_wifi.c",
     "drivers/net/aic8800_runtime.c", "drivers/net/aic8800_firmware.c",
-    "drivers/net/aic8800_sdio_transport.c", "drivers/net/aic8800_sdio_codec.c",
+    "drivers/net/aic8800_sdio_transport.c", "drivers/net/aic8800_sdio_codec.c", "drivers/storage/storage_digest.c",
     "drivers/storage/sdio_card.c", "drivers/storage/sunxi_sdio.c"]
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def vectors(path):

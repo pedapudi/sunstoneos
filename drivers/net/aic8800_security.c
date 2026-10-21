@@ -38,9 +38,7 @@ int aic8800_security_claim(struct aic8800_security *s,const void *owner,struct a
 static void encode(struct aic8800_security *s,uint16_t id,unsigned bytes)
 {
     for(unsigned i=0;i<sizeof(s->request);++i)s->request[i]=0;
-    uint8_t *p=s->request;unsigned n=12+bytes;p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);p[2]=0x11;
-    uint8_t crc=0;for(unsigned i=0;i<3;++i){crc^=p[i];for(unsigned j=0;j<8;++j)crc=(uint8_t)((crc<<1)^((crc&128)?7:0));}p[3]=crc;
-    p[8]=(uint8_t)id;p[9]=(uint8_t)(id>>8);p[10]=(uint8_t)(id>>10);p[12]=100;p[14]=(uint8_t)bytes;p[15]=(uint8_t)(bytes>>8);
+    aic8800_sdio_command_header(s->request,id,(uint16_t)bytes);
     s->expected_cfm=id+1;s->state=AIC8800_SECURITY_REQUEST;s->authorized=0;
 }
 static int admit(struct aic8800_security *s,const void *owner,uint64_t now,uint64_t deadline)

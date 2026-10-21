@@ -29,8 +29,9 @@ a key. The native implementation follows these operations:
    produce the 16-byte reply.
 
 The boolean functions operate on bytes: majority is `(a & b) ^ (a & c) ^ (b & c)`;
-choice is `(a & b) ^ (~a & c)`. Each hash contains four input bytes and standard
-SHA-256 padding, so it requires one compression block. Each worker step performs
+choice is `(a & b) ^ (~a & c)`. Each hash covers four input bytes, so it
+requires one SHA-256 compression block; the worker uses the existing software
+SHA-256 in [storage_digest.c](../drivers/storage/storage_digest.c). Each worker step performs
 one hash stage, one bounded platform callback, or request encoding. No additional
 binary, key file, allocator, or filesystem is required.
 

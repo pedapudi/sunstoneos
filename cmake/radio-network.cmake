@@ -42,7 +42,8 @@ set_property(SOURCE "${SUNSTONE_TCP_DIR}/source/FreeRTOS_DNS.c" APPEND PROPERTY
     "${network_root}/drivers/net/aic8800_data.c" "${network_root}/drivers/net/aic8800_wifi.c"
     "${network_root}/drivers/net/aic8800_runtime.c" "${network_root}/drivers/net/aic8800_firmware.c"
     "${network_root}/drivers/net/aic8800_sdio_transport.c" "${network_root}/drivers/net/aic8800_sdio_codec.c"
-    "${network_root}/drivers/storage/sdio_card.c" "${network_root}/drivers/storage/sunxi_sdio.c")
+    "${network_root}/drivers/storage/sdio_card.c" "${network_root}/drivers/storage/sunxi_sdio.c"
+    "${network_root}/drivers/storage/storage_digest.c")
   foreach(property INCLUDE_DIRECTORIES COMPILE_OPTIONS LINK_OPTIONS LINK_DEPENDS COMPILE_DEFINITIONS)
     get_target_property(value kernel-check ${property})
     set_property(TARGET radio-network-model PROPERTY ${property} "${value}")
