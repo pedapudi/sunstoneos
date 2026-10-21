@@ -228,3 +228,19 @@ The accepted motion image retains the inherited descriptive workload label
 session mode and linked geometry marker determine admission. The generator is
 corrected separately for future builds; the accepted image is not rebuilt for
 that wording change.
+
+The `deinterlace-tnr-20261020` evidence executes the linked fixed-strength TNR
+configuration, guarded allocation, IOMMU construction, completion, copied output
+and native acknowledgment. A distinct fault case corrupts the boundary after
+the larger TNR flag buffer; native code retains resources and refuses output.
+The host captures that exact native response as planar YUV420 and rejects a
+response header naming the motion mode. Two focused SRAM cases cover mode 3
+admission and reject an unsupported mode. Device completion and output bytes
+are synthetic; these checks establish no numerical filtering or physical DMA.
+
+The allocation fixture preserves CPU context, task stack, provider state and
+modeled MMIO at the actual allocator return. Its original run omitted that
+checkpoint; one affected replay repaired serialization and reproduced the
+original allocation proof and page table byte for byte. Completion resumes the
+saved context with an identical final session. The fixture models its prepared
+board deadline and counter before allocation; it excludes bootstrap timing.
