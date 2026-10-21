@@ -256,7 +256,7 @@ def validate_entry(record,image_hash,cache=None,frozen=False):
     observer=types.SimpleNamespace(validate_platform=platform_validate)
     validate=types.FunctionType(supervisor.validate_admission.__code__,
         {**supervisor.validate_admission.__globals__,'artifact':evidence,'observer':observer})
-    validate({**record,'schema':'a733-smp-supervised-entry-v1'},image_hash)
+    validate({**record,'schema':'a733-smp-supervised-entry-v1'},image_hash,record.get('identity'),record.get('port'))
     return cache
 
 
