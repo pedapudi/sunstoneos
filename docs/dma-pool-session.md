@@ -334,11 +334,16 @@ board's usable DRAM from its advertised size. It explicitly refuses a pool
 outside the initial image reservation until that profile's protected-image
 ranges are integrated.
 
-The current profile uses finite RAM transfers on DMA0. Continuous I2S capture
-and playback must register their rings with this same service owner and narrow
-memory policy. Peripheral shutdown must precede DMA drain where required.
-DMA1, cyclic transfers, interrupts, IOMMU operation and wider peripheral modes
-remain part of the [DMA scope](dma.md). Physical cache coherence, descriptor
+The RAM-copy profile uses finite RAM transfers on DMA0. The I2S constructors,
+`a733_dma_pool_session_stream_init` and its supervised variant, register I2S0
+period rings with the same service owner: for each direction one descriptor page
+and two to eight period pages, each admitted only for its own memory role and
+the matching FIFO route. A duplex profile registers one such bank per direction
+on two channels. The same catalogue serves finite and hardware-linked cyclic
+stream profiles, and the controller implements cyclic transmit and receive. The
+I2S stream driver disables its DMA requests before any DMA drain. DMA1,
+interrupts, IOMMU operation and wider peripheral modes remain part of the
+[DMA scope](dma.md). Physical cache coherence, descriptor
 fetches, bus completion, external-user exclusion and recovery need board evidence.
 
 ## Selected composition check

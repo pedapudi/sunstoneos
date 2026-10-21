@@ -11,8 +11,12 @@ channel claims, mapped-buffer ownership, cache-operation callbacks, completion,
 and bounded cancellation. Its host model passes noncoherent memory/FIFO transfers
 and fault handling checks. The [RAM admission policy and native cache/MMIO
 adapter](dma-memory.md) now pass host and FreeRTOS emulator checks.
-Board RAM/FIFO registration, production service serialization, interrupt delivery,
-and clock/reset setup remain unimplemented.
+The [DMA pool session](dma-pool-session.md) registers board RAM, and the native
+policy admits the UART2, I2S0 and HDMI-audio FIFO routes their images use. The
+[DMA service](dma-service.md) serializes production access, and the
+[DMA platform startup](dma-platform.md) prepares DMA0 clocks, reset and CPU
+routing. Interrupt delivery, DMA1, descriptor addresses at or above
+`0xfffff800` and physical qualification remain open.
 The controller has not executed on physical hardware.
 
 Calling the encoder alone performs no hardware access and does not transfer
@@ -221,7 +225,10 @@ The core rejects buffer overlap with descriptors, controller state, or transfer
 metadata. Concurrent transfers can share read-only source allocations.
 Any overlap involving a writable allocation is rejected, including disjoint
 written byte ranges within the same owned cache lines. Two channels cannot use
-the same FIFO port concurrently. CPU writes to leased allocations are forbidden.
+the same FIFO port in the same direction concurrently. A read FIFO and a write
+FIFO may share one register address, as the UART receive and transmit registers
+do; each direction still needs its own native port admission. CPU writes to
+leased allocations are forbidden.
 
 Submission retains the immutable transfer metadata and its allocations before
 cache preparation. It cleans source and descriptor lines, cleans and invalidates
@@ -236,6 +243,12 @@ The core requires the channel to be disabled and its busy bit to clear.
 It then verifies restored channel settings, invalidates destination lines, and
 invokes a final barrier before releasing allocations. Timeout takes precedence
 over queue completion when both events are observed.
+
+A FIFO producer must disable its DMA requests before poll stops the channel.
+`a733_dma_finite_state()` lets it observe queue end, error events and timeout
+for its active finite transfer without acknowledging them. The query applies
+the same routing, mode and descriptor-high checks as poll and retains the channel
+in recovery when they fail.
 
 Cancellation issues one pause/disable/resume sequence. Each poll performs a
 bounded amount of work and never waits internally. The caller schedules polls
@@ -272,8 +285,6 @@ visibility remain unqualified.
 Pause, hardware timeout modes, burst mode, IOspeed mode,
 request handshakes, DMA1, interrupt delivery, IOMMU integration, and concurrent
 peripheral workloads remain required.
-Bidirectional peripheral ports that share one register address need a
-peripheral-aware FIFO lease extension; the current core serializes those ports.
 Data addresses crossing 4 GiB boundaries and transfers near the upper address
 limit need physical tests; software representation does not establish bus behavior.
 
