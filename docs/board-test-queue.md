@@ -67,8 +67,8 @@ image, launcher and host sources, and submitted artifacts that do not cover
 `prepared.json`, `image.elf` and `launch.bin`. Each runner supplies its device
 label, prerequisites and software-evidence schema and result flags. A change to
 these rules therefore applies to all eighteen runners. The board, accelerator,
-GPU display, NPU, combined mimus board and multicore observer runners keep
-their own claim checks. `checks/audit-build-harness-supervised-claims.py`
+GPU display, NPU, combined mimus board, integrated OS and multicore observer
+runners keep their own claim checks. `checks/audit-build-harness-supervised-claims.py`
 records every runner's decision for a valid claim and for each tampered field.
 
 The other runners that read queue claims do not check the binding:
