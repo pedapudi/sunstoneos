@@ -25,12 +25,13 @@ int a733_twi_init_controller(struct a733_twi *s,const struct a733_twi_ops *o,voi
     uint32_t divider,enum a733_twi_controller controller,unsigned register_bytes)
 {
     if(!s || s->self || s->state!=A733_TWI_NEW || !o || !ctx || divider>127 ||
-       (controller!=A733_TWI_MAIN11 && controller!=A733_TWI_R1) ||
+       (controller!=A733_TWI_MAIN11 && controller!=A733_TWI_R1 && controller!=A733_TWI_MAIN9) ||
        (register_bytes!=1 && register_bytes!=2) ||
        !separate(s,sizeof(*s),o,sizeof(*o)) || !separate(s,sizeof(*s),ctx,1) ||
        !o->now || !o->authenticate || !o->enter || !o->leave || !o->retain || !o->read || !o->write || !o->current)return 0;
     *s=(struct a733_twi){.self=s,.ops=*o,.context=ctx,.divider=divider,.state=A733_TWI_READY,
-        .base=controller==A733_TWI_MAIN11?A733_TWI11_BASE:UINT32_C(0x07084000),
+        .base=controller==A733_TWI_MAIN11?A733_TWI11_BASE:
+            controller==A733_TWI_MAIN9?A733_TWI9_BASE:UINT32_C(0x07084000),
         .register_bytes=(uint8_t)register_bytes};return 1;
 }
 static int fail(struct a733_twi *s)
