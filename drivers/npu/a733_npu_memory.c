@@ -66,7 +66,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         const struct a733_npu_buffer *b = &buffers[i];
         if (!pointer((void *)b->cpu, b->bytes) || !b->device ||
             ((b->cpu | b->physical | b->bytes | b->device) & (PAGE - 1)) ||
-            (unsigned)b->role > A733_NPU_BUFFER_BOOTSTRAP ||
+            (unsigned)b->role > A733_NPU_BUFFER_CONSTANT ||
             b->physical >= PA_LIMIT || b->bytes > PA_LIMIT - b->physical ||
             b->bytes > VA_LIMIT - b->device ||
             overlap(b->cpu, b->bytes, (uintptr_t)m, sizeof(*m)) ||
@@ -74,7 +74,8 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
             overlap(b->physical, b->bytes, physical, capacity) ||
             overlap(b->device, b->bytes, 0x400000, 0x80000)) return 0;
         if (b->role == A733_NPU_BUFFER_BOOTSTRAP) ++bootstraps;
-        if (b->role >= A733_NPU_BUFFER_COMMAND && b->bytes < A733_NPU_FETCH_BYTES) return 0;
+        if ((b->role == A733_NPU_BUFFER_COMMAND || b->role == A733_NPU_BUFFER_BOOTSTRAP) &&
+            b->bytes < A733_NPU_FETCH_BYTES) return 0;
         for (size_t j = 0; j < i; ++j) {
             const struct a733_npu_buffer *p = &buffers[j];
             if (overlap(b->cpu, b->bytes, p->cpu, p->bytes) ||
@@ -114,7 +115,8 @@ int a733_npu_memory_command(const struct a733_npu_memory *m, uint32_t device,
     if (!m || m->state != A733_NPU_MEMORY_IDLE || !output_private(m, cmd, sizeof(*cmd))) return 0;
     for (size_t i = 0; i < m->count; ++i) {
         const struct a733_npu_buffer *b = &m->buffers[i];
-        if (b->device != device || b->role < A733_NPU_BUFFER_COMMAND) continue;
+        if (b->device != device || (b->role != A733_NPU_BUFFER_COMMAND &&
+            b->role != A733_NPU_BUFFER_BOOTSTRAP)) continue;
         *cmd = (struct a733_npu_command){device, b->bytes, (void *)b};
         return 1;
     }
@@ -185,18 +187,24 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
     const struct a733_npu_buffer *b = &m->buffers[found];
     if (b->role != (bootstrap ? A733_NPU_BUFFER_BOOTSTRAP : A733_NPU_BUFFER_COMMAND) ||
         cmd->device != b->device || cmd->readable_bytes != b->bytes ||
-        !live_mappings(m) || !canonical(m)) return fault(m);
+        (!bootstrap && !m->booted) || !live_mappings(m) || !canonical(m)) return fault(m);
     m->active = *cmd; m->state = A733_NPU_MEMORY_DEVICE;
     /* Validate everything before publishing any range. A partial failure
-     * retains the complete session even if the controller never triggers. */
-    if (!m->ops.cache(m->cookie, A733_NPU_CACHE_CLEAN, m->arena, m->image.bytes)) return fault(m);
+     * retains the complete session even if the controller never triggers.
+     * Immutable tables, streams and CONSTANT data were cleaned by the
+     * bootstrap publication; canonical() still checks the tables per job. */
+    if (bootstrap && !m->ops.cache(m->cookie, A733_NPU_CACHE_CLEAN, m->arena, m->image.bytes))
+        return fault(m);
     for (size_t i = 0; i < m->count; ++i) {
         b = &m->buffers[i];
+        if (!bootstrap && b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE)
+            continue;
         enum a733_npu_cache_op op = b->role == A733_NPU_BUFFER_WRITE ?
             A733_NPU_CACHE_CLEAN_INVALIDATE : A733_NPU_CACHE_CLEAN;
         if (!m->ops.cache(m->cookie, op, b->cpu, b->bytes)) return fault(m);
     }
     m->ops.barrier(m->cookie);
+    if (bootstrap) m->booted = 1;
     return 1;
 }
 int a733_npu_memory_finish(struct a733_npu_memory *m, const struct a733_npu_command *cmd)

@@ -264,7 +264,7 @@ void kernel_main(void)
         (uintptr_t)check_small[2],(uintptr_t)check_small[3],(uintptr_t)check_commands[1]};
     const uint32_t devices[]={0xe0000000,0xe0002000,0xe0004000,0xe0085000,0xe0087000,0xe0089000};
     const size_t sizes[]={4096,4096,524288,4096,4096,524288};
-    const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
+    const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_CONSTANT,A733_NPU_BUFFER_CONSTANT,
         A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP};
     for(unsigned i=0;i<6;++i)config.buffers[i]=(struct a733_npu_buffer){addresses[i],addresses[i],sizes[i],devices[i],roles[i]};
     check_model[20]^=1;

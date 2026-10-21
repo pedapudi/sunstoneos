@@ -42,7 +42,7 @@ def constructor(a,out,image,inputs,outputs):
  extent=reserved+rl['extent'];assert m.get(extent+el['cpu'])==0x41600000 and m.get(extent+el['bytes'])==3235840
  cpus=(0x41600000,0x41606000,0x417eb000,0x4186b000,0x41890000,0x41891000,0x416e0000,0)
  devices=(0xe0000000,0xe0007000,0xe01ee000,0xe026f000,0xe0295000,0xe0297000,0xe00e2000,0)
- sizes=(24576,892928,524288,151552,4096,524288,1093632,0);roles=(0,0,2,0,1,3,1,0)
+ sizes=(24576,892928,524288,151552,4096,524288,1093632,0);roles=(4,4,2,0,1,3,1,0)
  tables=0x41911000;assert m.get(memory+ml['arena'])==tables and m.get(memory+ml['capacity'])==20480 and m.get(memory+ml['count'])==7
  # Decode the actual constructed root, not a table address inferred from sums.
  root=m.get(tables+(devices[0]>>24)*4,4);second=root&~4095

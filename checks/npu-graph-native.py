@@ -85,7 +85,7 @@ def main():
         sizes = (4096,4096,524288,4096,4096,524288)
         cpus = (0x43300000,0x43301000,0x43400000,0x43302000,0x43303000,0x43500000)
         devices = (0xe0000000,0xe0002000,0xe0004000,0xe0085000,0xe0087000,0xe0089000)
-        roles = (0,0,2,0,1,3)
+        roles = (4,4,2,0,1,3)  # CONSTANT descriptors/weights, READ input
         stride = (fields['arena']-fields['buffers'])//6
         assert stride == 32
         for i in range(6):

@@ -20,8 +20,10 @@ confirms completion and bus idle.
 Initialization copies up to 64 buffer descriptions and sorts them by device
 address. Each description includes CPU and physical bases, a device virtual
 base, length, and role. Exactly one bootstrap command allocation is required.
-Other roles are application commands, device-readable data, and
-device-readable/writable data.
+Other roles are application commands, device-readable data that may change
+between jobs (READ, such as a job input), constant device-readable data
+(CONSTANT, such as descriptors and weights), and device-readable/writable data
+(WRITE).
 
 Buffer bases and lengths must align to 4 KiB. Device addresses fit 32 bits;
 physical addresses fit 40 bits. CPU, physical, and device ranges must each be
@@ -65,8 +67,16 @@ compares every used entry and padding byte against the private registry.
 The walk detects extra mappings, altered permissions or addresses, incorrect
 root pointers, and modified absent entries. It does not rely on a checksum.
 
-Publication cleans the table image and every device-readable allocation.
-It cleans and invalidates every device-written allocation. The cache callback
+The bootstrap publication cleans the table image and every device-readable
+allocation, and cleans and invalidates every device-written allocation.
+An application-command publication requires an earlier successful bootstrap
+publication of the same memory object. It cleans only READ allocations and
+cleans and invalidates only WRITE allocations. The tables, command streams and
+CONSTANT allocations must not change after initialization and the bootstrap
+publication, so a job publication skips their maintenance; the table walk and
+translation checks above still run for every job. A CPU write to a CONSTANT
+allocation after the bootstrap publication is never made visible to the device.
+The cache callback
 must complete maintenance to the point of coherency, where CPU and device
 accesses observe the same memory, and use a supported maintenance stride.
 A final barrier orders publication before controller submission.
@@ -82,10 +92,10 @@ publication, completion, command lookup, and initialization calls refuse the
 instance without invoking callbacks. Partial cache maintenance retains the
 entire session. External recovery must prove device quiescence before disposal.
 
-The memory object, tables, command streams, and allocation descriptions remain
-private and immutable through successful controller close. All buffers remain
-reserved for that session. Payload bytes may change only when controller
-ownership permits CPU access. Callers must serialize operations and prevent
+The memory object, tables, command streams, CONSTANT payloads and allocation
+descriptions remain private and immutable through successful controller close.
+All buffers remain reserved for that session. READ and WRITE payload bytes may
+change only when controller ownership permits CPU access. Callers must serialize operations and prevent
 other CPU or device access during publication and execution.
 
 The policy validates memory relationships, not command semantics. A native model
@@ -110,6 +120,10 @@ The check covers:
   read-only commands, unmapped pages, and disposal of caller metadata.
 - Changed CPU mappings, missing permissions, wrong memory attributes,
   substituted commands or images, and corrupted table entries or padding.
+- Cache maintenance scope: the bootstrap publication covers the tables and all
+  four buffers; a later job publication covers only the READ input and WRITE
+  output, or only the output when the input is CONSTANT. A job publication
+  before any bootstrap publication is refused.
 - Failure at each publication cache operation, failed completion maintenance,
   retained faults, and refusal without further callbacks.
 - Atomic admission refusal for aliases, SRAM overlap, address overflow,

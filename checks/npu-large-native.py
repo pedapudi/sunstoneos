@@ -119,7 +119,7 @@ def check_constructor(a,out,image,inputs,outputs,bad=False):
  cpus=(0x41600000,0,0x41702000,0x41782000,0x41802000,0x41843000,0x41602000,0x41601000)
  devices=(0xe0000000,0,0xe0105000,0xe0186000,0xe0207000,0xe0249000,0xe0004000,0xe0002000)
  sizes=(4096,0,524288,524288,266240,524288,1048576,4096)
- roles=(0,0,2,0,1,3,1,0)
+ roles=(4,0,2,0,1,3,1,4)
  tables=0x418c3000
  assert m.get(memory+ml['arena'])==tables and m.get(memory+ml['capacity'])==20480
  assert m.get(memory+ml['count'])==7
