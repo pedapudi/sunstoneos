@@ -18,7 +18,7 @@ calls it yet, and no board has reported the register values it reads. With the
 current sources it cannot return zero on a board: the OR100 processor and the
 crypto engine (CE) remain unproven, as explained below.
 
-## The cold boot chain starts only the SD controller, CE and possibly DMA0
+## The cold boot chain starts CE and may leave DMA0 and storage controllers out of reset
 
 The cold boot chain is the board ROM, then boot0, then the SunstoneOS cold-entry
 monitor and its stage-2 loader. The TOC1 package contains only the monitor; it
@@ -37,7 +37,8 @@ omits U-Boot, the shipped ARM Trusted Firmware monitor and the SCP firmware.
   both CE resets, opens the CE MBUS gate (bit 2 of `MBUS_GATE_EN_REG`) and opens
   both CE bus gates. The ROM's SPI and raw-NAND boot routines de-assert the DMA0
   reset at `0x10d0`, and a routine at `0xc91c` asserts it again. The ROM also
-  writes the NAND0, SMHC0, SMHC2 and UFS reset registers.
+  writes the NAND0, SMHC0, SMHC2 and UFS reset registers. The literal scan does
+  not show whether those writes leave the resets de-asserted.
 - **boot0.** Among the masters below, boot0 references only the SMHC0 reset
   register. It reads the card through the SMHC0 internal DMA controller (IDMAC).
   Whether boot0 leaves the IDMAC disabled at hand-off is not established from
