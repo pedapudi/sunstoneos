@@ -60,7 +60,10 @@ The host snapshots the complete candidate and constructs an ordered hash chain.
 Each chain entry commits its relative sector offset, byte count, next entry and
 actual chunk bytes. The immutable launch grant contains the first commitment.
 The service verifies each received chunk against that commitment before issuing
-any write command. The last chunk must terminate the chain.
+any write command. The last chunk must terminate the chain. Each write chunk
+holds one 512-byte sector, and the commitment offset counts sectors.
+Prepared artifacts with a two-sector chain no longer match and must be prepared
+again; the host refuses them by the size of the chain file.
 
 Before sending a chunk, the host creates and synchronizes an immutable intent
 record containing the session, sequence, physical sector and payload identity.
@@ -76,7 +79,15 @@ Completion requires the full candidate readback digest. Card status and readback
 do not establish power-loss durability, atomic replacement or bootability.
 
 Each request has an absolute deadline of at most one second, bounded by the
-session cutoff. The maintenance watchdog may renew only from completed storage
+session cutoff. A write request covers one CMD24, its card-status polling and
+the one-sector readback within that deadline. The SD specification allows up to
+250 ms of write busy per block for SDHC and 500 ms for SDXC. At the
+identification clock the transfers and status commands are estimated at tens
+of milliseconds, so the one-second deadline leaves at least 500 ms for one sector's
+programming. Programming that outlasts the deadline faults the request and
+retains the uncertain write. The maintenance watchdog requires a constant
+operation deadline within each request, so the readback does not receive a
+separate restarted deadline. The maintenance watchdog may renew only from completed storage
 work and completed USB exchanges under its actual lease. Host filesystem stalls
 must fail within that lease; they cannot cause indefinite feeding.
 
@@ -84,7 +95,10 @@ must fail within that lease; they cannot cause indefinite feeding.
 
 An incomplete write, failed status, mismatched readback, invalid sequence or USB
 loss permanently faults the session. The transport loss latch is checked before
-subsequent platform accesses and core I/O. The service retains its source bytes,
+each later platform access and core step. A FIFO burst counts as one access and
+holds up to one sector (128 words). Once admitted, the burst reaches the FIFO in
+full even when a loss is latched during it. The CMD24 write has already started
+by then, so that write is uncertain in either case. The service retains its source bytes,
 range and platform resources. It does not retry, release ownership on timeout,
 or reset a card into an assumed cold state.
 
@@ -132,7 +146,10 @@ to the C service and the actual MMC platform, PMIC, rail, clock and pin managers
 Only card media, register access, time and transport are modeled. It reuses the
 existing card model without executing its protocol suites. New cases cover
 backup files, write/readback, explicit restoration, ownership refusals, candidate
-commitment, uncertain writes, transport loss and host durability failures.
+commitment, uncertain writes, transport loss and host durability failures. A
+card model that stays in programming state for 500 ms after each CMD24 completes
+a two-sector update; one that stays busy for one second retains the first write
+as uncertain.
 Software results do not qualify the physical board.
 
 The connected core/host batch passes under AddressSanitizer and

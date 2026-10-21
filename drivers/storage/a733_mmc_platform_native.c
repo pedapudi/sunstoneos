@@ -1,6 +1,7 @@
 #include "a733_mmc_platform_native.h"
 #include "a733_storage_update.h"
 #include "a733_platform_locks.h"
+#include "sunxi_smhc.h"
 #include "task.h"
 #if INCLUDE_xTaskGetSchedulerState != 1 || INCLUDE_xTaskGetCurrentTaskHandle != 1 || INCLUDE_xSemaphoreGetMutexHolder != 1
 #error "MMC native binding requires scheduler-state, task and mutex-owner APIs"
@@ -43,50 +44,73 @@ static int admit(void *cookie,const struct a733_mmc_platform_config *c,const str
     if(r==1)n->sd_profile=c->sd_profile;
     return r;
 }
+/* A successful lock entry is cached until leave or retain, so each access
+ * needs no kernel critical section to query the mutex holder. */
 static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_mmc_platform_native *n=cookie;
-    return current(n)&&a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
+    n->holding=current(n)&&a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline)==1;
+    return (int)n->holding;
 }
 static void leave(void *cookie)
 {
     struct a733_mmc_platform_native *n=cookie;
-    a733_platform_lock_leave(n->locks,A733_PLATFORM_REGISTER_LOCK);
+    n->holding=0;a733_platform_lock_leave(n->locks,A733_PLATFORM_REGISTER_LOCK);
 }
 static void retain(void *cookie)
 {
     struct a733_mmc_platform_native *n=cookie;
-    configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_REGISTER_LOCK)==1);
+    n->holding=0;configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_REGISTER_LOCK)==1);
 }
+static uintptr_t fifo_address(const struct a733_mmc_platform_native *n)
+{return A733_MMC_BASE(a733_mmc_slot(n->kind,n->emmc_host))+SUNXI_SMHC_FIFO;}
 static int allowed(struct a733_mmc_platform_native *n,uintptr_t a,unsigned writing)
 {
     if(!current(n))return 0;
-    unsigned index=n->kind==SUNXI_MMC_SD?0:n->emmc_host==A733_MMC_EMMC_SDC3?3:2;
-    int fifo=writing&&a==0x04020000+index*0x1000+0x200&&n->update;
+    int fifo=writing&&a==fifo_address(n)&&n->update;
     if(!fifo&&!a733_mmc_platform_native_address_selected(n->kind,n->emmc_host,a,writing))return 0;
-    return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u)&&
-        xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
+    return n->holding&&!(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u);
+}
+/* Device accesses to one peripheral stay ordered; barriers bracket the burst. */
+static int load(struct a733_mmc_platform_native *n,uintptr_t a,uint32_t *v,unsigned count)
+{
+    if(!v||!count||count>SUNXI_MMC_FIFO_WORDS||!allowed(n,a,0))return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    for(unsigned i=0;i<count;++i)v[i]=*(volatile const uint32_t *)a;
+    __asm__ volatile("dsb sy" ::: "memory");return 1;
+}
+static int store(uintptr_t a,const uint32_t *v,unsigned count)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    for(unsigned i=0;i<count;++i)*(volatile uint32_t *)a=v[i];
+    __asm__ volatile("dsb sy" ::: "memory");return 1;
 }
 static int read32(void *cookie,uintptr_t a,uint32_t *v)
+{return load(cookie,a,v,1);}
+static int read_fifo(void *cookie,uintptr_t a,uint32_t *v,unsigned count)
 {
     struct a733_mmc_platform_native *n=cookie;
-    if(!v||!allowed(n,a,0))return 0;
-    __asm__ volatile("dsb sy" ::: "memory");
-    *v=*(volatile const uint32_t *)a;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    return n&&a==fifo_address(n)&&load(n,a,v,count);
+}
+static int write_fifo(void *cookie,uintptr_t a,const uint32_t *v,unsigned count)
+{
+    struct a733_mmc_platform_native *n=cookie;
+    if(!n||!v||!count||count>SUNXI_MMC_FIFO_WORDS||a!=fifo_address(n)||!allowed(n,a,1)||
+       !a733_mmc_platform_native_fifo_allowed(n->kind,n->emmc_host,n->update,a,count))return 0;
+    return store(a,v,count);
 }
 static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_mmc_platform_native *n=cookie;
     if(!allowed(n,a,1))return 0;
-    unsigned index=n->kind==SUNXI_MMC_SD?0:n->emmc_host==A733_MMC_EMMC_SDC3?3:2;
-    uintptr_t base=0x04020000+index*0x1000;
-    uintptr_t module=0x02002d00+index*0x10;
-    if(a==base+0x200) {
+    unsigned slot=a733_mmc_slot(n->kind,n->emmc_host);
+    uintptr_t base=A733_MMC_BASE(slot);
+    uintptr_t module=A733_MMC_MODULE(slot);
+    if(a==base+SUNXI_SMHC_FIFO) {
         if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
     } else if(a==0x03400198) {
-        if(v!=(1u<<(index+1)))return 0;
-    } else if(a==module||a==module+0xc) {
+        if(v!=A733_MMC_GIC_BIT(slot))return 0;
+    } else if(a==module||a==A733_MMC_BUS(slot)) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
         if(a==module){
             uint32_t setting=v&(mask&~UINT32_C(0x80000000));
@@ -97,31 +121,29 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         __asm__ volatile("dsb sy" ::: "memory");
         uint32_t old=*(volatile const uint32_t *)a;
         if((old^v)&~mask)return 0;
-    } else if(a==base+0x18) {
-        if(v&(1u<<10)) {
+    } else if(a==base+SUNXI_SMHC_CMD) {
+        if(v&SUNXI_SMHC_CMD_WRITE) {
             if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
         }
-        if(!(v&(1u<<21)))switch(v&63) {
+        if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
         case 16:case 17:case 18:case 41:case 55:break;
         case 6:case 51:
             if(n->kind!=SUNXI_MMC_SD||!n->sd_profile)return 0;
             /* New SD commands have fixed read-only protocol forms. No eMMC
              * SWITCH or write-direction command is admitted by this path. */
-            {uint32_t argument=*(volatile const uint32_t *)(base+0x1c);
-             uint32_t flags=(1u<<31)|(1u<<13)|(1u<<8)|(1u<<6);
-             if((v&63u)==51){if(v!=(flags|(1u<<9)|51u)||argument)return 0;}
+            {uint32_t argument=*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG);
+             uint32_t flags=SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP;
+             if((v&SUNXI_SMHC_CMD_INDEX)==51){if(v!=(flags|SUNXI_SMHC_CMD_DATA|51u)||argument)return 0;}
              else if(v==(flags|6u)){if(argument!=2)return 0;}
-             else if(v==(flags|(1u<<9)|6u)){if(n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||(argument!=0x00fffff1&&argument!=0x80fffff1))return 0;}
+             else if(v==(flags|SUNXI_SMHC_CMD_DATA|6u)){if(n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||(argument!=0x00fffff1&&argument!=0x80fffff1))return 0;}
              else return 0;}
             break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;
         default:return 0;
         }
     }
-    __asm__ volatile("dsb sy" ::: "memory");
-    *(volatile uint32_t *)a=v;
-    __asm__ volatile("dsb sy" ::: "memory");return 1;
+    return store(a,&v,1);
 }
 static int barrier(void *cookie)
 {
@@ -146,8 +168,9 @@ int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *n,
        (kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC)||(unsigned)host>A733_MMC_EMMC_SDC3||
        (kind==SUNXI_MMC_SD&&host))return 0;
     n->emmc_host=host;n->kind=kind;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
-    n->operations=(struct a733_mmc_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier,outside};
-    n->initialized=1;return 1;
+    n->operations=(struct a733_mmc_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier,outside,
+        read_fifo,write_fifo};
+    n->update=NULL;n->holding=0;n->initialized=1;return 1;
 }
 
 int a733_mmc_platform_native_init(struct a733_mmc_platform_native *n,
@@ -159,6 +182,7 @@ int a733_mmc_platform_native_bind_update(struct a733_mmc_platform_native *n,stru
 {
     if(!n||!n->initialized||n->update||!u||!current(n)||!a733_storage_update_owned(u,u->platform)||
        u->platform->update!=u||u->platform->cookie!=n||u->platform->ops.write!=write32||
+       u->platform->ops.write_fifo!=write_fifo||
        u->platform->config.kind!=n->kind||u->platform->config.emmc_host!=n->emmc_host)return 0;
     n->update=u;return 1;
 }

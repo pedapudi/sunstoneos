@@ -18,6 +18,8 @@ struct model {
     int admit_result, retain_result, bad_if, bad_rca, bad_card, no_dtc, no_acd;
     int bad_stop, bad_status, crc_after, late_crc, timed_cmd, fail_write, busy;
     int backwards, expiry_on_done, reentry, removal;
+    int oor_command, oor_stop, oor_status; /* R1 OUT_OF_RANGE (bit 31) placement. */
+    unsigned no_level, trickle, advertised, data_polls, polls;
 };
 static void field(uint32_t *r, unsigned first, unsigned count, uint32_t v)
 {
@@ -43,9 +45,18 @@ static void seed(struct model *m, struct sunxi_mmc *h, unsigned kind, unsigned s
     m->ext[194] = 2; m->ext[192] = 8;
     if (sector) m->ext[215] = 1;
 }
+/* FIFO_LEVEL reports the words a read may take; trickle limits arrival and
+ * no_level models a controller whose level field stays zero. Each sample
+ * starts a new burst, which may move at most SUNXI_MMC_FIFO_WORDS words. */
 static uint32_t status(struct model *m)
 {
     uint32_t v = (m->fifo_pos == m->fifo_total ? 4u : 0u);
+    m->fifo_this_poll = 0;
+    unsigned level = (m->fifo_total - m->fifo_pos) / 4;
+    if (level > 256) level = 256;
+    if (m->trickle && level > m->trickle) level = m->trickle;
+    m->advertised = m->no_level ? !!level : level;
+    if (!m->no_level) v |= level << 17;
     if (m->busy) v |= 1u << 9;
     return v;
 }
@@ -69,8 +80,9 @@ static int read32(void *ctx, uint32_t off, uint32_t *out)
         return 1;
     }
     if (off == 0x200) {
-        assert(m->fifo_pos < m->fifo_total);
-        assert(++m->fifo_this_poll <= 16);
+        assert(m->fifo_pos < m->fifo_total && m->advertised);
+        --m->advertised;
+        assert(++m->fifo_this_poll <= SUNXI_MMC_FIFO_WORDS);
         if (m->fifo_this_poll > m->max_fifo) m->max_fifo = m->fifo_this_poll;
         *out = 0;
         for (unsigned b = 0; b < 4; ++b) {
@@ -138,7 +150,9 @@ static void command(struct model *m, uint32_t cmd)
     case 7:
         assert(m->state == 3); m->state = 4; m->selected = 1; break;
     case 13:
-        assert(m->selected); m->reg[0x20/4] = m->reads && m->bad_status ? 0x800 : 0x900; break;
+        assert(m->selected); m->reg[0x20/4] = m->reads && m->bad_status ? 0x800 : 0x900;
+        if (m->reads && m->oor_status) m->reg[0x20/4] |= 1u << 31;
+        break;
     case 16:
         assert(m->selected && !m->sector && arg == 512); ++m->cmd16; break;
     case 17: case 18:
@@ -148,8 +162,8 @@ static void command(struct model *m, uint32_t cmd)
         if (n == 18) assert(m->reg[0x58/4] == 0);
         ++m->reads; m->data_command = cmd; m->fifo_total = m->reg[0x14/4];
         assert(m->fifo_total >= 512 && m->fifo_total <= 4096);
-        m->reg[0x20/4] = m->bad_card ? (1u << 25) : 0x900;
-        m->reg[0x24/4] = m->bad_stop ? (1u << 19) : 0x900;
+        m->reg[0x20/4] = (m->bad_card ? (1u << 25) : 0x900) | (m->oor_command ? 1u << 31 : 0);
+        m->reg[0x24/4] = (m->bad_stop ? (1u << 19) : 0x900) | (m->oor_stop ? 1u << 31 : 0);
         break;
     default: assert(!"unsupported card command");
     }
@@ -167,6 +181,19 @@ static int write32(void *ctx, uint32_t off, uint32_t value)
     return 1;
 }
 static int barrier(void *ctx) { ++((struct model *)ctx)->calls; return 1; }
+/* Bursts repeat the modeled FIFO access; the level assertion stays per word. */
+static inline int model_read_fifo(void *ctx, uint32_t *words, unsigned count)
+{
+    assert(count && count <= SUNXI_MMC_FIFO_WORDS);
+    for (unsigned i = 0; i < count; ++i) if (read32(ctx, 0x200, &words[i]) != 1) return 0;
+    return 1;
+}
+static inline int model_write_fifo(void *ctx, const uint32_t *words, unsigned count)
+{
+    assert(count && count <= SUNXI_MMC_FIFO_WORDS);
+    for (unsigned i = 0; i < count; ++i) if (write32(ctx, 0x200, words[i]) != 1) return 0;
+    return 1;
+}
 static int now_us(void *ctx, uint64_t *out)
 {
     struct model *m = ctx; ++m->calls;
@@ -195,7 +222,8 @@ static int retained(void *ctx, uintptr_t token)
 static void init(struct model *m, struct sunxi_mmc *h, unsigned kind, unsigned sector)
 {
     seed(m, h, kind, sector);
-    struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained, NULL},
+    struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained, NULL,
+        model_read_fifo, model_write_fifo},
         m, 0xa733, (enum sunxi_mmc_kind)kind, 800000, 0x00300000, SUNXI_MMC_SD_LEGACY};
     assert(sunxi_mmc_init(h, &c)); assert(!m->calls);
     assert(!sunxi_mmc_init(h, &c));
@@ -206,7 +234,8 @@ static void run(struct model *m)
     for (unsigned i = 0; i < 20000; ++i) {
         if (m->host->state == SUNXI_MMC_READY || m->host->state == SUNXI_MMC_DONE ||
             m->host->state == SUNXI_MMC_FAULT) return;
-        m->fifo_this_poll = 0; sunxi_mmc_poll(m->host);
+        m->fifo_this_poll = 0; sunxi_mmc_poll(m->host); ++m->polls;
+        if (m->fifo_this_poll) ++m->data_polls;
     }
     assert(!"model failed to reach bounded terminal state");
 }
@@ -300,7 +329,43 @@ int main(int argc, char **argv)
                 assert(!sunxi_mmc_take(&h, (struct sunxi_mmc_result *)(void *)(buffer + 1)));
                 assert(sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK && !h.borrowed);
             }
-            assert(m.max_fifo == 16);
+            assert(m.max_fifo == SUNXI_MMC_FIFO_WORDS);
+        }
+    }
+    /* One STATUS sample moves a whole block, so 4 KiB needs eight data polls.
+     * Partial arrival and a level field that stays zero move only what the
+     * sampled status allows. */
+    for (unsigned variant = 0; variant < 3; ++variant) {
+        identified(&m, &h, SUNXI_MMC_SD, 1);
+        m.trickle = variant == 1 ? 5 : 0; m.no_level = variant == 2;
+        assert(sunxi_mmc_read(&h, 0, 8, buffer, 4096, m.now + 1000000));
+        m.polls = m.data_polls = 0; run(&m);
+        assert(h.state == SUNXI_MMC_DONE && h.result.received == 4096);
+        assert(m.data_polls == (variant == 0 ? 8u : variant == 1 ? 205u : 1024u));
+        printf("8-block read, %s: %u polls, %u data polls\n",
+               variant == 0 ? "full level" : variant == 1 ? "5-word level" : "zero level field", m.polls, m.data_polls);
+        for (unsigned i = 0; i < 4096; ++i) assert(buffer[i] == (uint8_t)(i * 37u + 11u));
+        assert(sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK);
+    }
+    /* A card may set OUT_OF_RANGE after an open-ended CMD18 that reaches the
+     * last sector. Only that stop response and its following CMD13 ignore it. */
+    for (unsigned kind = 1; kind <= 2; ++kind) {
+        for (unsigned where = 0; where < 2; ++where) {
+            identified(&m, &h, kind, 1); m.oor_stop = !where; m.oor_status = where;
+            assert(sunxi_mmc_read(&h, h.card.sectors - 8, 8, buffer, 4096, m.now + 100000)); run(&m);
+            assert(h.state == SUNXI_MMC_DONE && sunxi_mmc_take(&h, &result) && result.error == SUNXI_MMC_OK);
+            assert(where ? (result.response >> 31) : (result.stop_response >> 31));
+        }
+        for (unsigned scenario = 0; scenario < 4; ++scenario) {
+            identified(&m, &h, kind, 1);
+            uint64_t first = h.card.sectors - (scenario == 3 ? 1 : 8);
+            if (scenario == 0) { m.oor_stop = 1; first = 0; }
+            if (scenario == 1) { m.oor_status = 1; first = h.card.sectors - 9; }
+            if (scenario == 2) m.oor_command = 1;
+            if (scenario == 3) m.oor_status = 1;
+            uint32_t blocks = scenario == 3 ? 1 : 8;
+            assert(sunxi_mmc_read(&h, first, blocks, buffer, blocks * 512u, m.now + 100000)); run(&m);
+            terminal(&m, SUNXI_MMC_CARD, buffer);
         }
     }
     /* Maximum SDXC capacity keeps a 64-bit count and accepts its final LBA. */
@@ -339,7 +404,7 @@ int main(int argc, char **argv)
             scenario == 6 ? SUNXI_MMC_IO : scenario == 9 ? SUNXI_MMC_ADMISSION : SUNXI_MMC_CONTROLLER;
         terminal(&m, e, buffer);
         if (scenario <= 3 || scenario == 10) assert(h.result.received == 1024);
-        if (scenario == 4) assert(h.result.received == 64);
+        if (scenario == 4) assert(h.result.received == SUNXI_MMC_FIFO_WORDS * 4u); /* Error seen after one burst. */
         assert(m.command_count < 20); /* No retry/reset after any failure. */
     }
     for (unsigned scenario = 0; scenario < 8; ++scenario) {
@@ -362,7 +427,7 @@ int main(int argc, char **argv)
         if (scenario == 0 || scenario == 1) assert(m.command_count == 2);
         if (scenario == 2 || scenario == 3 || scenario == 4 || scenario == 7) assert(!m.command_count);
     }
-    puts("PASS: pinned CSD parity, SD/eMMC identification and bounded reads, full-range admission, independent completion/status, retained faults and callback guards");
+    puts("PASS: pinned CSD parity, SD/eMMC identification and bounded reads, full-range admission, independent completion/status, FIFO-level bursts, end-of-card OUT_OF_RANGE, retained faults and callback guards");
     return 0;
     return 0;
 }

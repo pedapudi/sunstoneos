@@ -1,10 +1,13 @@
 #include "a733_mmc_platform.h"
 #include "a733_clock_reference.h"
 #include "a733_storage_update.h"
+#include "sunxi_smhc.h"
 #define CCU UINT32_C(0x02002000)
 #define PIO UINT32_C(0x02000000)
 #define GIC UINT32_C(0x03400000)
 #define BIT(n) (UINT32_C(1)<<(n))
+/* Core steps sharing one admitted poll while a transfer advances. */
+#define CORE_STEPS 8u
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,SUPPLIES,BASELINE,GIC_WAIT,PINS,PRESENCE,
        ENABLE,RESET_WAIT,RESET_RELEASE,OPEN,IDENTIFY,READY };
 static const unsigned emmc_pins[]={0,1,5,6,8,9,10,11,13,14,15,16};
@@ -138,7 +141,7 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     return mode==p->voltage_mode;
 }
 static uint32_t irq_bit(const struct a733_mmc_platform *p)
-{return p->config.kind==SUNXI_MMC_SD?BIT(1):p->config.emmc_host==A733_MMC_EMMC_SDC3?BIT(4):BIT(3);}
+{return A733_MMC_GIC_BIT(a733_mmc_slot(p->config.kind,p->config.emmc_host));}
 static int masked(struct a733_mmc_platform *p)
 {
     uint32_t v,mask=irq_bit(p);
@@ -212,6 +215,20 @@ static int core_write(void *v,uint32_t off,uint32_t value)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&wr(p,p->base+off,value);if(!ok)fail(p);return ok;}
 static int core_barrier(void *v)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&p->ops.barrier(p->cookie)==1&&timely(p);if(!ok)fail(p);return ok;}
+static int core_read_fifo(void *v,uint32_t *words,unsigned n)
+{
+    struct a733_mmc_platform *p=v;
+    int ok=core_guard(p)&&n&&n<=SUNXI_MMC_FIFO_WORDS&&
+        p->ops.read_fifo(p->cookie,p->base+SUNXI_SMHC_FIFO,words,n)==1&&timely(p);
+    if(!ok)fail(p);return ok;
+}
+static int core_write_fifo(void *v,const uint32_t *words,unsigned n)
+{
+    struct a733_mmc_platform *p=v;
+    int ok=core_guard(p)&&n&&n<=SUNXI_MMC_FIFO_WORDS&&
+        p->ops.write_fifo(p->cookie,p->base+SUNXI_SMHC_FIFO,words,n)==1&&timely(p);
+    if(!ok)fail(p);return ok;
+}
 static int core_now(void *v,uint64_t *out)
 {struct a733_mmc_platform *p=v;if(!core_guard(p)){fail(p);return 0;}*out=p->last_now;return 1;}
 static int core_retained(void *v,uintptr_t token)
@@ -244,6 +261,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
     a733_clock_mask_t shared;
     if(!p||p->initialized||!a733_mmc_platform_scopes(c,&shared)||!o||!o->now_us||!o->current||
        !o->admit||!o->enter||!o->leave||!o->retain||!o->read||!o->write||!o->barrier||!o->outside||
+       !o->read_fifo||!o->write_fifo||
        !clocks||!clocks->initialized||!pins||!pins->initialized||!rails||rails->self!=rails||
        rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||
        pmic->rails!=rails||pmic->pins!=pins||!pmic->ops.outside||
@@ -263,11 +281,12 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
     }
     struct a733_pmic_lifetime identity;
     if(a733_pmic_identity(pmic,&identity)!=A733_PMIC_READY)return 0;
-    unsigned index=sd?0:c->emmc_host==A733_MMC_EMMC_SDC3?3:2;
+    unsigned slot=a733_mmc_slot(c->kind,c->emmc_host);
     *p=(struct a733_mmc_platform){.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,.pins=pins,
         .rails=rails,.pmic=pmic,.power=identity,.shared=shared,.deadline=c->deadline_us,
-        .base=0x04020000+index*0x1000,.module=CCU+0xd00+index*0x10,.bus=CCU+0xd0c+index*0x10,.running_module=0x8000001d};
-    struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained,core_sd_module},
+        .base=A733_MMC_BASE(slot),.module=A733_MMC_MODULE(slot),.bus=A733_MMC_BUS(slot),.running_module=0x8000001d};
+    struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained,core_sd_module,
+        core_read_fifo,core_write_fifo},
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
@@ -372,7 +391,14 @@ static enum a733_mmc_platform_result controller(struct a733_mmc_platform *p)
     if(p->stage==OPEN) {
         if(!sunxi_mmc_open(&p->core,p->deadline)){p->core_call=0;return fail(p);}
         p->stage=IDENTIFY;
-    } else sunxi_mmc_poll(&p->core);
+    } else for(unsigned i=0;i<CORE_STEPS;++i) {
+        /* The clock, voltage and interrupt checks above cover a few further
+         * core steps only while a transfer advances without a timed wait. Each
+         * step still checks owner, shared-clock failure, service and deadline. */
+        sunxi_mmc_poll(&p->core);
+        if(p->fault||(p->core.state!=SUNXI_MMC_READING&&p->core.state!=SUNXI_MMC_WRITING)||
+           p->core.last_us<p->core.retry_us)break;
+    }
     p->core_call=0;
     if(p->fault||p->core.state==SUNXI_MMC_FAULT||!timely(p))return fail(p);
     if(p->core.state==SUNXI_MMC_READY){p->stage=READY;return A733_MMC_READY;}

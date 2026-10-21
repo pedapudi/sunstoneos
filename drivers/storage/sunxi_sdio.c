@@ -1,34 +1,35 @@
 /* Native bounded controller implementation. Register/protocol references and
  * source identities are documented in docs/sdio.md. */
 #include "sunxi_sdio.h"
+#include "sunxi_smhc.h"
 
-#define GCTRL 0x00u
-#define CLKCR 0x04u
-#define TMOUT 0x08u
-#define WIDTH 0x0cu
-#define BLKSZ 0x10u
-#define BCNT 0x14u
-#define CMD 0x18u
-#define ARG 0x1cu
-#define RESP 0x20u
-#define IMASK 0x30u
-#define RINT 0x38u
-#define STATUS 0x3cu
-#define NTSR 0x5cu
-#define DMAC 0x80u
-#define IDIE 0x8cu
-#define EDSD 0x104u
-#define DRIVE 0x140u
-#define SAMPLE 0x144u
-#define FIFO 0x200u
-#define VERSION 0x300u
-#define START (1u << 31)
-#define AHB (1u << 31)
-#define CMD_DONE (1u << 2)
-#define DATA_OVER (1u << 3)
-#define SDIO_IRQ (1u << 16)
-#define ERRORS 0xbbc2u
-#define UPDATE (START | (1u << 21) | (1u << 13))
+#define GCTRL SUNXI_SMHC_GCTRL
+#define CLKCR SUNXI_SMHC_CLKCR
+#define TMOUT SUNXI_SMHC_TMOUT
+#define WIDTH SUNXI_SMHC_WIDTH
+#define BLKSZ SUNXI_SMHC_BLKSZ
+#define BCNT SUNXI_SMHC_BCNT
+#define CMD SUNXI_SMHC_CMD
+#define ARG SUNXI_SMHC_ARG
+#define RESP SUNXI_SMHC_RESP0
+#define IMASK SUNXI_SMHC_IMASK
+#define RINT SUNXI_SMHC_RINT
+#define STATUS SUNXI_SMHC_STATUS
+#define NTSR SUNXI_SMHC_NTSR
+#define DMAC SUNXI_SMHC_DMAC
+#define IDIE SUNXI_SMHC_IDIE
+#define EDSD SUNXI_SMHC_EDSD
+#define DRIVE SUNXI_SMHC_DRIVE
+#define SAMPLE SUNXI_SMHC_SAMPLE
+#define FIFO SUNXI_SMHC_FIFO
+#define VERSION SUNXI_SMHC_VERSION
+#define START SUNXI_SMHC_CMD_START
+#define AHB (1u << 31) /* GCTRL CPU FIFO access. */
+#define CMD_DONE SUNXI_SMHC_INT_CMD_DONE
+#define DATA_OVER SUNXI_SMHC_INT_DATA_DONE
+#define SDIO_IRQ SUNXI_SMHC_INT_SDIO
+#define ERRORS SUNXI_SMHC_ERRORS
+#define UPDATE SUNXI_SMHC_UPDATE
 
 static int span(const void *p, size_t n) { return p && n <= UINTPTR_MAX - (uintptr_t)p; }
 static int overlap(const void *a, size_t an, const void *b, size_t bn)
@@ -176,11 +177,11 @@ static void issue_step(struct sunxi_sdio *h)
         h->step = 1; return;
     }
     if (h->request.bytes && (!rd(h, GCTRL, &value) || (value & 2))) return;
-    uint32_t command = START | (1u << 6) | h->request.command;
-    if (h->request.command != 5) command |= 1u << 8; /* R4 has no CRC. */
+    uint32_t command = START | SUNXI_SMHC_CMD_RESP | h->request.command;
+    if (h->request.command != 5) command |= SUNXI_SMHC_CMD_CRC; /* R4 has no CRC. */
     if (h->request.bytes) {
-        command |= (1u << 9) | (1u << 13);
-        if (h->request.argument & START) command |= 1u << 10;
+        command |= SUNXI_SMHC_CMD_DATA | SUNXI_SMHC_CMD_WAIT;
+        if (h->request.argument & START) command |= SUNXI_SMHC_CMD_WRITE;
         uint32_t block = h->request.block_bytes ? h->request.block_bytes : (uint32_t)h->request.bytes;
         if (!wr(h, BLKSZ, block) || !wr(h, BCNT, (uint32_t)h->request.bytes)) return;
     }
@@ -209,7 +210,7 @@ static void transfer_step(struct sunxi_sdio *h)
         if (!rd(h, STATUS, &status)) return;
         h->result.status = status;
         int write = (h->request.argument & START) != 0;
-        if (status & (write ? 8u : 4u)) break;
+        if (status & (write ? SUNXI_SMHC_STATUS_FIFO_FULL : SUNXI_SMHC_STATUS_FIFO_EMPTY)) break;
         uint8_t *p = h->request.data + h->result.transferred;
         if (write) {
             word = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);

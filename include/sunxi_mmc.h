@@ -5,6 +5,8 @@
 
 #define SUNXI_MMC_BLOCK_BYTES 512u
 #define SUNXI_MMC_MAX_BLOCKS 8u
+/* FIFO words moved by one bounded poll: one 512-byte block. */
+#define SUNXI_MMC_FIFO_WORDS 128u
 /* Explicit physical slot selection; SDC1 belongs to the radio driver. */
 enum sunxi_mmc_kind { SUNXI_MMC_SD = 1, SUNXI_MMC_EMMC = 2 };
 enum sunxi_mmc_sd_profile { SUNXI_MMC_SD_LEGACY=0, SUNXI_MMC_SD_DEFAULT4=1,
@@ -47,6 +49,12 @@ struct sunxi_mmc_ops {
      * selected module to 400MHz/divisor (N=1), preserving other writers.
      * Exactly1 completes; uncertainty is terminal, with no retry/rollback. */
     int (*sd_module)(void *,uintptr_t token,unsigned divisor);
+    /* Move 1..SUNXI_MMC_FIFO_WORDS words through the FIFO register in order.
+     * The core sizes each burst from one STATUS sample: reads take at most the
+     * reported fill level, writes at most the free space. Admission happens
+     * once per burst. A failed write burst may have transferred any prefix. */
+    int (*read_fifo)(void *,uint32_t *words,unsigned count);
+    int (*write_fifo)(void *,const uint32_t *words,unsigned count);
 };
 struct sunxi_mmc_config {
     struct sunxi_mmc_ops ops;
@@ -112,6 +120,7 @@ struct sunxi_mmc {
     size_t data_bytes, position, borrowed_bytes;
     uint16_t setup, protocol;
     uint8_t command_step, response_seen, entered, initialized, admitted;
+    uint8_t read_tail; /* Open-ended CMD18 ending at the last sector. */
     struct sunxi_mmc_write_request write_request;
     struct sunxi_mmc_write_identity write_identity;
     struct sunxi_mmc_write_authority write_authority;
