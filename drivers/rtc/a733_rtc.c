@@ -99,19 +99,28 @@ int a733_rtc_arm(struct a733_rtc *r,unsigned delay)
     if(!r||r->read_only||r->state!=A733_RTC_READY||delay<1||delay>10)return 0;
     struct a733_rtc_time now,latest;
     if(!coherent(r,&now))return fail(r);
-    uint64_t target=seconds(&now)+delay;
-    if(target/86400>65535)return fail(r);
-    uint32_t d=(uint32_t)(target/86400),s=(uint32_t)(target%86400);
-    uint32_t h=((s/3600)<<16)|(((s/60)%60)<<8)|(s%60);
-    r->snapshot.target_day=d;r->snapshot.target_hms=h;
     uint32_t rd,rh,pending,en,irq,output;
-    if(!write_reg(r,ALDAY,(r->snapshot.saved_day&~UINT32_C(65535))|d)||
-       !write_reg(r,ALHMS,(r->snapshot.saved_hms&~HMS_MASK)|h)||
-       !read_reg(r,ALDAY,&rd)||!read_reg(r,ALHMS,&rh)||
-       (rd&65535)!=d||(rh&HMS_MASK)!=h||!coherent(r,&latest)||
-       !read_reg(r,STATUS,&pending)||!read_reg(r,ENABLE,&en)||
-       !read_reg(r,IRQEN,&irq)||!read_reg(r,0x50,&output)||((pending|en|irq|output)&1)||
-       !coherent(r,&latest)||seconds(&latest)>=target)return fail(r);
+    /* A one-second delay can elapse while the target is written. The alarm is
+     * still disabled and its registers hold only this owner's values, so
+     * retarget once from the later read. The calendar advances once per
+     * second; a second miss within this short sequence is not that race. */
+    for(unsigned attempt=0;;++attempt){
+        uint64_t target=seconds(&now)+delay;
+        if(target/86400>65535)return fail(r);
+        uint32_t d=(uint32_t)(target/86400),s=(uint32_t)(target%86400);
+        uint32_t h=((s/3600)<<16)|(((s/60)%60)<<8)|(s%60);
+        r->snapshot.target_day=d;r->snapshot.target_hms=h;
+        if(!write_reg(r,ALDAY,(r->snapshot.saved_day&~UINT32_C(65535))|d)||
+           !write_reg(r,ALHMS,(r->snapshot.saved_hms&~HMS_MASK)|h)||
+           !read_reg(r,ALDAY,&rd)||!read_reg(r,ALHMS,&rh)||
+           (rd&65535)!=d||(rh&HMS_MASK)!=h||!coherent(r,&latest)||
+           !read_reg(r,STATUS,&pending)||!read_reg(r,ENABLE,&en)||
+           !read_reg(r,IRQEN,&irq)||!read_reg(r,0x50,&output)||((pending|en|irq|output)&1)||
+           !coherent(r,&latest))return fail(r);
+        if(seconds(&latest)<target)break;
+        if(attempt)return fail(r);
+        now=latest;
+    }
     atomic_store_explicit(&r->owned,1,memory_order_release);
     if(!write_reg(r,ENABLE,r->saved_enable|1)||!write_reg(r,IRQEN,r->saved_irq_enable|1)||
        !read_reg(r,ENABLE,&en)||!read_reg(r,IRQEN,&irq)||!(en&irq&1))return fail(r);
