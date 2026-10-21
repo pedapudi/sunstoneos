@@ -17,7 +17,7 @@ int main(int argc,char **argv)
  struct a733_clock_leases clocks={0};assert(a733_clock_leases_init(&clocks,setup_now,NULL));
  struct a733_pins pins={0};struct a733_pin_handoff handoff={0};handoff.authorized[A733_PIN_E]=15;
  struct a733_pins_operations pin_ops={setup_enter,setup_leave,setup_now,setup_read32,setup_write32};assert(a733_pins_init_banks(&pins,&pin_ops,NULL,&handoff));
- struct a733_spi_platform_config config={.owner=23,.handoff=91,.deadline=6000000,.route=A733_SPI3_PE,.format={3,0,0,0,0,500000,2,2}};
+ struct a733_spi_platform_config config={.owner=23,.handoff=91,.deadline=6000000,.route=A733_SPI3_PE,.format={3,0,0,0,0,500000,2,2,0,0}};
  for(unsigned i=0;i<4;++i){config.expected[i]=(struct a733_pin_config){15,0,0};config.desired[i]=(struct a733_pin_config){5,0,0};}
  struct a733_spi_platform_ops ops={setup_now,setup_current,setup_authorize,setup_enter,setup_leave,setup_leave,setup_read32,setup_write32,setup_read8,setup_write8};struct a733_spi_platform platform={0};
  assert(a733_spi_platform_init(&platform,&config,&ops,NULL,&clocks,&pins));

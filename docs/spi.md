@@ -1,10 +1,12 @@
 # Native SPI master transfers
 
-The [controller](../drivers/spi/a733_spi.c) implements single-lane, eight-bit
-master transfers on SPI0–4 and S_SPI. It supports clock modes 0–3, either bit
-order, either chip-select polarity, full duplex, writes, reads and command-response
-transactions. Host checks and native compilation pass. Physical SPI operation
-remains unqualified.
+The [controller](../drivers/spi/a733_spi.c) implements eight-bit master
+transfers on SPI0–4 and S_SPI. It supports clock modes 0–3, either bit order,
+either chip-select polarity, chip selects 0–3, full duplex, writes, reads and
+command-response transactions. Half-duplex transfers can move their data phase
+on two (dual) or four (quad) data lines, and any transfer can use DMA0 instead
+of CPU FIFO access. Host checks and native compilation pass. Physical SPI
+operation, including every dual, quad and DMA transfer, remains unqualified.
 
 ## Controller resources and board routes
 
@@ -80,6 +82,49 @@ invalid after failure. The driver does not automatically retry, abort, reset or
 release resources. A successful close disables the idle controller; the platform
 still owns interrupt, pin and clock release.
 
+## Dual, quad and DMA transfers
+
+A session's format sets the widest data path (`lanes` 1, 2 or 4) and whether
+DMA transfers are permitted (`dma`). Each transfer then selects its own lane
+count and a single-lane prefix length. The prefix carries the command and any
+single-lane address or dummy bytes on MOSI; the remaining TX bytes and every RX
+byte use the selected lines. This matches the manual's dual-output, dual I/O
+and quad-output flash commands (section 18.8.5.4–18.8.5.5). The driver writes
+the prefix length to the single-mode transmit counter (BCC bits 0–23) and sets
+BCC bit 28 for dual or bit 29 for quad, as the pinned `spi-sunxi.c` does.
+Full-duplex transfers stay single-lane. Byte counts and FIFO handling are the
+same for every lane count. The automatic dummy-burst counter is unused; callers
+include dummy bytes in the prefix or the multi-lane TX bytes.
+
+Quad transfers need IO2 (WP) and IO3 (HOLD) pins. No admitted platform route
+leases those pins, so the [platform binding](spi-platform.md) refuses `lanes`
+4. Dual transfers reuse MOSI and MISO as the two data lines.
+
+A DMA transfer names no CPU buffer. The caller starts one DMA0 channel per
+direction, using the controller's request line, 1-byte width and single-beat
+bursts, before submitting. The request lines from manual table 13-2 are 23–26
+for SPI0–3 and 53 for S_SPI. SPI4 has no DMA request: the board device tree
+names 54, but the manual lists no source at that request, so the driver
+refuses DMA for SPI4.
+
+Submission requires the normal DMA handshake setting (`0xe5` at offset `0x88`)
+and a FIFO control word without requests. It enables the TX request (trigger
+level 32) and RX request (trigger level 1) that the transfer needs and checks
+the readback. Completion requires the transfer interrupt, XCH clear and empty
+FIFO and internal buffers, so the RX channel must have emptied the FIFO. The
+hold interval then disables both requests, checks the readback and deasserts
+CS. The controller's byte counts stay zero for DMA transfers; the DMA service's
+completion and quiescence establish the moved data. Close refuses a FIFO
+control word that still enables a request.
+
+An abandoned DMA transfer calls `a733_spi_dma_stop` with a fresh cleanup
+deadline instead of polling. It disables both requests, checks the readback
+and enters the terminal fault state with CS, buffers and leases retained.
+`dma_requests` then reads zero, and the caller may cancel its DMA channels. A
+poll after the transfer deadline faults first and leaves the requests enabled;
+those channels then need external recovery. No application uses SPI DMA or
+multi-lane transfers yet.
+
 ## Sources and focused evidence
 
 Register semantics follow A733 manual sections 18.8 and 18.9. Controller versions,
@@ -99,6 +144,16 @@ Evidence is stored under `~/.cache/sunstoneos/evidence/spi-20261016/`:
   device tree and the corrected AArch64 core object. The main CCU base is
   `0x02002000`.
 
+Dual, quad and DMA cases run in the same host model and in the
+[platform composition](spi-platform.md). The model checks the BCC value at
+each transfer start, dual command-response, quad read and quad write data,
+refused lane combinations, DMA transfers of every kind with the FIFO request
+words before and after, a delayed RX channel, handshake mismatch, abandonment
+with and without a successful request readback, and close with an enabled
+request. Evidence is under
+`~/.cache/sunstoneos/build/audit-serial-buses/checks/spi/` and
+`checks/spi-platform/` in the same directory.
+
 The `native-correction` and `ccu-base-correction` directories also archive a
 standalone native binding that no image linked. That binding has been removed;
 the [platform binding](spi-platform.md) and its evidence replace it.
@@ -112,8 +167,13 @@ remain protected.
 
 The [supervised SPI3 application](spi-application.md) also implements deferred
 interrupt completion for one FIFO-sized WRITE_READ request; polling remains
-available. Broader interrupt-driven scheduling, DMA, calibrated high rates, slave operation,
-dual/quad transfers, three-wire and bit-aligned transfers, SPI1 DBI operation,
-power transitions and applicable flash protocols remain required. The separate
-SPIF controller is outside this driver's register aperture and remains in scope
-for its own implementation. No benchmark has run.
+available. An application that uses DMA or dual transfers, a route with IO2/IO3
+pins for quad transfers, interrupt completion for DMA transfers, wider DMA
+bursts, broader interrupt-driven scheduling, calibrated high rates, slave
+operation, three-wire and bit-aligned transfers, SPI1 DBI operation, power
+transitions and applicable flash protocols remain required. The pinned BSP
+bit-aligned implementation is not in the source cache, and the manual leaves
+the bit-aligned clock source ambiguous. The separate SPIF controller is outside
+this driver's register aperture and remains in scope for its own
+implementation; its pins share PC with the unpopulated eMMC footprint and boot
+storage. No benchmark has run.
