@@ -116,7 +116,7 @@ static unsigned poll_channel(struct dma_service *s,unsigned i)
 }
 enum { IRQ_EVENT=1u, IRQ_FAILED=2u };
 /* Whether channel i can wait for its next DMA interrupt. Stop drain, I2S
- * register and health operations, TX priming and an uncopied RX period all
+ * register and health operations, TX priming and a copyable RX period all
  * progress without one, so they keep tick polling. */
 static int event_driven(struct dma_service *s,unsigned i)
 {
@@ -128,7 +128,8 @@ static int event_driven(struct dma_service *s,unsigned i)
     uint64_t packages;
     if (st->status != A733_I2S_ACTIVE || st->deadline || st->priming) return 0;
     if (!st->profile.cyclic || st->profile.direction == A733_I2S_TRANSMIT) return 1;
-    return a733_dma_cyclic_progress(&s->controller,i,&packages) && packages <= st->raw_next;
+    /* Receive period raw_next becomes copyable once raw_next+1 completes. */
+    return a733_dma_cyclic_progress(&s->controller,i,&packages) && packages < st->raw_next+2;
 }
 /* Account for ISR notifications, after this pass has acknowledged events. */
 static void irq_observe(struct dma_service *s,unsigned pending)
