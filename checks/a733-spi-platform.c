@@ -1,6 +1,7 @@
 #include "a733_spi_platform.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct cell {uintptr_t a;uint32_t v;};
@@ -11,7 +12,8 @@ struct fixture {
     struct cell cells[160];unsigned count;
     uint64_t time,hold_start;
     unsigned locked,poisoned,authorized,initial_pin_writes,transactions,received,rn;
-    unsigned deny_read,late_reap,late_seen;
+    unsigned deny_read,late_reap,late_seen,osc_reads;
+    uint64_t trace;
     uintptr_t fail_write;
 };
 static uint32_t *cell(struct fixture *f,uintptr_t a)
@@ -46,6 +48,7 @@ static int rd(void *p,uintptr_t a,uint32_t *v)
 {
     struct fixture *f=p;assert(f->locked);
     if(f->deny_read)return 0;
+    if(a==0x07090160)f->osc_reads++;
     if(a==f->platform.spi.plan.base+4&&(*cell(f,a)&0x80000000)) *cell(f,a)=0x80;
     if(a==f->platform.spi.plan.base+0x18)*cell(f,a)&=~0x80008000u;
     if(a==f->platform.spi.plan.base+0x1c)*v=f->rn;else *v=*cell(f,a);
@@ -54,6 +57,7 @@ static int rd(void *p,uintptr_t a,uint32_t *v)
 static int wr(void *p,uintptr_t a,uint32_t v)
 {
     struct fixture *f=p;assert(f->locked);struct a733_spi_platform *s=&f->platform;
+    f->trace=(f->trace^a^((uint64_t)v<<32))*UINT64_C(0x100000001b3);
     uintptr_t base=s->spi.plan.base,bank=0x03400000u+4*(s->spi.plan.intid/32);
     if(a==bank+0x180){*cell(f,bank+0x100)&=~v;return 1;}
     if(a==bank+0x280){*cell(f,bank+0x200)&=~v;return 1;}
@@ -124,7 +128,12 @@ static void working(void)
         if(route==A733_SPI3_PE) {
             uint8_t rx[4]={0};struct a733_spi_transfer t={A733_SPI_READ,0,rx,0,4};
             assert(a733_spi_platform_submit(&f.platform,&t,100000)==A733_SPI_PLATFORM_PENDING);
-            assert(advance(&f,A733_SPI_PLATFORM_COMPLETE)==A733_SPI_PLATFORM_COMPLETE);
+            /* Each transfer poll revalidates the parent once, inside admission. */
+            enum a733_spi_platform_result r=A733_SPI_PLATFORM_PENDING;
+            for(unsigned i=0;i<100&&r==A733_SPI_PLATFORM_PENDING;i++) {
+                f.osc_reads=0;r=a733_spi_platform_poll(&f.platform,8);assert(f.osc_reads==1);
+            }
+            assert(r==A733_SPI_PLATFORM_COMPLETE);
             assert(f.transactions==1&&rx[0]==1&&rx[3]==4);
             f.late_reap=1;
             assert(a733_spi_platform_reap(&f.platform,100000)==A733_SPI_PLATFORM_READY);
@@ -137,6 +146,7 @@ static void working(void)
         f.time=saved;
         assert(a733_spi_platform_close(&f.platform,100000)==A733_SPI_PLATFORM_PENDING);
         assert(advance(&f,A733_SPI_PLATFORM_CLOSED)==A733_SPI_PLATFORM_CLOSED);
+        if(getenv("SPI_TRACE"))printf("route %u write trace %016llx\n",route,(unsigned long long)f.trace);
         assert(!f.platform.clock.id&&!f.poisoned&&!f.locked);
         assert(*cell(&f,f.platform.spi.plan.clock)==0x07000302);
         assert(*cell(&f,f.platform.spi.plan.reset)==0x20000000);
