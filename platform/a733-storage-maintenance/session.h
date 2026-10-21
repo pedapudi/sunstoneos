@@ -22,7 +22,9 @@
  * 112 minimum reload us, 120 maximum recovery us, 128 guard us,
  * 136 absolute reset-by us, 144/148/152 RTC control/divider/source, 156 zero.
  * 160..415 is the existing storage grant, copied verbatim.
- * 416 topology, 424 topology artifact SHA256, 456..487 zero,
+ * 416 topology, 424 topology artifact SHA256, 456 MMC SD profile u32
+ * (0 one-bit 400 kHz, 1 four-bit default speed, 2 four-bit high speed;
+ * nonzero only for SD), 460..487 zero,
  * 488 supply targets[4], 504/512/520 MMC/PMIC/USB owner identities,
  * 528 fabric[3], 540 fabric rates[3], 552 MMC voltage mask,
  * 556 USB cold-reference flag, 560 MMC expected[12][3],

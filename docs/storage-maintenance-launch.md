@@ -32,6 +32,14 @@ additional authorization fields. The session also binds the epoch, generation,
 boot lease, final ELF digest, physical recovery digest, qualified watchdog bounds,
 RTC source snapshots and native pin, clock and supply configuration.
 
+The 32-bit word at offset 456 selects the SD bus profile for the MMC platform:
+0 for one-bit 400 kHz operation, 1 for four-bit default speed and 2 for
+four-bit high speed. The optional `mmc_sd_profile` configuration key sets it
+and defaults to 0. The launcher and the native decoder refuse any other value,
+a nonzero profile for eMMC and nonzero bytes in the reserved range 460..487.
+The native platform refuses a pin route that does not match the profile:
+profiles 1 and 2 require mux 2 on PF0–PF5.
+
 The initial reload observations at offsets 640 and 648 are zero in uploaded
 bytes. The ARM launcher records the physical counter immediately before and
 after the initial hardware arm/reload sequence. It requires a span shorter than
@@ -110,7 +118,9 @@ loss or bootability of written bytes.
 ## Selective validation
 
 The connected check builds the actual maintenance image and exercises the new
-launcher/session boundaries and protected host lifecycle. The recorded composition
+launcher/session boundaries and protected host lifecycle. Its decoder cases
+also confirm that profile 2 reaches the decoded MMC configuration and that a
+profile of 3, a nonzero reserved byte and an eMMC profile refuse. The recorded composition
 passed nine ARM launcher cases, nine linked AArch64 admission, decoder and fatal
 exception cases, and the protected host backup lifecycle. The runtime dependency
 manifest matches the compiled source and headers. The build log preserves the

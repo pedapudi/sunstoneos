@@ -172,7 +172,7 @@ class Native:
                     name=die.attributes.get('DW_AT_name')
                     if die.tag=='DW_TAG_structure_type' and name and 'DW_AT_byte_size' in die.attributes:
                         label=name.value.decode()
-                        if label in ('a733_storage_native_boot','a733_maintenance_transfer','a733_storage_grant','a733_maintenance_lease'):
+                        if label in ('a733_storage_native_boot','a733_maintenance_transfer','a733_storage_grant','a733_maintenance_lease','a733_mmc_platform_config'):
                             members={d.attributes['DW_AT_name'].value.decode():d.attributes['DW_AT_data_member_location'].value
                                 for d in die.iter_children() if d.tag=='DW_TAG_member' and 'DW_AT_name' in d.attributes}
                             self.layout[label]=(die.attributes['DW_AT_byte_size'].value,members)
@@ -231,6 +231,23 @@ def native_cases(image,observed,e):
         assert m.call('a733_storage_session_decode',(0x41e00000,0x41e04000,0x41f00000,now))==0
         assert bytes(m.u.mem_read(0x41e00000,4096))==b'\xa5'*4096 and bytes(m.u.mem_read(0x41e04000,4096))==b'\x5a'*4096
         cases.append(label+' leaves outputs untouched')
+    # The SD profile word at offset 456 reaches the MMC configuration; other
+    # values, other reserved bytes and a profile for eMMC refuse.
+    profile=bm['mmc']+n.layout['a733_mmc_platform_config'][1]['sd_profile']
+    assert struct.unpack('<I',n.u.mem_read(0x41e00000+profile,4))[0]==0
+    m=Native(image);good_profile=bytearray(raw);struct.pack_into('<I',good_profile,456,2);m.u.mem_write(0x41f00000,bytes(good_profile))
+    assert m.call('a733_storage_session_decode',(0x41e00000,0x41e04000,0x41f00000,now))==1
+    assert struct.unpack('<I',m.u.mem_read(0x41e00000+profile,4))[0]==2
+    cases.append('SD profile two reaches the decoded MMC configuration')
+    m=Native(image);emmc=bytearray(raw);struct.pack_into('<I',emmc,172,2);m.u.mem_write(0x41f00000,bytes(emmc))
+    assert m.call('a733_storage_session_decode',(0x41e00000,0x41e04000,0x41f00000,now))==1
+    for label,offset,value in [('profile three',456,3),('reserved byte after profile',460,1),('eMMC with profile one',172,2)]:
+        m=Native(image);bad=bytearray(raw);struct.pack_into('<I',bad,offset,value)
+        if offset==172:struct.pack_into('<I',bad,456,1)
+        m.u.mem_write(0x41f00000,bytes(bad));m.u.mem_write(0x41e00000,b'\xa5'*4096)
+        assert m.call('a733_storage_session_decode',(0x41e00000,0x41e04000,0x41f00000,now))==0
+        assert bytes(m.u.mem_read(0x41e00000,4096))==b'\xa5'*4096
+        cases.append(label+' refuses')
     for state in (0,16,1):
         m=Native(image);ptr=m.call('a733_maintenance_native_lease');off=m.layout['a733_maintenance_lease'][1]['state']
         m.u.mem_write(ptr+off,struct.pack('<I',state));records=m.symbols['a733_cached_records']
@@ -310,6 +327,20 @@ def host_case(host,bundle,p,store,grant,e):
     (e/'host-results.json').write_text(json.dumps(result,indent=2)+'\n')
 
 
+def profile_cases(host,e):
+    """The launcher places the optional SD profile at offset 456 and refuses other values."""
+    config=json.loads((e/'fixture-configuration.json').read_text());raw=(e/'bundle/session.bin').read_bytes()[160:416]
+    assert struct.unpack_from('<I',host.session_bytes(raw,config,'11'*32,1,2,3),456)[0]==0
+    session=host.session_bytes(raw,dict(config,mmc_sd_profile=2),'11'*32,1,2,3)
+    assert struct.unpack_from('<I',session,456)[0]==2 and not any(session[460:488])
+    emmc=bytearray(raw);struct.pack_into('<I',emmc,12,2)
+    for grant,profile in ((raw,3),(raw,True),(raw,-1),(bytes(emmc),1)):
+        try:host.session_bytes(grant,dict(config,mmc_sd_profile=profile),'11'*32,1,2,3);assert False
+        except ValueError:pass
+    (e/'profile-results.json').write_text(json.dumps(['default profile zero','profile two at offset 456',
+        'profile three, boolean and negative values refuse','eMMC profile refuses'],indent=2)+'\n')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--freertos',type=Path,required=True);parser.add_argument('--tinyusb',type=Path,required=True)
@@ -329,6 +360,7 @@ def main():
         host_case(host,e/'bundle',p,store,grant,e)
         try:host.validate_session({},p,grant,{}, {},'fixture','fixture');assert False
         except ValueError:pass
+        profile_cases(host,e)
     (e/'results.json').write_text(json.dumps(dict(physical_access=False,image_sha256=sha(image),launcher_sha256=sha(e/'bundle/launch.bin'),
         native_image=True,host_instruction_composition=True,limits='No physical recovery, coherence, storage, USB or board qualification; unchanged scheduler/driver workloads reused.'),indent=2)+'\n')
     print('PASS: connected image, launcher/session/fatal-hook instructions and protected host composition')

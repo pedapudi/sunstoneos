@@ -80,7 +80,8 @@ CMD16 changes the volatile read block length; it does not write media contents.
 
 ## SD can negotiate four-bit default and high-speed operation
 
-The read-only application selects a typed SD profile before identification.
+The read-only application and the storage maintenance session each select a
+typed SD profile before identification.
 Profile zero preserves the original one-bit 400 kHz path. Profile one requires
 four-bit default-speed signaling at a configured rate no greater than the CSD
 `TRAN_SPEED` limit or 25 MHz. Profile two requires positive high-speed support
@@ -288,7 +289,8 @@ SD v1 identification, SDUC, eight-bit buses, UHS rates, voltage switching,
 tuning, DMA, interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
 4 KiB sectors, command queuing, hotplug/recovery and power management remain
 outside the implemented profile. Four-bit default-speed and high-speed SD reads
-are implemented but physically unqualified, as is the update-bound writer. UFS remains tracked separately in
+are implemented but physically unqualified, as is the update-bound writer at
+every profile. UFS remains tracked separately in
 [storage.md](storage.md). Completing this component does not complete board
 storage support or the full OS goal. Performance qualification follows
 functional hardware coverage under the [validation policy](validation.md).
