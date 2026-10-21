@@ -37,6 +37,7 @@ struct a733_radio_session {
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
     unsigned bootstrap_only,reconnect_phase;
+    uint64_t discarded_data; /* Ordinary frames received without a consumer. */
     uint64_t reconnect_deadline,reconnect_open;
     uint16_t reconnect_reason;
     struct aic8800_wifi_target reconnect_target;

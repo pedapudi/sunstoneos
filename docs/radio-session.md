@@ -104,6 +104,16 @@ a failed subsequent attachment retains the session rather than replacing keys.
 The runtime binding challenge likewise requires a successful real platform-ID
 callback. The session supplies neither an identity stub nor an entropy fallback.
 
+Port authorization can admit ordinary data frames before
+`a733_radio_session_start_network` attaches the socket service; an access point
+may send a broadcast immediately after the port opens. While the session is in
+its management or bootstrap stage, each poll discards one such frame after
+dispatcher polling and counts it in `discarded_data`. A held frame would
+otherwise stop the transport receive parser. The supplicant could then never
+reach its authorized state, and network attachment would never become ready.
+EAPOL frames remain owned by the supplicant. Reconnect discards ordinary frames
+in the same way while the network is offline.
+
 The hardware entropy source has not completed production security qualification.
 Deterministic fixture entropy establishes only software control flow. It does
 not qualify WPA2, TCP sequence unpredictability or a secure physical network.
@@ -243,6 +253,11 @@ until both bounds agree. A subsequent actual clock
 lease failure retained the active packet and socket while returning link
 loss through the copied reply queue. Provider-backing alias admission and
 wrong-task polling were also refused.
+
+After open-port authorization and before network start, the fixture delivers
+one broadcast ARP frame. The session must discard it, and network start must
+then succeed with the transport ready. The session code without this discard
+retains the session in the same case.
 
 The focused run passed once. Its preserved executable has SHA-256
 `9d3b52249a9a102697aca8c344530d53b087d876b24f484e220582ea6bf3165b`.

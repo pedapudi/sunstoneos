@@ -118,6 +118,16 @@ int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platf
 {return initialize(s,p,c,0);}
 int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
 {return initialize(s,p,c,1);}
+/* Ordinary frames admitted while no network consumer is attached are counted
+ * and discarded. A held frame would stop the receive parser and attachment. */
+static int discard_data(struct a733_radio_session *s)
+{
+    struct aic8800_data_frame frame;
+    if(!aic8800_dispatch_peek_data(&s->dispatcher,&frame))return 0;
+    if(!aic8800_dispatch_consume_data(&s->dispatcher))return -1;
+    if(s->discarded_data!=UINT64_MAX)++s->discarded_data;
+    return 1;
+}
 /* Each phase advances one existing bounded worker; the device lifetime and
  * data sequence are never reconstructed. Only the IP task processes its fence. */
 static int reconnect_poll(struct a733_radio_session *s)
@@ -130,11 +140,8 @@ static int reconnect_poll(struct a733_radio_session *s)
     }
     if(s->reconnect_phase<7){
         aic8800_dispatch_poll(&s->dispatcher);
-        struct aic8800_data_frame frame;
-        if(aic8800_dispatch_peek_data(&s->dispatcher,&frame)){
-            if(!aic8800_dispatch_consume_data(&s->dispatcher))return 0;
-            return 1; /* Offline old-generation RX is deliberately discarded. */
-        }
+        int discarded=discard_data(s);
+        if(discarded)return discarded>0; /* Offline old-generation RX is deliberately discarded. */
     }
     if(s->reconnect_phase<=2&&s->wifi.link!=
        (s->reconnect_target.security==AIC8800_WIFI_OPEN?AIC8800_WIFI_ASSOCIATED_OPEN:AIC8800_WIFI_SECURED))return 0;
@@ -238,8 +245,11 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
         if(aic8800_transport_start_data(t,&s->data))s->stage=MANAGEMENT;
         else aic8800_dispatch_poll(&s->dispatcher);
         break;
-    case MANAGEMENT:aic8800_dispatch_poll(&s->dispatcher);break;
-    case BOOTSTRAP:aic8800_dispatch_poll(&s->dispatcher);break;
+    case MANAGEMENT:case BOOTSTRAP:
+        /* An open port may admit frames before start_network attaches sockets. */
+        aic8800_dispatch_poll(&s->dispatcher);
+        if(discard_data(s)<0)return leave(s,fail(s));
+        break;
     case RECONNECT:if(!reconnect_poll(s))return leave(s,fail(s));break;
     case NETWORK:
         if(!sunstone_net_poll_owned(&s->sockets))return leave(s,fail(s));
