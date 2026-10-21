@@ -145,6 +145,16 @@ def main():
         assert re.search(r'cpu_' + c + r'_clk, "cpu_' + c + r'", cpu_' + c + r'_parents,\s*' + hex(int(reg, 16) + 0x1c) + r', 24, 3', pll)
     assert 'reg & lock, 100, 70000' in pll and '!(reg & clear), 100, 10000' in pll
     assert '#define UPDATE_US 10000u' in driver and '#define LOCK_US 70000u' in driver
+    # Pattern and LFM words the inspection reads, and the enables the pinned probe sets.
+    for c, base in [('L', 0x1000), ('B', 0x2000)]:
+        for name, off in [('PAT0', 0x4), ('PAT1', 0x8), ('LFM', 0x18)]:
+            assert re.search(r'#define SUN60IW2_PLL_CPU_%s_%s_REG\s+0x%04x\b' % (c, name, base + off), pll), (c, name)
+    for term in ['val |= BIT(29) | BIT(30);  /* ues Triangular(3bit) */', 'val |= BIT(31);  /* enable lfm_en */',
+                 'val |= BIT(31) | BIT(8);  /* 1.125MHz/us */']:
+        assert term in pll, term
+    for define in ['#define PAT0 0x4u', '#define PAT1 0x8u', '#define LFM 0x18u',
+                   '#define PAT0_TYPE (BIT(29)|BIT(30))', '#define PAT1_LFM BIT(31)', '#define LFM_ON BIT(31)']:
+        assert define in driver, define
     assert 'const unsigned nmax=c->cluster==A733_CPU_LITTLE ? 84u : 86u;' in driver
     nkmp = kernel['ccu_nkmp.c']
     assert 'rate = ccu_nkmp_calc_rate(parent_rate, n, k, m, 1 << p);' in nkmp  # P is a power of two.

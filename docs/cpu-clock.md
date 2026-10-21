@@ -100,7 +100,9 @@ every request is refused. NORMAL admits granted points; THROTTLE admits only
 points at or below 1014 MHz, which needs 800 mV in every bin; CRITICAL refuses
 every transition and cannot be cleared. While idle under THROTTLE, the driver
 lowers a cluster that it raised above 1014 MHz back to 1014 MHz. That
-transition consumes no change and keeps the voltage. The thermal driver
+transition consumes no change and keeps the voltage. If it ends REFUSED or
+EXPIRED, the driver does not start it again while idle; the cluster stays at
+its rate until the owner requests a transition of that cluster. The thermal driver
 itself is unchanged; its owner task must call this function from its level
 callback to establish the coupling.
 
@@ -118,40 +120,66 @@ step and never waits in a loop:
 2. Acquire the cluster's rail exclusively in the rail ledger.
 3. Read and check the inherited state: a 26 MHz oscillator that is enabled
    and stable, a mapped speed bin, the cluster PLL enabled and locked with no
-   update pending, the mux on that PLL, and N within range. For CPU-L, the
-   DSU rate must decode and have a supported DSU point.
-4. Read the rail through a PMIC snapshot.
+   update pending, the mux on that PLL, and N within range. The cluster's
+   pattern and frequency-modulation enables, described below, must be clear.
+   For CPU-L, the DSU rate must decode and have a supported DSU point.
+4. Read the rail through a PMIC snapshot. The output must be enabled and its
+   selector must decode.
 5. Compute the target voltage: the target point's voltage, and for CPU-L at
    least the voltage of the lowest DSU point at or above the current DSU
    rate.
 6. When raising the rate, write a higher voltage first, then wait for the
    ramp of `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay. No write
    is made when the present voltage is already enough.
-7. Change the frequency: park the mux on the DCXO, write N, set the update
-   bit, wait up to 10 ms for it to clear and up to 70 ms for lock (the pinned
-   driver's limits), write P, and select the PLL again. Every mux and P
-   write is read back, and the final words must decode to the target rate.
+7. Change the frequency. The remaining time before the caller's deadline
+   must cover both PLL waits and a 10 ms margin for the owner polls that
+   follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
+   before any PLL or mux write. Then park the mux on the DCXO, write N, set
+   the update bit, wait up to 10 ms for it to clear and up to 70 ms for lock
+   (the pinned driver's limits), write P, and select the PLL again. Every mux
+   and P write is read back, and the final words must decode to the target
+   rate.
 8. When lowering the rate, write the lower voltage after the frequency
    change and wait for the same ramp.
 9. Release both leases.
 
 The pinned Linux driver changes N in place with linear frequency modulation
-enabled. This driver does not program the modulation registers; parking on
-the oscillator keeps the cluster on a stable clock while the PLL relocks. A
+(LFM) enabled. At probe it sets these bits in each CPU PLL's control words:
+
+- bits 29 and 30 of the pattern word PAT0 (`PLL + 0x4`), a triangular
+  pattern;
+- bit 31 of PAT1 (`PLL + 0x8`), `lfm_en`;
+- bits 31 and 8 of the LFM word (`PLL + 0x18`), a 1.125 MHz/µs ramp.
+
+With any of these enabled, N alone may not define the rate, and lock may be
+reported before the PLL reaches its final rate. A lowering could then
+reselect the PLL while it still runs fast and lower the voltage under it.
+This driver reads the three words for the cluster and refuses the transition
+when PAT0 bit 29 or 30, PAT1 bit 31 or LFM bit 31 is set. It never writes
+them. Their values after boot0 are unknown, so the first physical trial
+shows whether this check admits the board's inherited state. Parking on the
+oscillator keeps the cluster on a stable clock while the PLL relocks. A
 transition to the present rate completes without writes.
 
 ## Failure handling keeps ownership after any write
 
 Refusals found during steps 1 to 4 release both leases and return REFUSED.
+This includes a snapshot that shows the rail disabled or an undecodable
+selector. A failed register read or a PMIC provider fault returns RETAINED
+even before any write, because the access path itself is then uncertain.
+
 A deadline reached before the PLL is touched returns EXPIRED with both leases
-released. This includes a PMIC request that expired before it reached the bus.
-At that point the hardware holds at most a confirmed higher voltage, which
-covers the present rate. A lowering whose voltage write has completed still
-finishes its ramp wait. Any error, timeout, readback mismatch or rejected PMIC
-write after the first write returns RETAINED, and so does a deadline reached
-during the PLL update, lock or unpark steps. The driver then keeps the clock
-and rail leases, marks both managers retained and makes no further access. A
-PLL timeout leaves the cluster parked on the 26 MHz oscillator.
+released. This includes a PMIC request that expired before it reached the bus,
+and a remaining deadline too short for the PLL waits in step 7. At that point
+the hardware holds at most a confirmed higher voltage, which covers the
+present rate. A lowering whose voltage write has completed still finishes its
+ramp wait. Any error, timeout, readback mismatch or rejected PMIC write after
+the first write returns RETAINED. A deadline reached during the PLL update,
+lock or unpark steps also returns RETAINED; step 7 admits the PLL change only
+when the deadline covers those steps, so this requires the owner task to be
+delayed by more than the 10 ms margin. After RETAINED the driver keeps the
+clock and rail leases, marks both managers retained and makes no further
+access. A PLL timeout leaves the cluster parked on the 26 MHz oscillator.
 
 ## Validation
 
@@ -174,17 +202,25 @@ PLL write while that cluster's mux selects the PLL. Its cases cover:
   last, and CPU-B on DCDC3;
 - a DSU rate that keeps DCDC5 at 900 mV when CPU-L is lowered;
 - the envelope for code 0;
-- THROTTLE refusal and automatic lowering, and terminal CRITICAL;
-- refusals for a 24 MHz oscillator, a PERI0 parent, an unlocked PLL and an
-  undecodable DSU rate;
+- THROTTLE refusal and automatic lowering, terminal CRITICAL, and no idle
+  retry after a refused throttle lowering;
+- refusals for a 24 MHz oscillator, a PERI0 parent, an unlocked PLL, an
+  undecodable DSU rate, a disabled DCDC5 snapshot and each pattern or LFM
+  enable, all with no register or PMIC write;
 - clean expiry while another owner holds the clock scope, while the
-  snapshot is still queued, and during the ramp wait of a raise;
+  snapshot is still queued, during the ramp wait of a raise, and after a
+  raise's voltage write when 3 ms remain for a PLL that locks in 5 ms, with
+  the PLL and mux untouched;
+- a PLL that locks in 60 ms within a 95 ms deadline, which completes;
 - retention after an update timeout, a lock timeout, a PMIC write whose
   readback differs and a selector changed after the snapshot.
 
 In a separate manual run, two altered drivers failed the model: one that
-changes frequency before voltage, and one that skips the ramp wait. The check
-passed on 2026-10-21.
+changes frequency before voltage, and one that skips the ramp wait. Four
+further altered drivers each failed one of the new cases: one without the
+step 7 deadline check, one that retains on a disabled snapshot, one that
+retries a refused throttle lowering, and one that ignores the LFM enable. The
+check passed on 2026-10-21.
 These are software results only. Physical lock time, settling, rail
 accuracy, frequency and thermal behavior remain unmeasured, and the driver
 has no native adapter.

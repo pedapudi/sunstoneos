@@ -40,8 +40,10 @@ void a733_cpu_clock_decode(uint32_t dcxo_hz,uint32_t pll,uint32_t select,struct 
  * caller with read access may use it, for example to name the clock in a
  * timing record. Returns 1 when every read succeeded. */
 int a733_cpu_clock_report(int (*read)(void *,uintptr_t,uint32_t *),void *,struct a733_cpu_clock_report *);
-/* Native access policy: those eight reads, and writes only to the CPU-L and
- * CPU-B PLL and mux/P words. The DSU and PLL_CPU_BACK are never written. */
+/* Native access policy: those eight reads, reads of the CPU-L and CPU-B
+ * pattern (PLL+0x4, +0x8) and LFM (PLL+0x18) words, and writes only to the
+ * CPU-L and CPU-B PLL and mux/P words. The DSU and PLL_CPU_BACK are never
+ * written. */
 int a733_cpu_clock_address(uintptr_t,int write);
 
 /* Physical use needs the user's approval for each change. A supervised
@@ -81,6 +83,7 @@ struct a733_cpu_clock {
     uint64_t last_now, deadline, timer;
     uint32_t changes, applied_mhz[2], target_mhz, from_uv, to_uv, select;
     unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained;
+    unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
 };
 /* Zeroed private storage once. Managers and the PMIC provider have platform
  * lifetime. The grant is copied. No hardware access. */
@@ -94,18 +97,24 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
     enum a733_cpu_domain,uint32_t mhz,uint64_t deadline);
 /* Owner task, one bounded step per call, no busy waits. Exclusive cluster
  * clock lease (LITTLE also holds the DSU rate shared) and exclusive rail
- * lease, then inspection and a PMIC snapshot. A raise writes voltage, waits
- * the ramp, then changes frequency; a lowering changes frequency, then
- * voltage. Frequency changes park the mux on the DCXO, write N with the update
- * bit, wait for update (10 ms) and lock (70 ms), set P and select the PLL
- * again. COMPLETE, REFUSED or EXPIRED end a transition and release both
- * leases. REFUSED occurs before any write; EXPIRED before the PLL is touched,
- * leaving at most a confirmed voltage that covers the present rate. A fault,
- * or expiry once the PLL is touched, returns RETAINED: the leases, the PMIC
- * request and the hardware state are kept and every later call returns
- * RETAINED. While idle under THROTTLE, a cluster this
- * driver raised above the throttle ceiling is lowered to it without consuming
- * a change and without lowering its voltage. Idle with nothing to do: READY. */
+ * lease, then inspection and a PMIC snapshot. Inspection refuses a PLL with
+ * its pattern or LFM enables set. A raise writes voltage, waits the ramp,
+ * then changes frequency; a lowering changes frequency, then voltage.
+ * Frequency changes park the mux on the DCXO, write N with the update bit,
+ * wait for update (10 ms) and lock (70 ms), set P and select the PLL again.
+ * The PLL is touched only when the remaining deadline covers both waits plus
+ * a 10 ms margin. COMPLETE, REFUSED or EXPIRED end a transition and release
+ * both leases. REFUSED occurs before any write, including for a disabled or
+ * undecodable rail snapshot; EXPIRED before the PLL is touched, leaving at
+ * most a confirmed voltage that covers the present rate. A fault, including
+ * a failed register read or PMIC provider fault before any write, or expiry
+ * once the PLL is touched, returns RETAINED: the leases, the PMIC request and
+ * the hardware state are kept and every later call returns RETAINED. While
+ * idle under THROTTLE, a cluster this driver raised above the throttle
+ * ceiling is lowered to it without consuming a change and without lowering
+ * its voltage. If that lowering is refused or expires, it is not retried
+ * until the owner requests that cluster again. Idle with nothing to do:
+ * READY. */
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
 /* Any task: the thermal policy's level. Before the first call every request
  * is refused. NORMAL admits granted points, THROTTLE admits none above the

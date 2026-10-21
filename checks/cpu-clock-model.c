@@ -14,7 +14,7 @@
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count;
-    uint64_t update_at[3], lock_at[3];
+    uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     struct { uint32_t from_uv, to_uv; uint64_t at; } ramp[2]; /* DCDC5, DCDC3. */
     struct event events[64];
 };
@@ -82,7 +82,7 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
             /* The PLL changes only while its cluster runs from the DCXO. */
             assert(((*word(SEL(d))>>24)&7)==0);
             *word(a)=value&~(1u<<28);
-            if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+20;}
+            if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
         }
         if(a==SEL(d)){*word(a)=value;covered();}
     }
@@ -234,17 +234,32 @@ int main(void)
     assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_CRITICAL) && !a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,416,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
 
+    /* A throttle lowering that is refused is not retried while idle. */
+    setup(0x00000200,2,30,30,30,&both);assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1404,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE);
+    *word(SEL(2))=0x05000000;assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_THROTTLE));
+    assert(run(400)==A733_CPU_CLOCK_REFUSED && released() && cpu.applied_mhz[0]==1404 && !cpu.failed);
+    unsigned reads=cm.reads;
+    assert(a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_READY && a733_cpu_clock_poll(&cpu)==A733_CPU_CLOCK_READY);
+    assert(cm.reads==reads && !cpu.clock.id && !cpu.rail.id);
+
     /* Inspection refusals end before any write and release both leases. */
-    const uint32_t sids[]={0x1100,0x00000100,0x00000100,0x00000100,0x00000100};
-    for(unsigned i=0;i<5;++i) {
+    const uint32_t sids[]={0x1100,0x00000100,0x00000100,0x00000100,0x00000100,0x00000100,0x00000100,
+        0x00000100,0x00000100};
+    for(unsigned i=0;i<9;++i) {
         setup(sids[i],1,30,30,30,&both);assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
         if(i==1)*word(0x07090160)=0x10000002;          /* 24 MHz DCXO. */
         if(i==2)*word(SEL(0))=0x04000000;              /* PERI0 2X parent. */
         if(i==3){*word(PLL(0))=0xe8802600;cm.stuck_lock=1;} /* Not locked. */
         if(i==4)*word(SEL(2))=0x05000000;              /* DSU rate unknown. */
+        if(i==5)pm.pmic[0x10]=0xef;                    /* DCDC5 snapshot disabled. */
+        if(i==6)*word(PLL(0)+0x4)=UINT32_C(0x60000000);  /* PAT0 triangular pattern. */
+        if(i==7)*word(PLL(0)+0x8)=UINT32_C(0x80000000);  /* PAT1 lfm_en. */
+        if(i==8)*word(PLL(0)+0x18)=UINT32_C(0x80000100); /* LFM ramp enabled. */
         assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+1000000)==A733_CPU_CLOCK_PENDING);
         enum a733_cpu_clock_status r=run(400);
-        assert(r==A733_CPU_CLOCK_REFUSED && !cm.writes && released());
+        assert(r==A733_CPU_CLOCK_REFUSED && !cm.writes && first(1)==cm.count && released() && !cpu.failed);
     }
     /* A held CPU_L lease delays admission until the deadline: clean expiry. */
     setup(0x00000100,1,30,30,30,&both);assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
@@ -266,6 +281,18 @@ int main(void)
     for(unsigned i=0;i<400 && cpu.state!=7;++i)assert(run(1)==A733_CPU_CLOCK_PENDING); /* Ramp wait. */
     assert(cpu.state==7 && pm.pmic[REG_DCDC3]==40);pm.now+=200000;
     assert(run(10)==A733_CPU_CLOCK_EXPIRED && released() && !cm.writes && *word(PLL(1))==(LOCKED|(39u<<8)));
+    /* A deadline that cannot cover both PLL waits ends before the PLL is
+     * touched, even with a slow but valid lock and after a raise's voltage
+     * write. A deadline that covers the waits lets the same lock complete. */
+    setup(0x00000100,1,30,30,30,&both);assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
+    cm.lock_us=5000;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+3000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_EXPIRED && released() && !cm.writes && pm.pmic[REG_DCDC5]==35);
+    assert(*word(PLL(0))==0xf8802600 && *word(SEL(0))==0x03010000 && !cpu.applied_mhz[0]);
+    cm.lock_us=60000;
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1196,pm.now+95000)==A733_CPU_CLOCK_PENDING);
+    assert(run(2000)==A733_CPU_CLOCK_COMPLETE && released() && *word(PLL(0))==L0(46) && cpu.applied_mhz[0]==1196);
+    assert(cm.events[cm.count-1].at-cm.events[first(0)].at>=60000);
     /* Faults after a write retain both leases and leave the hardware as it is. */
     for(unsigned i=0;i<2;++i) {
         setup(0x00000200,2,30,30,30,&both);assert(a733_cpu_clock_thermal(&cpu,A733_THERMAL_NORMAL));
@@ -310,6 +337,7 @@ int main(void)
     assert(a733_pmic_decode(A733_RAIL_DCDC5,0x10,87,&s) && s.enabled && s.programmed_uv==1540000);
     assert(a733_pmic_decode(A733_RAIL_DCDC5,0xef,88,&s) && !s.enabled && !s.decoded);
     puts("PASS CPU clock: report, bins, grant/thermal admission, voltage-before-frequency raise, "
-         "frequency-before-voltage lowering, DSU rail share, throttle, refusals, expiry and retained faults");
+         "frequency-before-voltage lowering, DSU rail share, throttle, refusals, expiry before the PLL waits "
+         "and retained faults");
     return 0;
 }

@@ -15,6 +15,13 @@
 #define MUX_PLL 3u
 #define UPDATE_US 10000u  /* Pinned driver: update bit clears within 10 ms. */
 #define LOCK_US 70000u    /* Pinned driver: lock within 70 ms. */
+#define UNPARK_US 10000u  /* Margin for the owner polls that observe lock and reselect the PLL. */
+#define PAT0 0x4u         /* Pattern words and LFM word, offsets from the PLL word. */
+#define PAT1 0x8u
+#define LFM 0x18u
+#define PAT0_TYPE (BIT(29)|BIT(30)) /* Bits the pinned probe sets: triangular pattern, */
+#define PAT1_LFM BIT(31)            /* lfm_en and the LFM ramp enable. */
+#define LFM_ON BIT(31)
 #define RAMP_UV_US 250u   /* Board DTS regulator-ramp-delay of DCDC3/DCDC5. */
 #define RELEASE_US 100000u
 #define THERMAL_US 500000u
@@ -126,8 +133,10 @@ int a733_cpu_clock_report(int (*read)(void *,uintptr_t,uint32_t *),void *cookie,
 }
 int a733_cpu_clock_address(uintptr_t a,int write)
 {
-    for(unsigned d=0;d<A733_CPU_DOMAINS;++d)
+    for(unsigned d=0;d<A733_CPU_DOMAINS;++d) {
         if((a==pll_word(d) || a==select_word(d)) && (!write || d!=A733_CPU_DSU))return 1;
+        if(!write && d!=A733_CPU_DSU && (a==pll_word(d)+PAT0 || a==pll_word(d)+PAT1 || a==pll_word(d)+LFM))return 1;
+    }
     return !write && (a==OSC || a==SID_DVFS);
 }
 
@@ -224,13 +233,15 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
        !row(cluster,mhz) || !permitted(c,mhz))return A733_CPU_CLOCK_REFUSED;
     if(!time_now(c))return fault(c);
     if(c->last_now>=deadline)return A733_CPU_CLOCK_EXPIRED;
-    --c->changes;return start(c,cluster,mhz,deadline,0);
+    --c->changes;c->throttle_failed&=~BIT(cluster);return start(c,cluster,mhz,deadline,0);
 }
 /* Inherited state and the target point, checked before any write. */
 static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
 {
     struct a733_cpu_clock_report *r=&c->report;
-    if(!a733_cpu_clock_report(c->ops.read,c->cookie,r))return fault(c);
+    uint32_t pat0,pat1,lfm;
+    if(!a733_cpu_clock_report(c->ops.read,c->cookie,r) || !rd(c,pll_word(c->cluster)+PAT0,&pat0) ||
+       !rd(c,pll_word(c->cluster)+PAT1,&pat1) || !rd(c,pll_word(c->cluster)+LFM,&lfm))return fault(c);
     const struct a733_cpu_clock_domain *d=&r->domain[c->cluster];
     const struct a733_cpu_opp *o=row(c->cluster,c->target_mhz);
     const unsigned nmax=c->cluster==A733_CPU_LITTLE ? 84u : 86u; /* 26 MHz VCO range. */
@@ -243,7 +254,10 @@ static enum a733_cpu_clock_status inspect(struct a733_cpu_clock *c)
     }
     c->p=c->target_mhz<676u ? 1u : 0u;
     c->n=(c->target_mhz<<c->p)/26u;
-    if((r->oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002) || r->dcxo_hz!=26000000u ||
+    /* With a pattern or frequency modulation enabled, N alone may not define
+     * the rate and lock may not mean the final rate. */
+    if((pat0&PAT0_TYPE) || (pat1&PAT1_LFM) || (lfm&LFM_ON) ||
+       (r->oscillator&UINT32_C(0x10000002))!=UINT32_C(0x10000002) || r->dcxo_hz!=26000000u ||
        !r->binned || !o || !a733_cpu_clock_opp_mv(o,r->bin) || !permitted(c,c->target_mhz) ||
        (d->pll&(PLL_ON|UPDATE))!=PLL_ON || d->source!=MUX_PLL || d->n<26u || d->n>nmax ||
        c->n*26u!=c->target_mhz<<c->p || c->n<26u || c->n>nmax)return finish(c,A733_CPU_CLOCK_REFUSED);
@@ -267,7 +281,7 @@ static int collect(struct a733_cpu_clock *c,enum a733_cpu_clock_status *out)
     if(reaped!=A733_PMIC_COMPLETE){*out=fault(c);return 0;}
     c->request=(struct a733_pmic_request){0};
     if(s==A733_PMIC_EXPIRED)return 2;
-    if(c->snapshot.rail!=rail_of(c->cluster) || !c->snapshot.enabled || !c->snapshot.decoded){*out=fault(c);return 0;}
+    if(c->snapshot.rail!=rail_of(c->cluster)){*out=fault(c);return 0;}
     return 1;
 }
 static enum a733_cpu_clock_status voltage(struct a733_cpu_clock *c)
@@ -292,7 +306,7 @@ static enum a733_cpu_clock_status written(struct a733_cpu_clock *c)
         if(c->after!=S_PARK)c->applied_mhz[c->cluster]=c->target_mhz;
         return finish(c,A733_CPU_CLOCK_EXPIRED);
     }
-    if(c->snapshot.programmed_uv!=c->to_uv)return fault(c);
+    if(!c->snapshot.enabled || !c->snapshot.decoded || c->snapshot.programmed_uv!=c->to_uv)return fault(c);
     uint32_t delta=c->to_uv>c->from_uv ? c->to_uv-c->from_uv : c->from_uv-c->to_uv;
     c->timer=c->last_now+(delta+RAMP_UV_US-1)/RAMP_UV_US;c->state=S_SETTLE;
     return A733_CPU_CLOCK_PENDING;
@@ -312,6 +326,8 @@ static enum a733_cpu_clock_status release(struct a733_cpu_clock *c)
         if(r!=A733_CLOCK_OK)return fault(c);
         c->clock=(struct a733_clock_token){0};
     }
+    /* A throttle lowering that did not complete is not retried while idle. */
+    if(c->thermal && c->result!=A733_CPU_CLOCK_COMPLETE)c->throttle_failed|=BIT(c->cluster);
     c->state=S_IDLE;return c->result;
 }
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
@@ -322,7 +338,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
     if(c->state==S_IDLE) {
         unsigned level=atomic_load_explicit(&c->level,memory_order_acquire);
         for(unsigned i=0;i<2;++i)if(level==A733_THERMAL_THROTTLE &&
-            c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ)
+            c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ && !(c->throttle_failed&BIT(i)))
             return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,1);
         return A733_CPU_CLOCK_READY;
     }
@@ -366,6 +382,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         int k=collect(c,&out);
         if(!k)return out;
         if(k==2)return finish(c,A733_CPU_CLOCK_EXPIRED);
+        if(!c->snapshot.enabled || !c->snapshot.decoded)return finish(c,A733_CPU_CLOCK_REFUSED);
         c->from_uv=c->snapshot.programmed_uv;c->selector=c->snapshot.selector;
         c->snapshot=(struct a733_pmic_snapshot){0};
         /* Raise: voltage first. Lower: frequency first, then voltage unless
@@ -382,8 +399,11 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(c->after==S_PARK){c->state=S_PARK;c->after=S_RELEASE;return A733_CPU_CLOCK_PENDING;}
         c->applied_mhz[c->cluster]=c->target_mhz;return finish(c,A733_CPU_CLOCK_COMPLETE);
     case S_PARK: {
-        /* Park on the DCXO, then write N and request the update. */
+        /* Park on the DCXO, then write N and request the update. A deadline
+         * that cannot cover both PLL waits ends the transition first: nothing
+         * is touched yet, and any confirmed voltage covers the present rate. */
         uint32_t pll,select;
+        if(c->deadline-c->last_now<UPDATE_US+LOCK_US+UNPARK_US)return finish(c,A733_CPU_CLOCK_EXPIRED);
         if(!rd(c,pll_word(c->cluster),&pll) || (pll&(PLL_ON|UPDATE))!=PLL_ON ||
            !rd(c,select_word(c->cluster),&select) || select!=c->select ||
            !wr(c,select_word(c->cluster),c->select&~MUX))return fault(c);
