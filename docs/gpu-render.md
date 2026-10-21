@@ -2,9 +2,13 @@
 
 The optional indexed-texture application accepts caller-supplied vertices,
 uint16 indices and RGBA8 texels, then streams a copied framebuffer up to
-1920 × 1080 pixels. It retains the graphics context between frames. The
-triangle-color application below keeps its separate 64 × 64 profile. Physical
-GPU execution remains unqualified.
+1920 × 1080 pixels. It retains the graphics context between frames. Graphics
+profile 2 draws one textured triangle list, profile 3 adds depth testing and
+source-over blending, and profile 4 adds per-batch state, perspective-correct
+texturing, stencil and further blend equations. A completed frame can also be
+lent to an in-image consumer such as a display engine. The triangle-color
+application below keeps its separate 64 × 64 profile. Physical GPU execution
+remains unqualified.
 
 ## Indexed textured frames
 
@@ -157,6 +161,146 @@ padded depth geometry with sanitizers. Native service cases cover two changing
 uncertain final kick. GPU writes and firmware effects remain explicit models.
 These checks do not establish physical depth testing or blending.
 
+## State batches, perspective texturing and stencil
+
+Graphics profile 4 draws up to sixteen index ranges per frame. Each range,
+called a batch, carries its own depth, culling, blending and stencil state.
+Select it with session envelope version 3; pass `profile=4` to
+`texture.session()`, `input_bytes()` and `capture_frames()`. The runtime
+protocol uses version 6 with the same 64-byte header, or version 10 with the
+optional lifecycle transport. The image exports `gpu_batch_marker`, which image
+preparation requires for a version-3 session.
+
+The canonical input contains vertex bytes, index bytes, batch records and
+padded texels, in that order. `input_bytes(..., profile=4, state=frame,
+batches=[...])` builds it. Each batch record holds four little-endian uint32
+values: first index, index count, state and stencil word. A batch draws
+`count` indices starting at `first`; the count is a nonzero multiple of three
+and the range lies inside the index buffer. Batches may overlap, so one
+geometry range can be drawn twice with different state.
+
+The state word on BEGIN is the frame state:
+
+- Bits 0–4 hold the batch count, 1 through 16.
+- Bit 5 selects linear minification and magnification; clear selects nearest.
+- Bits 6–8 and 9–11 hold `VkSamplerAddressMode` values 0–4 for U and V:
+  repeat, mirrored repeat, clamp to edge, clamp to border and mirror clamp to
+  edge. The border colour is transparent black.
+- Bit 12 decodes the texture as sRGB.
+- All other bits are zero.
+
+Each batch state word uses Vulkan numbering for compare and stencil
+operations:
+
+- Bits 0–2 hold the depth `VkCompareOp`; bit 3 enables depth writes. ALWAYS
+  without writes disables depth testing.
+- Bits 4–5 select culling: 0 none, 1 clockwise and 2 counter-clockwise
+  triangles in framebuffer coordinates, with x to the right and y down. With a
+  counter-clockwise front face, 1 is back-face culling.
+- Bits 6–8 select the blend equation listed below.
+- Bit 9 disables colour writes for a depth or stencil pass. It requires the
+  opaque equation.
+- Bit 10 enables the stencil test. Bits 11–13 hold its `VkCompareOp`, and bits
+  14–16, 17–19 and 20–22 hold the `VkStencilOp` for stencil failure, depth
+  failure and pass. These fields are zero when the test is disabled.
+- Bits 23–31 are zero.
+
+The stencil word holds the reference value in bits 0–7, the compare mask in
+bits 8–15 and the write mask in bits 16–23. It is zero when the test is
+disabled. The same stencil state applies to front and back faces.
+
+Bits 6–8 select one of five fixed blend equations. Equation 1 expects
+straight alpha and equation 2 expects premultiplied alpha:
+
+| Value | Colour result | Alpha result |
+| --- | --- | --- |
+| 0 | `src.rgb` | `src.a` |
+| 1 | `src.rgb·src.a + dst.rgb·(1−src.a)` | `src.a + dst.a·(1−src.a)` |
+| 2 | `src.rgb + dst.rgb·(1−src.a)` | `src.a + dst.a·(1−src.a)` |
+| 3 | `src.rgb + dst.rgb` | `src.a + dst.a` |
+| 4 | `src.rgb·dst.rgb` | `src.a·dst.a` |
+
+Positions use homogeneous clip coordinates. Every vertex lies inside the view
+volume: w is between 2⁻¹⁶ and 2¹⁶, |x| ≤ w, |y| ≤ w and 0 ≤ z ≤ w. Texture
+coordinates are finite with magnitude at most 2¹⁶, so repeat modes can tile
+the texture. The validator compares binary32 bit patterns and needs no
+floating-point state. Triangles that cross the view-volume boundary are refused
+rather than clipped. Texture coordinates use perspective-correct
+interpolation: the coefficient program iterates W, and the hardware divides
+the UV coefficients by it.
+
+The attachment is packed `D32_SFLOAT_S8_UINT` in the F64Z depth load/store
+format, eight bytes per sample. Its twiddled extents are the session width and
+height rounded up to powers of two, at least 32 each. A 1080p session needs a
+2048 × 2048 extent and 32 MiB; a 64 × 64 session needs 32 KiB. The background
+object clears depth to one and stencil to zero for every frame. Depth and
+stencil are stored without an initial load, as for profile 3. Before each
+frame the CPU initializes the attachment and its two guard pages in bounded
+batches. The writable GPU mapping at `0x800d000000` covers only the
+attachment, so a 1080p session needs at most 35 VM table pages.
+
+After previous completion, the worker validates the copied batch table again
+and writes one 26-word programmable primitive pipeline (PPP) state block per
+batch at general offset `0x11200`, 128 bytes apart. The vertex data master
+(VDM) stream at general offset `0x11000` contains each block's state update,
+the shared vertex state after the first update and one 16-bit triangle-list
+index command per batch. The geometry command starts at that stream. Each
+block differs from the template only in the tag-write, depth, pass-type and
+stencil-reference word, the stencil word, the fragment program address and
+the cull mode. Blended batches use the translucent pass so the framebuffer
+fetch observes earlier batches in submission order.
+
+The resident programs come from the pinned compiler through
+`checks/pvr-batch-producer.py`. The vertex shader and descriptor program are
+the profile-2 programs. One coefficient program loads W and the perspective
+UV pair. The opaque fragment shader has 200 instruction bytes; the four
+blending shaders have 344, 312, 296 and 296 bytes. Each has 32 temporaries,
+twelve coefficient registers and 27 shared registers, and none uses scratch,
+spills, barriers or atomics. The fragment programs occupy USC offsets 2560,
+3072, 3584, 1344 and 1920, with PDS kick programs at 2304, 2560, 2688, 2816
+and 2944.
+
+`checks/pvr-batch.py` compares the native programs with the producer output.
+With sanitizers, it unpacks the PPP blocks, VDM stream, sampler and image
+words and depth/stencil registers using pinned Mesa packers, enumeration
+helpers and firmware structure offsets. It also covers refusals for every
+batch field, frame-state field and vertex bound. `checks/gpu-batch.py` runs the
+actual native owner, VM, allocator and service in QEMU. It covers two 1080p
+frames with stencil, perspective and sampler state, refused drafts that keep
+the previous frame, and a 63 × 17 session. `checks/gpu-texture-runtime.py
+--profile 4` drives the linked application and host helpers through modeled
+TinyUSB transfers. GPU, firmware and USB effects are modeled; none of these
+checks establishes physical rasterization, stencil, blending or cache
+visibility.
+
+Arbitrary trusted shaders, arbitrary blend factor combinations, clipping,
+other topologies, mipmaps, other texture formats, more than one texture,
+multisampling and more than sixteen batches per frame remain unsupported.
+
+## Lending a completed frame for presentation
+
+A PRESENT request lends the complete copied snapshot of the current frame to
+the requesting GPU client. It requires a completed frame, the matching
+previous-frame number and zero generation, offset and byte count. After the
+reply, `pvr_gpu_service_texture_present()` returns a
+`struct pvr_render_texture_frame` with the CPU address, physical address,
+byte count, width, height, row stride in pixels and frame number. Rows are
+RGBA8 and include the stride padding.
+
+The output stage cleans each copied 64 KiB chunk to the point of coherency.
+A non-coherent DMA reader, such as the display engine, can therefore fetch the
+snapshot by its physical address without further cache maintenance. The
+snapshot lies in the graphics owner's write-back lease, outside every GPU
+mapping. While it is lent, READ, BEGIN, WRITE, SUBMIT and CLOSE are refused,
+so the bytes stay unchanged. The consumer stops reading, then sends RELEASE
+with the PRESENT ticket, the frame number and offset zero.
+
+The display consumer supplies its own translation for the physical range and
+its own proof that scanout has stopped before RELEASE. The GPU-to-HDMI
+application still copies frames through READ slots, and the USB protocol does
+not expose PRESENT. `checks/gpu-batch.py` covers lending, refusal while lent,
+release and healthy CLOSE in QEMU.
+
 ## Geometry, partial renders and final completion
 
 The shared render worker follows pinned Mesa's geometry/partial-render/final
@@ -215,10 +359,12 @@ service checks model only unchanged architectural admission and GPU/firmware
 effects. The application checks model service replies, GPU results and USB
 endpoint hardware. These checks establish no physical rasterization claim.
 
-Arbitrary shaders, perspective rendering, stencil, general blend equations, other
-topologies/index modes, mipmaps, other texture formats/filtering, arrays/cubes,
-multisampling, display presentation, physical context-disposal qualification and
-allocation reclamation remain required work.
+Profile 4 adds batches, perspective-correct texturing, stencil, sampler modes
+and fixed blend equations; see
+[State batches, perspective texturing and stencil](#state-batches-perspective-texturing-and-stencil).
+Arbitrary shaders, arbitrary blend factors, clipping, other topologies and index
+modes, mipmaps, other texture formats, arrays and cubes, multisampling, physical
+context-disposal qualification and allocation reclamation remain required work.
 
 ## Healthy CLOSE cleans firmware objects before stopping
 
@@ -311,8 +457,10 @@ ledger containing only the GPU parents are also required. Mixed-device runtime
 pool reclamation still needs shared serialization.
 
 All queued mutations and copied outputs bind their queue epoch at service
-consumption. Optional wire versions are compute 6, triangle 7, texture 8 and
-depth/blend 9; legacy versions 2 through 5 retain their layouts. Render OPEN
+consumption. Optional wire versions are compute 6, triangle 7, texture 8,
+depth/blend 9 and batches 10. The default transports use versions 2 through 6
+with their own layouts. Batch-profile disposal and reopening reuse the same
+owner reconstruction but have no separate lifecycle check. Render OPEN
 publishes frame/generation zero and requires fresh submission before READ.
 Compute OPEN executes the original sealed input and publishes sequence one.
 Texture replies use a separate 72-byte header, followed by the existing copied

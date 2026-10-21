@@ -1161,9 +1161,18 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is source/object-bound; older single-final-fragment ownership evidence remains
   historical and is superseded for the corrected shared rendering sequence.
   Compute queues retain their separate behavior. Physical graphics, cache visibility,
-  confinement and recovery remain unqualified. Stencil, perspective, arbitrary
-  shaders, general blend equations, per-list state batches, multisampling, wider
-  texture modes, display presentation and context disposal remain required.
+  confinement and recovery remain unqualified.
+  [Graphics profile 4](gpu-render.md#state-batches-perspective-texturing-and-stencil)
+  draws up to sixteen index ranges per frame, each with its own depth compare,
+  culling, stencil test and one of five fixed blend equations. It adds
+  perspective-correct texturing, filtering and address modes, sRGB decoding and
+  a packed D32S8 attachment sized from the session. A completed frame can be
+  [lent to a display consumer](gpu-render.md#lending-a-completed-frame-for-presentation)
+  by physical address. Pinned-Mesa reference, QEMU native-service and linked
+  application checks pass with GPU, firmware and USB effects modeled; physical
+  rendering is unqualified. Arbitrary shaders and blend factors, clipping,
+  multisampling, mipmaps, other texture formats, wider compute input/output and
+  display use of the lent frame remain required.
   The [native GPU application](gpu-application.md) connects real firmware,
   providers, IRQ routing, fixed rendering and copied USB output. Its central
   image links; focused checks verify retention when isolation is unavailable
