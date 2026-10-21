@@ -150,8 +150,11 @@ The caller supplies two distinct DEVICE-owned allocations from the existing
 memory pool: an immutable XRGB8888 frame and its 32 KiB IOMMU tables. The
 request describes the complete frame allocation. The binding authenticates
 allocation generations and exact extents, the display master's active READ-only
-IOMMU span, every table word, and each CPU page's uncached translation. It
-checks the actual tables and allocator before publication and each admission.
+IOMMU span, every table word, and each CPU page's uncached translation. This
+full walk of the tables and frame pages runs before publication, once per
+scanout phase, and after each prepare, request or replay. Each register access
+checks only the allocation generations, exact extents and IOMMU generation, so
+a table word changed in place is found by the next full walk.
 The image owner must exclude CPU aliases and writers throughout the session.
 A fault retains both allocations; there is no return to CPU ownership.
 
@@ -268,10 +271,23 @@ Its retained copy and sealed session survive ordinary BSS clearing. The private
 linker bounds the heap, including the exception stack, below the uploaded
 session. Shared CPU, GIC and memory-provider sources are unchanged.
 
+The display PLL holds the common register mutex from its first to its last
+poll and performs one register operation per poll. While it holds the mutex,
+the owner task yields between polls instead of sleeping one tick, so the
+nominal sequence of about 150 polls finishes in milliseconds. The PLL lock
+filter has no timeout shorter than the session deadline. If one hold lasts
+5 ms, the task returns to one poll per tick for the rest of that hold, so a PLL
+that never locks does not keep lower-priority tasks off the core until the
+deadline.
+
 After video starts, the owner completes the explicit post-video steps, obtains a
 native controller observation and scans display IOMMU faults. It publishes a
 256-byte immutable result with session/frame hashes, geometry, generations,
-controller state and raw observations. It continues bounded controller and
+controller state and raw observations. For the generated color bars, the frame
+hash is measured from the framebuffer after it is written. For a version 2
+replay session, it is the sealed slot 0 hash: the input path committed slot 0
+only after hashing its stored bytes to that value, and no CPU writes the slot
+afterwards. It continues bounded controller and
 IOMMU observations while the original result remains immutable. A deadline,
 uncertain access or fault closes admission and retains memory and resources.
 There is no successful STOP, release, retry or panel power-down claim: the
@@ -336,6 +352,9 @@ Operation 2 has no payload or hash and selects a committed slot using a strictly
 increasing presentation sequence. The actual codec upload convention is reused:
 each fragment is bounded by its current phase, and generation, epoch, authority,
 monotonic time and deadline remain bound through hashing and publication.
+The USB task hashes each fragment back from the uncached bank right after
+copying it, so the slot hash is complete when the last fragment arrives. A
+refused last fragment leaves the running hash unchanged.
 Providers cannot start DSI scanout until both complete copies are hash-checked.
 
 A presentation follows the [DE352 RCQ protocol](display-engine.md#de352-replay-of-two-immutable-addresses),

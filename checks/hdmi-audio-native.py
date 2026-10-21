@@ -77,7 +77,7 @@ def seed(image,out):
 
 class Machine:
  def __init__(self,image,session,contract,pcm,edid):
-  self.i=image;self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.time=100;self.scheduler=1;self.task=0;self.tasks=[];self.holders={};self.queues={};self.notifications={};self.events=[];self.trace=[];self.registers={};self.pending={};self.internal={};self.publishes=[];self.boundary=None;self.stopped=False;self.edid=edid;self.completion_reported=False;self.dma_started=0;self.dma_done=0;self.fifo_empty_at=0;self.underrun=False;self.underrun_reads=0;self.dma_payload=b'';self.callsites=[];self.phase="constructor";self.active_handle=None;self.sequence=0
+  self.i=image;self.u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.time=100;self.scheduler=1;self.task=0;self.tasks=[];self.holders={};self.queues={};self.notifications={};self.events=[];self.trace=[];self.registers={};self.pending={};self.internal={};self.publishes=[];self.boundary=None;self.stopped=False;self.edid=edid;self.completion_reported=False;self.dma_started=0;self.dma_done=0;self.fifo_empty_at=0;self.underrun=False;self.underrun_reads=0;self.dma_error=False;self.dma_payload=b'';self.callsites=[];self.phase="constructor";self.active_handle=None;self.sequence=0
   self.regions=[(0x41000000,0x03000000),(0x02000000,0x4000),(0x02535000,4096),(0x03000000,4096),(0x03400000,4096),(0x04601000,8192),(0x05510000,0x20000),(0x05600000,4096),(0x05730000,4096),(0x07010000,4096),(0x07025000,4096),(0x0706a000,4096),(0x07083000,4096),(0x07090000,4096)]
   for a,n in self.regions:self.u.mem_map(a,n)
   for a,_,d,_ in image.parts:
@@ -175,16 +175,16 @@ class Machine:
   if a==0x0706a008:value=self.registers.get(0x0706a000,0)&15
   elif a==0x05600040:value=int(self.registers.get(0x05600020,0)&0xe0000000==0xe0000000)
   elif a==0x05523004:value=2|int(bool(self.registers.get(0x05523000,0)&8))
-  elif a==0x02535018:value=128<<16 if not self.dma_started or self.time>=self.fifo_empty_at else 64<<16
+  elif a==0x02535018:value=128<<16 if not self.dma_started or self.time>=self.fifo_empty_at or self.dma_error else 64<<16
   elif a==0x0253500c and getattr(self,'underrun',False) and self.dma_started:value=0x40;self.underrun_reads+=1
   elif a==0x04601100 and self.dma_started and self.time>=self.dma_done:value=0;self.registers[a]=0
   elif a==0x04601030:value=1 if self.dma_started and self.time<self.dma_done else 0
-  elif a==0x04601138 and self.dma_started and self.time>=self.dma_done and not self.completion_reported:value=4
+  elif a==0x04601138 and self.dma_started and self.time>=self.dma_done and not self.completion_reported:value=8 if self.dma_error else 4
   self.put(a,value,n)
  def write(self,u,access,a,n,value,unused):
   self.events.append([self.time,self.task,a,n,value]);self.registers[a]=value
   if self.power.write(a,value):return
-  if a==0x04601138 and value&4:self.completion_reported=True
+  if a==0x04601138 and value&12:self.completion_reported=True
   if a==0x04601138:self.pending[a]=(0,4)
   if a in (0x05520105,0x05520108,0x05520103,0x0253500c,0x04601010,0x04601014):self.pending[a]=(0,n)
   elif a==0x05527e04:
@@ -227,6 +227,8 @@ class Machine:
    assert len(cts)==2 and n1[-1][0]<=cts[-1][0] and self.time>=cts[-1][0]+5000
    self.dma_payload=bytes(self.u.mem_read(source,count));self.dma_started=self.time
    self.dma_done=self.time+count*1000000//(48000*4);self.fifo_empty_at=self.dma_done+2000
+   # An injected error ends the channel at once, before any sample is queued.
+   if self.dma_error:self.dma_done=self.time
  def call(self,name,*args,budget=30000000):
   self.boundary=None;self.stopped=False;self.u.reg_write(UC_ARM64_REG_SP,0x43fd0000);self.u.reg_write(UC_ARM64_REG_LR,0x43fff000)
   for j,v in enumerate(args):self.u.reg_write(UC_ARM64_REG_X0+j,v)
@@ -460,6 +462,20 @@ def run(args):
   assert f.get(channel+i.field('dma_service_channel','holds_buffers'),4)==1
   f.checkpoint(out,label,fork_tasks);(out/(label+'-result.bin')).write_bytes(fault)
   fault_results.append(dict(case=label,passed=True,retained_memory=True,fifo_empty=False,wire_drained=False))
+  # A DMA error while TX waits for the first queued samples must fail on that
+  # DMA result, not only when the session stop time expires.
+  label='priming-dma-error-retained'
+  saved,producer,producer_source,producer_hardware=forks[7];f=Machine(i,raw,contract,pcm,edid);f.identity=m.identity;f.fixture_source_sha=m.fixture_source_sha;f.hardware_source_sha=m.hardware_source_sha
+  saved=restore(f,producer/('submitted-requests-disabled.pickle'),m.identity,producer_source,producer_hardware);fork_tasks=copy.deepcopy(saved['task_contexts']);active_machine=f;active_tasks=fork_tasks
+  assert f.get(audio+nf['stage'],4)==7
+  f.dma_error=True;started=f.time;previous=len(f.events);state=schedule(f,fork_tasks,None)
+  fault=bytes(f.u.mem_read(i.address('hdmi_audio_result'),160));fw=struct.unpack('<12Q',fault[:96])
+  assert state==3 and fw[3]==3 and fw[6]==0 and fw[7]==3 and f.dma_started and f.completion_reported,(state,fw,f.time)
+  assert not any(e[2]==0x02535000 and e[4]&4 for e in f.events[previous:]) and f.time-started<100000,(f.time,started)
+  assert f.get(i.address('hdmi_audio_result_ready'),4)==1
+  assert f.get(audio+nf['local']) and f.get(audio+nf['record']+i.field('device_memory_allocation','state'),4)==2
+  f.checkpoint(out,label,fork_tasks);(out/(label+'-result.bin')).write_bytes(fault)
+  fault_results.append(dict(case=label,passed=True,retained_memory=True,source_consumed=0,dma_result=fw[7],elapsed_us=f.time-started,wire_drained=False))
   save(out/'faults.json',fault_results)
   for path,digest in inputs.items():assert sha(path)==digest,('input changed during continuations',path)
   active_machine=m;active_tasks=tasks

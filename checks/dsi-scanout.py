@@ -38,7 +38,7 @@ def main():
  tcp=Path.home()/'.cache/sunstoneos/sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source'
  includes=['-include','apps/board-single-core/FreeRTOSConfig.h','-Inetwork/include','-I'+str(tcp/'include'),'-I'+str(tcp/'portable/Compiler/GCC'),'-Iapps/dsi-scanout','-Iapps/board-single-core','-Iplatform/a733-storage-update','-I'+str(fr/'include'),'-I'+str(fr/'portable/GCC/ARM_AARCH64_SRE')]
  if not (out/'native-check').exists():run([cc,*flags,*includes,'-DSUNSTONE_BOARD_SUPERVISED=1','-DSUNSTONE_BOARD_APPLICATION=1','-DGUEST=1',out/'build-id.c','checks/dsi-scanout-native.c','apps/dsi-scanout/profile.c','apps/dsi-scanout/main.c','apps/dsi-scanout/native.c',*drivers,*pmic,'-o',out/'native-check'])
- for name,mode in [('720p','success'),('1080p','success'),('720p','mapping'),('720p','iommu'),('720p','late')]:
+ for name,mode in [('720p','success'),('1080p','success'),('720p','mapping'),('720p','iommu'),('720p','late'),('720p','nolock')]:
   result=out/(name+'-'+mode+'-pass.txt')
   if not result.exists():result.write_text(run([out/'native-check',out/(name+'-session.bin'),mode,out/(name+'-observation.bin')]))
  (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,scope='Actual application/media/PLL/IOMMU/PMIC/pins/allocator/scanout, modeled MMIO/clock/RTOS and explicit nonphysical panel facts',image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest()),indent=2)+'\n')

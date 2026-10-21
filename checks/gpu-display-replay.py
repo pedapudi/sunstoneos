@@ -51,11 +51,12 @@ class Machine(n.Machine):
   if address==0x07061008:self.put(address,self.get(address-8,4)&15,4)
   elif address==0x05008150:self.put(address,0,4)
   elif address==0x05008144:
-   # FRAME_END latches on a free-running cadence of replay status reads,
-   # independent of the driver step and of its W1C clears.
+   # FRAME_END latches on a fixed pseudo-random half of replay status reads,
+   # independent of the driver step and of its W1C clears. A fixed period can
+   # stay in phase with the driver and never land on one of the steps.
    if self.get(self.de+self.dl['action'],4)==4:
-    self.status_reads+=1
-    if self.status_reads%3==0:self.status|=1
+    self.status_reads=(self.status_reads*1103515245+12345)&0xffffffff
+    if (self.status_reads>>16)&1:self.status|=1
     step=self.get(self.de+self.dl['step'],4)
     if self.status&1 and step in (4,17):self.races[step==17]+=1
    self.put(address,self.status,4)

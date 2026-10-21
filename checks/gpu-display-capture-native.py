@@ -35,7 +35,7 @@ class Machine(n.Machine):
   self.u.reg_write(UC_ARM64_REG_PSTATE,0x345)
   self.u.mem_write(self.sealed+self.sf['bytes'],raw);self.u.mem_write(self.sealed+self.sf['digest'],hashlib.sha256(raw).digest());self.put(self.sealed+self.sf['ready'],1,4)
   self.ul=nested(path,'gpu_display_application','usb');self.usb=self.app+self.af['usb']
-  self.custom={};self.sha={};self.holders={};self.rx=bytearray();self.tx=bytearray();self.tx_limit=1024;self.tx_capacity=1024;self.zero_write=False;self.flushes=0;self.write_calls=[];self.reason='';self.phase='constructor';self.submits=[];self.reaped=[];self.events=[];self.critical=0;self.queue=0;self.status=0;self.pending_frame=0;self.pm_live=1
+  self.custom={};self.sha={};self.holders={};self.rx=bytearray();self.tx=bytearray();self.tx_limit=1024;self.tx_capacity=1024;self.zero_write=False;self.flushes=0;self.write_calls=[];self.reason='';self.phase='constructor';self.submits=[];self.reaped=[];self.events=[];self.critical=0;self.queue=0;self.status=0;self.status_reads=0;self.races=[0,0];self.pm_live=1
   for address,count in [(0x02002000,0x2000),(0x03900000,0x20000),(0x04100000,0x1000),(0x05000000,0x400000),(0x07010000,0x1000),(0x07061000,0x1000),(0x07090000,0x1000)]:self.u.mem_map(address,count)
   defaults=[(0x07090160,0x10000002),(0x070101ac,1),(0x02002000,0xf8000000|(99<<16)|(99<<8)),(0x020022e0,0xf4000000|(3<<16)|(99<<8)),(0x02003928,0x20002),(0x020039a8,0x20000),(0x020025a4,0x30001),(0x020025c0,(1<<5)|(1<<9)),(0x020025e0,(1<<11)|(1<<31)),(0x02002580,0x80000000),(0x02002588,0x80000000),(0x020025e4,0x40302),(0x0200258c,0x10007),(0x020025b4,0x10007),(0x02003300,0x40000000),(0x02003304,0x01000100),(0x02003340,0xa1000005),(0x04100040,0x8140)]
   for at,value in defaults:self.put(at,value,4)
@@ -158,7 +158,7 @@ def preserve(m,folder,label):
  spans=[(0x41000000,0x400000),(0x43f80000,0x80000),*pools,(0x02002000,0x2000),(0x03900000,0x20000),(0x04100000,0x1000),(0x05000000,0x400000),(0x07010000,0x1000),(0x07061000,0x1000),(0x07090000,0x1000)]
  for at,count in spans:
   file=label+'-'+hex(at)+'.bin';data=bytes(m.u.mem_read(at,count));(folder/file).write_bytes(data);memory.append(dict(address=at,file=file,sha256=hashlib.sha256(data).hexdigest()))
- attrs={k:getattr(m,k) for k in ['tasks','clocks','submits','reaped','events','queue','status','pending_frame','critical','pm_live','ticks','tusb_calls','pm_request','pm_id'] if hasattr(m,k)}
+ attrs={k:getattr(m,k) for k in ['tasks','clocks','submits','reaped','events','queue','status','status_reads','races','critical','pm_live','ticks','tusb_calls','pm_request','pm_id'] if hasattr(m,k)}
  attrs['holders']={str(k):v for k,v in m.holders.items()}
  if hasattr(m,'usb_context'):
   saved=m.u.context_save();m.u.context_restore(m.usb_context)
@@ -210,6 +210,9 @@ def main():
    assert result<0x80000000,(i,result,m.get(m.de+m.dl['error'],4),m.get(m.de+m.dl['step'],4))
    if m.get(m.app+m.af['presentations'],4)==3:break
   assert m.get(m.app+m.af['presentations'],4)==3
+  # The replay model's free-running FRAME_END landed between clears and readbacks.
+  assert all(m.races),m.races
+  assert 0<m.get(m.de+m.dl['replay_rcq_done'])<m.get(m.de+m.dl['replay_frame_end'])
   preserve(m,a.output,'presented-checkpoint');print('PASS source-verified 0/1/0 records with post-completion timestamps',flush=True)
  # Recreate only the private address aliases after restoring preserved memory.
  m.fb=e.address('framebuffer');m.fl=e.layouts['hdmi_framebuffer'];m.hdmi=m.app+m.af['hdmi'];m.hl=e.layouts['a733_hdmi_native'];m.h=m.hdmi+m.hl['controller'];m.hcl=e.layouts['a733_hdmi'];m.de=m.fb+m.fl['de'];m.dl=e.layouts['a733_de'];m.deadline=m.get(m.app+m.af['deadline']);m.bank=m.get(m.fb+m.fl['extent'])

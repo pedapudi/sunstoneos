@@ -120,6 +120,10 @@ def main():
     pins=hdmi+hl['pins'];struct.pack_into('<I',raw,pins+11*4,3)
     # Existing native fixture latch image: all PL values zero and complete mask.
     struct.pack_into('<2Q2I',raw,pins+56,100,777,0x3fff,0)
+    # Sessions sealed before the PHY reference was bound hold zero there;
+    # they were prepared for the 24 MHz reference.
+    reference=hdmi+hl['request']+image.layouts['a733_hdmi_request']['phy_reference_hz']
+    if not struct.unpack_from('<I',raw,reference)[0]:struct.pack_into('<I',raw,reference,24000000)
     contract[224:256]=hashlib.sha256(raw).digest();raw=bytes(raw);contract=bytes(contract)
     m=Machine(image,a.image,raw,contract)
     # The initial fixture run executed the actual root sealer successfully.
@@ -146,7 +150,8 @@ def main():
         assert m.call('a733_memory_reservations_commit_verified')==1
         assert m.call('a733_memory_uncached_commit_verified')==1
         m.call('a733_smp_diagnostic_start')
-        assert m.stopped and len(m.tasks)==4,(m.tasks,m.trace[-30:])
+        # PMIC, output, render and USB observation tasks plus the GPU service worker.
+        assert m.stopped and len(m.tasks)==5,(m.tasks,m.trace[-30:])
         pl=image.layouts['device_memory_pool'];al=image.layouts['device_memory_allocation'];allocations={};memory=[]
         for name,fn in [('wb','a733_memory_reservations_init'),('nc','a733_memory_uncached_init')]:
             pool=m.call(fn);rows=[]
@@ -175,7 +180,10 @@ def main():
     m.put(submission+rl['texture_output_client'],0,4)
     fb=image.address('framebuffer');fl=image.layouts['hdmi_framebuffer'];extent=fb+fl['extent'];bank=m.get(extent)
     total=1280*720*4;framebytes=1847296;hashes=[]
+    inputs=m.call('gpu_display_inputs_get')
     for frame in range(2):
+        # The render task opens and closes each frame's copied-output evidence.
+        assert m.call('gpu_display_evidence_begin',frame,inputs+16+frame*64+32)==1
         converted=bytearray()
         for offset in range(0,total,65536):
             n=min(65536,total-offset);ticket=1000+frame*100+offset//65536
@@ -187,6 +195,7 @@ def main():
             actual=bytes(m.u.mem_read(bank+36864+frame*framebytes+offset//2,n//2));assert actual==expected
             converted.extend(actual)
             assert m.call('gpu_display_bank_copy',frame,frame+1,offset,output,n)==0
+        assert m.call('gpu_display_evidence_end',frame)==1
         hashes.append(hashlib.sha256(converted).hexdigest())
     assert m.call('gpu_display_bank_seal')==0 # GPU still owns unfinished close.
     m.put(m.app+m.af['gpu_closed'],1,4);assert m.call('gpu_display_bank_seal')==1
