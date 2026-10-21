@@ -79,8 +79,9 @@ from an actual interrupt notification. The caller owns pending buffers and
 advances them by the returned counts.
 The controller stores no buffer pointers and has no internal transmit queue.
 
-Transmit counts indicate bytes accepted into the FIFO within the deadline.
-They do not establish transmission on the wire. The driver arms the transmitter
+Transmit counts report the bytes each FIFO batch moved. A batch that finishes
+after the deadline still reports its bytes and then faults the controller.
+The counts do not establish transmission on the wire. The driver arms the transmitter
 interrupt while the supplied span remains and disables it when that span is
 consumed. A failed access or a late batch may already have transferred its final byte;
 the fault prevents automatic retransmission of uncertain data.
