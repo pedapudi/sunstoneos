@@ -60,8 +60,10 @@ permanent allocation: a 4096-byte descriptor page and a source span rounded to
 4096 bytes. Actual native translation checks validate the whole pool and exact
 registered DMA windows. The shared DMA RAM policy remains restricted to write-back
 RAM. This application validates its two exact non-cacheable ranges separately,
-including identity translations, inner shareability and descriptor write access
-on every 4096-byte page. Its cache callback accepts only CLEAN for those immutable
+including identity translations, Normal non-cacheable attributes and descriptor
+write access on every 4096-byte page. It accepts outer or inner shareability,
+matching the uncached pool contract: the address-translation result reports
+Normal non-cacheable memory as outer shareable whatever the descriptor holds. Its cache callback accepts only CLEAN for those immutable
 ranges and uses DSB ordering; it never broadens the shared policy or accepts
 invalidation, unknown ranges or cacheable aliases. The allocation becomes
 DEVICE-owned before the DMA worker is created. Protected ranges exclude the remaining firmware, source
@@ -85,6 +87,14 @@ parents on raw 24/26 MHz boards while retaining REF ownership; it does not infer
 fabric rates from raw DCXO alone.
 
 ## Completion and retained failure
+
+Playback enables I2S3 and its FIFO requests with transmission off, then sets
+the transmit enable once the FIFO holds samples, as the I2S0 stream driver does.
+While the DMA job runs and while the FIFO drains, each output-task poll reads
+the I2S interrupt status and FIFO status together. A TX overrun, or a TX
+underrun seen while the FIFO again holds samples, retains the failure. An
+underrun alone is expected once the FIFO empties after the final transfer,
+because transmission stays enabled until the stop.
 
 A successful run observes the actual DMA service's COMPLETE result after its
 controller stop/drain protocol, then observes all 128 I2S TX FIFO slots free.

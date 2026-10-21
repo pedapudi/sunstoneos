@@ -155,10 +155,12 @@ static int nc_mapping(const struct a733_dma_mapping *m)
     int pcm=(uintptr_t)m->cpu==audio.extent.cpu+4096&&m->bus==audio.extent.physical+4096&&
         m->bytes==audio.pcm_span&&m->access==A733_DMA_READ;
     if(!descriptor&&!pcm)return 0;
+    /* PAR_EL1 reports Normal-NC as outer shareable (2), whatever the
+     * descriptor says; accept inner (3) as well, like the uncached pool. */
     for(size_t off=0;off<m->bytes;off+=4096){
         struct aarch64_translation t;
         if(!aarch64_device_translate((uintptr_t)m->cpu+off,descriptor,&t)||
-           t.physical!=m->bus+off||t.attributes!=0x44||t.shareability!=3)return 0;
+           t.physical!=m->bus+off||t.attributes!=0x44||(t.shareability!=2&&t.shareability!=3))return 0;
     }
     return 1;
 }
@@ -299,12 +301,39 @@ static int i2s_prepare(void)
     }
     leave(&audio);return ok&&!atomic_load_explicit(&audio.failed,memory_order_acquire)?0:-1;
 }
+/* Start enables the controller and FIFO requests with TX still off, so DMA
+ * primes the FIFO before transmit() starts the serializer, as the I2S0 stream
+ * driver does. */
 static int producer(unsigned start)
 {
     int lock=enter(&audio,app.stop_at);if(lock!=1)return lock;
-    int ok=start?(update(I2S,0x107,0x105)&&update(I2S+0x1c,0x80,0x80)):
+    int ok=start?(update(I2S,0x107,0x101)&&update(I2S+0x1c,0x80,0x80)):
         (update(I2S+0x1c,0x80,0)&&update(I2S,0x105,0));
     leave(&audio);return ok&&!atomic_load_explicit(&audio.failed,memory_order_acquire)?1:-1;
+}
+static unsigned primed; /* FIFO requests enabled; TXEN waits for queued samples. */
+static int transmit(void)
+{
+    int lock=enter(&audio,app.stop_at);if(lock!=1)return lock;
+    uint32_t f;int ok=rd(I2S+0x18,&f),started=0;
+    if(ok&&((f>>16)&255)<128){ok=update(I2S,4,4);started=ok;}
+    leave(&audio);
+    if(!ok||atomic_load_explicit(&audio.failed,memory_order_acquire))return -1;
+    return started;
+}
+/* ISTA TXO never occurs with request flow control. TXU also latches once the
+ * FIFO drains after the final DMA transfer while TXEN stays set, so it marks
+ * a playback underrun only when a later FSTA read finds samples again: after
+ * the final transfer nothing refills an empty FIFO. */
+static int playback_fault(uint32_t ista,uint32_t fsta)
+{return (ista&0x20)||((ista&0x40)&&((fsta>>16)&255)<128);}
+static int playback_status(uint32_t *fsta)
+{
+    int lock=enter(&audio,app.stop_at);if(lock!=1)return lock;
+    uint32_t ista;int ok=rd(I2S+0x0c,&ista)&&rd(I2S+0x18,fsta);leave(&audio);
+    if(!ok||atomic_load_explicit(&audio.failed,memory_order_acquire)||
+       playback_fault(ista,*fsta)||((*fsta>>16)&255)>128)return -1;
+    return 1;
 }
 int hdmi_audio_step(void)
 {
@@ -338,19 +367,19 @@ int hdmi_audio_step(void)
         if(r<0)return fail();if(!r)return 0;
         if(reply.phase!=DMA_SERVICE_RUNNING||!reply.holds_buffers)return fail();audio.stage=7;return 0;
     case 7:
-        r=producer(1);if(r<0)return fail();if(!r)return 0;
+        if(!primed){r=producer(1);if(r<0)return fail();if(!r)return 0;primed=1;}
+        r=transmit();if(r<0)return fail();if(!r)return 0;
         if(a733_hdmi_audio_mute(&audio.sampler,0)!=1)return fail();
         hdmi_audio_result.stage=HDMI_AUDIO_RUNNING;audio.stage=8;return 0;
-    case 8:
+    case 8:{
+        uint32_t f;r=playback_status(&f);if(r<0)return fail();
         r=request(DMA_SERVICE_STATUS,0,&reply);if(r<0)return fail();if(!r)return 0;
         if(reply.phase==DMA_SERVICE_RUNNING||reply.phase==DMA_SERVICE_DRAINING)return 0;
         hdmi_audio_result.dma_result=reply.outcome;
         if(reply.phase!=DMA_SERVICE_RESULT||reply.outcome!=DMA_SERVICE_COMPLETE||!reply.holds_buffers)return fail();
-        hdmi_audio_result.source_consumed_bytes=hdmi_audio_result.source_bytes;audio.stage=9;return 0;
+        hdmi_audio_result.source_consumed_bytes=hdmi_audio_result.source_bytes;audio.stage=9;return 0;}
     case 9:{
-        r=enter(&audio,app.stop_at);if(r<0)return fail();if(!r)return 0;
-        uint32_t f;int ok=rd(I2S+0x18,&f);leave(&audio);
-        if(!ok||atomic_load_explicit(&audio.failed,memory_order_acquire)||((f>>16)&255)>128)return fail();
+        uint32_t f;r=playback_status(&f);if(r<0)return fail();if(!r)return 0;
         if(((f>>16)&255)!=128)return 0;
         hdmi_audio_result.fifo_empty=1;audio.stage=10;return 0;}
     case 10:
