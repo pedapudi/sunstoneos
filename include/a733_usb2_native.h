@@ -62,6 +62,7 @@ struct a733_usb2_audio_block {
 struct a733_usb2_audio_alternate { unsigned interface,alternate,packet,interval; };
 struct a733_usb2_audio {
     unsigned address,control_interface,streaming,endpoint,alternates;
+    uint32_t features[8]; /* Feature Unit IDs of the Audio Control interface, one bit each. */
     struct a733_usb2_audio_alternate alternate[A733_USB2_AUDIO_ALTERNATES];
     unsigned stream,interface,packet,channels,starting,started;
     uint32_t rate;

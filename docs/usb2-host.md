@@ -921,8 +921,9 @@ The adapter allows these control requests for the audio device:
 
 - the standard enumeration requests;
 - SET_INTERFACE to alternate 0 or to a recorded capture alternate;
-- Feature Unit volume or mute GET_CUR, GET_MIN, GET_MAX and GET_RES (UAC1
-  section 5.2.2.4);
+- volume or mute GET_CUR, GET_MIN, GET_MAX and GET_RES (UAC1 section 5.2.2.4)
+  addressed to a Feature Unit that the Audio Control interface's
+  class-specific descriptors declare;
 - the endpoint sampling-frequency SET_CUR (UAC1 section 5.2.3.2.3.1), whose
   three data bytes must equal the requested rate.
 

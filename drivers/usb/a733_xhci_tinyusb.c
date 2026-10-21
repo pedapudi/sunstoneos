@@ -281,7 +281,8 @@ bool a733_tinyusb_ss_enumerate(uint8_t address,unsigned stage,uint8_t *buffer,tu
  * IN data endpoint; playback interfaces may exist and are never opened. Only
  * capture alternates with at most A733_XHCI_ISOCH_PACKET bytes per packet and
  * a 1 ms or shorter service interval are recorded. TinyUSB's audio class
- * parses the class-specific descriptors themselves. */
+ * parses the class-specific descriptors themselves; only the Feature Unit IDs
+ * of the Audio Control interface are recorded here, for its control requests. */
 static int audio_configuration(unsigned address,const uint8_t *p,unsigned total,unsigned speed)
 {
     struct a733_usb2_audio a={0};
@@ -316,7 +317,9 @@ static int audio_configuration(unsigned address,const uint8_t *p,unsigned total,
                     a.alternate[a.alternates++]=(struct a733_usb2_audio_alternate){current,alternate,size,interval};
                 }
             }
-        }else if(type!=0x24&&type!=0x25)return 0;
+        }else if(type==0x24&&open&&subclass==1&&length>=7&&p[at+2]==6&&p[at+3])
+            a.features[p[at+3]>>5]|=UINT32_C(1)<<(p[at+3]&31);
+        else if(type!=0x24&&type!=0x25)return 0;
         at+=length;
     }
     if(!control||(open&&seen!=expected)||interfaces!=p[4]||!a.alternates)return 0;
@@ -677,7 +680,8 @@ bool hcd_setup_send(uint8_t port,uint8_t address,const uint8_t setup[8])
         const struct a733_usb2_audio *a=&host->audio;unsigned alternate=0;
         for(unsigned i=0;i<a->alternates;++i)alternate|=a->alternate[i].interface==index&&a->alternate[i].alternate==value;
         valid=(setup[0]==1&&setup[1]==11&&!len&&index<32&&(a->streaming&(1u<<index))&&(!value||alternate))||
-          (setup[0]==0xa1&&setup[1]>=0x81&&setup[1]<=0x84&&(index&255)==a->control_interface&&(index>>8)&&
+          (setup[0]==0xa1&&setup[1]>=0x81&&setup[1]<=0x84&&(index&255)==a->control_interface&&
+            ((a->features[index>>13]>>((index>>8)&31))&1)&&
             ((value>>8)==1||(value>>8)==2)&&(len==1||len==2))||
           (setup[0]==0x22&&setup[1]==1&&value==0x0100&&index==a->endpoint&&len==3&&a->starting);
     }else valid=desc->kind==A733_USB2_DEVICE_MSC&&setup[0]==0xa1&&setup[1]==0xfe&&!value&&!index&&len==1;
