@@ -295,8 +295,8 @@ def plan(args):
         same = lambda e: (e['bytes'], e['load'], e['kind'], e['sha256'])
         if active and active['entry'] == args.entry and \
                 [same(e) for e in active['extents']] == [same(e) for e in extents]:
-            raise ValueError('Selected slot %s already holds these contents; resume its plan with apply'
-                             % current['selected'])
+            raise ValueError('Selected slot %s already holds these contents; if an earlier plan '
+                             'stopped, resume it with apply' % current['selected'])
         # The payload precedes its header; a new monitor follows a valid slot.
         writes = [('payload', region['first'], bytes(payload)),
                   ('header', HEADER_SECTORS[slot], header)]

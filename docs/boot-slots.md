@@ -188,8 +188,10 @@ plan directory. Once its header is written, the new slot is selected, so a
 fresh plan would choose the slot that holds the previous image as its standby
 and overwrite it. `plan` refuses when the selected slot already holds the
 requested image, assets and entry address. This covers an install that
-stopped after its header but before boot0 and the TOC1 package. `plan` also
-refuses in two other cases:
+stopped after its header but before boot0 and the TOC1 package. The same
+check refuses a plan that copies the active image into the standby slot, so
+the two slots never hold the same image. `plan` also refuses in two other
+cases:
 
 - a valid header of the other slot has an extent inside the standby region,
   as a header written by another tool may have;
@@ -241,8 +243,8 @@ allocation refusals, the install order with container extents, an interrupted
 and resumed update, an interrupted install that refuses a new plan and then
 resumes, refusal of a changed image before any write, rollback and its
 refusal, plan refusals and the header rules. The plan refusals include a
-foreign header with an extent in the standby region and the 64-bit limits. Both checks run on the
-development host:
+foreign header with an extent in the standby region and the 64-bit limits.
+Both checks run on the development host:
 
 ```sh
 cmake -S boot/a733/stage2 -B BUILD -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/aarch64-clang.cmake \
