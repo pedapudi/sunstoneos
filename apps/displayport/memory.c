@@ -337,15 +337,20 @@ int dp_memory_service(void)
 }
 
 /* Acknowledge only the source-defined frame-end W1C bit while preserving
- * non-W1C status controls; then require an observed clear before output start. */
+ * non-W1C status controls; then require an observed clear before output start.
+ * A free-running frame-end can latch between the clear and its readback, so
+ * a set readback clears again, at most three times. */
 int dp_memory_frame(unsigned clear)
 {
  uint32_t status;
  if(!current()||!source_ready()||!read32(&framebuffer,A733_DE_BASE+0x8144,&status))return -1;
  if(clear){
-  if(!write32(&framebuffer,A733_DE_BASE+0x8144,(status&~13u)|1u)||
-     !read32(&framebuffer,A733_DE_BASE+0x8144,&status)||(status&1))return -1;
-  return 1;
+  for(unsigned attempt=0;attempt<3;++attempt){
+   if(!write32(&framebuffer,A733_DE_BASE+0x8144,(status&~13u)|1u)||
+      !read32(&framebuffer,A733_DE_BASE+0x8144,&status))return -1;
+   if(!(status&1))return 1;
+  }
+  return -1;
  }
  if(status&2)return -1;return !!(status&1);
 }

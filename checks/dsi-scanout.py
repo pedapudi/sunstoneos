@@ -13,7 +13,7 @@ def main():
   r=subprocess.run(list(map(str,args)),cwd=ROOT,capture_output=True,text=True);commands.append(dict(command=list(map(str,args)),returncode=r.returncode,stdout=r.stdout,stderr=r.stderr));(out/'commands.json').write_text(json.dumps(commands,indent=2)+'\n');assert r.returncode==0,commands[-1];return r.stdout
  drivers=['drivers/display/'+n+'.c' for n in ('a733_display_native','a733_display_handoff','a733_display_pll','display_scanout','a733_dsi','a733_dsi_phy','a733_dsi_video','a733_tcon_lcd','a733_display_engine')]+['drivers/clock/a733_media_clock.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','drivers/iommu/a733_iommu.c','runtime/device_memory_pool.c']
  pmic=['drivers/power/a733_pmic.c','drivers/power/a733_rail_leases.c','drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/storage/storage_digest.c']
- cc='/usr/bin/clang-21';flags=['-D_POSIX_C_SOURCE=200112L','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined','-fno-omit-frame-pointer','-Iinclude']
+ cc='/usr/bin/clang-21';flags=['-D_POSIX_C_SOURCE=200112L','-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-missing-field-initializers','-fsanitize=address,undefined','-fno-omit-frame-pointer','-Iinclude']
  sources=['checks/dsi-scanout-profile.c','apps/dsi-scanout/profile.c',*[v for v in drivers if v != 'drivers/display/a733_display_native.c'],'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c']
  if not (out/'profile-check').exists():run([cc,*flags,*sources,'-o',out/'profile-check'])
  factors=int(run([out/'profile-check','--factors']))

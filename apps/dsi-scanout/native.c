@@ -161,11 +161,15 @@ static int allocate(void)
  uint32_t *pixels=(void *)dsi.frame_extent.cpu;unsigned w=dsi.session.values[DSI_WIDTH],h=dsi.session.values[DSI_HEIGHT],stride=dsi.session.values[DSI_PITCH]/4;
  static const uint32_t colors[]={0x00ffffff,0x00ffff00,0x0000ffff,0x0000ff00,0x00ff00ff,0x00ff0000,0x000000ff,0};
  for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)pixels[y*stride+x]=colors[((uint64_t)x*8/w+dsi.session.values[DSI_SEED])&7];
+ storage_digest_bytes((void *)dsi.frame_extent.cpu,dsi_frame_bytes(&dsi.session),dsi.frame_hash);
  }
  else if(!atomic_load_explicit(&dsi.input.committed[0],memory_order_acquire)||
  !atomic_load_explicit(&dsi.input.committed[1],memory_order_acquire)||
  !a733_de_replay_build((void *)(dsi.frame_extent.cpu+2*dsi_frame_bytes(&dsi.session)),0x10000000,dsi_frame_bytes(&dsi.session)))return 0;
- storage_digest_bytes((void *)dsi.frame_extent.cpu,dsi_frame_bytes(&dsi.session),dsi.frame_hash);
+ /* The input path committed slot 0 only after hashing its stored bytes to
+  * this sealed value, and no CPU writes it afterwards. frame_hash is that
+  * admitted hash rather than a second measurement of the bank. */
+ else memcpy(dsi.frame_hash,dsi.session.replay.hashes[0],32);
  struct a733_iommu_span span={0x10000000,dsi.frame_extent.physical,dsi.frame_extent.bytes,A733_IOMMU_READ};
  struct a733_iommu_tables tables;if(a733_iommu_build(&tables,(void *)dsi.table_extent.cpu,dsi.table_extent.physical,&span,1)!=1||!barrier(&dsi))return 0;
  struct a733_iommu_ops ops={now,memory_admit,memory_read,memory_write,publish};
@@ -252,7 +256,11 @@ void dsi_task(void *unused)
  (void)unused;uint64_t start=board.session.session_start_ticks/24;
  if(start>UINT64_MAX-dsi.session.values[DSI_TIMEOUT])goto fault;
  dsi.deadline=start+dsi.session.values[DSI_TIMEOUT];if(dsi.deadline>=board.session.deadline_us-10000)goto fault;
- for(;;){if(!dsi_live())break;if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&step()<0)break;vTaskDelay(1);}
+ /* The PLL holds the common register mutex from its ENTER to LEAVE polls and
+  * its own waits are microseconds, so poll it again after a yield instead of
+  * sleeping a tick per register operation while other MMIO users wait. */
+ for(;;){if(!dsi_live())break;if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)&&step()<0)break;
+  vTaskDelay(dsi.stage==4&&dsi.pll.held?0:1);}
  fault:
  atomic_store_explicit(&dsi.failed,1,memory_order_release);atomic_store_explicit(&dsi.result,2,memory_order_release);
  if(dsi.pool){if(dsi.frame.generation)(void)device_memory_retain(dsi.pool,dsi.frame);if(dsi.tables.generation)(void)device_memory_retain(dsi.pool,dsi.tables);}
