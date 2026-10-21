@@ -1,7 +1,7 @@
-# Native G2D fill, copy and solid-background blending
+# Native G2D fill, copy, blending and twofold enlargement
 
-The native FreeRTOS application implements one retained ARGB8888 fill or
-source-copy or source-over-solid operation per boot. This document assumes familiarity with DMA,
+The native FreeRTOS application implements one retained ARGB8888 fill,
+source-copy, source-over-solid or twofold enlargement operation per boot. This document assumes familiarity with DMA,
 IOMMU translation and the supervised A733 launch contract. Software
 implementation does not establish physical pixel correctness or safe resource
 reclamation. Board testing is blocked while physical recovery is unavailable.
@@ -13,10 +13,12 @@ all pixels and be divisible by four. ARGB8888 bytes are B, G, R, A in memory.
 Fill requires a zero source origin; copy requires a zero fill color. Source-over-solid
 uses straight per-pixel source alpha over the opaque ARGB color in `color`; its
 alpha byte must be 255. It uses the same bounded source origin and rectangle as
-copy. Bounds
-checks use subtraction before computing offsets. Scaling, image-over-image blending, translucent backgrounds, rotation,
-color conversion and additional formats remain required hardware modes outside
-these bounded operations.
+copy. Twofold enlargement (`scale2x`, operation4) requires positive even
+width and height for the destination rectangle and a zero color. Its source
+crop has half the destination width and height at the supplied source origin.
+Bounds checks use subtraction before computing offsets. Other scaling ratios,
+image-over-image blending, translucent backgrounds, rotation, color conversion
+and additional formats remain required hardware modes outside these operations.
 
 The caller uploads stride times height bytes, including row padding. A SHA256
 digest authenticates the complete source even for fill. The destination starts
@@ -83,8 +85,13 @@ cover at most three distinct 4 MiB windows and never map the guards.
 ## Completion precedes the immutable copy
 
 The register-command queue (RCQ) contains eight headers. It configures video
-layer0, disables unused UI layers and scaling, and writes the bounded destination
-rectangle. Fill and copy select blender COPY. Source-over-solid enables UI2 in
+layer0, disables unused UI layers and writes the bounded destination rectangle.
+Fill, copy and twofold enlargement select blender COPY. Enlargement enables the
+video scaler with the full 1152-byte register block inside the existing RCQ
+page. It follows the pinned RGB path: half-step coordinates, zero phases, the
+upscaling horizontal coefficient bank and linear vertical coefficients. The
+source crop remains at most 640 by 360 pixels, so coarse downsampling is disabled.
+Other operations disable the scaler. Source-over-solid enables UI2 in
 constant-color mode as pipe1, with uploaded V0 foreground in pipe0, and selects
 Porter-Duff SRCOVER. UI2 adds no buffer reads or IOMMU mapping. Both inputs and
 the output use the effective upstream straight-alpha settings; the uploaded
@@ -235,3 +242,26 @@ not execute startup, requalify pixel arithmetic or prove physical write
 visibility. The earlier blend model omitted the normal-success reset and retains
 only that earlier implementation's scope. The unchanged launcher binary and
 prior boot and transport evidence retain their recorded scopes without replay.
+
+
+The twofold-enlargement image has SHA256
+`f77be8b28ef7283658c4d5e80bff37392a3cd90c6b6033703b2caa0881522ce4`, with evidence
+under `g2d-scale-20261020/`. A sanitizer check compares complete video-overlay,
+scaler and writeback register images with the pinned setters at minimum,
+asymmetric and maximum geometry. It also refuses odd destination dimensions,
+source half-extent overflow and nonzero color.
+
+One linked native job consumes the final producer session and root-published
+runtime contract. Its RCQ bytes match the source comparison artifact; actual
+acknowledgment, reset, IOMMU scans and guarded copy retain 16384 bytes. Device
+pixels are explicitly injected tagged data confined to the destination rectangle.
+They establish no interpolation, filtered-alpha, edge-handling or rounding rule.
+Host capture checks authenticated output and exact zero bytes outside the target
+rectangle, including padding, without comparing interpolated pixels.
+
+
+One high-speed transport case restores that exact copied checkpoint and executes
+the linked C serializer and TinyUSB vendor, FIFO and endpoint code. It emits the
+16576-byte authenticated response and final receipt while gating ACK processing
+on completed transfers. DCD effects, provider readiness and scheduling are
+modeled; no G2D job, full-speed matrix or earlier completion cases replay.

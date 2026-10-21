@@ -11,7 +11,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
-from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_Q0,UC_ARM64_REG_FPCR,UC_ARM64_REG_FPSR
+from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_Q0,UC_ARM64_REG_FPCR,UC_ARM64_REG_FPSR,UC_ARM64_REG_SP_EL0
 ROOT=Path(__file__).resolve().parents[1]
 EXPECTED='4e043dad7e691ad50c4164dd9085ae118a0e0911d7fd8aea93e16610e7966328'
 def module(name,path):
@@ -58,7 +58,7 @@ def usb_variables(path):
 class Machine:
  def __init__(self,image,types,sizes,enums,speed):
   self.image=image;self.t=types;self.sizes=sizes;self.enums=enums;self.speed=speed;self.mps=512 if speed==2 else 64
-  self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.reg_write(UC_ARM64_REG_PSTATE,0x345)
+  self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);self.cpu.reg_write(UC_ARM64_REG_PSTATE,4) # Linked privileged task entry is EL1t, using SP_EL0.
   for at,size in [(0x41000000,0x3000000),(0x48000000,0x1000000),(0x78000000,0x1000000),(0x90000000,0x1000000)]:self.cpu.mem_map(at,size)
   for at,data in image.parts:
    if data:self.cpu.mem_write(at,data)
@@ -95,7 +95,7 @@ class Machine:
   self.ret(1)
  def call(self,name,*args):
   saved=self.cpu.context_save();self.stop=None
-  self.cpu.reg_write(UC_ARM64_REG_SP,0x90efd000);self.cpu.reg_write(UC_ARM64_REG_LR,0x90fff000)
+  self.cpu.reg_write(UC_ARM64_REG_PSTATE,4);self.cpu.reg_write(UC_ARM64_REG_SP_EL0,0x90efd000);self.cpu.reg_write(UC_ARM64_REG_SP,0x90efd000);self.cpu.reg_write(UC_ARM64_REG_LR,0x90fff000)
   for i,v in enumerate(args):self.cpu.reg_write(UC_ARM64_REG_X0+i,v)
   self.cpu.emu_start(self.image.address(name),0,count=4000000);assert self.stop=='returned',(name,self.stop,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
   value=self.cpu.reg_read(UC_ARM64_REG_X0);self.cpu.context_restore(saved);return value
@@ -103,7 +103,7 @@ class Machine:
   for ep,p in self.pending.items():
    if ep&128:assert bytes(self.cpu.mem_read(p['pointer'],p['count']))==p['data'],'Endpoint bytes changed before completion'
   if not self.started:
-   self.started=True;self.cpu.reg_write(UC_ARM64_REG_SP,0x90ffd000);self.cpu.reg_write(UC_ARM64_REG_X0,0);at=self.image.address('board_usb0_task')
+   self.started=True;self.cpu.reg_write(UC_ARM64_REG_PSTATE,4);self.cpu.reg_write(UC_ARM64_REG_SP_EL0,0x90ffd000);self.cpu.reg_write(UC_ARM64_REG_SP,0x90ffd000);self.cpu.reg_write(UC_ARM64_REG_X0,0);at=self.image.address('board_usb0_task')
   else:self.cpu.context_restore(self.context);at=self.cpu.reg_read(UC_ARM64_REG_PC)
   self.stop=None;self.cpu.emu_start(at,0,count=8000000);assert self.stop=='yield',hex(self.cpu.reg_read(UC_ARM64_REG_PC));self.context=self.cpu.context_save()
  def event(self,kind,**fields):
@@ -128,23 +128,32 @@ class Machine:
  def request(self,data):self.complete(2,data);self.tick()
 
 def main():
+ global EXPECTED,ACTIVE_MODEL,ACTIVE_OUTPUT
  p=argparse.ArgumentParser(description=__doc__)
  for k in ('image','checkpoint','output'):p.add_argument('--'+k,type=Path,required=True)
+ p.add_argument('--expected-image',default=EXPECTED,help='Pinned final ELF SHA256; must match native checkpoint')
  p.add_argument('--speed',choices=['full','high'],required=True)
  p.add_argument('--variant',choices=['retained','exact-total'],default='retained')
- a=p.parse_args();assert hashlib.sha256(a.image.read_bytes()).hexdigest()==EXPECTED
+ a=p.parse_args();assert len(a.expected_image)==64 and all(x in '0123456789abcdef' for x in a.expected_image);EXPECTED=a.expected_image;assert hashlib.sha256(a.image.read_bytes()).hexdigest()==EXPECTED
  # Checkpoint schema supplied by the native G2D owner; mapped ranges are hashed.
  checkpoint=json.loads(a.checkpoint.read_text());e=base.Image(a.image,layout_names=());t,sizes,enums=metadata(a.image);m=Machine(e,t,sizes,enums,2 if a.speed=='high' else 1)
  assert checkpoint['image_sha256']==EXPECTED
+ ACTIVE_MODEL=m;ACTIVE_OUTPUT=a.output
+ frozen=[Path(__file__),ROOT/'checks/storage-read-native.py',ROOT/'apps/g2d/usb.c',a.image,a.checkpoint]
+ for row in checkpoint['memory']:
+  q=Path(row['file']);frozen.append(q if q.is_absolute() else a.checkpoint.parent/q)
+ identities={str(q.resolve()):hashlib.sha256(q.read_bytes()).hexdigest() for q in frozen}
  for row in checkpoint['memory']:
   path=Path(row['file']);path=path if path.is_absolute() else a.checkpoint.parent/path;data=path.read_bytes();assert hashlib.sha256(data).hexdigest()==row['sha256'];m.cpu.mem_write(row['address'],data)
  a.output.mkdir(parents=True,exist_ok=True)
+ (a.output/'inputs.json').write_text(json.dumps(identities,indent=2)+'\n')
  g=e.address('g2d');gt=t['g2d_application'];board=e.address('board');bt=t['board_application']
  def field(name,n=4):return m.word(g+gt[name],n)
  uv=usb_variables(a.image)
  for name in ['response','response_bytes','sent','delivered','acked','acking','terminal_zlp']:
   if name not in uv:uv[name]=e.address(name)
  def private(name,n=8):return m.word(uv[name],n)
+ if 'session_sha256' in checkpoint:assert hashlib.sha256(bytes(m.cpu.mem_read(g+gt['session'],904))).hexdigest()==checkpoint['session_sha256']
  assert field('result')==1 and field('copied',8)==field('bytes',8)==16384
  payload_at=field('payload',8);payload=bytes(m.cpu.mem_read(payload_at,field('bytes',8)))
  assert hashlib.sha256(payload).digest()==bytes(m.cpu.mem_read(g+gt['digest'],32))
@@ -155,7 +164,7 @@ def main():
   m.cpu.mem_write(g+gt['digest'],hashlib.sha256(payload).digest())
   for name,value in dict(width=1,height=506,stride=32,dx=0,dy=0,w=1,h=506,sx=0,sy=0).items():m.write(g+gt['session.'+name],value)
  setup=a.output/'configured.pkl.gz'
- regs=[*[UC_ARM64_REG_X0+i for i in range(29)],UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_FPCR,UC_ARM64_REG_FPSR,*[UC_ARM64_REG_Q0+i for i in range(32)]]
+ regs=[*[UC_ARM64_REG_X0+i for i in range(29)],UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_LR,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_FPCR,UC_ARM64_REG_FPSR,*[UC_ARM64_REG_Q0+i for i in range(32)]]
  # FP/X29 has a noncontiguous Unicorn register ID.
  from unicorn.arm64_const import UC_ARM64_REG_FP
  regs.append(UC_ARM64_REG_FP)
@@ -218,6 +227,15 @@ def main():
  assert all(m.seen[name] for name in ['tu_fifo_write_n_access_mode','tu_fifo_read_n_access_mode','vendord_xfer_cb','tud_vendor_tx_cb','usbd_edpt_claim','usbd_edpt_xfer'])
  (a.output/'response.bin').write_bytes(wire);(a.output/'acknowledged.bin').write_bytes(acknowledged)
  result=dict(passed=True,image_sha256=EXPECTED,checkpoint_sha256=hashlib.sha256(a.checkpoint.read_bytes()).hexdigest(),speed=a.speed,variant=a.variant,total_bytes=len(wire),payload_sha256=hashlib.sha256(payload).hexdigest(),dcd_transfer_lengths=transfer_lengths,modeled_dcd_packet_lengths=m.packets,fifo_refill_progress=samples,executed=dict(m.seen),early_ack_accepted_only_after_final_completion=True,modeled=['DCD physical transfer/completion effects','Native board/provider readiness','Scheduler/counter','Previously modeled accelerator result in retained checkpoint']+(['Synthetic terminal geometry/length only; no second G2D job/admission'] if a.variant=='exact-total' else []),scope=__doc__,physical_access=False)
+ for path,sha in identities.items():assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==sha
  (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  print('PASS FIFO refills, header bridge, terminal completion and ACK ownership',flush=True)
-if __name__=='__main__':main()
+if __name__=='__main__':
+ try:main()
+ except BaseException as error:
+  if 'ACTIVE_MODEL' in globals():
+   m=ACTIVE_MODEL;ACTIVE_OUTPUT.mkdir(parents=True,exist_ok=True)
+   snapshot=dict(error=repr(error),image=EXPECTED,cpu=m.cpu.context_save(),task_context=getattr(m,'context',None),registers={reg:m.cpu.reg_read(reg) for reg in [*[UC_ARM64_REG_X0+i for i in range(29)],UC_ARM64_REG_SP,UC_ARM64_REG_SP_EL0,UC_ARM64_REG_PC,UC_ARM64_REG_LR,UC_ARM64_REG_PSTATE]},memory=[(at,bytes(m.cpu.mem_read(at,n))) for at,n in [(0x41000000,0x3000000),(0x48000000,0x1000000),(0x78000000,0x1000000),(0x90000000,0x1000000)]],attributes={k:getattr(m,k) for k in ['seen','opened','pending','events','packets','transfers','started','now','stop','failure']})
+   (ACTIVE_OUTPUT/'interrupted.pkl.gz').write_bytes(gzip.compress(pickle.dumps(snapshot),compresslevel=1))
+   (ACTIVE_OUTPUT/'failure.json').write_text(json.dumps(dict(error=repr(error)),indent=2)+'\n')
+  raise
