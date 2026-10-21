@@ -111,28 +111,26 @@ static const struct a733_hdmi_step ddc_setup[]={
     B(0x7e05,4,0),B(0x7e06,0x44,0),B(0x7e00,0x7f,0x50),
     B(0x7e08,0x7f,0x30),B(0x7e0a,0xff,0)
 };
+/* Per byte: one poll issues the clear, segment, offset and command writes;
+ * status polls follow; one poll reads the byte, clears DONE and samples HPD. */
 static int edid_read(struct a733_hdmi *s){
     struct a733_hdmi_io *b=&s->io;uint32_t x;int r;
     if(s->phase==0){
         r=hpd(s);if(r<0)return -1;if(!r)return fail(s,A733_HDMI_SINK);
-        if(a733_hdmi_write(b,A733_HDMI_BASE+0x105,1,3)!=1)return -1;
-    }else if(s->phase==1){
-        if(a733_hdmi_write(b,A733_HDMI_BASE+0x7e0a,1,s->position/256)!=1)return -1;
-    }else if(s->phase==2){
-        if(a733_hdmi_write(b,A733_HDMI_BASE+0x7e01,1,s->position&255)!=1)return -1;
-    }else if(s->phase==3){
+        if(a733_hdmi_write(b,A733_HDMI_BASE+0x105,1,3)!=1 ||
+           a733_hdmi_write(b,A733_HDMI_BASE+0x7e0a,1,s->position/256)!=1 ||
+           a733_hdmi_write(b,A733_HDMI_BASE+0x7e01,1,s->position&255)!=1)return -1;
         if(b->now>UINT64_MAX-10000)return fail(s,A733_HDMI_IO);
         s->transaction_deadline=b->now+10000;
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x7e04,1,s->position>=256?2:1)!=1)return -1;
-    }else if(s->phase==4){
+    }else if(s->phase==1){
         if(b->now>=s->transaction_deadline)return fail(s,A733_HDMI_DDC_ERROR);
         if(a733_hdmi_read(b,A733_HDMI_BASE+0x105,1,&x)!=1)return -1;
         if(b->now>=s->transaction_deadline || (x&1))return fail(s,A733_HDMI_DDC_ERROR);
         if(!(x&2))return 0;
-    }else if(s->phase==5){
+    }else if(s->phase==2){
         if(a733_hdmi_read(b,A733_HDMI_BASE+0x7e03,1,&x)!=1)return -1;
         s->edid[s->position]=(uint8_t)x;
-    }else if(s->phase==6){
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x105,1,2)!=1)return -1;
         r=hpd(s);if(r<0)return -1;if(!r)return fail(s,A733_HDMI_SINK);
         ++s->position;s->phase=0;

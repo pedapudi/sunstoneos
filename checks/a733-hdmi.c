@@ -16,13 +16,16 @@ struct model {
     struct a733_hdmi *owner;
     uint64_t time;
     uint64_t top_lock_observed,svsret_low,tv_enable_time;
-    unsigned events,reads,writes,validates,now_calls,retains;
+    /* TX PHY lock follows the 0x3000 bit3 enable by lock_delay; tick is the
+     * owner's poll spacing while it waits for that lock. */
+    uint64_t tx_enable_time,lock_delay,tick;
+    unsigned events,reads,writes,validates,now_calls,retains,polls,edid_polls;
     unsigned hpd,deny,retain_busy,expire_unmute,bad_phy_read,top_unlock,uncertain_unmute;
 };
 struct system {struct model m;struct a733_hdmi s;struct a733_hdmi_config c;};
-static struct system live,ddc_checkpoint,pll_checkpoint,phy_checkpoint,start_checkpoint;
+static struct system live,ddc_checkpoint,pll_checkpoint,phy_checkpoint,start_checkpoint,lock_checkpoint;
 static struct a733_hdmi copied;
-static unsigned ddc_saved,pll_saved,phy_saved,start_saved;
+static unsigned ddc_saved,pll_saved,phy_saved,start_saved,lock_saved;
 static int now(void *p,uint64_t *v){struct model *m=p;++m->now_calls;*v=m->time;return 1;}
 static int acquire(void *p,const struct a733_hdmi_request *r,uint64_t d,
                    struct a733_hdmi_reservation *g){
@@ -53,7 +56,7 @@ static int read32(void *p,uintptr_t a,uint32_t *v){
 static int read8(void *p,uintptr_t a,uint8_t *v){
     struct model *m=p;++m->reads;assert(a>=A733_HDMI_BASE && a<A733_HDMI_BASE+sizeof(m->dw));
     unsigned o=(unsigned)(a-A733_HDMI_BASE);
-    if(o==0x3004){*v=(uint8_t)((m->hpd?2:0)|((m->dw[0x3000]&8)?1:0));return 1;}
+    if(o==0x3004){*v=(uint8_t)((m->hpd?2:0)|((m->dw[0x3000]&8)&&m->time>=m->tx_enable_time+m->lock_delay?1:0));return 1;}
     *v=m->dw[o];if(o==0x3024 && m->bad_phy_read)*v^=1;return 1;
 }
 static void event(struct model *m,uintptr_t a,uint32_t v,unsigned w){
@@ -74,6 +77,7 @@ static int write8(void *p,uintptr_t a,uint8_t v){
     if(o==0x3000){
         if(!(v&0x20))m->svsret_low=m->time;
         else if(!(m->dw[o]&0x20))assert(m->svsret_low && m->time-m->svsret_low>=5);
+        if((v&8) && !(m->dw[o]&8))m->tx_enable_time=m->time;
     }
     if(o==0x1018 && (v&3)==1)
         assert(m->tv_enable_time && m->time-m->tv_enable_time>=50000);
@@ -132,7 +136,8 @@ static void setup(enum a733_hdmi_mode mode,enum a733_hdmi_range range){
 }
 static void capture(void){
     struct a733_hdmi *s=&live.s;
-    if(!ddc_saved && s->state==A733_HDMI_EDID && s->phase==4){ddc_checkpoint=live;ddc_saved=1;}
+    if(!ddc_saved && s->state==A733_HDMI_EDID && s->phase==1){ddc_checkpoint=live;ddc_saved=1;}
+    if(!lock_saved && s->state==A733_HDMI_PHY && s->phy.stage==15){lock_checkpoint=live;lock_saved=1;}
     if(!pll_saved && s->state==A733_HDMI_PHY && s->phy.stage==4){pll_checkpoint=live;pll_saved=1;}
     if(!phy_saved && s->state==A733_HDMI_PHY && s->phy.stage==12 && s->phy.phase==11){phy_checkpoint=live;phy_saved=1;}
     if(!start_saved && s->state==A733_HDMI_STARTING && s->index==1 && live.m.time>=s->until){start_checkpoint=live;start_saved=1;}
@@ -140,9 +145,10 @@ static void capture(void){
 static void run_to(enum a733_hdmi_state state,int save){
     for(unsigned n=0;n<20000;++n){
         if(save)capture();
+        live.m.edid_polls+=live.s.state==A733_HDMI_EDID;++live.m.polls;
         int r=a733_hdmi_poll(&live.s);assert(r>=0);
         if(live.s.state==state)return;
-        live.m.time+=10;
+        live.m.time+=live.s.state==A733_HDMI_PHY && live.s.phy.stage==15 && live.m.tick?live.m.tick:10;
     }
     assert(!"bounded model completion");
 }
@@ -180,6 +186,9 @@ int main(void){
     setup(A733_HDMI_720P60,A733_HDMI_LIMITED);
     assert(a733_hdmi_prepare(&live.s,1000000)==1);
     run_to(A733_HDMI_PREPARED,1);
+    /* 512 EDID bytes, each one setup, one status and one data poll. */
+    assert(live.m.edid_polls==3*512);
+    fprintf(stderr,"prepare polls %u, EDID polls %u\n",live.m.polls,live.m.edid_polls);
     check_tcon_tv(live.m.tv,live.m.top,4);range_check();
     assert(live.m.sys[0]==0xa5a51000 && live.m.sys[1]==0x00cdef12);
     assert(!(live.m.tv[0x90/4]&0x80000000) && (live.m.dw[0x1018]&3)==2);
@@ -225,6 +234,25 @@ int main(void){
     assert(a733_hdmi_poll(&copied)==-1 && live.m.reads==old);
     live=ddc_checkpoint;live.m.time=live.s.io.now-1;
     assert(a733_hdmi_poll(&live.s)==-1);fault_no_io();
+    /* A tick-paced owner first samples TX PHY lock 0-1ms after stage 14.
+     * A lock 1.2ms after enable, well inside the source's 2.5ms budget, must
+     * be accepted for every tick phase; a lock that never comes still faults. */
+    assert(lock_saved);
+    for(uint64_t phase=0;phase<1000;phase+=100){
+        live=lock_checkpoint;live.m.tick=1000;live.m.lock_delay=1200;
+        live.m.time=live.s.phy.operation_deadline-2500+phase;
+        run_to(A733_HDMI_PREPARED,0);assert(live.s.phy.ready);
+    }
+    live=lock_checkpoint;live.m.tick=1000;live.m.lock_delay=2400;
+    live.m.time=live.s.phy.operation_deadline-2500;run_to(A733_HDMI_PREPARED,0);
+    live=lock_checkpoint;live.m.tick=1000;live.m.lock_delay=UINT64_MAX/2;
+    for(unsigned n=0;n<10 && a733_hdmi_poll(&live.s)>=0;++n)live.m.time+=1000;
+    assert(live.s.state==A733_HDMI_FAULT_RETAINED && live.s.phy.index>=4 && live.s.io.now>=live.s.phy.operation_deadline);
+    fault_no_io();
+    live=lock_checkpoint;live.m.lock_delay=UINT64_MAX/2;
+    for(unsigned n=0;n<1000 && a733_hdmi_poll(&live.s)>=0;++n)live.m.time+=10;
+    assert(live.s.state==A733_HDMI_FAULT_RETAINED && live.m.time+2500-live.s.phy.operation_deadline<2600);
+    fault_no_io();
     live=ddc_checkpoint;
     assert(a733_hdmi_edid_accept(live.m.edid,512,A733_HDMI_720P60,A733_HDMI_LIMITED)==1);
     assert(a733_hdmi_edid_accept(live.m.edid,512,A733_HDMI_720P60,A733_HDMI_FULL)==-1);
