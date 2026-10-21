@@ -6,8 +6,8 @@
 #endif
 
 /* SHA-256, FIPS 180-4 sections 4.1.2, 4.2.2, 5.1.1, 5.3.3 and 6.2.
- * Private artifact identity helper. Inputs are bounded by the model capacity
- * and the largest catalogue allocation (1 MiB and 1,093,632 bytes).
+ * Private artifact identity helper. Inputs are at most the 1 MiB model
+ * capacity; the largest hashed allocation is 892,928 bytes of coefficients.
  * https://csrc.nist.gov/pubs/fips/180-4/upd1/final */
 static uint32_t rotate(uint32_t x,unsigned n) { return x>>n | x<<(32-n); }
 static uint32_t big(const unsigned char *p)
