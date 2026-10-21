@@ -10,8 +10,11 @@ MODE,CONFIG,FLAG,ALT,RVBAR=0x02050014,0x02050010,0x070501c0,0x070501d4,0x0800100
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bundle',type=Path,required=True)
 parser.add_argument('--output',type=Path,required=True)
-parser.add_argument('--motion-only',action='store_true',
+selection=parser.add_mutually_exclusive_group()
+selection.add_argument('--motion-only',action='store_true',
                     help='Check only motion-mode admission and unsupported-mode refusal')
+selection.add_argument('--tnr-only',action='store_true',
+                    help='Check only temporal-filter admission and unsupported-mode refusal')
 args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 image=args.bundle/'image.elf'
 with image.open('rb') as stream:
@@ -37,7 +40,13 @@ if args.motion_only:
     assert struct.unpack_from('<I',template,876)[0]==2
     cases=[
         ('motion-handoff',None,None,12),
-        ('unsupported-motion-mode',876,struct.pack('<I',3),14),
+        ('unsupported-motion-mode',876,struct.pack('<I',4),14),
+    ]
+elif args.tnr_only:
+    assert struct.unpack_from('<I',template,876)[0]==3
+    cases=[
+        ('temporal-filter-handoff',None,None,12),
+        ('unsupported-temporal-mode',876,struct.pack('<I',4),14),
     ]
 for name,offset,value,reason in cases:
     session=bytearray(template)
@@ -95,7 +104,7 @@ for name,offset,value,reason in cases:
         assert terminal==['handoff'] and writes==[(RVBAR,0x41000000),(RVBAR+4,0)] and len(ticks)==4
         assert struct.unpack_from('<4Q',published,80)==(ticks[0],ticks[0]+24000000,ticks[0]+480000000,ticks[0]+480000000)
         assert published[8:80]==contract[8:80] and published[112:]==contract[112:]
-        if args.motion_only:
+        if args.motion_only or args.tnr_only:
             (args.output/'runtime-contract.bin').write_bytes(published)
     else:
         assert terminal==['return'] and not writes and not ticks and published==contract
