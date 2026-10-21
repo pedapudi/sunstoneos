@@ -28,8 +28,24 @@ requires coherent CPU memory; it does not synchronize noncoherent DMA.
 Only the bound recognition task may submit work, and calls cannot nest.
 Assertions verify the caller on core 0 and the worker on core 1. A final
 `WORKERS` record reports completed jobs; the acceptance tool requires a
-nonzero count. This adapter has no asynchronous job interface. Execution on all
-eight physical cores remains outstanding.
+nonzero count. Execution on all eight physical cores remains outstanding.
+
+The adapter also installs the engine's asynchronous interface. The engine uses
+it to run one item on the worker while recognition continues: the attention
+softmax and context steps, and the hand-off of the next layer's input. The same
+queues carry these items, under the same owner, core and lifetime assertions.
+While an item is pending, the engine runs every `ParallelFor` on core 0, so the
+worker never holds a range and an item at once. A second record,
+`WORKERS async=N`, reports the item count. Defining `SUNSTONE_MIMUS_NO_ASYNC`
+restores the previous range-only behavior.
+
+The engine's own estimate bounds the gain to the softmax and scalar attention
+work, about 3 to 5 percent of the 19.5-second physical bench. Emulator timing
+does not measure it. The two-core emulator run matches the host reference for
+the bench recording with 2,631 jobs and 2,428 asynchronous items:
+features, log probabilities, frame count, words, punctuation, capitals and
+formatted text. The engine caps workers at two (`kMaxWorkers` in the pinned
+mimus source), so a change there is required to use more cores.
 
 ## Packed matrix products share rows between workers
 
