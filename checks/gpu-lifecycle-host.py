@@ -29,7 +29,8 @@ class Replay:
         self.rows=[(artifact(row['request'],base),artifact(row['response'],base),
                     artifact(row['body'],base) if 'body' in row else b'') for row in fixture['exchanges']]
         self.cursor=0;self.header=None;self.body=b'';self.body_offset=0;self.injected=False;self.requests=[]
-        self.injected_operation=None;self.first_epoch=None;self.expected_retained=[];pages={};opened=set();initial_epoch=None
+        self.injected_operation=None;self.first_epoch=None;self.compute_prefix=bytearray();self.compute_failure_prefix=None
+        self.compute_failure_first=None;self.expected_retained=[];pages={};opened=set();initial_epoch=None
         for request,response,body in self.rows:
             op=struct.unpack_from('<I',request,8)[0];state=struct.unpack_from('<I',response,8)[0]
             epoch=struct.unpack_from('<Q',response,64 if self.texture else 40)[0]
@@ -62,6 +63,19 @@ class Replay:
                 struct.pack_into('<Q',raw,offset,epoch+1);self.injected=True
             elif self.case=='open-closed' and self.texture and op in (0,7) and state==1 and self.first_epoch is not None and epoch>self.first_epoch:
                 struct.pack_into('<I',raw,44,1);self.injected=True;self.injected_operation=op
+        if self.case in ('compute-page-index','compute-tail-count','compute-sequence','compute-acquired') and not self.texture and op==1 and state==1 and not self.injected:
+            first=struct.unpack_from('<I',request,24)[0]
+            count,total=struct.unpack_from('<2I',raw,16)
+            if first>0 and first+count==total:
+                self.compute_failure_prefix=bytes(self.compute_prefix);self.compute_failure_first=first
+                if self.case=='compute-page-index':struct.pack_into('<I',raw,12,first//32-1)
+                elif self.case=='compute-tail-count':
+                    struct.pack_into('<I',raw,16,count+1);raw.extend(bytes(4))
+                elif self.case=='compute-sequence':
+                    sequence=struct.unpack_from('<I',raw,24)[0];struct.pack_into('<I',raw,24,sequence-1)
+                else:struct.pack_into('<I',raw,36,total-1)
+                self.injected=True;self.injected_operation=op
+            else:self.compute_prefix.extend(response[48:])
         return bytes(raw)
 
     def accept(self,request):
@@ -157,6 +171,10 @@ def run_case(fixture,base,case):
         if case in ('output-save','interrupt-retain','late-output'):assert client.outputs and retained[0][0]=='output'
         if case in ('disposed-save','late-receipt'):assert client.state==5 and retained[-1][0]=='disposed'
         if case=='partial-stream':assert client.failure['partial']==wire.body[:wire.body_offset] and wire.body_offset>0
+        if case.startswith('compute-'):
+            assert client.failure['partial']==wire.compute_failure_prefix
+            assert len(client.failure['partial'])==wire.compute_failure_first*4>0
+            assert not retained and not client.outputs
         if case in ('late-output','late-receipt'):assert isinstance(caught,TimeoutError)
         if case.startswith('interrupt-'):assert isinstance(caught,KeyboardInterrupt)
     return {'case':case,'requests':len(wire.requests),'retained':[row[0] for row in retained],
@@ -169,7 +187,7 @@ def main():
     parser.add_argument('--fixture',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--baseline',type=Path,help='Preserved matching healthy result for negative-only continuation')
     parser.add_argument('--case',action='append',choices=('healthy','session-epoch','queue-epoch','open-epoch','open-closed',
-        'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','late-receipt','partial-stream','epoch-wrap'))
+        'output-save','disposed-save','interrupt-transport','interrupt-retain','late-output','late-receipt','partial-stream','epoch-wrap','compute-page-index','compute-tail-count','compute-sequence','compute-acquired'))
     args=parser.parse_args();fixture_raw=args.fixture.read_bytes();fixture=json.loads(fixture_raw);base=args.fixture.parent
     if fixture.get('schema')!='pvr-gpu-lifecycle-host-fixture-v1' or fixture.get('physical_authority') is not False or fixture.get('modeled') is not True:
         raise ValueError('Fixture must explicitly identify modeled hardware authority')
@@ -181,6 +199,8 @@ def main():
     if image[:4]!=b'\x7fELF' or fixture['profile'] not in ('compute','triangle','texture','depth') or not 0<fixture['session_epoch']<2**64:
         raise ValueError('Actual native fixture identity')
     selected=args.case or ['healthy']
+    if any(case.startswith('compute-') for case in selected) and (fixture['profile']!='compute' or fixture['words']<=32 or fixture['words']%32==0):
+        raise ValueError('Compute page guards require an actual multi-page result with a partial tail')
     if 'healthy' in selected and selected[0]!='healthy':raise ValueError('Healthy compatibility case must precede injections')
     if 'healthy' not in selected:
         if args.baseline is None:raise ValueError('Negative continuation requires preserved healthy evidence')

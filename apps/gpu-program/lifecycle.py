@@ -72,7 +72,7 @@ class Session:
 
     def _status(self,*,opening=False):
         old=self.queue_epoch
-        reply=self._call(STATUS,self.sequence,queue_epoch=0 if not old or opening else old)
+        reply=self._call(STATUS,0,queue_epoch=0 if not old or opening else old)
         if not old:
             if not reply['queue_epoch'] and (reply['status']!=0 or reply['sequence']):
                 raise ValueError('GPU discovery returned invalid zero queue epoch')
