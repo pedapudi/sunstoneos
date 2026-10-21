@@ -181,6 +181,22 @@ recorded previous contents before writing anything. A card that changed since
 planning is refused, and a partly applied plan resumes by skipping extents
 that already match.
 
+An interrupted plan must be resumed by running `apply` again with the same
+plan directory. Once its header is written, the new slot is selected, so a
+fresh plan would choose the slot that holds the previous image as its standby
+and overwrite it. `plan` refuses when the selected slot already holds the
+requested image, assets and entry address. This covers an install that
+stopped after its header but before boot0 and the TOC1 package. `plan` also
+refuses in two other cases:
+
+- a valid header of the other slot has an extent inside the standby region,
+  as a header written by another tool may have;
+- a valid header holds the largest 64-bit generation, so no newer generation
+  exists.
+
+Entry and load addresses that do not fit in 64 bits are refused when the
+arguments are read.
+
 **Rollback.** `boot-slots.py rollback` plans one write: a zero sector over the
 active header. It refuses unless the other slot's header and payload verify.
 After rollback the older generation is selected again, and its payload bytes
@@ -220,8 +236,10 @@ admission and card-detect evidence are modeled.
 
 [standalone-boot-slots.py](../checks/standalone-boot-slots.py) covers
 allocation refusals, the install order with container extents, an interrupted
-and resumed update, refusal of a changed image before any write, rollback and
-its refusal, plan refusals and the header rules. Both checks run on the
+and resumed update, an interrupted install that refuses a new plan and then
+resumes, refusal of a changed image before any write, rollback and its
+refusal, plan refusals and the header rules. The plan refusals include a
+foreign header with an extent in the standby region and the 64-bit limits. Both checks run on the
 development host:
 
 ```sh
