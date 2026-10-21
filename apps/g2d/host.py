@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 from pathlib import Path
+from fractions import Fraction
 import struct
 import time
 
@@ -14,6 +15,10 @@ supervisor=module('g2d_host_supervisor',ROOT/'tools/check-a733-smp-supervised.py
 require=supervisor.require
 HEADER=192
 MAXIMUM=3686400
+FORMATS=('ARGB8888','ABGR8888','RGBA8888','BGRA8888','XRGB8888','XBGR8888','RGBX8888','BGRX8888')
+OPERATIONS={1:'fill',2:'copy',3:'source-over-solid',4:'scale2x',5:'scale',6:'source-over-image'}
+# Bit positions of A,R,G,B in a little-endian word for ARGB, ABGR, RGBA and BGRA orders.
+CHANNELS=((24,16,8,0),(24,0,8,16),(0,24,16,8),(0,8,16,24))
 
 
 def decode(raw,session):
@@ -29,41 +34,80 @@ def decode(raw,session):
     complete,rcq,scanned,guards=struct.unpack_from('<4I',raw,176)
     size=geometry[1]*geometry[2]
     require(count==(size if status==1 else 0) and len(raw)==HEADER+count,'G2D copied extent differs.')
+    output_format=struct.unpack_from('<I',session,820)[0]
     result=dict(status=status,bytes=count,width=geometry[0],height=geometry[1],stride=geometry[2],
-        format='ARGB8888-little-endian-BGRA',operation={1:'fill',2:'copy',3:'source-over-solid',4:'scale2x'}[geometry[4]],
+        format=FORMATS[geometry[3]]+'-little-endian-word',output_format=FORMATS[output_format]+'-little-endian-word',
+        operation=OPERATIONS[geometry[4]],
         complete=complete,rcq_status=rcq,scanned_masters=scanned,guards=guards,physical_qualified=False)
     if status in (1,3):
         require(complete==1 and rcq&1 and scanned==0x400 and guards==1,'G2D completion or guard proof differs.')
         if status==1:
             require(hashlib.sha256(raw[HEADER:]).digest()==raw[96:128],'G2D copied pixel digest differs.')
         result['sha256']=raw[96:128].hex()
-    if geometry[4]==3:result['arithmetic_scope']='Ideal straight-alpha /255 nearest reference; hardware rounding unqualified.'
-    if geometry[4]==4:result['arithmetic_scope']='Scale2x interpolation unchecked; no qualified numerical oracle.'
+    if geometry[4] in (3,6):result['arithmetic_scope']='Ideal straight-alpha /255 nearest reference; hardware rounding unqualified.'
+    if geometry[4] in (4,5):result['arithmetic_scope']='Scaling interpolation unchecked; no qualified numerical oracle.'
+    if diagnostic(session) and geometry[4]==2:result['arithmetic_scope']='Ideal channel reordering; X-channel handling and conversion unqualified.'
     return result
 
 
+def diagnostic(session):
+    """Whether a CPU reference is an unqualified diagnostic that does not gate ACK."""
+    geometry,extension=preparation.session_geometry(session)
+    return geometry[4] in (3,6) or (geometry[4]==2 and bool(geometry[3] or extension[5]))
+
+
+def unpack_pixel(word,format_):
+    """Return A,R,G,B from one little-endian 32-bit word; X formats read as opaque."""
+    a,r,g,b=[(word>>shift)&255 for shift in CHANNELS[format_&3]]
+    return (255 if format_>=4 else a),r,g,b
+
+
+def pack_pixel(argb,format_):
+    """Pack A,R,G,B; the ideal reference writes X channels as 255."""
+    a,r,g,b=argb;shifts=CHANNELS[format_&3]
+    return struct.pack('<I',((255 if format_>=4 else a)<<shifts[0])|(r<<shifts[1])|(g<<shifts[2])|(b<<shifts[3]))
+
+
+def over(foreground,background,plane=255):
+    """Ideal straight-alpha SRCOVER of two A,R,G,B pixels, rounded to nearest."""
+    fa=Fraction(foreground[0]*plane,255*255);ba=Fraction(background[0],255)
+    out=fa+ba*(1-fa)
+    if not out:return (0,0,0,0)
+    color=[(foreground[c]*fa+background[c]*ba*(1-fa))/out for c in (1,2,3)]
+    return tuple(int(value+Fraction(1,2)) for value in (out*255,*color))
+
+
 def expected_output(source,session):
-    """Fill/copy bytes, ideal source-over bytes, or None for scaling.
+    """Fill/copy bytes, ideal conversion or source-over bytes, or None for scaling.
 
     Blending rounds the ideal /255 result to nearest. Hardware quantization is
     unqualified; modeled pixels compared here do not qualify device arithmetic.
     Scaling has no numerical oracle and must not imply a pixel comparison."""
     preparation.session_check(session)
-    width,height,stride,format_,operation,dx,dy,w,h,sx,sy,color=struct.unpack_from('<12I',session,856)
+    (width,height,stride,format_,operation,dx,dy,w,h,sx,sy,color),extension=preparation.session_geometry(session)
+    bx,by,alpha,output_format=extension[2:6]
     require(len(source)==height*stride and hashlib.sha256(source).digest()==session[768:800],
         'G2D reference source differs from sealed input.')
-    if operation==4:return None
+    if operation in (4,5):return None
     out=bytearray(len(source))
     row=struct.pack('<I',color)*w if operation==1 else None
+    def pixel(at,format_=0):return unpack_pixel(struct.unpack_from('<I',source,at)[0],format_)
     for y in range(h):
         target=(dy+y)*stride+dx*4
         start=(sy+y)*stride+sx*4
         if operation==3:
             background=struct.pack('<I',color)
             for x in range(w):
-                pixel=source[start+x*4:start+x*4+4];alpha=pixel[3]
+                pixel_=source[start+x*4:start+x*4+4];alpha_=pixel_[3]
                 out[target+x*4:target+x*4+4]=bytes(
-                    [(pixel[c]*alpha+background[c]*(255-alpha)+127)//255 for c in range(3)]+[255])
+                    [(pixel_[c]*alpha_+background[c]*(255-alpha_)+127)//255 for c in range(3)]+[255])
+        elif operation==6:
+            under=(by+y)*stride+bx*4
+            for x in range(w):
+                out[target+x*4:target+x*4+4]=pack_pixel(over(pixel(start+x*4),pixel(under+x*4),alpha),0)
+        elif operation==2 and (format_ or output_format):
+            for x in range(w):
+                out[target+x*4:target+x*4+4]=pack_pixel(pixel(start+x*4,format_),output_format)
         else:out[target:target+w*4]=row if operation==1 else source[start:start+w*4]
     return bytes(out)
 
@@ -134,7 +178,7 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
                 if not copied['untouched_bytes_zero']:
                     record['g2d_result']='observed-failure';record['durable_result']=entry.copy();save();return result
                 save()
-            elif struct.unpack_from('<I',session,872)[0]==3:
+            elif diagnostic(session):
                 copied['reference_qualified']=False
                 copied['reference_comparison']='matches-ideal' if copied['matches_cpu_reference'] else 'differs-from-ideal'
                 save()

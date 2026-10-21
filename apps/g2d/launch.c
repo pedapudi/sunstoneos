@@ -6,6 +6,9 @@
 int a733_smp_launch_prepare(void)
 {
     volatile const struct a733_g2d_session *g=(const void *)A733_BOARD_SESSION_ADDRESS;
+    /* An opaque base register gives each field a base+offset load instead of
+     * its own absolute address, which keeps this code within the SRAM region. */
+    __asm__("":"+r"(g));
     volatile const struct a733_board_session *s=&g->board;
     ADMIT(g->magic==A733_G2D_SESSION_MAGIC&&g->version==1&&g->bytes==sizeof(*g)&&
         s->magic==A733_BOARD_SESSION_MAGIC&&s->version==2&&s->bytes==sizeof(*s)&&
