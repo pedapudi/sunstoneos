@@ -15,6 +15,16 @@ struct nbg_assembly_plan {
     struct nbg_allocation_requirement buffers[NBG_ALLOCATION_COUNT];
     uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
 };
+/* General plan: NN, COEFF, POOL and COMMAND as above, then one allocation per
+ * input tensor in model order, then one per output tensor. With one input
+ * and one output this is the six-slot plan order. */
+#define NBG_ASSEMBLY_MAX_TENSORS 8u
+#define NBG_LAYOUT_MAX_BUFFERS (NBG_ALLOC_INPUT + 2u * NBG_ASSEMBLY_MAX_TENSORS)
+struct nbg_assembly_layout {
+    struct nbg_allocation_requirement buffers[NBG_LAYOUT_MAX_BUFFERS];
+    uint32_t inputs, outputs;
+    uint32_t nn_operations, descriptor_patches, state_patches, command_body_bytes;
+};
 struct nbg_assembly_buffer {
     void *cpu;
     size_t bytes;
@@ -62,4 +72,16 @@ int nbg_assembly_requirements(const struct nbg_model *, struct nbg_assembly_plan
 int nbg_assemble(const struct nbg_model *,
                  const struct nbg_assembly_buffer[NBG_ALLOCATION_COUNT],
                  struct nbg_assembly_plan *);
+
+/* General form of the two functions above for graphs with 1..8 inputs and
+ * 1..8 outputs of affine UINT8 or INT8 tensors. The profile, relocation,
+ * ring and checksum policy is otherwise identical, and patch sources 1 and 2
+ * select the input or output allocation by their tensor index. Supply
+ * NBG_ALLOC_INPUT + inputs + outputs buffer slots in plan order with the same
+ * placement rules. The same refusal guarantees and the same lack of
+ * submission authorization apply. The six-slot functions remain limited to
+ * one UINT8 input and one UINT8 output. */
+int nbg_assembly_layout(const struct nbg_model *, struct nbg_assembly_layout *);
+int nbg_assemble_layout(const struct nbg_model *, const struct nbg_assembly_buffer *, size_t count,
+                        struct nbg_assembly_layout *);
 #endif
