@@ -155,7 +155,9 @@ renewal does, while an ACCEPT is pending and again while a RESOLVE is pending.
 Both requests remain pending during the pause. After authorization returns, the
 ACCEPT completes and the accepted socket exchanges data; the unanswered RESOLVE
 ends at its own timeout. With the earlier address check, the ACCEPT ended
-during the pause.
+during the pause. Both runs are preserved under
+`~/.cache/sunstoneos/evidence/audit-radio-20261020/`, in `checks-final/net-rekey/`
+and `checks-negative/net-rekey/`.
 Another delays a positive stack send result beyond its request deadline and
 checks that the timeout reply preserves accepted bytes and the socket handle.
 The lifecycle and entropy results reuse their original executable; the delayed

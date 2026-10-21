@@ -257,7 +257,9 @@ wrong-task polling were also refused.
 After open-port authorization and before network start, the fixture delivers
 one broadcast ARP frame. The session must discard it, and network start must
 then succeed with the transport ready. The session code without this discard
-retains the session in the same case.
+retains the session in the same case. Both runs are preserved under
+`~/.cache/sunstoneos/evidence/audit-radio-20261020/`, in `checks-final/session/`
+and `checks-negative4/session/`.
 
 The focused run passed once. Its preserved executable has SHA-256
 `9d3b52249a9a102697aca8c344530d53b087d876b24f484e220582ea6bf3165b`.
