@@ -504,8 +504,12 @@ Wideband advertisement requires the reported local eSCO and transparent-data
 features. The AG advertises codec negotiation in BRSF bit 9 and wideband in SDP
 bit 5. After the HF advertises negotiation support and supplies BAC, the AG
 selects only a codec in that list. A matching BCS command and complete local
-acceptance of its OK response precede synchronous setup. A changed BAC cancels
-an outstanding selection. Invalid or missing BCS cannot establish audio.
+acceptance of its OK response precede synchronous setup. HFP lets the HF send
+BAC again at any time. A new list cancels an outstanding offer. It keeps the
+selected codec when the list still contains that codec and clears the selection
+otherwise, so the AG must select again before the next audio setup. An open audio
+link keeps the codec bound when it opened; only a different nonzero selection
+faults it. Invalid or missing BCS cannot establish audio.
 
 The existing HCI owner queries remote features before setup. Transparent mSBC
 requires matching local and remote eSCO/transparent support. Enhanced setup and

@@ -96,7 +96,10 @@ static void response(struct bt_hfp_ag *q)
             if(at==n)break;if(p[at++]!=','||at==n){ok=0;break;}
         }while(at<n);
         if(!(mask&2))ok=0;
-        if(ok){q->pending_codecs=mask;q->pending_codec=0;q->offered_codec=0;q->codec_deadline=0;}
+        /* HFP lets the HF resend its list at any time. A selection that the
+         * new list still contains survives; otherwise reselection is required. */
+        if(ok){q->pending_codecs=mask;q->pending_codec=mask&(1u<<q->selected_codec)?q->selected_codec:0;
+            q->offered_codec=0;q->codec_deadline=0;}
     }else if(!q->discard && q->stage>=4 && q->offered_codec && prefix(p,n,"AT+BCS=",&at) &&
              decimal(p,n,&at,&value) && at==n && value==q->offered_codec && (q->peer_codecs&(1u<<value))){
         q->pending_codec=value;ok=1;

@@ -70,7 +70,10 @@ static int prepare(void *ctx)
         struct bt_sco_security s={0};
         if(!ag_current(q,l->ag,l->acl_generation,l->channel,&s) || s.generation!=l->security.generation ||
            s.secure_connections!=l->security.secure_connections)return fault(q,BT_SCO_SECURITY);
-        if(l->phase==BT_SCO_OPEN&&l->ag->local_codecs&&(l->ag->hf_features&128)&&l->ag->selected_codec!=l->codec)return fault(q,BT_SCO_IDENTITY);
+        /* An open link keeps the codec bound at open. A cleared selection only
+         * requires reselection before the next open; a different one faults. */
+        if(l->phase==BT_SCO_OPEN&&l->ag->local_codecs&&(l->ag->hf_features&128)&&
+           l->ag->selected_codec&&l->ag->selected_codec!=l->codec)return fault(q,BT_SCO_IDENTITY);
         if(l->phase!=BT_SCO_OPEN && q->now>=l->deadline)return fault(q,BT_SCO_EXPIRED);
     }
     /* No other submitter can replace the H4 payload before this post-step

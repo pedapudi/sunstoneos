@@ -21,7 +21,7 @@ p.add_argument('--recognition-profile',action='store_true')
 p.add_argument('--run-only',action='store_true')
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
-p.add_argument('--case',action='append',choices=['success','informational','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication'])
+p.add_argument('--case',action='append',choices=['success','informational','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication'])
 a=p.parse_args();
 if a.playback:a.msbc=True;a.recognition_profile=True
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
