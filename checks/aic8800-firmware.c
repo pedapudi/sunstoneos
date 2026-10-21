@@ -14,9 +14,51 @@ static size_t artifact_size[5], transcript_size, transcript_at, saved_transcript
 static unsigned firmware_commands, fw_block_commands, held_events;
 static int drop_firmware_cfm, fail_firmware_tx;
 static uint64_t power_record_time;
+/* Radio memory written by firmware commands, kept per run to compare the
+ * per-word and block-write table modes. Writes outside the RAM window, the
+ * 0x40000000 registers, are logged in order. */
+#define RAM_BASE 0x100000u
+#define RAM_WORDS (0x200000u / 4)
+static uint32_t ram[2][RAM_WORDS], other[2][64][2];
+static uint8_t written[2][RAM_WORDS];
+static unsigned other_count[2], table_commands;
+static int memory_model, model_run;
+
+static void store(uint32_t address, uint32_t value)
+{
+    if (address >= RAM_BASE && address - RAM_BASE < RAM_WORDS * 4) {
+        assert(!(address & 3));
+        ram[model_run][(address - RAM_BASE) / 4] = value; written[model_run][(address - RAM_BASE) / 4] = 1;
+        return;
+    }
+    assert(other_count[model_run] < 64);
+    other[model_run][other_count[model_run]][0] = address; other[model_run][other_count[model_run]++][1] = value;
+}
+static void model_tx_done(void)
+{
+    const uint8_t *p = m.transmitted;
+    unsigned id = p[8] | (unsigned)p[9] << 8, n = 4;
+    uint32_t address = get32(p + 16), value = get32(p + 20);
+    uint8_t parameters[8] = {0};
+    ++firmware_commands;
+    if (firmware.phase == 2) ++table_commands; /* APPLY_BT_TABLE */
+    if (id == 0x0402) { store(address, value); put32(parameters, address); put32(parameters + 4, value); n = 8; }
+    else if (id == 0x040b) {
+        assert(m.bytes == 1536 && value <= 1024 && !(value & 3)); ++fw_block_commands;
+        for (uint32_t i = 0; i < value / 4; ++i) store(address + 4 * i, get32(p + 24 + 4 * i));
+    } else if (id == 0x0400) {
+        assert(address >= RAM_BASE && written[model_run][(address - RAM_BASE) / 4]);
+        put32(parameters, address); put32(parameters + 4, ram[model_run][(address - RAM_BASE) / 4]); n = 8;
+    } else { assert(id == 0x040d); put32(parameters, 0xa501); }
+    memset(receive, 0, sizeof(receive));
+    receive[0] = (uint8_t)(12 + n); receive[2] = 0x11;
+    receive[4] = (uint8_t)(id + 1); receive[5] = (uint8_t)((id + 1) >> 8); receive[10] = (uint8_t)n;
+    memcpy(receive + 16, parameters, n); m.card[1][4] = 1;
+}
 
 static void fw_tx_done(void)
 {
+    if (memory_model) { model_tx_done(); return; }
     assert(transcript_at + 20 <= transcript_size);
     const uint8_t *entry = transcript + transcript_at;
     uint32_t bytes = get32(entry), response_id = get32(entry + 4), n = get32(entry + 8);
@@ -110,9 +152,35 @@ static void run_firmware(void)
         }
     }
 }
+/* Run the complete upload with each table mode from the same identified device
+ * and compare the resulting radio memory and register write order. */
+static void table_bursts(void)
+{
+    unsigned commands[2], table[2], blocks[2];
+    for (model_run = 0; model_run < 2; ++model_run) {
+        m = identified_model; host = identified_host; transport = identified_transport;
+        memset(&firmware, 0, sizeof(firmware)); struct aic8800_firmware_config c = config();
+        c.table_bursts = 2; assert(!aic8800_firmware_init(&firmware, &c));
+        c.table_bursts = (uint8_t)model_run; assert(aic8800_firmware_init(&firmware, &c));
+        memory_model = 1; firmware_commands = fw_block_commands = table_commands = held_events = 0;
+        assert(aic8800_transport_load_firmware(&transport, &firmware, m.now + 200000));
+        run_firmware();
+        assert(transport.state == AIC8800_TRANSPORT_START_CONFIRMED && firmware.bt_patch_applied);
+        assert(firmware.bootstatus == 0xa501 && !held_events && !firmware.table_burst);
+        commands[model_run] = firmware_commands; table[model_run] = table_commands; blocks[model_run] = fw_block_commands;
+    }
+    printf("AIC firmware: table commands %u per word, %u with bursts; all commands %u and %u\n",
+           table[0], table[1], commands[0], commands[1]);
+    assert(commands[0] == 3256 && table[0] == 2880 && blocks[0] == 361);
+    /* The 2,766-word TRAP run becomes ten 256-word and one 206-word block write. */
+    assert(table[1] == 125 && commands[1] == 3256 - 2766 + 11 && blocks[1] == 361 + 11);
+    assert(!memcmp(ram[0], ram[1], sizeof(ram[0])) && !memcmp(written[0], written[1], sizeof(written[0])));
+    assert(other_count[0] == other_count[1] && !memcmp(other[0], other[1], sizeof(other[0])));
+    memory_model = 0;
+}
 int main(int argc, char **argv)
 {
-    assert(argc == 7 || (argc == 8 && !strcmp(argv[7], "mode-alias")));
+    assert(argc == 7 || (argc == 8 && (!strcmp(argv[7], "mode-alias") || !strcmp(argv[7], "table-bursts"))));
     for (unsigned i = 0; i < 5; ++i) artifact[i] = file_bytes(argv[i + 1], &artifact_size[i]);
     transcript = file_bytes(argv[6], &transcript_size);
     begin(AIC8800_PAD_KEEP); setup(); identity(2000);
@@ -120,6 +188,13 @@ int main(int argc, char **argv)
     assert(transport.state == AIC8800_TRANSPORT_COMPLETE);
     host.config.ops.write32 = firmware_write; /* Model binding before ownership handoff. */
     identified_transport = transport; identified_host = host; identified_model = m;
+    if (argc == 8 && !strcmp(argv[7], "table-bursts")) {
+        table_bursts();
+        for (unsigned i = 0; i < 5; ++i) free(artifact[i]);
+        free(transcript);
+        puts("AIC firmware: table block writes leave the same radio memory and register order with 125 table commands");
+        return 0;
+    }
     struct aic8800_firmware_config c = config();
     assert(aic8800_firmware_init(&firmware, &c));
     assert(!aic8800_firmware_init(&firmware, &c));

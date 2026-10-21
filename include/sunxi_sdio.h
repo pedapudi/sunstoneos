@@ -3,7 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SUNXI_SDIO_MAX_BYTES 4096u
+/* The largest CMD53: 511 counted blocks of 512 bytes, as the pinned Linux SDIO
+ * helper issues it when the host request limits allow. */
+#define SUNXI_SDIO_MAX_BYTES (511u * 512u)
 #define SUNXI_SDIO_FIFO_BUDGET 16u
 /* Four-bit default speed moves at most one 512-byte block per poll, sized from
  * one FIFO-level sample, as the SD/eMMC core does at the same clock. */
@@ -44,7 +46,7 @@ struct sunxi_sdio_request {
     uint8_t command; /* Only CMD3, CMD5, CMD7, CMD52, CMD53. */
     uint16_t block_bytes; /* CMD53 block mode only; 4..512, multiple of 4. */
     uint8_t *data; /* CMD53: borrowed exclusively through completion/fault. */
-    size_t bytes; /* 4..4096, whole words; buffers may be unaligned. */
+    size_t bytes; /* 4..SUNXI_SDIO_MAX_BYTES, whole words; buffers may be unaligned. */
 };
 struct sunxi_sdio_result {
     enum sunxi_sdio_error error;

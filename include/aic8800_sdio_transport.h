@@ -3,7 +3,9 @@
 #include "sdio_card.h"
 #include "aic8800_sdio_codec.h"
 
-#define AIC8800_TRANSPORT_RX_BYTES 4096u
+/* The largest function-1 block-mode receive report. Status values 1..112 count
+ * 512-byte blocks; 113..127 select byte mode or the function-2 encoding. */
+#define AIC8800_TRANSPORT_RX_BYTES (112u * 512u)
 #define AIC8800_TRANSPORT_TX_BYTES 1536u
 struct aic8800_firmware;
 struct aic8800_runtime;

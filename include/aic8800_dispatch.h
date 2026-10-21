@@ -5,6 +5,8 @@
 #include "aic8800_data.h"
 #define AIC8800_DISPATCH_EVENTS 4u
 #define AIC8800_DISPATCH_RECORDS 4u
+/* Diagnostic copies keep at most this many leading bytes of each record. */
+#define AIC8800_DISPATCH_RECORD_BYTES 4096u
 enum aic8800_dispatch_event_kind { AIC8800_DISPATCH_SCAN=1,AIC8800_DISPATCH_STATION,AIC8800_DISPATCH_EAPOL };
 enum aic8800_dispatch_record_kind { AIC8800_DISPATCH_UNCLAIMED=1,AIC8800_DISPATCH_PRINT,
     AIC8800_DISPATCH_UNSUPPORTED_DATA,AIC8800_DISPATCH_MALFORMED_UNCLAIMED };
@@ -20,9 +22,9 @@ struct aic8800_dispatch_event {
 struct aic8800_dispatch_record {
     uint64_t sequence,generation;
     enum aic8800_dispatch_record_kind kind;
-    uint16_t bytes,message_id;
-    uint8_t transport_type,has_message;
-    uint8_t payload[AIC8800_TRANSPORT_RX_BYTES];
+    uint16_t bytes,message_id; /* bytes counts the copied payload. */
+    uint8_t transport_type,has_message,truncated;
+    uint8_t payload[AIC8800_DISPATCH_RECORD_BYTES];
 };
 struct aic8800_dispatch {
     struct aic8800_sdio_transport *transport;
@@ -41,6 +43,8 @@ struct aic8800_dispatch {
  * Supported events retain copied bytes; a full event queue applies backpressure.
  * Unclaimed/unsupported records keep the first four diagnostic copies; later
  * diagnostics retire with a saturating count. They never complete a command.
+ * A copy holds at most the record's first AIC8800_DISPATCH_RECORD_BYTES bytes
+ * and marks a longer record as truncated.
  * Diagnostic bytes are private and may contain sensitive radio payloads.
  */
 int aic8800_dispatch_init(struct aic8800_dispatch *,struct aic8800_sdio_transport *);
