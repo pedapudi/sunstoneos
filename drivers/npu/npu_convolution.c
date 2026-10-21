@@ -1,4 +1,4 @@
-#include "npu_convolution.h"
+#include "npu_convolution_layout.h"
 #include "aarch64_device_memory.h"
 #include <string.h>
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
@@ -6,7 +6,8 @@
 #endif
 
 /* SHA-256, FIPS 180-4 sections 4.1.2, 4.2.2, 5.1.1, 5.3.3 and 6.2.
- * Private artifact identity helper; callers below bound input to 512 KiB.
+ * Private artifact identity helper. Inputs are at most the 1 MiB model
+ * capacity; the largest hashed allocation is 892,928 bytes of coefficients.
  * https://csrc.nist.gov/pubs/fips/180-4/upd1/final */
 static uint32_t rotate(uint32_t x,unsigned n) { return x>>n | x<<(32-n); }
 static uint32_t big(const unsigned char *p)
@@ -105,7 +106,29 @@ static int private_overlap(const struct npu_convolution *c,uintptr_t p,size_t n)
         if(overlap(p,n,c->buffers[i].cpu,c->buffers[i].bytes))return 1;
     return 0;
 }
-static int unchanged(struct npu_convolution *c)
+/* Command streams are a short payload followed by END pairs to the end of
+ * the mapped fetch span. The prefix digest plus an END check of every later
+ * eight-byte unit binds the same bytes as a digest of the whole allocation. */
+typedef uint64_t __attribute__((may_alias)) stream_word;
+static int stream_intact(const struct npu_convolution *c,unsigned k)
+{
+    const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+    size_t bytes=c->stream_bytes[k];
+    unsigned char actual[32];
+    if(!bytes || (bytes&7) || bytes>b->bytes)return 0;
+    const stream_word *tail=(const stream_word *)b->cpu;
+    for(size_t i=bytes/8;i<b->bytes/8;++i)if(tail[i]!=UINT64_C(0x10000000))return 0;
+    digest((void *)b->cpu,bytes,actual);
+    return !memcmp(actual,c->stream_digest[k],sizeof(actual));
+}
+/* Integrity policy. The shared SMP mappings cannot stop another privileged
+ * writer, so bytes the NPU reads are rechecked against digests taken at
+ * preparation. Every check covers descriptors, coefficients or shader, and
+ * the job command stream. Preparation-time checks (startup, activation,
+ * bootstrap publication, stop) also cover the private model copy and the
+ * bootstrap stream. A job publication omits those two: the device never
+ * reads the model copy, and the bootstrap stream runs only at OPEN. */
+static int unchanged(struct npu_convolution *c,int job)
 {
     unsigned char actual[32];
     if(!good(c))return 0;
@@ -113,13 +136,16 @@ static int unchanged(struct npu_convolution *c)
        c->model_bytes!=models[c->model_index].model_bytes ||
        c->input_bytes!=models[c->model_index].input_bytes ||
        c->output_bytes!=models[c->model_index].output_bytes)return fault(c);
-    digest(c->model,c->model_bytes,actual);
-    if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
-    for(unsigned j=0;j<4;++j) {
+    if(!job) {
+        digest(c->model,c->model_bytes,actual);
+        if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
+    }
+    for(unsigned j=0;j<2;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,actual);
         if(memcmp(actual,c->immutable_digest[j],sizeof(actual)))return fault(c);
     }
+    for(unsigned k=0;k<(job ? 1u : 2u);++k)if(!stream_intact(c,k))return fault(c);
     return 1;
 }
 static void little(unsigned char *p,uint32_t v)
@@ -128,15 +154,7 @@ static int bootstrap_image(struct a733_npu_buffer *b)
 {
     unsigned char *p=(void *)b->cpu;
     for(size_t i=0;i<b->bytes;i+=8){little(p+i,0x10000000);little(p+i+4,0);}
-    if(!a733_npu_bootstrap(p,b->bytes))return 0;
-    /* Accepted INIT zeros AXI SRAM base/end. Insert after VIP SRAM state,
-     * before the final sync/event/END. Preserve the generic encoder. */
-    memmove(p+168,p+152,40);
-    little(p+152,0x08010e4f);little(p+156,0);
-    little(p+160,0x08010e50);little(p+164,0);
-    /* The encoder's final eight bytes are padding after END. */
-    little(p+200,0x10000000);little(p+204,0);
-    return 1;
+    return a733_npu_bootstrap(p,b->bytes);
 }
 static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size_t bytes)
 {
@@ -146,11 +164,16 @@ static int tensor_profile(const struct nbg_tensor *t,const uint32_t raw[12],size
     for(unsigned i=0;i<6;++i)if(t->sizes[i]!=raw[i+1])return 0;
     return 1;
 }
+/* Assembly allocation size fixed by the shared layout; zero when unused. */
+static size_t allocation_bytes(unsigned i)
+{
+    unsigned slot=npu_convolution_allocation[i];
+    return slot<NPU_CONVOLUTION_BUFFERS ? npu_convolution_layout[slot].bytes : 0;
+}
 static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     const struct supported_model *v)
 {
 #if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
-    static const uint32_t sizes[]={24576,892928,1093632,524288,151552,4096};
     struct nbg_tensor input,output;
     if(v->family!=2 || m->header.version!=0x1001e || m->header.target!=0x1000003b ||
        m->header.operation_count!=126 || m->header.pool_bytes!=1092352 ||
@@ -161,10 +184,9 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
        v->state_patches!=125 || v->command_body_bytes!=3056 ||
        !nbg_model_tensor(m,NBG_INPUT,0,&input)||!nbg_model_tensor(m,NBG_OUTPUT,0,&output)||
        !tensor_profile(&input,v->input,v->input_bytes)||!tensor_profile(&output,v->output,v->output_bytes))return 0;
-    for(unsigned i=0;i<6;++i)if(p->buffers[i].allocation_bytes!=sizes[i])return 0;
+    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)if(p->buffers[i].allocation_bytes!=allocation_bytes(i))return 0;
     return 1;
 #elif defined(SUNSTONE_NPU_LARGE_GRAPH)
-    static const uint32_t sizes[]={4096,4096,1048576,524288,524288,266240};
     if(v->family!=1 || v->nn_operations!=3 || v->descriptor_patches!=6 ||
        v->state_patches!=6 || v->command_body_bytes!=656 ||
        m->header.operation_count!=5 || m->header.pool_bytes!=1047808 ||
@@ -176,10 +198,9 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
     if(!nbg_model_tensor(m,NBG_INPUT,0,&input)||!nbg_model_tensor(m,NBG_OUTPUT,0,&output)||
        !tensor_profile(&input,v->input,v->input_bytes)||
        !tensor_profile(&output,v->output,v->output_bytes))return 0;
-    for(unsigned i=0;i<6;++i)if(p->buffers[i].allocation_bytes!=sizes[i])return 0;
+    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)if(p->buffers[i].allocation_bytes!=allocation_bytes(i))return 0;
     return 1;
 #else
-    static const uint32_t sizes[]={4096,4096,0,524288,4096,4096};
     struct nbg_tensor input,output;
     if(m->header.version!=0x20000 || m->header.target!=0x1000003b ||
        m->header.core_count!=1 || m->header.operation_count!=v->nn_operations+1 ||
@@ -192,8 +213,8 @@ static int profile(const struct nbg_model *m,const struct nbg_assembly_plan *p,
        !tensor_profile(&input,v->input,v->input_bytes) ||
        !tensor_profile(&output,v->output,v->output_bytes))return 0;
     for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i)
-        if(p->buffers[i].allocation_bytes!=sizes[i] ||
-           p->buffers[i].minimum_bytes>sizes[i] ||
+        if(p->buffers[i].allocation_bytes!=allocation_bytes(i) ||
+           p->buffers[i].minimum_bytes>allocation_bytes(i) ||
            p->buffers[i].payload_bytes>p->buffers[i].minimum_bytes)return 0;
     return 1;
 #endif
@@ -209,36 +230,14 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
        overlap((uintptr_t)c,sizeof(*c),(uintptr_t)v.arena,v.arena_bytes) ||
        overlap((uintptr_t)v.arena,v.arena_bytes,(uintptr_t)v.model,v.model_bytes) ||
        overlap((uintptr_t)config,sizeof(*config),(uintptr_t)v.arena,v.arena_bytes))return 0;
-#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
-    static const size_t sizes[]={24576,892928,524288,151552,4096,524288,1093632,0};
-    static const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
-        A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP,
-        A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_READ};
-#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
-    static const size_t sizes[]={4096,0,524288,524288,266240,524288,1048576,4096};
-    static const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
-        A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP,
-        A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_READ};
-#else
-    static const size_t sizes[]={4096,4096,524288,4096,4096,524288};
-    static const enum a733_npu_buffer_role roles[]={A733_NPU_BUFFER_READ,A733_NPU_BUFFER_READ,
-        A733_NPU_BUFFER_COMMAND,A733_NPU_BUFFER_READ,A733_NPU_BUFFER_WRITE,A733_NPU_BUFFER_BOOTSTRAP};
-#endif
     for(unsigned i=0;i<NPU_CONVOLUTION_BUFFERS;++i) {
         const struct a733_npu_buffer *b=&v.buffers[i];
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
-        if(i==
-#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
-            NPU_CONVOLUTION_PPU
-#else
-            NPU_CONVOLUTION_COEFF
-#endif
-        ){
+        const struct npu_convolution_slot *l=&npu_convolution_layout[i];
+        if(!l->bytes){
             if(b->cpu||b->physical||b->bytes||b->device||b->role!=A733_NPU_BUFFER_READ)return 0;
             continue;
         }
-#endif
-        if(b->bytes!=sizes[i] || b->role!=roles[i] || !span(b->cpu,b->bytes) ||
+        if(b->bytes!=l->bytes || b->role!=l->role || !span(b->cpu,b->bytes) ||
            overlap(b->cpu,b->bytes,(uintptr_t)c,sizeof(*c)) ||
            overlap(b->cpu,b->bytes,(uintptr_t)config,sizeof(*config)) ||
            overlap(b->cpu,b->bytes,(uintptr_t)v.model,v.model_bytes))return 0;
@@ -281,22 +280,14 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
         }
     }
     struct nbg_assembly_buffer buffers[NBG_ALLOCATION_COUNT]={0};
-#if defined(SUNSTONE_NPU_NN_POOL_GRAPH)
-    static const unsigned slots[]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_COEFF,NPU_CONVOLUTION_POOL,
-        NPU_CONVOLUTION_COMMAND,NPU_CONVOLUTION_INPUT,NPU_CONVOLUTION_OUTPUT};
-    for(unsigned i=0;i<6;++i)buffers[i]=(struct nbg_assembly_buffer){
-        (void *)c->buffers[slots[i]].cpu,c->buffers[slots[i]].bytes,c->buffers[slots[i]].device};
-    if(!nbg_assemble(&model,buffers,&plan) ||
-#elif defined(SUNSTONE_NPU_LARGE_GRAPH)
-    static const unsigned slots[]={NPU_CONVOLUTION_NN,NPU_CONVOLUTION_PPU,NPU_CONVOLUTION_POOL,
-        NPU_CONVOLUTION_COMMAND,NPU_CONVOLUTION_INPUT,NPU_CONVOLUTION_OUTPUT};
-    for(unsigned i=0;i<6;++i)buffers[i]=(struct nbg_assembly_buffer){
-        (void *)c->buffers[slots[i]].cpu,c->buffers[slots[i]].bytes,c->buffers[slots[i]].device};
+    for(unsigned i=0;i<NBG_ALLOCATION_COUNT;++i) {
+        unsigned slot=npu_convolution_allocation[i];
+        if(slot<NPU_CONVOLUTION_BUFFERS)buffers[i]=(struct nbg_assembly_buffer){
+            (void *)c->buffers[slot].cpu,c->buffers[slot].bytes,c->buffers[slot].device};
+    }
+#if defined(SUNSTONE_NPU_LARGE_GRAPH) && !defined(SUNSTONE_NPU_NN_POOL_GRAPH)
     if(!nbg_sh_nt_assemble(&model,buffers,&plan) ||
 #else
-    static const unsigned slots[]={NBG_ALLOC_NN,NBG_ALLOC_COEFF,NBG_ALLOC_COMMAND,NBG_ALLOC_INPUT,NBG_ALLOC_OUTPUT};
-    for(unsigned i=0;i<5;++i)buffers[slots[i]]=(struct nbg_assembly_buffer){
-        (void *)c->buffers[i].cpu,c->buffers[i].bytes,c->buffers[i].device};
     if(!nbg_assemble(&model,buffers,&plan) ||
 #endif
        !bootstrap_image(&c->buffers[NPU_CONVOLUTION_BOOTSTRAP]) ||
@@ -305,6 +296,14 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     for(unsigned j=0;j<4;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,c->immutable_digest[j]);
+    }
+    c->stream_bytes[0]=plan.buffers[NBG_ALLOC_COMMAND].payload_bytes;
+    c->stream_bytes[1]=A733_NPU_BOOTSTRAP_BYTES;
+    for(unsigned k=0;k<2;++k) {
+        const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+        if(!c->stream_bytes[k] || (c->stream_bytes[k]&7) || c->stream_bytes[k]>b->bytes)return fault(c);
+        digest((void *)b->cpu,c->stream_bytes[k],c->stream_digest[k]);
+        if(!stream_intact(c,k))return fault(c);
     }
     c->prepared=1;return 1;
 }
@@ -325,7 +324,7 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
 {
     struct npu_convolution *c=cookie;
     if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
-       !unchanged(c))return fault(c);
+       !unchanged(c,!bootstrap))return fault(c);
     return a733_npu_native_operations.publish(&c->native,image,command,bootstrap);
 }
 static int finish(void *cookie,const struct a733_npu_command *command,int canceled)
@@ -357,7 +356,7 @@ static int prepared(void *cookie,const struct a733_npu_ops *ops,void *backend,
     const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)
 {
     struct npu_convolution *c=cookie;
-    if(!good(c) || !metadata(c,ops,backend,image,commands,count) || !unchanged(c)) {
+    if(!good(c) || !metadata(c,ops,backend,image,commands,count) || !unchanged(c,0)) {
         fault(c);return -1;
     }
     int result=a733_npu_startup_prepared(c->startup,ops,backend,image,commands,count);
@@ -388,7 +387,7 @@ enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolutio
     const struct a733_npu_handoff *h=&c->startup->handoff;
     const struct npu_service *s=&c->service;
     if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c)) {
+       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
         fault(c);return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result=a733_npu_startup_poll(c->startup);
@@ -409,6 +408,7 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         if(c->opened || !timeout || timeout>INT64_MAX)return 0;
         break;
     case NPU_SERVICE_STATUS:
+    case NPU_SERVICE_WAIT:
         if(!c->opened || timeout)return 0;
         break;
     case NPU_SERVICE_SUBMIT:
@@ -482,7 +482,7 @@ enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *
     const struct a733_npu_handoff *h=&c->startup->handoff;
     const struct npu_service *s=&c->service;
     if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c)) {
+       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
         fault(c);return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result=a733_npu_startup_stop_poll(c->startup);

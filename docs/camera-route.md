@@ -70,11 +70,12 @@ retains continuous `VCAP`. A733 manual section 16.1.13.4 defines SCAP as capture
 of the next complete frame followed by automatic clearing of the enable bit.
 The producer must remain quiet throughout receiver configuration and readback.
 
-The receiver does not rearm SCAP when its status is sampled. A new capture
-requires a separately designed lifecycle; reopening an existing controller is
-refused. The camera DMA controller waits for `CAPTURE_DONE`, which the manual
-identifies as completion of writing the still image to its buffer. These
-controls prevent a subsequent partial frame from overwriting the same buffer.
+The receiver does not rearm SCAP when its status is sampled. Only the explicit
+retained rearm sequence in the [capture coordinator](camera-capture.md) rewrites
+SCAP, with the sensor stopped; reopening an existing controller is refused. The
+camera DMA controller waits for `CAPTURE_DONE`, which the manual identifies as
+completion of writing the still image to its buffer. These controls prevent a
+subsequent partial frame from overwriting the same buffer.
 
 The platform can compose the components in this order:
 

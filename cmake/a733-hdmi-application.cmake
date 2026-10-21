@@ -38,7 +38,8 @@ foreach(source IN ITEMS apps/hdmi/main.c apps/hdmi/admission.c apps/hdmi/snapsho
  list(APPEND hdmi_sources "${hdmi_root}/${source}")
 endforeach()
 if(SUNSTONE_HDMI_FRAMEBUFFER)
- foreach(source IN ITEMS apps/hdmi/framebuffer.c runtime/device_memory_pool.c
+ foreach(source IN ITEMS apps/hdmi/framebuffer.c drivers/display/a733_display_framebuffer.c
+  drivers/power/a733_de_sys_power.c runtime/device_memory_pool.c
   platform/a733/memory_uncached.c drivers/iommu/a733_iommu.c
   drivers/clock/a733_media_clock.c drivers/clock/a733_media_clock_native.c
   drivers/display/a733_display_engine.c drivers/display/a733_tcon_lcd.c

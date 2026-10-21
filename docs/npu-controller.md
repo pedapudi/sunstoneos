@@ -3,7 +3,11 @@
 The native controller core is **implemented** and passes a host register and
 buffer-ownership model. It compiles for AArch64. Physical initialization,
 translation, command execution, cancellation, and recovery remain untested.
-The core is excluded from default builds and is not linked into a board image.
+The default build compiles it only as an object target. It is linked into
+the NPU board images: `a733-npu-convolution` and `a733-npu-convolution-supervised`
+from [apps/npu-convolution](../apps/npu-convolution/CMakeLists.txt), the
+`a733-npu-convolution-single-core` profiles, and the combined
+`sunstone-a733-accelerators` image from [apps/accelerators](../apps/accelerators/CMakeLists.txt).
 
 The [interface](../include/a733_npu_controller.h) provides open, submit, poll,
 cancel, reap, and close operations. The
@@ -58,9 +62,11 @@ A failed pass ends the attempt. The core then configures memory counters,
 clock-gating controls, page-directory MMU mode, reorder behavior, and event
 reporting. Board power and clock configuration must already be valid.
 
-The bootstrap encoder writes 192 bytes containing a translation-cache flush,
-reference initialization commands, internal-SRAM base configuration, completion
-event zero, END, and trailing padding. The internal SRAM base is `0x400000`.
+The bootstrap encoder writes 208 bytes containing a translation-cache flush,
+reference initialization commands, internal-SRAM base configuration, zero AXI
+SRAM base and end states (`0x0e4f` and `0x0e50`), completion event zero, END,
+and one further END pair as padding. The convolution session submits these
+bytes unchanged. The internal SRAM base is `0x400000`.
 The platform must reserve the SRAM virtual window from ordinary allocations;
 its complete translation and access behavior still needs implementation and
 physical qualification.

@@ -1,3 +1,18 @@
+# The native HEVC parser, controller, decoder binding, application tasks and USB
+# service are not integrated (docs/hevc-native.md). Refuse before any other
+# check so that this target cannot be mistaken for a buildable one.
+set(hevc_missing "")
+foreach(source IN ITEMS apps/hevc/main.c apps/hevc/input.c apps/hevc/storage.c apps/hevc/native.c
+ apps/hevc/parse.c apps/hevc/usb0.c apps/hevc/gst-source.py drivers/video/a733_video_hevc.c
+ include/a733_video_hevc.h)
+ if(NOT EXISTS "${SUNSTONE_SOURCE_ROOT}/${source}")
+  list(APPEND hevc_missing "${source}")
+ endif()
+endforeach()
+if(hevc_missing)
+ list(JOIN hevc_missing ", " hevc_missing)
+ message(FATAL_ERROR "Native HEVC decoding is not integrated; missing sources: ${hevc_missing}. See docs/hevc-native.md")
+endif()
 if(SUNSTONE_BOARD_USB2_IRQ)
   message(FATAL_ERROR "USB2 CPU interrupt completion is board-only; configure this application with SUNSTONE_BOARD_USB2_IRQ=OFF")
 endif()
@@ -27,7 +42,7 @@ apply_build_patch("${hevc_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733
 list(APPEND hevc_sources "${hevc_build}/boot.c"
  "${SUNSTONE_SOURCE_ROOT}/platform/a733/device_memory_layout.c")
 foreach(source IN ITEMS apps/hevc/main.c apps/hevc/input.c apps/hevc/storage.c apps/hevc/native.c apps/hevc/parse.c apps/hevc/usb0.c apps/hevc/admission.c apps/hevc/snapshot.c
- drivers/video/a733_video_hevc.c drivers/video/a733_video_platform.c
+ drivers/video/a733_video_hevc.c drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c
  drivers/iommu/a733_iommu.c)
  list(APPEND hevc_sources "${SUNSTONE_SOURCE_ROOT}/${source}")
 endforeach()
@@ -67,7 +82,8 @@ set(hevc_inputs ${hevc_sources} ${hevc_headers} ${board_inputs}
  "${hevc_build}/link.ld"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_hevc_application.h"
  "${SUNSTONE_SOURCE_ROOT}/include/a733_video_hevc.h"
- "${SUNSTONE_SOURCE_ROOT}/include/a733_video_platform.h" "${CMAKE_CURRENT_LIST_FILE}")
+ "${SUNSTONE_SOURCE_ROOT}/include/a733_video_platform.h" "${SUNSTONE_SOURCE_ROOT}/include/a733_video_unit.h"
+ "${CMAKE_CURRENT_LIST_FILE}")
 list(APPEND hevc_inputs
  "${SUNSTONE_SOURCE_ROOT}/apps/hevc/gst-source.py"
  "${SUNSTONE_SOURCE_ROOT}/apps/hevc/sources.json"

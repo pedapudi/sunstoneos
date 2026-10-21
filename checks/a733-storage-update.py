@@ -105,6 +105,58 @@ def planned_card_update(host,fixture,base,Session,passed):
     passed.append('ranges that already hold their planned bytes are skipped')
 
 
+def high_speed(host,fixture,base,Session,passed):
+    """Backup, update and restoration at SD profile two over 20 sectors."""
+    work=fixture/'high-speed';work.mkdir()
+    blocks=20;initial=pattern(blocks*512,8);candidate=pattern(blocks*512,9)
+    (work/'initial.bin').write_bytes(initial);(work/'candidate.bin').write_bytes(candidate)
+    read=dict(base,nonce='e1'*32,blocks=blocks)
+    def backup(name,grant,media):
+        session=Session(grant,media,'hs');client=host.Client(session.exchange,grant)
+        with host.ProtectedDirectory(work/name,True) as store:host.backup(client,store)
+        session.close();assert session.output.read_bytes()==media.read_bytes() and client.read_blocks==8
+        return client.sequence
+    # INFO, three BACKUP chunks of 8, 8 and 4 sectors, SEAL and FINISH.
+    assert backup('backup',read,work/'initial.bin')==6
+    def apply(name,prior,source,nonce,media,expected):
+        g=dict(read,mode=1,nonce=nonce*32)
+        with host.ProtectedDirectory(work/prior) as old,host.ProtectedDirectory(work/name,True) as out:
+            update=host._prepare_files(out,old,source,g)
+        session=Session(update['grant'],media,'hs')
+        with host.ProtectedDirectory(work/name) as store:
+            host.apply(host.Client(session.exchange,update['grant']),store)
+            assert [store.json(f'intent-{i:08d}.json')['bytes'] for i in range(blocks)]==[512]*blocks
+        session.close();assert session.output.read_bytes()==expected
+        return session.output
+    written=apply('update','backup',work/'candidate.bin','e2',work/'initial.bin',candidate)
+    current=dict(read,nonce='e3'*32);backup('current-backup',current,written)
+    apply('restore','current-backup',work/'backup/backup.bin','e4',written,initial)
+    passed.append('SD profile two: eight-sector backup reads, one-sector CMD24 writes with readback and restoration')
+
+
+def info_stride(host,base,passed):
+    """The host takes its BACKUP stride from INFO and refuses other forms."""
+    grant=dict(base,blocks=7)
+    def server(stride,size=260):
+        offsets=[]
+        def exchange(packet):
+            sequence,command,offset=struct.unpack_from('<IIQ',packet,32)
+            if command==1:
+                data=(host.grant_encode(grant)+struct.pack('<I',stride))[:size]
+                return struct.pack('<IIQII',sequence,0,offset,len(data),0)+bytes(32)+data
+            assert command==2
+            offsets.append(offset);data=bytes(min(stride,grant['blocks']-offset)*512)
+            return struct.pack('<IIQII',sequence,0,offset,len(data),0)+host.digest(data)+data
+        return exchange,offsets
+    exchange,offsets=server(3);client=host.Client(exchange,grant);client.identify()
+    for offset in range(0,grant['blocks'],client.read_blocks):client.call(2,offset)
+    assert client.read_blocks==3 and offsets==[0,3,6]
+    for stride,size in ((0,260),(9,260),(8,256)):
+        client=host.Client(server(stride,size)[0],grant)
+        refused(client.identify);assert client.failed
+    passed.append('host BACKUP stride comes from INFO; a zero, oversized or missing stride refuses')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence', type=Path, required=True)
@@ -207,9 +259,10 @@ def main():
             self.process.stdin.close();self.process.stdout.close()
             result=self.process.wait(timeout=10);self.log.close();assert result==0,self.prefix
     session=Session(base,fixture/'initial.bin')
+    client=host.Client(session.exchange,base)
     with host.ProtectedDirectory(fixture/'backup',True) as store:
-        host.backup(host.Client(session.exchange,base),store)
-    session.close();assert session.output.read_bytes()==initial
+        host.backup(client,store)
+    session.close();assert session.output.read_bytes()==initial and client.read_blocks==8
     passed.append('actual card/platform/provider backup to protected fsynced host bytes')
     def prepared(path,prior,source,nonce):
         g=dict(base,mode=1,nonce=nonce*32)
@@ -232,6 +285,8 @@ def main():
     with host.ProtectedDirectory(fixture/'restore') as store:host.apply(host.Client(session.exchange,restore['grant']),store)
     session.close();assert session.output.read_bytes()==initial
     passed.append('explicit fresh-session restoration from protected original bytes after current-state backup')
+    high_speed(host,fixture,base,Session,passed)
+    info_stride(host,base,passed)
     for mode in ('uncertain','loss'):
         item=prepared(fixture/mode,fixture/'backup',fixture/'candidate.bin', '05' if mode=='uncertain' else '06')
         session=Session(item['grant'],fixture/'initial.bin',mode)

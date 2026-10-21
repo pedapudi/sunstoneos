@@ -66,9 +66,18 @@ would therefore stop the Bluetooth module after almost every byte at
 with a receive-timeout interrupt (IIR cause 12), which the driver services as
 received data. The native binding accepts only the planned values for the
 port, plus the UART2 DMA-mode value 0x09. The trigger behavior of this
-controller instance has not been measured on the board. Bluetooth receive
-throughput also remains bounded by its 64-byte drain budget per 1 ms poll,
-about 64 KB/s.
+controller instance has not been measured on the board.
+
+Bluetooth uses UART1 without DMA. Each H4 transport step reads at most 64
+bytes, and the Bluetooth task polls once per 1 ms tick. Identification,
+configuration and pairing step the transport once per poll, about 64 KB/s.
+Service discovery and hands-free control step it twice per poll, and
+synchronous audio three times, up to about 192 KB/s. The line rate at
+1,500,000 baud is 150 KB/s. Received audio needs about 16 KB/s for CVSD and
+8 KB/s for mSBC. UART1 RTS/CTS is wired to PG8/PG9, and the Bluetooth profile
+requires automatic flow control, so a slower drain throttles the module instead
+of overflowing the receive FIFO. A DMA receive path for UART1 therefore has no
+current throughput requirement. Physical throughput has not been measured.
 
 `exchange` services FIFO status directly. `interrupt` handles one interrupt
 cause: received data, receive timeout, line status, transmitter empty or modem

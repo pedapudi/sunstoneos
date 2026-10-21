@@ -1,5 +1,5 @@
 #include "a733_gpu_compute_reserved.h"
-#include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include "a733_gpu_disposal.h"
 #include <string.h>
 
@@ -15,18 +15,7 @@ static int apart(uintptr_t a, size_t an, uintptr_t b, size_t bn)
 { return a + an <= b || b + bn <= a; }
 static size_t rounded(size_t n) { return (n + 4095) & ~(size_t)4095; }
 static int mapped(uintptr_t cpu, size_t bytes, unsigned attr, int write)
-{
-    if (!bytes || cpu > UINTPTR_MAX - bytes) return 0;
-    uintptr_t last = (cpu + bytes - 1) & ~(uintptr_t)4095;
-    for (uintptr_t page = cpu & ~(uintptr_t)4095; ; page += 4096) {
-        struct aarch64_translation r, w;
-        if (!aarch64_device_translate(page, 0, &r) || r.physical != page || r.attributes != attr ||
-            (r.shareability != 3 && (attr != 0x44 || r.shareability != 2))) return 0;
-        if (write && (!aarch64_device_translate(page, 1, &w) || w.physical != page ||
-            w.attributes != attr || w.shareability != r.shareability)) return 0;
-        if (page == last) return 1;
-    }
-}
+{ return a733_gpu_identity_mapped(cpu, bytes, attr, write); }
 static int private_image(uintptr_t cpu, size_t bytes, int write)
 {
     return cpu >= UINT32_C(0x41000000) && cpu < (uintptr_t)__device_pool_start &&
@@ -362,7 +351,7 @@ int a733_gpu_compute_reserved_disposed(struct a733_gpu_compute_reserved *s)
 }
 int a733_gpu_compute_reserved_rebuild(struct a733_gpu_compute_reserved *s,struct pvr_gpu_service *g)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(g);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(g);
     if(!d || d->phase!=A733_GPU_DISPOSAL_REBUILD || d->compute!=s || s!=compute_owner ||
        s->stage!=DISPOSED || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING ||
        d->released!=((1u<<d->count)-1))return 0;

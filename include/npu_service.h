@@ -12,7 +12,8 @@
 
 enum npu_service_operation {
     NPU_SERVICE_STATUS, NPU_SERVICE_OPEN, NPU_SERVICE_SUBMIT,
-    NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE
+    NPU_SERVICE_CANCEL, NPU_SERVICE_REAP, NPU_SERVICE_CLOSE,
+    NPU_SERVICE_WAIT
 };
 enum npu_service_result {
     NPU_SERVICE_OK, NPU_SERVICE_INVALID, NPU_SERVICE_DENIED,
@@ -76,6 +77,8 @@ struct npu_service {
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
     struct npu_service_message deferred;
     unsigned has_deferred;
+    struct npu_service_message held;
+    unsigned has_held;
     struct a733_npu_mmu_image image;
     struct a733_npu_command commands[NPU_SERVICE_COMMANDS];
     unsigned command_count, owner, initialized;
@@ -87,6 +90,7 @@ struct npu_service {
     uint8_t request_storage[NPU_SERVICE_CLIENTS * sizeof(struct npu_service_message)];
     struct npu_service_client clients[NPU_SERVICE_CLIENTS];
     TaskHandle_t worker;
+    UBaseType_t affinity;
     StaticTask_t worker_state;
     StackType_t worker_stack[NPU_SERVICE_STACK_WORDS];
 };
@@ -125,8 +129,13 @@ int npu_service_bind(struct npu_service *, unsigned slot, TaskHandle_t, uint32_t
 /* Optional private binding after init, before scheduling. The route/cookie and
  * worker remain pinned. ISR entry follows root-owned mask of INTID97; it never
  * reads NPU registers. mask_ok failure is sticky. Pre-binding IRQ dispatch must
- * be retained by the platform. */
-int npu_service_bind_irq(struct npu_service *,const struct npu_service_irq_ops *,void *);
+ * be retained by the platform. route is the affinity mask of the one CPU the
+ * interrupt is routed to; binding is refused unless the worker was created
+ * pinned to exactly that CPU, because the callbacks run in the worker and the
+ * route owner must mask, rearm and stop the source on its own CPU. The worker
+ * affinity must not change after binding. */
+int npu_service_bind_irq(struct npu_service *,const struct npu_service_irq_ops *,void *,
+    UBaseType_t route);
 void npu_service_irq_notify_from_isr(struct npu_service *,int mask_ok,BaseType_t *woken);
 int npu_service_irq_stopped(const struct npu_service *);
 unsigned npu_service_irq_completions(const struct npu_service *);
@@ -138,8 +147,13 @@ unsigned npu_service_irq_completions(const struct npu_service *);
  * Output arguments are unchanged on refusal/timeout. Queues own all message data,
  * so a timed-out caller's stack is never retained by the worker.
  *
- * OPEN claims the session; only its owner may submit, cancel, reap, or close.
- * STATUS is diagnostic for any registered task. Active polling waits at most
+ * OPEN claims the session; only its owner may submit, cancel, reap, close or
+ * wait. STATUS is diagnostic for any registered task. WAIT (owner only, zero
+ * timeout) replies like STATUS, but the worker holds the reply while the
+ * bootstrap, job or cancellation is still active and sends it at the first
+ * poll or interrupt pass after the controller leaves that state: READY, DONE,
+ * CANCELED or FAULT, including a controller deadline. A held WAIT never delays
+ * other clients' requests. Collect it with finite waits like any reply. Active polling waits at most
  * one tick for requests; scheduling/callback latency can extend that interval.
  * Idle sessions sample the counter at least once per one-second queue wait.
  * No client request is needed to advance completion/deadlines. Fault retains

@@ -120,7 +120,7 @@ int main(int argc,char **argv)
             assert(result==-1&&!m->trigger&&!m->memory);
             if(test==1||test==2)assert(!m->writes&&!m->vereads);
             if(test==3)assert(m->writes==6&&!(m->ccu[0xa8c/4]&(1u<<18))&&!m->vereads);
-            if(test==4)assert(m->writes==1&&p.locked&&m->lock&&!m->vereads);
+            if(test==4)assert(m->writes==1&&p.decoder.unit.locked&&m->lock&&!m->vereads);
             if(test==5)assert(m->writes==14&&m->vereads);
             unsigned accesses=m->reads+m->writes;
             assert(a733_video_jpeg_poll(&run)==-1&&accesses==m->reads+m->writes);

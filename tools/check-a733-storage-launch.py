@@ -81,6 +81,12 @@ def session_bytes(raw,config,image,epoch,generation,lease):
     struct.pack_into('<3I',b,144,*config['rtc'])
     b[160:416]=raw;struct.pack_into('<Q',b,416,config['topology'])
     b[424:456]=bytes.fromhex(config['topology_artifact'])
+    # Optional SD bus profile: 0 one-bit 400 kHz (default), 1 four-bit default
+    # speed, 2 four-bit high speed. The native platform checks the pin route.
+    profile=config.get('mmc_sd_profile',0)
+    require(type(profile) is int and profile in (0,1,2) and (not profile or g['kind']==1),
+            'MMC SD profile must be 0, 1 or 2, and nonzero only for SD.')
+    struct.pack_into('<I',b,456,profile)
     struct.pack_into('<4I',b,488,*config['usb_supply_uv'])
     struct.pack_into('<3Q',b,504,*config['owners'])
     struct.pack_into('<3I',b,528,*config['fabric']);struct.pack_into('<3I',b,540,*config['fabric_hz'])

@@ -1,9 +1,10 @@
 # Native OV5640 capture and supervised observation
 
 The dedicated `sunstone-a733-camera` image connects the existing OV5640 binding,
-shared providers and USB0 device transport. It retains one 640 × 480 NV16 frame:
-307,200 luminance bytes followed by 307,200 interleaved chroma bytes. No MIPI
-camera is connected; physical capture waits for the accessory and remains unqualified.
+shared providers and USB0 device transport. It retains one readable 640 × 480
+NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma
+bytes. No MIPI camera is connected; physical capture waits for the accessory and
+remains unqualified.
 
 The default image preserves its qualified watchdog admission requirements.
 `SUNSTONE_CAMERA_SUPERVISED=ON` selects a separate session and launch ABI for
@@ -29,7 +30,10 @@ existing sensor, CSI, route and camera DMA controllers. The PMIC provider and
 USB0 run independently. Only the camera owner uses the cached singleton
 allocator during preparation.
 
-The camera task copies both completed planes through the native copy interface.
+When the session's camera record requests discarded images, the native binding
+captures and rearms over them before the readable image; the application sees
+only that image. The camera task copies both completed planes through the native
+copy interface.
 It publishes output only after both copies succeed and the deadline remains
 live. USB reads the immutable output without accessing allocator metadata.
 Failed or cancelled capture retains every resource. Partial copies are
@@ -68,7 +72,13 @@ with product `sunstoneos native camera` and serial `sunstoneos-a733-camera`.
 Physical preparation and capture remain the board coordinator's responsibility.
 
 The wire format retains the existing twelve-byte request and seventy-two-byte
-response header. Reads return at most 4,096 bytes. The collector validates epoch,
+response header. Reads return at most 4,096 bytes. USB0 uses the shared board
+service in `apps/board/usb0_service.h` for its descriptors, provider startup
+and polling loop, which repeats passes within one tick while the transfer makes
+progress. The camera image's build identity hashes that header. When an IN
+transfer completes, the transmit callback refills the vendor FIFO before the
+TinyUSB vendor class decides whether to send a zero-length packet, so a
+response cannot end early on a 512-byte boundary. The collector validates epoch,
 generation and the immutable session digest on every response. It records all
 fragments and requires all 150 chunks before publishing a 614,400-byte NV16
 artifact and metadata. A failed transfer, inconsistent response, deadline or
@@ -79,7 +89,7 @@ framework. Build `sunstone-a733-camera` with the pinned FreeRTOS/TinyUSB sources
 and existing AArch64 toolchain. The [native camera contract](camera-native.md)
 retains the device ownership and completed-frame requirements. Continuous
 capture, wider modes, interrupts and general reclamation remain outside this
-single-frame application and still require implementation and qualification.
+application and still require implementation and qualification.
 
 ## Retained launch session
 

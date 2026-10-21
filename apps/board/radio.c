@@ -3,6 +3,9 @@
 #include "a733_storage_digest.h"
 #include <string.h>
 enum { STARTING,CONNECTING,SECURING,ONLINE };
+/* CPU time one owner poll may spend repeating session steps that advance. At
+ * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
+#define BOARD_RADIO_POLL_BUDGET_US 500u
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -92,6 +95,34 @@ static enum board_radio_result publish(struct board_radio *r,enum board_radio_re
     }
     return result;
 }
+static uint64_t later(uint64_t now,uint64_t span)
+{return span>UINT64_MAX-now?UINT64_MAX:now+span;}
+/* Admit recovery after a clean link loss; 0 once admission is overdue. The
+ * recovery bound covers reassociation, the 4-way handshake and, with DHCP, the
+ * configured address acquisition; the session lease also caps it. */
+static int recover(struct board_radio *r,uint64_t now)
+{
+    uint64_t association=later(r->config.association_timeout_us,r->config.security_timeout_us);
+    if(!r->loss_deadline)r->loss_deadline=later(now,association);
+    if(now>=r->loss_deadline)return 0;
+    uint64_t span=association;
+    if(r->config.network.network.dhcp)
+        span=later(span,(uint64_t)r->config.network.network.address_timeout*(1000000u/configTICK_RATE_HZ));
+    uint64_t deadline=later(now,span);if(deadline>r->session.deadline)deadline=r->session.deadline;
+    if(a733_radio_session_recover(&r->session,&r->config.target,&r->config.security,0,deadline)){
+        r->recovering=1;r->loss_deadline=0;if(r->recoveries!=UINT64_MAX)++r->recoveries;
+    }
+    return 1;
+}
+struct progress {uint64_t host,transport;unsigned platform,session;};
+static struct progress progress(const struct board_radio *r)
+{return (struct progress){r->platform.host.progress,r->session.transport.progress,r->platform.stage,r->session.stage};}
+static int advanced(const struct board_radio *r,const struct progress *before)
+{
+    struct progress now=progress(r);
+    return now.host!=before->host||now.transport!=before->transport||
+        now.platform!=before->platform||now.session!=before->session;
+}
 enum board_radio_result board_radio_poll(struct board_radio *r)
 {
     if(!r||r->self!=r||!r->constructed||
@@ -105,17 +136,35 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
     uint64_t now;
     if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
     if(r->stage!=ONLINE&&now>=r->config.startup_deadline_us)return retain(r);
-    enum a733_radio_session_result result=a733_radio_session_poll(&r->session);
+    /* Repeat whole session polls, each with its own platform and deadline
+     * checks, while a step advances. Yield on the first call that only waits:
+     * an in-flight bus operation without FIFO progress, a poll interval, an
+     * idle receive status or event backpressure. */
+    enum a733_radio_session_result result;
+    for(uint64_t start=now;;){
+        struct progress before=progress(r);
+        result=a733_radio_session_poll(&r->session);
+        if((result!=A733_SESSION_PENDING&&result!=A733_SESSION_MANAGEMENT&&result!=A733_SESSION_NETWORK)||
+            !advanced(r,&before))break;
+        if(!a733_counter_clock_now(&r->config.shared->counter,&now))return retain(r);
+        if(now-start>=BOARD_RADIO_POLL_BUDGET_US)break;
+    }
     if(result==A733_SESSION_RETAINED||result==A733_SESSION_INVALID)return retain(r);
     if(result==A733_SESSION_BUSY)return publish(r,BOARD_RADIO_PENDING);
     if(r->session.dispatcher.initialized){
-        if(r->stage!=ONLINE&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
-            r->startup_events!=UINT64_MAX)++r->startup_events;
+        /* Station events of a reconnect or recovery would otherwise fill the
+         * event queue and stop receive parsing. */
+        if((r->stage!=ONLINE||r->recovering)&&a733_radio_session_take_event(&r->session,&r->startup_event)&&
+            r->stage!=ONLINE&&r->startup_events!=UINT64_MAX)++r->startup_events;
         if(a733_radio_session_take_record(&r->session,&r->diagnostic)&&
             r->diagnostic_records!=UINT64_MAX)++r->diagnostic_records;
     }
-    if(r->stage==ONLINE)return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
-        BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    if(r->stage==ONLINE){
+        if(result==A733_SESSION_LOST&&!recover(r,now))return retain(r);
+        if(result==A733_SESSION_NETWORK)r->recovering=0;
+        return publish(r,!atomic_load(&r->session.sockets.offline)&&aic8800_network_ready(&r->session.sockets.network)?
+            BOARD_RADIO_NETWORK:BOARD_RADIO_PENDING);
+    }
     if(result!=A733_SESSION_MANAGEMENT)return publish(r,BOARD_RADIO_PENDING);
     if(now>=r->session.deadline)return retain(r);
     if(r->stage==STARTING){
@@ -145,11 +194,13 @@ enum board_radio_result board_radio_poll(struct board_radio *r)
 }
 int board_radio_reconnect(struct board_radio *r,uint64_t deadline)
 {
-    return r&&r->self==r&&r->constructed&&r->stage==ONLINE&&r->config.recovery_state&&
+    int ok=r&&r->self==r&&r->constructed&&r->stage==ONLINE&&r->config.recovery_state&&
         xTaskGetCurrentTaskHandle()==r->config.session.owner_task&&
         !atomic_load_explicit(&r->failed,memory_order_acquire)&&
         !(atomic_load_explicit(r->config.recovery_state,memory_order_acquire)&4)&&
         a733_radio_session_reconnect(&r->session,&r->config.target,&r->config.security,0,3,deadline);
+    if(ok)r->recovering=1;
+    return ok;
 }
 int board_radio_submit(struct board_radio *r,const struct sunstone_net_request *request,uint64_t *ticket)
 {

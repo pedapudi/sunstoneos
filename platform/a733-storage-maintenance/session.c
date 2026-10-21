@@ -14,7 +14,7 @@ int a733_storage_session_decode(struct a733_storage_native_boot *out,
     if(a733_storage_wire64(raw)!=A733_STORAGE_SESSION_MAGIC ||
        a733_storage_wire64(raw+8)!=A733_STORAGE_SESSION_VERSION ||
        a733_storage_wire64(raw+16)!=A733_STORAGE_SESSION_BYTES ||
-       !zero(raw+156,4)||!zero(raw+456,32)||!zero(raw+638,2)||!zero(raw+656,48) ||
+       !zero(raw+156,4)||!zero(raw+460,28)||!zero(raw+638,2)||!zero(raw+656,48) ||
        !a733_storage_grant_decode(&b.grant,raw+A733_STORAGE_GRANT_OFFSET,256))return 0;
     t.magic=A733_MAINTENANCE_TRANSFER_MAGIC;t.epoch=a733_storage_wire64(raw+24);
     t.generation=a733_storage_wire64(raw+32);t.lease=a733_storage_wire64(raw+40);
@@ -47,6 +47,11 @@ int a733_storage_session_decode(struct a733_storage_native_boot *out,
     b.mmc.deadline_us=b.pmic.startup_deadline=b.usb.deadline_us=startup;
     b.mmc.lifetime_deadline_us=b.grant.deadline_us;
     b.mmc.kind=(enum sunxi_mmc_kind)b.grant.kind;b.mmc.emmc_host=(enum a733_mmc_emmc_host)b.grant.host;
+    /* Profile zero stays the default; the platform also refuses a profile
+     * for eMMC and a pin route that does not match the profile. */
+    uint32_t profile=a733_storage_wire32(raw+456);
+    if(profile>SUNXI_MMC_SD_HIGH_SPEED4||(profile&&b.grant.kind!=SUNXI_MMC_SD))return 0;
+    b.mmc.sd_profile=(enum sunxi_mmc_sd_profile)profile;
     for(unsigned i=0;i<3;++i) {
         b.mmc.fabric[i]=b.usb.fabric[i]=a733_storage_wire32(raw+528+i*4);
         b.mmc.fabric_hz[i]=b.usb.rate_hz[i]=a733_storage_wire32(raw+540+i*4);

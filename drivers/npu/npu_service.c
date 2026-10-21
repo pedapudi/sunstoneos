@@ -16,7 +16,7 @@ static int active(enum a733_npu_state state)
     return state == A733_NPU_BOOTING || state == A733_NPU_RUNNING ||
            state == A733_NPU_CANCEL_ASSERTED || state == A733_NPU_CANCEL_WAIT;
 }
-enum { IRQ_EVENT=1u, IRQ_FAILED=2u, SERVICE_DEFERRED=5 };
+enum { IRQ_EVENT=1u, IRQ_FAILED=2u, SERVICE_DEFERRED=5, SERVICE_HELD=6 };
 static void irq_fault(struct npu_service *s)
 {
     s->controller.state=A733_NPU_FAULT;s->controller.fault=A733_NPU_IRQ;
@@ -74,7 +74,7 @@ static enum npu_service_result execute(struct npu_service *s,
 {
     const struct npu_service_request *r = &m->request;
     struct a733_npu_controller *c = &s->controller;
-    if ((unsigned)r->operation > NPU_SERVICE_CLOSE ||
+    if ((unsigned)r->operation > NPU_SERVICE_WAIT ||
         (r->operation != NPU_SERVICE_SUBMIT && r->command) ||
         ((r->operation == NPU_SERVICE_OPEN || r->operation == NPU_SERVICE_SUBMIT ||
           r->operation == NPU_SERVICE_CANCEL) ? !duration(r->timeout_us) : r->timeout_us != 0) ||
@@ -98,6 +98,8 @@ static enum npu_service_result execute(struct npu_service *s,
     if (s->owner != m->client) return NPU_SERVICE_DENIED;
     if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
     switch (r->operation) {
+    case NPU_SERVICE_WAIT:
+        return active(c->state) ? SERVICE_HELD : NPU_SERVICE_OK;
     case NPU_SERVICE_SUBMIT:
         if (!r->command || r->command >= s->command_count) return NPU_SERVICE_INVALID;
         if (!(s->clients[m->client].commands & (UINT32_C(1) << r->command))) return NPU_SERVICE_DENIED;
@@ -140,6 +142,25 @@ static enum npu_service_result execute(struct npu_service *s,
     }
     return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_INVALID;
 }
+static void respond(struct npu_service *s, const struct npu_service_message *m,
+                    enum npu_service_result result, unsigned canceled)
+{
+    struct npu_service_reply reply = {.ticket = m->ticket, .result = result, .canceled = canceled};
+    reply.state = s->controller.state; reply.fault = s->controller.fault;
+    reply.owns_session = s->owner == m->client;
+    reply.job_ticket = s->job_ticket;
+    if (m->request.operation == NPU_SERVICE_REAP && result == NPU_SERVICE_OK)
+        s->job_ticket = 0;
+    configASSERT(xQueueSend(s->clients[m->client].replies, &reply, 0) == pdTRUE);
+}
+/* The owner's held WAIT is answered once the controller leaves an active state.
+ * Every active state has a controller deadline, so the hold is bounded. */
+static void release_held(struct npu_service *s)
+{
+    if (!s->has_held || active(s->controller.state)) return;
+    s->has_held = 0;
+    respond(s, &s->held, s->controller.state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK, 0);
+}
 static void worker(void *argument)
 {
     struct npu_service *s = argument;
@@ -165,6 +186,7 @@ static void worker(void *argument)
         int progressed=1;
         if(s->irq_bound)progressed=irq_progress(s);
         else a733_npu_poll(&s->controller);
+        release_held(s);
         struct npu_service_message message;
         TickType_t wait = active(s->controller.state) ? 1 :
             (s->controller.state == A733_NPU_FAULT ? portMAX_DELAY : pdMS_TO_TICKS(1000));
@@ -178,19 +200,20 @@ static void worker(void *argument)
             }
         }else if (xQueueReceive(s->requests, &message, wait) != pdTRUE) continue;
         configASSERT(message.client < NPU_SERVICE_CLIENTS && message.ticket);
-        struct npu_service_reply reply = {.ticket = message.ticket};
-        reply.result = execute(s, &message, &reply.canceled);
-        if((unsigned)reply.result==SERVICE_DEFERRED) {
+        unsigned canceled = 0;
+        enum npu_service_result result = execute(s, &message, &canceled);
+        if((unsigned)result==SERVICE_DEFERRED) {
             s->deferred=message;s->has_deferred=1;
             (void)ulTaskNotifyTake(pdTRUE,1);continue;
         }
         s->has_deferred=0;
-        reply.state = s->controller.state; reply.fault = s->controller.fault;
-        reply.owns_session = s->owner == message.client;
-        reply.job_ticket = s->job_ticket;
-        if (message.request.operation == NPU_SERVICE_REAP && reply.result == NPU_SERVICE_OK)
-            s->job_ticket = 0;
-        configASSERT(xQueueSend(s->clients[message.client].replies, &reply, 0) == pdTRUE);
+        if((unsigned)result==SERVICE_HELD) {
+            /* One pending request per client: the owner has no other request. */
+            configASSERT(!s->has_held);
+            s->held=message;s->has_held=1;continue;
+        }
+        respond(s, &message, result, canceled);
+        release_held(s);
     }
 }
 
@@ -238,7 +261,7 @@ static int initialize(struct npu_service *s, const struct a733_npu_ops *ops, voi
     s->activation=activation ? *activation : (struct npu_service_activation){0};
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
     atomic_init(&s->irq_pending,0);atomic_init(&s->irq_stopped,0);atomic_init(&s->irq_completions,0);
-    s->initialized = 1; instance = s; creating_worker = 1;
+    s->initialized = 1; s->affinity = affinity; instance = s; creating_worker = 1;
 #if configNUMBER_OF_CORES > 1
     s->worker = xTaskCreateStaticAffinitySet(worker, "npu-service", NPU_SERVICE_STACK_WORDS,
         s, priority, s->worker_stack, &s->worker_state, affinity);
@@ -289,10 +312,12 @@ int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, ui
     s->clients[slot].task = task; s->clients[slot].commands = commands;
     return 1;
 }
-int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops *ops,void *cookie)
+int npu_service_bind_irq(struct npu_service *s,const struct npu_service_irq_ops *ops,void *cookie,
+    UBaseType_t route)
 {
     if(!s || s!=instance || !s->initialized || s->irq_bound || !ops ||
        !ops->mask || !ops->rearm || !ops->stop || !cookie ||
+       !route || (route&(route-1)) || route!=s->affinity ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     s->irq_ops=*ops;s->irq_cookie=cookie;s->irq_bound=1;return 1;
 }

@@ -87,6 +87,14 @@ int a733_board_contract_valid(const struct a733_smp_contract *c,const struct a73
        c->expires_at!=s->reset_by_us*24||c->watchdog_mode!=0x41||c->watchdog_configuration!=1||
        c->watchdog_output!=2||c->fel_flag!=0x5aa5a55a||c->redirect_flag!=0xfa50392f||
        c->redirect_entry!=0x20||c->alternate_flag)return 0;
+#elif defined(SUNSTONE_BOARD_RESIDENT)
+       /* The stage-2 loader armed the four-second watchdog at armed_at. The
+        * watchdog is the only hang bound: no diagnostic deadline, no FEL return. */
+       c->armed_at>now||c->armed_at>UINT64_MAX-4*A733_SMP_COUNTER_HZ||
+       c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline||
+       c->diagnostic_deadline!=A733_SMP_NO_DEADLINE||c->expires_at!=c->armed_at+4*A733_SMP_COUNTER_HZ||
+       c->watchdog_mode!=0x41||c->watchdog_configuration!=1||c->watchdog_output!=2||
+       c->fel_flag||c->redirect_flag||c->redirect_entry||c->alternate_flag)return 0;
 #else
        c->armed_at>now||c->armed_at>UINT64_MAX-A733_BOARD_SUPERVISED_SECONDS*A733_SMP_COUNTER_HZ||
        c->startup_deadline!=c->armed_at+A733_BOARD_STARTUP_SECONDS*A733_SMP_COUNTER_HZ||now>=c->startup_deadline||

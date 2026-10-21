@@ -76,6 +76,14 @@ static void irq_owner(void *arg)
     (void)arg;
     configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
     configASSERT(wait_phase(PVR_GPU_SERVICE_READY).owns_session);
+    /* An armed ready session with no work sleeps until a request or interrupt:
+     * no further mask, rearm or other backend callback occurs while idle. */
+    TickType_t armed = xTaskGetTickCount();
+    while (service.irq_masked) { configASSERT(xTaskGetTickCount() - armed < 100); vTaskDelay(1); }
+    vTaskDelay(2);
+    uint32_t idle_calls = get(&calls), idle_masks = get(&mask_calls), idle_rearms = get(&rearm_calls);
+    vTaskDelay(20);
+    configASSERT(get(&calls) == idle_calls && get(&mask_calls) == idle_masks && get(&rearm_calls) == idle_rearms);
     /* IRQ routes to core 0; the supervisor moved the worker to core 1. */
     uint32_t before = get(&interrupt_count);
     pend(); wait_at_least(&interrupt_count, before + 1);

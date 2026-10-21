@@ -250,6 +250,27 @@ board path; `integration/npu-selector/` records that source comparison.
 These checks use modeled
 USB and FEL boundaries and a private host lock; they establish no physical result.
 
+## Application hooks and the resident lifetime
+
+An application image supplies `board_application_task_privileged`,
+`board_application_pins` and `board_application_start`; `main.c` calls them
+at fixed points. A single-application image defines them itself. The
+[integrated OS image](os-image.md) defines them over a fixed list of named
+entries, so several applications share one board composition.
+`board_session_sealed` returns the complete sealed session span for an image
+whose session extends the 592-byte board prefix.
+
+`SUNSTONE_BOARD_RESIDENT`, which only the integrated OS image selects, keeps
+the supervised session layout and changes the contract. The board contract
+magic becomes `0x4153373342524332`. The contract must arm WDT0 in the
+four-second mode, carry zero FEL and redirect fields, set no diagnostic
+deadline (`UINT64_MAX`) and expire four seconds after arming. The derived
+lifetime then never expires. The PMIC, Type-C and power tasks record progress
+after each poll, and the supervising task calls the image's
+`board_resident_renew` every 20 ms. When renewal is refused, the task closes
+admission, revokes the Type-C attachment and parks, and the armed watchdog
+resets the board. Other board images compile the progress calls to nothing.
+
 ## Boot-CPU execution preserves the complete application
 
 `apps/board-single-core` builds `sunstone-a733-board-single-core.elf` with the

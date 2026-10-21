@@ -7,7 +7,7 @@
 
 enum a733_platform_lock {
     A733_PLATFORM_REGISTER_LOCK, A733_PLATFORM_I2C_LOCK,
-    A733_PLATFORM_I2C1_LOCK, A733_PLATFORM_LOCK_COUNT
+    A733_PLATFORM_I2C1_LOCK, A733_PLATFORM_I2C11_LOCK, A733_PLATFORM_LOCK_COUNT
 };
 struct a733_platform_locks {
     StaticSemaphore_t storage[A733_PLATFORM_LOCK_COUNT];
@@ -20,7 +20,9 @@ struct a733_platform_locks {
 };
 /* One static instance per platform, initialized before clients become runnable.
  * Every CCU/PCK writer shares the register lock. PMIC/S_TWI0 transactions use
- * I2C_LOCK; independent S_TWI1 transactions use I2C1_LOCK. Supply
+ * I2C_LOCK; independent S_TWI1 transactions use I2C1_LOCK and camera TWI11
+ * transactions use I2C11_LOCK, so a retained fault on one bus leaves the
+ * others available. Supply
  * the native adapter's monotonic microsecond clock. Require FreeRTOS static
  * mutexes plus scheduler-state/current-task/mutex-holder APIs. The supported
  * ports are the project's AArch64 SRE and patched SMP ports.

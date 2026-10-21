@@ -7,6 +7,7 @@
 #include "aic8800_data.h"
 #include "aic8800_security.h"
 #include "aic8800_supplicant.h"
+#include <string.h>
 
 enum { BLOCK_LO_READ, BLOCK_HI_READ, BLOCK_LO_WRITE, BLOCK_HI_WRITE,
     BLOCK_LO_VERIFY, BLOCK_HI_VERIFY, ENABLE_READ, ENABLE_WRITE, ENABLE_READY,
@@ -123,7 +124,7 @@ int aic8800_transport_setup(struct aic8800_sdio_transport *t, uint64_t deadline)
 static void encode(struct aic8800_sdio_transport *t)
 {
     t->tx_bytes = 512;
-    for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = 0;
+    memset(t->tx, 0, t->tx_bytes);
     if (t->expected == SETUP_OPERATION)
         t->codec_result = aic8800_sdio_encode_bootstrap_setup(t->tx, sizeof(t->tx));
     else t->codec_result = aic8800_sdio_encode_identity_read(
@@ -353,7 +354,7 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if (t->firmware->state == AIC8800_FW_REQUEST) {
             t->tx_bytes = t->firmware->request_bytes;
             if (!t->tx_bytes || t->tx_bytes > sizeof(t->tx) || t->tx_bytes % 512) return 0;
-            for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->firmware->request[i];
+            memcpy(t->tx, t->firmware->request, t->tx_bytes);
             t->phase = CREDIT;
         }
         return 1;
@@ -371,22 +372,24 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
         if (t->runtime->state == AIC8800_RUNTIME_FAULT) { fail(t, AIC8800_TRANSPORT_RUNTIME_ERROR); return 1; }
         if (t->runtime->state == AIC8800_RUNTIME_REQUEST) {
             t->tx_bytes = sizeof(t->runtime->request);
-            for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->runtime->request[i];
+            memcpy(t->tx, t->runtime->request, t->tx_bytes);
             t->phase = CREDIT;
         } else if (t->runtime->state == AIC8800_RUNTIME_RECEIVING && t->wifi) {
             aic8800_wifi_step(t->wifi, t, now);
             if (t->wifi->state == AIC8800_WIFI_FAULT) { fail(t, AIC8800_TRANSPORT_WIFI_ERROR); return 1; }
             if (t->wifi->state == AIC8800_WIFI_REQUEST) {
                 t->tx_bytes = sizeof(t->wifi->request);
-                for (size_t i = 0; i < t->tx_bytes; ++i) t->tx[i] = t->wifi->request[i];
+                memcpy(t->tx, t->wifi->request, t->tx_bytes);
                 t->phase = CREDIT;
             } else if(t->security && t->security->state == AIC8800_SECURITY_REQUEST) {
                 t->tx_bytes=sizeof(t->security->request);
-                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->security->request[i];
+                memcpy(t->tx,t->security->request,t->tx_bytes);
                 t->security_tx=1;t->phase=CREDIT;
             } else if(t->data && t->data->state == AIC8800_DATA_REQUEST) {
+                /* The data worker's request stays unchanged until aic8800_data_sent,
+                 * so CMD53 borrows it directly instead of copying it into tx. */
                 t->tx_bytes=t->data->request_bytes;
-                for(size_t i=0;i<t->tx_bytes;++i)t->tx[i]=t->data->request[i];
+                if(!t->tx_bytes||t->tx_bytes>sizeof(t->data->request)||t->tx_bytes%512)return 0;
                 t->data_tx=1;t->phase=CREDIT;
             } else t->phase = RX_STATUS;
         } else if (t->runtime->state != AIC8800_RUNTIME_VERIFYING) t->phase = RX_STATUS;
@@ -394,7 +397,8 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     case CREDIT: ok = cmd52(t, 1, 3, 0, 0, &r); break;
     case RX_STATUS: ok = cmd52(t, 1, 4, 0, 0, &r); break;
     case RX_LENGTH: ok = cmd52(t, 1, 5, 0, 0, &r); break;
-    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->tx, t->tx_bytes, &r); break;
+    case TX: ok = sdio_card_cmd53(t->card, 1, 0x10, 1, 0, 512, t->data_tx ? t->data->request : t->tx,
+                     t->tx_bytes, &r); break;
     case RX: ok = sdio_card_cmd53(t->card, 1, 0x0f, 0, 0,
                      t->rx_bytes > 512 ? 512 : 0, t->rx, t->rx_bytes, &r); break;
     default: return 0;
@@ -402,6 +406,8 @@ static int admit(struct aic8800_sdio_transport *t, uint64_t now)
     if (!ok || !sunxi_sdio_submit(t->card->host, &r, deadline)) return 0;
     t->pending = 1; return 1;
 }
+static void advanced(struct aic8800_sdio_transport *t)
+{ if (t->progress != UINT64_MAX) ++t->progress; }
 static void delay(struct aic8800_sdio_transport *t, uint64_t now, uint64_t ticks)
 {
     if (!later(now, ticks, &t->wait_until)) fail(t, AIC8800_TRANSPORT_TIMEOUT);
@@ -578,6 +584,10 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
         (t->state != AIC8800_TRANSPORT_SETUP && t->state != AIC8800_TRANSPORT_IDENTITY &&
          t->state != AIC8800_TRANSPORT_FIRMWARE && t->state != AIC8800_TRANSPORT_RUNTIME)) return;
     t->entered = 1;
+    enum aic8800_transport_state state = t->state;
+    uint8_t phase = t->phase, pending = t->pending, held = t->held;
+    size_t cursor = t->cursor;
+    uint64_t host_progress = t->card->host->progress;
     if (!observe(t, &now)) goto out;
     if (t->pending) {
         sunxi_sdio_poll(t->card->host);
@@ -601,6 +611,8 @@ static void poll_receive(struct aic8800_sdio_transport *t,const void *owner)
 post:
     if (t->state != AIC8800_TRANSPORT_FAULT) (void)observe(t, &now);
 out:
+    if (t->state != state || t->phase != phase || t->pending != pending || t->held != held ||
+        t->cursor != cursor || t->card->host->progress != host_progress) advanced(t);
     t->entered = 0;
 }
 int aic8800_transport_peek(const struct aic8800_sdio_transport *t, struct aic8800_sdio_response *out)
@@ -615,7 +627,11 @@ static int consume_receive(struct aic8800_sdio_transport *t,const void *owner)
     if(owner){t->entered=1;if(!observe(t,&now)){t->entered=0;return 0;}}
     if (t->data) aic8800_data_consumed(t->data, t, t->unrelated.record);
     if (t->wifi) aic8800_wifi_consumed(t->wifi, t, t->unrelated.record);
-    t->cursor += t->unrelated.consumed; t->held = 0;
+    /* A remaining A-MSDU subframe keeps the same record held. */
+    if (!t->data || !t->data->held || t->data->held_record != t->unrelated.record) {
+        t->cursor += t->unrelated.consumed; t->held = 0;
+    }
+    advanced(t);
     if(owner){int ok=observe(t,&now);t->entered=0;return ok;}return 1;
 }
 
@@ -652,7 +668,7 @@ int aic8800_transport_retire_record(struct aic8800_sdio_transport *t,const void 
     size_t expected=(record[2]&0x10)?4+((length+3)&~(size_t)3):((length+60+3)&~(size_t)3);
     if(consumed!=expected||consumed>available)return 0;
     uint64_t now;t->entered=1;int ok=observe(t,&now);
-    if(ok){t->cursor+=consumed;ok=observe(t,&now);}
+    if(ok){t->cursor+=consumed;advanced(t);ok=observe(t,&now);}
     t->entered=0;return ok;
 }
 void aic8800_transport_fault_receive(struct aic8800_sdio_transport *t,const void *owner)

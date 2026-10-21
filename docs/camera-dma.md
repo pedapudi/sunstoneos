@@ -84,10 +84,19 @@ before publishing its result.
 This path reaches `READABLE`, keeps both planes device-owned, and never calls
 disable, drain, close or release. Only the 307,200-byte image payload of each
 plane may be read; guards and padding are excluded. Every table, parameter,
-frame, clock and hardware reservation remains retained. CPU writes, rearming,
-buffer reuse and global reclamation remain prohibited. The manual's still-frame
-completion definition and the reference driver's image return support this
-limited access; they do not establish global transaction drain.
+frame, clock and hardware reservation remains retained. CPU writes and global
+reclamation remain prohibited. The manual's still-frame completion definition
+and the reference driver's image return support this limited access; they do
+not establish global transaction drain.
+
+`a733_camera_dma_rearm` returns a `READABLE` channel to `ARMED` for one more
+image into the same planes. Its caller declares that every view and copy has
+ended and keeps the producer stopped behind a cleared parser fence. Status must
+still equal the final observation, and only those bits are acknowledged. Status
+must then read clear, capture must be inactive and the channel must still be
+enabled. The admission callback runs again with the retained token to prepare
+the cache for device writes. Ownership stays with the device, and a fault
+retains everything.
 
 A returned privileged const view cannot be revoked. Its caller must serialize
 use with the owner and stop on a later fault. Only a completed copy in separately

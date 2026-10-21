@@ -28,11 +28,14 @@ static void radio_retain(void *v)
 {struct radio_model *m=v;assert(m->power.register_held);m->register_retained=1;}
 static void host_accessible(struct radio_model *m)
 {
-    assert(m->admitted && !m->power.register_held && m->radio.pin_lease.id);
+    /* Only widening holds the register lock, for its module-clock change. */
+    assert(m->admitted && m->radio.pin_lease.id);
+    assert(!m->power.register_held || m->radio.host.state==SUNXI_SDIO_WIDENING);
     assert(a733_rail_status(&m->power.rails,&m->radio.rail)==A733_RAIL_READY);
     assert(m->enabled_at && m->power.now-m->enabled_at>=50000);
     assert((*pmic_model_word(&m->power,0x02002d1c)&0x10001)==0x10001);
-    assert((*pmic_model_word(&m->power,0x02002d10)&0x87001f1f)==0x8000001d);
+    uint32_t module=*pmic_model_word(&m->power,0x02002d10)&0x87001f1f;
+    assert(module==0x8000001d || (m->radio.four_bit && module==0x81000007));
     if(!m->first_host_at)m->first_host_at=m->power.now;
 }
 static int radio_read(void *v,uintptr_t a,uint32_t *out)
@@ -55,6 +58,7 @@ static int radio_write(void *v,uintptr_t a,uint32_t value)
         if(off==0x38){assert(!(value&(1u<<16)));m->sdc[off/4]&=~value;return 1;}
         m->sdc[off/4]=value;if(off!=0x18)return 1;
         if(value&(1u<<21)){m->sdc[off/4]&=~(1u<<31);return 1;}
+        m->sdc[off/4]&=~(1u<<31); /* The controller has loaded the command. */
         unsigned command=value&63;uint32_t arg=m->sdc[0x1c/4];
         assert(command==3 || command==5 || command==7 || command==52);
         ++m->commands;m->sdc[0x38/4]|=4;m->sdc[0x20/4]=0;
@@ -132,6 +136,14 @@ static enum a733_radio_platform_result radio_step(void)
     assert(!(*pmic_model_word(&r.power,0x07025040)&4)); /* PM2 level preserved. */
     return result;
 }
+/* PERI0 at 2400 MHz with its 400 MHz branch (divider 6) enabled and gated on. */
+static void radio_peri0(unsigned gated)
+{
+    *pmic_model_word(&r.power,0x020020a0)=0xfe000000u|(1u<<20)|(99u<<8);
+    uint32_t branch=(1u<<11)|(1u<<2)|(1u<<1);
+    *pmic_model_word(&r.power,0x02003908)=gated?branch|(branch<<16):0;
+    *pmic_model_word(&r.power,0x02003988)=branch<<16;
+}
 static void retained_without_io(void)
 {
     unsigned accesses=r.accesses,writes=r.power.writes;
@@ -188,11 +200,31 @@ int main(void)
     for(unsigned i=0;i<1500 && status!=A733_RADIO_RETAINED;++i)status=radio_step();
     assert(status==A733_RADIO_RETAINED && r.register_retained && r.radio.pin_lease.id && !r.first_host_at);
     retained_without_io();
+    /* Four-bit request: CCCR width with read-after-write, module switch under the
+     * register lock, controller verification and a CCCR reread at 25 MHz. */
+    radio_setup();radio_peri0(1);
+    assert(a733_radio_platform_four_bit(&r.radio) && !a733_radio_platform_four_bit(&r.radio));
+    status=A733_RADIO_PENDING;
+    for(unsigned i=0;i<4000 && status!=A733_RADIO_READY;++i){status=radio_step();assert(status!=A733_RADIO_RETAINED);}
+    assert(status==A733_RADIO_READY && r.radio.host.wide && r.radio.host.card_hz==25000000);
+    assert((r.card[0][7]&3)==2 && r.sdc[0xc/4]==1 && r.sdc[0x4/4]==(1u<<16));
+    assert(((r.sdc[0x140/4]>>16)&3)==3 && r.sdc[0x144/4]==(1u<<7) && !(r.sdc[0x5c/4]&0x80000000u));
+    assert((*pmic_model_word(&r.power,0x02002d10)&0x87001f1f)==0x81000007 && !r.power.register_held);
+    assert(r.radio.shared&A733_CLOCK_PERI0);
+    assert(a733_radio_platform_borrow(&r.radio,80,&token,&card) && card==&r.radio.card);
+    /* Too late after the first poll; a missing 400 MHz branch stops before any
+     * module or controller write. */
+    assert(!a733_radio_platform_four_bit(&r.radio));
+    radio_setup();radio_peri0(0);assert(a733_radio_platform_four_bit(&r.radio));
+    status=A733_RADIO_PENDING;
+    for(unsigned i=0;i<1500 && status!=A733_RADIO_RETAINED;++i)status=radio_step();
+    assert(status==A733_RADIO_RETAINED && !r.first_host_at && !r.radio.initial_module);
+    retained_without_io();
     assert(!a733_radio_platform_native_address(0x04021078,1));
     assert(!a733_radio_platform_native_address(0x04021084,1));
     assert(!a733_radio_platform_native_address(0x04020000,1));
     assert(!a733_radio_platform_native_address(0x020025c0,1));
     assert(!a733_radio_platform_native_address(0x07025040,1));
-    puts("PASS actual radio/PMIC/rail/pin/clock/card composition, power settling, exclusive lifetime, bounded borrowing and retained faults");
+    puts("PASS actual radio/PMIC/rail/pin/clock/card composition, power settling, exclusive lifetime, bounded borrowing, four-bit widening and retained faults");
     return 0;
 }

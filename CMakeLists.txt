@@ -6,13 +6,20 @@ if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_VERSION VERSION_
   message(FATAL_ERROR "Clang 21 or later is required; found ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
 endif()
 option(SUNSTONE_A733_PWM "Supervised native PWM0 fan application" OFF)
-if(SUNSTONE_A733_PWM)
- set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
-endif()
 option(SUNSTONE_A733_STORAGE_READ "Supervised read-only SD0 application" OFF)
-if(SUNSTONE_A733_STORAGE_READ)
- set(SUNSTONE_BOARD_SUPERVISED ON CACHE BOOL "Supervised board lifetime" FORCE)
-endif()
+# These profiles derive their images from the supervised board target, which
+# leaves the watchdog disabled. That mode must be requested explicitly, and
+# before the board target is created; a profile that switched it on itself
+# would also leave it on in the cache after the profile was disabled.
+foreach(profile SUNSTONE_A733_PWM SUNSTONE_A733_STORAGE_READ SUNSTONE_A733_CRYPTO
+    SUNSTONE_A733_THERMAL SUNSTONE_A733_RTC SUNSTONE_A733_PCIE SUNSTONE_A733_PCIE_TEST
+    SUNSTONE_A733_SPI SUNSTONE_A733_ADC SUNSTONE_A733_MONITOR SUNSTONE_A733_DEINTERLACE
+    SUNSTONE_JPEG_ENCODE_APPLICATION SUNSTONE_JPEG_FIXTURE SUNSTONE_BLUETOOTH_APPLICATION
+    SUNSTONE_MIMUS_BOARD_APPLICATION)
+  if(${profile} AND NOT SUNSTONE_BOARD_SUPERVISED)
+    message(FATAL_ERROR "${profile} builds on the supervised board; configure with -DSUNSTONE_BOARD_SUPERVISED=ON")
+  endif()
+endforeach()
 
 set(FREERTOS_DIR "" CACHE PATH "Pinned FreeRTOS kernel source directory")
 if(NOT EXISTS "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE/port.c")
@@ -51,16 +58,7 @@ endforeach()
 link_libraries(sunstone-path-maps)
 
 set(PORT "${FREERTOS_DIR}/portable/GCC/ARM_AARCH64_SRE")
-function(apply_build_patch output source patch_file)
-  execute_process(COMMAND patch --silent --output "${output}.tmp" "${source}" "${patch_file}"
-    RESULT_VARIABLE patch_status)
-  if(NOT patch_status EQUAL 0)
-    message(FATAL_ERROR "Could not apply ${patch_file}")
-  endif()
-  # Preserve the generated source timestamp when patch output is unchanged.
-  configure_file("${output}.tmp" "${output}" COPYONLY)
-  file(REMOVE "${output}.tmp")
-endfunction()
+include(cmake/patch.cmake)
 apply_build_patch("${CMAKE_CURRENT_BINARY_DIR}/freertos-port.c" "${PORT}/port.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-aarch64-clang.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -180,6 +178,9 @@ elseif(A733_NPU_HANDOFF_SOURCE)
   # before later profiles replace their directory variables.
   add_subdirectory(apps/npu-convolution native-npu EXCLUDE_FROM_ALL)
 endif()
+# The standalone NPU project defines its own apply_build_patch, which would
+# replace the exact one for every later profile.
+include(cmake/patch.cmake)
 include(cmake/a733-smp-cached-devices.cmake)
 include(cmake/a733-storage-maintenance.cmake)
 include(cmake/a733-camera-application.cmake)
@@ -288,3 +289,5 @@ option(SUNSTONE_A733_STAGE2 "Build the cold-entry monitor with the stage-2 slot 
 if(SUNSTONE_A733_STAGE2)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-standalone-boot.cmake")
 endif()
+
+include(cmake/a733-os.cmake)

@@ -121,6 +121,11 @@ int a733_csi_open_image(struct a733_csi_receiver *s,uint64_t d)
     if(r==1)s->image_mode=1;
     return r;
 }
+int a733_csi_rearm_image(struct a733_csi_receiver *s,uint64_t d)
+{
+    if (!s || !s->initialized || s->state!=A733_CSI_ARMED || !s->image_mode) return -1;
+    return begin(s,A733_CSI_REARM,d);
+}
 int a733_csi_sample(struct a733_csi_receiver *s,uint64_t d)
 {
     if (!s || !s->initialized || s->state!=A733_CSI_ARMED) return -1;
@@ -211,6 +216,23 @@ int a733_csi_poll(struct a733_csi_receiver *s)
             if(v&4)return fault(s);
         } else {
             if(s->saved && write_reg(s,A733_CSI_PARSER,0x44,s->saved)!=1)return -1;
+            s->state=A733_CSI_ARMED;return 1;
+        }
+        ++s->index;return 0;
+    case A733_CSI_REARM:
+        /* Status reads, fence read, SCAP write, SCAP readback. */
+        if(s->index<2) {
+            if(read_reg(s,s->index?A733_CSI_PARSER:A733_CSI_PORT,s->index?0x44:0x118,&v)!=1)return -1;
+            if(v&(s->index?7u:0x1fffu))return fault(s);
+        } else if(s->index==2) {
+            if(read_reg(s,A733_CSI_PARSER,0x0c,&v)!=1)return -1;
+            if(v&0x03030303)return fault(s);
+            s->saved=v|1u;
+        } else if(s->index==3) {
+            if(write_reg(s,A733_CSI_PARSER,0x0c,s->saved)!=1)return -1;
+        } else {
+            if(read_reg(s,A733_CSI_PARSER,0x0c,&v)!=1)return -1;
+            if((v&0x03030303)!=1)return fault(s);
             s->state=A733_CSI_ARMED;return 1;
         }
         ++s->index;return 0;

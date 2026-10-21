@@ -4,7 +4,7 @@ static int fault(void)
     /* The designated task alone advances native retention. No later call
      * releases a clock, rail, PCK lease, mutex, or inherited memory owner. */
 #if SUNSTONE_HDMI_FRAMEBUFFER
-    hdmi_framebuffer_retain();
+    a733_display_framebuffer_retain(&framebuffer);
 #endif
 #if SUNSTONE_HDMI_AUDIO
     hdmi_audio_retain();
@@ -53,7 +53,7 @@ int hdmi_output_step(void)
         atomic_store_explicit(&app.state,HDMI_APP_ACTIVE,memory_order_release);app.stage=3;return 1;
     case 3:
 #if SUNSTONE_HDMI_FRAMEBUFFER
-        if(hdmi_framebuffer_service()<0)return fault();
+        if(a733_display_framebuffer_service(&framebuffer)<0)return fault();
 #endif
         r=a733_hdmi_service(h,app.deadline);if(r<0)return fault();
 #if SUNSTONE_HDMI_AUDIO

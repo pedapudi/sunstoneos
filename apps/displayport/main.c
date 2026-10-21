@@ -24,7 +24,7 @@ int board_application_start(void)
  memcmp(s->board.image,a733_smp_build_id,32)||board.session.deadline_us<50000)return 0;
  dp_app.session=*s;dp_app.deadline=board.session.deadline_us-50000;
  atomic_init(&dp_app.terminal,0);atomic_init(&dp_app.pd_enabled,0);atomic_init(&dp_app.typec_stop,DP_TYPEC_RUNNING);
- dp_app.memory.self=&dp_app.memory;dp_app.initialized=1;
+ dp_app.initialized=1;
  if(!dp_memory_boot())return 0;
  TaskFunction_t fn[]={display_task,typec_task,power_task};const char *names[]={"dp-output","dp-typec","dp-power"};
  for(unsigned i=0;i<3;i++){
@@ -89,7 +89,7 @@ void dp_publish(unsigned success)
  r->epoch=dp_app.session.board.epoch;r->generation=dp_app.session.board.generation;r->lease=dp_app.session.board.lease;
  r->pd_generation=dp_app.native.token.generation;r->hpd_irq=dp_app.native.token.hpd_irq;
  memcpy(r->session_digest,displayport_admitted_session_digest(),32);memcpy(r->build_id,a733_smp_build_id,32);
- memcpy(r->pixel_digest,dp_app.memory.pixel_digest,32);
+ memcpy(r->pixel_digest,dp_app.pixel_digest,32);
  r->allocation_cpu=dp_app.memory.extent.cpu;r->allocation_physical=dp_app.memory.extent.physical;r->allocation_bytes=dp_app.memory.extent.bytes;
  r->pixel_iova=A733_DISPLAYPORT_PIXEL_IOVA;r->pitch=A733_DISPLAYPORT_STRIDE;r->width=A733_DISPLAYPORT_WIDTH;r->height=A733_DISPLAYPORT_HEIGHT;
  r->de_state=dp_app.memory.de.state;r->iommu_state=dp_app.memory.iommu.state;
@@ -113,7 +113,7 @@ static void display_task(void *unused)
   case 3:result=dp_memory_prepare();if(result<0)goto fault;if(result){
     if(dp_memory_frame(1)!=1||dp_native_start()!=1)goto fault;stop_at=a733_smp_counter()/24+250000;stage=4;}break;
   case 4:if(!a733_dp_service(&dp_app.native.controller))goto fault;
-   result=dp_memory_service();if(result<0)goto fault;
+   result=a733_display_framebuffer_service(&dp_app.memory);if(result<0)goto fault;
    /* An incremental IOMMU scan keeps source admission pending. Observe the
     * frame only after that scan has returned to ACTIVE without a fault. */
    if(result>0){result=dp_memory_frame(0);if(result<0)goto fault;if(result)dp_app.fresh_frame=1;}

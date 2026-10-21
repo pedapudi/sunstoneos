@@ -108,8 +108,9 @@ the function-1 FIFO, and the implementation follows that published route.
 Receive requests use fixed FIFO address `0x0f`. Byte-mode transfers contain at
 most 512 bytes; larger transfers must be multiples of 512. Every transfer is
 whole-word aligned in length and bounded by the owned 4,096-byte receive buffer.
-The controller itself moves at most 16 FIFO words per poll and requires its
-completion events in addition to FIFO progress.
+The controller itself moves at most 16 FIFO words per poll at one bit, or one
+512-byte block at four bits, and requires its completion events in addition to
+FIFO progress.
 
 The source's miscellaneous interrupt bit `0x80` enters a separate soft-interrupt
 path that clears a pending bit. The native transport does not claim that path is
@@ -123,6 +124,27 @@ delivery remains disabled. The transport polls status and never acknowledges the
 controller's persistent SDIO interrupt latch. A later interrupt binding must
 coordinate acknowledgement after servicing device causes; this component does
 not install an ISR or acquire interrupt ownership from another worker.
+
+## Owners repeat calls only while they advance
+
+Each poll still performs at most one host step, one next admission or one
+record parse, with clock and deadline observations before and after it. The
+transport's `progress` counter increases on a poll that changes its state or
+phase, admits or completes a host request, moves the receive cursor or held
+record, or makes controller progress such as moving FIFO words. Consuming or
+retiring a record also increases it. A poll that only waits leaves it
+unchanged: a pending host request without progress, a poll interval or
+settling delay, or a held record awaiting its consumer. An owner may therefore
+repeat polls while the counter increases and yield when it does not, without
+changing the step semantics or deadlines.
+
+[checks/radio-poll-batching.py](../checks/radio-poll-batching.py) runs the setup
+and bootstrap identity sequence of the integrated fixture twice: once with one
+poll per owner tick and once repeating polls while `progress` increases. Every
+call stays within the controller's FIFO budget, and every repeated tick ends on a
+waiting call. The fixture's controller model completes bus work instantly, so
+only the owner's tick count is meaningful: 172 ticks drop to 42.
+This shows the removed per-step tick waits, not physical bus time.
 
 ## Unrelated messages apply backpressure without disappearing
 

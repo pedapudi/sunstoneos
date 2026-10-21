@@ -4,7 +4,11 @@ The native NPU adapter is **implemented** and passes a FreeRTOS emulator check.
 It supplies CPU translation, cache maintenance, ordered register access,
 microsecond timing, and memory-publication callbacks for the
 [controller core](npu-controller.md). Physical NPU access remains untested.
-The adapter is excluded from default builds and is not linked into a board image.
+The default build does not link it. It is linked into
+the NPU board images: `a733-npu-convolution` and `a733-npu-convolution-supervised`
+from [apps/npu-convolution](../apps/npu-convolution/CMakeLists.txt), the
+`a733-npu-convolution-single-core` profiles, and the combined
+`sunstone-a733-accelerators` image from [apps/accelerators](../apps/accelerators/CMakeLists.txt).
 
 The [interface](../include/a733_npu_native.h) contains the private
 [memory policy](npu-memory.md), timer-conversion state, register mapping, and

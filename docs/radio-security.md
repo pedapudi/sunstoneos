@@ -117,7 +117,11 @@ Automatic reinitialization and retries cannot discard that state.
 Normal retirement requires an idle action queue. It closes the firmware port,
 deletes every known installed key with confirmations, destroys the RSN state,
 and wipes the master key, allocation arena and timers before detachment. A failed
-retirement keeps the terminal owner for external recovery. A library invariant
+retirement keeps the terminal owner for external recovery. Retirement after an
+unsolicited disconnection, with the link down, skips the port closure and the
+pairwise-key delete because the firmware station no longer exists; it wipes the
+pairwise record locally and deletes only the group keys. Retirement is refused
+while roaming is unresolved. A library invariant
 failure marks the owner failed and traps; the native exception/recovery path must
 retain that owner. Secret-bearing diagnostics are disabled.
 

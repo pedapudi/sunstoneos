@@ -1,16 +1,17 @@
 # PCIe starts a cold direct endpoint under retained native ownership
 
 The initial native profile implements the A733 COMB1 internal 100 MHz PHY
-sequence, PCIe root-complex preparation, an x1 Gen1 link and read-only
-configuration access to one directly attached endpoint. FreeRTOS owns the
+sequence, PCIe root-complex preparation, an x1 link and read-only
+configuration access to one directly attached endpoint. Both applications
+select Gen1 (2.5 GT/s). FreeRTOS owns the
 controller. Linux and U-Boot supply register semantics and comparison helpers;
 neither is a runtime dependency. The [supervised native application](pcie-application.md)
 connects these providers to authenticated entry and copied USB results. Physical
 PCIe operation remains unqualified.
 
 The controller has sixteen inbound and sixteen outbound translation windows,
-four embedded DMA read channels and four write channels. Gen2/Gen3 operation,
-bridge enumeration, general BAR allocation, wider interrupt/DMA modes, endpoint
+four embedded DMA read channels and four write channels. Physical Gen2/Gen3
+operation, bridge enumeration, general BAR allocation, wider interrupt/DMA modes, endpoint
 drivers, power transitions and shutdown remain required follow-on work. The
 separate [endpoint test application](pcie-test-application.md) implements one
 selected BAR, one MSI and one endpoint-DMA COPY offline. Configuration-only
@@ -117,6 +118,41 @@ observed multifunction header. Each public read checks link and live resource
 ownership and leaves caller output unchanged after refusal or uncertainty.
 Endpoint bus mastering and MSI/MSI-X enablement must initially be clear.
 
+One core helper programs every outbound translation region. It disables the
+region, observes the enable bit clear, writes base, limit and target, and then
+enables the region. Region zero accepts only the CFG0 window for bus 1,
+device 0 and a function from 0 to 7. Region one accepts one identity-mapped
+memory window inside the DTS memory aperture, `0x22000000..0x27ffffff`, and
+only after the endpoint test client has claimed the port. The core records the
+last programming of each region. The native write filter admits an outbound
+translation write only when its value repeats that record, so no other region
+and no other target can be written.
+
+## Link speed is selected by configuration
+
+The configuration field `link_speed` selects 1, 2 or 3, meaning 2.5, 5 or
+8 GT/s. The pinned board kernel device tree, `sun60iw2p1.dtsi`, gives this
+controller `max-link-speed = <3>`, which is the source for admitting speeds
+above 1. Root
+preparation writes the selected speed into the maximum-speed field of Link
+Capabilities and the target-speed field of Link Control 2. The link first
+trains at 2.5 GT/s.
+
+For a speed above 1, the port then follows the board kernel's
+`sunxi_pcie_host_speed_change()`. It confirms the Link Control 2 target, clears
+and then sets bit 17 of DBI+0x80c to direct a speed change, and polls until the
+controller clears that bit. Only then does it program the configuration window.
+A change that never completes retains the port at the operation deadline.
+
+The negotiated link must be x1 at a speed from 1 to the selected target, so an
+endpoint limited to 2.5 GT/s is accepted at that speed. The first identity read
+records the link status. Every later identity check and the endpoint test
+client require that same status, and a retrain to another speed retains the
+port. The kernel also raises an NSI bus bandwidth limit for faster links. The
+port leaves that limit unchanged, because the NSI interconnect is shared and
+outside PCIe ownership; a faster link may therefore be throttled. No speed has
+run on hardware.
+
 PCIe Base Specification section 6.6.1 allows an endpoint up to 1 s after
 PERST release to return a successful configuration completion. Until then,
 the first vendor-ID read can return FFFFh (no successful completion) or 0001h
@@ -189,3 +225,13 @@ The unchanged source-helper execution was reused from its preserved first
 batch. Two initial fixture failures, caused by an incorrect GPIO-bank address,
 remain archived; the PCIe runtime did not change during validation. No physical
 PCIe result is claimed.
+
+`checks/a733-pcie-trace.py` builds the core and endpoint-test host models with
+address and undefined-behavior sanitizers and runs every case of both. The core
+model includes a directed change to 5 GT/s, an endpoint that stays at 2.5 GT/s,
+a negotiated speed above the target, a change that never completes, a later
+retrain and outbound-region write permissions. The script also prints every
+register write of the nominal Gen1 core and endpoint-test flows. Given an
+earlier revision with `--baseline-rev`, it builds the same trace driver against
+that revision and requires identical write sequences. Controller and endpoint
+responses, including the speed change, are modeled.

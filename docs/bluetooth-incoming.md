@@ -17,9 +17,13 @@ attempt. Requests preserved through configured handoff remain owned.
 
 `bt_acl_listen` copies a nonzero peer address and returns its reserved link
 generation. The absolute deadline covers waiting for the request and completing
-the connection. The local controller address and every previously reserved or
-attempted peer are refused. Caller address storage may change after return.
-The reservation consumes one of four lifetime attempt slots immediately.
+the connection. The local controller address and every peer that is reserved,
+being rejected or has held a handle are refused. Caller address storage may
+change after return. The reservation takes one of the four link slots
+immediately. When the peer's previous attempt closed before the controller
+assigned a handle, the reservation reuses that slot under a new generation.
+Until the caller reserves the peer again, a new request from it receives no
+host reply and the controller's accept timeout refuses it.
 
 A matching ACL Connection Request copies its class of device and record serial
 into that slot. The worker sends Accept Connection Request with role `1`, which
@@ -34,14 +38,19 @@ other security events remain owned for the actual security implementation.
 [L2CAP](bluetooth-l2cap.md) and [RFCOMM](bluetooth-rfcomm.md) continue requiring
 authorization for the service and current link generation.
 
-## Rejection retains an attempt until its terminal event
+## Rejection holds a slot until its terminal event
 
-An unreserved ACL request consumes a free attempt slot and sends Reject
+An unreserved ACL request takes a free slot and sends Reject
 Connection Request with reason `0x0e`, security rejection. A request using the
 local controller address receives `0x0f`, unacceptable address. Both commands
 require Command Status followed by Connection Complete. A successful Reject
 status leaves the slot pending until a failure Connection Complete arrives.
-An unexpected successful connection after rejection faults the worker.
+That matched failure returns the slot to the free pool, because a rejected
+attempt never held a handle, packet or caller generation. The same peer may
+page again and is rejected again. When every slot is busy, an unreserved
+request receives no host reply; the controller's accept timeout refuses the
+peer, and the resulting failed Connection Complete matches no slot and is
+released. An unexpected successful connection after rejection faults the worker.
 A request that arrives before incoming handling is enabled receives no host
 reply; the link worker frees its receive slot and the controller refuses the
 peer when the configured accept timeout expires.
@@ -58,12 +67,15 @@ terminal link events, and successful handles remain unique for the controller
 lifetime. Existing links can continue ACL transmission and retire controller
 credits while connection commands progress.
 
-Every attempt retains its slot, address and generation after refusal or
-disconnection. A repeated address, an incoming/outbound address collision,
-exhausted incoming capacity or uncertain terminal event faults and retains the
-controller lifetime. Timeout also retains ownership. There is no automatic
-cancellation, reconnect, reset or slot reclamation. Fresh capacity requires
-qualified external recovery and a new controller/UART generation.
+A reserved or outbound attempt keeps its slot, address and generation after
+refusal or disconnection. Its caller may reserve the same peer again only when
+that attempt closed before a handle existed. A request from a peer that is being
+accepted, being rejected, connecting or has held a handle faults and retains the
+controller lifetime. So do an incoming/outbound address collision and an
+uncertain terminal event. A refused Reject command also keeps its slot, because
+the controller's request remains open. Timeout retains ownership. There is no
+automatic cancellation, reconnect after disconnection or reset. Fresh capacity
+requires qualified external recovery and a new controller/UART generation.
 
 Valid SCO and eSCO requests remain retained for the synchronous audio owner.
 They do not consume ACL attempt slots. Malformed requests fault the worker.
@@ -101,6 +113,9 @@ the check verifies their hashes and archives them with its inputs.
 The check covers accepted traffic and credit retirement, rejection and command
 refusal, concurrent connection attempts, stale and premature events, retained
 security and synchronous requests, handle quarantine, exhaustion and deadlines.
+It also covers repeated rejection of more unknown pages than there are slots,
+an unanswered request when every slot is reserved, and a peer retaking its slot
+after incoming or outbound attempts that closed before a handle existed.
 The composed check passed with AddressSanitizer and UndefinedBehaviorSanitizer.
 The changed HCI and ACL sources also compiled for AArch64. Inputs, executable,
 objects and logs are retained under

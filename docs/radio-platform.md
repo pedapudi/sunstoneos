@@ -32,6 +32,26 @@ That software interval is conservative; it is not a measured hardware limit.
 The real SDIO state machine then checks controller version and performs local
 reset, FIFO, timing and clock-update preparation before card enumeration.
 
+## Four-bit default speed is an optional request
+
+`a733_radio_platform_four_bit` must be called before the first poll. It adds
+the shared PERI0 scope to the clock lease, and every later clock-profile
+observation also requires the PERI0 400 MHz branch: its gate, its enable status
+and a PLL configuration that yields 400 MHz. After enumeration of a full-speed
+card (CCCR capability bit 6 clear), the platform reads CCCR address 7 and writes
+four-bit width with read-after-write, keeping the other bits. It then widens the
+controller. During that poll only, it holds the platform register lock. Its
+module callback stops the SDC1 module gate, selects source 1 (PERI0 400 MHz) with
+M=8, and restarts the gate; it verifies each write by readback and rechecks the
+clock profile and pin health. The resulting module clock is 50 MHz and the card
+clock is 25 MHz. A final CCCR read at the new clock must still report four bits
+before the platform becomes READY. Any failure retains the platform, including
+the changed module register. A low-speed card stays at one bit and 400 kHz.
+
+No board image requests this profile yet. Physical qualification requires a
+coordinator-owned identity read at four bits and 25 MHz that matches the
+one-bit result.
+
 Shared storage access depends on STORE AHB gate bit 24 at CCU offset `0x5c0`,
 STORE MBUS gate bit 30 at `0x5e0`, and MSI_LITE1 gate/reset bits 0, 16 and 17
 at `0x59c`. SD-monitor automatic gating at `0x5c0` bit 29 must be disabled.
@@ -167,7 +187,8 @@ the pin-function tables, board schematic V1.2 sheets 6, 9 and 14, and the pinned
 board device tree. Published clock, GPIO power sequencing and AXP8191 register
 sources corroborate those register contracts.
 
-The initial native profile uses one SDIO data line at 400 kHz. Wider buses,
-higher rates, DMA, interrupt service and suspend/resume require separate
+The default native profile uses one SDIO data line at 400 kHz. The optional
+four-bit 25 MHz profile is implemented and covered by the register model only.
+High-speed timing, DMA, interrupt service and suspend/resume require separate
 implementation and qualification. Board startup must connect the borrowed
 card and live guard to the transport worker before firmware loading.

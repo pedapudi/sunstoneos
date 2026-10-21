@@ -1,5 +1,6 @@
 #include "a733_gpu_vm_memory.h"
 #include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 
 #define PAGE 4096u
 #define PA_LIMIT (UINT64_C(1) << 36)
@@ -12,13 +13,7 @@ static int apart(const void *a, size_t n, const void *b, size_t m)
 static int physical(uint64_t p)
 { return p && p < PA_LIMIT && !(p >= 0x1fc00000 && p < 0x1fc04000); }
 static int mapped(uintptr_t cpu, uint64_t pa, unsigned attributes)
-{
-    struct aarch64_translation r, w;
-    return aarch64_device_translate(cpu, 0, &r) && aarch64_device_translate(cpu, 1, &w) &&
-        r.physical == pa && w.physical == pa && r.attributes == attributes &&
-        w.attributes == attributes && r.shareability == w.shareability &&
-        (r.shareability == 3 || (attributes == 0x44 && r.shareability == 2));
-}
+{ return a733_gpu_page_mapped(cpu, pa, attributes, 1); }
 static int context_mapped(const struct a733_gpu_vm_memory *m)
 { return mapped((uintptr_t)m->context_cpu, m->context_physical, 0x44); }
 static int table_mapped(const struct a733_gpu_vm_memory *m, unsigned i)

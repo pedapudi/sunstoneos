@@ -4,7 +4,7 @@
 #include <string.h>
 #define CFG UINT32_C(0x20000000)
 #define DBI UINT32_C(0x06000000)
-#define ATU UINT32_C(0x06300200)
+#define ATU A733_PCIE_ATU_OUTBOUND(1)
 #define MEM A733_PCIE_TEST_WINDOW
 #define B(n) (UINT32_C(1)<<(n))
 enum { CLAIM,BAR,WINDOW,MSI,PREPARE,ARM,SUBMIT,WAIT,DONE };
@@ -82,10 +82,8 @@ static int bar(struct a733_pcie_epf_test *t)
 }
 static int window(struct a733_pcie_epf_test *t)
 {
-    if(!wr(t,ATU+4,4,0)||!equal(t,ATU+4,4,B(31),0)||!wr(t,ATU+8,4,MEM)||
-       !wr(t,ATU+12,4,0)||!wr(t,ATU+16,4,MEM+A733_PCIE_TEST_WINDOW_BYTES-1)||
-       !wr(t,ATU+20,4,MEM)||!wr(t,ATU+24,4,0)||!wr(t,ATU,4,0)||
-       !wr(t,ATU+4,4,B(31))||!equal(t,ATU+4,4,B(31),B(31))||
+    if(!a733_pcie_atu_program(t->port,1,0,MEM,MEM,A733_PCIE_TEST_WINDOW_BYTES)||
+       !equal(t,ATU+4,4,B(31),B(31))||
        !wr(t,DBI+0x20,4,0x22002200)||!equal(t,DBI+0x20,4,UINT32_MAX,0x22002200)||
        !wr(t,CFG+4,2,(t->command&~0x407u)|0x402)||
        !equal(t,CFG+4,2,0xffff,(t->command&~0x407u)|0x402))return 0;
@@ -136,8 +134,8 @@ static int metadata(struct a733_pcie_epf_test *t)
         equal(t,CFG+4,2,0xffff,(t->command&~0x407u)|(t->submitted?0x406:0x402))&&
         equal(t,CFG+t->port->endpoint.msi_cap+2,2,0xffff,t->msi_control|1)&&
         equal(t,DBI+4,2,0xffff,0x106)&&equal(t,ATU+4,4,B(31),B(31))&&
-        equal(t,DBI+t->port->root_cap+0x12,2,0x3ff,0x11)&&
-        equal(t,CFG+t->port->endpoint.pcie_cap+0x12,2,0x3ff,0x11);
+        equal(t,DBI+t->port->root_cap+0x12,2,0x3ff,t->port->endpoint.link_status&0x3ffu)&&
+        equal(t,CFG+t->port->endpoint.pcie_cap+0x12,2,0x3ff,t->port->endpoint.link_status&0x3ffu);
 }
 static int contents(struct a733_pcie_epf_test *t)
 {
@@ -244,9 +242,7 @@ int a733_pcie_epf_native_write(const struct a733_pcie *p,uintptr_t a,unsigned w,
         default:return 0;
         }
     }
-    if(a>=ATU&&a<=ATU+24){switch(a-ATU){case 0:case 12:case 24:return !v;
-        case 4:return !v||v==B(31);case 8:case 20:return v==MEM;
-        case 16:return v==MEM+A733_PCIE_TEST_WINDOW_BYTES-1;default:return 0;}}
+    if(a>=ATU&&a<=ATU+24)return a733_pcie_atu_write_allowed(p,a,v);
     if(a==DBI+4)return v==0x106;
     if(a==DBI+0x20)return v==0x22002200;
     if(a==DBI+0x820)return v==(uint32_t)t->memory[2].physical;

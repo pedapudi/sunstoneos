@@ -36,6 +36,24 @@ static int live(enum bt_acl_link_state s)
 { return s>=BT_ACL_CONNECTED && s<=BT_ACL_DISCONNECTING; }
 static int pending(enum bt_acl_link_state s)
 { return s!=BT_ACL_UNUSED && s!=BT_ACL_CONNECTED && s!=BT_ACL_CLOSED && s!=BT_ACL_WAIT_REQUEST; }
+/* An attempt that closed before any handle existed: no handle, packet or
+ * upper-layer state can name it. A retained rejection keeps its nonzero reason. */
+static int unconnected(const struct bt_acl_link *l)
+{ return l->state==BT_ACL_CLOSED && !l->handle_valid && !l->reason; }
+/* The only slot this peer address may take: its own unconnected attempt, else
+ * a free slot. -1 when the address is still retained, 0 when none is free. */
+static int peer_slot(struct bt_acl *a,const uint8_t address[6],struct bt_acl_link **out)
+{
+    *out=0;
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) {
+        struct bt_acl_link *l=&a->links[i];
+        if(l->state==BT_ACL_UNUSED || !equal(address,l->peer.address)) continue;
+        if(!unconnected(l)) return -1;
+        *out=l;return 1;
+    }
+    for(unsigned i=0;i<BT_ACL_LINKS;++i) if(a->links[i].state==BT_ACL_UNUSED) {*out=&a->links[i];return 1;}
+    return 0;
+}
 int bt_acl_init(struct bt_acl *a,struct bt_hci *h)
 {
     if(!a || !h || h->self!=h || h->acl_owner || a->state!=BT_ACL_OFF ||
@@ -83,17 +101,14 @@ int bt_acl_connect(struct bt_acl *a,const struct bt_acl_peer *p,uint64_t deadlin
        deadline<=a->hci->transport.now || p->page_scan_mode>2 || p->role_switch>1) return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i) any|=p->address[i];
     if(!any) return -1;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i)
-        if(a->links[i].state!=BT_ACL_UNUSED &&
-           equal(p->address,a->links[i].peer.address)) return -1;
+    struct bt_acl_link *l;int found=peer_slot(a,p->address,&l);
+    if(found<0) return -1;
     /* Serialize terminal link operations, beyond the HCI command credit slot. */
     for(unsigned i=0;i<BT_ACL_LINKS;++i) if(pending(a->links[i].state)) return 0;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i) if(a->links[i].state==BT_ACL_UNUSED) {
-        a->links[i]=(struct bt_acl_link){.peer=*p,.generation=a->next_link++,
-            .deadline=deadline,.handle=0xffff,.state=BT_ACL_CONNECT_QUEUED};
-        *generation=a->links[i].generation;return 1;
-    }
-    return 0;
+    if(!found) return 0;
+    *l=(struct bt_acl_link){.peer=*p,.generation=a->next_link++,
+        .deadline=deadline,.handle=0xffff,.state=BT_ACL_CONNECT_QUEUED};
+    *generation=l->generation;return 1;
 }
 int bt_acl_incoming(struct bt_acl *a,uint64_t timeout)
 {
@@ -114,16 +129,12 @@ int bt_acl_listen(struct bt_acl *a,const uint8_t address[6],uint64_t deadline,ui
        equal(address,a->hci->identity.address)) return -1;
     unsigned any=0;for(unsigned i=0;i<6;++i) any|=address[i];
     if(!any) return -1;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i)
-        if(a->links[i].state!=BT_ACL_UNUSED && equal(address,a->links[i].peer.address)) return -1;
-    for(unsigned i=0;i<BT_ACL_LINKS;++i) if(a->links[i].state==BT_ACL_UNUSED) {
-        struct bt_acl_link *l=&a->links[i];
-        *l=(struct bt_acl_link){.generation=a->next_link++,.deadline=deadline,
-            .handle=0xffff,.incoming=1,.state=BT_ACL_WAIT_REQUEST};
-        for(unsigned j=0;j<6;++j) l->peer.address[j]=address[j];
-        *generation=l->generation;return 1;
-    }
-    return 0;
+    struct bt_acl_link *l;int found=peer_slot(a,address,&l);
+    if(found!=1) return found;
+    *l=(struct bt_acl_link){.generation=a->next_link++,.deadline=deadline,
+        .handle=0xffff,.incoming=1,.state=BT_ACL_WAIT_REQUEST};
+    for(unsigned j=0;j<6;++j) l->peer.address[j]=address[j];
+    *generation=l->generation;return 1;
 }
 int bt_acl_disconnect(struct bt_acl *a,uint64_t generation,uint64_t deadline)
 {
@@ -207,11 +218,16 @@ static int incoming_request(struct bt_acl *a,const struct bt_h4_record *r)
         else if(equal(candidate->peer.address,p+2)) l=candidate;
     }
     if(l) {
+        /* Until the caller reserves this peer again, its new page gets no reply
+         * and the controller's accept timeout refuses it. */
+        if(unconnected(l)) return release_record(a,r);
         if(l->state!=BT_ACL_WAIT_REQUEST || l->deadline<=a->hci->transport.now) return fault(a);
         if(l->deadline>deadline) l->deadline=deadline;
         l->state=BT_ACL_ACCEPT_QUEUED;
     } else {
-        if(!unused) return fault(a);
+        /* With every slot busy, an unknown peer gets no reply: the controller's
+         * accept timeout refuses it and its failed completion is released. */
+        if(!unused) return release_record(a,r);
         l=unused;
         *l=(struct bt_acl_link){.generation=a->next_link++,.deadline=deadline,
             .handle=0xffff,.incoming=1,.reason=0x0e,.state=BT_ACL_REJECT_QUEUED};
@@ -291,6 +307,9 @@ static int dispatch(struct bt_acl *a,const struct bt_h4_record *r)
         if((l->state!=BT_ACL_CONNECTING && l->state!=BT_ACL_ACCEPTING &&
             l->state!=BT_ACL_REJECTING) || r->serial<=l->acknowledgement) return fault(a);
         if(l->state==BT_ACL_REJECTING && !p[2]) return fault(a);
+        /* A matched rejection never had a handle, packet or caller generation,
+         * so its slot returns to the pool and the peer may be refused again. */
+        if(l->state==BT_ACL_REJECTING) {*l=(struct bt_acl_link){0};return release_record(a,r);}
         if(p[2]) {l->status=p[2];l->state=BT_ACL_CLOSED;return release_record(a,r);}
         unsigned h=le16(p+3);
         if(h>0xeff || handle(a,h) || (a->synchronous && a->synchronous->owns(a->synchronous_context,(uint16_t)h)) || p[11]!=1 || p[12]>1) return fault(a);

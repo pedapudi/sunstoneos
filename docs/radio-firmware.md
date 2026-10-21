@@ -108,7 +108,9 @@ patch pointers. This checks the required metadata; it does not read back and
 compare the entire uploaded image.
 
 The admitted AMSDU patch writes the source's configuration offset `0x0170`
-with value `0x0100000a`. System and masked RF configuration tables are empty
+with value `0x0100000a`, as the source's normal SDIO configuration does. It has no
+effect under the current Wi-Fi profile, which claims no HT capability; access
+points send A-MSDUs only to HT stations. System and masked RF configuration tables are empty
 for the selected SDIO profile. The engine does not copy USB-only operations.
 
 ## Confirmations, backpressure, and uncertain effects retain ownership

@@ -190,6 +190,64 @@ static void issue_step(struct sunxi_sdio *h)
         !barrier(h) || !wr(h, CMD, command)) return;
     h->state = SUNXI_SDIO_ACTIVE;
 }
+/* Old-mode (NTSR bit 31 clear) default speed at 25 MHz uses the same delays
+ * as identification in the pinned tm4 table: command and data output at 180
+ * degrees, sample delay zero with the enable bit. Preparation set both. */
+#define DRIVE_PH180 (3u << 16)
+#define SAMPLE_DELAY 0xbfu
+static int controller_errors(struct sunxi_sdio *h)
+{
+    uint32_t raw;
+    if (!rd(h, RINT, &raw)) return 0;
+    h->sdio_pending |= (raw & SDIO_IRQ) != 0;
+    if (raw & ERRORS) { sunxi_sdio_stop(h, SUNXI_SDIO_CONTROLLER_ERROR); return 0; }
+    return 1;
+}
+int sunxi_sdio_widen(struct sunxi_sdio *h, unsigned divisor, uint64_t deadline)
+{
+    if (!h || h->entered || h->state != SUNXI_SDIO_READY || h->wide || !h->config.ops.module ||
+        divisor < 8 || divisor > 32 || deadline <= h->last_now) return 0;
+    h->deadline = deadline; h->step = 0; h->divisor = (uint8_t)divisor;
+    h->request = (struct sunxi_sdio_request){0}; h->result = (struct sunxi_sdio_result){0};
+    h->state = SUNXI_SDIO_WIDENING; return 1;
+}
+static void widen_step(struct sunxi_sdio *h)
+{
+    uint32_t value;
+    unsigned divisor = h->divisor;
+    switch (h->step) {
+    case 0:
+        /* Stop the card clock only between commands, with no card busy state. */
+        if (!rd(h, CMD, &value) || (value & START) || !rd(h, STATUS, &value)) return;
+        h->result.status = value;
+        if (value & SUNXI_SMHC_STATUS_BUSY) return;
+        if (!controller_errors(h) || !wr(h, CLKCR, 0) || !barrier(h) || !wr(h, CMD, UPDATE)) return;
+        h->step = 1; return;
+    case 1:
+        if (!rd(h, CMD, &value) || (value & START)) return;
+        if (!controller_errors(h) || !rd(h, CLKCR, &value)) return;
+        if (value) { sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return; }
+        /* Fresh deadline observations surround the platform's module change. */
+        if (!time_limit(h)) return;
+        if (h->config.ops.module(h->config.context, divisor) != 1) { sunxi_sdio_stop(h, SUNXI_SDIO_IO_ERROR); return; }
+        if (!time_limit(h)) return;
+        h->step = 2; return;
+    case 2:
+        if (!wr(h, WIDTH, 1) || !wr(h, CLKCR, 1u << 16) || !barrier(h) || !wr(h, CMD, UPDATE)) return;
+        h->step = 3; return;
+    default:
+        if (!rd(h, CMD, &value) || (value & START)) return;
+        if (!controller_errors(h)) return;
+        uint32_t clock, width, drive, sample, timing;
+        if (!rd(h, CLKCR, &clock) || !rd(h, WIDTH, &width) || !rd(h, DRIVE, &drive) ||
+            !rd(h, SAMPLE, &sample) || !rd(h, NTSR, &timing)) return;
+        if (clock != (1u << 16) || width != 1 || (drive & DRIVE_PH180) != DRIVE_PH180 ||
+            (sample & SAMPLE_DELAY) != (1u << 7) || (timing & START)) {
+            sunxi_sdio_stop(h, SUNXI_SDIO_SETUP_ERROR); return;
+        }
+        h->card_hz = 400000000u / (2u * divisor); h->wide = 1; h->state = SUNXI_SDIO_READY; return;
+    }
+}
 static void transfer_step(struct sunxi_sdio *h)
 {
     uint32_t raw, status, word;
@@ -206,20 +264,35 @@ static void transfer_step(struct sunxi_sdio *h)
                           h->request.command == 3 ? 0xe000u : h->request.command == 7 ? 0xfdff0000u : 0;
         if (h->result.response & errors) { sunxi_sdio_stop(h, SUNXI_SDIO_RESPONSE_ERROR); return; }
     }
-    for (unsigned n = 0; n < SUNXI_SDIO_FIFO_BUDGET && h->result.transferred < h->request.bytes; ++n) {
+    /* One-bit operation samples STATUS before every word. Four-bit operation
+     * sizes each burst from one FIFO-level sample: the fill level for reads, or
+     * one word when the level reads zero but FIFO-empty is clear, and the free
+     * space for writes. Raw underrun/overflow remains a terminal error. */
+    int write = (h->request.argument & START) != 0;
+    unsigned budget = h->wide ? SUNXI_SDIO_FIFO_BUDGET_WIDE : SUNXI_SDIO_FIFO_BUDGET;
+    for (unsigned moved = 0; moved < budget && h->result.transferred < h->request.bytes;) {
         if (!rd(h, STATUS, &status)) return;
         h->result.status = status;
-        int write = (h->request.argument & START) != 0;
-        if (status & (write ? SUNXI_SMHC_STATUS_FIFO_FULL : SUNXI_SMHC_STATUS_FIFO_EMPTY)) break;
-        uint8_t *p = h->request.data + h->result.transferred;
-        if (write) {
-            word = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-            if (!wr(h, FIFO, word)) return;
-        } else {
-            if (!rd(h, FIFO, &word)) return;
-            for (unsigned i = 0; i < 4; ++i) p[i] = (uint8_t)(word >> (8 * i));
+        unsigned level = SUNXI_SMHC_STATUS_FIFO_LEVEL(status), n;
+        if (write) n = (status & SUNXI_SMHC_STATUS_FIFO_FULL) || level >= SUNXI_SMHC_FIFO_DEPTH ? 0 : SUNXI_SMHC_FIFO_DEPTH - level;
+        else n = (status & SUNXI_SMHC_STATUS_FIFO_EMPTY) ? 0 : level ? level : 1;
+        size_t left = (h->request.bytes - h->result.transferred) / 4;
+        if (n > left) n = (unsigned)left;
+        if (n > budget - moved) n = budget - moved;
+        if (n && !h->wide) n = 1;
+        if (!n) break;
+        for (unsigned i = 0; i < n; ++i) {
+            uint8_t *p = h->request.data + h->result.transferred;
+            if (write) {
+                word = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+                if (!wr(h, FIFO, word)) return;
+            } else {
+                if (!rd(h, FIFO, &word)) return;
+                for (unsigned b = 0; b < 4; ++b) p[b] = (uint8_t)(word >> (8 * b));
+            }
+            h->result.transferred += 4;
         }
-        h->result.transferred += 4;
+        moved += n;
     }
     if (!h->response_seen || (h->request.bytes &&
         (!(h->result.interrupts & DATA_OVER) || h->result.transferred != h->request.bytes))) return;
@@ -237,9 +310,13 @@ void sunxi_sdio_poll(struct sunxi_sdio *h)
 {
     if (!h || h->entered || h->state == SUNXI_SDIO_FAULT || h->state == SUNXI_SDIO_UNPREPARED || h->state == SUNXI_SDIO_DONE) return;
     h->entered = 1;
+    enum sunxi_sdio_state state = h->state;
+    uint8_t step = h->step, seen = h->response_seen;
+    size_t moved = h->result.transferred;
     if (!time_limit(h)) goto out;
     switch (h->state) {
     case SUNXI_SDIO_PREPARING: prepare_step(h); break;
+    case SUNXI_SDIO_WIDENING: widen_step(h); break;
     case SUNXI_SDIO_QUEUED: issue_step(h); break;
     case SUNXI_SDIO_ACTIVE: transfer_step(h); break;
     case SUNXI_SDIO_READY: {
@@ -252,6 +329,8 @@ void sunxi_sdio_poll(struct sunxi_sdio *h)
     if (h->state != SUNXI_SDIO_FAULT && time_limit(h) &&
         (h->state == SUNXI_SDIO_READY || h->state == SUNXI_SDIO_DONE)) h->deadline = 0;
 out:
+    if ((h->state != state || h->step != step || h->response_seen != seen ||
+         h->result.transferred != moved) && h->progress != UINT64_MAX) ++h->progress;
     h->entered = 0;
 }
 int sunxi_sdio_take_result(struct sunxi_sdio *h, struct sunxi_sdio_result *r)

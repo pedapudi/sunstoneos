@@ -21,14 +21,15 @@ SOURCES = [
     'drivers/gpu/a733_gpu_resources.c', 'drivers/pinctrl/a733_pins.c',
     'drivers/pinctrl/a733_pin_tables.c', 'runtime/device_memory_pool.c']
 CHANGED = ['drivers/camera/a733_camera_native.c', 'drivers/camera/a733_camera_capture.c',
-           'drivers/camera/a733_camera_dma.c', 'drivers/i2c/a733_twi.c',
+           'drivers/camera/a733_camera_dma.c', 'drivers/camera/a733_csi_receiver.c',
+           'drivers/camera/ov5640.c', 'drivers/i2c/a733_twi.c',
            'drivers/i2c/a733_twi_native.c']
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', type=Path, required=True)
     p.add_argument('--clang', default='/usr/bin/clang-21')
-    p.add_argument('--cases', default='0,1,2,3,4,5,6,7,8,9,10,11,12,13,14')
+    p.add_argument('--cases', default='0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18')
     p.add_argument('--skip-native', action='store_true')
     a = p.parse_args()
     out = a.evidence.resolve();out.mkdir(parents=True, exist_ok=False)

@@ -23,7 +23,8 @@ existing MMC core divides the resulting 800 kHz module clock by two, producing a
 `emmc_host` to `A733_MMC_EMMC_SDC3` selects SDC3. SD rejects that selector.
 Profile zero retains one-bit SDR signaling and programmed I/O. SD profiles one
 and two negotiate four-bit default-speed and high-speed operation; eMMC remains
-on its existing profile. The public API provides startup polling, card information,
+on its existing profile. A bound storage update service writes at the profile
+its session selected. The public API provides startup polling, card information,
 bounded block reads and result collection. It exposes no raw controller pointer,
 command escape, write, erase, partition switch or recovery operation. Writes
 exist only through a bound [storage update service](storage-update.md).

@@ -301,10 +301,13 @@ survive. The complete authenticated compute package stays outside disposed
 pools. Graphics reconstruction uses retained profile metadata; caller texture
 and geometry drafts require a fresh upload after OPEN.
 
-This profile admits only the source-audited standalone image: exact static
-service/owner/provider bindings, one GPU client, the actual GPU worker, static
-task allocation, disabled timers and an exact pool ledger containing only the
-GPU parents. Other images refuse disposal and reopening. Mixed-device runtime
+This profile admits only the source-audited standalone image. That image names
+its static disposal owner in the service configuration (`disposal`); every other
+image leaves the field empty, so DISPOSE and reopening are refused. The platform
+returns the owner only to the actual GPU worker while the owner names a backend
+bound to this service and its firmware memory, a nonzero session limit, and one
+registered GPU client. Static task allocation, disabled timers and an exact pool
+ledger containing only the GPU parents are also required. Mixed-device runtime
 pool reclamation still needs shared serialization.
 
 All queued mutations and copied outputs bind their queue epoch at service
@@ -317,16 +320,21 @@ stream and terminal-ZLP ownership rules.
 
 DISPOSE and reconstruction each allow up to 15 seconds, capped by the original
 absolute session deadline. CLOSE retains its one-second allowance. Disposal
-handles at most 16 WB pages per worker step; the admitted maximum depth layout
-needs fewer than 2,000 steps at the configured 1 kHz tick rate. Neither an
-expired deadline nor uncertain completion authorizes reuse.
+handles at most 16 WB pages per worker step, and the worker runs up to 16
+disposal steps per tick of the configured 1 kHz rate. The admitted maximum depth
+layout needs 1,620 steps, about 102 ticks. Neither an expired deadline nor
+uncertain completion authorizes reuse.
 
 Focused lifecycle evidence is retained in
 `~/.cache/sunstoneos/evidence/gpu-resource-disposal-20261020/`. Native child
 allocation/disposal/reconstruction and application protocol checks have separate
 model boundaries. Separate linked consumers cover texture/depth and compute. The compute-only
 [three-parent lifecycle check](gpu-compute-service.md#compute-only-disposal-and-reopening)
-also exercises copied output across reopening. Triangle lifecycle runtime remains
+also exercises copied output across reopening. With the owner supplied through
+the service configuration and bursts of worker steps, both native owner checks
+passed again on rebuilt texture and compute lifecycle images; their models stop
+publication at the same power admission boundary between burst steps. The
+application protocol checks were not repeated. Triangle lifecycle runtime remains
 outside these checks. These checks do not establish physical cache visibility,
 firmware execution, rasterized pixels, SMP scheduling or mixed-device disposal.
 

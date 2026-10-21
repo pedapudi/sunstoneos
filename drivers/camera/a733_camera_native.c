@@ -230,22 +230,29 @@ static int sensor_line(void *v,uint64_t t,enum ov5640_line line,int asserted,uin
         timely(n,d) && authority(n)?1:-1;
 }
 static int sensor_bus(struct a733_camera_native *n,uint64_t t,uint8_t address,uint16_t reg,
-    unsigned reading,uint8_t *value,uint64_t d)
+    unsigned reading,uint8_t *data,unsigned count,uint64_t d)
 {
-    if(t!=n->boot.lease || address!=0x3c || !value || !authority(n) || !timely(n,d))return -1;
+    if(t!=n->boot.lease || address!=0x3c || !data || !authority(n) || !timely(n,d))return -1;
     /* Bounded synchronous bridge preserves the sensor controller's current
-     * callback contract. One transaction gets at most 10 ms within capture time. */
+     * callback contract. One transaction gets at most 10 ms within capture time;
+     * a 40-byte block write takes about 4 ms at 100 kHz. */
     uint64_t limit=d;
     if(d-n->last_now>10000)limit=n->last_now+10000;
-    if(a733_twi_request(&n->twi,address,reg,reading,*value,limit)<0)return -1;
+    if(a733_twi_request_block(&n->twi,address,reg,reading,data,count,limit)<0)return -1;
     int r;
     do {r=a733_twi_poll(&n->twi);}while(r==0);
-    return r==1 && a733_twi_take(&n->twi,value)==1 && timely(n,d) && authority(n)?1:-1;
+    return r==1 && a733_twi_take_block(&n->twi,data,count)==1 && timely(n,d) && authority(n)?1:-1;
 }
 static int sensor_read(void *v,uint64_t t,uint8_t a,uint16_t r,uint8_t *x,uint64_t d)
-{uint8_t byte=0;int ok=sensor_bus(v,t,a,r,1,&byte,d);if(ok==1)*x=byte;return ok;}
+{uint8_t byte=0;int ok=sensor_bus(v,t,a,r,1,&byte,1,d);if(ok==1)*x=byte;return ok;}
 static int sensor_write(void *v,uint64_t t,uint8_t a,uint16_t r,uint8_t x,uint64_t d)
-{return sensor_bus(v,t,a,r,0,&x,d);}
+{return sensor_bus(v,t,a,r,0,&x,1,d);}
+static int sensor_write_block(void *v,uint64_t t,uint8_t a,uint16_t r,const uint8_t *x,unsigned count,uint64_t d)
+{
+    uint8_t block[OV5640_BLOCK_BYTES];
+    if(!x || count<2 || count>OV5640_BLOCK_BYTES)return -1;
+    memcpy(block,x,count);return sensor_bus(v,t,a,r,0,block,count,d);
+}
 static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mode *m,uint64_t d)
 {
     struct a733_camera_native *n=v;
@@ -298,10 +305,16 @@ static int csi_write(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32
     struct a733_camera_native *n=v;uintptr_t a=csi_address(r,o);
     if(!a || r==A733_CSI_TOP || !n->capture.local_granted)return -1;
     if(n->capture.packets_granted) {
-        if(n->capture.state!=A733_CAPTURE_SAMPLE || n->capture.receiver.state!=A733_CSI_SAMPLE ||
-           n->capture.sensor.state!=OV5640_READY ||
-           !((r==A733_CSI_PORT && o==0x118 && !(x&~0x1fffu)) ||
-             (r==A733_CSI_PARSER && o==0x44 && !(x&~7u))))return -1;
+        /* After the first image only status acknowledgement and the SCAP
+         * rearm are accepted, both with the sensor stopped. */
+        enum a733_capture_state s=n->capture.state;
+        unsigned status=(s==A733_CAPTURE_SAMPLE || s==A733_CAPTURE_REARM_SAMPLE) &&
+            n->capture.receiver.state==A733_CSI_SAMPLE;
+        unsigned rearm=s==A733_CAPTURE_REARM_RECEIVER && n->capture.receiver.state==A733_CSI_REARM;
+        if(n->capture.sensor.state!=OV5640_READY ||
+           !((status && r==A733_CSI_PORT && o==0x118 && !(x&~0x1fffu)) ||
+             (status && r==A733_CSI_PARSER && o==0x44 && !(x&~7u)) ||
+             (rearm && r==A733_CSI_PARSER && o==0x0c && (x&0x03030303)==1)))return -1;
     }
     return write_word(v,t,a,x,d);
 }
@@ -312,7 +325,16 @@ static int dma_admit(void *v,const struct a733_camera_dma_config *c,uint64_t d,u
        c->y.mapped_bytes!=PLANE_BYTES || c->uv.mapped_bytes!=PLANE_BYTES ||
        !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;
-    return cache(n,AARCH64_CACHE_CLEAN_INVALIDATE,n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES,2u*PLANE_BYTES,d);
+    uintptr_t planes=n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES;
+    /* A rearm refills the planes, so a short next frame cannot leave bytes
+     * of the previous image. The channel is acknowledged and inactive, the
+     * parser fence is clear and the sensor is stopped. */
+    if(n->capture.dma.state==A733_CAM_DMA_REARM){
+        if(n->capture.state!=A733_CAPTURE_REARM_DMA || n->capture.sensor.state!=OV5640_READY ||
+           n->state!=A733_CAMERA_NATIVE_CAPTURE)return -1;
+        memset((void *)planes,A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
+    }
+    return cache(n,AARCH64_CACHE_CLEAN_INVALIDATE,planes,2u*PLANE_BYTES,d);
 }
 static int dma_read(void *v,uint64_t t,uint16_t o,uint32_t *x,uint64_t d)
 {return o<0x1000?read_word(v,t,0x05830000u+o,x,d):-1;}
@@ -335,6 +357,7 @@ static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervise
        b->excluded_masters!=A733_IOMMU_REAL_MASTERS || b->powered_masters!=A733_IOMMU_REAL_MASTERS ||
        b->raw_trim!=0xb00 || b->parameter_guard_bytes!=4096 || b->plane_guard_bytes!=4096 ||
        !b->settle || !b->deskew || b->deskew>31 || b->test_pattern>1 || b->pwdn_only>1 ||
+       b->discard_frames>A733_CAMERA_NATIVE_DISCARD_LIMIT ||
        b->inherited[11].function!=1)return 0;
     if(b->pwdn_only) {
         const struct a733_pin_config *r=&b->inherited[14];
@@ -410,7 +433,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
             p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
         .table_words=(void *)p,.table_physical=p,.frame_id=n->boot.lease,
         .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.color_bars=n->boot.test_pattern,
-        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain},
+        .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
@@ -522,7 +545,13 @@ int a733_camera_native_poll(struct a733_camera_native *n)
         r=a733_camera_capture_poll(&n->capture);
         if(r==1){
             if(n->capture.state!=A733_CAPTURE_READABLE || n->capture.dma.owner!=A733_CAMERA_DEVICE ||
-               !authority(n)){r=-1;break;}n->state=A733_CAMERA_NATIVE_READABLE;
+               !authority(n)){r=-1;break;}
+            /* Discarded images were never visible, so no view can remain. */
+            if(n->discarded<n->boot.discard_frames){
+                r=a733_camera_capture_rearm(&n->capture,n->boot.deadline_us)==1?0:-1;
+                ++n->discarded;break;
+            }
+            n->state=A733_CAMERA_NATIVE_READABLE;
         }break;
     default:r=-1;break;
     }

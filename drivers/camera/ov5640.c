@@ -159,11 +159,36 @@ static const struct ov5640_reg *entry(unsigned i)
 #undef PART
     return NULL;
 }
+/* Only an unmasked, undelayed entry with a fixed value may join a block. */
+static int plain(const struct ov5640_reg *e)
+{
+    return e && !e->mask && !e->delay_ms && e->reg != 0x503d &&
+           e != &timings_controls[COUNT(timings_controls) - 1];
+}
+/* Length of the run of plain entries at consecutive registers from index. */
+static unsigned run(unsigned index)
+{
+    const struct ov5640_reg *first = entry(index), *e = first;
+    unsigned n = 0;
+    while (n < OV5640_BLOCK_BYTES && plain(e) && e->reg == first->reg + n)
+        e = entry(index + ++n);
+    return n;
+}
 static int configure(struct ov5640 *s)
 {
     const struct ov5640_reg *e = entry(s->index);
     uint8_t value;
     int r;
+    unsigned n = s->ops.write_block ? run(s->index) : 0;
+    if (n > 1) {
+        uint8_t values[OV5640_BLOCK_BYTES];
+        for (unsigned i = 0; i < n; ++i) values[i] = entry(s->index + i)->value;
+        r = s->ops.write_block(s->context, s->token, ADDRESS, e->reg, values, n,
+                               s->deadline);
+        if (r != 1 || time_ok(s) != 1) return fault(s);
+        s->index = (uint16_t)(s->index + n);
+        return 0;
+    }
     if (!e) {
         unsigned i = s->index - (COUNT(prepare) + COUNT(ov5640_init_setting) +
             COUNT(clocks) + COUNT(ov5640_setting_low_res) + COUNT(timings_controls));

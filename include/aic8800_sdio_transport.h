@@ -67,6 +67,9 @@ struct aic8800_sdio_transport {
     enum aic8800_codec_result codec_result;
     uint64_t deadline, wait_until, enable_deadline;
     uint64_t completed_transfers; /* Owner-only successful nonempty CMD53 count. */
+    /* Owner-only saturating count of calls that changed worker state, admitted
+     * or completed a host request, or advanced the receive cursor. */
+    uint64_t progress;
     size_t rx_bytes, cursor, tx_bytes;
     uint16_t prior_block_bytes;
     const void *receive_owner;
@@ -145,7 +148,8 @@ int aic8800_transport_take_scan(struct aic8800_sdio_transport *, struct aic8800_
 /* Attach a fresh packet worker to the same serialized runtime. No network
  * readiness follows. Open-port admission requires an explicit caller record and
  * lasts only for the current open association. WPA remains EAPOL-only.
- * Send copies a 14..1514-byte Ethernet frame. One TX and one RX are retained;
+ * Send copies a 14..1514-byte Ethernet frame into the data worker, whose request
+ * buffer CMD53 then borrows through completion or fault. One TX and one RX are retained;
  * ordinary TX completion means bus transfer only. EAPOL additionally waits for
  * firmware status; its ACK bit is reported separately from transfer completion.
  * Pending TX excludes connect/disconnect/lease renewal. Unsolicited link loss
@@ -169,6 +173,9 @@ int aic8800_transport_finish_security(struct aic8800_sdio_transport *);
 #endif
 /* At most one host step, one next admission, or one record parse per call.
  * Deadlines continue while unrelated-message backpressure blocks receive reuse.
+ * A call that only waits (a pending host step without progress, a poll interval,
+ * held backpressure) leaves `progress` unchanged; owners may repeat calls while
+ * it advances and must yield when it does not.
  */
 void aic8800_transport_poll(struct aic8800_sdio_transport *);
 /* Borrowed view valid until consume or external disposal. Copy before retaining

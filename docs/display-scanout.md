@@ -246,6 +246,16 @@ one page-rounded framebuffer including explicit, qualified fetch padding. A
 Narrower valid modes remain available within the existing planners' constraints;
 this path does not admit modes beyond their limits.
 
+Entry must also find every power domain the media clock selects already ON.
+The DE, VO0 and IOMMU groups select PCK domains 0, 1, 2, 3, 8 and 9 (registers
+at `0x07060000 + 0x1000*n`); each command and status register must read ON
+(low four bits 8). The image powers none of them. The VO0 and IOMMU domain
+sequences are not implemented, and the fixed domain-ON provider used by G2D
+and the TV framebuffer images covers only domain 1. The electrical record's
+`de_vo_power_stable` fact asserts this state. If a domain reads OFF, the
+media-clock stability check refuses the first baseline step and the session
+retains every acquired lease and allocation.
+
 `profile.py` encodes a caller-supplied value-only panel JSON and a bound 592-byte
 board prefix into a sealed 4096-byte session. No command sequence or electrical
 values are supplied by default. The profile includes exact timing and rates,

@@ -71,10 +71,31 @@ IPv4 stack after the supplicant authorizes the controlled port. Startup,
 association and security retain fixed deadlines. Transient transport activity
 defers attachment before consuming supplicant or socket-service storage.
 
-Before sockets exist, each iteration consumes at most one copied dispatcher
-event and one diagnostic record. The application retains the latest copies and
-counts; this prevents station-event backpressure from blocking startup. Socket
-clients consume later event copies through the existing EVENT request.
+Within one iteration, `board_radio_poll` repeats complete session polls while
+the SDIO controller, transport, platform or session reports progress. It stops
+at the first poll that only waits, on any non-pending result, or after 500
+microseconds of CPU time; the owner task then sleeps one tick. Each repeated
+session poll performs its own platform liveness and deadline checks. The budget
+covers the largest 4,096-byte receive at the optional four-bit 25 MHz clock and
+limits the time taken from other tasks on the same core. At one bit and 400 kHz
+an in-flight command usually ends the loop, so the main saving is the removed
+tick waits between small steps such as credit, status and length reads and
+record parsing.
+
+Before sockets exist, and while a reconnect or link recovery runs, each
+iteration consumes at most one copied dispatcher event and one diagnostic record.
+The application retains the latest copies and counts; this prevents
+station-event backpressure from blocking startup or reassociation. Otherwise
+socket clients consume event copies through the existing EVENT request.
+
+When the session reports a clean link loss, the owner calls
+`a733_radio_session_recover` with the profile's target and WPA2 credentials. The
+recovery deadline is the association and security timeouts plus, with DHCP, the
+address acquisition timeout, capped by the runtime lease. If recovery cannot be
+admitted within the association and security timeouts after the loss is first
+reported, the owner retains the radio. The board's single TCP client treats any
+non-OK reply as terminal, so a loss during its exchange still ends the
+application; recovery serves a client that has finished or is idle.
 
 Application tasks submit requests and receive results through the existing
 bounded copied socket queues. Network publication uses a release/acquire flag
@@ -93,7 +114,7 @@ bus, although the four pinned blobs contain about 391,000 bytes. At the one-bit
 With the smallest command, polling and confirmation framing it takes at least
 46.7 seconds. The supervised profile allows 40 seconds from session start to its
 bootstrap deadline, so firmware loading cannot finish in time; power-up, card
-setup, controller latency and the one-transfer-step-per-tick cadence add more.
+setup and controller latency add more.
 A four-second watchdog window cannot cover cold startup either.
 
 [`checks/radio-bootstrap-budget.py`](../checks/radio-bootstrap-budget.py)
@@ -102,6 +123,9 @@ admitted module clock and the profile's bootstrap offset. It fails for the
 current profile. Do not queue the radio board test with this profile until a
 faster or wider SDIO mode is qualified or the engine sends fewer bytes. A later
 deadline cannot help, because the supervised session itself ends at 60 seconds.
+With `--four-bit`, the check evaluates the radio platform's optional four-bit
+25 MHz profile instead; its bus lower bound is about 0.2 seconds. The board does
+not request that profile, and it has no physical qualification.
 
 The transport counts only consumed successful CMD53 transactions that moved
 nonzero bytes. The counter saturates and never wraps. The radio owner publishes

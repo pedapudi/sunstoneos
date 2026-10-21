@@ -79,13 +79,12 @@ struct a733_pins {
     struct a733_pins_operations operations;
     void *cookie;
     uint64_t next_id, last_time;
-    uint32_t authorized_pb_mask;
     unsigned initialized, failed;
     struct a733_pin_handoff handoff;
     struct a733_pin_bank_state banks[A733_PIN_BANKS];
     struct a733_pin_state pins[A733_PIN_BANKS][32];
 };
-/* No MMIO. authorized_pb_mask is an explicit platform handoff of unowned pins,
+/* No MMIO. The authorized PB mask is an explicit platform handoff of unowned pins,
  * not a discovery of unused pins. PIO clock, bank voltage, stable mappings,
  * operation-specific recovery and quiescent peripheral functions are
  * prerequisites. Image admission may authorize supervised RAM-only retention
@@ -112,8 +111,10 @@ enum a733_pins_result a733_pins_read_inputs(struct a733_pins *,
 /* Read ownership under the shared lock, including after RECOVERY; no MMIO. */
 enum a733_pins_result a733_pins_held(struct a733_pins *,
     const struct a733_pin_lease *, int *held, uint64_t deadline);
-/* Bank-qualified API. Legacy PB functions above keep their input/alternate/
- * disabled admission. Both APIs share this manager, lock, and token sequence.
+/* Bank-qualified API. The PB functions above are bank-B views of this
+ * implementation that keep their input/alternate/disabled admission. Both APIs
+ * share this manager, lock, and token sequence; neither accepts the other's
+ * token format.
  * The enlarged manager is a source-compatible, not binary-compatible, change:
  * rebuild every embedding consumer and link a733_pin_tables.c. */
 struct a733_pin_request_banked {

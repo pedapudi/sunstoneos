@@ -1,26 +1,11 @@
 #include "nbg_sh_nt.h"
 #include "nbg_checksum.h"
 #include "nbg_relocation.h"
+#include "nbg_command.h"
 #include <string.h>
 
-/* Command prefix/footer are the existing SDK preparation profile. INIT is
- * recognized before omission; native cold bootstrap remains a separate command. */
-static const uint32_t prefix[]={0x08010e02,0x701,0x48000000,0x701,0x0801022c,0x1f,
-    0x08010e03,0xc23,0x08010e02,0x701,0x48000000,0x701};
-static const uint32_t footer[]={0x08010e02,0x30000701,0x48000000,0x30000701,
-    0x08010e03,0xc23,0x08010e01,0x40,0x10000000,0,0,0,0,0};
-static const uint32_t initial[]={0x0801028a,0x11,0x08010e13,2,0x08010e4e,0,
-    0x08010e4f,0,0x08010e50,0};
 static const uint32_t nt_state[]={0x08010e4c,0x0493e040,0x08010e5a,0x00451440,
     0x08010428,0,0x08010429,0};
-static uint32_t word(const unsigned char *p)
-{return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
-static void put(unsigned char *p,uint32_t v)
-{for(unsigned i=0;i<4;++i)p[i]=(unsigned char)(v>>(8*i));}
-static void words(unsigned char *p,const uint32_t *v,unsigned n)
-{for(unsigned i=0;i<n;++i)put(p+4*i,v[i]);}
-static int range(const void *p,size_t n)
-{return p && n && n<=UINTPTR_MAX-(uintptr_t)p;}
 static int overlap(uint64_t a,uint64_t an,uint64_t b,uint64_t bn)
 {return an && bn && a<b+bn && b<a+an;}
 static int separate(const void *a,size_t an,const void *b,size_t bn)

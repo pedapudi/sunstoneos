@@ -120,14 +120,21 @@ int a733_storage_update_request(struct a733_storage_update *s,const uint8_t *p,s
     if(!timely(s)||s->finished||s->state!=A733_STORAGE_IDLE||s->response_ready||n<88||
        memcmp(p,s->grant.nonce,32)||s->sequence==UINT32_MAX||get32(p+32)!=s->sequence+1||get32(p+52))return fault(s);
     unsigned op=get32(p+36),bytes=get32(p+48);uint64_t offset=get64(p+40);
-    if(bytes>A733_STORAGE_CHUNK||n!=88u+bytes+(op==A733_STORAGE_WRITE?32u:0u))return fault(s);
+    if(bytes>A733_STORAGE_WRITE_BYTES||n!=88u+bytes+(op==A733_STORAGE_WRITE?32u:0u))return fault(s);
     ++s->sequence;s->active_command=op;
     uint64_t remaining=s->grant.deadline_us-s->last_now;
     s->operation_deadline=s->last_now+(remaining<1000000?remaining:1000000);
-    if(op==A733_STORAGE_INFO){if(bytes||offset)return fault(s);uint8_t g[256];a733_storage_grant_encode(&s->grant,g);respond(s,0,g,256,NULL);return 1;}
+    if(op==A733_STORAGE_INFO) {
+        if(bytes||offset)return fault(s);
+        uint8_t info[A733_STORAGE_GRANT_BYTES+4];a733_storage_grant_encode(&s->grant,info);
+        put32(info+A733_STORAGE_GRANT_BYTES,A733_STORAGE_READ_BLOCKS);respond(s,0,info,sizeof(info),NULL);return 1;
+    }
     if(op==A733_STORAGE_BACKUP) {
         if(bytes||s->sealed||offset!=s->read_blocks||offset>=s->grant.blocks)return fault(s);
-        uint64_t left=s->grant.blocks-offset;s->chunk_bytes=(unsigned)(left>2?2:left)*512;
+        /* Reads finish well inside the operation deadline even at 400 kHz:
+         * eight sectors take about 85 ms of one-bit bus time. */
+        uint64_t left=s->grant.blocks-offset;
+        s->chunk_bytes=(unsigned)(left>A733_STORAGE_READ_BLOCKS?A733_STORAGE_READ_BLOCKS:left)*512;
         s->state=A733_STORAGE_READ_START;return 1;
     }
     if(op==A733_STORAGE_SEAL) {

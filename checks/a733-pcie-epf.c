@@ -89,7 +89,9 @@ static void refused(void)
 int main(int argc,char **argv)
 {
  assert(argc==2);assert(mmap((void *)0x41c00000,2*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)!=MAP_FAILED);
- const char *mode=argv[1];begin(!strcmp(mode,"wide")||!strcmp(mode,"high-half"),!strcmp(mode,"high-half")?1:0);
+ const char *mode=argv[1];
+ if(!strncmp(mode,"gen2",4))link_speed=negotiated=2; /* Modeled directed change to 5 GT/s. */
+ begin(!strcmp(mode,"wide")||!strcmp(mode,"high-half"),!strcmp(mode,"high-half")?1:0);
  oversize_bar=!strcmp(mode,"oversize");
  if(!strcmp(mode,"fixture")){
   for(unsigned i=0;i<model.word_count;++i)printf("%lx %x\n",(unsigned long)model.words[i].address,model.words[i].value);
@@ -110,8 +112,10 @@ int main(int argc,char **argv)
    else if(!strcmp(mode,"guard-error")){*(uint8_t *)client.memory[1].cpu^=1;refused();}
    else if(!strcmp(mode,"source-error")){*(uint8_t *)(client.memory[0].cpu+4103)^=1;refused();}
    else if(!strcmp(mode,"link-loss")){*pmic_model_word(&model,0x06400e0c)=0;refused();}
+   else if(!strcmp(mode,"gen2-retrain")){*pmic_model_word(&model,0x06000080)=0x00110000;refused();}
    else {
-    assert(!strcmp(mode,"nominal")||!strcmp(mode,"wide"));assert(advance()==A733_PCIE_READY);
+    assert(!strcmp(mode,"nominal")||!strcmp(mode,"wide")||!strcmp(mode,"gen2"));assert(advance()==A733_PCIE_READY);
+    assert(port.endpoint.link_status==(!strcmp(mode,"gen2")?0x12:0x11));
     assert(a733_pcie_epf_copy(&client,(void *)&port)==A733_PCIE_INVALID);
     assert(a733_pcie_epf_copy(&client,(void *)&model.clocks)==A733_PCIE_INVALID);
     assert(a733_pcie_epf_copy(&client,output)==A733_PCIE_READY&&client.published);

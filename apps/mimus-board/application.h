@@ -18,6 +18,11 @@ unsigned mimus_board_started(void);
 unsigned mimus_board_generation(void);
 int mimus_board_ack(unsigned);
 int mimus_board_rearm(void);
+void mimus_board_progress(void);
+struct a733_pin_handoff;
+int mimus_board_task_privileged(void (*)(void *),void *);
+int mimus_board_pins(struct a733_pin_handoff *);
+int mimus_board_application_start(void);
 void mimus_board_storage_completed(unsigned);
 int mimus_board_copy(uint32_t,size_t,uint8_t *,size_t *,uint32_t *);
 #ifdef __cplusplus

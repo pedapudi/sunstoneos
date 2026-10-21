@@ -108,7 +108,7 @@ static int geometry(const GstH264SPS *s,struct h264_high_plan *p)
     const GstH264VUIParams *v=&s->vui_parameters;
     if(!s->vui_parameters_present_flag||!v->bitstream_restriction_flag||v->num_reorder_frames>2||!v->max_dec_frame_buffering||v->max_dec_frame_buffering>4||v->max_dec_frame_buffering<s->num_ref_frames||v->num_reorder_frames>v->max_dec_frame_buffering)return 0;
     unsigned n=s->num_ref_frames+1,y=page(w*h),c=page(w*h/2),field=((w/16)*((h/16+1)/2)*32+1023)&~1023u,mv=page(field*2);
-    if(n*y>6266880||n*c>3133440||n*mv>786432)return 0;
+    if(n*y>A733_H264_HIGH_Y_BYTES||n*c>A733_H264_HIGH_C_BYTES||n*mv>A733_H264_HIGH_MV_BYTES)return 0;
     /* Annex A MaxDpbMbs / MaxFS, adapted upstream level table; no rate claim. */
     unsigned fs,dpb;
     switch(s->level_idc){case 10:fs=99;dpb=396;break;case 11:fs=396;dpb=900;break;case 12:case 13:case 20:fs=396;dpb=2376;break;case 21:fs=792;dpb=4752;break;case 22:case 30:fs=1620;dpb=8100;break;case 31:fs=3600;dpb=18000;break;case 32:fs=5120;dpb=20480;break;case 40:fs=8192;dpb=32768;break;default:return 0;}
@@ -123,7 +123,7 @@ static int geometry(const GstH264SPS *s,struct h264_high_plan *p)
 int h264_high_prepare(struct h264_high *h,const uint8_t *data,size_t bytes,
     struct h264_high_plan *out,size_t *config_bytes)
 {
-    if(!h||!data||!out||!config_bytes||!bytes||bytes>4194304||h->pending_valid)return 0;
+    if(!h||!data||!out||!config_bytes||!bytes||bytes>A733_H264_HIGH_INPUT_BYTES||h->pending_valid)return 0;
     struct h264_high_plan p={0};GstH264NalUnit slice_nal={0};unsigned stage=0;
     GstH264SPS *sps=NULL;GstH264PPS *pps=NULL;size_t config=0;
     for(size_t at=0;at<bytes;){

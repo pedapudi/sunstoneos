@@ -33,3 +33,5 @@ int board_session_prepare(const struct a733_smp_contract *c)
 }
 const struct a733_board_session *board_session_snapshot(void)
 {return sealed.ready?&sealed.data.prefix:NULL;}
+const void *board_session_sealed(void)
+{return sealed.ready?sealed.data.bytes:NULL;}

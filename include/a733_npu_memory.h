@@ -4,9 +4,14 @@
 
 #define A733_NPU_MEMORY_MAX_BUFFERS 64u
 
+/* READ buffers may change between jobs and are cleaned at every publication.
+ * CONSTANT buffers are device-read data, such as weights and descriptors,
+ * that the CPU must not write after the bootstrap publication; like tables
+ * and command streams they are cleaned only by that publication. */
 enum a733_npu_buffer_role {
     A733_NPU_BUFFER_READ, A733_NPU_BUFFER_WRITE,
-    A733_NPU_BUFFER_COMMAND, A733_NPU_BUFFER_BOOTSTRAP
+    A733_NPU_BUFFER_COMMAND, A733_NPU_BUFFER_BOOTSTRAP,
+    A733_NPU_BUFFER_CONSTANT
 };
 enum a733_npu_cache_op {
     A733_NPU_CACHE_CLEAN, A733_NPU_CACHE_CLEAN_INVALIDATE,
@@ -42,6 +47,7 @@ struct a733_npu_memory {
     void *cookie;
     struct a733_npu_command active;
     enum a733_npu_memory_state state;
+    unsigned booted;
 };
 
 /* Privileged, serialized memory policy; no allocation or MMIO. Zero once.
@@ -73,10 +79,14 @@ int a733_npu_memory_command(const struct a733_npu_memory *, uint32_t device,
                             struct a733_npu_command *);
 /* Controller callback adapters pass their memory object here. publish checks
  * the selected image, canonical table contents, all live CPU translations,
- * command identity, and role before any cache maintenance. finish is legal
- * only after the controller proves event/cancel completion AND bus idle.
- * IDLE denotes completed cache transfer, not permission to bypass reap/close.
- * Failure latches MEMORY_FAULT and ends further callbacks. */
+ * command identity, and role before any cache maintenance. The bootstrap
+ * publication cleans the tables and every buffer, and clean+invalidates WRITE
+ * buffers. A job publication requires an earlier successful bootstrap
+ * publication and maintains only READ (clean) and WRITE (clean+invalidate)
+ * buffers; tables, commands, bootstrap and CONSTANT buffers are immutable.
+ * finish is legal only after the controller proves event/cancel completion
+ * AND bus idle. IDLE denotes completed cache transfer, not permission to
+ * bypass reap/close. Failure latches MEMORY_FAULT and ends further callbacks. */
 int a733_npu_memory_publish(struct a733_npu_memory *, const struct a733_npu_mmu_image *,
                             const struct a733_npu_command *, int bootstrap);
 int a733_npu_memory_finish(struct a733_npu_memory *, const struct a733_npu_command *);

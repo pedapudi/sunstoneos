@@ -42,7 +42,7 @@ def constructor(a,out,image,inputs,outputs):
  extent=reserved+rl['extent'];assert m.get(extent+el['cpu'])==0x41600000 and m.get(extent+el['bytes'])==3235840
  cpus=(0x41600000,0x41606000,0x417eb000,0x4186b000,0x41890000,0x41891000,0x416e0000,0)
  devices=(0xe0000000,0xe0007000,0xe01ee000,0xe026f000,0xe0295000,0xe0297000,0xe00e2000,0)
- sizes=(24576,892928,524288,151552,4096,524288,1093632,0);roles=(0,0,2,0,1,3,1,0)
+ sizes=(24576,892928,524288,151552,4096,524288,1093632,0);roles=(4,4,2,0,1,3,1,0)
  tables=0x41911000;assert m.get(memory+ml['arena'])==tables and m.get(memory+ml['capacity'])==20480 and m.get(memory+ml['count'])==7
  # Decode the actual constructed root, not a table address inferred from sums.
  root=m.get(tables+(devices[0]>>24)*4,4);second=root&~4095
@@ -62,13 +62,18 @@ def constructor(a,out,image,inputs,outputs):
  m.hooks.pop(image.address('npu_convolution_send'));m.scheduler=2
  for field,value in [('bound',1),('client',m.task),('opened',1),('ready',1)]:m.put(c+cl[field],value,8 if field=='client' else 4)
  command=c+cl['commands']+image.layouts['a733_npu_command']['token']+8
+ # The bootstrap publication cleans the CONSTANT descriptors and coefficients;
+ # a job publication maintains only the input, pool and output.
+ boot=c+cl['commands'];m.cache=[]
+ assert m.call('a733_npu_memory_publish',memory,image_at,boot,1)==1
+ for i in (0,1):assert [0,cpus[i],sizes[i]] in m.cache
+ assert m.call('a733_npu_memory_finish',memory,boot,0)==1
  for index,data in enumerate(inputs):
   m.u.mem_write(cpus[6],bytes([0xa5+index])*sizes[6]);m.u.mem_write(0x43010000,data)
   assert m.call('npu_convolution_send',c,2,0x43010000,len(data),5000000,5,0x43e00100)==0
   assert m.data(cpus[6],sizes[6])==bytes(sizes[6]) and m.data(cpus[3],len(data))==data
   m.cache=[];assert m.call('a733_npu_memory_publish',memory,image_at,command,0)==1
-  for i in (6,4):assert [1,cpus[i],sizes[i]] in m.cache
-  assert [0,cpus[1],sizes[1]] in m.cache
+  assert sorted(m.cache)==sorted([[0,cpus[3],sizes[3]],[1,cpus[4],sizes[4]],[1,cpus[6],sizes[6]]]),m.cache
   assert m.call('a733_npu_memory_finish',memory,command,0)==1
   for i in (6,4):assert [2,cpus[i],sizes[i]] in m.cache
  # Coefficient integrity is rechecked at the actual wrapper publication boundary.

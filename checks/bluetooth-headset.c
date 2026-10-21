@@ -8,7 +8,7 @@
 void bluetooth_recognition_abort(void){} /* Metadata-only OS boundary; no engine completion. */
 #endif
 static size_t output_cursor;
-static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss;
+static unsigned attempt,rf_stage,at_sent,audio_injected,disconnected,deny,loss,retry,retry_limit,retried;
 static uint16_t local_cid;static unsigned handoff,speech,informational;static uint64_t sco_bytes;
 static void put16(uint8_t *p,unsigned n){p[0]=(uint8_t)n;p[1]=(uint8_t)(n>>8);}
 static unsigned get16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
@@ -40,7 +40,11 @@ r[7]=0x80;r[9]=0x20;r[10]=8;}
     else if(op==0x0c2e||op==0x0c5a||op==0x0c55||op==0x0c79){length=5;r[4]=1;}
     else if(op==0x0c19){length=5;r[4]=2;}
     else if(op==0x1004){length=14;r[4]=p[0];r[5]=0;}
-    else if(op==0x0409){cs(&wire,op,1,0);const uint8_t conn[]={0,0x23,0,1,2,3,4,5,6,1,0};event(&wire,3,conn,sizeof(conn));
+    else if(op==0x0409){cs(&wire,op,1,0);
+        /* An attempt ends before any handle exists, as on an LMP timeout:
+         * only the first one, or every one when probing the retry bound. */
+        if(retry&&(retry_limit||!retried)){++retried;const uint8_t failed[]={0x22,0,0,1,2,3,4,5,6,1,0};event(&wire,3,failed,sizeof(failed));return;}
+        const uint8_t conn[]={0,0x23,0,1,2,3,4,5,6,1,0};event(&wire,3,conn,sizeof(conn));
         /* Link events a real controller may emit after connection, more than
          * the four receive slots; no stack owner consumes them. */
         if(informational){const uint8_t slots[]={0x23,0,5},psrm[]={1,2,3,4,5,6,1},lsto[]={0x23,0,0x80,0x0c},
@@ -200,7 +204,7 @@ static void setup(void)
 #endif
 int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
 {
-    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");
+    assert(argc==2||argc==4);speech=!strcmp(argv[1],"speech");deny=!strcmp(argv[1],"justworks");loss=!strcmp(argv[1],"loss");handoff=!strcmp(argv[1],"handoff");retry_limit=!strcmp(argv[1],"retry-limit");retry=retry_limit||!strcmp(argv[1],"retry");
     informational=!strcmp(argv[1],"informational");setup();
     if(handoff){
         until(SECURITY_CONFIG);struct bt_h4 *h=&app.hci.transport;
@@ -226,6 +230,17 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     }
     const uint8_t request[]={1,2,3,4,5,6,4,4,0x24,1};
     event(&wire,4,request,sizeof(request));
+    for(unsigned n=0;retry&&(retry_limit||!n);++n){
+        uint64_t first=voice.link;int r=0;for(unsigned i=0;i<200&&voice.link==first&&r>=0;++i)r=pump();
+        /* Every security entry now holds one failed generation, so the
+         * fourth failure retains the whole owner instead of retrying. */
+        if(n==3){assert(r==-1&&retried==4&&(atomic_load(&recovery)&4));
+            puts("PASS failed attempts retry three times, then the security entries bound them");return 0;}
+        assert(r>=0&&retried==n+1&&voice.stage==CONNECT&&voice.link==first+1&&link()==&voice.acl.links[0]&&
+            voice.acl.links[0].state==BT_ACL_WAIT_REQUEST&&voice.security.connections[n].acl_generation==first&&
+            voice.security.connections[n+1].attached&&voice.security.connections[n+1].acl_generation==voice.link);
+        event(&wire,4,request,sizeof(request));
+    }
     if(deny){for(unsigned i=0;i<500&&!attempt;++i)assert(pump()>=0);assert(attempt==1);assert(!voice.security.connections[0].authenticated);puts("PASS initiator Just Works refusal uses actual upstream SSP handler");return 0;}
     until(CONTROL);uint64_t generation;unsigned sc;
     app.iteration_live=1;assert(bt_security_authorized(&voice.security,voice.link,&generation,&sc)==1&&!sc);app.iteration_live=0;
@@ -286,5 +301,7 @@ int BLUETOOTH_HEADSET_FIXTURE_ENTRY(int argc,char **argv)
     assert(bluetooth_headset_copy(&app,1,0,48,out,&copied,&snapshot)==1&&copied==48);
     struct bluetooth_pcm_record records[2];memcpy(records,out,48);assert(records[0].source_bytes==3&&records[0].copied_bytes==3&&records[1].offset==3&&records[1].source_bytes==5);
     assert(bluetooth_headset_copy(&app,0,7,2,out,&copied,&snapshot)==-1);
+    if(retry){assert(voice.snapshot.acl==voice.link&&voice.link==2&&!voice.security.connections[0].authenticated&&voice.security.connections[1].authenticated);
+        puts("PASS an incoming attempt that failed before a handle existed is retried under a fresh ACL generation through capture");return 0;}
     puts("PASS native security to RFCOMM/AG to odd-segment PCM and confirmed-disconnect publication");return 0;
 }

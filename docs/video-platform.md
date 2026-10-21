@@ -18,6 +18,49 @@ The implementation is in `include/a733_video_platform.h` and
 object as the callback context. Callers must provide private, immutable
 configuration and serialize all access to each object.
 
+## One resource core serves the decoder and encoder
+
+The decoder and encoder bindings share one resource core in
+`include/a733_video_unit.h` and `drivers/video/a733_video_unit.c`. The core
+validates the clock and PCK leases, retries a busy registry, takes and releases
+the common register mutex and performs every register access against the job
+deadline. It also checks the fabric clocks, the DCXO reference, the selected VE
+PLL, the PERI0 outputs, the inherited powered baseline and the compound
+identity. A clock-reference or busy-handling rule therefore has one
+implementation for both units.
+
+A constant descriptor holds the facts that differ between the two units:
+
+| Field | Decoder | Encoder |
+| --- | --- | --- |
+| Register window | `0x01c0e000` | `0x01c10000` |
+| PCK power domain | 2, at `0x07062000` | 3, at `0x07063000` |
+| Module clock register | CCU `0xa88` | CCU `0xa80` |
+| Reset and bus gate at CCU `0xa8c` | Bits 18 and 2 | Bits 16 and 0 |
+| Local gates at CCU `0x5c0`, `0x5e0`, `0x5e4` | Bits 0, 14 and 18 | Bits 1, 12 and 1 |
+| Autonomous power control at CCU `0x1b10` | Checked | Not checked |
+| Interrupt | 81 | 80 |
+| Module mux value that selects PLL_VE0 | 1 | 0 |
+| Exclusive clock scope | `A733_CLOCK_VE_DEC` | `A733_CLOCK_VE_ENC` |
+| Identity block | Window offset `0xe0`, three admitted versions | Window offset `0x8e0`, one admitted version |
+
+The codec bindings keep their own job types, register allowlists and
+sequencing. A codec-neutral decoder layer, `struct a733_video_decoder`, holds
+the decoder's admission, cold or inherited start, identity, memory and reset
+steps. The JPEG and H.264 bindings pass their own typed jobs through its
+`admit` and `memory` hooks, so neither binding presents its job as another
+codec's structure. The encoder layer, `struct a733_video_encoder`, does the same
+for the JPEG and H.264 encoder bindings. The cold NS-ROM start, the JPEG drain
+and the retained-copy gate remain decoder-specific.
+
+`checks/a733-video-unit.c` drives both decoder bindings and both encoder
+bindings through nominal, cold-start, identity, contention, uncertain-write,
+refused-mutex, parent-selection and job-mismatch cases. It records every
+callback, register access and clock observation. The recorded digests match
+those of the separate decoder and encoder implementations that preceded the
+shared core. The encoder native checks also produce identical programmed
+writes and encoded pictures.
+
 ## Admission authenticates existing resource ownership
 
 The binding borrows exact tokens from the common clock registry and the existing
@@ -146,7 +189,9 @@ inherited transaction drain. Hardware reset does not supply that proof.
 
 The native read and write functions use explicit physical-address allowlists,
 volatile 32-bit accesses, the JPEG byte-write locations, and AArch64 `DSB SY`
-barriers. They require identity-mapped Device-nGnRnE pages at EL1.
+barriers. Before each access they translate the address at EL1 and refuse it
+unless the page is an identity-mapped Device-nGnRnE page, as the encoder's
+native functions do.
 Non-AArch64 builds refuse these native functions; host models use explicit
 substitute callbacks. The CCU write path permits decoder reset and bus bits,
 module enable and the three decoder-local gates listed below. Every other field

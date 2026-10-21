@@ -101,3 +101,17 @@ The parent directory contains the original-function comparison. Its command
 bytes remain identical after the clock fix, so that comparison was reused.
 The affected host check was repeated once after the clock fix. Existing GPU
 component, emulator, board, mimus, and performance checks were not repeated.
+
+The [runner](../checks/pvr-gpu-flush.py) repeats the sanitizer check, the
+clock-regression case and the AArch64 object build in one output directory.
+With the pinned driver directory, it also runs the reference comparison on the
+commands that the check writes:
+
+```sh
+python3 checks/pvr-gpu-flush.py --output ~/.cache/sunstoneos/build/gpu-flush \
+  --sources ~/.cache/sunstoneos/sources/gpu/board-2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/imagination
+```
+
+No service, platform owner or application calls this component yet. It stays
+available for the mapping-change path of a later compute or render session,
+which must submit and collect the invalidation before its next KICK.

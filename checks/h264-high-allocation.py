@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1];REGS=[UC_ARM64_REG_X0,UC_ARM64_REG_X1,U
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for name in ('image','inputs','output'):p.add_argument('--'+name,type=Path,required=True)
- p.add_argument('--geometries',nargs='+',default=['fullhd','hd'])
+ p.add_argument('--geometries',nargs='+',default=['fullhd','fullhd3','hd'])
  a=p.parse_args();a.output.mkdir(exist_ok=False);spec=importlib.util.spec_from_file_location('cases',ROOT/'checks/h264-application-cases.py');cases=importlib.util.module_from_spec(spec);spec.loader.exec_module(cases)
  syms,segments,types,_,_=cases.setup(a.image,a.output,True,True,high=True)
  for start,end in [('__device_pool_start','__device_pool_end'),('__uncached_pool_start','__uncached_pool_end')]:assert 0x7b000000<=syms[start] or syms[end]<=0x7a000000
@@ -52,9 +52,9 @@ def main():
     base=pool+pooltype['allocations']+i*sizes['device_memory_allocation'];rows.append(dict(first=get(base+alloc['first'],4),pages=get(base+alloc['pages'],4),state=get(base+alloc['state'],4)))
    return rows
   ncrows=ledger(nc,7);wbrows=ledger(wb,8)
-  assert max(x['first']+x['pages'] for x in ncrows)*4096==14749696 and all(x['state']==2 for x in ncrows)
-  assert max(x['first']+x['pages'] for x in wbrows)*4096==23920640 and all(x['state']==3 for x in wbrows)
-  assert get(st+sty['output']+types['h264_stream_output']['payload'])==0x486f8000
-  reports.append(dict(geometry=name,nc_bytes=14749696,wb_bytes=23920640,metadata_used=highsize,metadata_reserved=1048576,parser_observed_stack_bytes=parsed_stack,output_slots=5,output_capacity_each=3110400,nc=ncrows,wb=wbrows,device_writes=0))
+  assert max(x['first']+x['pages'] for x in ncrows)*4096==16044032 and all(x['state']==2 for x in ncrows)
+  assert max(x['first']+x['pages'] for x in wbrows)*4096==21823488 and all(x['state']==3 for x in wbrows)
+  assert get(st+sty['output']+types['h264_stream_output']['payload'])==0x484f8000
+  reports.append(dict(geometry=name,nc_bytes=16044032,wb_bytes=21823488,metadata_used=highsize,metadata_reserved=1048576,parser_observed_stack_bytes=parsed_stack,output_slots=5,output_capacity_each=3110400,nc=ncrows,wb=wbrows,device_writes=0))
  (a.output/'result.json').write_text(json.dumps(dict(passed=True,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),physical_access=False,cases=reports,scope='Actual native parser, immutable CPU ledger, uncached allocator, guards and IOMMU construction/validation. Extended-memory readiness/getters modeled; no provider programming, CPU startup or device operation.'),indent=2)+'\n');print('PASS actual High allocation, CPU metadata/stack, copied outputs and four-window tables')
 if __name__=='__main__':main()

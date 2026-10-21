@@ -74,6 +74,13 @@ Pixels start 4096 bytes into that span, at IOVA `0x10001000`, with a 2560-byte
 pitch. The eight colored bars, black border and diagonal marks come from CPU
 writes before publication.
 
+The allocation, media clock, DE_SYS power domain, IOMMU and DE use the retained
+framebuffer source `drivers/display/a733_display_framebuffer.c`, shared with the
+HDMI framebuffer and GPU display images and described in the
+[HDMI framebuffer guide](hdmi-framebuffer.md). This image selects TV1 and
+supplies the DisplayPort controller states that admit each DE action. Its clock
+token checks wait out registry contention within the original deadline.
+
 The leading pixel redzone and tail padding contain `0xa5`. These bytes remain
 mapped; they are diagnostic redzones, without an unmapped guard claim. The image
 checks those bytes and the immutable pixel digest after output stop. Initial

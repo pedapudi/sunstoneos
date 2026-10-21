@@ -205,6 +205,11 @@ int bt_security_attach(struct bt_security *s,uint64_t generation)
     struct bt_acl_link *l=NULL;
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(s->acl->links[i].generation==generation)l=&s->acl->links[i];
     if(!l||memcmp(l->peer.address,s->policy.peer,6)||l->state==BT_ACL_UNUSED||l->state==BT_ACL_CLOSED)return -1;
+    /* A later generation of the peer follows an attempt that closed before any
+     * handle existed. That entry stays attached but unreachable; it must hold
+     * no key, borrow or security result, and no copied command may remain. */
+    for(unsigned i=0;i<BT_ACL_LINKS;++i){const struct bt_conn *c=&s->connections[i];
+        if(c->attached&&(actual(s,c)||c->authenticated||c->encrypt||c->br.link_key||c->references||s->pending||s->count))return -1;}
     for(unsigned i=0;i<BT_ACL_LINKS;++i)if(!s->connections[i].attached){
         struct bt_conn *c=&s->connections[i];*c=(struct bt_conn){.acl_generation=generation,
             .firmware_generation=s->firmware_generation,.uart_generation=s->uart_generation,.attached=1,

@@ -80,8 +80,14 @@ enum a733_capture_state {
     A733_CAPTURE_FENCE,A733_CAPTURE_DMA_DISABLE,A733_CAPTURE_ROUTE_CLOSE,
     A733_CAPTURE_RECEIVER_CLOSE,A733_CAPTURE_SENSOR_CLOSE,A733_CAPTURE_DRAIN,
     A733_CAPTURE_IOMMU_SCAN,A733_CAPTURE_DMA_FINISH,A733_CAPTURE_DMA_CLOSE,
-    A733_CAPTURE_READY,A733_CAPTURE_FAULT,A733_CAPTURE_READABLE,A733_CAPTURE_READOUT_ROUTE
+    A733_CAPTURE_READY,A733_CAPTURE_FAULT,A733_CAPTURE_READABLE,A733_CAPTURE_READOUT_ROUTE,
+    A733_CAPTURE_REARM_QUIET,A733_CAPTURE_REARM_SAMPLE,A733_CAPTURE_REARM_DMA,
+    A733_CAPTURE_REARM_WAIT,A733_CAPTURE_REARM_RECEIVER
 };
+/* Stopped-producer interval before each rearm status check: three periods of
+ * the nominal 30 frame/s profile, so a frame the sensor finishes after its
+ * stop readback ends inside the first interval. */
+#define A733_CAPTURE_QUIET_US 100000u
 struct a733_camera_capture {
     struct a733_camera_capture_config config;
     struct a733_iommu_tables tables;
@@ -91,7 +97,7 @@ struct a733_camera_capture {
     struct a733_camera_route route;
     struct a733_csi_receiver receiver;
     struct a733_camera_dma dma;
-    uint64_t token,deadline,now;
+    uint64_t token,deadline,now,quiet_from;
     enum a733_capture_state state;
     uint8_t initialized,entered,started,local_granted,packets_granted;
     uint8_t quiet,sampled,fenced,drained,scanned,retained_readout;
@@ -113,16 +119,27 @@ int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
  * parser capture bits clear, scan IOMMU faults, and perform fresh DMA status
  * and CPU cache synchronization. No packet-quiet/drain/close/release callback
  * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
- * Only the 307,200-byte payload per plane may be read, without mutation or reuse.
+ * Only the 307,200-byte payload per plane may be read, without mutation. Only
+ * the rearm below reuses the planes.
  * A privileged const view cannot be revoked: its consumer must serialize use
  * with this owner and stop on a later fault. Only a completed separate copy
  * remains independently usable. This API does not authorize EL0 aliases. */
 int a733_camera_capture_open_retained(struct a733_camera_capture *,uint64_t deadline);
+/* Capture the next retained image into the same planes, from READABLE only.
+ * The call declares that every view and copy of the current image has ended.
+ * The sensor stays stopped while the receiver acknowledges status after one
+ * quiet interval, DMA acknowledges its final status and prepares the cache,
+ * and, after a second quiet interval with no packet or parser flag, SCAP is
+ * written again. The packet handoff, sensor start and the complete retained
+ * readout above then repeat. Faults retain every resource, as for the first
+ * image; global, analog and IOMMU leases and mappings stay held throughout. */
+int a733_camera_capture_rearm(struct a733_camera_capture *,uint64_t deadline);
 /* One platform/MMIO/cache operation at most, plus nested monotonic clock reads.
  * READY transfers the 640x480 NV16 Y/UV payloads to this caller, stride640 each.
  * Global/analog/IOMMU tokens and mappings remain retained even after READY.
- * No restart, dispose, cancellation or automatic rollback. FAULT retains every
- * unreleased sublease and the global reservation; it performs no further I/O.
+ * No close-path restart, dispose, cancellation or automatic rollback; only the
+ * retained readout can rearm. FAULT retains every unreleased sublease and the
+ * global reservation; it performs no further I/O.
  * Physical clock/pin/power binding and qualification remain prerequisites.
  */
 int a733_camera_capture_poll(struct a733_camera_capture *);

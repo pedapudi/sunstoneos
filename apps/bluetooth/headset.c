@@ -120,6 +120,16 @@ static int upper_init(struct bluetooth_application *a)
         bt_sco_init(&voice.audio,&voice.acl,&voice.audio_binding)!=1)return fail();
     return 1;
 }
+/* Reserve the profile peer's next ACL generation and attach it to security. */
+static int reserve(struct bluetooth_application *a)
+{
+    const struct bluetooth_headset_profile *p=&a->profile->headset;int result;
+    if(p->incoming)result=bt_acl_listen(&voice.acl,p->peer,voice.operation_deadline,&voice.link);
+    else {struct bt_acl_peer peer={.page_scan_mode=p->peer_page_scan_mode,
+        .role_switch=p->peer_role_switch,.clock_offset=p->peer_clock_offset};memcpy(peer.address,p->peer,6);
+        result=bt_acl_connect(&voice.acl,&peer,voice.operation_deadline,&voice.link);}
+    return result==1&&bt_security_attach(&voice.security,voice.link)==1?1:fail();
+}
 static int control_step(struct bluetooth_application *a)
 {
     if(voice.discovery.l2cap&&voice.discovery.phase!=BT_SDP_CLOSED&&
@@ -163,19 +173,22 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
         if(bt_security_step(&voice.security,64,voice.operation_deadline)!=1)return fail();
         if(!voice.security.configured)return 0;
         voice.operation_deadline=stage_deadline(a,53000000);
-        int result;
-        if(p->incoming){
-            result=bt_acl_incoming(&voice.acl,p->response_timeout_us);
-            if(result==1)result=bt_acl_listen(&voice.acl,p->peer,voice.operation_deadline,&voice.link);
-        } else {struct bt_acl_peer peer={.page_scan_mode=p->peer_page_scan_mode,
-            .role_switch=p->peer_role_switch,.clock_offset=p->peer_clock_offset};memcpy(peer.address,p->peer,6);
-            result=bt_acl_connect(&voice.acl,&peer,voice.operation_deadline,&voice.link);}
-        if(result!=1||bt_security_attach(&voice.security,voice.link)!=1)return fail();
+        if(p->incoming&&bt_acl_incoming(&voice.acl,p->response_timeout_us)!=1)return fail();
+        if(reserve(a)!=1)return -1;
         voice.stage=CONNECT;return 0;
     }
     if(voice.stage==CONNECT||voice.stage==AUTHENTICATE){
         if(bt_security_step(&voice.security,64,voice.operation_deadline)!=1)return fail();
-        struct bt_acl_link *l=link();if(!l||l->state==BT_ACL_CLOSED)return fail();
+        struct bt_acl_link *l=link();if(!l)return fail();
+        if(l->state==BT_ACL_CLOSED){
+            /* An attempt that closed before any handle existed, such as a page
+             * timeout, is retried under a fresh generation until the stage
+             * deadline. Each retry retains one security entry, which bounds
+             * them; a link that ever connected still ends the session. */
+            if(voice.stage!=CONNECT||l->handle_valid)return fail();
+            if(voice.security.pending||voice.security.count)return 0;
+            return reserve(a)==1?0:-1;
+        }
         if(voice.stage==CONNECT){
             if(l->state!=BT_ACL_CONNECTED)return 0;
             int r=bt_security_start(&voice.security,voice.link);if(r<0)return fail();if(!r)return 0;

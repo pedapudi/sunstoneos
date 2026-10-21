@@ -62,6 +62,8 @@ CCU offsets `0x0a20` and `0x0a24` control its module and bus/reset clocks.
 The adapter validates the detected oscillator, normalized PLL_REF and PERI0
 rate rather than assuming a raw 24 MHz board oscillator. It adopts an already
 powered DE_SYS domain and the existing shared DCDC2 800 mV operating point.
+It does not run the domain-ON provider that G2D uses. If the domain command or
+status does not read ON, setup fails at the parent check before any clock write.
 Register readback checks configured consistency, not electrical qualification.
 
 The path reuses the G2D board/provider composition and existing exclusive

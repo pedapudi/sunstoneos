@@ -56,8 +56,9 @@ if(SUNSTONE_CAMERA_SUPERVISED)
   A733_SMP_CONTRACT_MAGIC=0x4153373343414333ULL A733_SMP_RESULT_MAGIC=0x4153373343415233ULL)
 endif()
 file(GLOB camera_headers "${camera_root}/apps/camera/*.h")
+# usb0.c compiles the shared USB0 service header, so it is part of the identity.
 set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
- "${camera_root}/apps/camera/boot.patch"
+ "${camera_root}/apps/board/usb0_service.h" "${camera_root}/apps/camera/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
 set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;640x480;NV16;USB0-sink;retained")

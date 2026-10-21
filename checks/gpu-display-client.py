@@ -87,7 +87,7 @@ def main():
  assert m.stopped and not m.get(m.app+m.af['fatal'],4)
  assert m.get(m.app+m.af['frames_ready'],4)==m.get(m.app+m.af['gpu_closed'],4)==1 and m.borrow is None
  assert m.events==['open','close'] and m.frame==1
- fb=e.address('framebuffer');fl=e.layouts['hdmi_framebuffer'];bank=m.get(fb+fl['extent'])
+ fb=e.address('framebuffer');fl=e.layouts['a733_display_framebuffer'];bank=m.get(fb+fl['extent'])
  framehash=[hashlib.sha256(bytes(m.u.mem_read(bank+36864+i*1847296,1843200))).hexdigest() for i in range(2)]
  for file,address,count in [('main-after-client.bin',0x41000000,0x400000),('bank-after-client.bin',bank,4194304)]:
   (a.output/file).write_bytes(bytes(m.u.mem_read(address,count)))

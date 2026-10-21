@@ -106,9 +106,19 @@ Configuration, entropy contexts, and the radio object graph remain pinned.
 Held receive records transfer with that ownership.
 
 The adapter checks the association generation before admitting queued frames.
-Generation change, link loss, or unresolved roaming revokes the interface and
-all application handles. EAPOL remains owned by the supplicant and cannot enter
-the ordinary Ethernet output queue.
+Generation change, unresolved roaming, or link loss with outstanding work revokes
+the interface and all application handles. EAPOL remains owned by the supplicant
+and cannot enter the ordinary Ethernet output queue.
+
+An unsolicited disconnection indication is a clean loss when nothing is
+outstanding: no packet transfer or unconsumed transmit result, no Wi-Fi command
+or confirmation deadline, no security operation and no supplicant action. A
+finished ordinary transmission is collected first. A clean loss sets
+`lost` and takes the interface offline through the same IP-task fence as an
+explicit reconnect, without setting `failed`. The socket service then closes new
+submissions. Existing sockets remain open; their pending requests wait for the
+port and end at their own timeouts, and CLOSE still completes. Any other loss
+keeps the terminal fault.
 
 A group-key renewal closes the controlled port for a few firmware actions. The
 supplicant leaves its authorized state, while the association generation, link
@@ -146,9 +156,10 @@ The composition's deterministic providers are test inputs only.
 The [retained session](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
 supports explicit healthy reconnect with fixed addressing or DHCP after all socket
 receipts and an IP-task offline fence. It keeps this stack instance and disposes
-old handles before changing association generation. Automatic recovery after
-unsolicited loss, stack retirement and full radio power modes
-remain unimplemented.
+old handles before changing association generation. After a clean loss, the
+session's recovery reassociates and resumes the same stack instance without
+disposing sockets; `aic8800_network_resume` clears `lost`. Stack retirement and
+full radio power modes remain unimplemented.
 
 ## Composition and external proof limits
 

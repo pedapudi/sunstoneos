@@ -6,7 +6,9 @@
 #define BIT(n) (UINT32_C(1)<<(n))
 enum { ACQUIRE, RESERVE_RAILS, WAIT_RAILS, ADMIT, RAILS, BASELINE, GIC_WAIT, PINS, SUPPLY_WAIT,
        ENABLE_MODULE, MODULE_SETTLE, BUS_GATE, RESET_WAIT, RESET_RELEASE, PREPARE,
-       PREPARING, ENUMERATE, ENUMERATING, READY };
+       PREPARING, ENUMERATE, ENUMERATING, WIDE_READ, WIDE_WRITE, WIDEN, WIDENING, WIDE_VERIFY, READY };
+#define MODULE_24M (BIT(31)|29) /* SYS24M, N=1, M=30: 800 kHz module clock. */
+#define WIDE_DIVISOR 8u /* PERI0 400 MHz / 8: 50 MHz module, 25 MHz card clock. */
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
 static const uint32_t fabric_mask[]={0x0300001f,0x8700001f,0x8700001f};
 static const uint32_t parent_mhz[3][8]={
@@ -128,6 +130,13 @@ static int profile(struct a733_radio_platform *p)
         !rd(p,CCU+0xa8,&a)||(a&BIT(31))||!rd(p,CCU+0xac,&b)||(b&BIT(27))||
         !rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return 0;
     n=((pll>>8)&255)+1;if(n<53||n>105)return 0;
+    if(p->four_bit) {
+        /* The four-bit profile's SMHC1 parent is the same 400 MHz branch the
+         * SD/eMMC platform requires for its negotiated rates. */
+        uint32_t required=BIT(11)|BIT(2)|BIT(1);unsigned div=(((pll>>20)&7)+1)*3;
+        if((gate&(required|(required<<16)))!=(required|(required<<16))||
+            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return 0;
+    }
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=p->selected_mhz[i],div,branches;
         switch(mhz) {
@@ -193,7 +202,7 @@ static int host_time(void *cookie,uint64_t *out)
     if(p->fault||p->ops.current(p->cookie)!=1)return 0;
     if(!timely(p)){fail(p);return 0;}
     if((p->host.state==SUNXI_SDIO_PREPARING||p->host.state==SUNXI_SDIO_QUEUED||
-        p->host.state==SUNXI_SDIO_ACTIVE||p->host.state==SUNXI_SDIO_DONE)&&
+        p->host.state==SUNXI_SDIO_ACTIVE||p->host.state==SUNXI_SDIO_DONE||p->host.state==SUNXI_SDIO_WIDENING)&&
         p->last_now>=p->host.deadline) {
         sunxi_sdio_stop(&p->host,SUNXI_SDIO_TIMEOUT);fail(p);return 0;
     }
@@ -216,6 +225,20 @@ static int host_access(struct a733_radio_platform *p,uint32_t off,uint32_t *v,un
 }
 static int host_read(void *p,uint32_t off,uint32_t *v){return host_access(p,off,v,0);}
 static int host_write(void *p,uint32_t off,uint32_t v){return host_access(p,off,&v,1);}
+/* Runs only from the widening controller poll, with the platform register
+ * lock held. Card output is stopped; the shared PERI0 parent is never written.
+ * Each readback becomes live state, so a failed later step retains it. */
+static int host_module(void *cookie,unsigned divisor)
+{
+    struct a733_radio_platform *p=cookie;
+    if(p->fault||p->ops.current(p->cookie)!=1||!p->core_call||!p->held||!p->four_bit||
+        p->stage!=WIDENING||divisor!=WIDE_DIVISOR||p->pins->failed||!timely(p)||!profile(p)){fail(p);return 0;}
+    uint32_t old=p->running_module,next=UINT32_C(0x81000000)|(divisor-1);
+    if(!update(p,CCU+0xd10,0x87001f1f,old,old&~BIT(31))||
+        !update(p,CCU+0xd10,0x87001f1f,old&~BIT(31),next&~BIT(31))||
+        !update(p,CCU+0xd10,0x87001f1f,next&~BIT(31),next)||!profile(p)||p->pins->failed||!timely(p)){fail(p);return 0;}
+    p->running_module=next;return 1;
+}
 static int host_barrier(void *cookie)
 {
     struct a733_radio_platform *p=cookie;
@@ -253,9 +276,14 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
         if(p->rail_scopes&A733_RAIL_BIT(rail))p->rail_sequence[p->rail_count++]=(enum a733_rail)rail;
     p->shared=shared;p->deadline=c->deadline_us;
     for(unsigned i=0;i<3;++i)p->selected_mhz[i]=parent_mhz[i][(c->fabric[i]>>24)&7];
-    struct sunxi_sdio_config host={{host_read,host_write,host_barrier,host_time},p,800000};
+    struct sunxi_sdio_config host={{host_read,host_write,host_barrier,host_time,host_module},p,800000};
     if(!sunxi_sdio_init(&p->host,&host)||!sdio_card_init(&p->card,&p->host,&c->card))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
+}
+int a733_radio_platform_four_bit(struct a733_radio_platform *p)
+{
+    if(!p||!p->initialized||p->stage!=ACQUIRE||p->clock.id||p->fault||p->four_bit)return 0;
+    p->four_bit=1;p->shared|=A733_CLOCK_PERI0;return 1;
 }
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {
@@ -353,8 +381,8 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
         r=masked(p);ok=r>=0;if(r==1)p->stage=PINS;
     } else if(p->stage==BUS_GATE) {
         ok=update(p,CCU+0xd10,0x87001f1f,p->initial_module&0x87001f1f,29)&&
-            update(p,CCU+0xd1c,0x10001,0,1)&&update(p,CCU+0xd10,0x87001f1f,29,BIT(31)|29);
-        if(ok){p->wait_since=p->last_now;p->stage=RESET_WAIT;}
+            update(p,CCU+0xd1c,0x10001,0,1)&&update(p,CCU+0xd10,0x87001f1f,29,MODULE_24M);
+        if(ok){p->running_module=MODULE_24M;p->wait_since=p->last_now;p->stage=RESET_WAIT;}
     } else if(p->stage==RESET_WAIT) {
         uint32_t v;ok=rd(p,CCU+0xd1c,&v)&&(v&0x10001u)==1;
         if(ok&&p->last_now-p->wait_since>=10)p->stage=RESET_RELEASE;
@@ -364,6 +392,21 @@ static enum a733_radio_platform_result registers(struct a733_radio_platform *p)
     } else ok=0;
     return ok&&timely(p)?A733_RADIO_PENDING:fail(p);
 }
+/* One CCCR bus-interface CMD52 per call sequence: admit, then poll to result. */
+static int cccr_width(struct a733_radio_platform *p,int write,uint8_t value,uint8_t *out)
+{
+    if(!p->card_pending) {
+        struct sunxi_sdio_request r;
+        if(!sdio_card_cmd52(&p->card,0,7,write,write,value,&r)||!sunxi_sdio_submit(&p->host,&r,p->deadline))return -1;
+        p->card_pending=1;return 0;
+    }
+    p->core_call=1;sunxi_sdio_poll(&p->host);p->core_call=0;
+    if(p->host.state==SUNXI_SDIO_FAULT)return -1;
+    if(p->host.state!=SUNXI_SDIO_DONE)return 0;
+    struct sunxi_sdio_result result;
+    if(!sunxi_sdio_take_result(&p->host,&result))return -1;
+    p->card_pending=0;*out=(uint8_t)result.response;return 1;
+}
 static enum a733_radio_platform_result controller(struct a733_radio_platform *p)
 {
     /* Check shared pin health before each bounded controller/card step. */
@@ -371,7 +414,8 @@ static enum a733_radio_platform_result controller(struct a733_radio_platform *p)
     if(locked<0)return fail(p);
     if(!locked)return A733_RADIO_BUSY;
     if(p->pins->failed||!timely(p))return fail(p);
-    p->ops.leave(p->cookie);p->held=0;
+    /* Only the module-clock change inside widening writes shared CCU state. */
+    if(p->stage!=WIDENING){p->ops.leave(p->cookie);p->held=0;}
     if(p->stage==PREPARE) {
         if(!sunxi_sdio_prepare(&p->host,p->deadline))return fail(p);
         p->stage=PREPARING;
@@ -385,7 +429,24 @@ static enum a733_radio_platform_result controller(struct a733_radio_platform *p)
     } else if(p->stage==ENUMERATING) {
         p->core_call=1;sdio_card_poll(&p->card);p->core_call=0;
         if(p->card.state==SDIO_CARD_FAULT||p->host.state==SUNXI_SDIO_FAULT)return fail(p);
-        if(p->card.state==SDIO_CARD_READY)p->stage=READY;
+        /* A low-speed card stays at the one-bit identification clock. */
+        if(p->card.state==SDIO_CARD_READY)p->stage=p->four_bit&&!(p->card.capabilities&0x40)?WIDE_READ:READY;
+    } else if(p->stage==WIDE_READ||p->stage==WIDE_WRITE||p->stage==WIDE_VERIFY) {
+        uint8_t value=0;
+        int r=cccr_width(p,p->stage==WIDE_WRITE,(uint8_t)((p->bus_interface&~3u)|2u),&value);
+        if(r<0)return fail(p);
+        if(r) {
+            if(p->stage==WIDE_READ){p->bus_interface=value;p->stage=WIDE_WRITE;}
+            else if((value&3u)!=2u)return fail(p);
+            else p->stage=p->stage==WIDE_WRITE?WIDEN:READY;
+        }
+    } else if(p->stage==WIDEN) {
+        if(!sunxi_sdio_widen(&p->host,WIDE_DIVISOR,p->deadline))return fail(p);
+        p->stage=WIDENING;
+    } else if(p->stage==WIDENING) {
+        p->core_call=1;sunxi_sdio_poll(&p->host);p->core_call=0;
+        if(p->host.state==SUNXI_SDIO_FAULT)return fail(p);
+        if(p->host.state==SUNXI_SDIO_READY)p->stage=WIDE_VERIFY;
     } else return fail(p);
     if(!timely(p)||p->fault)return fail(p);
     return p->stage==READY?A733_RADIO_READY:A733_RADIO_PENDING;

@@ -15,7 +15,8 @@ struct a733_radio_session_config {
     struct aic8800_wifi_config wifi;
 };
 enum a733_radio_session_result { A733_SESSION_PENDING,A733_SESSION_BUSY,
-    A733_SESSION_MANAGEMENT,A733_SESSION_NETWORK,A733_SESSION_RETAINED,A733_SESSION_INVALID };
+    A733_SESSION_MANAGEMENT,A733_SESSION_NETWORK,A733_SESSION_RETAINED,A733_SESSION_INVALID,
+    A733_SESSION_LOST };
 /* Private, zero storage. One immutable task owns every platform/protocol/socket
  * polling call. Application tasks use the existing copied socket queues. All
  * object and blob lifetimes survive fault; no shutdown, reset or reinit exists. */
@@ -36,7 +37,7 @@ struct a733_radio_session {
     atomic_uint busy;
     uint64_t deadline,last_now;
     unsigned stage,fault,renew_pending;
-    unsigned bootstrap_only,reconnect_phase;
+    unsigned bootstrap_only,reconnect_phase,reconnect_lost;
     uint64_t discarded_data; /* Ordinary frames received without a consumer. */
     uint64_t reconnect_deadline,reconnect_open;
     uint16_t reconnect_reason;
@@ -74,6 +75,14 @@ enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_sessi
  * Success admits bounded work; poll returns PENDING until NETWORK is restored. */
 int a733_radio_session_reconnect(struct a733_radio_session *,const struct aic8800_wifi_target *,
     const struct aic8800_supplicant_config *,uint64_t open_authority,uint16_t reason,uint64_t deadline);
+/* Poll returns LOST while the network is offline after a clean unsolicited
+ * disconnection (see aic8800_network_lost). Recovery admits the same target and
+ * credentials as reconnect. It skips port closure, the pairwise delete and the
+ * disconnect command, deletes group keys, then reassociates, retrying refused or
+ * failed associations until the deadline, and restores the address as reconnect
+ * does. Sockets survive; their requests wait or time out meanwhile. */
+int a733_radio_session_recover(struct a733_radio_session *,const struct aic8800_wifi_target *,
+    const struct aic8800_supplicant_config *,uint64_t open_authority,uint64_t deadline);
 int a733_radio_session_scan(struct a733_radio_session *,uint64_t deadline);
 int a733_radio_session_connect(struct a733_radio_session *,const struct aic8800_wifi_target *,uint64_t deadline);
 int a733_radio_session_disconnect(struct a733_radio_session *,uint16_t reason,uint64_t deadline);
