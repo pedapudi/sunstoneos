@@ -36,37 +36,49 @@ def collect_dependencies(build,target):
     """Recover every object actually linked into this image, including ASM."""
     import re
     build=Path(build).resolve()
+    cmake_root=next((p for p in (build,*build.parents) if (p/'CMakeCache.txt').is_file()),build)
     link=build/f'CMakeFiles/{target}.dir/link.txt'
     objects=[(build/name).resolve() for name in shlex.split(link.read_text()) if name.endswith(('.obj','.o'))]
-    commands=json.loads((build/'compile_commands.json').read_text())
-    commands={(Path(c['directory'])/c['output']).resolve():c for c in commands}
+    commands=json.loads((cmake_root/'compile_commands.json').read_text())
+    # CMake's output field can be top-build-relative even when directory is a
+    # subdirectory. The actual compiler -o argument uses the recorded cwd.
+    by_object={}
+    for command in commands:
+        args=command.get('arguments') or shlex.split(command['command'])
+        output=args[args.index('-o')+1] if '-o' in args else command['output']
+        by_object[(Path(command['directory'])/output).resolve()]=command
+    commands=by_object
     errors=[];dependencies={};actual=[];records={};asm={}
+    def internal_record(obj):
+        directory=next(p for p in obj.parents if p.name.endswith('.dir') and p.parent.name=='CMakeFiles')
+        return directory/'depend.internal'
     for obj in objects:
-        target=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
-        if target in asm:continue
+        record=internal_record(obj)
+        if record in asm:continue
         entries={};current=None
-        if target.is_file():
-            for line in target.read_text().splitlines():
+        if record.is_file():
+            for line in record.read_text().splitlines():
                 if not line or line.startswith('#'):continue
-                if not line.startswith(' '):current=(build/line).resolve();entries[current]=[]
-                elif current is not None:entries[current].append(Path(line.strip()))
-        asm[target]=entries
+                if not line.startswith(' '):current=(cmake_root/line).resolve();entries[current]=[]
+                elif current is not None:entries[current].append((cmake_root/line.strip()).resolve())
+        asm[record]=entries
     for obj in objects:
         command=commands.get(obj)
         if not obj.is_file() or command is None:
             errors.append('Missing linked object/command: '+str(obj));continue
-        actual.append(command);source=Path(command['file']).resolve();dep=Path(str(obj)+'.d')
+        actual.append(command);cwd=Path(command['directory'])
+        source=(cwd/command['file']).resolve();dep=Path(str(obj)+'.d')
         if dep.is_file():
-            names=shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]);paths=[(build/n).resolve() for n in names]
+            names=shlex.split(dep.read_text().replace('\\\n',' ').split(':',1)[1]);paths=[(cwd/n).resolve() for n in names]
         else:
-            dep=build/Path(*obj.relative_to(build).parts[:2])/'depend.internal'
+            dep=internal_record(obj)
             paths=asm[dep].get(obj,[])
             if source.suffix!='.S' or not paths:
                 errors.append('Missing compiler dependency record: '+str(obj));continue
         if source not in paths:errors.append('Dependency record omits source: '+str(source))
         # The generated fixed assembly embeds two immutable binary inputs.
         if source.suffix=='.S':
-            paths+= [Path(name) for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
+            paths+= [(cwd/name).resolve() for name in re.findall(r'^\s*\.incbin\s+"([^"]+)"',source.read_text(),re.M)]
         for path in paths:
             if not path.is_file():errors.append('Missing dependency: '+str(path))
             else:dependencies[str(path)]=hashlib.sha256(path.read_bytes()).hexdigest()
