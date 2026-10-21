@@ -89,7 +89,7 @@ def main():
         steps[label] = {'command':command,'exit':result.returncode}
         steps_path.write_text(json.dumps(steps,indent=2)+'\n')
         result.check_returncode()
-    host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'checks'),'-I'+str(source/'platform/a733-smp-cached')]
+    host=[compiler,'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-DSUNSTONE_BOARD_SUPERVISED=1','-I'+str(source/'include'),'-I'+str(source/'apps/jpeg'),'-I'+str(source/'checks'),'-I'+str(source/'platform/a733-smp-cached')]
     jobs={
         'admission':['apps/jpeg/admission.c','drivers/storage/storage_digest.c','checks/jpeg-application-admission.c'],
         'retained':['drivers/video/a733_video_jpeg.c','drivers/video/a733_video_jpeg_run.c','drivers/video/a733_video_platform.c','drivers/video/a733_video_unit.c','drivers/clock/a733_clock_leases.c','drivers/gpu/a733_gpu_resources.c','checks/jpeg-application-retained.c'],

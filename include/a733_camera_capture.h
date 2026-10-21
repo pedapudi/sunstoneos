@@ -76,7 +76,7 @@ enum a733_capture_state {
     A733_CAPTURE_IOMMU,A733_CAPTURE_SENSOR_OPEN,A733_CAPTURE_ROUTE_OPEN,
     A733_CAPTURE_DMA_OPEN,A733_CAPTURE_LOCAL_HANDOFF,A733_CAPTURE_RECEIVER_OPEN,
     A733_CAPTURE_PACKET_HANDOFF,A733_CAPTURE_SENSOR_START,A733_CAPTURE_DMA_RUN,
-    A733_CAPTURE_SENSOR_STOP,A733_CAPTURE_QUIET,A733_CAPTURE_SAMPLE,
+    A733_CAPTURE_FRAME_STATUS,A733_CAPTURE_SENSOR_STOP,A733_CAPTURE_QUIET,A733_CAPTURE_SAMPLE,
     A733_CAPTURE_FENCE,A733_CAPTURE_DMA_DISABLE,A733_CAPTURE_ROUTE_CLOSE,
     A733_CAPTURE_RECEIVER_CLOSE,A733_CAPTURE_SENSOR_CLOSE,A733_CAPTURE_DRAIN,
     A733_CAPTURE_IOMMU_SCAN,A733_CAPTURE_DMA_FINISH,A733_CAPTURE_DMA_CLOSE,
@@ -98,6 +98,10 @@ struct a733_camera_capture {
     struct a733_csi_receiver receiver;
     struct a733_camera_dma dma;
     uint64_t token,deadline,now,quiet_from;
+    /* Packet-port 0x118 and parser 0x44 status read after CAPTURE_DONE and
+     * before the sensor stop, for each image. Diagnostic only: an error
+     * found by the later sample but absent here arrived during the stop. */
+    uint32_t frame_status[2];
     enum a733_capture_state state;
     uint8_t initialized,entered,started,local_granted,packets_granted;
     uint8_t quiet,sampled,fenced,drained,scanned,retained_readout;
@@ -115,9 +119,10 @@ int a733_camera_capture_supervised_init(struct a733_camera_capture *,
     const struct a733_camera_capture_config *);
 int a733_camera_capture_open(struct a733_camera_capture *,uint64_t deadline);
 /* Source-defined still-frame access while every resource stays reserved.
- * After actual CAPTURE_DONE, stop the sensor, sample CSI errors, verify all
- * parser capture bits clear, scan IOMMU faults, and perform fresh DMA status
- * and CPU cache synchronization. No packet-quiet/drain/close/release callback
+ * After actual CAPTURE_DONE, record receiver status without acknowledging it,
+ * stop the sensor, sample CSI errors, verify all parser capture bits clear,
+ * scan IOMMU faults, and perform fresh DMA status and CPU cache
+ * synchronization. No packet-quiet/drain/close/release callback
  * runs. READABLE preserves DEVICE ownership and all mappings/table backing.
  * Only the 307,200-byte payload per plane may be read, without mutation. Only
  * the rearm below reuses the planes.

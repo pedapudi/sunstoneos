@@ -5,6 +5,7 @@
  * Authors: Zheng ZeQun <zequnzheng@allwinnertech.com>
  * See isp0-sources.json for source identity and RAM/MMIO boundaries. */
 #include "a733_isp0.h"
+#include "a733_camera_common.h"
 #include "isp600_default.h"
 #include <string.h>
 #define CCU UINT32_C(0x05800000)
@@ -34,15 +35,14 @@ int a733_isp0_parameters(void *load,size_t ln,void *save_load,size_t sn,void *vi
  /* Source module0/module1 disable-all setters. No 3A, WB, lens, gamma,
   * CEM, temporal history or auxiliary image addressing is enabled. */
  put(p+0x130,0);put(p+0x134,0);
- /* Existing A733 unity VIPP image, YUV422 with no conversion or overlays. */
- put(v+0x200,1);put(v+0x204,256u|(256u<<14)|(1u<<27));
- put(v+0x208,640u|(480u<<16));put(v+0x220,0xd0);put(v+0x234,640u|(480u<<16));
+ a733_vipp_unity_parameters(v);
  return 1;
 }
 struct step {uintptr_t address;uint32_t mask,value;unsigned kind;};
-/* kind0 checked masked update; kind1 W1C and verify zero; kind2 cold check.
- * ISP parameter RAM is never replayed to MMIO. Only owned DMA addresses are
- * installed through the source-defined AHB address registers. */
+/* kind0 checked masked update; kind1 W1C and verify zero; kind2 cold check;
+ * kind3 VIPP para-ready update. ISP parameter RAM is never replayed to MMIO.
+ * Only owned DMA addresses are installed through the source-defined AHB
+ * address registers. The shared VIPP0 enable order follows this table. */
 static const struct step prepare[]={
  {CCU+4,UINT32_MAX,0,2},{TOP,0x000ff00d,0,2},
  {TOP+4,0x00ff0011,0,2},{ISP,UINT32_MAX,0,2},
@@ -66,14 +66,19 @@ static const struct step prepare[]={
  {ISP+0x24,UINT32_MAX,A733_ISP0_LOAD_IOVA>>2,0},
  {ISP+0x3c,UINT32_MAX,A733_ISP0_SAVE_IOVA>>2,0},
  {ISP+0x40,UINT32_MAX,A733_ISP0_SAVE_LOAD_IOVA>>2,0},
- {ISP+0x20,0x601fe703,0x60008203,0}, /* gamma/CEM update, READY,CAP, feedback. */
- {VIPP,0x13,1,0},{VIPP+0x30,UINT32_MAX,0xffffff03,1},
- {VIPP+0x40,0x15,0,0},{VIPP+0x50,UINT32_MAX,A733_ISP0_VIPP_IOVA>>2,0},
- {VIPP,2,2,0},{VIPP+0x40,0x15,4,0},{VIPP+0x40,1,1,0}
+ {ISP+0x20,0x601fe703,0x60008203,0} /* gamma/CEM update, READY,CAP, feedback. */
 };
+#define PREPARE (sizeof(prepare)/sizeof(*prepare))
+static struct step prepared(unsigned i)
+{
+ if(i<PREPARE)return prepare[i];
+ const struct a733_vipp_step *e=&a733_vipp_enable[i-PREPARE];
+ if(e->kind==A733_VIPP_ADDRESS)return (struct step){VIPP+e->off,UINT32_MAX,A733_ISP0_VIPP_IOVA>>2,0};
+ return (struct step){VIPP+e->off,e->mask,e->value,e->kind==A733_VIPP_W1C?1u:e->kind==A733_VIPP_READY?3u:0u};
+}
 static int fail(struct a733_isp0 *s){s->fault=1;return -1;}
 static int timely(struct a733_isp0 *s)
-{uint64_t t;if(s->ops.now(s->context,&t)!=1||t<s->last_now||t>=s->deadline)return fail(s);s->last_now=t;return 1;}
+{return a733_camera_clock(s->ops.now,s->context,&s->last_now,s->deadline)?1:fail(s);}
 static int read32(struct a733_isp0 *s,uintptr_t a,uint32_t *v)
 {return timely(s)==1&&s->ops.read(s->context,a,v)==1&&timely(s)==1?1:fail(s);}
 static int write32(struct a733_isp0 *s,uintptr_t a,uint32_t v)
@@ -86,18 +91,17 @@ int a733_isp0_init(struct a733_isp0 *s,const struct a733_isp0_ops *ops,void *ctx
 int a733_isp0_poll(struct a733_isp0 *s)
 {
  if(!s||!s->initialized||s->fault)return -1;if(timely(s)!=1)return -1;if(s->armed)return 1;
- const struct step *p=&prepare[s->index];uint32_t v;
+ const struct step step=prepared(s->index),*p=&step;uint32_t v;
  if(read32(s,p->address,&v)!=1)return -1;
  if(p->kind==2){if((v&p->mask)!=p->value)return fail(s);}
  else{
   uint32_t value=p->kind==1?p->value:(v&~p->mask)|p->value;
   if(write32(s,p->address,value)!=1||read32(s,p->address,&v)!=1)return -1;
   /* PARA_READY can clear after loading; capture/bypass remain checked. */
-  uint32_t mask=p->address==ISP+0x20?p->mask&~2u:p->mask;
-  if(p->address==VIPP+0x40)mask&=~4u;
+  uint32_t mask=p->address==ISP+0x20?p->mask&~2u:p->kind==3?A733_VIPP_READY_VERIFY:p->mask;
   if(p->kind==1?v!=0:(v&mask)!=(value&mask))return fail(s);
  }
- if(++s->index==sizeof(prepare)/sizeof(*prepare))s->armed=1;
+ if(++s->index==PREPARE+A733_VIPP_ENABLE_STEPS)s->armed=1;
  return s->armed?1:0;
 }
 int a733_isp0_trigger(struct a733_isp0 *s)

@@ -103,7 +103,9 @@ Before configuration, the route rejects active VIPP channels, enabled interrupts
 and an active camera pattern generator. It clears stale VIPP status while input
 is quiet. The load address, parameter-ready flag and channel capture enable are
 programmed in that order. Parameter-ready may clear after loading, so its
-readback is not treated as a persistent enable bit.
+readback is not treated as a persistent enable bit; the two steps that set it
+verify only the capture and bypass bits. ISP0 shares this VIPP order and
+parameter image through `include/a733_camera_common.h`.
 
 `ARMED` means configuration has been submitted. It does not mean that parameters
 have loaded or that a frame has arrived. Finishing requires a callback to prove

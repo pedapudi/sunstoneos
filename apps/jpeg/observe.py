@@ -3,12 +3,15 @@
 import hashlib
 import struct
 HEADER=144
-MAXIMUM=6144
+# Native capacities from apps/jpeg/input.h; prepare.py checks them in the image.
+INPUT_CAPACITY=524288
+PLANE_CAPACITY=307200
+MAXIMUM=460800
 def geometry(width,height,stride,rows):
-    if not 1<=width<=128 or not 1<=height<=128 or stride!=((width+31)&~31) or rows!=((height+31)&~31):
+    if not 1<=width<=1920 or not 1<=height<=1080 or stride!=((width+31)&~31) or rows!=((height+31)&~31):
         raise ValueError('Invalid parsed JPEG geometry')
     count=width*height+2*((width+1)//2)*((height+1)//2)
-    if stride*rows>4096 or stride*rows//2>4096 or count>MAXIMUM:raise ValueError('JPEG planes exceed admitted capacity')
+    if stride*rows>PLANE_CAPACITY or count>MAXIMUM:raise ValueError('JPEG planes exceed admitted capacity')
     return count
 
 def decode(raw,session,reference=None):

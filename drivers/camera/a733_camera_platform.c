@@ -5,6 +5,7 @@
  * Authors: Zheng Zequn <zequnzheng@allwinnertech.com>
  */
 #include "a733_camera_platform.h"
+#include "a733_camera_common.h"
 #include <stddef.h>
 
 #define TOP_MASK UINT32_C(0x67001f0f)
@@ -21,18 +22,13 @@ static const struct step setup[]={
 };
 static int fault(struct a733_camera_platform *s){s->state=A733_CAMERA_PLATFORM_FAULT;return -1;}
 static int tick(struct a733_camera_platform *s){
-    uint64_t n;
-    if(s->ops.now_us(s->context,&n)!=1 || n<s->now || n>=s->deadline)return fault(s);
-    s->now=n;return 1;
-}
-static int overlap(const void *a,size_t an,const void *b,size_t bn){
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
+    return a733_camera_clock(s->ops.now_us,s->context,&s->now,s->deadline)?1:fault(s);
 }
 static int initialize(struct a733_camera_platform *s,
     const struct a733_camera_platform_ops *o,void *ctx,uint32_t proof){
     if(!s || !o || s->initialized || s->state!=A733_CAMERA_PLATFORM_NEW ||
-       overlap(s,sizeof(*s),o,sizeof(*o)) || (ctx && overlap(s,sizeof(*s),ctx,1)) ||
+       a733_camera_overlap(s,sizeof(*s),o,sizeof(*o)) ||
+       (ctx && a733_camera_overlap(s,sizeof(*s),ctx,1)) ||
        !o->now_us || !o->admit || !o->read || !o->write)return -1;
     s->ops=*o;s->context=ctx;s->required_proof=proof;s->initialized=1;return 1;
 }

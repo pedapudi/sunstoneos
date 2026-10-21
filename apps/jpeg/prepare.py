@@ -13,6 +13,8 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('jpeg_board_prepare',ROOT/'apps/board/prepare.py')
 fixtures=module('jpeg_fixture_profiles',ROOT/'apps/jpeg/fixture.py')
+observe=module('jpeg_result_decoder',ROOT/'apps/jpeg/observe.py')
+INPUT_CAPACITY,OUTPUT_CAPACITY=observe.INPUT_CAPACITY,observe.MAXIMUM
 base=board.base
 require=base.require
 SCHEMA='a733-jpeg-supervised-bundle-v2'
@@ -40,7 +42,7 @@ def embedded_reference(image,session):
     found=[s for s in table.iter_symbols() if s.name=='jpeg_runtime_geometry']
     require(len(found)==1,'Missing unique immutable JPEG runtime geometry.')
     first,size=int(found[0]['st_value']),int(found[0]['st_size'])
-    expected=struct.pack('<6Q',0x415337334a504132,2,856,4096,6144,144)
+    expected=struct.pack('<6Q',0x415337334a504132,2,856,INPUT_CAPACITY,OUTPUT_CAPACITY,144)
     require(size==len(expected),'JPEG geometry size differs.')
     parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and not int(p['p_flags'])&2 and
            int(p['p_vaddr'])<=first and first+size<=int(p['p_vaddr'])+int(p['p_filesz'])]
@@ -51,7 +53,7 @@ def embedded_reference(image,session):
 def upload_bytes(jpeg,reference,session):
     session_check(session)
     reference=reference or b''
-    require(0<len(jpeg)<=4096 and len(reference)<=6144,'JPEG upload exceeds admitted capacities.')
+    require(0<len(jpeg)<=INPUT_CAPACITY and len(reference)<=OUTPUT_CAPACITY,'JPEG upload exceeds admitted capacities.')
     require(hashlib.sha256(jpeg).digest()==session[768:800],'JPEG input digest differs.')
     require((hashlib.sha256(reference).digest() if reference else bytes(32))==session[800:832],
             'JPEG oracle mode/digest differs.')

@@ -34,7 +34,7 @@ def fixture(image,session,out,prep):
 
 def run(image,manifest,inputs,native,out,clang,lld):
     out.mkdir(parents=True,exist_ok=False);host=module('jpeg_runtime_host',ROOT/'tools/check-a733-jpeg-supervised.py');prep=host.preparation;results={}
-    for name in ('partial-mcu','partial-mcu-oracle'):
+    for name in ('partial-mcu','partial-mcu-oracle','vga-oracle'):
         source=inputs/name;case=out/name;case.mkdir()
         raw=fixture(image,(source/'session.bin').read_bytes(),case/'MODEL-NOT-PHYSICAL-fixture',prep)
         bundle=case/'MODEL-NOT-PHYSICAL-bundle';reference=source/'reference.yu12' if (source/'reference.yu12').stat().st_size else None
@@ -64,11 +64,12 @@ def run(image,manifest,inputs,native,out,clang,lld):
         else:raise AssertionError('Bad upload accepted')
         device_capture=case/'capture-device';device_capture.mkdir()
         class Device:
-            def __init__(self):self.writes=[];self.remaining=bytes(frame)
+            # Small frames arrive in 37-byte fragments; a VGA frame in 64 KiB ones.
+            def __init__(self):self.writes=[];self.remaining=bytes(frame);self.fragment=37 if len(frame)<65536 else 65536
             def write(self,endpoint,data,timeout):
                 assert endpoint==2;self.writes.append(bytes(data));return len(data)
             def read(self,endpoint,maximum,timeout):
-                assert endpoint==0x81;n=min(maximum,37,len(self.remaining));value=self.remaining[:n];self.remaining=self.remaining[n:];return value
+                assert endpoint==0x81;n=min(maximum,self.fragment,len(self.remaining));value=self.remaining[:n];self.remaining=self.remaining[n:];return value
         device=Device();observed={}
         result=host.capture_device(device,lambda:None,time.monotonic()+10,session,device_capture,observed,lambda:None,
           reference=frozen['_reference'],upload=frozen['_upload'])

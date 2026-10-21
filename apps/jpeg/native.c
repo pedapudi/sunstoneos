@@ -5,6 +5,13 @@
 #include "boot.h"
 #include <string.h>
 struct jpeg_application jpeg;
+_Static_assert(JPEG_INPUT_IOVA+JPEG_INPUT_CAPACITY<JPEG_LUMA_IOVA&&
+    JPEG_LUMA_IOVA+JPEG_PLANE_CAPACITY+4096u<JPEG_CHROMA_IOVA&&
+    JPEG_CHROMA_IOVA+JPEG_PLANE_CAPACITY/2u+4096u<UINT32_C(0x10400000),
+    "JPEG decoder spans need unmapped gaps inside one table window");
+/* Active output bytes copied per retained-copy call. It bounds the uncached
+ * reads in one task wake; the task sleeps a tick between calls. */
+#define JPEG_COPY_BUDGET 65536u
 static uint64_t jpeg_deadline(void){return board.session.deadline_us-10000;}
 static int jpeg_now(void *v,uint64_t *out)
 {return v==&jpeg&&board_live(NULL)&&a733_counter_clock_now(&providers.shared.counter,out)==1;}
@@ -51,8 +58,10 @@ static int jpeg_authority(void *v,const struct a733_video_platform_config *c,
     if(v!=&jpeg||!token)return -1;
     if(*token&&*token!=jpeg.session.authority)return -1;*token=jpeg.session.authority;
     if(!board_live(NULL)||d!=jpeg_deadline()||memcmp(c,&jpeg.config,sizeof(*c))||
-       j->input!=jpeg.input||j->file_bytes!=jpeg.supplied.input_bytes||j->input_bytes!=4096||
-       j->input_iova!=0x10001000||j->luma_iova!=0x10005000||j->chroma_iova!=0x10009000)return -1;
+       j->input!=jpeg.input||j->file_bytes!=jpeg.supplied.input_bytes||
+       j->input_iova!=JPEG_INPUT_IOVA||j->input_bytes!=jpeg_input_mapped(&jpeg.supplied,0)||
+       j->luma_iova!=JPEG_LUMA_IOVA||j->luma_bytes!=jpeg_input_mapped(&jpeg.supplied,1)||
+       j->chroma_iova!=JPEG_CHROMA_IOVA||j->chroma_bytes!=jpeg_input_mapped(&jpeg.supplied,2))return -1;
     uint8_t hash[32];storage_digest_bytes(j->input,jpeg.supplied.input_bytes,hash);
     if(memcmp(hash,jpeg.session.fixture,32))return -1;
     for(uintptr_t p=0x17000;p<0x22000;p+=4096)if(!jpeg_device(p))return -1;
@@ -76,58 +85,90 @@ static int jpeg_memory(void *v,uint64_t token,const struct a733_video_jpeg_job *
 }
 static int jpeg_no_drain(void *v,uint64_t t,uint64_t d)
 {(void)v;(void)t;(void)d;return -1;}
+/* Each allocation is a guard page, the mapped pages and a guard page. */
 static int jpeg_guards(void)
 {
     for(unsigned a=0;a<3;++a){
         struct device_memory_extent e;enum device_memory_state state;
-        if(!device_memory_describe(jpeg.pool,jpeg.leases[a+1],&e,&state)||state!=DEVICE_MEMORY_DEVICE)return 0;
+        uint32_t mapped=jpeg_input_mapped(&jpeg.supplied,a);
+        if(!device_memory_describe(jpeg.pool,jpeg.leases[a+1],&e,&state)||state!=DEVICE_MEMORY_DEVICE||
+           e.bytes!=(uint64_t)mapped+8192u)return 0;
         const volatile uint8_t *p=(const void *)e.cpu;
-        for(unsigned i=0;i<4096;++i)if(p[i]!=0xa5||p[8192+i]!=0xa5)return 0;
-        unsigned used=a==0?4096:a==1?jpeg.supplied.luma_bytes:jpeg.supplied.chroma_bytes;
-        for(unsigned i=used;i<4096;++i)if(p[4096+i]!=0xa5)return 0;
+        for(unsigned i=0;i<4096;++i)if(p[i]!=0xa5||p[4096+mapped+i]!=0xa5)return 0;
+        unsigned used=a==0?mapped:a==1?jpeg.supplied.luma_bytes:jpeg.supplied.chroma_bytes;
+        for(unsigned i=used;i<mapped;++i)if(p[4096+i]!=0xa5)return 0;
     }
     return 1;
+}
+/* Copy whole output rows, luma then Cb then Cr, until the budget is spent.
+ * Returns 1 once every active row is copied. */
+static int jpeg_copy_rows(void)
+{
+    uint32_t w=jpeg.supplied.width,h=jpeg.supplied.height,stride=jpeg.supplied.stride;
+    uint32_t cw=(w+1u)/2u,ch=(h+1u)/2u,plane_bytes=jpeg.supplied.luma_bytes/4u,copied=0;
+    while(jpeg.copy_row<h+2u*ch&&copied<JPEG_COPY_BUDGET){
+        uint32_t row=jpeg.copy_row++;
+        if(row<h){
+            for(unsigned col=0;col<w;++col)
+                jpeg.payload[row*w+col]=((volatile uint8_t *)jpeg.luma)[row*stride+col];
+            copied+=w;continue;
+        }
+        uint32_t plane=(row-h)/ch;row=(row-h)%ch;
+        for(unsigned col=0;col<cw;++col)
+            jpeg.payload[w*h+plane*cw*ch+row*cw+col]=
+                ((volatile uint8_t *)jpeg.chroma)[plane*plane_bytes+row*(stride/2u)+col];
+        copied+=cw;
+    }
+    return jpeg.copy_row==h+2u*ch;
 }
 static int jpeg_copied(void *v,uint64_t token,uint64_t d)
 {
     if(v!=&jpeg||token!=jpeg.session.authority||d!=jpeg_deadline()||!board_live(NULL))return -1;
     if(!jpeg.copy_step){if(a733_iommu_scan(&jpeg.iommu,d)!=1)return -1;jpeg.copy_step=1;}
     int r=a733_iommu_poll(&jpeg.iommu);if(r!=1)return r;
-    if(jpeg.iommu.fault.scanned_masters!=0xc0||!jpeg_guards())return -1;
+    if(jpeg.iommu.fault.scanned_masters!=0xc0)return -1;
     if(jpeg.copy_step==2){
         uint32_t final_status;
-        if(jpeg_load(0x01c0e11c,&final_status)!=1||(final_status&0x0018000e)||!jpeg_guards())return -1;
+        if(!jpeg_guards()||jpeg_load(0x01c0e11c,&final_status)!=1||(final_status&0x0018000e)||!jpeg_guards())return -1;
         storage_digest_bytes(jpeg.payload,jpeg.supplied.output_bytes,jpeg.digest);return 1;
     }
-    uint32_t status;
-    if(jpeg_load(0x01c0e11c,&status)!=1||(status&0x0018000e))return -1;
+    /* Guards and codec status are checked once before the first chunk and
+     * again after the last; chunks in between only copy. */
+    if(jpeg.copy_step==1){
+        uint32_t status;
+        if(!jpeg_guards()||jpeg_load(0x01c0e11c,&status)!=1||(status&0x0018000e))return -1;
+        jpeg.copy_step=3;
+    }
     __asm__ volatile("dsb sy":::"memory");
-    uint32_t w=jpeg.supplied.width,h=jpeg.supplied.height,stride=jpeg.supplied.stride;
-    uint32_t cw=(w+1u)/2u,ch=(h+1u)/2u,plane_bytes=jpeg.supplied.luma_bytes/4u;
-    for(unsigned row=0;row<h;++row)for(unsigned col=0;col<w;++col)
-        jpeg.payload[row*w+col]=((volatile uint8_t *)jpeg.luma)[row*stride+col];
-    for(unsigned plane=0;plane<2;++plane)for(unsigned row=0;row<ch;++row)for(unsigned col=0;col<cw;++col)
-        jpeg.payload[w*h+plane*cw*ch+row*cw+col]=((volatile uint8_t *)jpeg.chroma)[plane*plane_bytes+row*(stride/2u)+col];
+    int done=jpeg_copy_rows();
     __asm__ volatile("dsb sy":::"memory");
-    if(!jpeg_guards()||!board_live(NULL)||
+    if(!board_live(NULL))return -1;
+    if(!done)return 0;
+    if(!jpeg_guards()||
        (jpeg.supplied.oracle_bytes&&memcmp(jpeg.payload,jpeg.supplied.oracle,jpeg.supplied.output_bytes)))return -1;
     if(a733_iommu_scan(&jpeg.iommu,d)!=1)return -1;
     jpeg.copy_step=2;return 0;
 }
 static int jpeg_retained(void *v,uint64_t t,uint64_t d)
 {return a733_video_platform_retained_copy(v,t,d,jpeg_copied,&jpeg);}
+/* Sized from the committed geometry: each buffer maps only its rounded pages,
+ * between two physical guard pages. */
 static int jpeg_allocate(void)
 {
     jpeg.pool=a733_memory_uncached_init();if(!jpeg.pool)return 0;
     for(unsigned i=0;i<4;++i){
         struct device_memory_extent e;
-        if(!device_memory_acquire_aligned(jpeg.pool,jpeg.session.owner,i?12288:32768,i?4096:16384,&jpeg.leases[i],&e))return 0;
+        uint64_t bytes=i?(uint64_t)jpeg_input_mapped(&jpeg.supplied,i-1)+8192u:32768u;
+        if(!device_memory_acquire_aligned(jpeg.pool,jpeg.session.owner,bytes,i?4096:16384,&jpeg.leases[i],&e))return 0;
         if(i==0)jpeg.table=(void *)e.cpu;
         else{memset((void *)e.cpu,0xa5,e.bytes);uint8_t *p=(void *)(e.cpu+4096);if(i==1)jpeg.input=p;else if(i==2)jpeg.luma=p;else jpeg.chroma=p;}
     }
-    memset(jpeg.input,0,4096);memcpy(jpeg.input,jpeg.supplied.bytes,jpeg.supplied.input_bytes);
-    struct a733_iommu_span spans[]={{0x10001000,(uintptr_t)jpeg.input,4096,A733_IOMMU_READ},
-        {0x10005000,(uintptr_t)jpeg.luma,4096,A733_IOMMU_WRITE},{0x10009000,(uintptr_t)jpeg.chroma,4096,A733_IOMMU_WRITE}};
+    uint32_t input=jpeg_input_mapped(&jpeg.supplied,0),luma=jpeg_input_mapped(&jpeg.supplied,1),
+        chroma=jpeg_input_mapped(&jpeg.supplied,2);
+    memset(jpeg.input,0,input);memcpy(jpeg.input,jpeg.supplied.bytes,jpeg.supplied.input_bytes);
+    struct a733_iommu_span spans[]={{JPEG_INPUT_IOVA,(uintptr_t)jpeg.input,input,A733_IOMMU_READ},
+        {JPEG_LUMA_IOVA,(uintptr_t)jpeg.luma,luma,A733_IOMMU_WRITE},
+        {JPEG_CHROMA_IOVA,(uintptr_t)jpeg.chroma,chroma,A733_IOMMU_WRITE}};
     if(a733_iommu_build(&jpeg.tables,jpeg.table,(uintptr_t)jpeg.table,spans,3)!=1)return 0;
     __asm__ volatile("dsb sy":::"memory");
     for(unsigned i=0;i<4;++i){
@@ -169,7 +210,9 @@ static int jpeg_setup(void)
     c->pck=(struct a733_gpu_resource_lease){jpeg.power_token,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,A733_GPU_RESOURCE_STABLE};
     struct a733_video_platform_ops ops={jpeg_now,jpeg_authority,jpeg_memory,jpeg_no_drain,jpeg_enter,jpeg_leave,a733_video_platform_native_read,a733_video_platform_native_write};
     if(!jpeg_allocate()||!a733_video_platform_init(&jpeg.platform,c,&ops,&jpeg))return -1;
-    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg.supplied.input_bytes,0x10001000,4096,0x10005000,4096,0x10009000,4096};
+    struct a733_video_jpeg_job job={jpeg.input,(uint32_t)jpeg.supplied.input_bytes,
+        JPEG_INPUT_IOVA,jpeg_input_mapped(&jpeg.supplied,0),JPEG_LUMA_IOVA,jpeg_input_mapped(&jpeg.supplied,1),
+        JPEG_CHROMA_IOVA,jpeg_input_mapped(&jpeg.supplied,2)};
     return a733_video_jpeg_begin_retained(&jpeg.run,a733_video_platform_jpeg_ops(),&jpeg.platform,&job,jpeg_deadline(),jpeg_retained)?1:-1;
 }
 /* The controller performs at most one register operation per poll. Repeat

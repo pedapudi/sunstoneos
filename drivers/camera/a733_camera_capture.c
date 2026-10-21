@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "a733_camera_capture.h"
+#include "a733_camera_common.h"
 #include <stddef.h>
 
 static int fail(struct a733_camera_capture *s){s->state=A733_CAPTURE_FAULT;return -1;}
@@ -103,10 +104,6 @@ SIMPLE(dma_release,dma,release)
 #undef CALL
 #undef BEGIN
 
-static int overlap(const void *a,size_t an,const void *b,size_t bn){
-    uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
-    return an>UINTPTR_MAX-x || bn>UINTPTR_MAX-y || (x<y+bn && y<x+an);
-}
 static int callbacks(const struct a733_camera_capture_config *c){
     return c->ops.now_us && c->ops.acquire && c->ops.handoff && c->ops.packets_quiet &&
         c->analog.admit && c->analog.read && c->analog.write && c->iommu.admit &&
@@ -120,23 +117,27 @@ static int callbacks(const struct a733_camera_capture_config *c){
 }
 static int initialize(struct a733_camera_capture *s,const struct a733_camera_capture_config *c,unsigned supervised){
     if(!s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
-       overlap(s,sizeof(*s),c,sizeof(*c)) || (c->context && overlap(s,sizeof(*s),c->context,1)) ||
+       a733_camera_overlap(s,sizeof(*s),c,sizeof(*c)) ||
+       (c->context && a733_camera_overlap(s,sizeof(*s),c->context,1)) ||
        !callbacks(c) || !c->frame_id || !c->table_words || ((uintptr_t)c->table_words&16383) ||
        c->receiver.port>1 || c->receiver.parser!=c->receiver.port ||
        !c->receiver.settle || !c->receiver.deskew || c->receiver.deskew>31 ||
        c->receiver.top_hz!=324000000 || (c->color_bars!=0 && c->color_bars!=1) ||
-       overlap(s,sizeof(*s),c->table_words,A733_IOMMU_TABLE_BYTES) ||
-       overlap(c,sizeof(*c),c->table_words,A733_IOMMU_TABLE_BYTES))return -1;
+       a733_camera_overlap(s,sizeof(*s),c->table_words,A733_IOMMU_TABLE_BYTES) ||
+       a733_camera_overlap(c,sizeof(*c),c->table_words,A733_IOMMU_TABLE_BYTES))return -1;
     struct a733_iommu_span spans[3];
     for(unsigned i=0;i<3;i++){
         const struct a733_capture_span *m=&c->memory[i];
         if(!m->cpu || ((uintptr_t)m->cpu&4095) || !m->iova ||
            m->iova>=UINT64_C(0x100000000) || m->bytes>UINT64_C(0x100000000)-m->iova ||
            m->bytes<(i?307200u:4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
-           overlap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
-           overlap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
-           overlap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))return -1;
-        for(unsigned j=0;j<i;j++)if(overlap(c->memory[j].cpu,(size_t)c->memory[j].bytes,m->cpu,(size_t)m->bytes))return -1;
+           a733_camera_overlap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
+           a733_camera_overlap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
+           a733_camera_overlap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))
+            return -1;
+        for(unsigned j=0;j<i;j++)
+            if(a733_camera_overlap(c->memory[j].cpu,(size_t)c->memory[j].bytes,m->cpu,(size_t)m->bytes))
+                return -1;
         spans[i]=(struct a733_iommu_span){m->iova,m->physical,m->bytes,i?A733_IOMMU_WRITE:A733_IOMMU_READ};
     }
     s->config=*c;s->initialized=1;
@@ -217,7 +218,15 @@ int a733_camera_capture_poll(struct a733_camera_capture *s){
         RUN(ov5640_start(&s->sensor,s->receiver.token,s->deadline),ov5640_poll(&s->sensor),A733_CAPTURE_DMA_RUN);break;
     case A733_CAPTURE_DMA_RUN:
         r=a733_camera_dma_poll(&s->dma);
-        if(s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_SENSOR_STOP);break;
+        if(s->dma.state==A733_CAM_DMA_STOP)next(s,A733_CAPTURE_FRAME_STATUS);break;
+    /* Record receiver status as the captured frame left it, before the
+     * sensor stop can add anything. Nothing is acknowledged; the sample
+     * after the stop still decides whether the capture faults. */
+    case A733_CAPTURE_FRAME_STATUS:
+        r=csi_read(s,s->receiver.token,s->started?A733_CSI_PARSER:A733_CSI_PORT,
+                   s->started?0x44:0x118,&v,s->deadline);
+        if(r==1){s->frame_status[s->started]=v;
+            if(s->started)next(s,A733_CAPTURE_SENSOR_STOP);else s->started=1;}break;
     case A733_CAPTURE_SENSOR_STOP:
         RUN(ov5640_stop(&s->sensor,s->deadline),ov5640_poll(&s->sensor),
             s->retained_readout?A733_CAPTURE_SAMPLE:A733_CAPTURE_QUIET);break;

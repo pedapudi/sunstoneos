@@ -5,6 +5,7 @@
  * Copyright (C) 2014-2017 Mentor Graphics Inc.
  */
 #include "ov5640.h"
+#include "a733_camera_common.h"
 #include <stddef.h>
 #include <stdint.h>
 #include "ov5640_tables.h"
@@ -73,20 +74,11 @@ static const struct ov5640_reg verify[] = {
     {0x4202, 0x0f, 255, 0}, {0x4800, 0x24, 255, 0},
     {0x3019, 0x70, 255, 0}, {0x503d, 0, 255, 0}
 };
-static int overlap(const void *a, size_t an, const void *b, size_t bn)
-{
-    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
-    return an > UINTPTR_MAX - x || bn > UINTPTR_MAX - y ||
-           (x < y + bn && y < x + an);
-}
 static int fault(struct ov5640 *s) { s->state = OV5640_FAULT; return -1; }
 static int time_ok(struct ov5640 *s)
 {
-    uint64_t n;
-    if (s->ops.now_us(s->context, &n) != 1 || n < s->now ||
-        n >= s->deadline) return fault(s);
-    s->now = n;
-    return 1;
+    return a733_camera_clock(s->ops.now_us, s->context, &s->now, s->deadline) ?
+           1 : fault(s);
 }
 static int delay(struct ov5640 *s, uint64_t us)
 {
@@ -99,8 +91,8 @@ int ov5640_init(struct ov5640 *s, const struct ov5640_ops *ops, void *context,
 {
     if (!s || !ops || s->initialized || s->state != OV5640_NEW ||
         (color_bars != 0 && color_bars != 1) ||
-        overlap(s, sizeof(*s), ops, sizeof(*ops)) ||
-        (context && overlap(s, sizeof(*s), context, 1)) ||
+        a733_camera_overlap(s, sizeof(*s), ops, sizeof(*ops)) ||
+        (context && a733_camera_overlap(s, sizeof(*s), context, 1)) ||
         !ops->now_us || !ops->acquire || !ops->line || !ops->read ||
         !ops->write || !ops->receiver || !ops->release) return -1;
     *s = (struct ov5640){ .ops = *ops, .context = context,
