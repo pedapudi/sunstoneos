@@ -34,8 +34,12 @@ owners are refused. Tokens identify leases; privileged service code must
 separately authenticate callers and protect manager memory.
 
 The existing PB4–PB8 signatures retain their input, alternate and disabled
-modes. They share the expanded manager's pin state, lock and generation sequence.
-Their token format cannot release a bank-qualified lease. The manager layout
+modes. Each one translates its pins and token to bank B and calls the
+bank-qualified implementation, so both signatures share one validation,
+register read-modify-write and deadline path, as well as the manager's pin
+state, lock and generation sequence. Their token format cannot release a
+bank-qualified lease, and a bank-qualified token cannot release a PB lease. The
+PB signatures are kept for the I2S platform binding. The manager layout
 has changed: every embedding consumer must be rebuilt, and builds must link
 `drivers/pinctrl/a733_pin_tables.c` with the manager. This is source compatibility,
 not binary compatibility.
@@ -167,10 +171,11 @@ regressing clock values are refused. Lock and MMIO callbacks must obey their
 contracts. Synchronous MMIO can stall before C code regains control, so independent
 hardware-watchdog recovery remains a prerequisite.
 
-The [I2S platform binding](i2s-platform.md) retains partial pin acquisitions
-through its lifecycle. Its existing workload evidence remains applicable to
-that unchanged lifecycle. The shared pin state and PB entry points receive
-focused compatibility checks when the manager changes.
+The [I2S platform binding](i2s-platform.md) acquires its pins through the PB
+entry points and retains partial pin acquisitions through its lifecycle. The
+I2S platform, stream, cyclic, runtime and duplex models exercise those entry
+points against the bank-qualified implementation, and the PB pin checks run in
+the focused batch below.
 
 ## Focused evidence and remaining integration
 
