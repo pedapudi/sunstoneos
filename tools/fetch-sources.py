@@ -58,6 +58,9 @@ if args.verify:
     if len(args.names) != 1 or "files" not in manifest[args.names[0]]:
         parser.error("--verify takes one source name whose lock entry pins files")
     require_files(args.names[0], args.verify)
+    # Callers such as CMake re-run the check when one of these files changes.
+    for path in manifest[args.names[0]]["files"]:
+        print(args.verify / path)
     sys.exit()
 args.cache.mkdir(parents=True, exist_ok=True)
 for name in args.names:

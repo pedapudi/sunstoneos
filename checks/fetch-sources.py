@@ -97,6 +97,7 @@ def main():
     (directory / "src/a.c").write_bytes(files["src/a.c"])
     result = fetch("tree", extra=("--verify", str(directory)))
     assert result.returncode == 0, result
+    assert result.stdout.split() == [str(directory / path) for path in lock["tree"]["files"]], result
 
     # Unpinned files may differ; only the compiled files are pinned.
     (directory / "README").write_bytes(b"local note\n")
