@@ -1,26 +1,28 @@
 /* Native storage controller. Source anchors: docs/mmc.md and docs/mmc-write.md. */
 #include "sunxi_mmc.h"
+#include "sunxi_smhc.h"
 
-#define START (1u << 31)
-#define UPDATE (START | (1u << 21) | (1u << 13))
-#define RESP (1u << 6)
-#define LONG (1u << 7)
-#define CRC (1u << 8)
-#define DATA (1u << 9)
-#define WRITE (1u << 10)
-#define AUTO (1u << 12)
-#define WAIT (1u << 13)
-#define CC (1u << 2)
-#define DTC (1u << 3)
-#define ACD (1u << 14)
-#define ERRORS (0xbfc2u | (1u << 18) | (1u << 31))
+#define START SUNXI_SMHC_CMD_START
+#define UPDATE SUNXI_SMHC_UPDATE
+#define RESP SUNXI_SMHC_CMD_RESP
+#define LONG SUNXI_SMHC_CMD_LONG
+#define CRC SUNXI_SMHC_CMD_CRC
+#define DATA SUNXI_SMHC_CMD_DATA
+#define WRITE SUNXI_SMHC_CMD_WRITE
+#define AUTO SUNXI_SMHC_CMD_AUTO_STOP
+#define WAIT SUNXI_SMHC_CMD_WAIT
+#define CC SUNXI_SMHC_INT_CMD_DONE
+#define DTC SUNXI_SMHC_INT_DATA_DONE
+#define ACD SUNXI_SMHC_INT_AUTO_STOP_DONE
+#define ERRORS SUNXI_SMHC_MMC_ERRORS
 /* Includes locked, switch and SD authentication failures. ECC-disabled is
  * informational; erase-reset is also refused in this bounded profile. */
 #define CARD_ERRORS 0xffffa088u
+#define OUT_OF_RANGE (1u << 31)
 #define TRAN_READY 0x900u
-#define BUSY ((1u << 10) | (1u << 9) | (15u << 4))
-#define FIFO_EMPTY (1u << 2)
-#define FIFO_FULL (1u << 3)
+#define BUSY SUNXI_SMHC_STATUS_BUSY
+#define FIFO_EMPTY SUNXI_SMHC_STATUS_FIFO_EMPTY
+#define FIFO_FULL SUNXI_SMHC_STATUS_FIFO_FULL
 
 enum { P_IDLE, P_SD_IF, P_SD_APP, P_SD_OCR, P_MMC_QUERY, P_MMC_OCR,
        P_CID, P_RCA, P_CSD, P_SELECT, P_STATUS, P_BLOCKLEN, P_EXT,
@@ -115,6 +117,7 @@ int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
     if (!span(h, sizeof(*h)) || !span(c, sizeof(*c)) || overlap(h, sizeof(*h), c, sizeof(*c)) ||
         h->initialized || !c->ops.read32 || !c->ops.write32 || !c->ops.barrier ||
         !c->ops.now_us || !c->ops.admit || !c->ops.retained || !c->token ||
+        !c->ops.read_fifo || !c->ops.write_fifo ||
         (c->kind != SUNXI_MMC_SD && c->kind != SUNXI_MMC_EMMC) ||
         c->module_hz < 200000 || c->module_hz > 800000 || (c->module_hz & 1u) ||
         (unsigned)c->sd_profile>SUNXI_MMC_SD_HIGH_SPEED4 ||
@@ -150,6 +153,7 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
     uint32_t arg = (uint32_t)(h->card.sector_addressed ? first : first * 512);
     h->result = (struct sunxi_mmc_result){0}; h->deadline_us = deadline;
     h->borrowed = buffer; h->borrowed_bytes = bytes; h->state = SUNXI_MMC_READING;
+    h->read_tail = blocks > 1 && blocks == h->card.sectors - first;
     queue(h, P_READ, (blocks == 1 ? 17u : (18u | AUTO)) | RESP | CRC | DATA | WAIT,
           arg, buffer, bytes);
     return 1;
@@ -282,8 +286,39 @@ static void setup(struct sunxi_mmc *h)
     default: return;
     }
 }
-/* At most sixteen FIFO words per poll. Controller completion does not publish
+/* One STATUS sample sizes a FIFO burst of at most one 512-byte block per poll.
+ * Reads take the reported fill level, or one word when only FIFO_EMPTY is
+ * clear; writes take the free space. Controller completion does not publish
  * data; the protocol subsequently confirms the card's ready/TRAN state. */
+static int fifo_step(struct sunxi_mmc *h)
+{
+    uint32_t words[SUNXI_MMC_FIFO_WORDS], s;
+    if (!rd(h, 0x3c, &h->result.status)) return 0;
+    s = h->result.status;
+    unsigned level = SUNXI_SMHC_STATUS_FIFO_LEVEL(s), n;
+    size_t left = (h->data_bytes - h->position) / 4;
+    if (h->command & WRITE)
+        n = (s & FIFO_FULL) || level >= SUNXI_SMHC_FIFO_DEPTH ? 0 : SUNXI_SMHC_FIFO_DEPTH - level;
+    else n = (s & FIFO_EMPTY) ? 0 : level ? level : 1;
+    if (n > left) n = (unsigned)left;
+    if (n > SUNXI_MMC_FIFO_WORDS) n = SUNXI_MMC_FIFO_WORDS;
+    if (!n) return 1;
+    if (h->command & WRITE) {
+        for (unsigned i = 0; i < n; ++i) {
+            const uint8_t *p = h->data + h->position + 4 * i;
+            words[i] = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+        }
+        h->result.submitted += 4 * n;
+        if (h->config.ops.write_fifo(h->config.context, words, n) != 1) { fault(h, SUNXI_MMC_IO); return 0; }
+        h->position += 4 * n;
+    } else {
+        if (h->config.ops.read_fifo(h->config.context, words, n) != 1) { fault(h, SUNXI_MMC_IO); return 0; }
+        for (unsigned i = 0; i < n; ++i)
+            for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(words[i] >> (8 * b));
+        if (h->protocol == P_READ) h->result.received = h->position;
+    }
+    return 1;
+}
 static int command_step(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -328,24 +363,8 @@ static int command_step(struct sunxi_mmc *h)
                 if (h->response[0] & CARD_ERRORS) { fault(h, SUNXI_MMC_CARD); return 0; }
             }
         }
-        if (h->data_bytes) {
-            for (unsigned n = 0; n < 16 && h->position < h->data_bytes; ++n) {
-                if((h->command&WRITE)&&!h->response_seen)break;
-                if (!rd(h, 0x3c, &h->result.status)) return 0;
-                if(h->command&WRITE) {
-                    if(h->result.status&FIFO_FULL)break;
-                    v=0;for(unsigned b=0;b<4;++b)v|=(uint32_t)h->data[h->position+b]<<(8*b);
-                    h->result.submitted+=4;
-                    if(!wr(h,0x200,v))return 0;
-                    h->position+=4;
-                } else {
-                    if (h->result.status & FIFO_EMPTY) break;
-                    if (!rd(h, 0x200, &v)) return 0;
-                    for (unsigned b = 0; b < 4; ++b) h->data[h->position++] = (uint8_t)(v >> (8 * b));
-                    if (h->protocol == P_READ) h->result.received = h->position;
-                }
-            }
-        }
+        if (h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
+            !fifo_step(h)) return 0;
         v = CC | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
         if ((h->seen & v) != v || h->position != h->data_bytes) return 0;
         h->command_step = 3; return 0;
@@ -356,26 +375,33 @@ static int command_step(struct sunxi_mmc *h)
         if (!interrupts(h)) return 0;
         if (h->command & AUTO) {
             if (!rd(h, 0x24, &h->result.stop_response)) return 0;
-            if (h->result.stop_response & CARD_ERRORS) { fault(h, SUNXI_MMC_CARD); return 0; }
+            /* SD 4.10 section 4.3.3 and JESD84-B51 section 6.8.3 let a card
+             * report OUT_OF_RANGE after an open-ended CMD18 reaches the last
+             * user-area sector; the pinned Linux block driver ignores it. */
+            if (h->result.stop_response & CARD_ERRORS & ~(h->read_tail ? OUT_OF_RANGE : 0)) {
+                fault(h, SUNXI_MMC_CARD); return 0;
+            }
         }
         return 1;
     default: fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
 }
-static int card_response(struct sunxi_mmc *h)
+static int card_status(struct sunxi_mmc *h, uint32_t ignored)
 {
     h->result.response = h->response[0];
-    if (h->response[0] & CARD_ERRORS) { fault(h, SUNXI_MMC_CARD); return 0; }
+    if (h->response[0] & CARD_ERRORS & ~ignored) { fault(h, SUNXI_MMC_CARD); return 0; }
     return 1;
 }
+static int card_response(struct sunxi_mmc *h) { return card_status(h, 0); }
 static void ready_status(struct sunxi_mmc *h, unsigned next)
 { queue(h, next, 13u | RESP | CRC | WAIT, (uint32_t)h->card.rca << 16, 0, 0); }
-static int ready(struct sunxi_mmc *h)
+static int ready_except(struct sunxi_mmc *h, uint32_t ignored)
 {
-    if (!card_response(h)) return 0;
+    if (!card_status(h, ignored)) return 0;
     if ((h->response[0] & 0x1f00u) != TRAN_READY) { fault(h, SUNXI_MMC_CARD); return 0; }
     return 1;
 }
+static int ready(struct sunxi_mmc *h) { return ready_except(h, 0); }
 static void next_write(struct sunxi_mmc *h)
 {
     uint64_t first=h->write_request.first_sector+h->result.confirmed_blocks;
@@ -555,7 +581,8 @@ static void protocol(struct sunxi_mmc *h)
         if (card_response(h)) ready_status(h, P_READ_STATUS);
         return;
     case P_READ_STATUS:
-        if (ready(h)) h->state = SUNXI_MMC_DONE;
+        /* The same end-of-card rule covers a status bit not yet cleared. */
+        if (ready_except(h, h->read_tail ? OUT_OF_RANGE : 0)) h->state = SUNXI_MMC_DONE;
         return;
     case P_WRITE_PRE:
         if(ready(h))next_write(h);

@@ -1,4 +1,5 @@
 #include "a733_storage_update.h"
+#include "sunxi_smhc.h"
 #include <string.h>
 static uint32_t get32(const uint8_t *p)
 {return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -85,14 +86,27 @@ int a733_storage_update_authorize(void *v,const struct sunxi_mmc_write_identity 
         r->source==s->input&&r->source==s->request.source&&r->bytes==s->chunk_bytes&&
         r->bytes==s->request.bytes&&r->deadline_us==s->operation_deadline&&r->deadline_us==s->request.deadline_us;
 }
+static int write_admitted(const struct a733_storage_update *s)
+{
+    const struct a733_mmc_platform *p=s?s->platform:NULL;
+    return p&&p->core_call&&p->held&&!p->fault&&
+        a733_storage_update_authorize((void *)s,&p->core.write_identity,&p->core.write_request);
+}
+int a733_storage_update_fifo(const struct a733_storage_update *s,uintptr_t address,unsigned count)
+{
+    if(!write_admitted(s))return 0;
+    const struct a733_mmc_platform *p=s->platform;
+    return address==p->base+SUNXI_SMHC_FIFO&&count&&p->core.state==SUNXI_MMC_WRITING&&p->core.writing&&
+        p->core.position<p->core.data_bytes&&count<=(p->core.data_bytes-p->core.position)/4;
+}
 int a733_storage_update_mmio(const struct a733_storage_update *s,uintptr_t address,uint32_t value)
 {
-    if(!s||!s->platform)return 0;
+    if(!write_admitted(s))return 0;
     const struct a733_mmc_platform *p=s->platform;
-    if(!p->core_call||!p->held||p->fault||!a733_storage_update_authorize((void *)s,&p->core.write_identity,&p->core.write_request))return 0;
-    if(address==p->base+0x200)return p->core.state==SUNXI_MMC_WRITING&&p->core.writing&&
-        p->core.position<p->core.data_bytes;
-    return address==p->base+0x18&&value==((1u<<31)|(1u<<13)|(1u<<10)|(1u<<9)|(1u<<8)|(1u<<6)|24);
+    if(address==p->base+SUNXI_SMHC_FIFO)return a733_storage_update_fifo(s,address,1);
+    /* Exactly the core's single-sector CMD24 command word. */
+    return address==p->base+SUNXI_SMHC_CMD&&value==(SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_WRITE|
+        SUNXI_SMHC_CMD_DATA|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP|24u);
 }
 static void respond(struct a733_storage_update *s,uint64_t offset,const uint8_t *data,unsigned bytes,const uint8_t *digest)
 {
@@ -124,8 +138,10 @@ int a733_storage_update_request(struct a733_storage_update *s,const uint8_t *p,s
     }
     if(op==A733_STORAGE_WRITE) {
         uint64_t left=s->grant.blocks-s->written_blocks;
+        /* One sector per request: its CMD24 busy period and readback share
+         * the operation deadline (docs/storage-update.md). */
         if(s->grant.mode!=1||!s->sealed||s->finished||!left||offset!=s->written_blocks||
-           bytes!=(left>2?2:left)*512||!nonzero(p+56))return fault(s);
+           bytes!=A733_STORAGE_WRITE_BYTES||!nonzero(p+56))return fault(s);
         uint8_t digest[32],header[16]={0};struct storage_digest commitment;
         put64(header,offset);put32(header+8,bytes);storage_digest_init(&commitment);
         if(!storage_digest_add(&commitment,header,16)||!storage_digest_add(&commitment,p+88,32)||

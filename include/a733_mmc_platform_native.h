@@ -12,6 +12,7 @@ struct a733_mmc_platform_native {
     enum a733_mmc_emmc_host emmc_host;
     struct a733_storage_update *update;
     unsigned initialized;
+    unsigned holding; /* Register mutex entered by this binding, until leave or retain. */
     enum sunxi_mmc_sd_profile sd_profile; /* Set by successful actual platform admission. */
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
@@ -21,8 +22,8 @@ static inline int a733_mmc_platform_native_address_selected(enum sunxi_mmc_kind 
 {
     if((kind!=SUNXI_MMC_SD&&kind!=SUNXI_MMC_EMMC)||(a&3)||
        (unsigned)host>A733_MMC_EMMC_SDC3||(kind==SUNXI_MMC_SD&&host))return 0;
-    unsigned index=kind==SUNXI_MMC_SD?0:host==A733_MMC_EMMC_SDC3?3:2;
-    uintptr_t base=0x04020000+index*0x1000;
+    unsigned index=a733_mmc_slot(kind,host);
+    uintptr_t base=A733_MMC_BASE(index);
     if(a>=base&&a<=base+0x300) {
         switch(a-base) {
         case 0:case 4:case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:
@@ -33,8 +34,8 @@ static inline int a733_mmc_platform_native_address_selected(enum sunxi_mmc_kind 
         default:return 0;
         }
     }
-    uintptr_t module=0x02002d00+index*0x10;
-    if(a==module||a==module+0xc)return 1;
+    uintptr_t module=A733_MMC_MODULE(index);
+    if(a==module||a==A733_MMC_BUS(index))return 1;
     if(a>=0x02002000&&a<0x02004000) {
         switch(a-0x02002000) {
         case 0:case 0xa0:case 0xa8:case 0xac:case 0x500:case 0x580:case 0x588:
@@ -64,6 +65,13 @@ static inline int a733_mmc_platform_native_transfer_allowed(enum sunxi_mmc_kind 
 {
     return u&&u->platform&&u->platform->config.kind==kind&&u->platform->config.emmc_host==host&&
         a733_storage_update_mmio(u,a,v);
+}
+/* The same boundary for one FIFO write burst of count words. */
+static inline int a733_mmc_platform_native_fifo_allowed(enum sunxi_mmc_kind kind,
+    enum a733_mmc_emmc_host host,const struct a733_storage_update *u,uintptr_t a,unsigned count)
+{
+    return u&&u->platform&&u->platform->config.kind==kind&&u->platform->config.emmc_host==host&&
+        a733_storage_update_fifo(u,a,count);
 }
 /* Bind once after the actual service owns this exact platform. Existing native
  * initialization and address helper remain read-only until this binding. */

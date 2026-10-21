@@ -70,6 +70,20 @@ static int storage_write(void *v,uintptr_t a,uint32_t value)
     }
     return 1;
 }
+/* Bursts repeat the installed per-word operation, so fixtures that replace
+ * read or write also observe every FIFO word. */
+static inline int storage_read_fifo(void *v,uintptr_t a,uint32_t *w,unsigned n)
+{
+    struct storage_model *s=v;assert(n&&n<=SUNXI_MMC_FIFO_WORDS&&a==s->platform.base+0x200);
+    for(unsigned i=0;i<n;++i)if(s->platform.ops.read(v,a,&w[i])!=1)return 0;
+    return 1;
+}
+static inline int storage_write_fifo(void *v,uintptr_t a,const uint32_t *w,unsigned n)
+{
+    struct storage_model *s=v;assert(n&&n<=SUNXI_MMC_FIFO_WORDS&&a==s->platform.base+0x200);
+    for(unsigned i=0;i<n;++i)if(s->platform.ops.write(v,a,w[i])!=1)return 0;
+    return 1;
+}
 static int storage_barrier(void *v)
 {struct storage_model *s=v;assert(s->power.register_held);return 1;}
 static void storage_setup_selected(enum sunxi_mmc_kind kind,enum a733_mmc_emmc_host host)
@@ -96,7 +110,8 @@ static void storage_setup_selected(enum sunxi_mmc_kind kind,enum a733_mmc_emmc_h
         c.desired[i].pull=1;
     }
     const struct a733_mmc_platform_ops o={storage_now,storage_current,storage_admit,storage_enter,
-        storage_leave,storage_retain,storage_read,storage_write,storage_barrier,storage_outside};
+        storage_leave,storage_retain,storage_read,storage_write,storage_barrier,storage_outside,
+        storage_read_fifo,storage_write_fifo};
     assert(a733_mmc_platform_init(&m.platform,&c,&o,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
     assert(!m.accesses);
 }
@@ -127,9 +142,10 @@ int main(int argc,char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--alias")) {
         storage_setup(SUNXI_MMC_SD);
-        struct a733_mmc_platform *alias=(void *)&m.power.trace[512];
-        _Static_assert(sizeof(*alias)<=sizeof(m.power.trace)-512*sizeof(m.power.trace[0]),"alias storage fits");
-        _Static_assert(_Alignof(struct pmic_model_word)>=_Alignof(struct a733_mmc_platform),"alias alignment");
+        /* Place the alias, at its own alignment, in the unused trace tail. */
+        const uintptr_t align=_Alignof(struct a733_mmc_platform);
+        struct a733_mmc_platform *alias=(void *)(((uintptr_t)&m.power.trace[512]+align-1)&~(align-1));
+        _Static_assert(sizeof(*alias)+_Alignof(struct a733_mmc_platform)<=sizeof(m.power.trace)-512*sizeof(m.power.trace[0]),"alias storage fits");
         assert(m.power.trace_count<=512);
         assert(!alias->initialized);
         assert(storage_outside(&m,alias,sizeof(*alias))==1);

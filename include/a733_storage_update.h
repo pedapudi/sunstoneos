@@ -2,7 +2,8 @@
 #define SUNSTONE_A733_STORAGE_UPDATE_H
 #include "a733_mmc_platform.h"
 #include "a733_storage_digest.h"
-#define A733_STORAGE_CHUNK 1024u
+#define A733_STORAGE_CHUNK 1024u /* BACKUP reads up to two sectors. */
+#define A733_STORAGE_WRITE_BYTES 512u /* WRITE carries exactly one sector. */
 #define A733_STORAGE_GRANT_BYTES 256u
 #define A733_STORAGE_BODY 1152u
 /* This grant belongs to trusted bootstrap memory, never to an application USB
@@ -61,6 +62,8 @@ void a733_storage_update_lost(struct a733_storage_update *);
  * can replace the immutable grant, completed backup reads or active request. */
 int a733_storage_update_authorize(void *,const struct sunxi_mmc_write_identity *,const struct sunxi_mmc_write_request *);
 int a733_storage_update_mmio(const struct a733_storage_update *,uintptr_t,uint32_t);
+/* FIFO burst form: count words must fit in the active sector's remaining bytes. */
+int a733_storage_update_fifo(const struct a733_storage_update *,uintptr_t,unsigned count);
 int a733_storage_update_alive(const struct a733_storage_update *);
 int a733_storage_update_owned(const struct a733_storage_update *,const struct a733_mmc_platform *);
 /* One USB producer and one storage worker; mailbox bytes stay owned until the

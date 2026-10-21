@@ -27,13 +27,16 @@ def main():
     old = 'storage_leave,storage_retain,storage_read,storage_write,storage_barrier,storage_outside'
     assert provider.count(old) == 1
     provider = provider.replace(old, 'storage_leave,storage_retain,update_read,update_write,storage_barrier,storage_outside')
+    old = 'storage_read_fifo,storage_write_fifo'
+    assert provider.count(old) == 1
+    provider = provider.replace(old, 'storage_read_fifo,update_write_fifo')
     (evidence/'storage-provider-model.h').write_text(provider)
     (evidence/'model-extraction.json').write_text(json.dumps(dict(
         original_card=hashlib.sha256(original.encode()).hexdigest(),
         extracted_card=hashlib.sha256(model.encode()).hexdigest(),
         original_platform=hashlib.sha256((root/'checks/a733-mmc-platform.c').read_bytes()).hexdigest(),
         transformed_platform=hashlib.sha256(provider.encode()).hexdigest(),
-        change='Only initializer MMIO callbacks select the write-capable card model; original platform cases are not run.'), indent=2))
+        change='Only initializer MMIO and FIFO-write callbacks select the write-capable card model; original platform cases are not run.'), indent=2))
     compiler = shutil.which('clang-21') or shutil.which('clang')
     assert compiler
     sources = ['drivers/storage/a733_storage_update.c','drivers/storage/storage_digest.c',
@@ -123,7 +126,7 @@ def main():
     session=Session(update['grant'],fixture/'initial.bin')
     with host.ProtectedDirectory(fixture/'update') as store:
         host.apply(host.Client(session.exchange,update['grant']),store)
-        assert store.json('intent-00000000.json')['sha256']==hashlib.sha256(candidate).hexdigest()
+        assert [store.json(f'intent-{i:08d}.json')['sha256'] for i in range(2)]==[hashlib.sha256(candidate[i*512:i*512+512]).hexdigest() for i in range(2)]
         assert store.json('complete.json')['readback_sha256']==hashlib.sha256(candidate).hexdigest()
     session.close();assert session.output.read_bytes()==candidate
     passed.append('actual bounded CMD24 writes and card readback with durable host intent/result')
@@ -147,8 +150,27 @@ def main():
             try:client.call(1);assert False
             except ValueError:pass
             assert (store.path/'intent-00000000.json').exists() and not (store.path/'result-00000000.json').exists()
-        session.close();assert session.output.read_bytes()[:4]==candidate[:4] and session.output.read_bytes()[4:]==initial[4:]
+        # A failed word ends its burst; a loss latched mid-burst stops the next admitted step.
+        written=4 if mode=='uncertain' else 512
+        session.close();assert session.output.read_bytes()==candidate[:written]+initial[written:]
     passed.append('uncertain FIFO write and preempting USB loss retain source/range with no retry')
+    # One-sector WRITE requests leave room for 500 ms of card programming per
+    # sector plus readback; programming beyond the request deadline retains.
+    item=prepared(fixture/'slow',fixture/'backup',fixture/'candidate.bin','09')
+    session=Session(item['grant'],fixture/'initial.bin','slow')
+    with host.ProtectedDirectory(fixture/'slow') as store:
+        host.apply(host.Client(session.exchange,item['grant']),store)
+        assert store.json('complete.json')['readback_sha256']==hashlib.sha256(candidate).hexdigest()
+        assert [store.json(f'intent-{i:08d}.json')['bytes'] for i in range(2)]==[512,512]
+    session.close();assert session.output.read_bytes()==candidate
+    item=prepared(fixture/'stalled',fixture/'backup',fixture/'candidate.bin','0a')
+    session=Session(item['grant'],fixture/'initial.bin','stalled');client=host.Client(session.exchange,item['grant'])
+    with host.ProtectedDirectory(fixture/'stalled') as store:
+        try:host.apply(client,store);assert False
+        except RuntimeError:pass
+        assert client.failed and (store.path/'intent-00000000.json').exists() and not (store.path/'result-00000000.json').exists()
+    session.close();assert session.output.read_bytes()==candidate[:512]+initial[512:]
+    passed.append('500 ms programming per one-sector write completes with readback; a longer stall retains the uncertain write')
     item=prepared(fixture/'wrong-commitment',fixture/'backup',fixture/'candidate.bin','08')
     session=Session(item['grant'],fixture/'initial.bin')
     def corrupt_write(packet):
