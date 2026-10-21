@@ -29,14 +29,22 @@ UART baud and unchanged firmware/UART generations. Reinitializing these structur
 cannot establish a new generation. Recovery must externally prove that the old
 controller and UART lifetime has ended before any backing storage is reused.
 
-Each controller lifetime permits four connection attempts. Attempts retain their
-slot even when refused, so their addresses, status and handles remain inspectable.
-A previously attempted peer address and a successful handle cannot be assigned
-again during that lifetime. A repeated peer address is refused. A repeated
-handle faults the worker before it becomes usable. This bounded quarantine keeps
-late credit events from being assigned to another connection. Explicit reservation exhaustion returns busy without changing the caller's output.
-An incoming request without a free or matching reserved slot faults and retains
-ownership. Larger capacity or reconnection policy requires a separate change.
+The link table has four slots. An attempt keeps its slot after it fails, so its
+address and status remain inspectable. A peer whose attempt closed before the
+controller assigned a handle can be reserved again: the caller's next connect
+or listen call for that address takes the same slot under a new generation.
+Such an attempt never carried a handle, data packet or upper-layer channel, so
+nothing else can refer to it. A refused Create Connection command and a failed
+Connection Complete, for example a page timeout, both close an attempt this way.
+
+Once a peer has held a handle, its address and handle stay quarantined for the
+controller lifetime, including after disconnection. A repeated address is
+refused, and a repeated handle faults the worker before it becomes usable. This
+quarantine keeps late credit events from being assigned to another connection.
+Explicit reservation exhaustion returns busy without changing the caller's output.
+[Incoming connection handling](bluetooth-incoming.md) describes how rejected
+peers free their slots. Reconnecting a peer after it disconnected requires a
+separate change.
 
 Sixteen packet descriptors hold immutable borrowed payloads. Terminal descriptors
 remain owned until the caller releases their serial. All payloads, receive slots,

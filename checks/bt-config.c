@@ -54,7 +54,8 @@ static void unreserved_handoff(void)
     assert(bt_acl_init(&a,&f.hci)==1 && bt_acl_incoming(&a,2000)==1);
     astep(&a);assert(a.links[0].state==BT_ACL_REJECT_STATUS && a.links[0].reason==0x0e);
     command(&f,&a,0,HCI_OP_REJECT_CONN_REQ);cs(&f,HCI_OP_REJECT_CONN_REQ,1,0);astep(&a);
-    terminal(&f,&a.links[0],0x16,0);astep(&a);assert(a.links[0].state==BT_ACL_CLOSED);
+    /* The matched rejection frees its slot. */
+    terminal(&f,&a.links[0],0x16,0);astep(&a);assert(a.links[0].state==BT_ACL_UNUSED && !a.links[0].generation);
 }
 static void refusal_and_deadlines(void)
 {

@@ -138,8 +138,8 @@ all unresolved ownership. A late observation cannot publish a usable audio
 link. Confirmed closure retains terminal TX results and received audio until
 explicit release.
 
-Four peer/audio identities are available per controller lifetime. Closed peers
-and handles remain quarantined. This finite bound prevents ambiguous delayed
+Four peer/audio identities are available per controller lifetime. Peers that
+have connected and their handles remain quarantined after closure. This finite bound prevents ambiguous delayed
 handle reuse; sustained reconnect support requires a separate proven identity
 policy or actual controller recovery. Audio control does not complete the
 remaining mandatory HFP call-control functions or establish headset compliance.

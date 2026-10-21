@@ -3,9 +3,12 @@
 #include "bt_hci.h"
 #define BT_ACL_LINKS 4u
 #define BT_ACL_TX_SLOTS 16u
-/* Connection attempts consume a slot for this controller lifetime. Handles
- * and peer addresses are never reused, including after failure/disconnect. New capacity requires
- * externally proven controller recovery and a new HCI/UART generation. */
+/* Outbound and admitted attempts keep their slot for this controller lifetime.
+ * Handles and connected peer addresses are never reused, including after
+ * disconnect. Only the same peer may retake a slot whose attempt closed before
+ * any handle existed, under a fresh generation. A rejected unknown peer's slot
+ * is freed once its failed Connection Complete is matched. New capacity
+ * requires externally proven controller recovery and a new HCI/UART generation. */
 enum bt_acl_link_state { BT_ACL_UNUSED, BT_ACL_CONNECT_QUEUED,
     BT_ACL_CONNECT_STATUS, BT_ACL_CONNECTING, BT_ACL_CONNECTED,
     BT_ACL_DISCONNECT_QUEUED, BT_ACL_DISCONNECT_STATUS, BT_ACL_DISCONNECTING,
@@ -87,6 +90,7 @@ int bt_acl_security_register(struct bt_acl *,const struct bt_acl_security_ops *,
 int bt_acl_synchronous_register(struct bt_acl *,const struct bt_acl_synchronous_ops *,void *context);
 /* Nonzero Bluetooth peer address; known page-scan mode0..2 and clock offset
  * supplied by a trusted discovery/configuration owner. Requests DM1 only.
+ * A peer whose earlier attempt closed without a handle retakes that slot.
  * Output pointers must be disjoint from every owned object and buffer. */
 int bt_acl_connect(struct bt_acl *, const struct bt_acl_peer *, uint64_t deadline,
                    uint64_t *link_generation);
@@ -96,15 +100,17 @@ int bt_acl_connect(struct bt_acl *, const struct bt_acl_peer *, uint64_t deadlin
  * authority is checked again here and on every HCI step. Preserved incoming
  * records are allowed: enable and reserve permitted peers before first ACL poll.
  * This scalar bounds classification through terminal completion; it is not a
- * controller setting. Unknown peers are rejected with reason0x0e. Exhaustion,
- * repeated peer requests and uncertain command outcomes retain a fault. */
+ * controller setting. Unknown peers are rejected with reason0x0e; with no free
+ * slot they get no reply and the controller's accept timeout refuses them. A
+ * request from a retained address and uncertain command outcomes retain a fault. */
 int bt_acl_incoming(struct bt_acl *, uint64_t response_timeout_us);
 /* Reserve one copied peer address and a generation for incoming connection
  * admission. This permits baseband connection only: the address and received
  * class are unauthenticated. Real pairing/key/encryption and PSM/service policy
  * remain mandatory at their owners. The absolute bound includes waiting for
- * Request and terminal completion. No automatic expiry/reuse or cancellation.
- * A matched request sends Accept with role1 (remain peripheral). */
+ * Request and terminal completion. No automatic expiry/reuse or cancellation;
+ * the caller may reserve the peer again after an attempt closed without a
+ * handle. A matched request sends Accept with role1 (remain peripheral). */
 int bt_acl_listen(struct bt_acl *, const uint8_t address[6], uint64_t deadline,
                   uint64_t *link_generation);
 /* Only reason0x13 (local user termination) is currently emitted. */
