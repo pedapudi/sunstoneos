@@ -1,8 +1,9 @@
 # A733 UART controller
 
 The native UART controller implements bounded configuration, FIFO receive and
-transmit, automatic RTS/CTS flow control, line-error reporting and interrupt
-service and a finite UART2 DMA lease. Host checks and an AArch64 compile pass. Physical serial operation,
+transmit, automatic RTS/CTS flow control, line-error reporting, interrupt
+service, a finite DMA lease on every port, and IrDA SIR, RS-485 9-bit and
+internal loopback line modes. Host checks and an AArch64 compile pass. Physical serial operation,
 Bluetooth HCI transport and platform resource binding remain unqualified on hardware.
 The [platform binding](uart-platform.md) implements real clock/pin ownership,
 local gate/reset control and a native adapter for polling or deferred IRQ service.
@@ -65,7 +66,7 @@ would therefore stop the Bluetooth module after almost every byte at
 1,500,000 baud. In interrupt mode a burst shorter than the trigger level ends
 with a receive-timeout interrupt (IIR cause 12), which the driver services as
 received data. The native binding accepts only the planned values for the
-port, plus the UART2 DMA-mode value 0x09. The trigger behavior of this
+port, plus the DMA-mode value 0x09. The trigger behavior of this
 controller instance has not been measured on the board.
 
 Bluetooth uses UART1 without DMA. Each H4 transport step reads at most 64
@@ -76,8 +77,9 @@ synchronous audio three times, up to about 192 KB/s. The line rate at
 1,500,000 baud is 150 KB/s. Received audio needs about 16 KB/s for CVSD and
 8 KB/s for mSBC. UART1 RTS/CTS is wired to PG8/PG9, and the Bluetooth profile
 requires automatic flow control, so a slower drain throttles the module instead
-of overflowing the receive FIFO. A DMA receive path for UART1 therefore has no
-current throughput requirement. Physical throughput has not been measured.
+of overflowing the receive FIFO. The driver permits a DMA lease on UART1, but
+the Bluetooth application does not use it: its receive path has no current
+throughput requirement. Physical throughput has not been measured.
 
 `exchange` services FIFO status directly. `interrupt` handles one interrupt
 cause: received data, receive timeout, line status, transmitter empty or modem
@@ -115,6 +117,56 @@ an empty transmit shift register, an empty receive FIFO and idle controller
 status. Unread receive data remains intact and prevents completion.
 DRAINED permits external resource teardown; FAULT retains every resource lease.
 Neither state restores an inherited console configuration.
+
+## DMA leases use each port's request line
+
+`a733_uart_dma_prepare` accepts any of the nine controllers. Manual table 13-2
+assigns DMA0 requests 14–20 to UART0–6 and 50–51 to S_UART0–1;
+`a733_uart_dma_request` returns them, and the board device tree matches for
+UART1–6 and S_UART0–1. The device tree gives UART0 no DMA request, so its value
+rests on the manual alone. Every port uses the same sequence: requests
+disabled and read back, interrupts disabled, handshake mode `0xe5`, FIFO
+control 0x09 (DMA mode with the one-character receive trigger) and HALT `0xc2`.
+With automatic flow control, the one-character trigger deasserts RTS while a
+received byte waits for DMA, so the peer pauses between bytes until the channel
+reads. Only the [UART2 application](uart-application.md#finite-dma-transfers)
+integrates DMA channels; another port needs its own channel, memory and request
+admission.
+
+## Line modes change only on a quiet line
+
+`a733_uart_mode` selects one of four line modes in READY, without a DMA lease
+and with the transmit interrupt disarmed. It first requires an empty transmit
+FIFO and shift register, an empty receive FIFO and an idle controller; a busy
+line leaves the mode unchanged and returns READY. It writes and reads back the
+modem control register, and for RS-485 the RS-485 control register at `0xc0`.
+A readback mismatch faults. The mode persists until another call or the
+external reset at close.
+
+- **UART** restores the planned modem control (`0x22` with flow control, else 0).
+- **Loopback** adds MCR bit 4. The transmitter output stays idle and data,
+  RTS and DTR loop back internally, which permits a self-test without a peer.
+- **IrDA SIR** writes MCR function 1 (`0x40`). It requires a plan without
+  flow control and an actual rate of at most 115200 baud within the 0.87% SIR
+  tolerance; 115200 from 24 MHz gives 115384 baud. The external infrared
+  transceiver is outside the driver.
+- **RS-485** writes MCR function 2 with automatic flow control (`0xa2`) and
+  RS-485 control `0x18`: half duplex (bit 4) and the driver's RXBFA bit
+  (bit 3). This is the pinned `sunxi-uart-ng` hardware 9-bit configuration. It requires
+  UART1–6 with RTS/CTS routed, eight data bits and parity. The RTS output
+  drives the transceiver enable. The parity select supplies the ninth transmit
+  bit: even parity writes THR bit 8 set, odd parity leaves it clear, as the
+  pinned driver does. Received bytes return RBR bit 8 in status bit 0
+  (`A733_UART_NINTH_BIT`).
+
+Two sources disagree about RS-485 and 9-bit support. The manual lists both, but
+the board device tree declares `allwinner,uart-v100`, whose pinned driver data
+disables hardware RS-485 control and 9-bit mode; that driver would use a GPIO
+transceiver enable instead. The manual also marks RS-485 control bit 3 as
+reserved. Physical qualification must therefore establish the RS-485 mode,
+including whether parity errors accompany address bytes, before an application
+relies on it. IrDA and loopback have no such conflict but are also physically
+unqualified.
 
 ## Platform ownership must precede register access
 
@@ -170,22 +222,29 @@ require reconciliation against the schematic and pin-function tables.
 
 ## Validation covers software behavior
 
-The [focused runner](../checks/a733-uart.py) checks register offsets against the
-pinned source and compares the complete configuration write trace with its
-source-derived sequence. An AddressSanitizer/UndefinedBehaviorSanitizer model
+The [focused runner](../checks/a733-uart.py) checks register offsets and
+line-mode values against the pinned source and compares the complete
+configuration write trace with its source-derived sequence. An AddressSanitizer/UndefinedBehaviorSanitizer model
 checks format refusal, update completion, FIFO backpressure, byte budgets,
 line errors, receive timeout, modem status, transmit-interrupt disable,
 unread-receive retention and sticky failures. A focused capacity case confirms
 that an exhausted caller buffer preserves unread line-error flags. A separate focused case verifies
 that FIFO empty alone does not complete drain while the shift register is busy.
-The controller compiles as freestanding AArch64 C.
+A line-mode model covers RS-485 with both parity selects, the ninth bit in
+both directions, the return to UART mode, loopback, IrDA at 115200 baud, every
+refusal and a busy line, and readback faults. The DMA lease model runs on UART1,
+UART2 and S_UART1. The controller compiles as freestanding AArch64 C. The
+linked native write policy is checked separately on the UART DMA image by
+[uart-native-fcr.py](../checks/uart-native-fcr.py). That evidence and the
+runner output are under `~/.cache/sunstoneos/build/audit-serial-buses/checks/`
+(`uart/` and `uart-native-policy/`).
 
 Evidence and exact inputs are under
 `~/.cache/sunstoneos/evidence/uart-20261016/`. Physical qualification requires
 independent recovery, authenticated platform admission, a reference serial peer,
-flow-control wiring and a coordinator-owned board test. DMA, RS-485, IrDA,
-nine-bit modes, runtime format changes and suspend/resume remain required
-controller extensions; they are outside the implemented FIFO path.
+flow-control wiring and a coordinator-owned board test. DMA applications on
+ports other than UART2, physical RS-485 and IrDA transceivers, runtime format
+changes and suspend/resume remain required.
 
 [core]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng-core.c
 [header]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/uart/sunxi-uart-ng.h

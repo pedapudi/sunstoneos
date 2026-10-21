@@ -60,7 +60,7 @@ static int access_allowed(struct a733_uart_platform_native *n,uintptr_t a,unsign
 {
     if (!current(n) || !a733_uart_platform_native_address(n->port,a,writing)) return 0;
     uintptr_t base=n->port<7 ? UINT32_C(0x02500000)+n->port*0x1000u : UINT32_C(0x07080000)+(n->port-7)*0x1000u;
-    if (a>=base && a<=base+0xa4) return 1; /* Exclusive controller, owner task. */
+    if (a>=base && a<=base+0xc0) return 1; /* Exclusive controller, owner task. */
     return !(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u) &&
         xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;
 }
@@ -77,13 +77,18 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
     struct a733_uart_platform_native *n=cookie;
     if (!access_allowed(n,a,1)) return 0;
     uintptr_t base=n->port<7 ? UINT32_C(0x02500000)+n->port*0x1000u : UINT32_C(0x07080000)+(n->port-7)*0x1000u;
-    if (a>=base && a<=base+0xa4) {
+    if (a>=base && a<=base+0xc0) {
         /* FCR accepts only the port's planned trigger, with or without the
-         * FIFO reset bits, and the UART2 DMA mode value. */
+         * FIFO reset bits, and the DMA mode value. MCR accepts the planned
+         * flow control alone or with loopback, IrDA SIR and RS-485 9-bit;
+         * THR alone takes a ninth (RS-485 address) bit. */
         uint32_t fcr=a733_uart_fcr(n->port);
-        if (v>255 || (a==base+0xa4 && (v&~7u) && !(n->port==2 && v==0xc2)) ||
-            (a==base+8 && v!=fcr && v!=(fcr|6u) && !(n->port==2 && v==9)) || (a==base+0x10 && v!=0 && v!=0x22) ||
-            (a==base+0x88 && v!=0xe5) || (a==base+0x8c && v!=0 && v!=3)) return 0;
+        uint32_t mcr=v&~0x10u;
+        if (v>(a==base ? 0x1ffu : 255u) || (a==base+0xa4 && (v&~7u) && v!=0xc2) ||
+            (a==base+8 && v!=fcr && v!=(fcr|6u) && v!=9) ||
+            (a==base+0x10 && mcr!=0 && mcr!=0x22 && v!=0x40 && v!=0xa2) ||
+            (a==base+0x88 && v!=0xe5) || (a==base+0x8c && v!=0 && v!=3) ||
+            (a==base+0xc0 && v!=0 && v!=0x18)) return 0;
     } else if (a>=UINT32_C(0x03400000) && a<UINT32_C(0x03410000)) {
         unsigned intid=n->port<7 ? 34+n->port : 233+n->port-7;
         if (v!=(UINT32_C(1)<<(intid%32))) return 0;

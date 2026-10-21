@@ -137,6 +137,11 @@ writers use the same scheduling-aware register mutex. Exclusive owner-task
 UART FIFO service does not acquire that global mutex for every byte.
 The adapter orders Device accesses with barriers, restricts addresses to the
 selected controller, and preserves other bits in shared local clock words.
+Controller writes accept only planned values: the port's FIFO trigger with or
+without FIFO resets, or DMA mode 0x09; the planned modem control alone or with
+loopback, IrDA SIR (`0x40`) or RS-485 (`0xa2`); RS-485 control 0 or `0x18`
+on UART1–6; and a ninth data bit in THR only. Every port may use the DMA
+handshake and request-enable registers.
 
 Callbacks must be bounded and non-reentrant. They use one monotonic microsecond
 clock and cannot invoke the interrupted binding or its borrowed controller.
@@ -184,8 +189,8 @@ UART teardown.
 The [native Bluetooth application](bluetooth-native.md) integrates this polled
 UART binding with module bootstrap and H4 transport. Physical admission and
 serial peer tests remain required. Alternate
-parent profiles, DMA, RS-485, IrDA, nine-bit modes, runtime format changes and
-suspend/resume also remain required. Modeled GIC observations do not qualify
+parent profiles, DMA applications beyond UART2, physical RS-485 and IrDA
+qualification, runtime format changes and suspend/resume also remain required. Modeled GIC observations do not qualify
 physical interrupt behavior or reset timing.
 
 The source basis is A733 User Manual V1.00 sections 4.1, 4.2, 9.1.7.16,
