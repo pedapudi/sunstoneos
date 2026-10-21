@@ -10,7 +10,7 @@ enum pvr_render_service_phase { PVR_RENDER_SERVICE_NEW, PVR_RENDER_SERVICE_BOUND
     PVR_RENDER_SERVICE_FORMAT_FRAGMENT, PVR_RENDER_SERVICE_SUBMIT,
     PVR_RENDER_SERVICE_TIMELINES, PVR_RENDER_SERVICE_INVALIDATE,
     PVR_RENDER_SERVICE_OUTPUT, PVR_RENDER_SERVICE_COMPLETE, PVR_RENDER_SERVICE_FAILED,
-    PVR_RENDER_SERVICE_TEXTURE_PREPARE };
+    PVR_RENDER_SERVICE_TEXTURE_PREPARE, PVR_RENDER_SERVICE_CLEANUP, PVR_RENDER_SERVICE_CLEANED };
 enum pvr_render_service_error { PVR_RENDER_SERVICE_NO_ERROR, PVR_RENDER_SERVICE_ADMISSION,
     PVR_RENDER_SERVICE_CLOCK, PVR_RENDER_SERVICE_QUEUE, PVR_RENDER_SERVICE_TIMELINE,
     PVR_RENDER_SERVICE_RESULT, PVR_RENDER_SERVICE_MEMORY, PVR_RENDER_SERVICE_RESET };
@@ -48,6 +48,10 @@ int pvr_render_service_begin(struct pvr_render_service *, uint64_t deadline);
 int pvr_render_service_draw(struct pvr_render_service *,const void *,size_t,uint32_t,uint64_t deadline);
 int pvr_render_service_draw_next(struct pvr_render_service *,uint32_t previous,
     const void *,size_t,uint32_t,uint64_t deadline);
+/* Internal worker only: validate unused/completed context and initialize unused
+ * rings without a job. format performs one existing ring-format step. */
+int pvr_render_service_cleanup_prepare(struct pvr_render_service *,uint64_t);
+int pvr_render_service_cleanup_format(struct pvr_render_service *);
 int pvr_render_service_poll(struct pvr_render_service *);
 void pvr_render_service_abort(struct pvr_render_service *, unsigned error);
 int pvr_render_service_texture_request(struct pvr_render_service *,uint64_t deadline);

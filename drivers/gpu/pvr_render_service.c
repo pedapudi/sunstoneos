@@ -24,7 +24,9 @@ static int admitted(struct pvr_render_service *s)
         s->owner->vm.phase==A733_GPU_VM_MEMORY_PUBLISHED &&
         s->owner->service->config.render==s &&
         s->owner->service->config.graphics==s->owner &&
-        s->owner->service->phase==PVR_GPU_SERVICE_READY &&
+        (s->owner->service->phase==PVR_GPU_SERVICE_READY ||
+         (s->phase==PVR_RENDER_SERVICE_CLEANUP &&
+          s->owner->service->phase==PVR_GPU_SERVICE_GRAPHICS_CLEANUP)) &&
         s->owner->service->queue.phase==PVR_CCB_ACTIVE &&
         s->owner->service->epoch==s->epoch;
 }
@@ -80,6 +82,54 @@ static int frag_write(void *s,enum pvr_cccb_region r,uint32_t o,const void *p,si
 { return transfer(s,1,r,o,(void *)p,n,1); }
 static int barrier(void *s,enum pvr_ccb_barrier kind)
 { (void)kind;if(!admitted(s))return 0;__asm__ volatile("dsb sy":::"memory");return 1; }
+int pvr_render_service_cleanup_prepare(struct pvr_render_service *s,uint64_t deadline)
+{
+    if(!s || !s->owner || (s->phase!=PVR_RENDER_SERVICE_READY && s->phase!=PVR_RENDER_SERVICE_COMPLETE) ||
+       atomic_load_explicit(&s->draw_state,memory_order_acquire) ||
+       atomic_load_explicit(&s->texture_state,memory_order_acquire) ||
+       atomic_load_explicit(&s->texture_output_state,memory_order_acquire) ||
+       s->texture_draft || s->texture_preparing)return 0;
+    struct pvr_gpu_service *g=s->owner->service;
+    if(s->phase==PVR_RENDER_SERVICE_READY)s->epoch=g->epoch;
+    uint64_t clock;
+    if(!admitted(s) || !now(s,&clock) || deadline<=clock || deadline!=g->deadline)return 0;
+    uintptr_t timeline=a733_gpu_graphics_memory_render_shared(s->owner)+1408;
+    if(!mapped(timeline,8,0x44))return 0;
+    uint32_t fragment=__atomic_load_n((uint32_t *)(timeline+4),__ATOMIC_ACQUIRE);
+    uint32_t geometry=__atomic_load_n((uint32_t *)timeline,__ATOMIC_ACQUIRE);
+    if(s->phase==PVR_RENDER_SERVICE_COMPLETE) {
+        uint32_t checked=PVR_RENDER_OUTPUT_BYTES;
+        if(s->owner->draw>=2) {
+            struct pvr_render_texture_layout l;
+            if(!pvr_render_texture_layout_profile(s->owner->profile.render.width,s->owner->profile.render.height,s->owner->draw,&l))return 0;
+            checked=l.output_bytes;
+        }
+        if(!s->sequence || s->sequence>UINT32_MAX/2 || geometry!=s->sequence || fragment!=s->sequence*2 ||
+           s->checked!=checked || !pvr_cccb_pair_reusable(&s->pair) || !s->pair.fragment_tail ||
+           s->pair.geometry!=&s->geometry || s->pair.fragment!=&s->fragment ||
+           s->geometry.queue!=&g->queue || s->geometry.context!=s || s->fragment.context!=s ||
+           s->geometry.serial!=s->sequence || s->fragment.serial!=(uint64_t)s->sequence*2 ||
+           s->geometry.firmware_context!=s->owner->render_object.address ||
+           s->fragment.firmware_context!=s->owner->render_object.address+152)return 0;
+    } else {
+        if(s->sequence || geometry || fragment || s->geometry.phase!=PVR_CCCB_NEW ||
+           s->fragment.phase!=PVR_CCCB_NEW)return 0;
+        const struct pvr_cccb_ops geom={now,geom_read,geom_write,barrier},frag={now,frag_read,frag_write,barrier};
+        if(!pvr_cccb_init(&s->geometry,&geom,s,&g->queue,2048,s->owner->render_object.address,deadline) ||
+           !pvr_cccb_init(&s->fragment,&frag,s,&g->queue,2048,s->owner->render_object.address+152,deadline))
+            return failed(s,PVR_RENDER_SERVICE_QUEUE);
+    }
+    s->deadline=deadline;s->phase=PVR_RENDER_SERVICE_CLEANUP;return 1;
+}
+int pvr_render_service_cleanup_format(struct pvr_render_service *s)
+{
+    uint64_t clock;
+    if(!s || s->phase!=PVR_RENDER_SERVICE_CLEANUP || !now(s,&clock) || clock>=s->deadline)return -1;
+    struct pvr_cccb *ring=s->fragment.phase==PVR_CCCB_FORMAT?&s->fragment:
+        s->geometry.phase==PVR_CCCB_FORMAT?&s->geometry:NULL;
+    if(ring)return pvr_cccb_poll(ring)==PVR_CCCB_OK?0:failed(s,PVR_RENDER_SERVICE_QUEUE);
+    return s->geometry.phase==PVR_CCCB_IDLE && s->fragment.phase==PVR_CCCB_IDLE?1:-1;
+}
 int pvr_render_service_begin(struct pvr_render_service *s,uint64_t deadline)
 {
     if(!s || s->phase!=PVR_RENDER_SERVICE_READY || !s->owner || (s->owner->draw && !s->draw_accepted)) return 0;

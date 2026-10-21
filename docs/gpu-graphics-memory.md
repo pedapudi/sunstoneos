@@ -87,8 +87,10 @@ The service observes its shared monotonic clock before and after each publicatio
 step. A final operation that completes after the OPEN deadline still faults.
 Failure aborts graphics and compute publication and retains every parent, child
 lease and diagnostic. Later graphics calls perform no cache, translation or
-shared-memory access. CLOSE preserves the existing free-list response draining;
-reopening remains unavailable until verified resource disposal exists.
+shared-memory access. CLOSE drains free-list responses, then performs the
+[ordered firmware cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping)
+before healthy shutdown. Mappings and allocations remain retained; reopening
+requires separately implemented translation removal and resource reclamation.
 
 ## Sources and focused verification
 

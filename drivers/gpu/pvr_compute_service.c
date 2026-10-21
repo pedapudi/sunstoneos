@@ -369,8 +369,9 @@ int pvr_compute_service_replace(struct pvr_compute_service *s,uint32_t sequence,
 int pvr_compute_service_cleanup_begin(struct pvr_compute_service *s,uint64_t deadline)
 {
     if(!s||!s->service||!s->config||s->service->phase!=PVR_GPU_SERVICE_READY||
-       s->service->config.compute!=s||s->service->config.graphics||s->service->config.render||
-       s->service->config.free_lists.count||s->service->owner>=PVR_GPU_SERVICE_CLIENTS||
+       s->service->config.compute!=s||
+       ((s->service->config.graphics||s->service->config.render||s->service->config.free_lists.count)&&
+        !s->service->graphics_cleanup_count)||s->service->owner>=PVR_GPU_SERVICE_CLIENTS||
        (s->phase!=PVR_COMPUTE_SERVICE_READY&&s->phase!=PVR_COMPUTE_SERVICE_COMPLETE)||
        atomic_load_explicit(&s->input_state,memory_order_acquire))return 0;
     s->deadline=deadline;
@@ -403,7 +404,8 @@ int pvr_compute_service_cleanup_begin(struct pvr_compute_service *s,uint64_t dea
 int pvr_compute_service_cleanup_poll(struct pvr_compute_service *s)
 {
     if(!s||s->phase!=PVR_COMPUTE_SERVICE_CLEANUP)return -1;
-    if(s->service->phase!=PVR_GPU_SERVICE_COMPUTE_CLEANUP||s->epoch!=s->service->epoch||
+    if((s->service->phase!=PVR_GPU_SERVICE_COMPUTE_CLEANUP&&
+        s->service->phase!=PVR_GPU_SERVICE_GRAPHICS_CLEANUP)||s->epoch!=s->service->epoch||
        s->epoch!=s->service->queue.epoch||s->cleanup_context!=s->config->firmware_address[0]||
        !timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLEANUP_ERROR);
     if(s->client.phase==PVR_CCCB_FORMAT) {

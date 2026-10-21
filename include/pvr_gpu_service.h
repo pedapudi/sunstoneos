@@ -19,7 +19,7 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
-    PVR_GPU_SERVICE_COMPUTE_CLEANUP };
+    PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
@@ -186,6 +186,10 @@ struct pvr_gpu_service {
     enum pvr_gpu_service_error error;
     unsigned owner, initialized;
     unsigned irq_masked, irq_fault, irq_wake_pending, irq_deferred;
+    /* Fixed native render owner: context pair, HWRT pair, local/global lists. */
+    struct pvr_ccb_token graphics_cleanup_tokens[6];
+    uint32_t graphics_cleanup_address[6], graphics_cleanup_type[6], graphics_cleanup_status[6];
+    unsigned graphics_cleanup_count, graphics_cleanup_index, graphics_events_retired;
     QueueHandle_t requests;
     StaticQueue_t request_state;
     uint8_t request_storage[PVR_GPU_SERVICE_CLIENTS * sizeof(struct pvr_gpu_service_message)];
@@ -215,14 +219,14 @@ int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
  * Failure retains ownership, diagnostics and all resources; no further backend
  * callback or automatic restart occurs. Reopening after successful stop uses a
  * fresh epoch and prepares all backing again when free lists are disabled.
- * With free lists enabled, CLOSE drains retained firmware actions before stop
- * and preserves all leases after verified isolation. Reopen then returns BUSY
+ * With native graphics, CLOSE drains retained firmware actions, cleans contexts,
+ * target data and free lists, then stops; all leases remain held. Reopen returns BUSY
  * until explicit resource disposal exists. Optional COMPUTE repeatedly admits the fixed
  * numerical workload after acquired completion for the READY owner; its reply reports acceptance. STATUS
  * includes compute progress. COMPUTE_OUTPUT copies acquired results with sequence
  * identity after completion. COMPUTE_CANCEL closes admission and faults/retains
  * the session; its acknowledgment does not establish hardware cancellation. CLOSE refuses pending compute and retains backing
- * after completed-job isolation; reopen remains BUSY until context disposal.
+ * after firmware cleanup and isolation; reopen remains BUSY until mapping/lease disposal.
  * Configured graphics and compute publication are part of OPEN and precede
  * power enable. Graphics preparation is not a rendering/completion claim.
  */

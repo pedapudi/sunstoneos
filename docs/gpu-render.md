@@ -217,7 +217,60 @@ endpoint hardware. These checks establish no physical rasterization claim.
 
 Arbitrary shaders, perspective rendering, stencil, general blend equations, other
 topologies/index modes, mipmaps, other texture formats/filtering, arrays/cubes,
-multisampling, display presentation and context disposal remain required work.
+multisampling, display presentation, physical context-disposal qualification and
+allocation reclamation remain required work.
+
+## Healthy CLOSE cleans firmware objects before stopping
+
+The native graphics owner keeps its allocations throughout CLOSE. The service
+first closes submission admission and refuses staged input, an incomplete render,
+a texture draft or borrowed output. A completed render requires its exact paired
+queue identities, serials, acquired geometry and final-fragment timelines, and
+completed framebuffer copy. An unused context requires zero timelines and fresh
+client rings; the existing formatter initializes both rings without a job.
+
+The service drains already-owned free-list responses until the manager is idle,
+no request remains, and control polling reports no queued events. It then retires
+grow and reconstruction dispatch. Any later grow or reconstruction event faults
+before reaching the resource handler, including events serviced synchronously
+inside shutdown polling. This prevents reconstruction from rewriting disposed
+render-target records.
+
+Cleanup uses the native owner's admitted firmware addresses in this order:
+
+1. Fragment common context, then geometry common context, when rendering exists.
+2. The supporting compute context, including an unused compute context.
+3. Render-target data record 1, then record 0.
+4. Local free list, then global free list.
+
+Resource-only graphics owners have no render context pair; they still own both
+render-target data records, both free lists and the supporting compute context.
+The common render-target record has no independent cleanup command. Static depth
+storage is mapped memory rather than an on-demand firmware ZS-buffer object.
+
+The pinned Linux source defines fragment-before-geometry destruction in
+`pvr_context.c:168–180`, reverse render-target cleanup before free-list reference
+release in `pvr_hwrt.c:501–518`, and local/global reference order in
+`pvr_hwrt.c:78–85`. Native cleanup uses `pvr_fw_structure_cleanup`'s KCCB command
+106 with flags 0 and types 0, 1 and 2. Each acquired receipt must match its epoch,
+serial and slot, and return status 1. The service retains every receipt and
+completed step if a later cleanup fails. BUSY, poll failure, missing acknowledgment
+or an expired deadline prevents healthy shutdown; no retry occurs.
+
+Only complete cleanup enters the existing firmware power and isolation protocol.
+One absolute CLOSE deadline covers draining, cleanup and shutdown. The service
+retains mappings and allocations and refuses reopen. Physical cleanup and memory
+draining remain unqualified. Translation removal and allocation reclamation
+remain unimplemented.
+
+Eight focused cases exercise the actual native reserved owners, allocator,
+mappings, admission callbacks, service and queue transport. They cover completed
+clear with copied output, unused rendering, resource-only graphics, partial BUSY,
+wrong-slot completion, reconstruction during cleanup, reconstruction during the
+first shutdown power command, and staged or borrowed output refusal. All pass in
+`~/.cache/sunstoneos/evidence/gpu-render-cleanup-20261020/`. Firmware returns,
+GPU pixels, register responses, mode observation and isolation are modeled.
+The separate native application build establishes compilation and linking only.
 
 ## Copied triangle submission
 
@@ -286,7 +339,8 @@ The maximum frame sequence is `UINT32_MAX/2`. With freshly constructed cleanup
 records, this conservatively bounds two cleanup references per complete frame
 below 32-bit wrap. Ticket and ring-serial wrap are also refused. A timeout or
 uncertain kick retains the context and allocations; it does not enable reuse.
-Context disposal and release remain unsupported.
+CLOSE performs the firmware cleanup described above. Mapping removal, allocation
+release and reopening remain unsupported.
 
 Build `apps/gpu-render` with `SUNSTONE_GPU_RUNTIME_DRAW=ON`,
 `SUNSTONE_GPU_SUPERVISED=ON` and `SUNSTONE_GPU_SINGLE_CORE_APPLICATION=ON`,
@@ -415,7 +469,7 @@ request deadline before and after callbacks. An uncertain kick, queue fault,
 clock regression, missing completion, invalid pixel or damaged guard retains
 both ring owners and all native parents. Terminal faults prohibit further device
 access. This profile admits one fixed clear per boot. Repeated fixed-clear
-submission and verified context disposal remain unsupported.
+submission remains unsupported. Physical context disposal is unqualified.
 
 ## Compiler and firmware references
 
@@ -475,6 +529,6 @@ is submitted by these host checks.
 
 The bounded draw profiles above do not complete graphics support. General
 shader selection, the remaining texture and render modes, synchronization across
-workloads, display presentation and context disposal remain required. Compute
+workloads, display presentation and allocation reclamation remain required. Compute
 remains an independent capability. Performance work follows functional hardware
 qualification.

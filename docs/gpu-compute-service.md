@@ -105,17 +105,17 @@ cleanup before the existing power and isolation protocol. STATUS exposes the
 cleanup and cleaned compute phases. The same CLOSE deadline covers every step.
 
 The cleanup command follows pinned Linux `pvr_fw_structure_cleanup`
-(`pvr_fw.c:1096–1166`): KCCB command106, flags0, type0 (`FWCOMMONCONTEXT`),
+(`pvr_fw.c:1096–1166`): KCCB command 106, flags 0, type 0 (`FWCOMMONCONTEXT`),
 and the admitted context firmware address. Its epoch, serial and return slot
-must match the exact submitted receipt. Only status1 authorizes shutdown;
+must match the exact submitted receipt. Only status 1 authorizes shutdown;
 firmware BUSY, poll failure, a missing receipt or an expired deadline retains
 ownership and prevents the healthy power-off path. BUSY is a terminal refusal
 for this bounded operation; no retry is implied.
 
 Cleanup acknowledges firmware context disposal. Compute backing, VM mappings
 and pool allocations remain retained, and OPEN refuses to reuse that session.
-Render contexts, render-target datasets and free lists still require their own
-ordered disposal. An unexpected multicore observation also requires per-core
+Native graphics owners use the [ordered render cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping)
+for render contexts, render-target datasets and free lists. An unexpected multicore observation also requires per-core
 context state and command support; the documented A733 GPU is MC1. Power OFF
 alone does not prove that outstanding memory transactions have drained.
 

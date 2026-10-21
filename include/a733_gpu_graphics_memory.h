@@ -93,5 +93,9 @@ void a733_gpu_graphics_memory_abort(struct a733_gpu_graphics_memory *);
 /* Direct native identity check for the embedded render service. No callback
  * substitution can authenticate a different allocator or graphics owner. */
 int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *);
+/* Snapshot only the actual admitted owner's firmware object addresses.
+ * Ordered fragment/geometry (if present), HWRT[1/0], local/global lists. */
+int a733_gpu_graphics_memory_cleanup_records(struct a733_gpu_graphics_memory *,
+    uint32_t addresses[6],uint32_t types[6],unsigned *count);
 uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *);
 #endif

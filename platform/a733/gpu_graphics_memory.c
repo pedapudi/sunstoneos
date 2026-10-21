@@ -65,6 +65,39 @@ static unsigned map_count(const struct a733_gpu_graphics_memory *s)
 { return A733_GPU_GRAPHICS_MAPS + (s->fixed_clear ? 4u : 0u) + (s->draw>=2?s->draw+1:s->draw); }
 uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *s)
 { return s->shared_extent.cpu + 8192 + rounded(s->profile.render.global_maximum_pages * 4u); }
+int a733_gpu_graphics_memory_cleanup_records(struct a733_gpu_graphics_memory *s,
+    uint32_t addresses[6],uint32_t types[6],unsigned *count)
+{
+    if(!live(s) || s->phase!=A733_GPU_GRAPHICS_READY || !addresses || !types || !count ||
+       !parents(s) || !s->service || s->service->config.graphics!=s ||
+       s->firmware->config.graphics!=s || s->service->config.compute!=&s->compute->compute ||
+       !a733_gpu_compute_reserved_admitted(s->compute,s->firmware,s->service) ||
+       s->vm.phase!=A733_GPU_VM_MEMORY_PUBLISHED || s->service->config.free_lists.count!=2 ||
+       s->service->free_lists.count!=2 || s->service->free_lists.epoch!=s->service->epoch ||
+       s->object.address!=FW_BASE || s->object.pages!=&s->firmware_page || s->object.page_count!=1 ||
+       s->object.cache_policy!=PVR_MIPS_UNCACHED || s->firmware_page!=s->shared_extent.physical ||
+       !mapped(s->shared_extent.cpu,4096,0x44) ||
+       s->target.common!=(void *)(s->shared_extent.cpu+128) || s->target.common_firmware!=s->object.address+128 ||
+       s->target.local_firmware!=s->object.address || s->target.global_firmware!=s->object.address+64)return 0;
+    unsigned n=0;
+    if(s->fixed_clear) {
+        if(s->service->config.render!=&s->submission || !a733_gpu_graphics_memory_render_admitted(s))return 0;
+        addresses[n]=s->render_object.address+152;types[n++]=0;
+        addresses[n]=s->render_object.address;types[n++]=0;
+    } else if(s->service->config.render || s->submission.phase || s->render_object.page_count)return 0;
+    for(unsigned i=0;i<2;++i) {
+        if(s->target.data[i]!=(void *)(s->shared_extent.cpu+256+i*384) ||
+           s->target.data_firmware[i]!=s->object.address+256+i*384 ||
+           s->lists[i].firmware_address!=s->object.address+i*64 ||
+           memcmp(&s->service->free_lists.lists[i].config,&s->lists[i],sizeof(s->lists[i])) ||
+           memcmp(&s->service->config.free_lists.lists[i],&s->lists[i],sizeof(s->lists[i])))return 0;
+    }
+    addresses[n]=s->target.data_firmware[1];types[n++]=1;
+    addresses[n]=s->target.data_firmware[0];types[n++]=1;
+    addresses[n]=s->lists[0].firmware_address;types[n++]=2;
+    addresses[n]=s->lists[1].firmware_address;types[n++]=2;
+    *count=n;return 1;
+}
 static size_t extra_payload(const struct a733_gpu_graphics_memory *s)
 { if(s->draw>=2) { struct pvr_render_texture_layout l;return pvr_render_texture_layout_profile(s->profile.render.width,s->profile.render.height,s->draw,&l)?l.total:0; }
   return s->fixed_clear ? PVR_RENDER_PROGRAM_BYTES + 4096u + s->draw*4096u : 0; }
