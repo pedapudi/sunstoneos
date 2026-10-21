@@ -26,7 +26,9 @@ worker progress; the handler retains the software mask without requiring a retry
 
 The worker masks delivery before advancing device control. It rearms only after
 control reports a drained event batch. A batch that exhausts its budget keeps
-delivery masked for the next worker iteration. The existing one-tick polling
+delivery masked for the next worker iteration, and the worker steps again
+within one tick. Once delivery is rearmed and no work is outstanding, a ready
+worker sleeps until the next interrupt or request. The existing one-tick polling
 fallback continues to advance deadlines and command returns without interrupts.
 Startup, compatibility checking, and shutdown use that fallback with delivery
 masked. CLOSE masks delivery before beginning the shutdown protocol.
@@ -76,6 +78,8 @@ software firmware model and reserved allocations. It sends actual software-pendi
 GIC interrupt 95 to core zero while the privileged worker runs on core one.
 Both cases cover:
 
+- No backend callback, mask or rearm for twenty ticks while an armed ready
+  session has no outstanding work.
 - Interrupt delivery, masking, worker wakeup, and cross-core serialization.
 - A full request queue with no previously queued wake message. Internal wake
   messages fill the queue, and the interrupt handler's failed enqueue preserves

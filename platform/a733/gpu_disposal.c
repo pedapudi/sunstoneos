@@ -54,8 +54,7 @@ static int fail(struct a733_gpu_disposal *d,unsigned error)
 static int timely(struct pvr_gpu_service *s,struct a733_gpu_disposal *d)
 {
     uint64_t now;
-    if(!s->config.start.now(s->config.context,&now) || now<s->last_now || now>=s->deadline || now>=d->limit)return 0;
-    s->last_now=now;return 1;
+    return pvr_gpu_service_now(s,&now)==1 && now<s->deadline && now<d->limit;
 }
 int a733_gpu_disposal_begin(struct pvr_gpu_service *s,uint64_t epoch)
 {

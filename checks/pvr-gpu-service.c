@@ -290,6 +290,22 @@ static void wait_flag(const uint32_t *p, uint32_t value)
     TickType_t start = xTaskGetTickCount();
     while (get(p) != value) { configASSERT(xTaskGetTickCount() - start < 2000); vTaskDelay(1); }
 }
+/* Publish one firmware UPDATE_STATS event for process zero at the next slot. */
+static void publish_statistic(uint32_t statistic, uint32_t change)
+{
+    unsigned write = get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
+    unsigned char *command = resource(PVR_FW_EVENTS) + (write & 31) * 88;
+    memset(command, 0, 88); put(command, 4, PVR_CCB_MAGIC | 107);
+    put(command + 8, 4, statistic); put(command + 16, 4, change);
+    __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL), (write + 1) & 31, __ATOMIC_RELEASE);
+}
+static void wait_statistic(unsigned statistic, int64_t value)
+{
+    TickType_t start = xTaskGetTickCount();
+    while (__atomic_load_n(&service.statistics[statistic - 1], __ATOMIC_ACQUIRE) != value) {
+        configASSERT(xTaskGetTickCount() - start < 1000); vTaskDelay(1);
+    }
+}
 static void supervisor(void *arg)
 {
     (void)arg; uint64_t ticket = 42; struct pvr_gpu_service_request r = {PVR_GPU_SERVICE_STATUS, 0};
@@ -367,6 +383,13 @@ static void owner(void *arg)
         put(command, 4, PVR_CCB_MAGIC | 101); put(command + 8, 4, 0x1234);
         __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL), 1, __ATOMIC_RELEASE);
         wait_flag(&handled, 1);
+        /* Statistics events update the service counters without reaching the
+         * platform handler; the session remains ready. */
+        for (unsigned i = 1; i <= PVR_GPU_SERVICE_STATISTICS; ++i) publish_statistic(i, i + 2);
+        publish_statistic(1, UINT32_MAX); /* A negative change of one. */
+        wait_statistic(1, 2);
+        for (unsigned i = 2; i <= PVR_GPU_SERVICE_STATISTICS; ++i) wait_statistic(i, i + 2);
+        configASSERT(get(&handled) == 1 && request(PVR_GPU_SERVICE_STATUS, 0).phase == PVR_GPU_SERVICE_READY);
         configASSERT(request(PVR_GPU_SERVICE_CLOSE, 1000000).result == PVR_GPU_SERVICE_OK);
         configASSERT(!wait_phase(PVR_GPU_SERVICE_STOPPED).owns_session);
         configASSERT(get(&isolated) == 1); set(&stage, 2); wait_flag(&peer_done, 2);

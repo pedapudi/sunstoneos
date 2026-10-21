@@ -34,12 +34,8 @@ static int now(void *context,uint64_t *out)
 {
     struct pvr_render_service *s=context;
     if (!admitted(s)) return 0;
-    struct pvr_gpu_service *g=s->owner->service;
-    if(g->config.start.now(g->config.context,out)!=1 || *out<s->last_now ||
-        *out<g->last_now || *out<g->start.last_now || *out<g->control.last_now ||
-        *out<g->queue.last_now || *out<g->free_lists.last_now ||
-        *out<s->geometry.last_now || *out<s->fragment.last_now ||
-        *out<s->pair.last_now || (g->config.compute && *out<g->config.compute->last_now)) return 0;
+    /* The service clock also orders this sample after both rings and the pair. */
+    if(pvr_gpu_service_now(s->owner->service,out)!=1) return 0;
     s->last_now=*out;return 1;
 }
 static int mapped(uintptr_t cpu,size_t bytes,unsigned attr)

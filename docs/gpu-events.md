@@ -10,6 +10,12 @@ reconstruction, or their firmware responses. Those operations require a resource
 manager. An absent handler fails the service; recognizing an event does not count
 as completing its requested operation.
 
+The [lifecycle service](gpu-service.md) owns one dispatcher for statistics
+updates (type 107). It registers a single process resource with ID zero, because
+no firmware context carries a process identity, and adds each signed adjustment
+to one of six per-session counters. An update naming another process, or one
+that would overflow its counter, fails the service.
+
 ## Decoding follows the fixed firmware ABI
 
 The [decoder](../drivers/gpu/pvr_gpu_events.c) requires one 88-byte command and

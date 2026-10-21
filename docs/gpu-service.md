@@ -85,11 +85,36 @@ Independent recovery must prove device quiescence before external reclamation.
 Task abandonment also retains resources.
 
 The worker advances one bounded controller step before receiving each request.
-While enabling power, starting, checking, ready, cleaning a compute context, or
-stopping, it waits at most one tick for the
-next request. Completion and deadlines therefore advance without client status
-polling. Scheduling delays and callback duration can extend the actual interval.
-Cold, stopped, and failed instances sleep until a request arrives.
+When a step makes progress without waiting for the device, the worker takes
+another step at once. A burst ends after 16 steps
+(`PVR_GPU_SERVICE_BURST_STEPS`), when a step only waits for the device, or when a
+request or interrupt wake is queued. Progress means a change in the phase or step
+position of the startup, shutdown, queue, free-list, compute or render state.
+OPEN preparation and disposal always count as progress because they never wait
+for the GPU. A compute dispatch therefore reaches its completion wait within one
+worker wake instead of one step per tick.
+
+After a burst, the worker waits at most one tick for the next request while it
+is enabling power, preparing, starting, checking, cleaning, draining, stopping
+or disposing. A ready session also waits at most one tick while a compute job,
+render, free-list operation or masked event batch is outstanding, or when the
+platform supplied no interrupt callbacks. Completion and deadlines therefore
+advance without client status polling. A ready session with armed interrupt
+delivery and no outstanding work sleeps until a request or interrupt arrives.
+Scheduling delays and callback duration can extend the actual interval. Cold,
+stopped, and failed instances also sleep until a request arrives.
+
+All composed components sample time through one worker-owned monotonic clock
+(`pvr_gpu_service_now`). It records the latest sample of any component and
+refuses a backward sample before the caller performs I/O. The service therefore
+does not compare the private time records of its controllers, compute job or
+render rings. Each component still samples again after a bounded operation to
+detect a late completion against its own deadline.
+
+The control worker forwards firmware statistics updates (type 107) to a
+service-owned [event dispatcher](gpu-events.md). The service adds each signed
+adjustment to a per-session counter in `statistics`; the counters restart at
+zero on each OPEN. Other event types reach the platform handler as before.
 
 ## Power enable can advance without blocking service requests
 
@@ -154,6 +179,9 @@ The focused check verifies:
   shutdown, fresh epochs, and transfer of ownership on reopen.
 - Preparation of all reserved firmware resources, health readiness, and one
   synthetic known event serviced without a client request.
+- Seven statistics updates, including a negative adjustment, applied to the
+  service counters without reaching the platform handler while the session
+  stays ready.
 - Autonomous startup and shutdown expiry, a control callback failure after
   readiness, retained owners, and no backend calls after each terminal failure.
 - Refusal of cross-component CPU and physical allocation aliases, and intact

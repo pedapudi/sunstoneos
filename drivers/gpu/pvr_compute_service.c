@@ -216,14 +216,13 @@ void pvr_compute_service_abort(struct pvr_compute_service *s,unsigned error)
 }
 static int fail(struct pvr_compute_service *s,unsigned error)
 { pvr_compute_service_abort(s,error);return -1; }
+/* The service clock orders this sample after every queue, controller, client
+ * ring and job sample, because each of them also samples through it. */
 static int clock_now(void *ctx,uint64_t *out)
 {
-    struct pvr_compute_service *s=ctx;struct pvr_gpu_service *g=s->service;uint64_t now;
-    if(s->phase==PVR_COMPUTE_SERVICE_FAILED||g->phase==PVR_GPU_SERVICE_FAILED||
-       g->config.start.now(g->config.context,&now)!=1||now<s->last_now||now<g->last_now||
-       now<g->queue.last_now||now<g->control.last_now||now<g->free_lists.last_now||
-       now<s->client.last_now||now<s->job.last_now)return 0;
-    s->last_now=now;g->last_now=now;*out=now;return 1;
+    struct pvr_compute_service *s=ctx;uint64_t now;
+    if(s->phase==PVR_COMPUTE_SERVICE_FAILED||pvr_gpu_service_now(s->service,&now)!=1)return 0;
+    s->last_now=now;*out=now;return 1;
 }
 static int timely(struct pvr_compute_service *s)
 { uint64_t now;return clock_now(s,&now)&&now<s->deadline; }
