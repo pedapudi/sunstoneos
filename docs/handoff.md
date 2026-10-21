@@ -24,6 +24,20 @@ Mixed-device disposal and Wi-Fi unexpected-loss recovery remain unsupported.
 Compute-only lifecycle disposal and paged application/host evidence are now
 accepted within the model scope below.
 
+The latest completed implementation batch is integrated through `70a4e63` on
+`bringup`. It also adds G2D twofold enlargement and DI301 fixed-strength temporal
+noise reduction. The component rows below link the frozen native and host
+evidence. Changes are committed locally; this batch has not been pushed. The
+implementation workers have finished, and the proposed assignments below have
+not started. Neither board was accessed during this batch.
+
+Two setup corrections must carry forward. Configure a fresh CMake build directory
+with the compiler and all dependency paths supplied together; changing the
+compiler in an existing cache can clear those paths. Save a complete resumable
+execution state before an allocation-only fixture exits. The TNR fixture now
+preserves that state and verifies reloading it. One allocation replay was needed
+to repair the omission; its proof and page tables matched the original bytes.
+
 Camera and thermal-monitor adapters now check actual mutex ownership after
 entry failure, independently of health. Four focused host cases pass under
 `mutex-enter-20261020/root-integration.json`; all 103 frozen source files match
@@ -274,6 +288,29 @@ rates are 73.9375/147.875 MHz; 1080p has source/host evidence only. Physical tim
 and output remain unqualified; the earlier GPU image retains its frozen scope.
 Other function checks do not qualify images or physical clocks.
 
+## Next offline assignments
+
+Prioritize persistent OS integration and significant missing hardware modes.
+These proposed workstreams have not started.
+Confirm the source-backed lifecycle before enabling recovery or buffer reuse.
+
+| Workstream | Next deliverable | Ownership and limit |
+| --- | --- | --- |
+| OS and mimus integration | Extend the existing combined application with repeated recorded-audio transcription and persistent services. Bind shared resources through each request and result. | Application owner; coordinate accelerator interfaces with the NPU owner. Preserve the model and output parity. |
+| NPU runtime lifecycle | Switch between already-supported graphs after a demonstrated quiescent state, with bounded submissions and owned copied results. | NPU owner; reuse the existing toolkit. Physical inference, confinement and reuse remain unqualified. |
+| Wi-Fi connection loss | Distinguish ordinary disassociation from controller failure; notify sockets and reconnect while firmware remains healthy. | Radio owner. A stalled controller retains its resources until independent recovery is established. |
+| USB storage errors | Extend the existing read-only storage path with source-backed bulk-stall and Bulk-Only Transport recovery. | USB host owner. Preserve media and reject reuse after uncertain DMA completion. |
+| G2D formats and geometry | Add practical rotation and format conversion through the existing application and buffers. | One graphics owner; coordinate shared DE_SYS and IOMMU contracts. Physical output remains unqualified. |
+| Standalone boot | Resolve cold-start remote-writer exclusion and memory publication before constructing application authority and entering FreeRTOS. | Primary agent only. The E902 shutdown/drain semantics remain unresolved in the cached source assessment; do not repeat the same search or infer safety by reversing startup writes. |
+
+Use Sol 6.1 medium implementation workers and focused Astra correctness review.
+Keep each native path and its host preparation consistent before building. Use
+separate worktrees and coordinate shared interfaces before concurrent edits.
+CPU, GIC, startup and multicore work remain the primary agent's responsibility.
+Resume checks from saved state and reuse successful evidence while its relevant
+inputs match. Defer performance optimization and recurring measurements until
+required hardware functionality is established.
+
 1. Continue complete native device paths and missing modes in the hardware matrix;
    integrate reviewed work promptly. Keep component owners' shared drivers and
    startup untouched unless a concrete dependency requires coordination. Update
@@ -299,6 +336,27 @@ Other function checks do not qualify images or physical clocks.
    to at most 0.05 times audio duration; investigate 0.01 times as a bounded stretch.
    Report loading and live latency separately. Reproducible boot images,
    recovery/update procedures and physical qualification remain goal requirements.
+
+## Worktree cleanup preserves unfinished work
+
+The 2026-10-20 cleanup removed 327 of 364 registered worktrees. Each removed
+checkout had integrated or patch-equivalent commits and no local files beyond
+verified disposable Python bytecode. All branch references were preserved, and
+the external source, build and frozen-evidence directories remain intact.
+
+Thirty-seven checkouts remain: `main`, `bringup` and `audit/integration`; seven
+with local source changes or untracked files; twenty-six with unintegrated or
+ambiguous commits; and the detached `uart-native` checkout. In particular, the
+unfinished `hevc-decode` and `h264-interframes` worktrees remain available.
+Do not discard those retained changes as part of another cleanup without review.
+
+The inventory, branch identities, removal journal and final result are under
+`~/.cache/sunstoneos/evidence/worktree-cleanup-20261020-204010/`.
+`plan.json` records each original path, branch and commit; `result.json` records
+the completed cleanup. Recreate a removed checkout at its recorded path with
+`git worktree add <path> <branch>` when an old build or reference requires it.
+Removing checkouts does not invalidate their frozen test evidence or justify
+rebuilding their images.
 
 The [historical handoff](handoff-history-20261019.md) preserves older integration,
 recovery and validation context; it supplies no current launch authority.
