@@ -443,6 +443,28 @@ static void fifo_transfers(void)
     }
 }
 
+/* Interrupt waiting: only an ACTIVE channel whose deadline is beyond the
+ * margin qualifies, and only interrupt-enabled acknowledgements are counted. */
+static void event_wait(void)
+{
+    setup();
+    assert(a733_dma_claim(&controller, 0) == A733_DMA_CONTROL_OK);
+    assert(!a733_dma_event_wait(&controller, 0, 0) && !a733_dma_event_wait(&controller, 1, 0));
+    now = UINT64_MAX - 4; /* The deadline arithmetic crosses counter wrap. */
+    assert(a733_dma_submit(&controller, 0, &transfers[0], 100) == A733_DMA_ACTIVE);
+    assert(a733_dma_event_wait(&controller, 0, 99) && !a733_dma_event_wait(&controller, 0, 100));
+    now = 5;
+    assert(a733_dma_event_wait(&controller, 0, 89) && !a733_dma_event_wait(&controller, 0, 90));
+    registers[reg_index(0, 0x38)] = 1; /* Half package is not interrupt-enabled. */
+    assert(a733_dma_poll(&controller, 0) == A733_DMA_ACTIVE && controller.events == 0);
+    execute(0);
+    assert(a733_dma_poll(&controller, 0) == A733_DMA_STOPPING && controller.events == 1);
+    assert(!a733_dma_event_wait(&controller, 0, 0));
+    drain(0);
+    assert(a733_dma_poll(&controller, 0) == A733_DMA_COMPLETE && controller.events == 1);
+    assert(!a733_dma_event_wait(&controller, 0, 0));
+}
+
 int main(void)
 {
     normal_completion();
@@ -451,5 +473,6 @@ int main(void)
     faults_and_timeouts();
     refusal();
     fifo_transfers();
-    puts("PASS DMA controller: noncoherent transfers, concurrent leases, bounded cancellation, and retained buffers after faults. Hardware untested.");
+    event_wait();
+    puts("PASS DMA controller: noncoherent transfers, concurrent leases, bounded cancellation, and retained buffers after faults and interrupt-wait eligibility. Hardware untested.");
 }

@@ -103,12 +103,15 @@ struct a733_dma_controller {
     uint16_t authorized_channels;
     unsigned initialized;
     struct a733_dma_channel channels[A733_DMA_CHANNELS];
+    /* Interrupt-enabled pending events acknowledged by poll; wraps. */
+    uint32_t events;
 };
 
 /* Zero-initialize controller once. Caller must serialize all methods and
  * maintain an exclusive firmware/platform lease for authorized_channels.
- * Before claim: clocks/reset/autogating must be prepared; GIC delivery must
- * remain masked for this polled service. Global routing is never changed.
+ * Before claim: clocks/reset/autogating must be prepared. The controller never
+ * touches the GIC; the DMA interrupt only wakes the caller, which still polls.
+ * Global routing is never changed.
  * No reinitialization or forced release of a failed channel is provided. */
 enum a733_dma_control_status a733_dma_controller_init(
     struct a733_dma_controller *controller, const struct a733_dma_operations *ops,
@@ -150,6 +153,10 @@ enum a733_dma_control_status a733_dma_finite_state(struct a733_dma_controller *,
                                                    const struct a733_dma_transfer *t);
 enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *, unsigned channel);
 enum a733_dma_control_status a733_dma_cancel(struct a733_dma_controller *, unsigned channel);
+/* 1 when the channel is ACTIVE, so only an enabled interrupt event or its
+ * deadline can advance it, and that deadline is more than margin ticks away.
+ * The caller may then wait for the interrupt instead of polling each tick. */
+int a733_dma_event_wait(struct a733_dma_controller *, unsigned channel, uint64_t margin);
 int a733_dma_owns(const struct a733_dma_controller *, const struct a733_dma_transfer *);
 
 #endif

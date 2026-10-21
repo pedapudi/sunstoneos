@@ -15,8 +15,9 @@ The [DMA pool session](dma-pool-session.md) registers board RAM, and the native
 policy admits the UART2, I2S0 and HDMI-audio FIFO routes their images use. The
 [DMA service](dma-service.md) serializes production access, and the
 [DMA platform startup](dma-platform.md) prepares DMA0 clocks, reset and CPU
-routing. Interrupt delivery, DMA1, descriptor addresses at or above
-`0xfffff800` and physical qualification remain open.
+routing. The service can wait for the DMA0 interrupt between DMA events when
+the platform binds it; GIC routing of that interrupt, DMA1, descriptor addresses
+at or above `0xfffff800` and physical qualification remain open.
 The controller has not executed on physical hardware.
 
 Calling the encoder alone performs no hardware access and does not transfer
@@ -205,9 +206,14 @@ The [controller interface](../include/a733_dma_controller.h) requires serialized
 calls and an exclusive platform lease for its authorized channel mask.
 CPU interrupt routing alone is insufficient ownership evidence.
 The platform must prepare clocks, resets, and autogating before claiming channels.
-The current polled implementation requires the DMA interrupt to remain masked
-at the GIC. Per-channel queue-end and timeout interrupt bits are enabled so the
-service can inspect and acknowledge their pending events.
+The controller never accesses the GIC. Each submission enables the channel's
+queue-end (finite) or package-end (cyclic) interrupt bit and the timeout bit,
+and poll acknowledges their pending events. The DMA0 interrupt therefore only
+wakes the caller, which still polls; the [service](dma-service.md) defines that
+wake path. Poll counts every acknowledgement that includes an interrupt-enabled
+bit in the controller's wrapping `events` counter. `a733_dma_event_wait()`
+reports whether a channel is active with its deadline more than a given margin
+away, so the caller can wait for the interrupt instead of polling each tick.
 
 Claims require CPU routing without always-on processor routing, a disabled idle
 channel, no pending or enabled interrupts, and zero pause, mode, and descriptor-high
@@ -283,8 +289,8 @@ with immutable TX and checked RX staging. RX device ordering and physical
 visibility remain unqualified.
 
 Pause, hardware timeout modes, burst mode, IOspeed mode,
-request handshakes, DMA1, interrupt delivery, IOMMU integration, and concurrent
-peripheral workloads remain required.
+request handshakes, DMA1, physical interrupt delivery and GIC routing, IOMMU
+integration, and concurrent peripheral workloads remain required.
 Data addresses crossing 4 GiB boundaries and transfers near the upper address
 limit need physical tests; software representation does not establish bus behavior.
 
@@ -337,11 +343,13 @@ sharing source data, conflicts between writable cache lines, and completion
 before bus drain. Faults cover ignored start/stop writes, descriptor configuration
 and restoration failures, uncleared events, and changed processor routing.
 The model also checks cancellation, timeout precedence, counter wrap, and a
-deadline consumed by cache preparation. It rejects writes to global registers
-or channels assigned to the always-on processor.
+deadline consumed by cache preparation. It checks the interrupt-wait margin
+across counter wrap and that a pending half-package event, which is not
+interrupt-enabled, leaves the event counter unchanged. It rejects writes to
+global registers or channels assigned to the always-on processor.
 
-The AArch64 object compiles with warnings treated as errors. Its code occupies
-5,124 bytes, with no static data or BSS. The object references the descriptor
+The AArch64 object compiles with warnings treated as errors. With the pinned
+Clang 21 toolchain its code occupies 7,216 bytes, with no static data or BSS. The object references the descriptor
 encoder and `memcpy`; final platform linkage remains outstanding.
 Commands, results, input hashes, compiler identity, and artifacts are in
 `~/.cache/sunstoneos/evidence/dma-controller-20261016/final/`.
@@ -355,7 +363,7 @@ clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
   checks/dma-controller.c drivers/dma/a733_dma_controller.c \
   drivers/dma/a733_dma.c -o ~/.cache/sunstoneos/build/dma-controller-check
 ~/.cache/sunstoneos/build/dma-controller-check
-clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude \
+clang -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude -Iruntime/include \
   --target=aarch64-none-elf -march=armv8-a -mstrict-align \
   -ffreestanding -fno-builtin -c drivers/dma/a733_dma_controller.c \
   -o ~/.cache/sunstoneos/build/dma-controller-a733.o

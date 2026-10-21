@@ -7,6 +7,9 @@ enum { ENABLE = A733_DMA_REG_ENABLE, PAUSE = A733_DMA_REG_PAUSE, DESCRIPTOR = A7
        MODE = A733_DMA_REG_MODE, PACKAGES = A733_DMA_REG_PACKAGES, IRQ_ENABLE = A733_DMA_REG_IRQ_ENABLE,
        PENDING = A733_DMA_REG_PENDING, DESCRIPTOR_HIGH = A733_DMA_REG_DESCRIPTOR_HIGH };
 enum { BUSY = A733_DMA_REG_BUSY, CPU_ROUTE = A733_DMA_REG_CPU_ROUTE, MCU_ROUTE = A733_DMA_REG_MCU_ROUTE };
+/* Interrupt enable values: cyclic package end and timeout; finite queue end
+ * and timeout. */
+enum { CYCLIC_EVENTS = 10, FINITE_EVENTS = 12 };
 
 static uint32_t read_global(struct a733_dma_controller *c, unsigned offset)
 { return c->operations.read(c->cookie, c->base + offset); }
@@ -260,7 +263,7 @@ static enum a733_dma_control_status submit(
     c->operations.cache(c->cookie, A733_DMA_CLEAN, t->descriptors.cpu, t->descriptors.bytes);
     barrier(c);
     write_channel(c, channel, DESCRIPTOR, (uint32_t)t->descriptors.bus);
-    uint32_t irq=cyclic?10:12; /* Cyclic package+timeout; finite queue+timeout. */
+    uint32_t irq=cyclic?CYCLIC_EVENTS:FINITE_EVENTS;
     write_channel(c, channel, IRQ_ENABLE, irq);
     barrier(c);
     if (read_channel(c, channel, DESCRIPTOR) != t->descriptors.bus ||
@@ -392,6 +395,7 @@ enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *c, unsign
     uint32_t pending = read_channel(c, channel, PENDING);
     if (pending & ~15u) return recovery(s);
     if (pending) write_channel(c, channel, PENDING, pending);
+    if (pending & (s->cyclic ? CYCLIC_EVENTS : FINITE_EVENTS)) ++c->events;
     if (s->status == A733_DMA_ACTIVE) {
         int ambiguous=s->cyclic && !cyclic_progress(c,channel);
         if (ambiguous || (pending & 8)) begin_stop(c, channel, A733_DMA_FAILED);
@@ -423,6 +427,18 @@ enum a733_dma_control_status a733_dma_poll(struct a733_dma_controller *c, unsign
     }
     if (ticks(c) - s->stop_started >= c->stop_timeout) return recovery(s);
     return s->status;
+}
+
+int a733_dma_event_wait(struct a733_dma_controller *c, unsigned channel, uint64_t margin)
+{
+    if (!valid_channel(c, channel) || !c->channels[channel].claimed) return 0;
+    struct a733_dma_channel *s = &c->channels[channel];
+    if (s->status != A733_DMA_ACTIVE) return 0;
+    /* A cyclic channel also fails when no poll observes it for its timeout.
+     * Each poll moves that deadline past this one, which counts from the last
+     * completed package. */
+    uint64_t elapsed = ticks(c) - s->started;
+    return elapsed < s->timeout && s->timeout - elapsed > margin;
 }
 
 int a733_dma_owns(const struct a733_dma_controller *c, const struct a733_dma_transfer *t)
