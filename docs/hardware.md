@@ -76,15 +76,31 @@ implementation is **planned**. Partial results apply only to the stated scope:
   1–48,000 stereo S16LE frames at 48 kHz, with EDID LPCM admission and retained
   normalized AUDIO1/HDMI clock ownership. GPL DesignWare/BSP/CCU adaptations run
   under FreeRTOS; no new opaque audio firmware is required.
-  Final image `432b7c10…` executes actual admission, construction and PMIC/output/DMA
+  Finite-audio image `432b7c10…` executes actual admission, construction and PMIC/output/DMA
   tasks over models, consuming 8,196 bytes (2,049 frames), observing DMA completion
   and FIFO empty, then publishing a retained 160-byte RAM result. Two fault
   continuations retain uncertainty. The [host tools](hdmi-audio-preparation.md)
   prepare sealed PCM and decode supplied result files; twenty-three refusals,
-  two durability failures and bounded boot/launcher checks pass. No live USB/FEL
-  capture exists. Root's `hdmi-audio-nc-20261020/root-integration.json` binds
-  618 saved inputs; the only current repository difference is an ISP0 constructor
-  declaration, while all final declared native/host sources match.
+  two durability failures and bounded boot/launcher checks pass. Session version 1
+  retains offline-only observation; running native RAM is never read through FEL.
+  Root's `hdmi-audio-nc-20261020/root-integration.json` binds
+  618 saved inputs. Its recorded `7fa75cc` comparison found an ISP0 constructor
+  declaration as the sole repository delta, with the declared native/host sources
+  matching that integration. This frozen comparison does not describe later HEADs.
+  Optional version-2 [copied USB observation](hdmi-audio-preparation.md#optional-copied-usb-observation)
+  now binds separate USB authority and cold-reference ownership. Current observation
+  image `0c661c29…` copies the published 160-byte audio result into one 512-byte,
+  identity/session-bound reply retained through terminal packet completion. It admits
+  at most 200 sequential requests in 19 seconds within the native 20-second lifetime;
+  partial/late transfer retains the slot, with no host ACK or resource release.
+  Seven constructor/provider/mailbox/actual TinyUSB cases model scheduling, PMIC and
+  DCD effects, explicitly seeding the prior audio disposition without PCM/DMA replay.
+  Host refusal/durability/budget cases and supervisor readiness pass. Four pre-GIC
+  guard assertions passed before reporting serialization failed; repaired reporting
+  source was not replayed. Root accepts all 123 compiled repository inputs and
+  nineteen final host sources under `hdmi-audio-usb-20261020/root-integration.json`;
+  two external host fixes are separately frozen from the native image identity.
+  Common provider failure may park USB before a retained fault can be retrieved.
   All allocations and leases remain retained. FIFO empty does not establish
   serializer drain, transmitted packets or sound. Physical audio, SMP/preemption,
   interrupt delivery, MMIO timing, visibility and recovery remain unqualified;
@@ -733,9 +749,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   each immutable DMA configuration and actual session IDs. Thirty host-only
   cases pass with all twenty sources matching under
   `dma-consumer-security-20261020/root-integration.json`. UART DMA adopts the
-  independently reviewed IDs before sealing its session; HDMI audio still has
-  offline decoding only. No native/runtime image or wire layout changes are
-  claimed. Production refuses modeled records; independently established
+  independently reviewed IDs before sealing its session. That host-admission batch
+  changed no native/runtime image or wire layout; HDMI USB observation has separate
+  typed authority and image evidence above. Production refuses modeled records; independently established
   physical access and each device's remaining admission prerequisites stay required.
   [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved) remains
   source-blocked. Its register layout, dedicated gates/reset and interrupts are
@@ -896,7 +912,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   A separate full compute-only application build `dae5a387…` matches all 166
   compiled repository inputs and 371 declared sources under
   `gpu-compute-cleanup-native-20261020/root-integration.json`; it was not executed.
-  Compute backing/VM mappings stay retained and reopen is refused; no full-application
+  Default compute backing/VM mappings stay retained and reopen is refused; no full-application
   result transfers from the composition model.
   [Render firmware cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping)
   is also implemented before healthy shutdown: fragment/geometry contexts, supporting
@@ -909,8 +925,27 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `gpu-render-cleanup-20261020/root-integration.json`. A separate texture application
   build `6c45bdc3…` matches all 166 compiled repository inputs and 476 declared sources
   under `gpu-render-cleanup-native-20261020/root-integration.json`; it was not executed.
-  Firmware, GPU pixels, MMIO and isolation remain modeled. Physical cleanup/visibility,
-  allocation reclamation, VM unmapping and reopen remain unqualified or unimplemented.
+  Firmware, GPU pixels, MMIO and isolation remain modeled. Physical cleanup/visibility
+  remains unqualified. Default retained profiles still do not unmap, reclaim or
+  reopen; the optional standalone path below has separate disposal evidence.
+  Optional [standalone child disposal/reopen](gpu-render.md#standalone-sessions-can-dispose-and-reconstruct-child-resources)
+  is now implemented for the admitted sole-client single-core image. After healthy
+  CLOSE, exact owner/epoch and stopped-backend checks precede child cache ownership,
+  offline translation removal and release of three compute/four graphics parent
+  leases. Two global firmware parents stay retained. OPEN rebuilds children with
+  fresh generations/queue epoch; failed partial release/reconstruction prevents retry.
+  Mixed-device images remain excluded. DISPOSE and reconstruction each have 15 s
+  within the original deadline; CLOSE retains 1 s.
+  Actual native leaf checks use original image `e26b9632…` with modeled healthy-stop
+  admission. Final depth image `780d9544…` exercises fourteen app/mailbox/TinyUSB
+  exchanges with modeled service/GPU completions; healthy plus twelve host failure
+  cases consume those replies. Two successful builds retain 87 of 89 objects after
+  the application-only budget change. All 169 compiled repository inputs match
+  final integration; ten noncompiled declared-source differences are separately
+  classified under `gpu-resource-disposal-20261020/root-integration.json`.
+  Compute/triangle leaves compile only; version-8 texture runtime and asynchronous
+  OPEN via STATUS are not exercised. Physical firmware/pixels, cache visibility,
+  reclamation/reopen, SMP and mixed-device allocator serialization remain unqualified.
   The finite GPU adapter is integrated with eight passing linked cases and
   Astra review. Its worker/PMIC quiescence and retained object placement are
   checked. The returning composition's Nonsecure publication and host capture
@@ -1387,9 +1422,10 @@ implementation is **planned**. Partial results apply only to the stated scope:
   dependencies and 161 objects under `root-integration.json`; do not mix current
   objects into that image. Physical networking, entropy quality and RF/wire drain remain
   unqualified. [Explicit healthy reconnect](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
-  now preserves the retained session/IP stack for the same AP and fixed address,
-  after every socket reply/disposal and an IP-task offline receipt. OPEN emitted
-  PASS. The WPA2 fixture executes actual `board_radio_reconnect` and session polling:
+  now preserves the retained session/IP stack for the same AP with fixed addressing
+  or DHCP,
+  after every socket reply/disposal and an IP-task offline receipt. Fixed-address
+  OPEN emitted PASS. The WPA2 fixture executes actual `board_radio_reconnect` and session polling:
   retirement, fresh handshake/keys, address restoration, new TCP exchange and CLOSE
   are verified from terminal RAM and client suspension. A reporting assertion
   prevented PASS; its corrected one-line fixture guard remains unbuilt/unexecuted.
@@ -1398,9 +1434,17 @@ implementation is **planned**. Partial results apply only to the stated scope:
   closure under `radio-reconnect-20261020/root-integration.json`; four linked images
   and eight configuration/build/preflight attempts remain preserved. The 82-input
   repository comparison differs only in that final fixture guard; the declared
-  source difference is unrelated hardware documentation. Physical reconnection,
-  unexpected-loss recovery, DHCP reconnect, IPv6, broader server operation and
-  wider security modes remain unqualified or required.
+  source difference is unrelated hardware documentation. Separate DHCP reconnect
+  and acquisition-timeout cases execute the actual IP task and socket service.
+  The old DHCP socket/timer retire before fresh transaction/address publication;
+  stale ACK is refused, and a new lease permits UDP exchange/CLOSE. Timeout keeps
+  client admission closed. Association, firmware and peer effects remain modeled;
+  this adds no WPA2 handshake, radio session-loop or board-poll execution.
+  Root verifies all 43 model, 168 native-build and 181 declared repository inputs
+  at `3d363f1` under `radio-dhcp-reconnect-20261020/root-integration.json`.
+  The native board consumer was built only, not executed. Physical reconnection,
+  unexpected-loss recovery, IPv6, broader server operation and wider security
+  modes remain unqualified or required.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
 
