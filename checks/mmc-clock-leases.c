@@ -41,7 +41,8 @@ int main(void)
     assert(a733_clock_token_status(&r,&live[1])==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[2])==A733_CLOCK_OK);
     assert(a733_clock_token_status(&r,&live[3])==A733_CLOCK_OK);
-    assert(a733_clock_acquire(&r,9,0,A733_CLOCK_BIT(67),10,&out)==A733_CLOCK_INVALID);
+    /* The first unassigned bit; assigned bits move this boundary upward. */
+    assert(a733_clock_acquire(&r,9,0,A733_CLOCK_ALL+1,10,&out)==A733_CLOCK_INVALID);
     assert(a733_clock_release(&r,&live[2],10)==A733_CLOCK_OK);
     assert(a733_clock_release(&r,&live[3],10)==A733_CLOCK_OK);
     assert(a733_clock_acquire(&r,8,A733_CLOCK_REF|A733_CLOCK_FABRIC,
