@@ -50,7 +50,9 @@ static struct bt_l2cap_channel *channel(const struct bt_avdtp *q,uint64_t identi
 int bt_avdtp_admit(void *ctx,uint64_t link,uint16_t psm,unsigned incoming)
 {
     struct bt_avdtp *q=ctx;
-    if(!q || !q->initialized || q->error || q->l2cap->state!=BT_L2CAP_ACTIVE || !disjoint(q))return -1;
+    if(!q || !q->initialized || q->l2cap->state!=BT_L2CAP_ACTIVE || !disjoint(q))return -1;
+    /* A sink fault refuses only PSM0x19; other services keep their policy. */
+    if(q->error && psm==BT_AVDTP_PSM)return -1;
     int allowed=q->policy(q->context,link,psm,incoming);
     if(psm!=BT_AVDTP_PSM)return allowed;
     if(!incoming)return -1;
@@ -274,6 +276,9 @@ int bt_avdtp_step(struct bt_avdtp *q,unsigned budget,uint64_t bound)
     if(!q || !q->initialized || q->error)return -1;
     if(q->l2cap->state!=BT_L2CAP_ACTIVE || !disjoint(q) || bt_l2cap_step(q->l2cap,budget,bound)!=1)return fail(q,BT_AVDTP_LOWER);
     if(maintain(q)!=1)return -1;
+    /* Held channels recheck the actual link security before any command,
+     * response or media publication. Local closure accepts neither. */
+    if((q->signal || q->media) && !q->closing && q->policy(q->context,q->link,BT_AVDTP_PSM,1)!=1)return fail(q,BT_AVDTP_SECURITY);
     const struct bt_l2cap_channel *s=channel(q,q->signal);
     if(s && s->state==BT_L2CAP_OPEN && !q->tx_serial && !q->response_length)signaling(q);
     if(!q->error && q->response_length && !q->tx_serial && s && s->state==BT_L2CAP_OPEN) {

@@ -11,7 +11,7 @@
 enum bt_avdtp_stream { BT_AVDTP_IDLE, BT_AVDTP_CONFIGURED, BT_AVDTP_OPEN,
     BT_AVDTP_STREAMING, BT_AVDTP_CLOSING, BT_AVDTP_ABORTING };
 enum bt_avdtp_error { BT_AVDTP_OK, BT_AVDTP_LOWER, BT_AVDTP_EXPIRED,
-    BT_AVDTP_PROTOCOL, BT_AVDTP_IDENTITY };
+    BT_AVDTP_PROTOCOL, BT_AVDTP_IDENTITY, BT_AVDTP_SECURITY };
 /* One copied media packet: whole SBC frames after the RTP and media payload
  * headers. gap counts packets the application never received before this
  * one, including invalid and dropped packets. pdu is the L2CAP serial. */
@@ -51,13 +51,16 @@ int bt_avdtp_init(struct bt_avdtp *,struct bt_l2cap *,const uint8_t capabilities
 /* Install beneath the RFCOMM registry like bt_sdp_server_admit. Incoming
  * PSM0x19 reserves the next channel generation as the signaling channel of
  * the only admitted link, then as its media channel after an accepted OPEN.
- * Outgoing PSM0x19 is refused; other PSMs delegate unchanged. */
+ * Outgoing PSM0x19 is refused; other PSMs delegate unchanged, also after a
+ * sink fault, which refuses only PSM0x19. */
 int bt_avdtp_admit(void *,uint64_t,uint16_t,unsigned);
 /* One lower step, channel maintenance, at most one signaling command with
  * its response and one media packet. Media is copied only while STREAMING
  * and only when every SBC frame header matches the configuration; a full
  * slot set drops the packet. Return1 active,0 closed after local close,
- * -1 retained fault. A peer that closes signaling returns to IDLE. */
+ * -1 retained fault. A peer that closes signaling returns to IDLE. While a
+ * channel is held and no local close is pending, each step first rechecks
+ * the policy for PSM0x19; any result but1 is a retained SECURITY fault. */
 int bt_avdtp_step(struct bt_avdtp *,unsigned uart_budget,uint64_t deadline);
 /* Oldest published media; release it by serial to free the slot. */
 const struct bt_avdtp_media *bt_avdtp_media(const struct bt_avdtp *);

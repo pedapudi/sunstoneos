@@ -63,6 +63,20 @@ becomes the media transport channel, but only after the sink has accepted
 close. Admission reserves the exact next L2CAP channel generation, so the sink
 never adopts a channel by a reused wire CID.
 
+Security is checked again on every step while the sink holds either channel.
+Before it handles a signaling command, sends a response or publishes a media
+slot, the step calls the security policy for PSM 25 on the admitted link. Any
+result other than success, for example after a key replacement, a loss of
+encryption or a revoked link, faults the sink with `BT_AVDTP_SECURITY`. The
+faulted sink handles no further commands, sends no response and publishes no
+media. It retains both channels and their unread receive records. During a
+local close the sink accepts no input and publishes nothing, so the step skips
+this check and the close can complete.
+
+A sink fault refuses only PSM 25. The admission callback still passes requests
+for other PSMs, such as SDP and RFCOMM, to the application's policy, so a fault
+caused by a malformed AVDTP packet does not deny the other services on the link.
+
 One serialized task owns the sink and the lower workers. Each step advances the
 lower stack once, maintains both channels, handles at most one signaling command
 and copies at most one media packet. One response is outstanding at a time.
@@ -128,6 +142,11 @@ sanitizers. The source side of each exchange is encoded independently in
   block length and subband count.
 - Peer signaling closure, ordered local closure, denied security, fragmented
   signaling and response expiry.
+- Security revoked while streaming: a pending `SUSPEND` receives no response,
+  a pending media packet fills no slot, and both channels and both receive
+  records are retained.
+- After a fragmented-signaling fault, PSM 25 is refused while SDP admission
+  still reaches the policy.
 
 The runner verifies the libsbc sources against `apps/bluetooth/msbc-source.json`
 and compares the SBC configuration bit layout with libsbc's A2DP definitions.

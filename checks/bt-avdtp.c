@@ -268,11 +268,27 @@ static void refusals(void)
     const uint8_t start_packet[]={(uint8_t)(1<<4|1<<2),2,3,0x01};incoming_pdu(&d.lower,p.signal,start_packet,4,0);
     int r=1;for(unsigned i=0;i<20 && r>=0;++i)r=apoll_result(&d);
     assert(r==-1 && d.sink.error==BT_AVDTP_PROTOCOL && bt_avdtp_step(&d.sink,64,UINT64_MAX)==-1);
+    /* The fault refuses further sinks but still delegates other services. */
+    assert(bt_avdtp_admit(&d.sink,d.lower.link,BT_AVDTP_PSM,1)==-1 && bt_avdtp_admit(&d.sink,d.lower.link,1,1)==1);
+    /* Revoked security while streaming stops commands, replies and media at
+     * the next step and retains both channels and their receive records. */
+    start(&d);open_signaling(&d,&p);const uint8_t joint[]={0x21,0x15,2,53};configure(&d,&p,joint);
+    static uint8_t frames[1024],packet[1100];static int16_t pcm[4096];size_t samples;
+    unsigned bytes=encode(joint,35,1,frames,sizeof(frames),pcm,&samples),m=media_packet(packet,1,0,frames,1,bytes);
+    incoming_pdu(&d.lower,p.media,packet,m,0);for(unsigned i=0;i<6;++i)apoll(&d);
+    const struct bt_avdtp_media *x=bt_avdtp_media(&d.sink);assert(x);bt_avdtp_release_media(&d.sink,x->serial);
+    quiet(&d);d.allow=0;
+    const uint8_t seid[]={4};command(&d,&p,9,seid,1);incoming_pdu(&d.lower,p.media,packet,m,0);
+    r=1;for(unsigned i=0;i<20 && r>=0;++i)r=apoll_result(&d);
+    assert(r==-1 && d.sink.error==BT_AVDTP_SECURITY && d.sink.stream==BT_AVDTP_STREAMING && !bt_avdtp_media(&d.sink));
+    assert(d.next==d.lower.outputs && d.sink.signal && d.sink.media && !d.sink.response_length && !d.sink.tx_serial);
+    unsigned held=0;for(unsigned i=0;i<BT_L2CAP_PDUS;++i)held+=d.lower.q.rx[i].state==BT_L2CAP_RECEIVED;assert(held==2);
+    assert(bt_avdtp_close(&d.sink,d.lower.f.now+50000)==-1);
     /* An unretired response expires at its deadline. */
     start(&d);open_signaling(&d,&p);d.lower.automatic_credits=0;command(&d,&p,1,0,0);
     for(unsigned i=0;i<40 && !d.sink.tx_serial;++i)apoll(&d);assert(d.sink.tx_serial);
     d.lower.f.now=d.sink.deadline;r=apoll_result(&d);assert(r==-1 && d.sink.error==BT_AVDTP_EXPIRED);
-    puts("AVDTP refuses invalid capabilities, outgoing and denied channels, fragmented signaling and expired responses");
+    puts("AVDTP refuses invalid capabilities, outgoing and denied channels, fragmented signaling, revoked security and expired responses");
 }
 int main(void)
 {
