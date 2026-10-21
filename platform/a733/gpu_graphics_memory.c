@@ -1,4 +1,5 @@
 #include "a733_gpu_graphics_memory.h"
+#include "a733_gpu_disposal.h"
 #include "aarch64_device_memory.h"
 #include "pvr_render_draw.h"
 #include <string.h>
@@ -303,7 +304,7 @@ static int construction_failed(struct a733_gpu_graphics_memory *s)
 }
 static int prepare(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *compute,
-    struct pvr_gpu_service *service, uint64_t owner, const struct a733_gpu_graphics_profile *profile, unsigned fixed_clear,unsigned draw)
+    struct pvr_gpu_service *service, uint64_t owner, const struct a733_gpu_graphics_profile *profile, unsigned fixed_clear,unsigned draw,int rebuilding)
 {
     if (graphics_owner || !s || !g || !compute || !service || !profile || !owner ||
         (uintptr_t)s % _Alignof(struct a733_gpu_graphics_memory) ||
@@ -311,7 +312,7 @@ static int prepare(struct a733_gpu_graphics_memory *s,
         (uintptr_t)compute % _Alignof(struct a733_gpu_compute_reserved) ||
         (uintptr_t)service % _Alignof(struct pvr_gpu_service) ||
         (uintptr_t)profile % _Alignof(struct a733_gpu_graphics_profile) ||
-        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
+        (!rebuilding && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) ||
         !mapped((uintptr_t)g, sizeof(*g), 0xff) || !mapped((uintptr_t)compute, sizeof(*compute), 0xff) ||
         !a733_gpu_compute_reserved_admitted(compute, g, service)) return 0;
     /* Existing native compute admission proves this is the actual boot pool,
@@ -326,7 +327,7 @@ static int prepare(struct a733_gpu_graphics_memory *s,
     const size_t n[] = {sizeof(*s), sizeof(*g), sizeof(*compute), sizeof(*service), sizeof(*profile), g->config.firmware_bytes};
     for (unsigned i = 0; i < 6; ++i) for (unsigned j = 0; j < i; ++j)
         if (!apart((uintptr_t)p[i], n[i], (uintptr_t)p[j], n[j])) return 0;
-    if (s->self || s->phase || service->initialized || g->config.graphics || g->config.free_lists.count ||
+    if (s->self || s->phase || (!rebuilding && service->initialized) || g->config.graphics || g->config.free_lists.count ||
         g->config.context || g->config.render || g->config.compute != &compute->compute || compute->binding.firmware != g ||
         compute->binding.service != service || compute->compute.phase != PVR_COMPUTE_SERVICE_BOUND ||
         !a733_gpu_compute_reserved_admitted(compute, g, service) ||
@@ -550,20 +551,39 @@ int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *s)
 int a733_gpu_graphics_memory_prepare(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *c,
     struct pvr_gpu_service *v, uint64_t owner, const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,0,0); }
+{ return prepare(s,g,c,v,owner,p,0,0,0); }
 int a733_gpu_graphics_memory_prepare_clear(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g, struct a733_gpu_compute_reserved *c,
     struct pvr_gpu_service *v, uint64_t owner, const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,1,0); }
+{ return prepare(s,g,c,v,owner,p,1,0,0); }
 int a733_gpu_graphics_memory_prepare_draw(struct a733_gpu_graphics_memory *s,
     struct a733_gpu_reserved *g,struct a733_gpu_compute_reserved *c,
     struct pvr_gpu_service *v,uint64_t owner,const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,1,1); }
+{ return prepare(s,g,c,v,owner,p,1,1,0); }
 
 int a733_gpu_graphics_memory_prepare_texture(struct a733_gpu_graphics_memory *s,struct a733_gpu_reserved *g,
     struct a733_gpu_compute_reserved *c,struct pvr_gpu_service *v,uint64_t owner,const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,1,2); }
+{ return prepare(s,g,c,v,owner,p,1,2,0); }
 
 int a733_gpu_graphics_memory_prepare_depth_blend(struct a733_gpu_graphics_memory *s,struct a733_gpu_reserved *g,
     struct a733_gpu_compute_reserved *c,struct pvr_gpu_service *v,uint64_t owner,const struct a733_gpu_graphics_profile *p)
-{ return prepare(s,g,c,v,owner,p,1,3); }
+{ return prepare(s,g,c,v,owner,p,1,3,0); }
+
+int a733_gpu_graphics_memory_disposed(struct a733_gpu_graphics_memory *s)
+{
+    if(s!=graphics_owner || s->phase!=A733_GPU_GRAPHICS_READY ||
+       device_memory_lookup(s->firmware->wb_pool,s->backing_lease) ||
+       device_memory_lookup(s->firmware->wb_pool,s->payload_lease) ||
+       device_memory_lookup(s->firmware->nc_pool,s->shared_lease) ||
+       device_memory_lookup(s->firmware->wb_pool,s->table_lease))return 0;
+    s->phase=A733_GPU_GRAPHICS_DISPOSED;return 1;
+}
+int a733_gpu_graphics_memory_rebuild(struct a733_gpu_graphics_memory *s,struct pvr_gpu_service *v)
+{
+    struct a733_gpu_disposal *d=gpu_application_disposal_get(v);
+    if(!d || d->phase!=A733_GPU_DISPOSAL_REBUILD || d->graphics!=s || s!=graphics_owner ||
+       s->phase!=A733_GPU_GRAPHICS_DISPOSED || v->phase!=PVR_GPU_SERVICE_RECONSTRUCTING ||
+       d->released!=((1u<<d->count)-1))return 0;
+    memset(s,0,sizeof(*s));graphics_owner=NULL;
+    return prepare(s,d->firmware,d->compute,v,d->graphics_owner,&d->profile,d->fixed_clear,d->draw,1);
+}

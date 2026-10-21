@@ -73,4 +73,7 @@ struct pvr_compute_service *a733_gpu_compute_reserved_prepare_package(
  */
 int a733_gpu_compute_reserved_admitted(struct a733_gpu_compute_reserved *,
     struct a733_gpu_reserved *, struct pvr_gpu_service *);
+/* Internal disposed-owner reconstruction; original startup APIs stay strict. */
+int a733_gpu_compute_reserved_disposed(struct a733_gpu_compute_reserved *);
+int a733_gpu_compute_reserved_rebuild(struct a733_gpu_compute_reserved *,struct pvr_gpu_service *);
 #endif

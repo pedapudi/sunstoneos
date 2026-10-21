@@ -3,6 +3,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include <stdatomic.h>
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
@@ -19,11 +20,12 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
-    PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP };
+    PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP, PVR_GPU_SERVICE_DISPOSING, PVR_GPU_SERVICE_DISPOSED,
+    PVR_GPU_SERVICE_RECONSTRUCTING };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
-    PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE };
+    PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE, PVR_GPU_SERVICE_DISPOSE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -138,7 +140,7 @@ struct pvr_gpu_service_reply {
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
-    uint64_t ticket;
+    uint64_t ticket, epoch;
     unsigned client;
     uint32_t render_first_pixel, compute_first_word, compute_sequence, render_sequence;
 };
@@ -184,7 +186,9 @@ struct pvr_gpu_service {
     uint64_t epoch, deadline, last_now;
     enum pvr_gpu_service_phase phase;
     enum pvr_gpu_service_error error;
-    unsigned owner, initialized;
+    unsigned owner, initialized, closed_owner;
+    uint64_t closed_epoch;
+    atomic_uint_fast64_t published_epoch;
     unsigned irq_masked, irq_fault, irq_wake_pending, irq_deferred;
     /* Fixed native render owner: context pair, HWRT pair, local/global lists. */
     struct pvr_ccb_token graphics_cleanup_tokens[6];
@@ -230,6 +234,15 @@ int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
  * Configured graphics and compute publication are part of OPEN and precede
  * power enable. Graphics preparation is not a rendering/completion claim.
  */
+int pvr_gpu_service_compute_input_epoch(struct pvr_gpu_service *,uint64_t,uint32_t,
+    const void *,size_t,uint64_t,TickType_t,uint64_t *);
+int pvr_gpu_service_compute_read_epoch(struct pvr_gpu_service *,uint64_t,uint32_t,uint32_t,TickType_t,uint64_t *);
+int pvr_gpu_service_render_read_epoch(struct pvr_gpu_service *,uint64_t,uint32_t,uint32_t,TickType_t,uint64_t *);
+/* Explicit epoch variants are mandatory for consumers that reopen a disposed
+ * instance. Legacy wrappers snapshot the currently published epoch. Every
+ * queued mutation/output operation is checked again at worker consumption. */
+int pvr_gpu_service_send_epoch(struct pvr_gpu_service *,uint64_t epoch,
+    const struct pvr_gpu_service_request *,TickType_t,uint64_t *);
 int pvr_gpu_service_send(struct pvr_gpu_service *, const struct pvr_gpu_service_request *,
                          TickType_t wait, uint64_t *ticket);
 int pvr_gpu_service_collect(struct pvr_gpu_service *, uint64_t ticket,

@@ -1,10 +1,11 @@
 #include "a733_gpu_compute_reserved.h"
 #include "aarch64_device_memory.h"
+#include "a733_gpu_disposal.h"
 #include <string.h>
 
 extern unsigned char __device_pool_start[];
 static struct a733_gpu_compute_reserved *compute_owner;
-enum { NEW, ACQUIRED, VM_BUILT, PROGRAMS_BUILT, CONTEXT_BUILT, JOB_BUILT, BOUND, FAILED };
+enum { NEW, ACQUIRED, VM_BUILT, PROGRAMS_BUILT, CONTEXT_BUILT, JOB_BUILT, BOUND, FAILED, DISPOSED };
 static const uint32_t context_bytes[6] = {232, 4, 32, 1024, 32, 64};
 /* Fixed firmware PDS/USC bases and the general heap from the pinned native
  * heap profile. PDS/USC offsets are relative to globally programmed bases. */
@@ -231,7 +232,7 @@ static int acquire(struct device_memory_pool *pool, uint64_t owner, size_t bytes
 
 static struct pvr_compute_service *prepare(
     struct a733_gpu_compute_reserved *s, struct a733_gpu_reserved *g,
-    struct pvr_gpu_service *service, uint32_t owner, const struct pvr_compute_package *package)
+    struct pvr_gpu_service *service, uint32_t owner, const struct pvr_compute_package *package,int rebuilding)
 {
     if(package&&(!private_image((uintptr_t)package,sizeof(*package),0)||!pvr_compute_package_valid(package)||
         !apart((uintptr_t)package,sizeof(*package),(uintptr_t)s,sizeof(*s))||
@@ -239,13 +240,13 @@ static struct pvr_compute_service *prepare(
         !apart((uintptr_t)package,sizeof(*package),(uintptr_t)service,sizeof(*service))))return NULL;
     if (compute_owner || !s || !g || !service || !owner || (uintptr_t)s % _Alignof(struct a733_gpu_compute_reserved) ||
         (uintptr_t)g % _Alignof(struct a733_gpu_reserved) || (uintptr_t)service % _Alignof(struct pvr_gpu_service) ||
-        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED ||
+        (!rebuilding && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) ||
         !private_image((uintptr_t)s, sizeof(*s), 1) || !private_image((uintptr_t)g, sizeof(*g), 1) ||
         !private_image((uintptr_t)service, sizeof(*service), 1) ||
         !apart((uintptr_t)s, sizeof(*s), (uintptr_t)g, sizeof(*g)) ||
         !apart((uintptr_t)s, sizeof(*s), (uintptr_t)service, sizeof(*service)) ||
         !apart((uintptr_t)g, sizeof(*g), (uintptr_t)service, sizeof(*service)) ||
-        s->stage || s->binding.self || service->initialized || g->config.compute ||
+        s->stage || s->binding.self || (!rebuilding && service->initialized) || g->config.compute ||
         g->config.free_lists.count || g->memory.phase != A733_GPU_MEMORY_OFFLINE ||
         !private_image((uintptr_t)g->config.firmware, g->config.firmware_bytes, 0) ||
         !apart((uintptr_t)s, sizeof(*s), (uintptr_t)g->config.firmware, g->config.firmware_bytes) ||
@@ -337,7 +338,7 @@ static struct pvr_compute_service *prepare(
     if (!pvr_mips_prepare(g->config.firmware, g->config.firmware_bytes,
         g->config.firmware_buffers, s->mappings,
         PVR_FW_RESOURCE_COUNT + PVR_COMPUTE_SERVICE_OBJECTS, &s->boot)) return failed(s);
-    if (!pvr_compute_service_bind(&s->compute, service, &g->config, &s->config)) return failed(s);
+    if (!(rebuilding?pvr_compute_service_rebind:pvr_compute_service_bind)(&s->compute, service, &g->config, &s->config)) return failed(s);
     s->stage = BOUND;
     return &s->compute;
 }
@@ -345,8 +346,33 @@ static struct pvr_compute_service *prepare(
 struct pvr_compute_service *a733_gpu_compute_reserved_prepare(
     struct a733_gpu_compute_reserved *s,struct a733_gpu_reserved *g,
     struct pvr_gpu_service *service,uint32_t owner)
-{return prepare(s,g,service,owner,NULL);}
+{return prepare(s,g,service,owner,NULL,0);}
 struct pvr_compute_service *a733_gpu_compute_reserved_prepare_package(
     struct a733_gpu_compute_reserved *s,struct a733_gpu_reserved *g,
     struct pvr_gpu_service *service,uint32_t owner,const struct pvr_compute_package *package)
-{return package?prepare(s,g,service,owner,package):NULL;}
+{return package?prepare(s,g,service,owner,package,0):NULL;}
+
+int a733_gpu_compute_reserved_disposed(struct a733_gpu_compute_reserved *s)
+{
+    if(s!=compute_owner || s->stage!=BOUND || s->compute.phase!=PVR_COMPUTE_SERVICE_CLEANED ||
+       device_memory_lookup(s->binding.wb,s->payload_lease) ||
+       device_memory_lookup(s->binding.nc,s->firmware_lease) ||
+       device_memory_lookup(s->binding.wb,s->table_lease))return 0;
+    s->stage=DISPOSED;return 1;
+}
+int a733_gpu_compute_reserved_rebuild(struct a733_gpu_compute_reserved *s,struct pvr_gpu_service *g)
+{
+    struct a733_gpu_disposal *d=gpu_application_disposal_get(g);
+    if(!d || d->phase!=A733_GPU_DISPOSAL_REBUILD || d->compute!=s || s!=compute_owner ||
+       s->stage!=DISPOSED || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING ||
+       d->released!=((1u<<d->count)-1))return 0;
+    struct a733_gpu_reserved *f=d->firmware;uint32_t owner=d->compute_owner;
+    const struct pvr_compute_package *package=d->package;
+    /* Only successful disposal authorizes replacing this child metadata. */
+    memset(s,0,sizeof(*s));compute_owner=NULL;
+    f->config.compute=NULL;f->config.graphics=NULL;f->config.render=NULL;f->config.context=NULL;
+    memset(&f->config.free_lists,0,sizeof(f->config.free_lists));
+    if(!prepare(s,f,g,owner,package,1))return 0;
+    g->config.compute=&s->compute;g->config.graphics=NULL;g->config.render=NULL;
+    memset(&g->config.free_lists,0,sizeof(g->config.free_lists));return 1;
+}

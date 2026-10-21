@@ -74,4 +74,7 @@ struct a733_gpu_backend {
 int a733_gpu_backend_bind(struct a733_gpu_backend *, struct pvr_gpu_service *,
     struct pvr_gpu_service_config *, struct a733_gpu_memory *, struct a733_gpu_platform *,
     const struct a733_gpu_backend_external *);
+/* Exact native binding and accepted full healthy-stop state; no MMIO. */
+int a733_gpu_backend_stopped(struct a733_gpu_backend *,struct pvr_gpu_service *);
+int a733_gpu_backend_rebind_children(struct a733_gpu_backend *);
 #endif

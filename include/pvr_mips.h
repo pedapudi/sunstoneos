@@ -58,4 +58,7 @@ int pvr_mips_prepare(const void *image, size_t bytes,
                      const struct pvr_mips_buffer buffers[3],
                      const struct pvr_mips_object *objects, size_t object_count,
                      struct pvr_mips_boot *boot);
+/* Offline removal only after the native full healthy-stop proof. Verify every
+ * old entry before clearing any; caller owns cache publication and all backing. */
+int pvr_mips_unmap_stopped(const struct pvr_mips_buffer *,const struct pvr_mips_object *,size_t);
 #endif

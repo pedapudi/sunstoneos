@@ -27,6 +27,31 @@ const uint64_t gpu_runtime_texture_marker[2]={UINT64_C(0x4750555458543031),PVR_R
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
 const uint64_t gpu_program_application_marker[2]={UINT64_C(0x4750555052473031),1};
 #endif
+#ifdef SUNSTONE_GPU_LIFECYCLE
+#if configSUPPORT_DYNAMIC_ALLOCATION != 0 || configUSE_TIMERS != 0
+#error "Exclusive GPU lifecycle requires static tasks and no timer task"
+#endif
+const uint64_t gpu_lifecycle_marker[2]={UINT64_C(0x4750554c49464531),1};
+/* This image creates only fixed PMIC/USB/client/service tasks. All pool
+ * construction precedes the scheduler; only the GPU worker mutates child leases
+ * afterward. Other images do not supply this binding. */
+struct a733_gpu_disposal *gpu_application_disposal_get(struct pvr_gpu_service *s)
+{
+    if(s!=&app.service || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+       xTaskGetCurrentTaskHandle()!=s->worker || !gpu_application_live(NULL) ||
+       app.disposal.firmware!=&app.firmware || app.disposal.compute!=&app.compute ||
+       app.disposal.backend!=&app.backend || app.backend.service!=s ||
+       app.backend.power!=&app.power || app.backend.memory!=&app.firmware.memory ||
+       app.disposal.limit!=app.session.deadline_us || s->clients[0].task!=app.handles[2])return NULL;
+    for(unsigned i=1;i<PVR_GPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return NULL;
+#ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
+    if(app.disposal.graphics!=&app.graphics)return NULL;
+#else
+    if(app.disposal.graphics)return NULL;
+#endif
+    return &app.disposal;
+}
+#endif
 extern const unsigned char gpu_firmware[],gpu_firmware_end[];
 static _Noreturn void park(void){for(;;)vTaskDelay(1);}
 int gpu_application_live(void *unused)
@@ -58,6 +83,11 @@ static _Noreturn void retained(void)
 {gpu_application_fail(NULL);park();}
 static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op,uint64_t timeout)
 {
+    #ifdef SUNSTONE_GPU_LIFECYCLE
+    if(timeout){uint64_t now=a733_smp_counter()/24;
+        if(now>=app.session.deadline_us)retained();
+        if(timeout>app.session.deadline_us-now)timeout=app.session.deadline_us-now;}
+#endif
     struct pvr_gpu_service_request q={op,timeout};struct pvr_gpu_service_reply reply;uint64_t ticket;
     if(!gpu_application_live(NULL)||!pvr_gpu_service_send(&app.service,&q,1,&ticket)){
         retained();}
@@ -67,6 +97,56 @@ static struct pvr_gpu_service_reply request(enum pvr_gpu_service_operation op,ui
     if(reply.result!=PVR_GPU_SERVICE_OK){retained();}
     return reply;
 }
+#ifdef SUNSTONE_GPU_LIFECYCLE
+/* Runs only in the sole bound application client, after acquiring its USB
+ * mailbox. Pending controls keep that mailbox owned until terminal publication. */
+int gpu_application_lifecycle(unsigned operation)
+{
+    if(operation<3 || operation>5)return 0;
+    uint64_t old=app.runtime_request_epoch;
+    if(old!=atomic_load_explicit(&app.runtime_epoch,memory_order_acquire))return -1;
+    uint64_t now=a733_smp_counter()/24;
+    if(now>=app.session.deadline_us)retained();
+    uint64_t timeout=operation==5?15000000:1000000;
+    if(timeout>app.session.deadline_us-now)timeout=app.session.deadline_us-now;
+    struct pvr_gpu_service_request q={operation==3?PVR_GPU_SERVICE_CLOSE:
+        operation==4?PVR_GPU_SERVICE_DISPOSE:PVR_GPU_SERVICE_OPEN,timeout};
+    struct pvr_gpu_service_reply r;uint64_t ticket;
+    if(!pvr_gpu_service_send_epoch(&app.service,old,&q,1,&ticket))return -1;
+    while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+    if(r.result==PVR_GPU_SERVICE_FAULT)retained();
+    if(r.result!=PVR_GPU_SERVICE_OK)return -1;
+    unsigned terminal=operation==3?PVR_GPU_SERVICE_STOPPED:
+        operation==4?PVR_GPU_SERVICE_DISPOSED:PVR_GPU_SERVICE_READY;
+    while(r.phase!=terminal){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+    if(r.epoch!=(operation==5?old+1:old))retained();
+    app.last=r;
+    if(operation==5) {
+        atomic_store_explicit(&app.runtime_epoch,r.epoch,memory_order_release);
+        atomic_store_explicit(&app.runtime_sequence,0,memory_order_release);
+#ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
+        app.texture_generation=0;
+#endif
+#ifdef SUNSTONE_GPU_RUNTIME_INPUT
+        r=request(PVR_GPU_SERVICE_COMPUTE,1000000);
+        while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+        unsigned total=gpu_application_package()->output_bytes/4;
+        for(unsigned first=0;first<total;first+=32) {
+            if(!pvr_gpu_service_compute_read_epoch(&app.service,r.epoch,1,first,1,&ticket))retained();
+            while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
+            unsigned n=total-first<32?total-first:32;
+            if(r.result!=PVR_GPU_SERVICE_OK || r.compute_sequence!=1 || r.compute_first_word!=first ||
+                r.compute_word_count!=n || r.compute_total_words!=total)retained();
+            memcpy(app.pixels+first,r.compute_words,n*4);
+        }
+        atomic_store_explicit(&app.runtime_sequence,1,memory_order_release);
+#endif
+        atomic_store_explicit(&app.runtime_closed,0,memory_order_release);
+    } else atomic_store_explicit(&app.runtime_closed,1,memory_order_release);
+    atomic_store_explicit(&app.result,operation==3?3:operation==4?5:1,memory_order_release);
+    return 1;
+}
+#endif
 #ifdef SUNSTONE_GPU_RUNTIME_INPUT
 static void runtime_inputs(void)
 {
@@ -77,12 +157,26 @@ static void runtime_inputs(void)
             if(!gpu_application_live(NULL))retained();
             (void)request(PVR_GPU_SERVICE_STATUS,0);vTaskDelay(1);
         }
+        #ifdef SUNSTONE_GPU_LIFECYCLE
+        if(app.runtime_operation>=3){
+            if(gpu_application_lifecycle(app.runtime_operation)<0)
+                atomic_store_explicit(&app.result,4,memory_order_release);
+            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
+        }
+#else
         if(app.runtime_operation==3)break;
+#endif
         uint64_t ticket;struct pvr_gpu_service_reply r;
-        if(!pvr_gpu_service_compute_input(&app.service,app.runtime_expected,app.runtime_input,
+        if(!pvr_gpu_service_compute_input_epoch(&app.service,
+#ifdef SUNSTONE_GPU_LIFECYCLE
+            app.runtime_request_epoch,
+#else
+            app.last.epoch,
+#endif
+            app.runtime_expected,app.runtime_input,
             app.runtime_bytes,1000000,1,&ticket)) {
-            atomic_store_explicit(&app.runtime_state,0,memory_order_release);
-            atomic_store_explicit(&app.result,1,memory_order_release);continue;
+            atomic_store_explicit(&app.result,1,memory_order_release);
+            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
         }
         while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
         if(r.result==PVR_GPU_SERVICE_FAULT)retained();
@@ -100,8 +194,8 @@ static void runtime_inputs(void)
                 memcpy(app.pixels+first,r.compute_words,n*4);
             }
         }
-        atomic_store_explicit(&app.runtime_state,0,memory_order_release);
         atomic_store_explicit(&app.result,1,memory_order_release);
+        atomic_store_explicit(&app.runtime_state,0,memory_order_release);
     }
 }
 #endif
@@ -113,9 +207,23 @@ static void runtime_draw(void)
             if(!gpu_application_live(NULL))retained();
             (void)request(PVR_GPU_SERVICE_STATUS,0);vTaskDelay(1);
         }
+        #ifdef SUNSTONE_GPU_LIFECYCLE
+        if(app.runtime_operation>=3){
+            if(gpu_application_lifecycle(app.runtime_operation)<0)
+                atomic_store_explicit(&app.result,4,memory_order_release);
+            atomic_store_explicit(&app.runtime_state,0,memory_order_release);continue;
+        }
+#else
         if(app.runtime_operation==3)return;
+#endif
         uint64_t ticket;struct pvr_gpu_service_reply r;
-        int sent=pvr_gpu_service_draw_next(&app.service,app.last.epoch,app.runtime_expected,app.runtime_input,app.runtime_bytes,
+        int sent=pvr_gpu_service_draw_next(&app.service,
+#ifdef SUNSTONE_GPU_LIFECYCLE
+            app.runtime_request_epoch,
+#else
+            app.last.epoch,
+#endif
+            app.runtime_expected,app.runtime_input,app.runtime_bytes,
             app.runtime_bytes/sizeof(struct pvr_render_vertex),1000000,1,&ticket);
         if(sent) {
             while(!pvr_gpu_service_collect(&app.service,ticket,&r,1))if(!gpu_application_live(NULL))retained();
@@ -164,6 +272,12 @@ static void client(void *unused)
     struct pvr_gpu_service_reply r=request(PVR_GPU_SERVICE_OPEN,1000000);
 #endif
     while(r.phase!=PVR_GPU_SERVICE_READY){vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    atomic_store_explicit(&app.runtime_epoch,r.epoch,memory_order_release);
+#ifdef SUNSTONE_GPU_RUNTIME_DRAW
+    atomic_store_explicit(&app.result,1,memory_order_release);
+#endif
+#endif
 #if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
     gpu_application_texture_client();
 #elif defined(SUNSTONE_GPU_RUNTIME_DRAW)
@@ -364,6 +478,14 @@ void a733_smp_diagnostic_start(void)
         atomic_store_explicit(&app.result,2,memory_order_release);
         if(app.service.worker)vTaskSuspend(app.service.worker);
     }
+#endif
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    app.disposal.firmware=&app.firmware;app.disposal.compute=&app.compute;
+#ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
+    app.disposal.graphics=&app.graphics;
+#endif
+    app.disposal.backend=&app.backend;app.disposal.limit=app.session.deadline_us;
+    __asm__ volatile("" :: "r"(gpu_lifecycle_marker) : "memory");
 #endif
     vTaskStartScheduler();platform_panic("GPU scheduler returned",9);
 }

@@ -126,12 +126,12 @@ static int metadata(struct pvr_compute_service *s,struct pvr_gpu_service *g,
     return 1;
 }
 static int validate(struct pvr_compute_service *s,struct pvr_gpu_service *g,
-    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c)
+    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c,int rebuilding)
 {
     if(!span(s,sizeof(*s))||!span(g,sizeof(*g))||!span(gc,sizeof(*gc))||!span(c,sizeof(*c))||
        (uintptr_t)s%_Alignof(struct pvr_compute_service)||(uintptr_t)c%_Alignof(struct pvr_compute_service_config)||
        (uintptr_t)g%_Alignof(struct pvr_gpu_service)||(uintptr_t)gc%_Alignof(struct pvr_gpu_service_config)||
-       s->phase||g->initialized||gc->compute||!apart(s,sizeof(*s),g,sizeof(*g))||
+       s->phase||(g->initialized && (!rebuilding || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING))||gc->compute||!apart(s,sizeof(*s),g,sizeof(*g))||
        !apart(s,sizeof(*s),gc,sizeof(*gc))||!apart(s,sizeof(*s),c,sizeof(*c))||
        !span(c->job,sizeof(*c->job))||!span(c->image,sizeof(*c->image))||
        (uintptr_t)c->job%_Alignof(struct pvr_compute_job_config)||
@@ -227,15 +227,21 @@ static int clock_now(void *ctx,uint64_t *out)
 }
 static int timely(struct pvr_compute_service *s)
 { uint64_t now;return clock_now(s,&now)&&now<s->deadline; }
-int pvr_compute_service_bind(struct pvr_compute_service *s,struct pvr_gpu_service *g,
-    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c)
+static int bind(struct pvr_compute_service *s,struct pvr_gpu_service *g,
+    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c,int rebuilding)
 {
-    if(!validate(s,g,gc,c))return 0;
+    if(!validate(s,g,gc,c,rebuilding))return 0;
     struct pvr_compute_service candidate={.config=c,.service=g,.phase=PVR_COMPUTE_SERVICE_BOUND};
     for(unsigned i=0;i<6;++i)candidate.objects[i]=(struct pvr_mips_object){
         c->firmware[i].pages,c->firmware[i].page_count,c->firmware_address[i],PVR_MIPS_UNCACHED};
     *s=candidate;gc->compute=s;return 1;
 }
+int pvr_compute_service_bind(struct pvr_compute_service *s,struct pvr_gpu_service *g,
+    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c)
+{ return bind(s,g,gc,c,0); }
+int pvr_compute_service_rebind(struct pvr_compute_service *s,struct pvr_gpu_service *g,
+    struct pvr_gpu_service_config *gc,const struct pvr_compute_service_config *c)
+{ return g && g->phase==PVR_GPU_SERVICE_RECONSTRUCTING && bind(s,g,gc,c,1); }
 int pvr_compute_service_prepare(struct pvr_compute_service *s,uint64_t deadline)
 {
     if(!s||s->phase!=PVR_COMPUTE_SERVICE_BOUND||!s->service->epoch)return 0;

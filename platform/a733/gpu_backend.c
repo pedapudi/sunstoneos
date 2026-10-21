@@ -482,3 +482,26 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
     c->enable = NULL; c->context = b; c->compute_mode = compute_mode;
     return 1;
 }
+
+int a733_gpu_backend_stopped(struct a733_gpu_backend *b,struct pvr_gpu_service *s)
+{
+    return b && s && healthy(b) && b->service==s && s->config.context==b &&
+        s->config.start.now==now && s->config.stop.isolate==isolate && s->config.stop.isolate_poll==isolate_poll &&
+        b->memory && b->memory->phase==A733_GPU_MEMORY_OFFLINE && b->power &&
+        b->power->phase==A733_GPU_PLATFORM_OFF && !b->power->token && !b->power->delegated &&
+        b->phase==A733_GPU_BACKEND_ISOLATED && s->stop.phase==PVR_GPU_STOP_STOPPED &&
+        s->stop.isolation_observed && s->stop.acknowledgement[0]==1 && s->stop.acknowledgement[1]==1 &&
+        s->queue.phase==PVR_CCB_RETIRED && s->control.phase==PVR_GPU_CONTROL_RETIRED &&
+        s->irq_masked && !s->irq_fault;
+}
+int a733_gpu_backend_rebind_children(struct a733_gpu_backend *b)
+{
+    if(!b || !healthy(b) || b->phase!=A733_GPU_BACKEND_ISOLATED ||
+       b->service->phase!=PVR_GPU_SERVICE_RECONSTRUCTING)return 0;
+    struct pvr_gpu_service_config *c=&b->service->config;
+    if(c->free_lists.count) {
+        b->free_list_ops=c->free_lists.ops;b->free_list_context=c->context;
+        c->free_lists.ops=(struct pvr_free_list_ops){free_allocate,free_page,free_read,free_write,free_publish,free_recover};
+    }
+    c->context=b;return 1;
+}

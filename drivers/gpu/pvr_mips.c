@@ -206,3 +206,32 @@ int pvr_mips_prepare(const void *image, size_t bytes,
     *boot = result;
     return 1;
 }
+
+int pvr_mips_unmap_stopped(const struct pvr_mips_buffer *table,
+    const struct pvr_mips_object *objects,size_t count)
+{
+    if(!range(table,sizeof(*table)) || !range(table->storage.cpu,PVR_MIPS_TABLE_BYTES) ||
+       table->storage.bytes!=PVR_MIPS_TABLE_BYTES || !count || count>PVR_MIPS_MAX_OBJECTS ||
+       !range(objects,count*sizeof(*objects)) ||
+       !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,table,sizeof(*table)) ||
+       !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,objects,count*sizeof(*objects)))return 0;
+    unsigned char *bytes=table->storage.cpu;
+    for(size_t i=0;i<count;++i) {
+        const struct pvr_mips_object *o=objects+i;
+        if(!o->page_count || o->page_count>PVR_MIPS_TABLE_BYTES/4 ||
+           !range(o->pages,o->page_count*sizeof(*o->pages)) ||
+           !separate(table->storage.cpu,PVR_MIPS_TABLE_BYTES,o->pages,o->page_count*sizeof(*o->pages)) ||
+           (o->cache_policy!=PVR_MIPS_UNCACHED && o->cache_policy!=PVR_MIPS_WRITE_THROUGH) ||
+           o->address<UINT32_C(0xc0000000) ||
+           (o->address&4095) || (uint64_t)o->address+(uint64_t)o->page_count*4096>UINT64_C(0xc1000000))return 0;
+        uint32_t first=(o->address-UINT32_C(0xc0000000))/4096;
+        for(unsigned p=0;p<o->page_count;++p) {
+            uint32_t value=0;for(unsigned b=0;b<4;++b)value|=(uint32_t)bytes[4*(first+p)+b]<<(8*b);
+            if(!valid_page(o->pages[p]) || value!=((o->pages[p]>>6)|(o->cache_policy<<3)|7))return 0;
+        }
+        for(size_t j=0;j<i;++j)if((uint64_t)o->address<(uint64_t)objects[j].address+objects[j].page_count*4096u &&
+            (uint64_t)objects[j].address<(uint64_t)o->address+o->page_count*4096u)return 0;
+    }
+    for(size_t i=0;i<count;++i)memset(bytes+4*((objects[i].address-UINT32_C(0xc0000000))/4096),0,objects[i].page_count*4u);
+    return 1;
+}

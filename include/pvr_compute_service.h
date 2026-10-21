@@ -71,6 +71,8 @@ struct pvr_compute_service {
  * VM backing, private state, descriptors and page lists. Caller supplies the
  * remaining reservation proof through job.admit. No buffer writes,
  * cache maintenance or GPU access. Success sets config.compute. */
+int pvr_compute_service_rebind(struct pvr_compute_service *,struct pvr_gpu_service *,
+    struct pvr_gpu_service_config *,const struct pvr_compute_service_config *);
 int pvr_compute_service_bind(struct pvr_compute_service *, struct pvr_gpu_service *,
     struct pvr_gpu_service_config *, const struct pvr_compute_service_config *);
 /* Internal privileged service-worker interface. Objects join the initial MIPS

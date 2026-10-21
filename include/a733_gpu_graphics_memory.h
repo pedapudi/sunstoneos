@@ -12,7 +12,7 @@
 #define A733_GPU_RENDER_FW UINT32_C(0xc0a00000)
 enum a733_gpu_graphics_phase { A733_GPU_GRAPHICS_NEW, A733_GPU_GRAPHICS_ACQUIRED,
     A733_GPU_GRAPHICS_BOUND, A733_GPU_GRAPHICS_DATA, A733_GPU_GRAPHICS_TABLES,
-    A733_GPU_GRAPHICS_READY, A733_GPU_GRAPHICS_FAILED };
+    A733_GPU_GRAPHICS_READY, A733_GPU_GRAPHICS_FAILED, A733_GPU_GRAPHICS_DISPOSED };
 struct a733_gpu_graphics_profile {
     struct pvr_render_profile render;
     uint32_t initial_pages, grow_pages, threshold;
@@ -98,4 +98,6 @@ int a733_gpu_graphics_memory_render_admitted(struct a733_gpu_graphics_memory *);
 int a733_gpu_graphics_memory_cleanup_records(struct a733_gpu_graphics_memory *,
     uint32_t addresses[6],uint32_t types[6],unsigned *count);
 uintptr_t a733_gpu_graphics_memory_render_shared(const struct a733_gpu_graphics_memory *);
+int a733_gpu_graphics_memory_disposed(struct a733_gpu_graphics_memory *);
+int a733_gpu_graphics_memory_rebuild(struct a733_gpu_graphics_memory *,struct pvr_gpu_service *);
 #endif

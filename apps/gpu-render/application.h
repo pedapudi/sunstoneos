@@ -6,6 +6,13 @@
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_platform_native.h"
 #include "cached.h"
+#ifdef SUNSTONE_GPU_LIFECYCLE
+#include "a733_gpu_disposal.h"
+#include "pvr_gpu_lifecycle.h"
+#define GPU_TEXTURE_HEADER_BYTES 72u
+#else
+#define GPU_TEXTURE_HEADER_BYTES 64u
+#endif
 struct gpu_application {
     struct a733_board_session session;
     struct a733_native_usb shared;
@@ -16,6 +23,11 @@ struct gpu_application {
     struct a733_gpu_compute_reserved compute;
     struct a733_gpu_graphics_memory graphics;
     struct pvr_gpu_service service;
+#ifdef SUNSTONE_GPU_LIFECYCLE
+    struct a733_gpu_disposal disposal;
+    atomic_uint_fast64_t runtime_epoch;
+    uint64_t runtime_request_epoch;
+#endif
     StaticTask_t tasks[3];
     StackType_t stacks[3][4096];
     TaskHandle_t handles[3];
@@ -29,7 +41,7 @@ struct gpu_application {
     unsigned char runtime_input[PVR_RENDER_TEXTURE_CHUNK];
     struct pvr_render_texture_request texture_request;
     atomic_uint texture_tx_state;
-    uint8_t texture_header[64];
+    uint8_t texture_header[GPU_TEXTURE_HEADER_BYTES];
     const uint8_t *texture_tx_data;
     uint32_t texture_tx_bytes,texture_tx_header;
     uint64_t texture_generation;
@@ -46,6 +58,9 @@ const struct a733_board_session *gpu_application_session(void);
 int gpu_application_live(void *);
 void gpu_application_fail(void *);
 void gpu_application_usb(void *);
+#ifdef SUNSTONE_GPU_LIFECYCLE
+int gpu_application_lifecycle(unsigned operation);
+#endif
 #ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
 void gpu_application_texture_client(void);
 void gpu_application_texture_closed(void);
