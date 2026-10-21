@@ -73,9 +73,11 @@ affected consumer.
 The pin manager owns PD20–23 for the entire port lifetime. Acquisition checks
 the inherited GPIO-output-low condition before mutation under the pin manager's
 shared lock. The port holds PERST low while it initializes COMB1, then waits at
-least 100 ms after successful PHY initialization before raising PERST. This
-matches the source ordering of PHY preparation followed by the endpoint reset
-hold. No running inherited endpoint is converted into a cold endpoint by an
+least 100 ms after successful PHY initialization before raising PERST. After
+raising PERST, it waits at least another 100 ms before the first configuration
+request. The pinned U-Boot `pcie_sunxi_rc.c` (SHA-256
+`15424d757efafbf79e0b68d48da526cedb7ec9fcc30f03f6668f66ced52ef2bd`,
+lines 375–379) has the same two 100 ms delays, around the PERST release. No running inherited endpoint is converted into a cold endpoint by an
 unapproved reset.
 
 Every register operation uses the actual common FreeRTOS register mutex. Pin
@@ -94,9 +96,11 @@ translation unit is at 0x06300000, and the application registers are at
 0x20000000. The native adapter permits the selected registers and access widths
 and refuses endpoint configuration writes.
 
-Local PCIe AUX uses SYS24M and AXI uses PERI0 400 MHz. The inherited parent
-checks require No-Auto mode, software enable and effective gate status for
-every selected branch. The native controller keeps GIC delivery masked and
+Local PCIe AUX uses SYS24M and AXI uses PERI0 400 MHz. SYS24M is the normalized
+24 MHz PLL_REF output, so admission uses the shared `a733_clock_ref24_valid()`
+decoder and accepts a 19.2 MHz or 26 MHz oscillator whose PLL_REF factors
+produce 24 MHz. The inherited parent checks require No-Auto mode, software
+enable and effective gate status for every selected branch. The native controller keeps GIC delivery masked and
 checks pending/active state, observes both link-up bits, bounds capability-list
 walking and refuses cyclic or malformed lists. PCI command accesses use 16-bit
 writes so adjacent status write-one-to-clear bits are preserved.
@@ -108,8 +112,24 @@ observed multifunction header. Each public read checks link and live resource
 ownership and leaves caller output unchanged after refusal or uncertainty.
 Endpoint bus mastering and MSI/MSI-X enablement must initially be clear.
 
+PCIe Base Specification section 6.6.1 allows an endpoint up to 1 s after
+PERST release to return a successful configuration completion. Until then,
+the first vendor-ID read can return FFFFh (no successful completion) or 0001h
+(a Configuration Request Retry Status completion when CRS Software Visibility
+is enabled). Because the link has trained, a device is present, so the port
+treats either value as not ready and reads again on later polls until 1 s after
+release. After that window either value retains the port, and a vendor ID of
+zero retains it at once. The operation deadline still applies: the session's
+link timeout must cover the readiness window, or a slow endpoint retains the
+port at the deadline. The port does not enable CRS Software Visibility, because
+the native write filter refuses Root Control writes.
+
 Absolute operation and lifetime deadlines use the common monotonic clock.
-PHY readiness and link observation advance through repeated bounded polls.
+One poll writes the 91-entry COMB1 PHY sequence under a single register-mutex
+hold, then returns until the PHY PLL reports lock at least 100 µs later. The
+next poll writes the four finishing entries. Each access keeps its own deadline
+check. Link observation and endpoint readiness advance through repeated
+bounded polls.
 A deadline bounds software progress; it cannot bound a hung physical MMIO
 transaction. Qualified independent recovery is required before physical use.
 An uncertain access, late result, resource fault or failed invariant retains

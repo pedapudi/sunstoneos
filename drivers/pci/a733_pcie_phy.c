@@ -114,24 +114,28 @@ int a733_pcie_phy_address(uintptr_t a,unsigned width,unsigned writing)
         if(finish[i].address==a&&finish[i].width==width)return 1;
     return 0;
 }
+/* Each table run is written in one call; only the PLL lock wait between the
+ * sequence and the finish entries returns to the caller. Every access keeps
+ * its own deadline check. */
 int a733_pcie_phy_step(struct a733_pcie *p)
 {
     const unsigned count=sizeof(sequence)/sizeof(sequence[0]);
     const struct step *s;
-    uint32_t old=0;
-    if(p->phy_index==count) {
-        if(p->last_now<p->wait_until)return 0;
-        if(!a733_pcie_read(p,0x06c02900,4,&old))return -1;
-        if(!(old&1)) {p->wait_until=p->last_now+100;return 0;}
-        ++p->phy_index;return 0;
+    for(;;) {
+        uint32_t old=0;
+        if(p->phy_index==count) {
+            if(p->last_now<p->wait_until)return 0;
+            if(!a733_pcie_read(p,0x06c02900,4,&old))return -1;
+            if(!(old&1)) {p->wait_until=p->last_now+100;return 0;}
+            ++p->phy_index;continue;
+        }
+        if(p->phy_index<count)s=&sequence[p->phy_index];
+        else if(p->phy_index-count-1<sizeof(finish)/sizeof(finish[0]))s=&finish[p->phy_index-count-1];
+        else return 1;
+        uint32_t full=s->width==2?0xffffu:UINT32_MAX;
+        if(s->mask!=full&&!a733_pcie_read(p,s->address,s->width,&old))return -1;
+        if(!a733_pcie_write(p,s->address,s->width,(old&~s->mask)|s->value))return -1;
+        ++p->phy_index;
+        if(p->phy_index==count){p->wait_until=p->last_now+100;return 0;}
     }
-    if(p->phy_index<count)s=&sequence[p->phy_index];
-    else if(p->phy_index-count-1<sizeof(finish)/sizeof(finish[0]))s=&finish[p->phy_index-count-1];
-    else return 1;
-    uint32_t full=s->width==2?0xffffu:UINT32_MAX;
-    if(s->mask!=full&&!a733_pcie_read(p,s->address,s->width,&old))return -1;
-    if(!a733_pcie_write(p,s->address,s->width,(old&~s->mask)|s->value))return -1;
-    ++p->phy_index;
-    if(p->phy_index==count)p->wait_until=p->last_now+100;
-    return 0;
 }
