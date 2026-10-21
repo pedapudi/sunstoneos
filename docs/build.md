@@ -150,6 +150,39 @@ the current tree. A recorded header that remains in another git checkout, such
 as a different worktree, is also refused, because comparing it with that
 checkout would not test the current tree.
 
+The returning images link a finite client against one returning platform:
+the monitor, boot, I2C and FreeRTOS objects of the `a733-power-probe` target
+and the counter, lock, clock, rail, PMIC, pin, GPU-resource, task and queue
+units of the PMIC provider probe, which use the probe's FreeRTOS configuration
+in `checks/pmic-provider-probe`. `ReturningPlatform` in
+`tools/returning_build.py` supplies that platform to these builders:
+
+| Builder | Images |
+| --- | --- |
+| `apps/rtc-returning/build.py` | read-only RTC client and its check-only policy ELF |
+| `apps/rtc-source-returning/build.py` | RTC source initialization, or alarm with `--operation alarm` |
+| `apps/thermal-returning/build.py` | thermal client, or ADC client with `--device adc` |
+| `apps/npu-returning/build.py` | NPU supply client |
+| `apps/usb-returning/build.py` | finite USB client |
+
+By default the platform is the accepted objects of the
+`pmic-provider-probe-20261018` evidence, with the header check described
+above. Recorded compile flags are mapped from the checkout named in that
+evidence's source snapshot to the current repository. With
+`--platform-build <dir>`, where `<dir>` is a central build directory configured
+from this checkout with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, the builder builds `a733-power-probe` there, links its
+platform objects and compiles the provider units from the current tree with
+that target's flags, the provider probe's configuration and `-Werror`. Such an
+image depends on no earlier evidence, and its `input-identities.json` records
+the platform objects and the provider units' header closure. The USB builder
+also links accepted TinyUSB objects that exist only in evidence, so it accepts
+only the evidence platform.
+
+`apps/npu-finite/build.py` rebuilds the single-core NPU application from its
+recorded configuration and replaces its monitor and platform exit;
+`--interrupt`, which `apps/npu-interrupt/build.py` passes, selects the
+interrupt-driven variant.
+
 The patched FEL recovery tool is built only on the host:
 
 ```sh
