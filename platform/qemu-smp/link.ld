@@ -15,7 +15,7 @@ SECTIONS {
     } > RAM
     .stacks (NOLOAD) : ALIGN(16) {
         __exception_stacks = .;
-        . += 2 * 32768;
+        . += DEFINED(SUNSTONE_SMP_STACKS) ? SUNSTONE_SMP_STACKS * 32768 : 2 * 32768;
     } > RAM
     /DISCARD/ : { *(.comment) *(.eh_frame*) *(.note*) }
 }

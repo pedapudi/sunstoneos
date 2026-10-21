@@ -1,3 +1,6 @@
+#ifndef SUNSTONE_SMP_CORES
+#define SUNSTONE_SMP_CORES 2
+#endif
 .section .text.boot, "ax"
 .global _start
 _start:
@@ -7,11 +10,11 @@ _start:
     b.ne .Lpark
     mrs x0, mpidr_el1
     and x1, x0, #0xff
-    // This emulator target has two cores in one affinity group.
+    // This emulator target numbers its cores in one affinity group.
     lsr x0, x0, #8
     and x0, x0, #0xffff
     cbnz x0, .Lpark
-    cmp x1, #2
+    cmp x1, #SUNSTONE_SMP_CORES
     b.hs .Lpark
     msr tpidr_el1, x1
     msr spsel, #1
