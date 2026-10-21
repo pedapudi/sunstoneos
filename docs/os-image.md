@@ -2,7 +2,7 @@
 
 `sunstone-a733-os` is one FreeRTOS image that runs the
 [mimus board application](../apps/mimus-board/README.md) and a continuous
-thermal service together. An optional supervised build also captures each
+thermal service together. An optional microphone build also captures each
 utterance from an I2S microphone and recognizes it in place of the recorded
 WAV. The mimus board application already combines the
 USB0 device service, the USB2 host with keyboard and read-only USB storage,
@@ -16,16 +16,16 @@ adds three fixed parts to it:
 - a resident lifetime, in which the armed hardware watchdog is renewed only
   while every listed service makes progress.
 
-Status: implemented, built and host-modeled in both lifetimes and with
-microphone recognition. No board has run the image. The sources are in
+Status: implemented, built and host-modeled in both lifetimes, each with and
+without microphone recognition. No board has run the image. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
 
 The build selects one of two lifetimes. Both use the 808-byte OS session
 described below and the same services. The microphone build extends the
-session to 992 bytes and is supervised only, because the stage-2 loader
-admits only the 808-byte session.
+session to 992 bytes and adds its capture client to the services, in either
+lifetime; the stage-2 loader admits both session sizes.
 
 | | Supervised | Resident |
 | --- | --- | --- |
@@ -69,10 +69,12 @@ A failed service parks or suspends without recording.
 | USB2 host owner | Each controller poll | 1 s |
 | Mimus recognizer | Its wait loops, input hashing and the inference yield checkpoint | 3 s |
 | Thermal service | Each completed step, at least every 25 ms | 1 s |
+| Microphone capture client (microphone build) | Each task pass that ends with no unanswered DMA service request, one pass per tick | 1 s |
 
 The windows are configuration. No board measurement of the longest pause of
-each loop exists yet. The microphone build has no resident lifetime, so its
-capture client reports no progress record.
+each loop exists yet. The DMA worker answers a request in its next
+iteration, so a capture client waiting longer on an unanswered request means
+the worker has stopped, and the client's record then expires.
 
 The board's supervising task runs every 20 ms. While the board is live and
 every service has reported within its window, it renews WDT0 at most once per
@@ -139,7 +141,7 @@ by the thermal owner's facts ([os.h](../apps/os/os.h)):
 | Bytes | Field |
 | --- | --- |
 | 0..591 | Board session, workload 0 or 4 |
-| 592..615 | Magic `0x415337334f534131`, version 1, size 808 |
+| 592..615 | Magic `0x415337334f534131`, version 1, size of the whole session: 808, or 992 in the microphone build |
 | 616..631 | Thermal owner and clock authority |
 | 632..759 | Initial, electrical, clock and supervision evidence hashes |
 | 760..767 | APB1 clock word and its frequency |
@@ -186,10 +188,16 @@ The 184 bytes after the thermal facts carry the receive facts:
 | --- | --- |
 | 808..831 | Magic `0x415337334f415531`, version 1, size 184 |
 | 832..863 | SHA-256 of the reviewed audio entry record |
-| 864..967 | Supervised DMA0 handoff: allowed clock configuration, controller, evidence, mode `0x5f`, owned and service channels |
+| 864..967 | DMA0 handoff: allowed clock configuration, controller, evidence, established facts, owned and service channels |
 | 968..975 | Audio parent cold flag; capture length, 16,000 to 80,000 samples |
 | 976..984 | Inherited function, pull and drive of PB5, PB6 and PB8 |
 | 985..991 | Zero |
+
+The established facts follow the lifetime. The supervised lifetime requires
+`0x5f`, whose recovery is manual power removal, and starts the DMA service
+with its supervised entry. The resident lifetime requires `0x3f`, whose
+recovery is the watchdog reset, and starts the DMA service with its default
+entry ([DMA startup](../include/a733_dma_startup.h)).
 
 The admission applies the I2S image's DMA rules to these fields: one service
 channel on the controller at `0x04601000`, every channel owned, the board's
@@ -213,18 +221,18 @@ with its reservations held. The next generation's request releases that WAV:
 the client then returns the final period, reaps, closes and opens the stream
 again. A discontinuous or wrong period, a stream that stops by itself, a
 refused request or a failed board ends the session through `board_fail`. The
-stream, its periods, the leases and the masked interrupt then stay held until
-whole-board power removal.
+stream, its periods, the leases and the masked interrupt then stay held. In
+the supervised lifetime they stay held until whole-board power removal. In
+the resident lifetime the client stops reporting progress, renewal stops and
+the watchdog resets the board.
 
 ## Build and checks
 
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  [-DSUNSTONE_A733_OS_RESIDENT=ON | -DSUNSTONE_A733_OS_AUDIO=ON]
+  [-DSUNSTONE_A733_OS_RESIDENT=ON] [-DSUNSTONE_A733_OS_AUDIO=ON]
 cmake --build BUILD --target sunstone-a733-os
 ```
-
-Configuration refuses the resident lifetime together with the microphone.
 
 The configuration needs the same inputs as the mimus board image. Each link
 runs [os-image-link.py](../checks/os-image-link.py), which reads the final ELF
@@ -251,8 +259,8 @@ with the image hash, build identity, lifetime and microphone selection. The
 supervised preparation uses it as the image manifest.
 
 [os-image-model.c](../checks/os-image-model.c) compiles the image's table,
-supervision and admission sources on the host, once for each lifetime and
-once for the microphone build:
+supervision and admission sources on the host, once for each lifetime with
+and without the microphone:
 
 - every INTID from 32 to 1019 is delivered; only INTID 71 on CPU0 reaches the
   thermal handler and, in the microphone build, only INTID 143 on CPU0 reaches
@@ -263,16 +271,19 @@ once for the microphone build:
   once per second for 120 modeled seconds and never expires;
 - when USB0 first reports at 1.5 s, nothing closes, the first renewal follows
   within 20 ms of that report, and renewal continues;
-- each of the seven services stalling at 70 s stops renewal within its window,
+- each of the seven services, eight in the microphone build, stalling at 70 s
+  stops renewal within its window,
   and the watchdog expires four seconds after the last renewal;
-- for each of the seven services, never reporting leads to expiry at four
+- for each of those services, never reporting leads to expiry at four
   seconds with no earlier close, and the task closes at that expiry if the
   watchdog has not reset the board;
 - a service that reports and then stalls before another service's first
   report closes the task when its window expires;
 - a refused renewal leads to expiry at four seconds;
-- the nominal session and contract are admitted, with 26 resident, 24
-  supervised and 44 microphone-build refusals of single changed fields.
+- the nominal session and contract are admitted, with refusals of single
+  changed fields: 24 supervised, 26 resident, 45 supervised microphone and 47
+  resident microphone. The microphone refusals include the other lifetime's
+  DMA established facts.
 
 The command is in the file's header comment.
 [os-image-stage2.py](../checks/os-image-stage2.py) runs the stage-2 entry path
@@ -284,8 +295,11 @@ and runs it under unicorn. Two generations each capture 32,000 bytes over
 eight periods and publish the exact WAV header and copied bytes; the second
 returns the held final period, reaps, closes and reopens the stream first. A
 discontinuous period and a stream that stops by itself are refused with the
-stream held, and the recognizer's request rules are checked. The build
-directory must export its compile commands (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
+stream held, and the recognizer's request rules are checked. A fifth case
+runs the client's task passes: in a resident build each pass reports progress
+except while a DMA request is unanswered or after a failure; a supervised
+build reports none. The build directory must export its compile commands
+(`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
 
 ## Supervised preparation and launch
 
@@ -332,9 +346,6 @@ No device, queue database or FEL program is opened.
 
 ## Not yet integrated
 
-- **Resident microphone recognition.** The stage-2 loader admits only the
-  808-byte session. A resident microphone build needs the loader to admit the
-  992-byte session and a progress record from the capture client.
 - **Continuous recognition.** Each generation captures one finite utterance.
   Streaming capture into the recognizer needs a pinned mimus change.
 - **Radio, CE, HDMI, camera, GPU and NPU.** The board image owns radio and CE
@@ -344,4 +355,5 @@ No device, queue database or FEL program is opened.
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The resident image needs every
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
-  measured service windows.
+  measured service windows; the resident microphone build also needs a
+  reviewed audio entry record with the resident DMA facts.

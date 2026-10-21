@@ -4,16 +4,19 @@
  * continuous thermal service, optional I2S microphone receive, one fixed
  * interrupt table and one fixed start list. */
 #include "a733_board_application.h"
+/* The microphone build appends 184 bytes of I2S receive facts to the
+ * 808-byte session. The stage-2 loader admits either size, so these
+ * definitions do not depend on the build. */
+#define OS_AUDIO_SESSION_MAGIC UINT64_C(0x415337334f415531)
+#define OS_AUDIO_SESSION_VERSION 1u
+#define OS_AUDIO_SESSION_BYTES 184u
 #ifdef SUNSTONE_A733_OS_AUDIO
 #include "a733_dma_platform.h"
-#ifdef SUNSTONE_BOARD_RESIDENT
-#error The stage-2 loader admits only the 808-byte OS session
-#endif
 /* I2S0 receive facts after the thermal facts. The DMA fields are the I2S
- * image's supervised DMA0 handoff (struct a733_dma_handoff, which audio.c
- * builds from them) and follow its rules (docs/i2s-application.md). The
- * evidence hash identifies the reviewed microphone wiring, bank voltage,
- * audio clock, FIFO route, DMA prior-drain and remote-exclusion records. */
+ * image's DMA0 handoff (struct a733_dma_handoff, which audio.c builds from
+ * them) and follow its rules (docs/i2s-application.md). The evidence hash
+ * identifies the reviewed microphone wiring, bank voltage, audio clock, FIFO
+ * route, DMA prior-drain and remote-exclusion records. */
 struct os_audio_session {
     uint64_t magic,version,bytes;
     uint8_t evidence[32];
@@ -25,11 +28,14 @@ struct os_audio_session {
     uint8_t inherited[3][3]; /* PB5 BCLK, PB6 LRCK, PB8 DIN: function, pull, drive */
     uint8_t reserved[7];
 };
-#define OS_AUDIO_SESSION_MAGIC UINT64_C(0x415337334f415531)
-#define OS_AUDIO_SESSION_VERSION 1u
-#define OS_AUDIO_SESSION_BYTES 184u
-/* A733_DMA_HANDOFF_SUPERVISED: manual power removal owns recovery. */
-#define OS_AUDIO_DMA_SUPERVISED UINT32_C(0x5f)
+/* The handoff's established facts follow the lifetime: in the supervised
+ * image manual power removal owns recovery (A733_DMA_HANDOFF_SUPERVISED); in
+ * the resident image the watchdog reset does (A733_DMA_HANDOFF_REQUIRED). */
+#ifdef SUNSTONE_BOARD_RESIDENT
+#define OS_AUDIO_DMA_ESTABLISHED UINT32_C(0x3f)
+#else
+#define OS_AUDIO_DMA_ESTABLISHED UINT32_C(0x5f)
+#endif
 _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
     offsetof(struct os_audio_session,dma)==56&&offsetof(struct os_audio_session,audio_cold)==160,
     "OS audio session geometry");
@@ -87,8 +93,13 @@ int os_audio_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
 
 /* Resident services after the board's own (apps/board/application.h). The
- * mimus board application reports as the first of them. */
-enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL, OS_SERVICES };
+ * mimus board application reports as the first of them; the microphone
+ * build adds its capture client. */
+enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
+#ifdef SUNSTONE_A733_OS_AUDIO
+    OS_SERVICE_AUDIO,
+#endif
+    OS_SERVICES };
 struct os_service { const char *name; uint32_t window_us; };
 extern const struct os_service os_services[OS_SERVICES];
 /* Interval between watchdog renewals while every service is in its window. */

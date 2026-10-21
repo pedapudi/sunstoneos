@@ -2,15 +2,17 @@
 """Execute the stage-2 entry path with modeled entry prerequisites.
 
 The linked AArch64 monitor runs as in checks/standalone-boot-loader.py: the
-actual boot0 header cleanup, cold-entry gate, stage-2 loader, SD core and
-SHA-256, against a card image written by tools/boot-slots.py. The slot holds
-an image, the integrated OS session page and an asset. Card admission, card
-presence and, unless a case refuses it, the entry prerequisites are modeled
-as granted. WDT0, the ROM redirect and RTC FEL registers and CCU word 0x24
-are modeled. The check confirms the watchdog arming sequence, the resident
-contract, the stamped session and the branch to the image entry, then has
-the integrated OS image's own admission (checks/os-image-model.c, resident
-build) accept that contract and session at the entry counter value.
+actual boot0 header cleanup, cold-entry gate, stage-2 loader, cold SD
+admission against the modeled boot0 controller state, SD core and SHA-256,
+against a card image written by tools/boot-slots.py. The slot holds an image,
+the integrated OS session page and an asset. The three entry prerequisites
+are modeled as granted unless a case refuses one. WDT0, the ROM redirect and
+RTC FEL registers and CCU word 0x24 are modeled. The check confirms the
+watchdog arming sequence, the resident contract, the stamped session and the
+branch to the image entry, then has the integrated OS image's own admission
+(checks/os-image-model.c, resident build) accept that contract and session at
+the entry counter value. It also compiles that model for the resident
+microphone build and enters a slot with the 992-byte session.
 """
 import argparse
 import contextlib
@@ -44,7 +46,9 @@ CARD_SECTORS, RAM, RAM_END, SDC0, RVBAR = (loader.CARD_SECTORS, loader.RAM, load
                                            loader.SDC0, loader.RVBAR)
 HZ = 24000000
 SESSION, CONTRACT, RESULT = 0x41f00000, 0x42004000, 0x42000000
-SESSION_BYTES, SESSION_MAGIC = 808, 0x4153373342535332
+SESSION_BYTES, AUDIO_SESSION_BYTES = 808, 992
+PREREQUISITES = ('a733_stage2_remote_writers_excluded', 'a733_stage2_watchdog_recovery',
+                 'a733_stage2_entry_state')
 CONTRACT_MAGIC, RESULT_MAGIC = 0x415337334f524331, 0x415337334f525231
 STATUS = {1: 'loaded', 6: 'entered', 7: 'entry-refused', 8: 'watchdog'}
 ARM_WRITES = [(0x02050018, 0x16aa0002), (0x02050010, 0x16aa0001),
@@ -86,6 +90,13 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    # The same model for the resident microphone build, whose session is 992 bytes.
+    audio_model = args.output / 'os-image-model-resident-audio'
+    subprocess.run(['clang', '-std=c11', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                    '-Iinclude', '-Iplatform/a733-smp-cached', '-Iapps/os', '-DSUNSTONE_BOARD_SUPERVISED=1',
+                    '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_BOARD_RESIDENT=1', '-DSUNSTONE_A733_OS_AUDIO=1',
+                    '-DA733_SMP_CONTRACT_MAGIC=%#xULL' % CONTRACT_MAGIC, 'checks/os-image-model.c',
+                    'drivers/storage/storage_digest.c', '-o', str(audio_model)], cwd=ROOT, check=True)
     raw = (args.build / 'a733-stage2.bin').read_bytes()
     table = loader.symbols(args.build / 'a733-stage2.elf')
     inherited, _ = cold.inherited_payload(args.boot0.read_bytes(), raw, args.output)
@@ -113,10 +124,13 @@ def main():
     (work / 'image').write_bytes(image)
     (work / 'asset').write_bytes(bytes((i * 13 + 5) & 255 for i in range(3000)))
 
-    def card(name, generation=1, session=True):
+    def card(name, generation=1, session=True, model=args.model, change=None):
         """A card with slot A; the session names `generation`; the first plan is generation 1."""
-        subprocess.run([str(args.model), '--write-session', str(work / (name + '.session')), str(generation)],
+        subprocess.run([str(model), '--write-session', str(work / (name + '.session')), str(generation)],
                        check=True)
+        if change:
+            path = work / (name + '.session')
+            path.write_bytes(change(bytearray(path.read_bytes())))
         assets = ['--asset', '%s@0x44000000' % (work / 'asset')]
         if session:
             assets = ['--asset', '%s@%#x' % (work / (name + '.session'), SESSION)] + assets
@@ -134,15 +148,20 @@ def main():
 
     cases = []
 
-    def run(name, card_bytes, expected, entry_admitted=True, preset=None, retained=None, stuck=()):
+    def run(name, card_bytes, expected, granted=PREREQUISITES, preset=None, retained=None, stuck=(),
+            model=args.model, session_bytes=SESSION_BYTES):
         registers = Registers(preset or {}, stuck)
         model_card = Card(card_bytes)
+        board = loader.Board(model_card, lambda: values['cntpct_el0'])
         cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         cpu.mem_map(RAM, RAM_END - RAM)
         cpu.mem_map(RVBAR, 0x1000)
         cpu.mmio_map(SDC0, 0x1000, model_card.read, None, model_card.write, None)
         for base in (0x02050000, 0x03000000, 0x07050000, 0x07090000):
             read, write = registers.page(base)
+            cpu.mmio_map(base, 0x1000, read, None, write, None)
+        for base in (loader.PIO, loader.CCU):
+            read, write = board.page(base)
             cpu.mmio_map(base, 0x1000, read, None, write, None)
         cpu.mem_write(0x47000000, inherited)
         if retained:
@@ -171,7 +190,7 @@ def main():
                                  u.reg_read(getattr(a64, 'UC_ARM64_REG_' + second.upper()))])
             u.reg_write(a64.UC_ARM64_REG_PC, address + 4)
 
-        def granted(u, address, size, context):
+        def grant(u, address, size, context):
             u.reg_write(a64.UC_ARM64_REG_X0, 1)
             u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
 
@@ -181,15 +200,16 @@ def main():
 
         # Outside its own storage the loader may write only the RVBAR words,
         # the SD controller, the load windows, the contract and the retained
-        # result header. Register pages are checked by their own model.
+        # result header. Register pages are checked by their own models.
         def write(u, access, address, size, value, context):
             end = address + size
             if not (0x47008000 <= address and end <= table['a733_stage2_stack_top']
                     or RVBAR + 4 <= address and end <= RVBAR + 12
                     or SDC0 <= address and end <= SDC0 + 0x1000
+                    or address in (loader.SMHC0_CLK, loader.PF_CFG0, loader.PF_PUL0) and size == 4
                     or 0x02050000 <= address and end <= 0x02051000
                     or 0x41000000 <= address and end <= 0x41000000 + len(image)
-                    or SESSION <= address and end <= SESSION + SESSION_BYTES
+                    or SESSION <= address and end <= SESSION + session_bytes
                     or 0x44000000 <= address and end <= 0x44000000 + 3000
                     or CONTRACT <= address and end <= CONTRACT + 224
                     or RESULT <= address and end <= RESULT + 8):
@@ -197,11 +217,8 @@ def main():
 
         for address in system:
             cpu.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
-        hooks = ['a733_stage2_card_admission', 'a733_stage2_card_present']
-        if entry_admitted:
-            hooks.append('a733_stage2_entry_admission')
-        for symbol in hooks:
-            cpu.hook_add(UC_HOOK_CODE, granted, begin=table[symbol], end=table[symbol])
+        for symbol in granted:
+            cpu.hook_add(UC_HOOK_CODE, grant, begin=table[symbol], end=table[symbol])
         cpu.hook_add(UC_HOOK_CODE, image_entry, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
         cpu.emu_start(0x47000000, 0, count=60000000)
@@ -211,15 +228,17 @@ def main():
         fields = struct.unpack_from('<16Q', report)
         status, detail = fields[3], fields[4]
         result = {'case': name, 'status': STATUS.get(status, status), 'detail': detail,
+                  'granted': list(granted), 'session_bytes': session_bytes,
                   'watchdog_writes': [[hex(a), hex(v)] for a, v in registers.writes]}
         assert fields[0] == loader.REPORT_MAGIC and STATUS.get(status) == expected, (name, result)
+        assert [w[:2] for w in board.writes] == loader.SELECTED and board.detect_reads, name
         contract = bytes(cpu.mem_read(CONTRACT, 224))
         if expected == 'entered':
             assert entered == [0x41000000] and not stops and controls[-1] == ['daifset', '#0xf']
             assert registers.writes == ARM_WRITES and detail == 0x41000000
             armed, contract_address = struct.unpack_from('<2Q', report, 112)
             assert contract_address == CONTRACT
-            session = bytes(cpu.mem_read(SESSION, SESSION_BYTES))
+            session = bytes(cpu.mem_read(SESSION, session_bytes))
             magic, version, size, epoch, generation, inverse = struct.unpack_from('<6Q', contract)
             build_id = contract[48:80]
             times = struct.unpack_from('<4Q', contract, 80)
@@ -231,13 +250,13 @@ def main():
             assert build_id == session[48:80] and lease == struct.unpack_from('<Q', session, 40)[0]
             assert times == (armed, armed + HZ, 2**64 - 1, armed + 4 * HZ)
             assert (mode, configuration, output, fel, redirect, redirect_entry, alternate) == (0x41, 1, 2, 0, 0, 0, 0)
-            assert reserved[:2] == (SESSION, SESSION_BYTES)
+            assert reserved[:2] == (SESSION, session_bytes)
             assert contract[192:224] == hashlib.sha256(session).digest()
             (args.output / (name + '.contract')).write_bytes(contract)
             (args.output / (name + '.session')).write_bytes(session)
             # The image's own resident admission, at the counter value the
             # loader last read: earlier than any instruction the image runs.
-            admit = subprocess.run([str(args.model), '--admit', str(args.output / (name + '.contract')),
+            admit = subprocess.run([str(model), '--admit', str(args.output / (name + '.contract')),
                                     str(args.output / (name + '.session')), str(values['cntpct_el0'])],
                                    capture_output=True, text=True)
             assert admit.returncode == 0 and admit.stdout.strip() == 'admitted', (name, admit.stdout, admit.stderr)
@@ -265,9 +284,21 @@ def main():
     previous = struct.pack('<16Q', RESULT_MAGIC, 77, 1, 5, 3, 0x30a, 1000, 0, 2000, *([0] * 7))
     run('entered', nominal, 'entered')
     run('entered-after-retained-result', nominal, 'entered', retained=previous)
-    run('prerequisites-refused', nominal, 'loaded', entry_admitted=False)
+    # Entry needs every prerequisite; each one alone refuses it.
+    run('prerequisites-refused', nominal, 'loaded', granted=())
+    for refused in PREREQUISITES:
+        run(refused[len('a733_stage2_'):].replace('_', '-') + '-refused', nominal, 'loaded',
+            granted=tuple(p for p in PREREQUISITES if p != refused))
+    audio, _ = card('audio', model=audio_model)
+    run('entered-audio-session', audio, 'entered', model=audio_model, session_bytes=AUDIO_SESSION_BYTES)
     no_session, _ = card('no-session', session=False)
     assert run('no-session-extent', no_session, 'entry-refused')['detail'] == 1
+    # A session extent of another size, here the 808 bytes and 92 more.
+    longer, _ = card('longer-session', change=lambda b: b + bytes(92))
+    assert run('session-size-other', longer, 'entry-refused', session_bytes=900)['detail'] == 1
+    # The OS size field must equal the extent: an 808-byte session claiming 992.
+    claims, _ = card('size-field-differs', change=lambda b: b[:608] + struct.pack('<Q', 992) + b[616:])
+    assert run('session-size-field-differs', claims, 'entry-refused')['detail'] == 2
     other, _ = card('other-generation', generation=2)
     assert run('session-generation-differs', other, 'entry-refused')['detail'] == 2
     run('watchdog-already-enabled', nominal, 'watchdog', preset={0x02050014: 1})
@@ -277,7 +308,7 @@ def main():
     result = {'passed': True, 'physical_access': False, 'physical_boot_qualified': False,
               'monitor_sha256': hashlib.sha256(raw).hexdigest(), 'cases': cases,
               'limitations': [
-                  'Card admission, card presence and the entry prerequisites are modeled as granted; the native functions refuse.',
+                  'The entry prerequisites are modeled as granted unless a case refuses one; the native functions refuse. Card admission runs against the modeled boot0 controller state.',
                   'Watchdog, redirect, RTC and CCU registers are modeled; no reset, expiry or ROM behavior is exercised.',
                   'The branch target is observed; the image itself is not executed here.']}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
