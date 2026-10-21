@@ -6,11 +6,12 @@
 #include <stdexcept>
 #include <sys/mman.h>
 #include <vector>
-namespace {unsigned mode,calls,initialized;bool healthy=true;TaskFunction_t entry;struct Done{};}
-extern "C" int i2s_capture_valid(void){return healthy?1:-1;}
+namespace {unsigned mode,calls,initialized,delays;bool healthy=true,published;TaskFunction_t entry;struct Done{};}
+// The capture is published only after inference has waited once for it.
+extern "C" int i2s_capture_valid(void){return healthy?published:-1;}
 extern "C" unsigned i2s_capture_bytes(void){return 160000;}
 extern "C" int i2s_capture_copy(void *out,unsigned bytes)
-{assert(bytes==160000);for(unsigned i=0;i<bytes;++i)static_cast<uint8_t *>(out)[i]=i*7;return 1;}
+{assert(bytes==160000&&published);for(unsigned i=0;i<bytes;++i)static_cast<uint8_t *>(out)[i]=i*7;return 1;}
 extern "C" int i2s_copy_target(const void *,size_t){return 1;}
 extern "C" void runtime_smp_init(void){assert(!initialized);initialized=1;}
 extern "C" void runtime_init(void){assert(initialized==1);initialized=2;}
@@ -18,7 +19,11 @@ extern "C" BaseType_t xTaskGetSchedulerState(void){return taskSCHEDULER_NOT_STAR
 extern "C" TaskHandle_t xTaskGetCurrentTaskHandle(void){return reinterpret_cast<TaskHandle_t>(1);}
 extern "C" TaskHandle_t xTaskCreateStatic(TaskFunction_t fn,const char *,configSTACK_DEPTH_TYPE depth,void *,UBaseType_t priority,StackType_t *,StaticTask_t *)
 {assert(initialized==2&&depth==16384&&priority==3);entry=fn;return reinterpret_cast<TaskHandle_t>(1);}
-extern "C" void vTaskDelay(TickType_t){assert(false);}
+// Model verification must finish before the wait: a model byte changed while
+// capture is pending must not affect the result, and a model corrupted before
+// entry must fail without waiting.
+extern "C" void vTaskDelay(TickType_t)
+{assert(!delays++&&mode!=1);*reinterpret_cast<uint8_t *>(I2S_MODEL_BASE+I2S_MODEL_SLOT)^=1;published=true;}
 extern "C" void vTaskSuspend(TaskHandle_t){throw Done{};}
 bool mimus_transcribe_recorded(std::span<const uint8_t> inputs[3],std::span<uint8_t> scratch,const std::atomic<bool> *stop)
 {
@@ -51,6 +56,7 @@ int main(int argc,char **argv)
  assert(i2s_recognition_copy(0,0,copied,&snapshot)==0);
  if(mode==1)*reinterpret_cast<uint8_t *>(I2S_MODEL_BASE)^=1;
  try{entry(nullptr);}catch(const Done &){}
+ assert(delays==(mode!=1));
  if(mode){assert(i2s_recognition_copy(0,0,copied,&snapshot)==-1);assert(calls==(mode==1?0:1));}
  else{
   assert(calls==1&&i2s_recognition_copy(0,0,copied,&snapshot)==1&&snapshot.samples==80000);
