@@ -8,6 +8,13 @@ profile adds one SuperSpeed Gen1 Bulk-Only Transport (BOT) mass-storage device
 or boot keyboard on TYPEC24, directly or through one self-powered Gen1 hub.
 It also supports the USB2 companion root through the same COMB0 preparation. The USB2 profiles keep their existing admission and wire
 contracts.
+Three further USB2 modes are implemented as admission options, which a session
+selects before the first poll. They admit a second tier of high-speed hubs,
+bus-powered hubs within the USB 2.0 current budget, and capture from one USB
+Audio Class 1 microphone over an isochronous IN stream. No board workload selects them yet;
+see [Two hub tiers](#two-usb2-hub-tiers-share-the-three-device-records),
+[Bus-powered hubs](#bus-powered-hubs-stay-within-the-upstream-current-budget)
+and [Audio capture](#an-isochronous-in-stream-carries-usb-audio-class-1-capture).
 The storage profile uses one configuration, interface 0, alternate 0, two bulk
 endpoints and LUN 0. Storage configuration descriptors must contain the standard
 32-byte configuration/interface/endpoint sequence for USB2, or the 44-byte
@@ -235,8 +242,8 @@ The native path links the pinned TinyUSB hub driver. It admits one directly
 attached high-speed USB2 hub with one to seven ports and one downstream device:
 a low-, full- or high-speed HID interface, or the existing high-speed MSC profile.
 The single application device and hub use separate TinyUSB address ranges:
-with `CFG_TUH_DEVICE_MAX=2` and `CFG_TUH_HUB=1`, leaves use logical addresses 1
-and 2 and the hub uses address 3. The original frozen single-leaf image used
+with `CFG_TUH_DEVICE_MAX=2` and `CFG_TUH_HUB=2`, leaves use logical addresses 1
+and 2 and hubs use addresses 3 and 4; a single hub receives address 3. The original frozen single-leaf image used
 `CFG_TUH_DEVICE_MAX=1` and hub address 2. Physical xHCI slots are bound from actual Enable Slot
 completions and are never inferred from those logical addresses.
 
@@ -248,13 +255,16 @@ multi-TT layout. Both alternates must declare the same endpoint, packet size and
 interval. The nine-byte class hub descriptor declares one to seven ports, bounded
 power/overcurrent modes and the source-defined transaction-translator think time.
 The port limit matches the pinned driver's one-byte status-change transfer.
-Nested hubs, richer configurations and additional hub interfaces close the
+A hub below this hub closes the entire session unless the session admits two
+hub tiers. Richer configurations and additional hub interfaces close the
 entire session. Existing single-result sessions still refuse another connected
 leaf. The separate combined workload below admits two distinct leaf classes.
 
 The hub must declare self power, report current self-powered status through the
 standard device GET_STATUS, and report a present local supply with no overcurrent
-through class hub GET_STATUS. Bus-powered hub budgeting is not implemented.
+through class hub GET_STATUS. A session that admits bus-powered hubs applies the
+rules in [Bus-powered hubs](#bus-powered-hubs-stay-within-the-upstream-current-budget)
+instead.
 These descriptor/status observations do not measure electrical power or establish
 that a particular accessory is safe. Physical admission still needs a suitable
 self-powered hub, its supply and the reviewed board/Type-C source path.
@@ -813,20 +823,158 @@ Endpoint and Disable Slot commands. It covers these cases:
 Controller timing, DMA visibility and physical disconnect behavior remain
 unqualified.
 
+## Two USB2 hub tiers share the three device records
+
+A session that sets `hub_tiers` to 2 in `struct a733_usb2_native` admits one
+USB2 high-speed hub on a port of the root-port hub. The second hub's device
+descriptor must declare the single-TT or multi-TT high-speed protocol, and every
+other hub rule above applies to it unchanged. A hub below the second tier, a
+full-speed hub and a SuperSpeed hub below another hub close the session. Both
+hubs and one leaf use the three xHCI device records, so the second tier serves
+one leaf.
+
+The xHCI core binds each child to its parent hub's slot and port. The child's
+route string holds one port number per tier, as xHCI 1.2 section 4.5.2
+requires: port 3 of a hub on root-hub port 2 gives route string `0x32`. A
+low- or full-speed child uses its parent hub's transaction translator: the Slot
+Context names the parent's slot and port and copies the parent's multi-TT
+selection. Every hub between the root port and a low- or full-speed device is a
+high-speed hub, so the parent is always the nearest high-speed hub.
+
+The TinyUSB adapter keeps one hub state per hub in `hubs[]`: identity, power
+status, powered ports, connected ports and the status-change transfer. A
+disconnect reported by either hub removes the device on that port. When the
+second-tier hub leaves, TinyUSB closes the hub and then its child; the core's
+detach of the hub already includes the child. The core tears down a child
+before its hub, and checks this by slot ownership instead of record order,
+because a child can hold a lower record than its hub after an earlier removal.
+A detaching hub whose child is not detaching is inconsistent and retains the
+session.
+
+## Bus-powered hubs stay within the upstream current budget
+
+A session that sets `bus_powered_hubs` admits USB2 hubs whose configuration
+descriptor reports bus power (`bmAttributes` 0x80). The adapter applies the
+current limits of USB 2.0 sections 7.2.1 and 11.13 to every USB2 device:
+
+- **Upstream current.** A root-port device may draw at most 500 mA, and at most
+  the qualified Type-C source current. A port of a self-powered hub supplies
+  500 mA and a port of a bus-powered hub supplies one unit load, 100 mA. A
+  configuration whose `bMaxPower` exceeds its port's supply is refused before
+  SET_CONFIGURATION.
+- **Bus-powered hub total.** The hub's configuration current excludes its
+  downstream ports, each of which may draw 100 mA. The hub's `bMaxPower` plus
+  100 mA for every port must fit within its own upstream supply. A seven-port
+  bus-powered hub on the root port therefore fails, and a bus-powered hub below
+  another bus-powered hub fails for any port count.
+- **Reported status.** Standard GET_STATUS must report the same power source as
+  the configuration descriptor. Class hub GET_STATUS must report no
+  over-current. Its Local Power Source bit describes a local supply, so a
+  bus-powered hub may report either value.
+
+These rules use descriptor and status values only. They do not measure current
+or establish that a hub's power switching works, and the Type-C source must
+still be qualified for the total load.
+
+## An isochronous IN stream carries USB Audio Class 1 capture
+
+The xHCI core supports one isochronous IN stream per controller for a full- or
+high-speed USB2 device. Its service interval must be at most 1 ms: full-speed
+`bInterval` 1 or high-speed `bInterval` 1 to 4. A packet holds at most 512
+bytes. The stream uses the device's own data ring and bounce page, so the
+128 KiB DMA layout is unchanged. Its endpoint context uses type Isoch IN, error
+count 0 and a maximum ESIT payload of one packet.
+
+Once started, the core keeps eight one-packet Isoch TDs on the ring. Each TD
+sets Interrupt-on-Short-Packet, Interrupt-on-Completion and Start Isoch ASAP,
+and uses a fixed 512-byte part of the bounce page. Completions arrive in TD
+order (xHCI 1.2 sections 4.10.2.8, 4.10.3.1 and 4.10.3.2):
+
+- **Success or short packet.** The TD carries data. `a733_xhci_isoch_take`
+  copies the oldest such packet into caller storage after its completion event
+  and frees the entry; the next poll queues a replacement TD and rings the
+  doorbell.
+- **Transaction, babble, split-transaction or missed-service error.** The TD
+  ends without data and the stream continues. The core counts these intervals
+  in `isoch.dropped`.
+- **Ring Overrun.** All queued TDs completed before software queued more, so the
+  controller found the ring empty. The event must name the enqueue position.
+  The core counts it in `isoch.overruns`; the next queued TD restarts the
+  stream one service interval later.
+
+Any other completion code, an event out of TD order or no ring event for 100 ms
+while TDs are queued retains the session and its DMA parent. A device teardown
+stops the endpoint; the TDs still queued end without completions when the
+dequeue pointer names the oldest of them.
+
+The TinyUSB adapter admits one USB Audio Class 1 capture device when the session
+sets `audio_capture` and the image builds the pinned TinyUSB audio host class.
+Its configuration must consist of one Audio Control interface and Audio
+Streaming interfaces; any other interface class, such as a headset's HID
+buttons, closes the session. Every capture alternate setting must use the same
+isochronous IN endpoint. The adapter records up to four capture alternates
+whose packet size and interval fit the stream above; a configuration without
+one closes the session. Playback interfaces may be present and are never
+opened. TinyUSB's audio class parses the class-specific descriptors itself.
+
+The adapter allows these control requests for the audio device:
+
+- the standard enumeration requests;
+- SET_INTERFACE to alternate 0 or to a recorded capture alternate;
+- Feature Unit volume or mute GET_CUR, GET_MIN, GET_MAX and GET_RES (UAC1
+  section 5.2.2.4);
+- the endpoint sampling-frequency SET_CUR (UAC1 section 5.2.3.2.3.1), whose
+  three data bytes must equal the requested rate.
+
+A stall on any of them closes the session.
+
+`a733_usb2_audio_start` selects the capture configuration with signed 16-bit
+little-endian samples at the requested rate and channel count, opens its
+endpoint and starts the stream. It returns 0 without other effect when the
+device offers no such configuration. TinyUSB then issues SET_INTERFACE, the
+sampling-frequency request when the endpoint supports it, and the first packet
+request; that sequence must complete by the caller's deadline.
+`a733_usb2_audio_read` copies the whole frames available, at most 1024 bytes,
+after a fresh attachment observation. Each block carries the attachment
+generation, a block sequence, rate, channel count, device identity and three
+continuity totals: intervals without data, empty-ring reports and frames that
+TinyUSB's 4096-byte overwrite FIFO replaced before a read. The copied samples
+are not resampled or decoded.
+
+The owner task must poll often enough to collect each packet and queue its
+replacement: one controller event and one ring refill take one poll each, so
+two polls per service interval keep the ring full. A removal ends the stream
+without output. A replugged microphone must be started again.
+
+Images build the audio class only when they compile
+`class/audio/audio_host.c` from the pinned TinyUSB tree and define
+`SUNSTONE_USB_HOST_AUDIO=1`; the current board build does not, so its adapter
+refuses audio admission and returns no audio data. The board application has no
+workload, wire format or host decoder for copied audio yet.
+
 ## Required wider modes and physical qualification
 
-The implementation supports the bounded storage, HID and hub profiles above. It
-refuses low/full-speed mass storage, deeper or bus-powered hubs, more than two
-leaves or two leaves of the same class,
-interrupt OUT, high-bandwidth periodic
-transfers, isochronous endpoints, other SuperSpeed HID profiles, Gen2, streams,
-nonstandard speed-ID tables, more than eight
-scratchpads and richer mass-storage configurations. GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
+The implementation supports the bounded storage, HID, hub and audio capture
+profiles above. It refuses:
+
+- low/full-speed mass storage and richer mass-storage configurations;
+- more than two USB2 hub tiers and a hub below a SuperSpeed hub;
+- more than two leaves, or two leaves of the same class;
+- interrupt OUT, high-bandwidth periodic transfers, isochronous OUT and more
+  than one isochronous stream;
+- USB Audio Class 2, CDC-ACM and other device classes, and other SuperSpeed HID
+  profiles;
+- Gen2, streams, nonstandard speed-ID tables and more than eight scratchpads.
+
+GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
 profile. Bulk stalls, other control stalls and uncertain recovery retain the
 session; generic clear-halt and BOT reset recovery remain unsupported. These are implementation limits, not claims that the board
 cannot support those modes.
 
-Further required work includes wider xHCI endpoint modes, physical interrupt
+Further required work includes more device records and endpoints per device
+for additional leaves and classes such as CDC-ACM, simultaneous enumeration on
+the USB2 and SuperSpeed roots, a board workload and wire format for copied
+audio, wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain, adoption of a
@@ -916,11 +1064,44 @@ qualification needs available supervised recovery, reviewed board/rail/Type-C
 admission, the exposed TYPEC24 data connector, an electrically suitable adapter,
 a supported directly attached HID device and a way to produce known reports.
 VBUS shutdown, device enumeration, report timing and observed report contents
-remain physically unqualified. Both microSD cards remain preserved. Broader
-speed/class support, broader hub topologies and power budgets, isochronous
-transfers, SuperSpeed, physical CPU
+remain physically unqualified. Both microSD cards remain preserved. Physical CPU
 interrupt delivery and device replacement after a Type-C attachment change
 remain required work.
+
+## Offline topology, power and audio evidence
+
+`checks/usb-host-classes.py` runs the actual USB2 platform, xHCI core and
+TinyUSB adapter with the pinned TinyUSB hub, MSC, HID and audio classes under
+address and undefined-behavior sanitizers. Its controller model reads the
+command and transfer rings and contexts from the DMA parent, follows each slot's
+route string through a modeled device tree and posts events to the programmed
+event ring. It rejects a route string, TT field or endpoint context that does
+not match the modeled device.
+
+Successful cases cover:
+
+- storage and a low-speed keyboard, with single-TT and multi-TT hubs, below two
+  hub tiers;
+- removal and replacement of the second-tier hub, and of its leaf alone;
+- a bus-powered hub serving a 100 mA keyboard, and a self-powered hub below a
+  bus-powered hub serving a 500 mA storage device;
+- audio capture at 16 kHz and 48 kHz, mono and stereo, at full speed directly
+  or through a hub TT, and at high speed, with contiguous sample counters;
+- injected missed-service intervals, a ring overrun after a 30 ms owner stall,
+  retention 100 ms after the ring stops producing events, and a root disconnect
+  followed by a replugged stream.
+
+Refusal cases cover a second tier without admission, a third tier, unadmitted
+bus power, a seven-port bus-powered hub, an over-budget leaf and a mismatched
+power status. They also cover nested bus-powered hubs, an over-budget
+self-powered hub, audio without admission, oversized audio packets and a
+headset HID interface. Each case checks the stage at which the refusal occurs. The adapter, core
+and audio class also compile for AArch64 with the audio class enabled.
+`checks/a733-xhci-detach.py` adds a core case in which a second-tier hub owns a
+higher record than its child and teardown still disables the child first.
+
+These results are software results. Physical hubs, hub power, isochronous
+timing, DMA visibility and USB microphones remain unqualified.
 
 ## Offline Gen1 evidence
 
