@@ -6,41 +6,68 @@ import time
 
 STATUS,BEGIN,WRITE,SUBMIT,READ_FRAME,CLOSE=range(6)
 CHUNK=65536
+VERSIONS={2:4,3:5,4:6}
 
 def session(base,width=1920,height=1080,profile=2):
     """Append GPU-only geometry before the coordinator authenticates the session."""
-    if profile not in (2,3) or len(base)!=592 or not 0<width<=1920 or not 0<height<=1080:
+    if profile not in (2,3,4) or len(base)!=592 or not 0<width<=1920 or not 0<height<=1080:
         raise ValueError('GPU texture session geometry')
     return base+struct.pack('<5Q',0x4153373347545831,profile-1,632,width,height)
 
-def input_bytes(vertices,indices,width,height,pixels,*,profile=2,state=0):
-    """Build position/UV vertices, uint16 indices and padded linear RGBA8 texels."""
+def input_bytes(vertices,indices,width,height,pixels,*,profile=2,state=0,batches=()):
+    """Build position/UV vertices, uint16 indices, profile-4 batch records and
+    padded linear RGBA8 texels."""
     if not 1<=len(vertices)<=65536 or not 3<=len(indices)<=65535 or len(indices)%3:
         raise ValueError('GPU indexed geometry bounds')
     if not 0<width<=1920 or not 0<height<=1080:
         raise ValueError('GPU texture bounds')
-    if not state_valid(profile,state):raise ValueError('GPU depth/blend state')
+    if not state_valid(profile,state):raise ValueError('GPU graphics state')
+    if (profile==4)!=bool(batches) or (profile==4 and len(batches)!=state&31):raise ValueError('GPU batch count')
     stride=(width+1)&~1
     if len(pixels)!=width*height*4:raise ValueError('GPU RGBA8 texture length')
     result=bytearray()
     for row in vertices:
-        if len(row)!=6 or not all(math.isfinite(x) for x in row) or not all(-1<=x<=1 for x in row[:2]) or not ((row[2]==0 if profile==2 else 0<=row[2]<=1) and row[3]==1) or not all(0<=x<=1 for x in row[4:]):
+        if len(row)!=6 or not all(math.isfinite(x) for x in row):raise ValueError('GPU position/UV vertex')
+        packed=struct.pack('<6f',*row)
+        if profile==4:
+            # Same binary32 view-volume bounds as the native validator.
+            x,y,z,w,u,v=struct.unpack('<6I',packed)
+            if not 0x37800000<=w<=0x47800000 or x&0x7fffffff>w or y&0x7fffffff>w or z&0x7fffffff>w or \
+                    (z&0x80000000 and z&0x7fffffff) or u&0x7fffffff>0x47800000 or v&0x7fffffff>0x47800000:
+                raise ValueError('GPU perspective vertex')
+        elif not all(-1<=x<=1 for x in row[:2]) or not ((row[2]==0 if profile==2 else 0<=row[2]<=1) and row[3]==1) or not all(0<=x<=1 for x in row[4:]):
             raise ValueError('GPU position/UV vertex')
-        result.extend(struct.pack('<6f',*row))
+        result.extend(packed)
     for index in indices:
         if type(index) is not int or not 0<=index<len(vertices):raise ValueError('GPU vertex index')
         result.extend(struct.pack('<H',index))
+    for batch in batches:
+        if len(batch)!=4 or not batch_valid(*batch,len(indices)):raise ValueError('GPU batch record')
+        result.extend(struct.pack('<4I',*batch))
     for y in range(height):
         result.extend(pixels[y*width*4:(y+1)*width*4]);result.extend(bytes((stride-width)*4))
     shape=(width,height,stride,len(vertices),len(indices))
-    return (shape,bytes(result),state) if profile==3 else (shape,bytes(result))
+    return (shape,bytes(result),state) if profile>=3 else (shape,bytes(result))
 
 def state_valid(profile,state):
-    return type(state) is int and (state==0 if profile==2 else profile==3 and 0<=state<16 and (state&3 or not state&4))
+    """Profile 3 takes depth/blend bits; profile 4 takes the frame state:
+    batch count, linear filtering, U/V VkSamplerAddressMode and sRGB."""
+    if type(state) is not int:return False
+    if profile==2:return state==0
+    if profile==3:return 0<=state<16 and bool(state&3 or not state&4)
+    return profile==4 and 0<=state<1<<13 and 1<=state&31<=16 and (state>>6)&7<=4 and (state>>9)&7<=4
+
+def batch_valid(first,count,state,stencil,index_count):
+    """One record: index range, depth/cull/blend/color/stencil state and the
+    stencil reference/compare-mask/write-mask word."""
+    if not all(type(x) is int and 0<=x<2**32 for x in (first,count,state,stencil)):return False
+    if count<3 or count%3 or first>index_count or count>index_count-first or state>>23 or (state>>4)&3==3:return False
+    if (state>>6)&7>4 or (state&(1<<9) and (state>>6)&7) or stencil>>24:return False
+    return bool(state&(1<<10)) or (not state&(0xfff<<11) and not stencil)
 
 def request(operation,frame,epoch,generation=0,offset=0,payload=b'',shape=(0,0,0,0,0),state=0,profile=2):
     if len(payload)>CHUNK:raise ValueError('GPU copied chunk bound')
-    return struct.pack('<4I2Q8I',0x49585047,5 if profile==3 else 4,operation,frame,epoch,generation,offset,len(payload),*shape,state)+payload
+    return struct.pack('<4I2Q8I',0x49585047,VERSIONS[profile],operation,frame,epoch,generation,offset,len(payload),*shape,state)+payload
 
 def frames(write,read,epoch,inputs,timeout=50,*,profile=2):
     """Use supplied bounded transport functions; stream each frame before reuse.
@@ -48,7 +75,7 @@ def frames(write,read,epoch,inputs,timeout=50,*,profile=2):
     write(bytes, remaining_seconds) sends one request. read(maximum_bytes,
     remaining_seconds) returns a nonempty prefix. Neither function opens a device.
     """
-    if profile not in (2,3) or not 0<epoch<2**64 or not 0<timeout<60:raise ValueError('GPU session deadline')
+    if profile not in (2,3,4) or not 0<epoch<2**64 or not 0<timeout<60:raise ValueError('GPU session deadline')
     end=time.monotonic()+timeout
     def remaining():
         n=end-time.monotonic()
@@ -79,7 +106,7 @@ def frames(write,read,epoch,inputs,timeout=50,*,profile=2):
         if not header:header=bytes(read(65,remaining()))
         if len(header)!=64:raise ValueError('GPU response header transfer')
         h=struct.unpack('<12I2Q',header)
-        if h[:2]!=(0x4f585047,5 if profile==3 else 4) or h[3]!=operation or h[12]!=epoch or h[9]:
+        if h[:2]!=(0x4f585047,VERSIONS[profile]) or h[3]!=operation or h[12]!=epoch or h[9]:
             raise ValueError('GPU texture response identity')
         return h
     h=exchange(STATUS,0)
@@ -87,7 +114,7 @@ def frames(write,read,epoch,inputs,timeout=50,*,profile=2):
     outputs=[];current=0
     for item in inputs:
         shape,data=item[:2];state=item[2] if len(item)==3 else 0
-        if not state_valid(profile,state):raise ValueError('GPU depth/blend state')
+        if not state_valid(profile,state):raise ValueError('GPU graphics state')
         if current>=(2**32-1)//2:raise ValueError('GPU frame sequence exhausted')
         h=exchange(BEGIN,current,shape=shape,state=state)
         if h[2]!=1 or h[4]!=current:raise ValueError('GPU input draft refused')

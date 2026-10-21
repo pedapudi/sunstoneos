@@ -22,6 +22,7 @@ const uint64_t gpu_runtime_draw_marker[2]={UINT64_C(0x4750554452415731),PVR_REND
 #endif
 #ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
 const uint64_t gpu_depth_blend_marker[2]={UINT64_C(0x4750554450424c31),PVR_RENDER_DEPTH_BLEND_PROFILE};
+const uint64_t gpu_batch_marker[2]={UINT64_C(0x4750554241544331),PVR_RENDER_BATCH_PROFILE};
 const uint64_t gpu_runtime_texture_marker[2]={UINT64_C(0x4750555458543031),PVR_RENDER_TEXTURE_PROFILE};
 #endif
 #ifdef SUNSTONE_GPU_PROGRAM_APPLICATION
@@ -402,7 +403,7 @@ void gpu_application_irq(void)
 void a733_smp_diagnostic_start(void)
 {
 #ifdef SUNSTONE_GPU_RUNTIME_TEXTURE
-    __asm__ volatile("" :: "r"(gpu_runtime_texture_marker),"r"(gpu_depth_blend_marker) : "memory");
+    __asm__ volatile("" :: "r"(gpu_runtime_texture_marker),"r"(gpu_depth_blend_marker),"r"(gpu_batch_marker) : "memory");
 #endif
 #ifdef SUNSTONE_GPU_RUNTIME_DRAW
     __asm__ volatile("" :: "r"(gpu_runtime_draw_marker) : "memory");
@@ -498,7 +499,9 @@ void a733_smp_diagnostic_start(void)
 #endif
 #ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
 #if defined(SUNSTONE_GPU_RUNTIME_TEXTURE)
-       !(gpu_application_texture_profile()==3?
+       !(gpu_application_texture_profile()==PVR_RENDER_BATCH_PROFILE?
+         a733_gpu_graphics_memory_prepare_batches(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile):
+         gpu_application_texture_profile()==3?
          a733_gpu_graphics_memory_prepare_depth_blend(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile):
          a733_gpu_graphics_memory_prepare_texture(&app.graphics,&app.firmware,&app.compute,&app.service,11,&profile))||
 #elif defined(SUNSTONE_GPU_RUNTIME_DRAW)

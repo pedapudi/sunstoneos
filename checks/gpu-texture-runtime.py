@@ -64,7 +64,8 @@ class Machine(transport.Machine):
         vertices=list(struct.iter_unpack('<6f',self.draft[:count*24]))
         indices=struct.unpack('<'+'H'*index_count,self.draft[count*24:count*24+index_count*2])
         assert count==4 and index_count==6 and all(i<count for i in indices)
-        texels=self.draft[count*24+index_count*2:];assert len(texels)==stride*height*4
+        batches=(self.state&31)*16 if self.profile==4 else 0
+        texels=self.draft[count*24+index_count*2+batches:];assert len(texels)==stride*height*4
         # Model only the GPU result for the two supplied indexed full-screen
         # quads. This does not execute or qualify USC/rasterization.
         flip=vertices[0][4]==1
@@ -152,7 +153,7 @@ class Machine(transport.Machine):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--image',type=Path,required=True)
-    ap.add_argument('--profile',type=int,choices=(2,3),default=2)
+    ap.add_argument('--profile',type=int,choices=(2,3,4),default=2)
     ap.add_argument('--output',type=Path,required=True);ap.add_argument('--speed',choices=('high','full'),required=True)
     a=ap.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     image=layout.Image(a.image);image.path=a.image;m=Machine(image,2 if a.speed=='high' else 1,a.profile)
@@ -164,6 +165,13 @@ def main():
         pixels=bytes(c for y in range(height) for x in range(width) for c in ((x*17+scene*31)&255,y*13,scene*73,255))
         if a.profile==3:
             for vertex in vertices:vertex[2]=0.25+scene*0.25
+        if a.profile==4:
+            # The second scene uses w=2; perspective division keeps the quad.
+            for vertex in vertices:vertex[:4]=[c*(scene+1) for c in vertex[:4]]
+            batches=[(0,3,1|8,0),(3,3,7|1<<6|1<<10|7<<11|2<<20,0xffff01)] if scene==0 else [(0,6,3|1<<4,0)]
+            inputs.append(host.input_bytes(vertices,[0,1,3,0,3,2],width,height,pixels,profile=4,
+                state=(2|1<<5|1<<9) if scene==0 else (1|3<<6|1<<12),batches=batches))
+            continue
         inputs.append(host.input_bytes(vertices,[0,1,3,0,3,2],width,height,pixels,
             profile=a.profile,state=(5 if scene==0 else 10) if a.profile==3 else 0))
     outputs=host.frames(m.write_request,m.read,123,inputs,timeout=50,profile=a.profile)
@@ -171,7 +179,7 @@ def main():
         if not m.field('runtime_state'):break
         m.pump()
     assert len(outputs)==2 and outputs[0]['pixels']!=outputs[1]['pixels'] and m.closed and m.borrow is None
-    assert m.states==([5,10] if a.profile==3 else [0,0])
+    assert m.states==([5,10] if a.profile==3 else [2|1<<5|1<<9,1|3<<6|1<<12] if a.profile==4 else [0,0])
     assert m.inputs==[item[1] for item in inputs] and not m.field('fatal') and m.field('runtime_closed')==1
     assert m.zlps and m.pending is None
     record=dict(passed=True,physical_access=False,profile=a.profile,states=m.states,speed=a.speed,frames=2,width=1920,height=1080,
