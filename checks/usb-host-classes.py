@@ -12,7 +12,8 @@ CASES = ['nested-msc', 'nested-hid-ls', 'nested-mtt-hid-ls', 'nested-unplug', 'n
          'nested-refused', 'third-tier',
          'bus-hub', 'bus-self-tier', 'bus-refused', 'bus-budget', 'bus-leaf-power', 'bus-status-mismatch',
          'bus-bus-tier', 'bus-self-tier-heavy',
-         'audio-fs', 'audio-16k', 'audio-stereo', 'audio-hub', 'audio-hs', 'audio-missed', 'audio-overrun',
+         'audio-fs', 'audio-16k', 'audio-stereo', 'audio-hub', 'audio-hs', 'audio-missed', 'audio-missed-batch',
+         'audio-missed-null', 'audio-missed-silent', 'audio-overrun', 'audio-overrun-refill', 'audio-late-poll',
          'audio-stall', 'audio-unplug', 'audio-disabled', 'audio-large', 'audio-hid-interface']
 
 

@@ -301,43 +301,88 @@ static int finished(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_x
     if((state!=2&&state!=3)||dequeue!=e->pending_trb)return 0;
     e->pending=0;e->pending_trb=0;return 1;
 }
+/* Position, counted from head, of the queued TD whose TRB is pointer, or
+ * A733_XHCI_ISOCH_TDS when no queued TD has it. */
+static unsigned isoch_position(const struct a733_xhci_isoch *s,uint64_t pointer)
+{
+    for(unsigned k=s->done;pointer&&k<s->count;++k)if(s->trb[(s->head+k)%A733_XHCI_ISOCH_TDS]==pointer)return k;
+    return A733_XHCI_ISOCH_TDS;
+}
+/* The controller passed the queued TDs before position k without data. */
+static void isoch_skip(struct a733_xhci_isoch *s,unsigned k)
+{
+    for(;s->done<k;++s->done){s->state[(s->head+s->done)%A733_XHCI_ISOCH_TDS]=3;++s->dropped;}
+}
 /* After a stop, the TDs still on an isochronous ring end without completions
- * when the dequeue pointer addresses the oldest of them, or the enqueue
- * position when none remains. */
+ * when the dequeue pointer addresses one of them, or the enqueue position. TDs
+ * the controller skipped without an event end the same way. */
 static int isoch_finished(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e)
 {
     struct a733_xhci_isoch *s=&x->isoch;
     const uint8_t *c=d->device+e->number*x->context_bytes;
     uint64_t dequeue=((uint64_t)get32(c+8)|((uint64_t)get32(c+12)<<32))&~UINT64_C(15);
-    uint64_t expected=s->done<s->count?s->trb[(s->head+s->done)%A733_XHCI_ISOCH_TDS]:e->ring_pa+16*e->index;
-    if((get32(c)&7)!=3||dequeue!=expected)return 0;
+    if((get32(c)&7)!=3||(isoch_position(s,dequeue)==A733_XHCI_ISOCH_TDS&&dequeue!=e->ring_pa+16*e->index))return 0;
     while(s->done<s->count){s->state[(s->head+s->done)%A733_XHCI_ISOCH_TDS]=3;++s->done;}
     e->pending=0;return 1;
 }
-/* One event for the oldest TD on the isochronous ring, in TD order. Success
- * and short packets carry data; transaction, babble, split and missed-service
- * errors end the TD without data and the stream continues (xHCI 1.2 sections
- * 4.10.2.8, 4.10.3.2). Ring Overrun reports an empty ring at the enqueue
- * position; the next queued TD rings the doorbell again (section 4.10.3.1). */
+/* Isochronous ring events follow the pinned Linux handle_tx_event. Success and
+ * short packets carry data; transaction, babble and split errors end the TD
+ * without data and the stream continues (xHCI 1.2 section 4.10.2.8).
+ * A Missed Service Error names the last missed TD, or none (section 4.10.3.2):
+ * every queued TD up to the named one ends without data. A controller may skip
+ * further TDs without an event, so until the next other event, that event may
+ * name a later TD and the TDs before it end without data.
+ * Ring Overrun names where the controller found the ring empty (section
+ * 4.10.3.1): the enqueue position, the oldest queued TD when a refill came late,
+ * a later TD after missed intervals, or none on pre-1.1 controllers. The
+ * controller removed the endpoint from its schedule, so while TDs remain the
+ * core rings the doorbell again. */
 static int isoch_event(struct a733_xhci *x,struct a733_xhci_device *d,struct a733_xhci_endpoint *e,
     unsigned code,unsigned residual,uint64_t pointer)
 {
     struct a733_xhci_isoch *s=&x->isoch;
+    unsigned k=isoch_position(s,pointer);
     if(code==21){
-        if(s->done!=s->count||(pointer&&pointer!=e->ring_pa+16*e->index))return 0;
-        ++s->overruns;e->pending=0;return 1;
+        if(pointer==e->ring_pa+16*e->index&&(s->done==s->count||s->skip))k=s->count;
+        else if(pointer&&(k==A733_XHCI_ISOCH_TDS||(k>s->done&&!s->skip)))return 0;
+        if(pointer){isoch_skip(s,k);s->skip=0;}
+        ++s->overruns;
+        if(s->done==s->count){e->pending=0;return 1;}
+        e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
+        return d->detach||wr(x,x->doorbell+d->slot*4,e->number);
     }
     if(code>=26&&code<=28)
         return d->detach&&d->stopping==2&&pointer>=e->ring_pa&&pointer<e->ring_pa+16*A733_XHCI_RING_TRBS;
-    unsigned i=(s->head+s->done)%A733_XHCI_ISOCH_TDS;
-    if(s->done==s->count||pointer!=s->trb[i]||s->state[i]!=1)return 0;
-    if(!d->detach&&code==1&&!residual){s->bytes[i]=e->packet;s->state[i]=2;}
-    else if(!d->detach&&code==13&&residual<=e->packet){s->bytes[i]=e->packet-residual;s->state[i]=2;}
-    else if(code==1||code==13||code==3||code==4||code==23||code==36){s->state[i]=3;++s->dropped;}
-    else return 0;
-    if(++s->done==s->count)e->pending=0;
+    if(code==23){
+        s->skip=1;
+        if(!pointer)return 1;
+        if(k==A733_XHCI_ISOCH_TDS)return 0;
+        isoch_skip(s,k+1);
+    }else{
+        if(k==A733_XHCI_ISOCH_TDS||(k>s->done&&!s->skip))return 0;
+        isoch_skip(s,k);s->skip=0;
+        unsigned i=(s->head+s->done)%A733_XHCI_ISOCH_TDS;
+        if(!d->detach&&code==1&&!residual){s->bytes[i]=e->packet;s->state[i]=2;}
+        else if(!d->detach&&code==13&&residual<=e->packet){s->bytes[i]=e->packet-residual;s->state[i]=2;}
+        else if(code==1||code==13||code==3||code==4||code==36){s->state[i]=3;++s->dropped;}
+        else return 0;
+        ++s->done;
+    }
+    if(s->done==s->count)e->pending=0;
     else e->deadline=x->lifetime_deadline-x->last_now>ISOCH_US?x->last_now+ISOCH_US:x->lifetime_deadline;
     return 1;
+}
+/* The isochronous bound runs from the last ring activity the core observed.
+ * It expires only when the event ring holds no further event, so a late poll
+ * first consumes what the controller posted while the owner was away. */
+static int isoch_expired(struct a733_xhci *x)
+{
+    const struct a733_xhci_isoch *s=&x->isoch;
+    if(!s->device)return 0;
+    const struct a733_xhci_device *d=&x->devices[s->device-1];const struct a733_xhci_endpoint *e=&d->endpoints[1];
+    if(d->detach||e->pending!=6||x->last_now<e->deadline)return 0;
+    if(!barrier(x))return 1;
+    return (x->events[x->event_index].control&1)!=x->event_cycle;
 }
 /* Queue one-packet Isoch TDs (ISP, IOC, Start Isoch ASAP) until every entry
  * is in use, then ring the endpoint once. */
@@ -651,7 +696,9 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
             struct a733_xhci_device *d=&x->devices[j];
             if((d->detach||(d->port_ready&&d->port_ready!=3))&&d->deadline&&d->deadline<x->deadline)x->deadline=d->deadline;
             if(d->detach)continue;
-            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if((d->endpoints[i].pending||(i&&d->endpoints[i].opened&&!d->endpoints[i].configured))&&
+            /* The isochronous bound is checked against the event ring below. */
+            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i)if(((d->endpoints[i].pending&&d->endpoints[i].pending!=6)||
+                (i&&d->endpoints[i].opened&&!d->endpoints[i].configured))&&
                 d->endpoints[i].deadline<x->deadline)x->deadline=d->endpoints[i].deadline;
         }
     }
@@ -691,6 +738,7 @@ enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
         if(!rd(x,x->operational+4,&v)||(v&(1|BIT(2)|BIT(11)|BIT(12)))||!port(x))goto failed;
         if(x->failed)goto failed;
         if(!x->irq_mode||x->irq_service){int e=event_step(x);if(e<0)goto failed;if(e>0)break;}
+        if(isoch_expired(x))goto failed;
         if(x->command_kind)break;
         {
             /* Children before their hub; a detaching hub with a bound child

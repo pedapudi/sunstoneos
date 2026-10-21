@@ -887,25 +887,39 @@ count 0 and a maximum ESIT payload of one packet.
 
 Once started, the core keeps eight one-packet Isoch TDs on the ring. Each TD
 sets Interrupt-on-Short-Packet, Interrupt-on-Completion and Start Isoch ASAP,
-and uses a fixed 512-byte part of the bounce page. Completions arrive in TD
-order (xHCI 1.2 sections 4.10.2.8, 4.10.3.1 and 4.10.3.2):
+and uses a fixed 512-byte part of the bounce page. The core handles ring events
+as the pinned Linux `handle_tx_event` does (xHCI 1.2 sections 4.10.2.8,
+4.10.3.1 and 4.10.3.2):
 
 - **Success or short packet.** The TD carries data. `a733_xhci_isoch_take`
   copies the oldest such packet into caller storage after its completion event
   and frees the entry; the next poll queues a replacement TD and rings the
   doorbell.
-- **Transaction, babble, split-transaction or missed-service error.** The TD
-  ends without data and the stream continues. The core counts these intervals
-  in `isoch.dropped`.
-- **Ring Overrun.** All queued TDs completed before software queued more, so the
-  controller found the ring empty. The event must name the enqueue position.
-  The core counts it in `isoch.overruns`; the next queued TD restarts the
-  stream one service interval later.
+- **Transaction, babble or split-transaction error.** The TD ends without data
+  and the stream continues. The core counts it in `isoch.dropped`.
+- **Missed Service Error.** The event names the last TD the controller missed,
+  or has no TRB pointer. When the Event Ring is full, one event can cover
+  several missed TDs. Every queued TD up to the named one ends without data and
+  is counted in `isoch.dropped`. A controller without the Contiguous Frame ID
+  capability may skip further TDs without an event. Until the next event of
+  another kind, that event may therefore name a later TD. The queued TDs before
+  it end without data and are counted the same way.
+- **Ring Overrun.** The controller found the ring empty and removed the
+  endpoint from its schedule. The event names where the ring was empty. This is
+  the enqueue position when every queued TD completed. It is the oldest queued
+  TD when the controller looked just before a late refill was written. It may be
+  a later TD after missed service intervals, or have no pointer on a pre-1.1
+  controller. TDs before the named position end without data. The core counts
+  the event in `isoch.overruns`. While TDs remain queued, it rings the endpoint
+  doorbell again so that the controller schedules the endpoint again.
 
-Any other completion code, an event out of TD order or no ring event for 100 ms
-while TDs are queued retains the session and its DMA parent. A device teardown
-stops the endpoint; the TDs still queued end without completions when the
-dequeue pointer names the oldest of them.
+Any other completion code, or an event that names a TD the rules above do not
+allow, retains the session and its DMA parent. So does a poll that finds the
+event ring empty 100 ms or more after the last ring activity while TDs are
+queued. Events that arrived while the owner was not polling are processed
+first, so a late poll by itself does not retain the session. A device teardown
+stops the endpoint. The TDs still queued end without completions when the
+dequeue pointer names one of them or the enqueue position.
 
 The TinyUSB adapter admits one USB Audio Class 1 capture device when the session
 sets `audio_capture` and the image builds the pinned TinyUSB audio host class.
@@ -1088,8 +1102,13 @@ Successful cases cover:
   bus-powered hub serving a 500 mA storage device;
 - audio capture at 16 kHz and 48 kHz, mono and stereo, at full speed directly
   or through a hub TT, and at high speed, with contiguous sample counters;
-- injected missed-service intervals, a ring overrun after a 30 ms owner stall,
-  retention 100 ms after the ring stops producing events, and a root disconnect
+- injected missed-service intervals in four forms: one event per missed TD,
+  one event for three missed TDs, events without a TRB pointer, and one event
+  followed by two missed TDs without events;
+- a ring overrun after a 30 ms owner stall, an overrun posted after the refill
+  that names the first new TD, and a 150 ms owner gap whose waiting events are
+  processed without retaining the session;
+- retention 100 ms after the ring stops producing events, and a root disconnect
   followed by a replugged stream.
 
 Refusal cases cover a second tier without admission, a third tier, unadmitted

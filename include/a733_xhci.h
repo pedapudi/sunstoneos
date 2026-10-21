@@ -62,9 +62,10 @@ struct a733_xhci_device {
 /* One isochronous IN stream per controller. Entries head..head+count-1
  * (modulo A733_XHCI_ISOCH_TDS) are in TD order; the first done entries have
  * completed and the rest are on the ring. Entry i always uses bounce bytes
- * i*A733_XHCI_ISOCH_PACKET. state: 1 on ring, 2 data, 3 no data. */
+ * i*A733_XHCI_ISOCH_PACKET. state: 1 on ring, 2 data, 3 no data. skip is set
+ * by a missed-service report and lets the next event pass queued TDs. */
 struct a733_xhci_isoch {
-    unsigned device,requested,head,count,done;
+    unsigned device,requested,head,count,done,skip;
     unsigned bytes[A733_XHCI_ISOCH_TDS],state[A733_XHCI_ISOCH_TDS];
     uint64_t trb[A733_XHCI_ISOCH_TDS];
     uint32_t dropped,overruns; /* Intervals without data; empty-ring reports. */
@@ -149,8 +150,10 @@ int a733_xhci_open_interrupt(struct a733_xhci *,unsigned address,unsigned endpoi
 int a733_xhci_open_isoch(struct a733_xhci *,unsigned address,unsigned endpoint,
     unsigned packet,unsigned interval,uint64_t deadline);
 /* Start keeping A733_XHCI_ISOCH_TDS one-packet TDs (Start Isoch ASAP) on the
- * ring once the endpoint is configured. Each TD must complete within 100 ms
- * of the previous ring activity; otherwise the session is retained. */
+ * ring once the endpoint is configured. When a poll finds the event ring empty
+ * 100 ms or more after the previous ring activity while TDs are queued, the
+ * session is retained. Events posted while the owner did not poll are
+ * consumed first, so a late poll alone does not retain the session. */
 int a733_xhci_isoch_start(struct a733_xhci *,unsigned address,unsigned endpoint);
 /* Copy the oldest completed packet into caller storage and free its entry;
  * the next poll queues a replacement TD. Entries that carried no data are

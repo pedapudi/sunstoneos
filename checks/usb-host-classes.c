@@ -156,12 +156,20 @@ static struct dev *make(unsigned kind,unsigned speed,struct dev *parent,unsigned
 static void finish_devices(void){for(unsigned i=0;i<device_count;++i)describe(&devices[i]);}
 
 /* ---- Controller model state ---- */
-struct ep { uint64_t deq,next;unsigned cycle,state,type,packet,esit,scheduled,kick; };
+struct ep { uint64_t deq,next;unsigned cycle,state,type,packet,esit,scheduled,kick,late; };
 static struct dev *slots[4];static struct ep eps[4][32];static unsigned slot_used;
 static uint64_t command_deq;static unsigned command_cycle,command_kick;
 static unsigned event_index,event_cycle=1,events_made;
 static unsigned disables[8],disable_count,root_enabled;
 static unsigned iso_missed_every,iso_services,iso_stalled,iso_frames_lost;
+/* Missed-service forms (xHCI 1.2 section 4.10.3.2): 0 one event per missed TD
+ * at its own TRB; 1 three TDs missed and one event for the last of them, as
+ * after an Event Ring full condition; 2 an event without a TRB pointer; 3 one
+ * event, then two further TDs missed without events, as without CFC. */
+static unsigned iso_miss_kind,iso_silent,iso_tds_missed;
+/* The controller finds the ring empty just before the refill and posts Ring
+ * Overrun only after the refill's doorbell, which it then ignores. */
+static unsigned iso_late_overrun;
 static uint8_t *event_ring(void){return cpu(get64(cpu(get64(&reg[0x1030/4]),16)),16*A733_XHCI_EVENT_TRBS);}
 static void event(unsigned type,uint64_t pointer,unsigned code,unsigned remaining,unsigned dci,unsigned slot)
 {
@@ -339,12 +347,18 @@ static unsigned audio_packet(struct dev *d,uint8_t *p,uint64_t service_us)
     }
     return frames*channels*2;
 }
-static void complete(unsigned slot,unsigned dci,struct ep *e,const uint8_t *t,unsigned code,unsigned residual)
+/* Move past the TD at the dequeue pointer and return its TRB address. */
+static uint64_t advance(struct ep *e)
 {
     uint64_t pointer=e->deq;
     e->deq+=16;
     const uint8_t *next=cpu(e->deq,16);
     if(((get32(next+12)>>10)&63)==6&&(get32(next+12)&1)==e->cycle){if(get32(next+12)&2)e->cycle^=1;e->deq=get64(next);}
+    return pointer;
+}
+static void complete(unsigned slot,unsigned dci,struct ep *e,const uint8_t *t,unsigned code,unsigned residual)
+{
+    uint64_t pointer=advance(e);
     if(get32(t+12)&BIT(5)||code!=1)event(32,pointer,code,residual,dci,slot);
 }
 /* Process available TDs: control and bulk at once, interrupt when data
@@ -361,7 +375,8 @@ static void service(unsigned slot,unsigned dci,uint64_t now)
         if((control&1)!=e->cycle){
             if(e->type==5&&e->scheduled&&now>=e->next){
                 /* Ring Overrun: the ring was empty at a service interval. */
-                event(32,e->deq,21,0,dci,slot);e->scheduled=0;
+                if(iso_late_overrun)e->late=1;else event(32,e->deq,21,0,dci,slot);
+                e->scheduled=0;
             }
             break;
         }
@@ -406,8 +421,18 @@ static void service(unsigned slot,unsigned dci,uint64_t now)
             if(!e->scheduled){e->scheduled=1;e->next=(now/1000+1)*1000;}
             if(now<e->next)break;
             uint64_t at=e->next;e->next+=e->esit;++iso_services;
+            if(iso_silent){
+                --iso_silent;++iso_tds_missed;uint64_t pointer=advance(e);
+                if(!iso_silent&&iso_miss_kind==1)event(32,pointer,23,length,dci,slot);
+                continue;
+            }
             if(iso_missed_every&&iso_services%iso_missed_every==0){
-                iso_frames_lost+=(d->audio_alt==2?48000:d->audio_rate)/1000;complete(slot,dci,e,t,23,length);continue;
+                iso_frames_lost+=(d->audio_alt==2?48000:d->audio_rate)/1000;++iso_tds_missed;
+                if(iso_miss_kind==0||iso_miss_kind==3)complete(slot,dci,e,t,23,length);
+                else advance(e);
+                if(iso_miss_kind==1||iso_miss_kind==3)iso_silent=2;
+                if(iso_miss_kind==2)event(32,0,23,length,dci,slot);
+                continue;
             }
             unsigned bytes=audio_packet(d,buffer,at);assert(bytes<=length);
             complete(slot,dci,e,t,bytes<length?13:1,length-bytes);
@@ -443,7 +468,11 @@ static int ww(void *v,uint32_t off,uint32_t value)
         return 1;
     }
     if(off==0x2000){command_kick=1;return 1;}
-    if(off>0x2000&&off<0x2010){unsigned slot=(off-0x2000)/4;assert(slot_used&BIT(slot)&&value&&value<32);eps[slot][value].kick=1;return 1;}
+    if(off>0x2000&&off<0x2010){
+        unsigned slot=(off-0x2000)/4;assert(slot_used&BIT(slot)&&value&&value<32);struct ep *e=&eps[slot][value];
+        if(e->late){e->late=0;event(32,e->deq,21,0,value,slot);}else e->kick=1;
+        return 1;
+    }
     reg[off/4]=value;
     if(off==0x40){if(value&2){reg[0x40/4]=0;reg[0x44/4]=1;}else if(value&1)reg[0x44/4]=0;}
     if(off==0x5c){command_deq=get64(&reg[0x58/4])&~UINT64_C(63);command_cycle=reg[0x58/4]&1;}
@@ -628,6 +657,7 @@ int main(int argc,char **argv)
         else root=mic=make(AUDIO,has("audio-hs")?3:1,NULL,0);
         mic->audio_hs=has("audio-hs");mic->audio_big=has("large");mic->audio_hid=has("hid-interface");
         iso_missed_every=has("missed")?10:0;
+        iso_miss_kind=has("batch")?1:has("null")?2:has("silent")?3:0;iso_late_overrun=has("refill");
         finish_devices();start_core();attach_root();
         if(has("disabled")||has("large")||has("hid-interface")){
             retained();if(mic->configured||!mic->slot)FAIL("refused at the wrong stage");
@@ -652,12 +682,30 @@ int main(int argc,char **argv)
         }
         if(!audio_collect(channels,300))FAIL("capture failed");
         struct a733_usb2_audio_block last;
-        if(has("overrun")){
-            /* The owner stops for 30 ms: eight TDs complete, then the ring is empty. */
-            for(unsigned i=0;i<300;++i){m.now+=100;tick();}
+        if(has("overrun")||has("late-poll")){
+            /* The owner stops for 30 ms, or for 150 ms, longer than the
+             * isochronous bound: eight TDs complete, then the ring is empty.
+             * Their events wait in the event ring until the owner polls. */
+            for(unsigned i=0;i<(has("late-poll")?1500u:300u);++i){m.now+=100;tick();}
             if(!audio_collect(channels,200))FAIL("capture after overrun failed");
-            if(n.core.isoch.overruns!=1||!gaps||n.core.isoch.dropped)FAIL("overruns %u gaps %u dropped %u",n.core.isoch.overruns,gaps,n.core.isoch.dropped);
-            printf("PASS an empty isochronous ring reports one overrun; the stream restarts at the next TD with a %u-frame gap\n",gap_frames);return 0;
+            if(n.failed||n.core.isoch.overruns!=1||!gaps||n.core.isoch.dropped)
+                FAIL("failed %u overruns %u gaps %u dropped %u",n.failed,n.core.isoch.overruns,gaps,n.core.isoch.dropped);
+            if(has("late-poll"))
+                printf("PASS a 150 ms owner gap consumes the waiting ring events first; one overrun and a %u-frame gap, the stream continues\n",gap_frames);
+            else if(has("refill"))
+                printf("PASS an overrun posted after the refill names the first new TD; the core rings again and the stream continues after a %u-frame gap\n",gap_frames);
+            else printf("PASS an empty isochronous ring reports one overrun; the stream restarts at the next TD with a %u-frame gap\n",gap_frames);
+            return 0;
+        }
+        if(has("missed")&&iso_miss_kind){
+            /* Missed TDs at the end may not be retired yet: up to three TDs
+             * wait for a later event. Every gap the reader sees was counted. */
+            unsigned per=rate/1000,dropped=n.core.isoch.dropped;
+            if(n.failed||!gaps||n.core.isoch.overruns||gap_frames%per||gap_frames/per>dropped||dropped>iso_tds_missed||iso_tds_missed-dropped>3)
+                FAIL("dropped %u missed %u gaps %u gap frames %u",dropped,iso_tds_missed,gaps,gap_frames);
+            printf("PASS %u of %u missed service intervals (%s) retired without data in %u gaps; the stream continues\n",dropped,iso_tds_missed,
+                iso_miss_kind==1?"one event for three TDs":iso_miss_kind==2?"events without a TRB pointer":"two TDs skipped without events",gaps);
+            return 0;
         }
         if(has("missed")){
             /* The last missed interval may follow the last read. */
