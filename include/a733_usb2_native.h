@@ -53,6 +53,9 @@ struct a733_usb2_native {
     struct device_memory_lease parent,memory;
     struct device_memory_extent backing;
     uint64_t last_now,read_deadline;
+    /* Bound for mounting while unmounted: the startup deadline, then the same
+     * budget from each attachment after a removal; zero while none waits. */
+    uint64_t mount_deadline,mount_budget;
     enum a733_usb2_device_kind kind;
     struct a733_usb2_hid hid;
     struct a733_usb2_hub hub;
@@ -93,7 +96,9 @@ int a733_usb2_read_sector(struct a733_usb2_native *,uint32_t lba,uint64_t deadli
 int a733_usb2_read_result(struct a733_usb2_native *,uint8_t out[512]);
 /* Same actual owner task. One interrupt IN request at a time; caller storage
  * never reaches DMA. Result copies the exact completed raw bytes only after
- * a fresh live attachment/deadline check. No automatic rearm or report parser. */
+ * a fresh live attachment/deadline check. No automatic rearm or report parser.
+ * Removing a device ends its outstanding request without output: results
+ * return-1 and the kind is NONE until a later attachment mounts. */
 enum a733_usb2_device_kind a733_usb2_device_kind(struct a733_usb2_native *);
 int a733_usb2_hid_receive(struct a733_usb2_native *,uint64_t deadline);
 int a733_usb2_hid_result(struct a733_usb2_native *,struct a733_usb2_hid_report *);

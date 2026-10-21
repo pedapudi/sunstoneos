@@ -30,7 +30,7 @@ static uint64_t deadline(void)
 {
     uint64_t now;if(!clock_now(&now)||now>UINT64_MAX-1000000)return 0;
     uint64_t d=host->hid.pending?host->hid.deadline:now+1000000;
-    if(!host->mounted&&d>host->platform.config.deadline)d=host->platform.config.deadline;
+    if(!host->mounted&&host->mount_deadline&&d>host->mount_deadline)d=host->mount_deadline;
     if(host->read_pending&&d>host->read_deadline)d=host->read_deadline;
     if(d>host->platform.config.lifetime_deadline)d=host->platform.config.lifetime_deadline;
     return d;
@@ -42,18 +42,70 @@ static void lost(void)
     a733_xhci_lost(&host->core);host->failed=1;host->read_failed=1;host->mounted=0;
     a733_usb2_platform_lost(&host->platform);
 }
+/* A reported removal waits for the next attachment until the lifetime ends.
+ * That attachment must mount within the startup budget measured from it. */
+static void attaching(void)
+{
+    uint64_t now,end=host->platform.config.lifetime_deadline;
+    if(host->mount_deadline)return;if(!clock_now(&now)){lost();return;}
+    host->mount_deadline=end-now>host->mount_budget?now+host->mount_budget:end;
+}
+static uint64_t mount_bound(void)
+{return host->mount_deadline?host->mount_deadline:host->platform.config.lifetime_deadline;}
+/* A removed leaf ends its outstanding request without a result or copy. The
+ * core has revoked, or is about to revoke, the request's DMA destination. */
+static void withdraw_msc(void)
+{host->msc_mounted=0;host->read_pending=host->read_complete=0;host->read_failed=1;}
+static void withdraw_hid(void)
+{
+    struct a733_usb2_hid *h=&host->hid;host->hid_mounted=0;
+    h->pending=h->complete=h->event_seen=h->event_bytes=h->requested=0;h->pending_buffer=NULL;
+}
+static void leaf_kind(void)
+{
+    host->kind=host->msc_seen&&host->hid_seen?A733_USB2_DEVICE_DUAL:host->msc_seen?A733_USB2_DEVICE_MSC:
+        host->hid_seen?A733_USB2_DEVICE_HID:A733_USB2_DEVICE_NONE;
+    mounted_update();
+}
+/* Clear the adapter state that names a device whose slot teardown started.
+ * Descriptor state follows core records that are detaching or unbound; the
+ * core clears a record itself only after its Disable Slot completion. Address
+ * 0 names no leaf or hub identity, so it clears only descriptor state. */
+static void forget(unsigned address)
+{
+    struct a733_usb2_native *n=host;
+    for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        if(!n->core.devices[i].port_ready||n->core.devices[i].detach)memset(&n->descriptors[i],0,sizeof(n->descriptors[i]));
+    if(n->control_buffer&&n->control_address==address){n->control_buffer=NULL;n->control_bytes=0;}
+    if(!address)return;
+    if(n->msc_seen&&address==n->address){
+        withdraw_msc();n->msc_seen=n->msc_in=n->msc_out=n->blocks=n->block_bytes=0;
+        n->bot_tag=n->bot_total=n->bot_received=0;n->bot_buffer=NULL;
+        n->bot_phase=n->bot_opcode=n->bot_stage=n->bot_endpoint=n->bot_requested=n->bot_status=0;
+    }
+    if(n->hid_seen&&address==n->hid_address){
+        /* Report sequence numbers stay monotonic across devices. */
+        uint64_t sequence=n->hid.sequence;memset(&n->hid,0,sizeof(n->hid));n->hid.sequence=sequence;
+        n->hid_seen=n->hid_mounted=n->hid_address=0;
+    }
+    if(address==n->address)n->address=0;
+    if(n->hub.present&&address==n->hub.address)memset(&n->hub,0,sizeof(n->hub));
+    leaf_kind();
+}
 uint32_t tusb_time_millis_api(void)
 {uint64_t now;if(!clock_now(&now)){lost();return host?(uint32_t)(host->last_now/1000):0;}return (uint32_t)(now/1000);}
 int a733_usb2_host_bind(struct a733_usb2_native *n)
 {
     if(host||!n||n->self!=n||!n->core_started||!n->core.self||n->core.ops.current(n->core.context)!=1)return 0;
-    host=n;const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=n->core.require_ss?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH};
+    host=n;uint64_t now;if(!clock_now(&now)||now>=n->platform.config.deadline){lost();return 0;}
+    n->mount_deadline=n->platform.config.deadline;n->mount_budget=n->platform.config.deadline-now;
+    const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=n->core.require_ss?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH};
     if(!tusb_init(0,&init)){lost();return 0;}return 1;
 }
 int a733_usb2_host_poll(struct a733_usb2_native *n)
 {
     uint64_t now;if(n!=host||!clock_now(&now)){lost();return -1;}
-    if((!host->mounted&&now>=host->platform.config.deadline)||
+    if((!host->mounted&&host->mount_deadline&&now>=host->mount_deadline)||
         (host->read_pending&&now>=host->read_deadline)||
         (host->hid.pending&&now>=host->hid.deadline)){lost();return -1;}
     if(host->hub.status_deferred&&now>=host->hub.power_good_deadline&&host->core.devices[0].hub_configured){
@@ -247,12 +299,17 @@ static int control_response(const struct a733_xhci_notice *e)
                 if(!(hub->connected_mask&(1u<<port))){
                     unsigned mask=hub->connected_mask;
                     if(mask&&(!n->dual_leaf||(mask&(mask-1))))return 0;
-                    hub->connected_mask|=1u<<port;hub->selected_port=port;
+                    hub->connected_mask|=1u<<port;hub->selected_port=port;attaching();
                 }
-            }else if(hub->connected_mask&(1u<<port))return 0;
+            }else if(hub->connected_mask&(1u<<port)){
+                /* Only a reported disconnect of a disabled port removes the
+                 * child: TinyUSB then closes it and the core disables its slot. */
+                if(!(changes&1)||(status&2))return 0;
+                hub->connected_mask&=~(1u<<port);n->mount_deadline=0;return 1;
+            }
             for(unsigned j=1;j<A733_XHCI_DEVICES;++j)
                 if(n->core.devices[j].parent_port==port&&n->core.devices[j].zero_retired&&
-                   (!(status&2)||(changes&2)))return 0;
+                   !n->core.devices[j].detach&&(!(status&2)||(changes&2)))return 0;
             return 1;
         }
     }
@@ -334,8 +391,19 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
 {
     struct a733_usb2_native *n=cookie;
     if(n!=host||!event||event->generation!=host->core.generation){lost();return;}
-    if(event->kind==A733_XHCI_ATTACH)hcd_event_device_attach(0,false);
-    else if(event->kind==A733_XHCI_REMOVE){host->mounted=0;host->read_failed=1;hcd_event_device_remove(0,false);}
+    if(event->kind==A733_XHCI_ATTACH){
+        /* The core announces a root attachment only with no slot bound, so no
+         * device state from an earlier attachment can remain in use. */
+        forget(0);if(n->msc_seen)forget(n->address);if(n->hid_seen)forget(n->hid_address);
+        memset(&n->hub,0,sizeof(n->hub));n->control_buffer=NULL;n->control_bytes=0;
+        attaching();hcd_event_device_attach(0,false);
+    }else if(event->kind==A733_XHCI_REMOVE){
+        /* Result 0 is an orderly root disconnect: the core is tearing down
+         * every slot and has revoked every caller destination. */
+        if(event->result){lost();return;}
+        withdraw_msc();withdraw_hid();n->control_buffer=NULL;n->control_bytes=0;
+        mounted_update();n->mount_deadline=0;hcd_event_device_remove(0,false);
+    }
     else if(event->kind==A733_XHCI_TRANSFER){
         uint64_t now,d=deadline();
         if(!d||!clock_now(&now)||host->core.ops.live(host->core.context,host->core.generation,d)!=1){lost();return;}
@@ -376,10 +444,15 @@ void hcd_port_reset(uint8_t port)
 void hcd_port_reset_end(uint8_t port){if(port||!owner())lost();}
 tusb_speed_t hcd_port_speed_get(uint8_t port)
 {return owner()&&!port?(host->core.speed==4?TUSB_SPEED_SUPER:host->core.speed==3?TUSB_SPEED_HIGH:host->core.speed==2?TUSB_SPEED_LOW:host->core.speed==1?TUSB_SPEED_FULL:TUSB_SPEED_INVALID):TUSB_SPEED_INVALID;}
+/* Closing a hub child, or any device after an orderly root disconnect, uses
+ * the core's slot teardown. Closing an attached root device has no port
+ * change behind it, so the core refuses that detach and the session ends. */
 void hcd_device_close(uint8_t port,uint8_t address)
 {
-    if(owner()&&!port&&!address&&a733_xhci_retire_zero(&host->core))return;
-    lost();
+    if(!owner()||port){lost();return;}
+    if(!address&&a733_xhci_retire_zero(&host->core))return;
+    if(!a733_xhci_detach(&host->core,address)){lost();return;}
+    forget(address);
 }
 
 bool hcd_edpt_open(uint8_t port,uint8_t address,const tusb_desc_endpoint_t *e)
@@ -489,9 +562,15 @@ void tuh_msc_mount_cb(uint8_t address)
     if(!owner()||!host->msc_seen||address!=host->address||host->msc_mounted||host->bot_phase||host->bot_stage){lost();return;}
     host->blocks=tuh_msc_get_block_count(address,0);host->block_bytes=tuh_msc_get_block_size(address,0);
     if(!host->blocks||host->block_bytes!=512||host->bot_status){lost();return;}
-    host->address=address;host->msc_mounted=1;mounted_update();
+    host->address=address;host->msc_mounted=1;host->read_failed=host->read_pending=host->read_complete=0;mounted_update();
 }
-void tuh_msc_umount_cb(uint8_t address){(void)address;lost();}
+/* TinyUSB closes a class only while removing its device; the device close
+ * that follows decides whether its slot can be torn down. */
+void tuh_msc_umount_cb(uint8_t address)
+{
+    if(!owner()||!host->msc_seen||address!=host->address){lost();return;}
+    withdraw_msc();mounted_update();
+}
 static bool read_complete(uint8_t address,const tuh_msc_complete_data_t *d)
 {
     if(!owner()||address!=host->address||!host->read_pending||!d||d->user_arg!=(uintptr_t)host||
@@ -524,11 +603,14 @@ void tuh_hid_mount_cb(uint8_t address,uint8_t instance,const uint8_t *descriptor
     if(!owner()||!host->hid_seen||address!=host->hid_address||host->hid_mounted||instance||
        !a733_xhci_device_speed(&host->core,address)||!descriptor||bytes!=host->hid.descriptor_bytes||
        !bytes||bytes>sizeof(host->hid.descriptor)||!clock_now(&now)||
-       host->core.ops.live(host->core.context,host->core.generation,host->platform.config.deadline)!=1){lost();return;}
+       host->core.ops.live(host->core.context,host->core.generation,mount_bound())!=1){lost();return;}
     memcpy(host->hid.descriptor,descriptor,bytes);if(!host->dual_leaf)host->address=address;host->hid_mounted=1;mounted_update();
 }
 void tuh_hid_umount_cb(uint8_t address,uint8_t instance)
-{(void)address;(void)instance;lost();}
+{
+    if(!owner()||!host->hid_seen||address!=host->hid_address||instance){lost();return;}
+    withdraw_hid();mounted_update();
+}
 void tuh_hid_report_received_cb(uint8_t address,uint8_t instance,const uint8_t *report,uint16_t bytes)
 {
     if(!owner()){lost();return;}
