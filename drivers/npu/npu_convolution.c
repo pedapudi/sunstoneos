@@ -6,7 +6,8 @@
 #endif
 
 /* SHA-256, FIPS 180-4 sections 4.1.2, 4.2.2, 5.1.1, 5.3.3 and 6.2.
- * Private artifact identity helper; callers below bound input to 512 KiB.
+ * Private artifact identity helper. Inputs are bounded by the model capacity
+ * and the largest catalogue allocation (1 MiB and 1,093,632 bytes).
  * https://csrc.nist.gov/pubs/fips/180-4/upd1/final */
 static uint32_t rotate(uint32_t x,unsigned n) { return x>>n | x<<(32-n); }
 static uint32_t big(const unsigned char *p)
@@ -105,7 +106,29 @@ static int private_overlap(const struct npu_convolution *c,uintptr_t p,size_t n)
         if(overlap(p,n,c->buffers[i].cpu,c->buffers[i].bytes))return 1;
     return 0;
 }
-static int unchanged(struct npu_convolution *c)
+/* Command streams are a short payload followed by END pairs to the end of
+ * the mapped fetch span. The prefix digest plus an END check of every later
+ * eight-byte unit binds the same bytes as a digest of the whole allocation. */
+typedef uint64_t __attribute__((may_alias)) stream_word;
+static int stream_intact(const struct npu_convolution *c,unsigned k)
+{
+    const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+    size_t bytes=c->stream_bytes[k];
+    unsigned char actual[32];
+    if(!bytes || (bytes&7) || bytes>b->bytes)return 0;
+    const stream_word *tail=(const stream_word *)b->cpu;
+    for(size_t i=bytes/8;i<b->bytes/8;++i)if(tail[i]!=UINT64_C(0x10000000))return 0;
+    digest((void *)b->cpu,bytes,actual);
+    return !memcmp(actual,c->stream_digest[k],sizeof(actual));
+}
+/* Integrity policy. The shared SMP mappings cannot stop another privileged
+ * writer, so bytes the NPU reads are rechecked against digests taken at
+ * preparation. Every check covers descriptors, coefficients or shader, and
+ * the job command stream. Preparation-time checks (startup, activation,
+ * bootstrap publication, stop) also cover the private model copy and the
+ * bootstrap stream. A job publication omits those two: the device never
+ * reads the model copy, and the bootstrap stream runs only at OPEN. */
+static int unchanged(struct npu_convolution *c,int job)
 {
     unsigned char actual[32];
     if(!good(c))return 0;
@@ -113,13 +136,16 @@ static int unchanged(struct npu_convolution *c)
        c->model_bytes!=models[c->model_index].model_bytes ||
        c->input_bytes!=models[c->model_index].input_bytes ||
        c->output_bytes!=models[c->model_index].output_bytes)return fault(c);
-    digest(c->model,c->model_bytes,actual);
-    if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
-    for(unsigned j=0;j<4;++j) {
+    if(!job) {
+        digest(c->model,c->model_bytes,actual);
+        if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
+    }
+    for(unsigned j=0;j<2;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,actual);
         if(memcmp(actual,c->immutable_digest[j],sizeof(actual)))return fault(c);
     }
+    for(unsigned k=0;k<(job ? 1u : 2u);++k)if(!stream_intact(c,k))return fault(c);
     return 1;
 }
 static void little(unsigned char *p,uint32_t v)
@@ -271,6 +297,14 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,c->immutable_digest[j]);
     }
+    c->stream_bytes[0]=plan.buffers[NBG_ALLOC_COMMAND].payload_bytes;
+    c->stream_bytes[1]=A733_NPU_BOOTSTRAP_BYTES;
+    for(unsigned k=0;k<2;++k) {
+        const struct a733_npu_buffer *b=&c->buffers[k ? NPU_CONVOLUTION_BOOTSTRAP : NPU_CONVOLUTION_COMMAND];
+        if(!c->stream_bytes[k] || (c->stream_bytes[k]&7) || c->stream_bytes[k]>b->bytes)return fault(c);
+        digest((void *)b->cpu,c->stream_bytes[k],c->stream_digest[k]);
+        if(!stream_intact(c,k))return fault(c);
+    }
     c->prepared=1;return 1;
 }
 static int read_reg(void *cookie,unsigned offset,uint32_t *out)
@@ -290,7 +324,7 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
 {
     struct npu_convolution *c=cookie;
     if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
-       !unchanged(c))return fault(c);
+       !unchanged(c,!bootstrap))return fault(c);
     return a733_npu_native_operations.publish(&c->native,image,command,bootstrap);
 }
 static int finish(void *cookie,const struct a733_npu_command *command,int canceled)
@@ -322,7 +356,7 @@ static int prepared(void *cookie,const struct a733_npu_ops *ops,void *backend,
     const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)
 {
     struct npu_convolution *c=cookie;
-    if(!good(c) || !metadata(c,ops,backend,image,commands,count) || !unchanged(c)) {
+    if(!good(c) || !metadata(c,ops,backend,image,commands,count) || !unchanged(c,0)) {
         fault(c);return -1;
     }
     int result=a733_npu_startup_prepared(c->startup,ops,backend,image,commands,count);
@@ -353,7 +387,7 @@ enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolutio
     const struct a733_npu_handoff *h=&c->startup->handoff;
     const struct npu_service *s=&c->service;
     if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c)) {
+       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
         fault(c);return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result=a733_npu_startup_poll(c->startup);
@@ -447,7 +481,7 @@ enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *
     const struct a733_npu_handoff *h=&c->startup->handoff;
     const struct npu_service *s=&c->service;
     if(!good(c) || !metadata(c,&h->backend,h->backend_cookie,&h->image,h->commands,h->command_count) ||
-       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c)) {
+       !metadata(c,&s->ops,s->cookie,&s->image,s->commands,s->command_count) || !unchanged(c,0)) {
         fault(c);return A733_NPU_PLATFORM_RETAINED;
     }
     enum a733_npu_platform_result result=a733_npu_startup_stop_poll(c->startup);

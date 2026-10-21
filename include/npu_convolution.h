@@ -54,6 +54,8 @@ struct npu_convolution {
     unsigned model_index;
     struct a733_npu_buffer buffers[NPU_CONVOLUTION_BUFFERS];
     unsigned char immutable_digest[4][32];
+    size_t stream_bytes[2]; /* Command, then bootstrap payload before END fill. */
+    unsigned char stream_digest[2][32];
     struct a733_npu_native native;
     struct a733_npu_command commands[2];
     struct npu_service service;
@@ -76,9 +78,11 @@ struct npu_convolution {
  * prerequisite. No peripheral register access occurs.
  *
  * Any admitted initialization failure is terminal; reservations remain owned.
- * No teardown/reinitialization is provided. Model/weights/commands stay immutable;
- * publication checks their digests. Input/output are accessed only through the
- * client API below. Full mapped command tails contain END pairs.
+ * No teardown/reinitialization is provided. Model/weights/commands stay immutable.
+ * Startup, activation, bootstrap publication and stop check the model copy,
+ * weight digests and both command streams; a job publication checks the
+ * weights and the job command stream only. Input/output are accessed only
+ * through the client API below. Full mapped command tails contain END pairs.
  *
  * Successful preparation admits the selected trusted compiled artifact only;
  * hashes and checksums do not prove hardware access extents or confinement. Physical PD-mode

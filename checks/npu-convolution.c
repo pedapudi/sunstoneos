@@ -178,7 +178,21 @@ static void check_client_run(void *unused)
     configASSERT(check_request(NPU_SERVICE_REAP,NULL).state==A733_NPU_READY);
     configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(input);++i)input[i]=fixture_input[i]^0xff;
+    if(check_activation_mutation==5) {
+        /* A job publication still binds the command padding. */
+        unsigned publications=atomic_load(&check_publishes);
+        check_commands[0][524280]^=1;
+        reply=check_request(NPU_SERVICE_SUBMIT,input);
+        configASSERT(reply.result==NPU_SERVICE_FAULT && reply.fault==A733_NPU_MEMORY);
+        configASSERT(atomic_load(&convolution.failed) && atomic_load(&check_publishes)==publications);
+        platform_puts("PASS convolution job integrity: mutated command padding refused before publication\n");
+        platform_exit(0);
+    }
+    /* The device never reads the private model copy, and the bootstrap stream
+     * runs only at OPEN, so a job publication omits both from its digests. */
+    convolution.model[0]^=1;check_commands[1][524287]^=1;
     check_request(NPU_SERVICE_SUBMIT,input);check_wait(A733_NPU_DONE);
+    convolution.model[0]^=1;check_commands[1][524287]^=1;
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==0x5a);
     check_request(NPU_SERVICE_REAP,NULL);
@@ -242,6 +256,7 @@ static unsigned check_mode(void)
     char command[128]={0};uintptr_t params[2]={(uintptr_t)command,sizeof(command)};
     register uintptr_t op __asm__("x0")=0x15,args __asm__("x1")=(uintptr_t)params;
     __asm__ volatile("hlt #0xf000":"+r"(op):"r"(args):"memory");configASSERT(!op);
+    for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"job-command",11))return 5;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"close-fault",11))return 4;
     for(unsigned i=0;i+5<sizeof(command);++i)if(!memcmp(command+i,"close",5))return 3;
     for(unsigned i=0;i+7<sizeof(command);++i)if(!memcmp(command+i,"startup",7))return 2;

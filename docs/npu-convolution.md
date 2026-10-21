@@ -66,11 +66,34 @@ relocations. CPU, physical and device ranges must satisfy the existing
 [memory policy](npu-memory.md). Leave unused device ranges unmapped.
 
 The selected full model hash fixes descriptor bytes, coefficients and relocation semantics.
-Exact catalogue tensor metadata and assembly allocation sizes are checked independently. Separate
-digests bind the assembled descriptor, coefficients and complete command
-allocations, including their padding. Publication checks those digests before
-native cache maintenance or device submission. Command 0 is bootstrap; command 1
-is the convolution. Applications cannot supply streams or register writes.
+Exact catalogue tensor metadata and assembly allocation sizes are checked independently.
+Preparation records SHA-256 digests of the assembled descriptor and coefficient
+(or shader) allocations and of both complete command allocations, including
+their padding. Each command allocation is a short payload followed by END
+pairs to the end of its fetch span. Preparation also records a digest of each
+payload and verifies that every later eight-byte unit is an END pair; the
+payload digest plus that END check binds the same bytes as the full digest.
+Command 0 is bootstrap; command 1 is the convolution. Applications cannot
+supply streams or register writes.
+
+The shared SMP mappings cannot stop another privileged writer, so the session
+rechecks these bytes before the NPU can read them:
+
+- Every startup poll, the service activation check, the bootstrap publication
+  at OPEN and every stop poll verify the private model copy, the descriptor and
+  coefficient digests, and both command payloads with their END padding.
+- Every job publication verifies the descriptor and coefficient digests and the
+  convolution command payload with its END padding. It omits the model copy,
+  which the device never reads, and the bootstrap stream, which runs only at
+  OPEN.
+
+In the NN-pool profile a job check therefore hashes 920,616 bytes and compares
+the remaining 521,176 command bytes against END. The previous per-job check
+hashed 2,930,304 bytes. The hash is a scalar C SHA-256; its cost on the board
+is unmeasured. Hashing could be removed from the job path only if the platform
+mapped the constant allocations read-only for the session, which the current
+stage-1 tables do not support. A mismatch at any check faults the session
+before cache maintenance or device submission and retains every reservation.
 
 The convolution bootstrap is the 208-byte sequence written by the controller's
 bootstrap encoder. After VIP SRAM setup it writes `LOAD_STATE 0x0e4f=0`
@@ -95,8 +118,8 @@ not establish any physical fact.
 
 The designated privileged bootstrap task must use
 `npu_convolution_startup_poll` for every startup step. This wrapper checks the
-bound model, both catalogue copies and immutable allocation digests before
-delegating to the actual startup adapter. Mutation stops further delegation and
+bound model, both catalogue copies and the immutable allocations, as described
+above, before delegating to the actual startup adapter. Mutation stops further delegation and
 retains partial acquisitions. After READY, the task activates the deferred
 service; its prepared callback checks byte identity and actual startup health.
 
@@ -175,8 +198,10 @@ modeled. Injected reference bytes test copying and ownership, not inference.
 The first image passes fixed artifact and relocation comparison, SHA-256 known
 answers and padding boundaries, complete bootstrap comparison, copied input,
 matched output completion, explicit REAP, varied input and retained publication
-mutation. A separate terminal mode refuses a changed command tail before service
-activation. A focused follow-up calls the actual startup and platform controllers
+mutation. Its second job runs with a changed model copy and bootstrap padding,
+which a job publication does not check. A separate terminal mode refuses a
+changed command tail before service activation, and the `job-command` mode
+refuses changed convolution command padding at a job publication. A focused follow-up calls the actual startup and platform controllers
 through bounded modeled acquisition, then verifies refusal and token retention
 after bootstrap corruption. It also refuses an unauthorized client without effects.
 
@@ -191,8 +216,8 @@ Generate authenticated fixture headers with
 [`checks/npu-convolution.py`](../checks/npu-convolution.py), passing the binary,
 saved input/output, recorded assembly directory and a fresh external destination.
 Configure `NPU_CONVOLUTION_FIXTURES` to that destination and build
-`npu-convolution-model`; its semihosting arguments are `composition`, `mutation`
-and `startup`. Archive executable and input identities before execution. The
+`npu-convolution-model`; its semihosting arguments are `composition`, `mutation`,
+`startup`, `close`, `close-fault` and `job-command`. Archive executable and input identities before execution. The
 private CMake fragment also defines the independent `npu-convolution` native
 object target.
 
