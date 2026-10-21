@@ -7,9 +7,10 @@ struct a733_gpu_compute_reserved;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_backend;
 struct pvr_gpu_service;
-/* Only the source-audited standalone GPU image supplies this exact static owner.
- * Global firmware/provider parents remain pinned. Seven child parent leases are
- * the maximum: three compute and four graphics. No mixed-device allocator use. */
+/* Only the source-audited standalone GPU image names this exact static owner in
+ * its service configuration. Global firmware/provider parents remain pinned.
+ * Seven child parent leases are the maximum: three compute and four graphics.
+ * No mixed-device allocator use. */
 struct a733_gpu_disposal {
     struct a733_gpu_reserved *firmware;
     struct a733_gpu_compute_reserved *compute;
@@ -29,9 +30,12 @@ struct a733_gpu_disposal {
 enum a733_gpu_disposal_phase { A733_GPU_DISPOSAL_NEW, A733_GPU_DISPOSAL_CACHE,
     A733_GPU_DISPOSAL_UNMAP, A733_GPU_DISPOSAL_TABLES, A733_GPU_DISPOSAL_RELEASE, A733_GPU_DISPOSAL_DONE,
     A733_GPU_DISPOSAL_REBUILD, A733_GPU_DISPOSAL_LIVE, A733_GPU_DISPOSAL_FAILED };
-/* Direct image binding, not an authority callback registered by a caller.
- * Other images always return NULL. Called only by the actual GPU worker. */
-struct a733_gpu_disposal *gpu_application_disposal_get(struct pvr_gpu_service *);
+/* Return the configured owner only to the running service worker, while the
+ * owner names a backend bound to this service and its firmware memory, has a
+ * nonzero session limit, and client slot zero is the sole registered client.
+ * A NULL configuration, as in every image except the standalone lifecycle
+ * image, returns NULL. */
+struct a733_gpu_disposal *a733_gpu_disposal_owner(struct pvr_gpu_service *);
 int a733_gpu_disposal_begin(struct pvr_gpu_service *,uint64_t epoch);
 int a733_gpu_disposal_poll(struct pvr_gpu_service *);
 int a733_gpu_disposal_rebuild(struct pvr_gpu_service *);

@@ -48,6 +48,7 @@ class Owner(leaf.Machine):
         cfg=f+self.image.layouts['a733_gpu_reserved']['config'];memory=f+self.image.layouts['a733_gpu_reserved']['memory']
         self.u.mem_write(0x90001000,bytes(self.sizes['a733_gpu_backend_external']))
         assert self.call('a733_gpu_backend_bind',b,s,cfg,memory,p,0x90001000)==1
+        self.set(cfg,'pvr_gpu_service_config','disposal',d,8) # As the application's binding does.
         assert self.call('pvr_gpu_service_init',s,cfg,3,1)==1
         self.put(self.at('handles')+16,0x90004000)
         assert self.call('pvr_gpu_service_bind',s,0,0x90004000)==1

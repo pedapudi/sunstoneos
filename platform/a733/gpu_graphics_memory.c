@@ -580,7 +580,7 @@ int a733_gpu_graphics_memory_disposed(struct a733_gpu_graphics_memory *s)
 }
 int a733_gpu_graphics_memory_rebuild(struct a733_gpu_graphics_memory *s,struct pvr_gpu_service *v)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(v);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(v);
     if(!d || d->phase!=A733_GPU_DISPOSAL_REBUILD || d->graphics!=s || s!=graphics_owner ||
        s->phase!=A733_GPU_GRAPHICS_DISPOSED || v->phase!=PVR_GPU_SERVICE_RECONSTRUCTING ||
        d->released!=((1u<<d->count)-1))return 0;

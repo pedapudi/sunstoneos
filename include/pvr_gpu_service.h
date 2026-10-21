@@ -11,6 +11,7 @@ struct pvr_compute_service;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
+struct a733_gpu_disposal;
 struct pvr_render_texture_request;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
@@ -122,6 +123,9 @@ struct pvr_gpu_service_config {
     /* Concrete native free-list/HWRT owner; published before compute and power. */
     struct a733_gpu_graphics_memory *graphics;
     struct pvr_render_service *render;
+    /* Standalone lifecycle images only: the exclusive owner of child disposal
+     * and reconstruction. NULL, as in every other image, refuses DISPOSE. */
+    struct a733_gpu_disposal *disposal;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;

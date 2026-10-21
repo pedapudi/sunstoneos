@@ -362,7 +362,7 @@ int a733_gpu_compute_reserved_disposed(struct a733_gpu_compute_reserved *s)
 }
 int a733_gpu_compute_reserved_rebuild(struct a733_gpu_compute_reserved *s,struct pvr_gpu_service *g)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(g);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(g);
     if(!d || d->phase!=A733_GPU_DISPOSAL_REBUILD || d->compute!=s || s!=compute_owner ||
        s->stage!=DISPOSED || g->phase!=PVR_GPU_SERVICE_RECONSTRUCTING ||
        d->released!=((1u<<d->count)-1))return 0;

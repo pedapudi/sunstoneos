@@ -37,7 +37,8 @@ class Machine:
         names=['a733_smp_counter','aarch64_device_translate','aarch64_device_cache_stride','aarch64_device_cache',
             'a733_device_memory_ready','a733_device_memory_commit_allowed','a733_cpu_coherence_publish',
             'xTaskGetSchedulerState','xTaskGetCurrentTaskHandle','xTaskCreateStatic','xQueueGenericCreateStatic',
-            'vPortEnterCritical','vPortExitCritical','platform_panic','xQueueReceive','xQueueGenericSend']
+            'vPortEnterCritical','vPortExitCritical','platform_panic','xQueueReceive','xQueueGenericSend',
+            'uxQueueMessagesWaiting']
         self.hooks={self.image.address(n):n for n in names}
         self.hooks[self.image.address('power_begin','/platform/a733/gpu_backend.c')]='modeled_power_boundary'
         sites=set(self.hooks)|{0x900ff000}
@@ -88,6 +89,12 @@ class Machine:
             self.ret(0)
             if self.get(self.s+self.image.layouts['pvr_gpu_service']['phase'],4)==self.enum('PVR_GPU_SERVICE_ENABLING'):
                 self.publishing=False;self.worker_stop='published';self.u.emu_stop()
+        elif name=='uxQueueMessagesWaiting':
+            # Between burst steps the worker checks for queued requests; publication
+            # stops at the same modeled power admission boundary as a receive.
+            self.ret(0)
+            if self.publishing and self.get(self.s+self.image.layouts['pvr_gpu_service']['phase'],4)==self.enum('PVR_GPU_SERVICE_ENABLING'):
+                self.publishing=False;self.worker_stop='published';self.u.emu_stop()
         elif name=='xQueueGenericSend':
             self.reply=bytes(self.u.mem_read(a[1],self.sizes['pvr_gpu_service_reply']))
             self.ret(1);self.worker_stop='reply';self.u.emu_stop()
@@ -124,6 +131,7 @@ class Machine:
         cfg=f+self.image.layouts['a733_gpu_reserved']['config'];memory=f+self.image.layouts['a733_gpu_reserved']['memory']
         self.put(0x90001000,0,8);self.u.mem_write(0x90001000,bytes(self.sizes['a733_gpu_backend_external']))
         assert self.call('a733_gpu_backend_bind',b,s,cfg,memory,p,0x90001000)==1
+        self.set(cfg,'pvr_gpu_service_config','disposal',d,8) # As the application's binding does.
         assert self.call('pvr_gpu_service_init',s,cfg,3,1)==1
         client=0x90004000;self.put(self.at('handles')+16,client)
         assert self.call('pvr_gpu_service_bind',s,0,client)==1

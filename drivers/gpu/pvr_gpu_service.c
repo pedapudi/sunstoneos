@@ -559,7 +559,7 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
         if(s->phase==PVR_GPU_SERVICE_DISPOSED) {
             if(m->client!=s->closed_owner || s->epoch==UINT64_MAX)return PVR_GPU_SERVICE_DENIED;
             if(!deadline(s,r->timeout_us))return PVR_GPU_SERVICE_FAULT;
-            struct a733_gpu_disposal *d=gpu_application_disposal_get(s);
+            struct a733_gpu_disposal *d=a733_gpu_disposal_owner(s);
             if(!d)return PVR_GPU_SERVICE_INVALID;
             if(s->deadline>d->limit)s->deadline=d->limit;
             s->phase=PVR_GPU_SERVICE_RECONSTRUCTING;
