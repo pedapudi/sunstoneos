@@ -87,8 +87,10 @@ The device discards a partial request and any unsent response, clears both
 vendor FIFOs and cancels a pending recovery command. A packet the controller
 has already loaded can still reach the host, so the host reads the IN
 endpoint until a short timeout before it sends the next request. A bus reset
-clears the same state. The device stalls other vendor control requests,
-including request `0x01` addressed to the interface (request type `0x41`).
+clears the same state. The device stalls every other control request that
+reaches the vendor driver. These include request `0x01` addressed to the
+interface (request type `0x41`) and the class request `0x20`, which TinyUSB
+forwards to the vendor driver of interface 0.
 
 This is a development protocol. Rejection and the reset request are checked
 only in a host model. Physical resynchronization and concurrent clients need
@@ -134,6 +136,10 @@ a modeled TinyUSB vendor stream, controller and host. It covers status, a
 rejected header forms, recovery from a truncated request and from an
 abandoned response through the reset request, and one recovery-timer renewal
 per tick. It models no controller registers.
+`checks/audit-device-minors-usb-control.py` uses the same model to offer the
+reset request with standard, class, vendor-interface, vendor-endpoint, reserved
+and IN request types. Each one must stall without resetting the channel, and
+request type `0x40` must then reset it once.
 
 The compiled-driver check in `checks/usb-zlp.py` uses Unicorn to verify that
 zero-length IN submission arms the transmit register. It resolves that specific
@@ -194,8 +200,11 @@ file may include it. The board image and the images that inherit its board
 inputs qualify, as do the board, storage-read and eMMC single-core images.
 The images that use the header are the board image and the ADC, SPI, UART,
 PCIe, PCIe test, monitor, storage read, JPEG decode and encode, H.264 decode
-and encode, G2D, ISP0, deinterlace, HEVC, DisplayPort, Bluetooth and mimus
-board images.
+and encode, G2D, ISP0, deinterlace, Bluetooth and mimus board images.
+The HEVC and DisplayPort images inherit the board inputs but replace
+`apps/board/usb0.c` and do not compile the header. DisplayPort keeps its own
+copy of the service loop in `apps/displayport/output.c`, which services one
+pass per tick.
 
 The camera, I2S, GPU render, GPU display, HDMI audio, accelerator, NPU
 runtime, NPU large-graph and DSI scanout images do not hash `apps/board/*.h`.
