@@ -27,8 +27,8 @@ KERNEL_FLAGS = ['-march=armv8-a', '-mstrict-align', '-ffreestanding', '-fno-buil
                 '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-ffunction-sections',
                 '-fdata-sections', '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-mgeneral-regs-only']
 WRITERS = ['E902', 'OR100', 'DMA0', 'DMA1', 'CE', 'SMHC0', 'SMHC1', 'SMHC2', 'SMHC3', 'NAND0', 'UFS',
-           'USB0', 'USB1', 'USB2', 'PCIE0', 'GMAC0', 'DE0', 'DI', 'G2D', 'EINK', 'VE', 'NPU', 'GPU0',
-           'CSI', 'ISP']
+           'SPIF', 'USB0', 'USB1', 'USB2', 'PCIE0', 'GMAC0', 'DE0', 'DI', 'G2D', 'EINK', 'VE', 'NPU',
+           'GPU0', 'CSI', 'ISP']
 BIT = {name: 1 << n for n, name in enumerate(WRITERS)}
 ALL = (1 << len(WRITERS)) - 1
 CCU, PRCM = 0x02002000, 0x07010000
@@ -37,10 +37,10 @@ ISP_CLK, MBUS_GATE_EN = CCU + 0x1860, CCU + 0x5e4
 # Manual 4.1.6 BGR offsets and reset bits, transcribed independently of the C table.
 RESETS = {'DMA0': (0x704, [16]), 'DMA1': (0x70c, [16]), 'CE': (0xac4, [16, 17]),
           'SMHC0': (0xd0c, [16]), 'SMHC1': (0xd1c, [16]), 'SMHC2': (0xd2c, [16]), 'SMHC3': (0xd3c, [16]),
-          'NAND0': (0xc8c, [16]), 'UFS': (0xd8c, [16, 17, 18, 19]), 'USB0': (0x1304, [16, 20, 24]),
-          'USB1': (0x130c, [16, 20]), 'USB2': (0x135c, [16]), 'PCIE0': (0x138c, [16, 17]),
-          'GMAC0': (0x141c, [16, 17]), 'DE0': (0xa04, [16]), 'DI': (0xa24, [16]), 'G2D': (0xa44, [16]),
-          'EINK': (0xa6c, [16]), 'VE': (0xa8c, [16, 18]), 'NPU': (0xb04, [16, 17, 18]),
+          'NAND0': (0xc8c, [16]), 'UFS': (0xd8c, [16, 17, 18, 19]), 'SPIF': (0xf1c, [16]),
+          'USB0': (0x1304, [16, 20, 24]), 'USB1': (0x130c, [16, 20]), 'USB2': (0x135c, [16]),
+          'PCIE0': (0x138c, [16, 17]), 'GMAC0': (0x141c, [16, 17]), 'DE0': (0xa04, [16]), 'DI': (0xa24, [16]),
+          'G2D': (0xa44, [16]), 'EINK': (0xa6c, [16]), 'VE': (0xa8c, [16, 18]), 'NPU': (0xb04, [16, 17, 18]),
           'GPU0': (0xb24, [16]), 'CSI': (0x1844, [16])}
 DMA = {'DMA0': 0x04601000, 'DMA1': 0x04024000}
 SMHC = {'SMHC0': 0x04020000, 'SMHC1': 0x04021000, 'SMHC2': 0x04022000, 'SMHC3': 0x04023000}

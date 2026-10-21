@@ -37,6 +37,8 @@ static const struct master {
     {A733_REMOTE_SMHC3, SMHC, 0xd3c, RST(16), 0x04023000},
     {A733_REMOTE_NAND0, RESET_ONLY, 0xc8c, RST(16), 0},
     {A733_REMOTE_UFS, RESET_ONLY, 0xd8c, RST(16) | RST(17) | RST(18) | RST(19), 0},
+    /* 4.1.6.167; 11.5.5.7: private descriptor DMA through an AHB master. */
+    {A733_REMOTE_SPIF, RESET_ONLY, 0xf1c, RST(16), 0},
     {A733_REMOTE_USB0, RESET_ONLY, 0x1304, RST(16) | RST(20) | RST(24), 0},
     {A733_REMOTE_USB1, RESET_ONLY, 0x130c, RST(16) | RST(20), 0},
     {A733_REMOTE_USB2, RESET_ONLY, 0x135c, RST(16), 0},

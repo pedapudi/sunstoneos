@@ -63,6 +63,7 @@ bit reads 0 when asserted and bit 0 is the bus clock gate.
 | CE | Both resets asserted (`0xac4` bits 16 and 17) | 4.1.6.118 |
 | NAND0 | Reset asserted (`0xc8c` bit 16) | 4.1.6.127 |
 | UFS | Four resets asserted (`0xd8c` bits 16 to 19) | 4.1.6.138 |
+| SPIF (SPI flash controller, which has its own descriptor DMA engine) | Reset asserted (`0xf1c` bit 16) | 4.1.6.167, 11.5.5.7 |
 | USB0, USB1, USB2 | All resets asserted (`0x1304` bits 16, 20, 24; `0x130c` bits 16, 20; `0x135c` bit 16) | 4.1.6.195, 4.1.6.197, 4.1.6.202 |
 | PCIE0, GMAC0 | Both resets asserted (`0x138c`, `0x141c` bits 16 and 17) | 4.1.6.207, 4.1.6.212 |
 | DE0, DI, G2D, EINK | Reset asserted (`0xa04`, `0xa24`, `0xa44`, `0xa6c` bit 16) | 4.1.6.105 to 4.1.6.112 |
@@ -153,7 +154,7 @@ uint32_t unproven = a733_remote_writers_excluded(&ops);
 [checks/remote-writers-model.py](../checks/remote-writers-model.py) compiles
 the function with the standalone-boot compiler flags and runs it in Unicorn.
 All register values are modeled, and the E902 configuration block is unmapped.
-Its 111 cases cover reset defaults, the shipped monitor's start writes together
+Its 113 cases cover reset defaults, the shipped monitor's start writes together
 and one at a time, the SD controller state that boot0 may leave, each DMA
 channel and status bit, every listed reset bit, read failures and missing
 callbacks. Each case also checks that the function writes no register and reads

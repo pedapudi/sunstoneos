@@ -32,9 +32,10 @@ INPUTS = {
                   '0c7c3c1984f49019f421b33089bc0f334cb084a489488ff10c69b7062a5accf0'),
 }
 BGR = {0x704: 'DMA0', 0x70c: 'DMA1', 0xac4: 'CE', 0xd0c: 'SMHC0', 0xd1c: 'SMHC1', 0xd2c: 'SMHC2',
-       0xd3c: 'SMHC3', 0xc8c: 'NAND0', 0xd8c: 'UFS', 0x1304: 'USB0', 0x130c: 'USB1', 0x135c: 'USB2',
-       0x138c: 'PCIE0', 0x141c: 'GMAC0', 0xa04: 'DE0', 0xa24: 'DI', 0xa44: 'G2D', 0xa6c: 'EINK',
-       0xa8c: 'VE', 0xb04: 'NPU', 0xb24: 'GPU0', 0x1844: 'CSI', 0x1860: 'ISP clock', 0x5e4: 'MBUS gates'}
+       0xd3c: 'SMHC3', 0xc8c: 'NAND0', 0xd8c: 'UFS', 0xf1c: 'SPIF', 0x1304: 'USB0', 0x130c: 'USB1',
+       0x135c: 'USB2', 0x138c: 'PCIE0', 0x141c: 'GMAC0', 0xa04: 'DE0', 0xa24: 'DI', 0xa44: 'G2D',
+       0xa6c: 'EINK', 0xa8c: 'VE', 0xb04: 'NPU', 0xb24: 'GPU0', 0x1844: 'CSI', 0x1860: 'ISP clock',
+       0x5e4: 'MBUS gates'}
 
 
 def literals(data, base, end, mode):
@@ -115,7 +116,8 @@ def main():
     manual = raw['manual'].decode()
     for text in ('RISCV_BGR_REG                           0x021C', 'CPUIDLE            0x07050000',
                  'CPUS_E902_CFG      0x07032000', 'DMA0_BGR_REG                   0x0704',
-                 'MBUS_GATE_EN_REG               0x05E4', 'GPU0_GATING_REG                0x0B24'):
+                 'MBUS_GATE_EN_REG               0x05E4', 'GPU0_GATING_REG                0x0B24',
+                 'SPIF_BGR_REG                   0x0F1C', '11.5.5.7       SPI Flash Private DMA'):
         assert text in manual, text
     assert manual.count('OR100') == 2 and 'E902_CORE_RST' not in manual
     datasheet = raw['datasheet'].decode()
