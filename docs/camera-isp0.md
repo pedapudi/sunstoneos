@@ -30,6 +30,10 @@ modules are disabled. The application writes the effective load RAM format and
 independent save-load input format fields, rather than replaying the default
 image's example AHB addresses into MMIO. Full load, save and save-load extents
 remain mapped even with optional modules disabled. VIPP0 uses unity geometry.
+Its parameter image, enable order and parameter-ready readback rule are those
+of the [camera route](camera-route.md), defined once in
+`include/a733_camera_common.h`. ISP0 still reads, writes and verifies each
+register within one poll.
 Output is contiguous NV16: a 307,200-byte Y plane followed by 307,200 bytes of
 interleaved U and V, both with stride 640.
 
