@@ -165,8 +165,8 @@
       }
     },
     "execution": "Selected standalone C SPS/PPS/slice/NalReader/raster helpers execute on the FreeRTOS CPU. Adapted fixed-array POC/list/MMCO algorithms also execute there. No GStreamer, GLib/GObject, V4L2 or Linux runtime is linked.",
-    "adaptation": "apps/h264/gst-source.py verifies pins and generates selected original functions with notices. Fixed integer port; no FMO allocation; explicit pre-arithmetic dimension/reference/Golomb bounds. apps/h264/high-parse.c adapts gsth264decoder.c/gsth264picture.c short-term DPB algorithms.",
+    "adaptation": "apps/h264/gst-source.py verifies pins and generates selected original functions with notices. Fixed integer port; no FMO allocation; explicit pre-arithmetic dimension/reference/Golomb bounds. apps/h264/high-parse.c adapts gsth264decoder.c/gsth264picture.c short- and long-term DPB algorithms.",
     "license": "GNU Library General Public License version 2 or later; Chromium BSD notice retained for adapted decoder portions. Original notices and complete upstream COPYING are preserved in apps/h264/LICENSE.gstreamer and frozen source inputs.",
-    "bounds": "Profile 100; progressive 8-bit 4:2:0; POC0/2; one slice; at most four short-term reference pictures and four active list entries per list; MMCO1/5 only. Fixed storage constrains geometry and reference count jointly. Long-term references and unrestricted streaming remain required work."
+    "bounds": "Profiles 66, 77 and 100; progressive 8-bit 4:2:0; POC0/2; one slice; at most four short- or long-term reference frames and four active list entries per list; MMCO1-6; no long-term entry in an active B list. Fixed storage constrains geometry and reference count jointly. Long-term B references and unrestricted streaming remain required work."
   }
 }

@@ -1850,8 +1850,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   parking. The affected native link and focused session/failure checks pass;
   prior decoder and numerical evidence was reused.
   The [High-profile H.264 build](h264-native.md#high-profile-runtime-clips-and-presentation-ordering)
-  is implemented for progressive profile 100, 8-bit 4:2:0, with CABAC, scaling
-  matrices, weighted prediction and I/P/B pictures including reference B pictures.
+  is implemented for progressive Baseline, Main and High profile streams, 8-bit
+  4:2:0, with CABAC or CAVLC, scaling matrices, weighted prediction, I/P/B
+  pictures including reference B pictures, and long-term references in P pictures.
   Fixed storage now holds four full-HD picture slots, which admit three
   short-term references at full HD, or four at HD, with at most four active
   entries per list. Each coded picture may use up to 2 MiB of device input, and
@@ -1879,8 +1880,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   `h264-high-20261019/compiled/build-identity-sources.json`; final provenance-only
   edits require no rebuild and extend no execution claim. Physical decoding,
   cache/reference visibility, confinement, timing and drain remain unqualified.
-  POC wrap and MMCO5 are source-reviewed but unexecuted. Long-term references,
-  unrestricted streaming, broader formats and broader encoding remain required. Baseline
+  Header-rewritten clips exercise long-term marking, memory-management operations
+  1 to 6, POC and frame_num wraparound and Baseline/Main streams through an
+  independent FFmpeg-syntax model and the linked image with modeled device effects;
+  B pictures with active long-term references are refused because the engine is
+  not told which references are long-term. Long-term B references, unrestricted
+  streaming, broader formats and broader encoding remain required. Baseline
   builds retain their separate scopes.
   The separate [full-HD H.264 profile](h264-native.md#full-hd-streaming-and-extended-memory)
   is implemented for progressive Baseline IDR/P clips with one short-term reference

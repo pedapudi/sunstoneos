@@ -3,10 +3,11 @@
 The native application programs the video engine (VE) and exposes copied planar
 YU12 pictures. Baseline builds retain the 48-by-32 single/two-picture,
 640-by-480 streaming and 1920-by-1080 streaming modes. A separate High-profile
-build admits runtime geometry, CABAC, I/P/B pictures and multiple short-term
-references through the same controller and application. Physical decoding remains
-unqualified. Long-term references, unrestricted streaming, broader profiles and
-formats, other codecs and encoding remain required work.
+build admits Baseline, Main and High streams with runtime geometry, CABAC, I/P/B
+pictures and multiple short- and long-term references through the same controller
+and application. Physical decoding remains unqualified. Long-term references in
+B pictures, unrestricted streaming, fields, 4:2:2 and higher bit depths, other
+codecs and encoding remain required work.
 
 ## High-profile runtime clips and presentation ordering
 
@@ -21,23 +22,33 @@ GLib, GObject, V4L2 or Linux runtime executes on the board. Generated files reta
 upstream LGPL notices. `apps/h264/LICENSE.gstreamer` retains those notices, the
 Chromium BSD notice from the adapted decoder and complete upstream COPYING.
 
-The admitted stream is High profile 100, progressive 8-bit 4:2:0, level at most
-4.0, with one complete slice per picture and fixed SPS/PPS bytes throughout a
-session. CABAC, 8-by-8 transforms, custom scaling matrices, explicit weighted P/B
-prediction and implicit weighted B prediction are programmed from parsed syntax.
-The initial picture must be IDR. Subsequent I/P/B pictures may use up to four
-short-term references, including reference B pictures. Each reference list may
-contain at most four active entries, including repeated weighted entries. A
-four-reference stream that signals five active weighted entries is refused.
+The admitted stream is Baseline profile 66, Main profile 77 or High profile 100,
+progressive 8-bit 4:2:0, level at most 4.0, with one complete slice per picture
+and fixed SPS/PPS bytes throughout a session. Baseline and Main streams use the
+same register fields as High streams, with 8-by-8 transforms off and flat scaling
+matrices. Level 1b is accepted as level_idc 9, or as 11 with constraint_set3_flag
+outside High profile. Extended profile 88 and the High 10, 4:2:2 and 4:4:4
+profiles are refused. CABAC and CAVLC entropy coding, 8-by-8 transforms, custom
+scaling matrices, explicit weighted P/B prediction and implicit weighted B
+prediction are programmed from parsed syntax. The initial picture must be IDR.
+Subsequent I/P/B pictures may use up to four reference frames, including
+reference B pictures. Each reference list may contain at most four active entries,
+including repeated weighted entries. A four-reference stream that signals five
+active weighted entries is refused.
 
-POC types 0 and 2, short-term list modifications 0/1, sliding-window marking and
-memory-management operations 1/5 are implemented. Frame-number gaps, long-term
-marking/references, fields/MBAFF, POC type 1, FMO, redundant slices, transform
-bypass and unsupported marking operations are refused. The SPS must signal VUI
+POC types 0 and 2, sliding-window marking, list modifications 0, 1 and 2, and
+memory-management operations 1 to 6 are implemented. An IDR picture may mark
+itself long-term. A long-term frame keeps its picture slot until an operation
+unmarks it or another frame takes its LongTermFrameIdx. Initial lists place
+long-term frames after short-term frames in ascending LongTermPicNum. Operations
+that name an absent frame, or a LongTermFrameIdx above MaxLongTermFrameIdx, are
+refused. Neither pinned reference driver tells the engine which references are
+long-term, while B direct prediction and implicit weights depend on that marking.
+A B picture whose active lists contain a long-term frame is therefore refused;
+P pictures do not depend on it. Frame-number gaps, fields/MBAFF, POC type 1, FMO,
+redundant slices and transform bypass are refused. The SPS must signal VUI
 bitstream restrictions, at most two reordered pictures and a DPB limit of at
-most four. Missing references fail rather than conceal damage. The completed
-fixtures exercise POC type 0 and operation 1; wraparound and operation 5 remain
-source-reviewed paths without execution coverage.
+most four. Missing references fail rather than conceal damage.
 
 Coded dimensions are multiples of 16, from 16-by-16 through 1920-by-1088.
 Visible dimensions must be positive and even, at most 1920-by-1080. Even crop
@@ -86,8 +97,8 @@ Actual allocator execution requires 16,044,032 of the 16,777,216 uncached bytes,
 including tables, alignment and guards. CPU write-back allocations require
 21,823,488 bytes: a 2 MiB upload, one optional oracle, five copied outputs and 1 MiB of parser/DPB
 metadata. Each copied-output capacity is 3,110,400 bytes. The actual metadata
-structure uses 243,064 bytes. Observed native parser stack use in the allocation
-fixture is 2,600 bytes; the existing USB task has a 16 KiB stack. These are
+structure uses 243,136 bytes. Observed native parser stack use in the allocation
+fixture is 2,760 bytes; the existing USB task has a 16 KiB stack. These are
 modeled execution measurements, not worst-case stack or physical timing proofs.
 All eight CPU leases are retained before publication. Device spans, CPU leases,
 alignment, guard capacity and table construction are validated before device use.
@@ -191,9 +202,46 @@ fixture command and `ref=3`; its pictures use slots 0 to 3. Copied frames of
 the earlier variants are unchanged. These results are retained under
 `~/.cache/sunstoneos/build/audit-video-consolidation/checks`.
 
-The focused Astra source review covers POC/lists/marking, speculative commit,
-reference/MV lifetime and output ordering. Existing Baseline parser and CPU startup evidence remains scoped to
-its unchanged paths.
+### Long-term, wraparound and profile coverage
+
+libx264 emits neither long-term marking, memory-management operation 5 nor short
+POC or frame_num moduli. `checks/h264-high-modes.py` therefore rewrites the slice
+headers of small 320-by-240 libx264 clips, and for wraparound also the SPS. It
+copies the CABAC slice data unchanged after the realigned header, so the decoded
+pixels differ from the source while each stream stays valid. FFmpeg must decode
+every nominal stream with error detection set to explode and supplies the pixel
+reference. FFmpeg's trace_headers syntax then drives an independent Python model
+of POC, initial lists, list modification and marking. The check compares that
+model with the sanitized host build of the native parser picture by picture. It
+covers these nominal streams:
+
+- 30 P pictures in two GOPs: a long-term IDR, operations 1, 2, 3, 4 and 6, an
+  index taken over by operation 3, and list modification 2.
+- 40 P pictures with 16-value POC and frame_num moduli and operation 5 in the
+  middle, so both counters wrap and restart.
+- 40 I/P/B pictures with the same moduli, so POC type 0 wraps across B pictures.
+- Unmodified Baseline (CAVLC) and Main (CABAC with implicit weighted B) clips.
+
+It also requires a refusal at the exact picture for a B picture whose list holds
+a long-term IDR, an operation 3 index above the maximum, a list modification 2
+above the maximum, operation 2 on an absent frame, operation 6 with no long-term
+index allowed, and an SPS relabelled as Extended profile. The unchanged parser
+refuses the long-term and profile streams and already decodes the wraparound
+streams correctly. `apps/h264/high.py` builds a sealed manifest from each nominal
+stream. `checks/h264-high-native.py` then runs the five nominal streams through
+the linked High image with FFmpeg pixels injected as device output. Every
+picture's frame list, reference lists and the retained contents of each
+referenced slot match, and every copied picture matches the FFmpeg reference.
+These results are under
+`~/.cache/sunstoneos/build/audit-codec-streaming/checks/modes` and
+`native-modes`; they have not been frozen into the evidence store. They establish
+parser and controller behavior with modeled device effects only.
+
+The focused Astra source review covers short-term POC/lists/marking, speculative
+commit, reference/MV lifetime and output ordering. It predates long-term marking,
+list modification 2 and Baseline/Main admission, which have had no independent
+review. Existing Baseline parser and CPU startup evidence remains scoped to its
+unchanged paths.
 
 The inherited multicore startup, extended-memory mapping, electrical state,
 initial device exclusion, IOMMU authority and whole-board recovery remain
