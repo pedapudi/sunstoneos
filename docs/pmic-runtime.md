@@ -176,6 +176,10 @@ must poll again to mark its mutex retained. Clients cannot unlock another
 task's mutex. A late failure observed after a proven idle bus and mutex release
 retains the request and resource leases, without claiming the released mutex.
 
+The PMIC I2C mutex serves S_TWI0 only. The Type-C controller bus (S_TWI1) and
+the camera bus (TWI11) each have their own platform mutex. A fault retained on
+either of those buses therefore does not block PMIC transactions.
+
 ## Consumer composition
 
 Initialize the shared managers, platform locks, native adapter and provider

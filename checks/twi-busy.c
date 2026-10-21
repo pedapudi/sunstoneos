@@ -2,7 +2,9 @@
 /* Registry BUSY injection for the native TWI11 adapter and the shared TWI
  * engine. The actual adapter, engine and pin tables run against modeled MMIO,
  * an SCCB target, registry/ledger status and platform mutexes. Each scenario
- * runs in its own process because the adapter admits one instance.
+ * runs in its own process because the adapter admits one instance. A final
+ * scenario makes the target NACK its address and checks that the retained
+ * fault covers only the TWI11 mutex, not the PMIC/S_TWI0 I2C mutex.
  * Build with -DSUNSTONE_CAMERA_MODEL=1 and the FreeRTOS include paths. */
 #define _GNU_SOURCE
 #include "a733_twi.h"
@@ -32,7 +34,7 @@ static unsigned held[A733_PLATFORM_LOCK_COUNT];
  * BUSY. refuse_at makes one call report an invalid token. */
 static unsigned status_calls,busy_from,busy_count,refuse_at,busy_seen;
 static struct { uintptr_t address; uint32_t value; } words[64],trace[256];
-static unsigned word_count,trace_count,wire,stored_before_busy;
+static unsigned word_count,trace_count,wire,stored_before_busy,nack;
 static uint8_t target[65536];
 static uint16_t selected;
 
@@ -80,12 +82,12 @@ void a733_camera_model_store(uintptr_t a,uint32_t v)
     assert(!(a&3) && trace_count<256);
     trace[trace_count].address=a;trace[trace_count++].value=v;
     if(a!=A733_TWI11_BASE+0xc || v==0x40){*word(a)=v;return;}
-    assert(held[A733_PLATFORM_I2C_LOCK] && !held[A733_PLATFORM_REGISTER_LOCK]);
+    assert(held[A733_PLATFORM_I2C11_LOCK] && !held[A733_PLATFORM_REGISTER_LOCK]);
     uint32_t data=*word(A733_TWI11_BASE+8),status=0;
     if(v==0x58){wire=0;*word(a)=0x40;*word(A733_TWI11_BASE+0x10)=0xf8;return;}
     if(v==0x68)status=wire?0x10:8;
     else switch(wire){
-    case 1:assert(data==0x78);status=0x18;break;
+    case 1:assert(data==0x78);status=nack?0x20:0x18;break;
     case 2:selected=(uint16_t)(data<<8);status=0x28;break;
     case 3:selected|=(uint16_t)data;status=0x28;break;
     case 4:target[selected]=(uint8_t)data;status=0x28;break;
@@ -143,14 +145,16 @@ static int scenario(void)
     value=0;if(transfer(1,&value)!=1 || value!=0x5a || target[0x3820]!=0x5a)return -1;
     return 1;
 }
-struct outcome { int result; unsigned retained,calls,busy_seen,trace_count,pending,fault; };
-static struct outcome child_run(unsigned from,unsigned count,unsigned refuse,uintptr_t *out_trace,uint32_t *out_values)
+struct outcome { int result; unsigned retained,calls,busy_seen,trace_count,pending,fault,held_mask; };
+static struct outcome child_run(unsigned from,unsigned count,unsigned refuse,unsigned refused_address,
+    uintptr_t *out_trace,uint32_t *out_values)
 {
     int pipefd[2];assert(!pipe(pipefd));
     pid_t pid=fork();assert(pid>=0);
     if(!pid){
-        busy_from=from;busy_count=count;refuse_at=refuse;
+        busy_from=from;busy_count=count;refuse_at=refuse;nack=refused_address;
         struct outcome o={0};o.result=scenario();
+        for(unsigned i=0;i<A733_PLATFORM_LOCK_COUNT;i++)if(held[i])o.held_mask|=1u<<i;
         o.retained=atomic_load(&locks.retained);o.calls=status_calls;o.busy_seen=busy_seen;
         o.trace_count=trace_count;o.pending=stored_before_busy;o.fault=native.fault;
         assert(write(pipefd[1],&o,sizeof(o))==sizeof(o));
@@ -172,14 +176,14 @@ static struct outcome child_run(unsigned from,unsigned count,unsigned refuse,uin
 int main(void)
 {
     static uintptr_t base_a[256],a[256];static uint32_t base_v[256],v[256];
-    struct outcome base=child_run(0,0,0,base_a,base_v);
+    struct outcome base=child_run(0,0,0,0,base_a,base_v);
     assert(base.result==1 && !base.retained && !base.fault && base.calls>20);
     unsigned cases=0,pending=0;
     /* BUSY at every status call, for one and for eight consecutive calls,
      * across prepare and both transactions: the same stores occur once each,
      * and no mutex is retained. */
     for(unsigned run=1;run<=8;run+=7)for(unsigned n=1;n<=base.calls;n++){
-        struct outcome o=child_run(n,run,0,a,v);
+        struct outcome o=child_run(n,run,0,0,a,v);
         if(o.result!=1 || o.retained || o.fault || !o.busy_seen || o.trace_count!=base.trace_count){
             fprintf(stderr,"BUSY at call %u x%u: result %d retained %u fault %u stores %u/%u\n",
                 n,run,o.result,o.retained,o.fault,o.trace_count,base.trace_count);
@@ -190,20 +194,31 @@ int main(void)
     }
     assert(pending>0);
     /* A real refusal still faults: after the first store it retains the held
-     * mutex, and inside a transaction it retains I2C. */
+     * mutex, and inside a transaction it retains the TWI11 mutex. */
     unsigned refused_retained=0;
     for(unsigned n=1;n<=base.calls;n++){
-        struct outcome o=child_run(0,0,n,a,v);
+        struct outcome o=child_run(0,0,n,0,a,v);
         assert(o.result!=1);
         if(o.retained)++refused_retained;
-        assert(!(o.retained&~((1u<<A733_PLATFORM_REGISTER_LOCK)|(1u<<A733_PLATFORM_I2C_LOCK))));
+        assert(!(o.retained&~((1u<<A733_PLATFORM_REGISTER_LOCK)|(1u<<A733_PLATFORM_I2C11_LOCK))));
     }
     assert(refused_retained>0);
     /* BUSY that outlasts the deadline is bounded and ends in a fault. */
-    struct outcome o=child_run(base.calls-6,1000000,0,a,v);
+    struct outcome o=child_run(base.calls-6,1000000,0,0,a,v);
     assert(o.result!=1 && o.busy_seen>1000);
+    /* An absent camera NACKs its address. The fault retains and keeps only the
+     * TWI11 mutex; the PMIC/S_TWI0 and S_TWI1 mutexes stay free and unretained,
+     * so their providers are still admitted. */
+    struct outcome absent=child_run(0,0,0,1,a,v);
+    assert(absent.result==-1 && absent.fault);
+    assert(absent.retained==(1u<<A733_PLATFORM_I2C11_LOCK) && absent.held_mask==(1u<<A733_PLATFORM_I2C11_LOCK));
+    unsigned stop=0;
+    for(unsigned i=0;i<absent.trace_count;i++)
+        if(a[i]==A733_TWI11_BASE+0xc && (v[i]&0x10))++stop;
+    assert(!stop); /* No STOP after the unexpected status. */
     printf("PASS TWI BUSY retry: %u injected cases, %u pending prepares without stores, %u stores unchanged; "
-        "%u refusals retained, bounded BUSY faulted after %u observations\n",
+        "%u refusals retained, bounded BUSY faulted after %u observations; "
+        "address NACK retained only the TWI11 mutex\n",
         cases,pending,base.trace_count,refused_retained,o.busy_seen);
     return 0;
 }
