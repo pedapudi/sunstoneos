@@ -77,14 +77,21 @@ One snapshot reads AXP8191 address `0x36` in this order:
 The provider holds the common I2C mutex across all six byte reads. Each read
 uses START, write address, register index, repeated START, read address, final
 NACK and STOP. Sending the register index does not write PMIC register data.
-One worker poll advances several bus phases while the I2C mutex stays held.
-A wait phase whose completion flag is still clear reads it again until the poll
-has spent 500 microseconds of counter time or 256 phase attempts. Clock and rail
-authority are checked again before each further phase; BUSY there ends the poll
-before any access. With 90 microseconds per bus event and one poll per 1 ms
-tick, a snapshot completes in 9 polls instead of 92
-([poll-count check](../checks/a733-pmic-polls.c)). A caller deadline bounds the
-complete snapshot, including mutex acquisition and result publication.
+One worker poll advances consecutive bus phases while the I2C mutex stays held.
+The poll ends at the first phase that waits for a completion flag that is still
+clear, and after at most eight phases. Clock and rail authority are checked
+again before each further phase; BUSY there ends the poll before any access.
+With 90 microseconds per bus event and one poll per 1 ms tick, a snapshot
+completes in 44 polls instead of 92.
+
+A poll holds the provider object, so a concurrent `a733_pmic_live()` caller
+observes BUSY for the duration of the poll. The HDMI and Type-C users treat that
+BUSY as a fault, so a poll must stay short. In the same model, the longest poll
+is the one that also checks the bus baseline; it holds the provider for 58
+modeled microseconds. A complete snapshot holds it for about 600 microseconds in
+total, the same as with one phase per poll ([poll-count and BUSY
+check](../checks/a733-pmic-polls.c)). A caller deadline bounds the complete
+snapshot, including mutex acquisition and result publication.
 
 A successful result contains raw bytes, enable state and a decoded programmed
 voltage where supported. Reaping the result ends its rail borrow. The copied
