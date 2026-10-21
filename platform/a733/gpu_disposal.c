@@ -2,23 +2,24 @@
 #include "a733_gpu_graphics_memory.h"
 #include "a733_gpu_backend.h"
 #include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include <string.h>
-#ifndef SUNSTONE_GPU_LIFECYCLE
-struct a733_gpu_disposal *gpu_application_disposal_get(struct pvr_gpu_service *s)
-{ (void)s;return NULL; }
-#endif
+struct a733_gpu_disposal *a733_gpu_disposal_owner(struct pvr_gpu_service *s)
+{
+    struct a733_gpu_disposal *d=s?s->config.disposal:NULL;
+    if(!d || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle()!=s->worker ||
+       !d->firmware || !d->compute || !d->backend || d->backend->service!=s ||
+       d->backend->memory!=&d->firmware->memory || !d->backend->power || !d->limit ||
+       !s->clients[0].task)return NULL;
+    for(unsigned i=1;i<PVR_GPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return NULL;
+    return d;
+}
 static int extent_equal(struct device_memory_extent a,struct device_memory_extent b)
 { return a.cpu==b.cpu && a.physical==b.physical && a.bytes==b.bytes; }
 static int mapping(struct device_memory_extent e,unsigned attr)
 {
     if(!e.bytes || (e.cpu&4095) || (e.bytes&4095) || e.cpu!=e.physical || e.bytes>UINTPTR_MAX-e.cpu)return 0;
-    for(uintptr_t p=e.cpu;p<e.cpu+e.bytes;p+=4096) {
-        struct aarch64_translation r,w;
-        if(!aarch64_device_translate(p,0,&r) || !aarch64_device_translate(p,1,&w) ||
-           r.physical!=p || w.physical!=p || r.attributes!=attr || w.attributes!=attr ||
-           r.shareability!=w.shareability || (r.shareability!=3 && (attr!=0x44 || r.shareability!=2)))return 0;
-    }
-    return 1;
+    return a733_gpu_identity_mapped(e.cpu,e.bytes,attr,1);
 }
 static int ledger(struct a733_gpu_disposal *d)
 {
@@ -54,12 +55,11 @@ static int fail(struct a733_gpu_disposal *d,unsigned error)
 static int timely(struct pvr_gpu_service *s,struct a733_gpu_disposal *d)
 {
     uint64_t now;
-    if(!s->config.start.now(s->config.context,&now) || now<s->last_now || now>=s->deadline || now>=d->limit)return 0;
-    s->last_now=now;return 1;
+    return pvr_gpu_service_now(s,&now)==1 && now<s->deadline && now<d->limit;
 }
 int a733_gpu_disposal_begin(struct pvr_gpu_service *s,uint64_t epoch)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(s);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(s);
     if(!d || (d->phase!=A733_GPU_DISPOSAL_NEW && d->phase!=A733_GPU_DISPOSAL_LIVE) ||
        s->phase!=PVR_GPU_SERVICE_STOPPED || !epoch || epoch!=s->epoch || epoch!=s->closed_epoch ||
        s->closed_owner>=PVR_GPU_SERVICE_CLIENTS || !a733_gpu_backend_stopped(d->backend,s) ||
@@ -112,7 +112,7 @@ int a733_gpu_disposal_begin(struct pvr_gpu_service *s,uint64_t epoch)
 }
 int a733_gpu_disposal_poll(struct pvr_gpu_service *s)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(s);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(s);
     if(!d || d->phase==A733_GPU_DISPOSAL_FAILED)return -1;
     if(s->phase!=PVR_GPU_SERVICE_DISPOSING || s->epoch!=d->epoch || !a733_gpu_backend_stopped(d->backend,s) ||
        !timely(s,d))return fail(d,1);
@@ -167,7 +167,7 @@ int a733_gpu_disposal_poll(struct pvr_gpu_service *s)
 }
 int a733_gpu_disposal_rebuild(struct pvr_gpu_service *s)
 {
-    struct a733_gpu_disposal *d=gpu_application_disposal_get(s);
+    struct a733_gpu_disposal *d=a733_gpu_disposal_owner(s);
     if(!d || d->phase!=A733_GPU_DISPOSAL_DONE || d->epoch!=s->closed_epoch ||
        d->released!=((1u<<d->count)-1) || !a733_gpu_backend_stopped(d->backend,s) || !timely(s,d))return 0;
     d->phase=A733_GPU_DISPOSAL_REBUILD;

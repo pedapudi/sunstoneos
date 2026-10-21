@@ -233,7 +233,12 @@ static void compute_owner(void *unused)
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; mode refusal retains backing before firmware startup\n");platform_exit(0);
     }
+    TickType_t opened=xTaskGetTickCount();
     r=wait_phase(PVR_GPU_SERVICE_READY);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_READY);
+    /* Data and table publication run in bounded bursts rather than one page
+     * per tick; startup and health still wait for the firmware model. */
+    TickType_t opening=xTaskGetTickCount()-opened;
+    platform_puts("compute open ticks ");platform_hex(opening);platform_puts("\n");configASSERT(opening<=50);
     configASSERT(vm.phase==A733_GPU_VM_MEMORY_PUBLISHED&&compute.buffer==23);
     if(compute_service_case>=15) {
         if(compute_service_case!=15) {
@@ -342,7 +347,8 @@ static void compute_owner(void *unused)
             }
         }
         configASSERT(request(PVR_GPU_SERVICE_CLOSE,1000000).result==PVR_GPU_SERVICE_OK);
-        r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_COMPLETE);
+        /* Compute-only CLOSE cleans the firmware context before shutdown. */
+        r=wait_phase(PVR_GPU_SERVICE_STOPPED);configASSERT(r.compute_phase==PVR_COMPUTE_SERVICE_CLEANED);
         platform_puts("PASS compute service case ");platform_hex(compute_service_case);
         platform_puts("; native package publication and paged copied output with modeled GPU writes\n");platform_exit(0);
     }
@@ -368,6 +374,10 @@ static void compute_owner(void *unused)
     configASSERT(request(PVR_GPU_SERVICE_CLOSE,100000).result==PVR_GPU_SERVICE_BUSY);
     configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_BUSY);
     if(compute_service_case>=7) {
+        /* A statistics event while the job is pending updates the counters only. */
+        publish_statistic(2,1);wait_statistic(2,1);
+        r=request(PVR_GPU_SERVICE_STATUS,0);
+        configASSERT(r.phase==PVR_GPU_SERVICE_READY&&r.compute_phase==PVR_COMPUTE_SERVICE_RUNNING&&!get(&event_forwarded));
         completion_model();
         do {vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
         while(r.compute_phase!=PVR_COMPUTE_SERVICE_COMPLETE);
@@ -378,9 +388,17 @@ static void compute_owner(void *unused)
         configASSERT(!pvr_compute_job_repeat(&compute.job,compute.job.deadline+100000));
         configASSERT(compute.job.phase==PVR_JOB_COMPLETE&&compute.client.serial==1);
         compute.job.sequence=1;
+        TickType_t accepted=xTaskGetTickCount();
         configASSERT(request(PVR_GPU_SERVICE_COMPUTE,100000).result==PVR_GPU_SERVICE_OK);
         configASSERT(request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0).result==PVR_GPU_SERVICE_BUSY);
         wait_flag(&job_kicks,2);
+        /* Publication, fence check, both ring commands, the KICK and its
+         * modeled return need no GPU progress, so one worker wake covers them.
+         * The job then waits only for its completion fence. */
+        while(compute.job.phase!=PVR_JOB_WAIT_FENCE){configASSERT(xTaskGetTickCount()-accepted<1000);vTaskDelay(1);}
+        TickType_t dispatch=xTaskGetTickCount()-accepted;
+        platform_puts("compute dispatch ticks ");platform_hex(dispatch);platform_puts("\n");
+        configASSERT(dispatch<=4);
         configASSERT(compute.client.serial==2&&compute.client.write==368&&compute.job.sequence==2);
         /* New publication must poison prior results before the second KICK. */
         for(unsigned i=0;i<32;++i)configASSERT(word((unsigned char *)job_config.buffers[PVR_JOB_OUTPUT].cpu+64+4*i,4)==~job_image.expected[i]);
@@ -391,16 +409,24 @@ static void compute_owner(void *unused)
             configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.owns_session&&r.phase==PVR_GPU_SERVICE_FAILED);
             configASSERT(compute.error==PVR_COMPUTE_SERVICE_CANCELLED);
         }
+        TickType_t signalled=xTaskGetTickCount();
         do {vTaskDelay(1);r=request(PVR_GPU_SERVICE_STATUS,0);}
         while(r.compute_phase!=((compute_service_case==7||compute_service_case==11)?PVR_COMPUTE_SERVICE_COMPLETE:PVR_COMPUTE_SERVICE_FAILED));
+        if(compute_service_case==7||compute_service_case==11) {
+            /* The fence poll and the copied output read follow in one wake. */
+            TickType_t completion=xTaskGetTickCount()-signalled;
+            platform_puts("compute completion ticks ");platform_hex(completion);platform_puts("\n");
+            configASSERT(completion<=3);
+        }
         if(compute_service_case==7||compute_service_case==11) {
             r=request(PVR_GPU_SERVICE_COMPUTE_OUTPUT,0);
             configASSERT(r.result==PVR_GPU_SERVICE_OK&&r.compute_sequence==2&&r.compute_word_count==32);
             for(unsigned i=0;i<32;++i)configASSERT(r.compute_words[i]==job_image.expected[i]);
             if(compute_service_case==11) {
-                unsigned char *command=resource(PVR_FW_EVENTS);memset(command,0,88);
+                unsigned write=get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
+                unsigned char *command=resource(PVR_FW_EVENTS)+(write&31)*88;memset(command,0,88);
                 put(command,4,PVR_CCB_MAGIC|105u);
-                __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL),1,__ATOMIC_RELEASE);
+                __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL),(write+1)&31,__ATOMIC_RELEASE);
                 r=wait_phase(PVR_GPU_SERVICE_FAILED);
                 configASSERT(compute.error==PVR_COMPUTE_SERVICE_RESET);
             }

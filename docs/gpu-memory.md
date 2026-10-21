@@ -30,7 +30,15 @@ avoid that ownership conflict. No cacheable CPU alias may exist for those pages.
 This policy applies to firmware control resources; application workload buffers
 remain separate work.
 
-The adapter verifies the affected pages before each shared access. Four-byte
+The adapter verifies the affected pages before each shared access. A read
+checks each touched page's read translation; a write also checks its write
+translation. Initialization, publication and reclamation check both translations
+of every page. Every GPU Normal-memory owner applies the same policy through
+[one helper](../include/a733_gpu_mapping.h): the physical address and MAIR
+attribute must match, non-cacheable memory may be inner or outer shareable, and
+other memory must be inner shareable. Device-memory register checks keep their
+own policy. Changing a mapping after initialization violates the platform's
+pinning contract; the next write to an affected page is refused. Four-byte
 queue accesses use a single aligned word load or store. Other shared reads use
 volatile byte loads. Full-system barriers order publication, completion, and
 acquisition. The callbacks cover queues, the firmware-started byte, compatibility
@@ -74,9 +82,10 @@ Two selected cases passed:
 - Preparation, publication, compatibility, health, event handling, shutdown,
   reclamation, reopen, and ownership transfer across the privileged worker's
   migration between cores. A later startup expiry retains published resources.
-- A deliberate change of shared pages to read-only permissions causes the next
-  native queue access to fail. The service retains its owner and stops callbacks;
-  all allocation guards remain intact.
+- A deliberate change of shared pages to read-only permissions while a firmware
+  event is pending: reading the event succeeds, and the queue write that consumes
+  it is refused. The service retains its owner and stops callbacks; all
+  allocation guards remain intact.
 
 Initialization also refuses cached shared resources, a mismatched physical page,
 read-only uncached memory, and absent mappings without changing the adapter.

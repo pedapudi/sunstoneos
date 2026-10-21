@@ -11,11 +11,18 @@ struct pvr_compute_service;
 struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
+struct a733_gpu_disposal;
 struct pvr_render_texture_request;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
 #define PVR_GPU_SERVICE_IRQ_REARM_ATTEMPTS 32u
+/* Consecutive worker steps taken without waiting while each one makes progress
+ * and no request or interrupt wake is queued. */
+#define PVR_GPU_SERVICE_BURST_STEPS 16u
+/* Firmware UPDATE_STATS counters: partial renders, out-of-memory events and
+ * TA, 3D, CDM and TDM context stores, in firmware statistic order 1..6. */
+#define PVR_GPU_SERVICE_STATISTICS 6u
 enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_CHECKING, PVR_GPU_SERVICE_READY, PVR_GPU_SERVICE_STOPPING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
@@ -116,6 +123,9 @@ struct pvr_gpu_service_config {
     /* Concrete native free-list/HWRT owner; published before compute and power. */
     struct a733_gpu_graphics_memory *graphics;
     struct pvr_render_service *render;
+    /* Standalone lifecycle images only: the exclusive owner of child disposal
+     * and reconstruction. NULL, as in every other image, refuses DISPOSE. */
+    struct a733_gpu_disposal *disposal;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -181,6 +191,8 @@ struct pvr_gpu_service {
     struct pvr_gpu_stop stop;
     struct pvr_free_lists free_lists;
     struct pvr_gpu_events free_list_events;
+    struct pvr_gpu_events statistics_events;
+    int64_t statistics[PVR_GPU_SERVICE_STATISTICS];
     struct pvr_mips_boot boot;
     struct pvr_mips_object mappings[PVR_MIPS_MAX_OBJECTS];
     uint64_t epoch, deadline, last_now;
@@ -256,6 +268,10 @@ int pvr_gpu_service_collect(struct pvr_gpu_service *, uint64_t ticket,
  */
 int pvr_gpu_service_interrupt(struct pvr_gpu_service *, BaseType_t *woken);
 BaseType_t pvr_gpu_service_task_privileged(TaskFunction_t, void *);
+/* Worker-only shared monotonic clock for components composed into the service.
+ * Returns 1 with a sample no older than any earlier component sample. A failed
+ * service, a callback failure or a backward clock returns 0 without recording. */
+int pvr_gpu_service_now(struct pvr_gpu_service *, uint64_t *now);
 /* Queue one copied 64-pixel output slice for the current session owner, using
  * the same send/collect ticket lifetime. Requires completed verified render.
  * first_pixel is a multiple of 64 below 4096. Reply owns its copied pixels;

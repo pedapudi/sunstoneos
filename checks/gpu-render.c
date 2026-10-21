@@ -74,6 +74,19 @@ static void commands(unsigned char *p,const struct pvr_cccb_command *expected,un
         configASSERT(!memcmp(p+40,expected[i].payload,expected[i].bytes));p+=40+expected[i].bytes;
     }
 }
+/* CLOSE cleans both render contexts, then the compute context, then the
+ * recorded targets and free lists; each command must name the expected record. */
+static void cleanup_record(const unsigned char *command,unsigned slot)
+{
+    unsigned index=service.graphics_cleanup_index;
+    int context=compute.compute.phase==PVR_COMPUTE_SERVICE_CLEANUP && index==(service.config.render?2u:0u);
+    configASSERT(service.phase==PVR_GPU_SERVICE_GRAPHICS_CLEANUP && service.graphics_events_retired &&
+        !word(resource(2)+slot*4,4) && !word(command+4,4));
+    configASSERT(context?!word(command+8,4) && word(command+12,4)==compute.config.firmware_address[0]:
+        word(command+8,4)==service.graphics_cleanup_type[index] &&
+        word(command+12,4)==service.graphics_cleanup_address[index]);
+    for(unsigned i=16;i<88;++i)configASSERT(!command[i]);
+}
 static int kick(void *ctx,uint32_t off,uint32_t value)
 {
     callback(ctx);configASSERT(running && off==0xb00 && !value);
@@ -115,7 +128,8 @@ static int kick(void *ctx,uint32_t off,uint32_t value)
         configASSERT(word(command+8,4)==A733_GPU_RENDER_FW+152 && word(command+20,4)==1 &&
             word(command+24,4)==graphics.target.data_firmware[0]+320);
         if(gpu_render_case==0)__atomic_store_n((uint32_t *)(shared+1412),2,__ATOMIC_RELEASE);
-    } else configASSERT(type==PVR_CCB_HEALTH);
+    } else if(type==(PVR_CCB_MAGIC|106))cleanup_record(command,slot);
+    else configASSERT(type==PVR_CCB_HEALTH);
     put(resource(0)+128,4,next);put(resource(2)+slot*4,4,1);return 1;
 }
 static int irq_read(void *ctx,uint32_t off,uint32_t *out)
@@ -191,7 +205,7 @@ void kernel_main(void)
     c->queue=(struct pvr_ccb_ops){read_queue,write_queue,barrier,kick};
     c->start=(struct pvr_gpu_start_ops){now,read_reg,write_reg,started,publish};
     c->control=(struct pvr_gpu_control_ops){now,irq_read,irq_write,compat,NULL};
-    c->stop=(struct pvr_gpu_stop_ops){now,read_reg,write_reg,sync_write,sync_read,unexpected};
+    c->stop=(struct pvr_gpu_stop_ops){now,read_reg,write_reg,sync_write,sync_read,unexpected,NULL};
     c->enable=enable;c->compute_mode=mode;
     configASSERT(pvr_gpu_service_init(&service,c,3,1));
     TaskHandle_t t=xTaskCreateStaticAffinitySet(client,"render-check",4096,NULL,2,client_stack,&client_state,2);

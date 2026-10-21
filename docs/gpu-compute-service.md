@@ -194,6 +194,14 @@ Case 7 passed before a timeout-fixture correction and remains preserved under
 job-local timeout check. These checks model firmware and numerical GPU writes;
 they do not execute the USC program on a physical GPU.
 
+The same repeated-workload cases measure worker latency in scheduler ticks of
+1 ms. A statistics update during the pending job leaves the job running. With
+the worker's bounded step bursts, OPEN reaches READY in 12 to 15 ticks, the
+second submission reaches its completion-fence wait in at most 3 ticks after
+acceptance, and completion follows the fence write within 2 ticks. With one step
+per tick, the same build needed 146 ticks for OPEN and 9 ticks to reach the KICK.
+The cases assert at most 50, 4 and 3 ticks so that slower emulator hosts pass.
+
 The [trusted program application](gpu-compiled-programs.md#runtime-input-in-one-session)
 also exposes bounded same-session input replacement. Its scoped copied staging
 slot carries a client/ticket-bound request to this worker; generic queue messages

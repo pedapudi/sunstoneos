@@ -1,7 +1,7 @@
 #include "pvr_compute_service.h"
 #include "pvr_compute_context.h"
 #include "pvr_gpu_service.h"
-#include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include <string.h>
 
 #define PAGE 4096u
@@ -31,13 +31,10 @@ static const struct pvr_mips_buffer *system_buffer(const struct pvr_gpu_service_
 { return i<3?&c->firmware_buffers[i]:&c->resources[i-3]; }
 static int pa(uint64_t p)
 { return p&&!(p&4095)&&p<(UINT64_C(1)<<36)&&!(p>=0x1fc00000&&p<0x1fc04000); }
+static int mapped_access(const struct pvr_mips_buffer *b,unsigned page,unsigned attr,int write)
+{ return a733_gpu_page_mapped((uintptr_t)b->storage.cpu+(size_t)page*PAGE,b->pages[page],attr,write); }
 static int mapped(const struct pvr_mips_buffer *b,unsigned page,unsigned attr)
-{
-    struct aarch64_translation r,w;uintptr_t address=(uintptr_t)b->storage.cpu+(size_t)page*PAGE;
-    return aarch64_device_translate(address,0,&r)&&aarch64_device_translate(address,1,&w)&&
-        r.physical==b->pages[page]&&w.physical==r.physical&&r.attributes==attr&&w.attributes==attr&&
-        r.shareability==w.shareability&&(r.shareability==3||(attr==0x44&&r.shareability==2));
-}
+{ return mapped_access(b,page,attr,1); }
 static int descriptor(const struct pvr_mips_buffer *b)
 {
     return span(b->storage.cpu,b->storage.bytes)&&!((uintptr_t)b->storage.cpu&4095)&&
@@ -216,14 +213,13 @@ void pvr_compute_service_abort(struct pvr_compute_service *s,unsigned error)
 }
 static int fail(struct pvr_compute_service *s,unsigned error)
 { pvr_compute_service_abort(s,error);return -1; }
+/* The service clock orders this sample after every queue, controller, client
+ * ring and job sample, because each of them also samples through it. */
 static int clock_now(void *ctx,uint64_t *out)
 {
-    struct pvr_compute_service *s=ctx;struct pvr_gpu_service *g=s->service;uint64_t now;
-    if(s->phase==PVR_COMPUTE_SERVICE_FAILED||g->phase==PVR_GPU_SERVICE_FAILED||
-       g->config.start.now(g->config.context,&now)!=1||now<s->last_now||now<g->last_now||
-       now<g->queue.last_now||now<g->control.last_now||now<g->free_lists.last_now||
-       now<s->client.last_now||now<s->job.last_now)return 0;
-    s->last_now=now;g->last_now=now;*out=now;return 1;
+    struct pvr_compute_service *s=ctx;uint64_t now;
+    if(s->phase==PVR_COMPUTE_SERVICE_FAILED||pvr_gpu_service_now(s->service,&now)!=1)return 0;
+    s->last_now=now;*out=now;return 1;
 }
 static int timely(struct pvr_compute_service *s)
 { uint64_t now;return clock_now(s,&now)&&now<s->deadline; }
@@ -252,18 +248,19 @@ int pvr_compute_service_prepare(struct pvr_compute_service *s,uint64_t deadline)
     if(!timely(s))return fail(s,PVR_COMPUTE_SERVICE_CLOCK);
     s->buffer=0;s->page=0;s->phase=PVR_COMPUTE_SERVICE_DATA;return 1;
 }
-static int io_span(struct pvr_compute_service *s,unsigned object,uint32_t off,size_t n)
+/* Reads need only the read translation of each touched page; writes check both. */
+static int io_span(struct pvr_compute_service *s,unsigned object,uint32_t off,size_t n,int write)
 {
     const struct pvr_mips_buffer *b=&s->config->firmware[object];
     const struct pvr_compute_program_span *l=logical(s->config,object);
     if(!n||off>l->bytes||n>l->bytes-off)return 0;
-    for(unsigned i=off/PAGE;i<=(off+n-1)/PAGE;++i)if(!mapped(b,i,0x44))return 0;
+    for(unsigned i=off/PAGE;i<=(off+n-1)/PAGE;++i)if(!mapped_access(b,i,0x44,write))return 0;
     return 1;
 }
 static int read_client(void *ctx,enum pvr_cccb_region r,uint32_t off,void *out,size_t n)
 {
     struct pvr_compute_service *s=ctx;
-    if(r!=PVR_CCCB_CONTROL||n!=4||(off&3)||!io_span(s,2,off,n))return 0;
+    if(r!=PVR_CCCB_CONTROL||n!=4||(off&3)||!io_span(s,2,off,n,0))return 0;
     uint32_t value=*(volatile uint32_t *)((uintptr_t)s->config->firmware[2].storage.cpu+off);
     __asm__ volatile("dsb sy":::"memory");memcpy(out,&value,4);return 1;
 }
@@ -271,7 +268,7 @@ static int write_client(void *ctx,enum pvr_cccb_region r,uint32_t off,const void
 {
     struct pvr_compute_service *s=ctx;
     unsigned id=r==PVR_CCCB_CONTROL?2:3;
-    if((unsigned)r>PVR_CCCB_COMMANDS||!io_span(s,id,off,n)||
+    if((unsigned)r>PVR_CCCB_COMMANDS||!io_span(s,id,off,n,1)||
        (r==PVR_CCCB_CONTROL&&(off||n!=32||
         (s->phase!=PVR_COMPUTE_SERVICE_FORMAT&&
          !(s->phase==PVR_COMPUTE_SERVICE_CLEANUP&&s->client.phase==PVR_CCCB_FORMAT))))||
@@ -286,7 +283,7 @@ static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t
 {
     struct pvr_compute_service *s=ctx;
     if(job!=s->config->job||deadline!=s->deadline||s->config->vm->phase!=A733_GPU_VM_MEMORY_PUBLISHED||
-       s->phase!=PVR_COMPUTE_SERVICE_RUNNING||!io_span(s,5,0,4))return 0;
+       s->phase!=PVR_COMPUTE_SERVICE_RUNNING||!io_span(s,5,0,4,0))return 0;
     uint32_t previous;
     if(!read_fence(s,&previous)||previous!=s->job.sequence-1)return 0;
     const struct pvr_mips_buffer *output=&s->config->buffers[PVR_JOB_OUTPUT];
@@ -303,7 +300,7 @@ static int published(void *ctx,const struct pvr_compute_job_config *job,uint64_t
 }
 static int read_fence(void *ctx,uint32_t *out)
 {
-    struct pvr_compute_service *s=ctx;if(!io_span(s,5,0,4))return 0;
+    struct pvr_compute_service *s=ctx;if(!io_span(s,5,0,4,0))return 0;
     uint32_t value=*(volatile uint32_t *)s->config->firmware[5].storage.cpu;
     __asm__ volatile("dsb sy":::"memory");*out=value;return 1;
 }
@@ -395,7 +392,7 @@ int pvr_compute_service_cleanup_begin(struct pvr_compute_service *s,uint64_t dea
         return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
     if(s->service->queue.phase!=PVR_CCB_ACTIVE||s->service->queue.epoch!=s->epoch||
        s->config->job->firmware_context!=s->config->firmware_address[0]||
-       !io_span(s,0,0,PVR_COMPUTE_CONTEXT_BYTES)||!read_fence(s,&completed)||completed!=expected||!timely(s))
+       !io_span(s,0,0,PVR_COMPUTE_CONTEXT_BYTES,1)||!read_fence(s,&completed)||completed!=expected||!timely(s))
         return fail(s,PVR_COMPUTE_SERVICE_ADMISSION);
     if(s->client.phase==PVR_CCCB_NEW) {
         const struct pvr_cccb_ops ops={clock_now,read_client,write_client,barrier};

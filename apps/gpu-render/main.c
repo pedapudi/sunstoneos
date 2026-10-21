@@ -34,22 +34,16 @@ const uint64_t gpu_program_application_marker[2]={UINT64_C(0x4750555052473031),1
 const uint64_t gpu_lifecycle_marker[2]={UINT64_C(0x4750554c49464531),1};
 /* This image creates only fixed PMIC/USB/client/service tasks. All pool
  * construction precedes the scheduler; only the GPU worker mutates child leases
- * afterward. Other images do not supply this binding. */
-struct a733_gpu_disposal *gpu_application_disposal_get(struct pvr_gpu_service *s)
+ * afterward. Other images leave the service's disposal owner unset. The
+ * backend's revocation flag is this application's fatal flag. */
+static int bind_disposal(void)
 {
-    if(s!=&app.service || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
-       xTaskGetCurrentTaskHandle()!=s->worker || !gpu_application_live(NULL) ||
-       app.disposal.firmware!=&app.firmware || app.disposal.compute!=&app.compute ||
-       app.disposal.backend!=&app.backend || app.backend.service!=s ||
-       app.backend.power!=&app.power || app.backend.memory!=&app.firmware.memory ||
-       app.disposal.limit!=app.session.deadline_us || s->clients[0].task!=app.handles[2])return NULL;
-    for(unsigned i=1;i<PVR_GPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return NULL;
+    app.disposal.firmware=&app.firmware;app.disposal.compute=&app.compute;
 #ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
-    if(app.disposal.graphics!=&app.graphics)return NULL;
-#else
-    if(app.disposal.graphics)return NULL;
+    app.disposal.graphics=&app.graphics;
 #endif
-    return &app.disposal;
+    app.disposal.backend=&app.backend;app.disposal.limit=app.session.deadline_us;
+    app.firmware.config.disposal=&app.disposal;return 1;
 }
 #endif
 extern const unsigned char gpu_firmware[],gpu_firmware_end[];
@@ -514,6 +508,9 @@ void a733_smp_diagnostic_start(void)
 #endif
 #endif
        !a733_gpu_backend_bind(&app.backend,&app.service,&app.firmware.config,&app.firmware.memory,&app.power,&external)||
+#ifdef SUNSTONE_GPU_LIFECYCLE
+       !bind_disposal()||
+#endif
        !pvr_gpu_service_init(&app.service,&app.firmware.config,3,1)||
        !pvr_gpu_service_bind(&app.service,0,app.handles[2])){
         /* Preparation has not opened the GPU. Keep every allocation and
@@ -525,11 +522,6 @@ void a733_smp_diagnostic_start(void)
     }
 #endif
 #ifdef SUNSTONE_GPU_LIFECYCLE
-    app.disposal.firmware=&app.firmware;app.disposal.compute=&app.compute;
-#ifndef SUNSTONE_GPU_COMPUTE_APPLICATION
-    app.disposal.graphics=&app.graphics;
-#endif
-    app.disposal.backend=&app.backend;app.disposal.limit=app.session.deadline_us;
     __asm__ volatile("" :: "r"(gpu_lifecycle_marker) : "memory");
 #endif
     vTaskStartScheduler();platform_panic("GPU scheduler returned",9);

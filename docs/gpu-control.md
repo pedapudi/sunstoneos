@@ -71,7 +71,9 @@ Known event types cover buffer backing/unbacking, freelist growth/reconstruction
 context resets, diagnostic dumps, statistics, and clock changes. The worker passes
 a copied 88-byte event to a registered handler. That handler must validate the
 payload and apply or retain the requested action before reporting success.
-The controller does not yet implement those resource-specific actions.
+The controller does not implement those resource-specific actions itself.
+The [lifecycle service](gpu-service.md) applies statistics updates (type 107)
+to its own counters and forwards the other types to the platform handler.
 
 Restart requests and firmware page faults latch failure without dispatching a
 handler. Unknown commands, absent handlers, and failed handlers also latch failure.

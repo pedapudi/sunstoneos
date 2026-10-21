@@ -1,5 +1,5 @@
 #include "a733_gpu_memory.h"
-#include "aarch64_device_memory.h"
+#include "a733_gpu_mapping.h"
 #include <string.h>
 
 static int span(const void *p, size_t n)
@@ -8,21 +8,13 @@ static int separate(const void *a, size_t n, const void *b, size_t m)
 { return (uintptr_t)a + n <= (uintptr_t)b || (uintptr_t)b + m <= (uintptr_t)a; }
 static const struct pvr_mips_buffer *buffer(const struct a733_gpu_memory *m, unsigned i)
 { return i < 3 ? &m->firmware[i] : &m->resources[i - 3]; }
-static int mapping(const struct pvr_mips_buffer *b, unsigned page, unsigned attributes)
-{
-    uintptr_t cpu = (uintptr_t)b->storage.cpu + page * 4096u;
-    struct aarch64_translation r, w;
-    return aarch64_device_translate(cpu, 0, &r) && aarch64_device_translate(cpu, 1, &w) &&
-        r.physical == b->pages[page] && w.physical == r.physical &&
-        r.attributes == attributes && w.attributes == attributes &&
-        r.shareability == w.shareability &&
-        (r.shareability == 3 || (attributes == 0x44 && r.shareability == 2));
-}
-static int mapped(const struct pvr_mips_buffer *b, size_t off, size_t n, unsigned attributes)
+static int mapped(const struct pvr_mips_buffer *b, size_t off, size_t n, unsigned attributes, int write)
 {
     if (!n || off > b->storage.bytes || n > b->storage.bytes - off) return 0;
     unsigned first = (unsigned)(off / 4096), last = (unsigned)((off + n - 1) / 4096);
-    for (unsigned page = first; page <= last; ++page) if (!mapping(b, page, attributes)) return 0;
+    for (unsigned page = first; page <= last; ++page)
+        if (!a733_gpu_page_mapped((uintptr_t)b->storage.cpu + page * 4096u, b->pages[page], attributes, write))
+            return 0;
     return 1;
 }
 static int external(const struct a733_gpu_memory *m, const void *p, size_t n)
@@ -83,14 +75,16 @@ int a733_gpu_memory_init(struct a733_gpu_memory *m, const struct pvr_mips_buffer
                     if (a->pages[q] == pa) return 0;
             }
         }
-        if (!mapped(b, 0, b->storage.bytes, i < 3 ? 0xff : 0x44)) return 0;
+        if (!mapped(b, 0, b->storage.bytes, i < 3 ? 0xff : 0x44, 1)) return 0;
     }
     candidate.phase = A733_GPU_MEMORY_OFFLINE; *m = candidate; return 1;
 }
-static int shared(struct a733_gpu_memory *m, unsigned id, size_t off, size_t bytes)
+/* Each access rechecks the pages it touches: reads their read translation,
+ * writes both translations. */
+static int shared(struct a733_gpu_memory *m, unsigned id, size_t off, size_t bytes, int write)
 {
     return ready(m) && id < PVR_FW_RESOURCE_COUNT &&
-        mapped(&m->resources[id], off, bytes, 0x44);
+        mapped(&m->resources[id], off, bytes, 0x44, write);
 }
 static void read_bytes(const void *source, void *out, size_t n)
 {
@@ -105,7 +99,7 @@ int a733_gpu_memory_read(void *ctx, enum pvr_ccb_region r, uint32_t off, void *o
     struct a733_gpu_memory *m = ctx;
     size_t size = pvr_ccb_region_bytes(r);
     if (!ready(m) || off > size || n > size - off || (n == 4 && (off & 3)) ||
-        !external(m, out, n) || !shared(m, (unsigned)r, off, n)) return fail(m);
+        !external(m, out, n) || !shared(m, (unsigned)r, off, n, 0)) return fail(m);
     if (n == 4) {
         uint32_t value = *(volatile uint32_t *)address(m, (unsigned)r, off);
         __asm__ volatile("dsb sy" ::: "memory"); memcpy(out, &value, 4);
@@ -128,7 +122,7 @@ int a733_gpu_memory_write(void *ctx, enum pvr_ccb_region r, uint32_t off, const 
 {
     struct a733_gpu_memory *m = ctx; size_t size = pvr_ccb_region_bytes(r);
     if (!ready(m) || off > size || n > size - off || (n == 4 && (off & 3)) ||
-        !external(m, in, n) || !shared(m, (unsigned)r, off, n) ||
+        !external(m, in, n) || !shared(m, (unsigned)r, off, n, 1) ||
         (m->phase == A733_GPU_MEMORY_PUBLISHED && !host_write(r, off, in, n))) return fail(m);
     __asm__ volatile("dsb sy" ::: "memory");
     if (n == 4) { uint32_t v; memcpy(&v, in, 4); *(volatile uint32_t *)address(m, (unsigned)r, off) = v; }
@@ -145,7 +139,7 @@ static int all_mappings(struct a733_gpu_memory *m)
 {
     for (unsigned i = 0; i < 3 + PVR_FW_RESOURCE_COUNT; ++i) {
         const struct pvr_mips_buffer *b = buffer(m, i);
-        if (!mapped(b, 0, b->storage.bytes, i < 3 ? 0xff : 0x44)) return 0;
+        if (!mapped(b, 0, b->storage.bytes, i < 3 ? 0xff : 0x44, 1)) return 0;
     }
     return 1;
 }
@@ -174,21 +168,21 @@ int a733_gpu_memory_started(void *ctx, uint32_t *out)
 {
     struct a733_gpu_memory *m = ctx;
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
-        !shared(m, PVR_FW_SYSTEM_INIT, 352, 1)) return fail(m);
+        !shared(m, PVR_FW_SYSTEM_INIT, 352, 1, 0)) return fail(m);
     unsigned char v; read_bytes(address(m, PVR_FW_SYSTEM_INIT, 352), &v, 1); *out = v; return 1;
 }
 int a733_gpu_memory_compat(void *ctx, uint32_t off, void *out, size_t n)
 {
     struct a733_gpu_memory *m = ctx;
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || off > 64 || n > 64 - off ||
-        !external(m, out, n) || !shared(m, PVR_FW_OS_INIT, 40 + off, n)) return fail(m);
+        !external(m, out, n) || !shared(m, PVR_FW_OS_INIT, 40 + off, n, 0)) return fail(m);
     read_bytes(address(m, PVR_FW_OS_INIT, 40 + off), out, n); return 1;
 }
 int a733_gpu_memory_sync_write(void *ctx, uint32_t value)
 {
     struct a733_gpu_memory *m = ctx;
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || value ||
-        !shared(m, PVR_FW_POWER_SYNC, 0, 4)) return fail(m);
+        !shared(m, PVR_FW_POWER_SYNC, 0, 4, 1)) return fail(m);
     __asm__ volatile("dsb sy" ::: "memory");
     *(volatile uint32_t *)address(m, PVR_FW_POWER_SYNC, 0) = value;
     __asm__ volatile("dsb sy" ::: "memory"); return 1;
@@ -197,7 +191,7 @@ int a733_gpu_memory_sync_read(void *ctx, uint32_t *out)
 {
     struct a733_gpu_memory *m = ctx;
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
-        !shared(m, PVR_FW_POWER_SYNC, 0, 4)) return fail(m);
+        !shared(m, PVR_FW_POWER_SYNC, 0, 4, 0)) return fail(m);
     uint32_t v = *(volatile uint32_t *)address(m, PVR_FW_POWER_SYNC, 0);
     __asm__ volatile("dsb sy" ::: "memory"); *out = v; return 1;
 }
@@ -206,7 +200,7 @@ int a733_gpu_memory_power_state(void *ctx, uint32_t *out)
 {
     struct a733_gpu_memory *m = ctx;
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
-        !shared(m, PVR_FW_SYSTEM_DATA, 8, 4)) return fail(m);
+        !shared(m, PVR_FW_SYSTEM_DATA, 8, 4, 0)) return fail(m);
     uint32_t v = *(volatile uint32_t *)address(m, PVR_FW_SYSTEM_DATA, 8);
     __asm__ volatile("dsb sy" ::: "memory"); *out = v; return 1;
 }
