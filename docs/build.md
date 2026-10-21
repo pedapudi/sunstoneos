@@ -191,6 +191,15 @@ disabled and retains resources until manual power removal. Both modes require
 real memory and power admission before physical execution; see the
 [supervised board procedure](board-application.md).
 
+The application profiles built from the supervised board, such as
+`SUNSTONE_A733_PWM`, `SUNSTONE_A733_STORAGE_READ` and `SUNSTONE_A733_THERMAL`,
+require `SUNSTONE_BOARD_SUPERVISED=ON` on the command line. Configuration stops
+before the board target is created when one of them is enabled without it,
+and the profile does not change the mode in the cache. Disabling the profile
+therefore leaves the requested board mode unchanged. A build directory
+configured before this rule may still hold the mode that an earlier profile
+set; pass the mode explicitly or use a fresh directory.
+
 The `sunstone-a733-camera` target connects native OV5640 capture to USB0 output.
 The separate `a733-smp-supervised` target runs the all-core observer with the
 watchdog disabled and manual recovery. Both are available through the central
