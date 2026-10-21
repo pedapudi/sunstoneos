@@ -43,6 +43,60 @@ and recursive library locks. It passes concurrent allocation, memory-stream
 locking, and library-state preservation across migration in QEMU. Its evidence
 does not qualify the single-core archive for concurrent use.
 
+## Memory copy and fill routines
+
+Every A733 image links `runtime/memory.c` and `runtime/memmove.c` for
+`memcpy`, `memmove` and `memset`. This includes the newlib images for mimus
+recognition, the mimus board application, I2S transcription and Bluetooth
+recognition. The linker resolves these symbols from the project objects, so it
+never extracts newlib's AArch64 copy and fill routines from `libc.a`.
+
+Boot C at EL3 calls `memset` and `memcpy` for structure initialization while
+translation is off. Every data access is then a Device-nGnRnE access, where an
+unaligned access or `DC ZVA` raises an alignment fault. Newlib's routines use
+SIMD registers, overlapping unaligned 16-byte stores and `DC ZVA`, so they
+cannot run there. The project routines meet these rules:
+
+- They use general registers only. A `+nofp` target attribute keeps SIMD code
+  out of images that do not compile with `-mgeneral-regs-only`.
+- `memcpy` and `memmove` copy single bytes until the destination is 8-byte
+  aligned. When source and destination have equal addresses modulo 8, they then
+  copy aligned 8-byte words, and they finish with single bytes. Other copies
+  run byte by byte.
+- `memset` stores single bytes up to 8-byte alignment, then 8-byte words that
+  repeat the fill byte, then single bytes.
+- No access falls outside the source or destination range. `memmove` copies
+  from the high end when the destination overlaps above the source.
+- `-fno-builtin` keeps the compiler from turning these loops into calls to
+  the routines themselves.
+
+Application code in the newlib images also uses these routines. Copies between
+buffers whose addresses differ modulo 8 cost about one cycle per byte. The
+effect on recognition time and on uncached USB bounce-buffer copies has not been
+measured on the board. `memcmp` and the string routines in `runtime/memory.c`
+remain byte loops.
+
+Two host checks cover the routines without board access:
+
+```sh
+python=$HOME/.cache/sunstoneos/venv/bin/python
+"$python" checks/runtime-string-routines.py --output BUILD_DIRECTORY/runtime-string
+"$python" checks/elf-memory-hazards.py BUILD_DIRECTORY/*.elf
+```
+
+The first check compiles both files with and without `-mgeneral-regs-only` and
+runs them under Unicorn instruction emulation. It covers every source and
+destination alignment modulo 16, lengths from 0 to 300 bytes, and overlapping
+`memmove` in both directions. Each result must match a byte-wise reference, and
+each data access must be naturally aligned and inside the caller's range. The
+second check disassembles final images. It fails when `memcpy`, `memmove` or
+`memset` contains a SIMD or floating-point register, `DC ZVA`, or a call. It
+applies the same instruction test to every function reachable by direct
+branches from the EL3 boot functions `local_boot`, `a733_cached_prepare` and
+`a733_cpu_*`. Indirect calls are counted but not followed. Alignment of scalar
+accesses in boot code depends on `-mstrict-align`, which this check does not
+inspect.
+
 ## Build and bounded checks
 
 Use the Clang configuration and FreeRTOS source from [build.md](build.md).
