@@ -85,10 +85,23 @@ bit before publishing application failure. Failed owner iterations call only
 the entropy and platform retention APIs; they cannot submit CE work or return
 to healthy hardware polling. Existing replies remain receivable.
 
-The four pinned firmware blobs contain 391,000 bytes. At the initial one-bit
-400 kHz SDIO rate, the payload alone requires at least 7.82 seconds. Protocol
-traffic, hashing, delays, association and security add time. A four-second
-watchdog window cannot cover cold startup.
+The firmware engine sends each of the 2,880 written patch-table pairs as its
+own padded 512-byte CMD53 transfer and each 1 KiB image chunk as a padded
+1,536-byte transfer. Firmware loading therefore moves about 2.04 MB over the
+bus, although the four pinned blobs contain about 391,000 bytes. At the one-bit
+400 kHz SDIO rate that the platform admits, this data alone takes 40.8 seconds.
+With the smallest command, polling and confirmation framing it takes at least
+46.7 seconds. The supervised profile allows 40 seconds from session start to its
+bootstrap deadline, so firmware loading cannot finish in time; power-up, card
+setup, controller latency and the one-transfer-step-per-tick cadence add more.
+A four-second watchdog window cannot cover cold startup either.
+
+[`checks/radio-bootstrap-budget.py`](../checks/radio-bootstrap-budget.py)
+computes this lower bound from the pinned artifacts, the engine framing, the
+admitted module clock and the profile's bootstrap offset. It fails for the
+current profile. Do not queue the radio board test with this profile until a
+faster or wider SDIO mode is qualified or the engine sends fewer bytes. A later
+deadline cannot help, because the supervised session itself ends at 60 seconds.
 
 The transport counts only consumed successful CMD53 transactions that moved
 nonzero bytes. The counter saturates and never wraps. The radio owner publishes
