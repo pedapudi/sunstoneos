@@ -129,7 +129,8 @@ is borrowed by the worker.
 ## Each channel has one hardware owner path
 
 The worker advances every active channel before receiving another request.
-While any transaction progresses, its queue wait is at most one FreeRTOS tick.
+While any transaction progresses, its queue wait is at most one FreeRTOS tick,
+except while an interrupt binding lets it wait for a DMA event as described below.
 A transfer can finish during that wait, so before answering `STATUS`,
 `PERIOD_GET` or `REAP` the worker advances the request's channel once more.
 The reply then reflects a completion that occurred while the worker waited.
@@ -145,6 +146,50 @@ that I2S DMA requests stop before the DMA controller can stop a channel or
 release buffers.
 Other FIFO peripherals require their own producer adapter before admission;
 raw FIFO requests are refused.
+
+## An optional DMA0 interrupt replaces tick polling between DMA events
+
+Without an interrupt binding, the worker polls every progressing channel once
+per FreeRTOS tick, which is 1000 wakes per second for as long as a cyclic I2S
+stream runs. The platform can instead bind the DMA0 interrupt (GIC SPI 111,
+INTID 143) with `dma_service_bind_irq()` after initialization and before the
+scheduler starts. The binding supplies a rearm callback, a fallback wait of
+1 to `configTICK_RATE_HZ/4` kernel ticks and the same interval in DMA counter
+ticks.
+
+The platform interrupt handler owns the GIC source. It masks the SPI, reads no
+DMA register and calls `dma_service_irq_notify_from_isr()` with the result of
+the mask. That call records the event and notifies the worker. All register
+work stays in the worker: its normal channel polls acknowledge the pending
+events with write-one-to-clear writes. Only after those polls does the worker
+call rearm, inside the kernel critical section and only when no further
+notification is waiting. Because the DMA0 line is level-sensitive, an event
+that arrives between the acknowledgement and the rearm is delivered as soon
+as the SPI is enabled again. With a binding, `dma_service_send()` also
+notifies the worker, so the worker never blocks on the request queue.
+
+The worker waits for the interrupt only when every progressing channel is an
+active transfer whose next progress is an enabled DMA event:
+
+- The controller channel is active, so its package-end or queue-end
+  interrupt is enabled.
+- The transfer deadline is more than twice the fallback interval away. A
+  channel that approaches its deadline is polled every tick, so expiry is
+  detected as without a binding.
+- An I2S stream is active, with no pending health or register operation, no
+  transmit priming and no completed receive period waiting for its checked
+  copy.
+
+In that state the worker sleeps until the interrupt, a client request or the
+fallback interval, whichever comes first. Stop and drain, stream open and
+close, FIFO flush, end-of-input drain and every other phase keep the
+one-tick wait. A cyclic I2S stream therefore wakes the worker about once per
+period. An interrupt after which no enabled event has been acknowledged since
+the last rearm is treated as spurious: the worker leaves the SPI masked and
+polls every tick until a poll acknowledges an event. A failed mask or a failed
+rearm permanently returns the service to tick polling. Channel state, results
+and buffer reservations are not affected by either failure, because polling
+alone remains a complete completion path.
 
 A finite I2S stream permits one start per open. After reaping, close and reopen
 before starting it again. Opening and closing can continue asynchronously
@@ -163,8 +208,9 @@ proof that the peripheral and bus are quiescent before reclaiming resources.
 
 The service assumes reserved DMA RAM, stable translations and the native
 memory/FIFO admission policy. Before service activation, DMA clocks and reset must be prepared,
-CPU channel routing established and DMA interrupt delivery masked for this
-polled implementation. DMA0 register access uses `0x04601000`.
+CPU channel routing established and the DMA interrupt masked at the GIC. Only an
+interrupt binding may later enable it, through its rearm callback. DMA0
+register access uses `0x04601000`.
 All participants must preserve these resources for the service lifetime.
 
 I2S jobs additionally require the shared clock leases and pin ownership of
@@ -219,3 +265,45 @@ The emulator must exit zero and print `PASS DMA service:`. Raw evidence,
 input identities and the private build overlay are under
 `~/.cache/sunstoneos/evidence/dma-service-20261016/`. The implementation has not
 accessed the physical board.
+
+## Interrupt wake evidence is modeled in the emulator
+
+[The interrupt runner](../checks/dma-interrupt.py) builds the
+[interrupt check](../checks/dma-interrupt.c) on the duplex cyclic I2S fixture
+and runs each case in a fresh two-core emulator process. The service, stream
+driver, controller, native cache operations and audio clock and pin providers
+are the production code. DMA and I2S registers, the GIC SPI and its interrupt
+handler are modeled. The modeled handler runs in a privileged task, so the
+check does not exercise exception entry. The binding uses a fallback of 200 ticks, so an interrupt wake is
+distinguishable from a fallback or tick wake.
+
+- Package-end wake: four receive and transmit periods each wake the worker
+  through the interrupt and produce the receive copy within 20 ticks without
+  any client request. Between events the worker reads no DMA register for 10
+  to 30 ticks. Every rearm happens with no enabled event pending, and each
+  interrupt is followed by one rearm.
+- Spurious interrupt: an interrupt without a pending event leaves the SPI
+  masked and returns the worker to tick polling. The next event, observed by
+  polling, enables the SPI again.
+- Failed mask: the service polls every tick for the rest of its lifetime and
+  never calls rearm again, while periods continue to complete.
+- Deadline margin: with no packages and a one-second period timeout, the
+  worker reads no register between fallback wakes and polls every tick once
+  the deadline is within twice the fallback interval.
+
+The polled path without a binding keeps the evidence of the service, startup
+and I2S stream emulator checks, which pass unchanged. The
+[controller host model](../checks/dma-controller.c) checks the deadline margin
+of `a733_dma_event_wait()` across counter wrap and that only
+interrupt-enabled acknowledgements advance the controller event count.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/dma-interrupt.py \
+  --output NEW_OUTPUT_DIRECTORY --freertos FREERTOS_DIRECTORY \
+  --tinyusb TINYUSB_DIRECTORY --lld LLD_PATH \
+  --qemu ~/.cache/sunstoneos/host/usr/bin/qemu-system-aarch64
+```
+
+The runner must print `PASS DMA interrupt cases`. Physical interrupt delivery,
+GIC routing to the worker's core and the CPU time saved during capture have
+not been measured on the board.

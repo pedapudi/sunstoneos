@@ -114,6 +114,52 @@ static unsigned poll_channel(struct dma_service *s,unsigned i)
     } else dma_state(c,a733_dma_poll(&s->controller,i));
     return progressing(c->phase);
 }
+enum { IRQ_EVENT=1u, IRQ_FAILED=2u };
+/* Whether channel i can wait for its next DMA interrupt. Stop drain, I2S
+ * register and health operations, TX priming and an uncopied RX period all
+ * progress without one, so they keep tick polling. */
+static int event_driven(struct dma_service *s,unsigned i)
+{
+    const struct dma_service_channel *c=&s->channels[i];
+    if (c->phase != DMA_SERVICE_RUNNING ||
+        !a733_dma_event_wait(&s->controller,i,2*s->irq.fallback_ticks)) return 0;
+    if (s->jobs[c->profile].kind != DMA_SERVICE_I2S_STREAM) return 1;
+    const struct a733_i2s_stream *st=dma_service_i2s_stream(s,i);
+    uint64_t packages;
+    if (st->status != A733_I2S_ACTIVE || st->deadline || st->priming) return 0;
+    if (!st->profile.cyclic || st->profile.direction == A733_I2S_TRANSMIT) return 1;
+    return a733_dma_cyclic_progress(&s->controller,i,&packages) && packages <= st->raw_next;
+}
+/* Account for ISR notifications, after this pass has acknowledged events. */
+static void irq_observe(struct dma_service *s,unsigned pending)
+{
+    if (pending & IRQ_FAILED) s->irq_retained=1;
+    if (!(pending & IRQ_EVENT)) return;
+    s->irq_armed=0; /* The ISR masked the SPI. */
+    /* Another owner's channel or a retained channel can hold the shared
+     * line asserted. Rearming then would only repeat the interrupt. */
+    if (s->controller.events == s->irq_events) s->irq_spurious=1;
+}
+/* Wait while channels progress: up to the fallback with the SPI enabled,
+ * otherwise one tick, as without a binding. */
+static TickType_t irq_wait(struct dma_service *s,unsigned event_driven_only)
+{
+    if (!event_driven_only || s->irq_retained) return 1;
+    if (s->irq_spurious) {
+        if (s->controller.events == s->irq_events) return 1;
+        s->irq_spurious=0;
+    }
+    if (!s->irq_armed) {
+        int r=0;
+        taskENTER_CRITICAL();
+        if (!atomic_load_explicit(&s->irq_pending,memory_order_acquire)) r=s->irq.rearm(s->irq.cookie);
+        taskEXIT_CRITICAL();
+        if (r < 0) s->irq_retained=1;
+        if (r != 1) return 1;
+        s->irq_armed=1; s->irq_events=s->controller.events;
+    }
+    return s->irq.fallback;
+}
 static enum dma_service_result stream_execute(struct dma_service *s,
     const struct dma_service_message *m,struct a733_i2s_period *period)
 {
@@ -273,10 +319,22 @@ static void worker(void *argument)
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
             continue;
         }
-        unsigned active=0;
-        for (unsigned i=0;i<A733_DMA_CHANNELS;++i) active |= poll_channel(s,i);
+        unsigned pending=s->irq_bound ? atomic_exchange_explicit(&s->irq_pending,0,memory_order_acq_rel) : 0;
+        unsigned active=0,event_driven_only=1;
+        for (unsigned i=0;i<A733_DMA_CHANNELS;++i)
+            if (poll_channel(s,i)) { active=1; if (s->irq_bound && !event_driven(s,i)) event_driven_only=0; }
         struct dma_service_message message;
-        if (xQueueReceive(s->requests,&message,active ? 1 : portMAX_DELAY) != pdTRUE) continue;
+        if (!s->irq_bound) {
+            if (xQueueReceive(s->requests,&message,active ? 1 : portMAX_DELAY) != pdTRUE) continue;
+        } else {
+            /* Clients and the ISR both notify, so requests are taken without
+             * blocking on the queue. */
+            irq_observe(s,pending);
+            if (xQueueReceive(s->requests,&message,0) != pdTRUE) {
+                (void)ulTaskNotifyTake(pdTRUE,active ? irq_wait(s,event_driven_only) : portMAX_DELAY);
+                continue;
+            }
+        }
         configASSERT(message.client < DMA_SERVICE_CLIENTS && message.ticket);
         /* A transfer can finish while the worker blocks. Observe it before
          * answering, so the reply needs no further worker tick. */
@@ -376,6 +434,7 @@ static int initialize(struct dma_service *s,const struct a733_dma_operations *op
     }
     s->activation=activation ? *activation : (struct dma_service_activation){0};
     atomic_init(&s->activation_state,activation ? SERVICE_WAITING : SERVICE_ACTIVE);
+    atomic_init(&s->irq_pending,0);
     s->initialized=1; instance=s; creating_worker=1;
 #if configNUMBER_OF_CORES > 1
     s->worker=xTaskCreateStaticAffinitySet(worker,"dma-service",DMA_SERVICE_STACK_WORDS,s,priority,
@@ -425,6 +484,20 @@ int dma_service_bind(struct dma_service *s,unsigned slot,TaskHandle_t task,uint3
     for (unsigned i=0;i<DMA_SERVICE_CLIENTS;++i) if (s->clients[i].task == task) return 0;
     s->clients[slot].task=task; s->clients[slot].jobs=jobs; return 1;
 }
+int dma_service_bind_irq(struct dma_service *s,const struct dma_service_irq *irq)
+{
+    if (!s || s != instance || !s->initialized || s->irq_bound || !irq || !irq->rearm ||
+        !irq->cookie || !irq->fallback || irq->fallback > configTICK_RATE_HZ/4 ||
+        !irq->fallback_ticks || irq->fallback_ticks > INT64_MAX/2 ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    s->irq=*irq; s->irq_bound=1; return 1;
+}
+void dma_service_irq_notify_from_isr(struct dma_service *s,int mask_ok,BaseType_t *woken)
+{
+    configASSERT(s && s == instance && s->initialized && s->irq_bound && woken);
+    atomic_fetch_or_explicit(&s->irq_pending,IRQ_EVENT|(mask_ok == 1 ? 0 : IRQ_FAILED),memory_order_release);
+    vTaskNotifyGiveFromISR(s->worker,woken);
+}
 static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
 {
     if (!s || s != instance || !s->initialized ||
@@ -460,7 +533,9 @@ int dma_service_send(struct dma_service *s,const struct dma_service_request *req
     struct dma_service_message m={*request,c->next_ticket+1,slot};
     c->pending=m.ticket;
     if (xQueueSend(s->requests,&m,wait) != pdTRUE) { c->pending=0; return 0; }
-    c->next_ticket=m.ticket; *ticket=m.ticket; return 1;
+    c->next_ticket=m.ticket; *ticket=m.ticket;
+    if (s->irq_bound) xTaskNotifyGive(s->worker);
+    return 1;
 }
 int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)
 {
