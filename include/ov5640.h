@@ -32,9 +32,10 @@ struct ov5640_ops {
     /* Acquire reserves clocks, rails, GPIO, sensor and I2C ownership. Before
      * any hardware change it publishes a nonzero token, retained on failure.
      * READY means stable 24 MHz XCLK, correct module rails, physical PWDN high
-     * and, unless ov5640_pwdn_only was called, RESETB low. The module adapter must establish the actual pinout and
-     * voltage levels; the board's connector 3.3 V is not a bare-sensor rail.
-     * Subsequent calls continue the same token. No changing token on retry.
+     * and, unless ov5640_pwdn_only was called, RESETB low. The module adapter
+     * must establish the actual pinout and voltage levels; the board's
+     * connector 3.3 V is not a bare-sensor rail. Subsequent calls continue
+     * the same token. No changing token on retry.
      */
     int (*acquire)(void *context, uint64_t deadline, uint64_t *token);
     /* asserted means PWDN high or RESETB low; adapter handles polarity. */
