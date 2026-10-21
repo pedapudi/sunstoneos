@@ -1,10 +1,11 @@
 # Privileged FreeRTOS DMA service
 
 The DMA service serializes DMA0 RAM, FIFO and I2S stream jobs through one
-preemptible EL1 worker. EL0 tasks submit copied requests through static FreeRTOS queues.
-Registered jobs contain bounded, private copies of transfer metadata. Buffer
-reservations persist through verified drain and remain held until explicit
-result reaping. Task abandonment and retained faults do not reclaim resources.
+preemptible EL1 worker. EL0 tasks submit copied requests through static FreeRTOS
+queues. Registered jobs contain bounded, private copies of transfer metadata.
+Buffer reservations persist through verified drain and remain held until
+explicit result reaping. Task abandonment and retained faults do not reclaim
+resources.
 
 One two-core FreeRTOS emulator session passes worker/client ownership,
 concurrent channels, late replies, autonomous completion and deadlines,
@@ -38,8 +39,8 @@ RX/TX; opposite read/write FIFOs may share an MMIO address, while two readers or
 two writers remain exclusive. An I2S stream job additionally supplies a trusted
 format, platform callback profile and period catalogue. Single-direction I2S0
 profiles must use one DMA channel; a duplex pair uses two distinct channels.
-Clients select job indices; they cannot supply
-addresses, callbacks, controller pointers or channel authority in requests.
+Clients select job indices; they cannot supply addresses, callbacks, controller
+pointers or channel authority in requests.
 
 Initialization copies job records, segment arrays, mapping arrays and I2S
 stream profiles into private storage. Original metadata can then be discarded.
@@ -47,14 +48,15 @@ The pointed-to DMA allocations, native adapter and callback contexts remain
 reserved and pinned for the service lifetime. An I2S profile's callback cookie
 is a lifetime reference to trusted platform state.
 
-The initial software bounds are eight client tasks, sixteen jobs, eight
-segments and sixteen mappings per job. Up to sixteen DMA0 channels can be
-authorized. The protected-range table contains at most thirty-two entries.
-These bounds limit static storage and work per request; they are not hardware
-capacity claims. The service holds two I2S stream contexts. Initialization binds
-one to each channel that I2S stream jobs use and never rebinds it, so a retained
-or duplex-paired stream keeps its address for the service lifetime. Channels
-without stream jobs carry no stream storage. There is no general heap allocation or runtime job-table edit.
+The initial software bounds are eight client tasks, sixteen jobs, eight segments
+and sixteen mappings per job. Up to sixteen DMA0 channels can be authorized. The
+protected-range table contains at most thirty-two entries. These bounds limit
+static storage and work per request; they are not hardware capacity claims. The
+service holds two I2S stream contexts. Initialization binds one to each channel
+that I2S stream jobs use and never rebinds it, so a retained or duplex-paired
+stream keeps its address for the service lifetime. Channels without stream jobs
+carry no stream storage. There is no general heap allocation or runtime
+job-table edit.
 
 ## Protected storage and retained jobs constrain admission
 
@@ -100,8 +102,9 @@ The job selects its fixed channel. FreeRTOS supplies caller identity.
 I2S resource durations become absolute monotonic microsecond deadlines in the
 stream driver. DMA period timeouts and drain use the existing controller's
 counter units. Stream jobs also accept the period operations described in
-[i2s-stream.md](i2s-stream.md). For the native adapter these are physical-counter ticks at
-`CNTFRQ_EL0`; callers must convert durations using that frequency.
+[i2s-stream.md](i2s-stream.md). For the native adapter these are
+physical-counter ticks at `CNTFRQ_EL0`; callers must convert durations using
+that frequency.
 
 Sending copies the request into a queue. Queue success means enqueued;
 the reply reports admission or refusal. Once a `SUBMIT` is queued, its client
@@ -184,13 +187,13 @@ continues from the service's copies.
 
 The session checks a delayed reply, client authorization, concurrent channels,
 buffer conflicts before submission and after drain, autonomous completion,
-cancellation and expiry, and completed-result retention after a task suspends.
-A two-period I2S receive stream checks that its DMA request is off whenever its
+cancellation and expiry, and completed-result retention after a task suspends. A
+two-period I2S receive stream checks that its DMA request is off whenever its
 channel starts or stops and whenever a captured period returns to the CPU. A
 transfer that completes while the worker is suspended is reported by the next
-`STATUS` without another worker tick. A retained drain fault checks buffer/session retention and absence
-of later failed-channel accesses. Startup refuses a physical alias of service
-storage and a raw FIFO job.
+`STATUS` without another worker tick. A retained drain fault checks
+buffer/session retention and absence of later failed-channel accesses. Startup
+refuses a physical alias of service storage and a raw FIFO job.
 
 The fixture uses the native adapter for CPU translation, FIFO admission and
 cache maintenance. Existing controller, memory-policy, I2S format, clock/pin
