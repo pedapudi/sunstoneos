@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one AArch64 DHCP/DNS composition and execute only its new cases."""
+"""Build one AArch64 DHCP/DNS/SNTP composition and execute only its new cases."""
 import argparse
 import hashlib
 import importlib.util
@@ -21,7 +21,7 @@ def main():
         try:operation()
         except BaseException as ex:errors.append(label+': '+str(ex))
     assert not errors,'; '.join(errors)
-    sources=['checks/radio-network-dhcp-dns.c','checks/radio-network-dhcp-dns.py','checks/radio-network.c','checks/radio-network.py','checks/aic8800-runtime.c','checks/aic8800-sdio-transport.c','checks/sdio-controller.c','drivers/net/aic8800_network.c','drivers/net/sunstone_net.c','include/aic8800_network.h','include/sunstone_net.h','network/include/FreeRTOSIPConfig.h','network/include/FreeRTOSConfig.h','runtime/memory.c','cmake/radio-network.cmake','cmake/a733-board.cmake','cmake/radio-dispatch.cmake','CMakeLists.txt']
+    sources=['checks/radio-network-dhcp-dns.c','checks/radio-network-dhcp-dns.py','checks/radio-network.c','checks/radio-network.py','checks/aic8800-runtime.c','checks/aic8800-sdio-transport.c','checks/sdio-controller.c','drivers/net/aic8800_network.c','drivers/net/sunstone_net.c','drivers/net/sunstone_sntp.c','include/aic8800_network.h','include/sunstone_net.h','include/a733_rtc_service.h','network/include/FreeRTOSIPConfig.h','network/include/FreeRTOSConfig.h','runtime/memory.c','cmake/radio-network.cmake','cmake/a733-board.cmake','cmake/radio-dispatch.cmake','CMakeLists.txt']
     inputs={str(ROOT/x):pins.digest(ROOT/x) for x in sources};inputs.update({str(x):pins.digest(x) for x in (a.clang,a.linker,a.qemu)})
     path=out/'results.json';record=json.loads(path.read_text()) if path.exists() else {'physical_access':False,'inputs':inputs,'commands':[],'cases':{}}
     if record['inputs']!=inputs:
@@ -62,6 +62,8 @@ set(SUNSTONE_LLD "{a.linker}")
 set(TINYUSB_DIR "{a.tinyusb}")
 set(Python3_EXECUTABLE "{sys.executable}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")
+# The repository toolchain also defines the path-map helpers its CMakeLists uses.
+include("{ROOT}/cmake/aarch64-clang.cmake")
 ''')
     if not record.get('built'):
         commands=[['cmake','-S',str(project),'-B',str(out/'build'),'-DCMAKE_TOOLCHAIN_FILE='+str(toolchain),'-DFREERTOS_DIR='+str(a.kernel),'-DSUNSTONE_TCP_DIR='+str(a.tcp),'-DSUNSTONE_RSN_DIR='+str(a.rsn),'-DSUNSTONE_NETWORK_C_HEADERS='+str(a.headers),'-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'],['cmake','--build',str(out/'build'),'--target','radio-network-dhcp-dns-model','-j4']]
@@ -76,13 +78,13 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path={a.linker}")
     record['dependencies']=dependencies;record['compile_commands']=commands;record['dependency_records']=records
     symbols=subprocess.run(['/usr/bin/llvm-nm-21','--defined-only',str(out/'build/radio-network-dhcp-dns-model.elf')],capture_output=True,text=True,check=True).stdout
     names={line.split()[-1] for line in symbols.splitlines() if line.split()}
-    required={'kernel_main','sunstone_net_cancel','sunstone_net_ip_step','sunstone_net_dns_bind','sunstone_net_dns_close','FreeRTOS_gethostbyname_a','vApplicationIPNetworkEventHook_Multi'}
+    required={'kernel_main','sunstone_net_cancel','sunstone_sntp_poll','sunstone_sntp_rtc_request','sunstone_net_ip_step','sunstone_net_dns_bind','sunstone_net_dns_close','FreeRTOS_gethostbyname_a','vApplicationIPNetworkEventHook_Multi'}
     assert required<=names,'Missing linked network entry points: '+str(required-names)
     record['required_symbols']=sorted(required);save()
-    for case in ('dhcp','acquisition','static','omitted'):
+    for case in ('dhcp','acquisition','static','omitted','sntp'):
         if record['cases'].get(case,{}).get('exit_code')==0:continue
         cmd=[str(a.qemu),'-M','virt,gic-version=3,secure=off,virtualization=off','-cpu','cortex-a53','-m','128M','-nographic','-nic','none','-monitor','none','-semihosting-config','enable=on,target=native,arg='+case,'-kernel',str(out/'build/radio-network-dhcp-dns-model.elf')]
         r=subprocess.run(cmd,capture_output=True,text=True,timeout=40);record['cases'][case]={'command':cmd,'exit_code':r.returncode,'stdout':r.stdout,'stderr':r.stderr};save()
         if r.returncode:raise RuntimeError(r.stdout+r.stderr)
-    record['result']='PASS new actual-stack DHCP/DNS cases only; no physical RF, credentials, entropy, or networking qualification';save();print(record['result'])
+    record['result']='PASS new actual-stack DHCP/DNS/SNTP cases only; no physical RF, credentials, entropy, or networking qualification';save();print(record['result'])
 if __name__=='__main__':main()

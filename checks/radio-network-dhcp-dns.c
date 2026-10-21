@@ -8,6 +8,7 @@
 #include "FreeRTOS_IP_Utils.h"
 #include "FreeRTOS_ARP.h"
 #include <strings.h>
+#include "a733_rtc_service.h"
 static unsigned offers,acks,queries,renewals,silent_dhcp,static_mode,drop_ack,omit_lease_mode,omit_lease;
 static const uint8_t answer_ip[4]={10,0,0,7};
 static void reply_udp(const uint8_t *request,unsigned bytes,const uint8_t *payload,unsigned length,int dhcp)
@@ -18,8 +19,41 @@ static void reply_udp(const uint8_t *request,unsigned bytes,const uint8_t *paylo
     store16(reply+34,be16(udp+2));store16(reply+36,be16(udp));store16(reply+38,(uint16_t)(8+length));
     memcpy(reply+42,payload,length);store16(reply+40,protocol_checksum(reply+14,reply+34,8+length,17));enqueue(reply,42+length);
 }
+/* SNTP server at answer_ip, the address DNS returns for every name. It
+ * answers ARP for that address, then for each request first sends a datagram
+ * from another port and one for an earlier nonce, which the client ignores.
+ * The first DNS query goes unanswered, as when an ARP miss consumes it. */
+static unsigned sntp_mode,sntp_requests,sntp_answered,sntp_dns_dropped;
+static const uint8_t sntp_seconds[4]={0xee,0x83,0x2f,0xf0}; /* 2026-10-21 12:34:56 UTC */
+static void sntp_datagram(const uint8_t *request,unsigned source_port,const uint8_t *body)
+{
+    uint8_t reply[90]={0};ip_header(reply,8+48,17);uint8_t *ip=reply+14,*udp=reply+34;
+    memcpy(ip+12,answer_ip,4);store16(ip+10,0);store16(ip+10,checksum(sum(ip,20,0)));
+    store16(udp,(uint16_t)source_port);store16(udp+2,be16(request+34));store16(udp+4,8+48);
+    memcpy(udp+8,body,48);store16(udp+6,protocol_checksum(ip,udp,8+48,17));enqueue(reply,90);
+}
+static int sntp_peer(const uint8_t *p,unsigned n)
+{
+    if(n>=42&&be16(p+12)==0x806&&be16(p+20)==1&&!memcmp(p+38,answer_ip,4)){
+        uint8_t reply[42]={0};memcpy(reply,local_mac,6);memcpy(reply+6,peer_mac,6);store16(reply+12,0x806);
+        memcpy(reply+14,p+14,6);store16(reply+20,2);memcpy(reply+22,peer_mac,6);memcpy(reply+28,answer_ip,4);
+        memcpy(reply+32,local_mac,6);memcpy(reply+38,local_ip,4);enqueue(reply,sizeof(reply));return 1;
+    }
+    if(n>=42&&be16(p+12)==0x800&&p[23]==17&&be16(p+36)==53&&!sntp_dns_dropped){sntp_dns_dropped=1;return 1;}
+    if(n<42||be16(p+12)!=0x800||p[23]!=17||memcmp(p+30,answer_ip,4))return 0;
+    const uint8_t *udp=p+34;assert(be16(udp+2)==123&&be16(udp+4)==8+48&&!protocol_checksum(p+14,udp,8+48,17));
+    const uint8_t *q=udp+8;assert(q[0]==0x23&&!q[1]&&!memcmp(q+1,(uint8_t[39]){0},39));++sntp_requests;
+    uint8_t body[48]={0x24,2,6,0xec};memcpy(body+24,q+40,8);
+    /* Received at .5 s less 2^-16 s (15 us); sent at .5 s. */
+    memcpy(body+32,sntp_seconds,4);body[36]=0x7f;body[37]=0xff;
+    memcpy(body+40,sntp_seconds,4);body[44]=0x80;
+    sntp_datagram(p,124,body);
+    body[31]^=1;sntp_datagram(p,123,body);body[31]^=1;
+    sntp_datagram(p,123,body);++sntp_answered;return 1;
+}
 static void service_peer(const uint8_t *p,unsigned n)
 {
+    if(sntp_mode&&sntp_peer(p,n))return;
     if(n<42||be16(p+12)!=0x800||p[23]!=17){peer(p,n);return;}
     const uint8_t *udp=p+34;unsigned bytes=be16(udp+4);assert(bytes>=8&&42+bytes-8<=n);
     assert(!checksum(sum(p+14,20,0))&&!protocol_checksum(p+14,udp,bytes,17));
@@ -78,10 +112,43 @@ static struct sunstone_net_reply resolve(const char *name,TickType_t timeout)
 }
 static void wait_state(atomic_uint *state,unsigned expected)
 {for(unsigned i=0;i<1000&&atomic_load(state)!=expected;++i)vTaskDelay(1);assert(atomic_load(state)==expected);}
+static unsigned sntp_random_calls;
+static int sntp_random(void *context,uint8_t *bytes,size_t count)
+{assert(context==&m&&count==8);++sntp_random_calls;for(size_t i=0;i<count;++i)bytes[i]=(uint8_t)(0x31*sntp_random_calls+i);return 1;}
+/* Name resolution, ARP misses for the DNS and time servers, ignored foreign
+ * datagrams, and the RTC request derived from the accepted reply. */
+static void sntp_application(void)
+{
+    struct sunstone_sntp_config config={.random=sntp_random,.random_context=&m,.timeout=200,.attempts=4,
+        .max_round_trip_us=1000000,.name_bytes=9,.name="time.test"};
+    uint64_t start=(uint64_t)xTaskGetTickCount()*1000;config.deadline_us=start+20000000;
+    static struct sunstone_sntp_client client;
+    struct sunstone_sntp_config bad=config;bad.attempts=0;assert(!sunstone_sntp_start(&client,&net,&bad));
+    bad=config;memcpy(bad.server,peer_ip,4);assert(!sunstone_sntp_start(&client,&net,&bad));
+    assert(sunstone_sntp_start(&client,&net,&config));
+    int result;unsigned polls=0;
+    while(!(result=sunstone_sntp_poll(&client,(uint64_t)xTaskGetTickCount()*1000))){assert(++polls<30000);vTaskDelay(1);}
+    platform_puts("SNTP result/queries/requests/sent/random/round trip ");platform_hex((unsigned)result);platform_hex(queries);
+    platform_hex(sntp_requests);platform_hex(client.sent);platform_hex(sntp_random_calls);platform_hex((unsigned)client.time.round_trip_us);platform_puts("\n");
+    assert(result==1&&!memcmp(client.server,answer_ip,4)&&sntp_answered&&client.sent==sntp_random_calls);
+    assert(sntp_dns_dropped&&queries>=1);
+    uint64_t server=UINT64_C(1792586096)*1000000u+500000u;
+    assert(client.time.stratum==2&&!client.time.leap&&client.time.round_trip_us<=1000000&&
+        client.time.unix_us==server+client.time.round_trip_us/2&&client.time.local_us>=start&&client.sent>=2);
+    /* The socket is closed: every ledger entry is free again. */
+    for(unsigned i=0;i<SUNSTONE_NET_SOCKETS;++i)assert(!net.sockets[i].socket);
+    struct rtc_request rtc;
+    assert(!sunstone_sntp_rtc_request(&client.time,client.time.local_us-1,&rtc));
+    assert(sunstone_sntp_rtc_request(&client.time,client.time.local_us+3600000000u-client.time.round_trip_us/2,&rtc));
+    assert(rtc.kind==RTC_REQUEST_SET&&rtc.day==20748&&rtc.hms==(13u<<16|34u<<8|56u)&&!rtc.seconds);
+    platform_puts("PASS actual-stack SNTP: repeated lookup after an unanswered DNS query, request resent after an ARP miss, ignored foreign datagrams, close and RTC request\n");
+    platform_exit(0);
+}
 static void address_application(void *unused)
 {
     (void)unused;assert(sunstone_net_activate(&net));
     struct sunstone_net_request status={.operation=SUNSTONE_NET_ADDRESS,.timeout=2500};struct sunstone_net_reply value=call(&status);
+    if(sntp_mode){assert(value.result==SUNSTONE_NET_OK);sntp_application();}
     if(silent_dhcp){
         assert(value.result==SUNSTONE_NET_ADDRESS_LOST&&atomic_load(&net.network.address_failed)&&aic8800_network_ready(&net.network));
         assert(!aic8800_network_address(&net.network,NULL));platform_puts("PASS DHCP acquisition deadline revokes address without inventing link loss\n");platform_exit(0);
@@ -145,7 +212,7 @@ void kernel_main(void)
     char command[128]={0};uint64_t block[2]={(uintptr_t)command,sizeof(command)};
     register uint64_t operation __asm__("x0")=0x15;register uint64_t *arg __asm__("x1")=block;
     __asm__ volatile("hlt #0xf000":"+r"(operation):"r"(arg):"memory");
-    if(!operation)for(unsigned i=0;i+11<sizeof(command);++i){if(!memcmp(command+i,"acquisition",11))silent_dhcp=1;if(!memcmp(command+i,"static",6))static_mode=1;if(!memcmp(command+i,"omitted",7))omit_lease_mode=1;}
+    if(!operation)for(unsigned i=0;i+11<sizeof(command);++i){if(!memcmp(command+i,"acquisition",11))silent_dhcp=1;if(!memcmp(command+i,"static",6))static_mode=1;if(!memcmp(command+i,"omitted",7))omit_lease_mode=1;if(!memcmp(command+i,"sntp",4))sntp_mode=static_mode=1;}
     TaskHandle_t app=xTaskCreateStatic(address_application,"address-app",4096,NULL,5,app_stack,&app_task);assert(app);
     struct sunstone_net_config c={.network={.transport=&transport,.tx_timeout=5000,.queue_timeout=5000,
         .random32=random32,.sequence=sequence,.entropy_context=&m,.entropy_record=1,
