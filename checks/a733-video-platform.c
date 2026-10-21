@@ -14,12 +14,24 @@ struct model {
     uint64_t now,reset_at,version;
     unsigned lock,writes,reads,vereads,admissions,memory,drain,trigger,fail;
     struct event events[800];
+    /* XO_CTRL0 with DCXO enabled and stable; PLL_REF is ccu[0]. */
+    uint32_t osc;
+    /* Another task holds a registry for busy_hold clock reads, starting at
+     * write busy_write or at the first pending drain. */
+    struct a733_clock_leases *clocks;struct a733_gpu_resource_manager *power;
+    unsigned busy_write,busy_drain,busy_hold,busy_seen;
 };
-static int now(void *v,uint64_t *n) {struct model*m=v;*n=++m->now;return 1;}
+static void busy_release(struct model*m)
+{
+    if(!m->busy_hold||--m->busy_hold)return;
+    if(m->clocks)atomic_store_explicit(&m->clocks->busy,0,memory_order_release);
+    if(m->power)atomic_store_explicit(&m->power->busy,0,memory_order_release);
+}
+static int now(void *v,uint64_t *n) {struct model*m=v;busy_release(m);*n=++m->now;return 1;}
 static int read_any(void*v,uintptr_t a,uint32_t*out)
 {
     struct model*m=v;++m->reads;
-    if(a==0x07090160)*out=0;
+    if(a==0x07090160)*out=m->osc;
     else if(a==0x070101ac)*out=1;
     else if(a==PCK||a==PCK+8)*out=m->fail==2?0:8;
     else if(a>=CCU&&a<CCU+sizeof(m->ccu))*out=m->ccu[(a-CCU)/4];
@@ -36,6 +48,10 @@ static int write_reg(void*v,uintptr_t a,unsigned width,uint32_t value)
 {
     struct model*m=v;assert(m->lock&&m->memory&&m->writes<800);
     m->events[m->writes++]=(struct event){(uint32_t)a,width,value};
+    if(m->busy_write&&m->writes==m->busy_write) {
+        atomic_store_explicit(&m->clocks->busy,1,memory_order_release);++m->busy_seen;
+        m->busy_hold=m->fail==17?0:8; /* Zero never releases. */
+    }
     if(m->fail==6)return -1;
     if(a==CCU+0xa8c) {
         assert(width==4);assert(!((value^m->ccu[0xa8c/4])&~(1u<<18)));
@@ -62,14 +78,18 @@ static int memory(void*v,uint64_t t,const struct a733_video_jpeg_job*j,
  const struct a733_video_jpeg*p,uint32_t stride,uint32_t rows,uint64_t d)
 {struct model*m=v;(void)j;(void)d;assert(t==42&&!m->lock&&p->width==48&&stride==64&&rows==32);++m->memory;return m->fail==5?-1:1;}
 static int drain(void*v,uint64_t t,uint64_t d)
-{struct model*m=v;(void)d;assert(t==42&&!m->lock&&m->trigger);++m->drain;return m->fail==8?-1:(m->drain>1);}
+{
+    struct model*m=v;(void)d;assert(t==42&&!m->lock&&m->trigger);++m->drain;
+    if(m->busy_drain&&m->drain==1){atomic_store_explicit(&m->power->busy,1,memory_order_release);++m->busy_seen;m->busy_hold=8;}
+    return m->fail==8?-1:(m->drain>1);
+}
 static int enter(void*v,uint64_t d)
 {struct model*m=v;(void)d;assert(!m->lock);m->lock=1;return 1;}
 static int leave(void*v)
 {struct model*m=v;assert(m->lock);m->lock=0;return 1;}
 static void setup(struct model*m,uint64_t version)
 {
-    m->version=version;
+    m->version=version;m->osc=0x10000002;
     m->ccu[0]=0xf8000000u|(99u<<8)|(99u<<16);
     m->ccu[0x240/4]=0xf8000000u|(77u<<8)|(3u<<20);
     m->ccu[0x1918/4]=0x20002;m->ccu[0x1998/4]=0x20000;m->ccu[0x1b10/4]=0x20000;
@@ -87,10 +107,14 @@ int main(int argc,char**argv)
     assert(argc==3||(argc==4&&!strcmp(argv[3],"--gates")));FILE*f=fopen(argv[1],"rb");assert(f);
     uint8_t *bytes=calloc(1,65536);assert(bytes);size_t n=fread(bytes,1,65536,f);assert(n&&n<65536&&!ferror(f));fclose(f);
     const uint64_t ids[]={UINT64_C(0x3332100021321),UINT64_C(0x3331000021320),UINT64_C(0x3052000012011)};
-    for(unsigned test=0;test<17;++test) {
+    static struct event nominal[800];unsigned nominal_writes=0;
+    for(unsigned test=0;test<23;++test) {
         if(argc==4&&test>0&&test<12)continue;
-        unsigned fail=(test<3||test==16)?0:test-2;uint64_t version=ids[test<3?test:0];
+        /* Test17 is the 26MHz board; test18 meets transient registry contention. */
+        unsigned fail=(test<3||test==16||test==17||test==18)?0:test<16?test-2:test-5;
+        uint64_t version=ids[test<3?test:0];
         struct model m={.fail=fail};setup(&m,version);
+        if(test==17){m.osc=0x983fb0f7;m.ccu[0]=0xf8675f00;} /* N=96, M=104. */
         struct a733_clock_leases clocks={0};assert(a733_clock_leases_init(&clocks,now,&m));
         struct a733_gpu_resource_manager power={0};struct a733_gpu_resource_ops po={now,read_any,unused_update,unused_rail};
         assert(a733_gpu_resources_init(&power,&po,&m));
@@ -110,6 +134,12 @@ int main(int argc,char**argv)
         assert(a733_clock_acquire(&clocks,99,scopes,A733_CLOCK_VE_DEC,100000,&c.clock)==A733_CLOCK_OK);
         struct a733_video_platform_ops ops={now,admit,memory,drain,enter,leave,read_reg,write_reg};
         struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&c,&ops,&m));
+        m.clocks=&clocks;m.power=&power;
+        if(test==18){m.busy_write=100;m.busy_drain=1;}
+        if(fail==17)m.busy_write=100;
+        if(fail==14)m.osc&=~0x10000000u; /* DCXO disabled. */
+        if(fail==15)m.osc&=~2u; /* DCXO not stable. */
+        if(fail==16)m.osc=0x983fb0f7; /* 26MHz with N=M. */
         if(fail==1)m.ccu[0x1918/4]&=~2u; /* Auto mode is not No-Auto. */
         if(fail==3)m.ve[0xe0/4]=0xdead;
         if(fail==4)m.gic[0x308/4]=1u<<17;
@@ -130,11 +160,15 @@ int main(int argc,char**argv)
             }
         }
         assert(polls<2000&&run.token==42&&p.token==42);
-        if(!fail)assert(result==1&&m.drain==2&&m.trigger&&!m.lock&&saved);
+        if(!test){nominal_writes=m.writes;memcpy(nominal,m.events,sizeof(nominal));}
+        if(test==17||test==18)assert(m.writes==nominal_writes&&!memcmp(m.events,nominal,sizeof(nominal)));
+        if(test==18)assert(m.busy_seen==2&&!m.busy_hold);
+        if(!fail)assert(result==1&&m.drain==2&&m.trigger&&!m.lock&&saved&&!p.failed);
         else {
             assert(result==-1);
-            if(fail<=4||fail==9||fail>=10)assert(!m.memory&&!m.writes);
-            if(fail==1||fail==2||fail==4||fail==9||fail>=10)assert(!m.vereads);
+            if(fail<=4||fail==9||(fail>=10&&fail<17))assert(!m.memory&&!m.writes);
+            if(fail==1||fail==2||fail==4||fail==9||(fail>=10&&fail<17))assert(!m.vereads);
+            if(fail==17)assert(m.busy_seen==1&&m.writes==100&&!m.lock&&!p.locked&&p.failed);
             if(fail==5)assert(m.memory&&!m.writes);
             if(fail==6||fail==7)assert(m.lock&&p.locked&&!m.trigger);
             if(fail==8)assert(m.trigger&&m.drain==1);
@@ -144,5 +178,5 @@ int main(int argc,char**argv)
         }
         assert(clocks.slots[0].id==c.clock.id&&power.leases[2].token==power_token);
     }
-    free(bytes);puts("PASS: native VE binding model, real token authentication, identity-before-reset, reset delay, retained faults and independent drain. No devices accessed.");
+    free(bytes);puts("PASS: native VE binding model, real token authentication, identity-before-reset, reset delay, retained faults and independent drain, 24/26MHz DCXO reference admission and DCXO/reference refusals, transient registry contention and retained persistent contention. No devices accessed.");
 }

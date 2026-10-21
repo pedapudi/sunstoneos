@@ -68,7 +68,7 @@ def main():
         def setfield(address,type_name,field,value,size=8):cpu.mem_write(address+types[type_name][field],value.to_bytes(size,'little'))
         def returned(value):cpu.reg_write(UC_ARM64_REG_X0,value);cpu.reg_write(UC_ARM64_REG_PC,cpu.reg_read(UC_ARM64_REG_LR))
         fifo=bytearray();time=[1000];mmio={0:1,0x1c:0,0xb0:0,0xec:0,0x228:0,0x5c:0,0x804:0,0xf0:0,0xe0:0x33310,0xe4:0x21320}
-        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];parked=[];guard_reads=[]
+        active=[False];status_reads=[0];fail_at=[None];scan_fail_at=[None];copy_fail_at=[None];tx=bytearray();delivered=[0];sram=[0]*1024;sram_offset=[0];triggers=[];tables=[];calls=[];parked=[];guard_reads=[];wakes=[0]
         def buffers():return list(struct.unpack('<6Q',cpu.mem_read(base+app['buffers'],48)))
         def hook(m,address,size,unused):
             if address==STOP:parked.append('return');m.emu_stop();return
@@ -158,7 +158,7 @@ def main():
         for address in boundaries:cpu.hook_add(UC_HOOK_CODE,hook,begin=address,end=address)
         def invoke(name,*values):
             for reg,value in zip(REGS,values):cpu.reg_write(reg,value)
-            cpu.reg_write(UC_ARM64_REG_SP,0x7affeff0);cpu.reg_write(UC_ARM64_REG_LR,STOP);parked.clear()
+            cpu.reg_write(UC_ARM64_REG_SP,0x7affeff0);cpu.reg_write(UC_ARM64_REG_LR,STOP);parked.clear();wakes[0]+=name=='h264_task'
             cpu.emu_start(syms[name],0,count=800000000);assert parked,(name,'instruction budget');return cpu.reg_read(REGS[0])
         assert invoke('device_memory_pool_init',syms['uncached_pool'],0x78000000,0x78000000,0x1000000)==1
         assert invoke('device_memory_pool_init',syms['boot_pool'],0x48000000,0x48000000,0x30000000)==1
@@ -255,7 +255,8 @@ def main():
         expected=[(0x10000000,4194304,1),(0x10401000,4177920,3),(0x10801000,2088960,3),(0x10a00000,217088,3),(0x10a36000,524288,3),(0x10abc000,49152,3)]
         for i,(va,n,access) in enumerate(expected):assert declared[i]==(va,buffers()[i],n,access)
         (args.output/f'{variant}-tables.bin').write_bytes(cpu.mem_read(get(base+app['table']),32768))
-        reports.append(dict(case=variant,terminal=get(base+app['result'],4),completed=get(streambase+streamtype['next'],4),triggers=triggers,branches=branches,table_sha256=tables[0],spans=declared,provider_admission='Extended-memory readiness/getters, mapping/power/USB/MMIO/pixels modeled; actual WB/NC allocator, IOMMU tables, parser/controller/copy/serializer execute. Shared startup/GIC/secondaries not executed.'))
+        # Task wakes in this process, one per tick; resumed runs count only the remainder.
+        reports.append(dict(case=variant,task_wakes=wakes[0],terminal=get(base+app['result'],4),completed=get(streambase+streamtype['next'],4),triggers=triggers,branches=branches,table_sha256=tables[0],spans=declared,provider_admission='Extended-memory readiness/getters, mapping/power/USB/MMIO/pixels modeled; actual WB/NC allocator, IOMMU tables, parser/controller/copy/serializer execute. Shared startup/GIC/secondaries not executed.'))
     (args.output/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=hashlib.sha256(args.image.read_bytes()).hexdigest(),cases=reports),indent=2)+'\n')
     print('PASS full-HD coded references/cropped copy, WB/NC pool bounds, ACK/backpressure and retained partial-copy failure')
 

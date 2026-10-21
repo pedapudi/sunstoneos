@@ -119,7 +119,7 @@ def main():
  p=argparse.ArgumentParser(description=__doc__)
  for n in ('image','input','session','output'):p.add_argument('--'+n,type=Path,required=True)
  p.add_argument('--resume',type=Path)
- p.add_argument('--case',required=True,choices=['allocation','nominal','generation','hash','truncated','stale','nonfinish','stall','error','empty','overflow','unaligned','later-fault'])
+ p.add_argument('--case',required=True,choices=['allocation','nominal','task-wakes','generation','hash','truncated','stale','nonfinish','stall','error','empty','overflow','unaligned','later-fault'])
  a=p.parse_args();a.output.mkdir(exist_ok=False);im=Image(a.image);m=Machine(im,a.session.read_bytes());raw=a.input.read_bytes();assert len(raw)==460800
  if a.resume:
   state=pickle.loads(gzip.decompress(a.resume.read_bytes()));assert state['image']==hashlib.sha256(a.image.read_bytes()).hexdigest() and state['session']==hashlib.sha256(a.session.read_bytes()).hexdigest()
@@ -149,13 +149,22 @@ def main():
   if a.case!='allocation':
    m.configuration();m.variant=a.case
    if a.case=='stale':m.status=1
-   result=0
+   result=0;wake_writes=[];task=a.case=='task-wakes'
+   if task:
+    # task-wakes runs the actual task loop, one call per tick until vTaskDelay.
+    shared=im.address('providers')+im.layouts['board_provider']['shared']
+    m.put(shared+im.layouts['a733_native_usb']['pmic_ready'],1);m.put(m.base+m.a['stage'],1)
    for i in range(2000):
-    result=m.call('a733_jpeg_encode_poll',m.base+m.a['run'])
+    if task:
+     before=len(m.codec_writes);m.call('jpeg_encode_task',0);wake_writes.append(len(m.codec_writes)-before)
+     result={0:0,1:1,2:-1}[m.get(m.base+m.a['result'],4)]
+    else:result=m.call('a733_jpeg_encode_poll',m.base+m.a['run'])
     if result:break
    if a.case=='nonfinish':
     assert result==0;m.now=990000;result=m.call('a733_jpeg_encode_poll',m.base+m.a['run']);assert result==-1
-   else:assert result==(1 if a.case in ('nominal','stale') else -1),(a.case,result,i)
+   else:assert result==(1 if a.case in ('nominal','stale','task-wakes') else -1),(a.case,result,i)
+   # Each poll formerly made at most one register access per wake.
+   if task:assert max(wake_writes)>=32,wake_writes
    assert m.triggers==1
    expected=struct.unpack('<128I',(Path.home()/'.cache/sunstoneos/evidence/jpeg-encode-trace-20261020/nominal-facts/quant-sram.bin').read_bytes());assert m.quant==list(expected)
    if result==1:
@@ -169,6 +178,6 @@ def main():
    master_micro=[0x400,0x600,0x800,0xa00,0x10400,0x10600,0x10800,0x10a00,0x10c00,0x10e00]
    for _,off in m.io:
     if off%0x10000>=0x400:assert 0xa00<=off<0xc00,hex(off)
-   report.update(result=result,polls=i+1,triggers=m.triggers,programmed= m.codec_writes,io_accesses=m.io,device_writes=len(m.codec_writes))
+   report.update(result=result,polls=i+1,wake_writes=wake_writes,triggers=m.triggers,programmed= m.codec_writes,io_accesses=m.io,device_writes=len(m.codec_writes))
  (a.output/'result.json').write_text(json.dumps(dict(passed=True,case=a.case,image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),input_sha256=hashlib.sha256(raw).hexdigest(),session_sha256=hashlib.sha256(a.session.read_bytes()).hexdigest(),physical_access=False,scope='Actual linked allocation/upload/controller/encoder provider/lowest native MMIO policy/IOMMU/copy. Memory readiness, translation attributes, lease status, locks, clocks, MMIO completion and32 entropy bytes modeled. No CPU startup, hardware arithmetic, physical burst/visibility/drain qualification.',**report),indent=2)+'\n');print('PASS',a.case)
 if __name__=='__main__':main()

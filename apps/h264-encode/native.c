@@ -167,6 +167,19 @@ static int setup(void)
     if(!h264_encode_storage_publish(&h264_encode.storage,h264_encode.session.input_digest)||!a733_h264_encode_platform_init(&h264_encode.platform,c,&ops,&h264_encode))return -1;
     return a733_h264_encode_begin(&h264_encode.run,a733_encode_platform_h264_ops(),&h264_encode.platform,&h264_encode.storage.job,h264_encode_deadline())?1:-1;
 }
+/* The controller performs at most one register operation per poll. Repeat
+ * polls while each one advances its state or index, so programming sequences
+ * finish in one wake. Waiting for hardware, a copy step or a busy resource
+ * makes no progress and sleeps a tick; the budget bounds one wake's work. */
+#define POLL_BUDGET 1024u
+static int advance(void)
+{
+ for(unsigned n=0;;){
+  enum a733_h264_encode_state state=h264_encode.run.state;unsigned index=h264_encode.run.index;
+  int r=a733_h264_encode_poll(&h264_encode.run);
+  if(r||(h264_encode.run.state==state&&h264_encode.run.index==index)||++n==POLL_BUDGET||!board_live(NULL))return r;
+ }
+}
 void h264_encode_task(void *unused)
 {
  (void)unused;for(;;){
@@ -180,7 +193,7 @@ void h264_encode_task(void *unused)
      r=a733_h264_encode_next(&h264_encode.run);if(r==1)h264_encode.stage=3;else r=-1;
     }
    }else if(h264_encode.stage==1||h264_encode.stage==3){
-    r=a733_h264_encode_poll(&h264_encode.run);
+    r=advance();
     if(r==1&&h264_encode.run.state==A733_H264_ENCODE_COPIED){
      unsigned ordinal=h264_encode.run.ordinal;
      atomic_store_explicit(&h264_encode.result[ordinal],1,memory_order_release);
