@@ -377,11 +377,17 @@ def observe_refusal(transaction, evidence, prepared, record, save):
     return 'refused'
 
 
+def report_hold(message):
+    # A closed console must not end the hold and release the board flock.
+    try: print(message,file=sys.stderr,flush=True)
+    except (OSError,ValueError): pass
+
+
 def hold_ownership():
-    print('Launch outcome unresolved. Board flock and queue claim remain held; coordinator recovery intervention is required.',file=sys.stderr,flush=True)
+    report_hold('Launch outcome unresolved. Board flock and queue claim remain held; coordinator recovery intervention is required.')
     while True:
         try: time.sleep(1)
-        except KeyboardInterrupt: print('Ownership retained. Stop this process only after independent coordinator recovery review.',file=sys.stderr,flush=True)
+        except KeyboardInterrupt: report_hold('Ownership retained. Stop this process only after independent coordinator recovery review.')
 
 
 def stop_after_failure(record, save, quarantine, error, hold=hold_ownership):
