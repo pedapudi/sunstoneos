@@ -159,6 +159,12 @@ implementation is **planned**. Partial results apply only to the stated scope:
   remote-writer exclusion, memory ownership/publication, physical reset/boot,
   media loading/writes or recovery. Standalone OS boot remains incomplete;
   packer licensing and exact source equivalence remain unresolved.
+  The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
+  separately executes the actual parser enable/clean-disable wrappers and all
+  twenty expected set/way operations for one synthetic hierarchy. Earlier parser
+  checks substituted those wrappers; their header/entry evidence retains its
+  original scope. `cold-boot-cache-20261020/audit.json` establishes no physical
+  publication, full boot0 execution or remote/DMA exclusion; no image was rebuilt.
 - Always-on processors and mailboxes: **planned**, with source assessment only
   for the internal E902 management core. The pinned A733 manual, sections
   5.2.1–5.2.4, identifies its configuration block at `0x07032000`; the shipped
@@ -723,8 +729,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   recovery. Eight focused host cases pass under
   `dma0-security-admission-20261020/root-integration.json`. Production refuses
   modeled authority; the source establishes no safe Nonsecure read of DMA security-register (`+0x20`).
-  No native probe, build or physical authority is added. Other DMA0 consumer
-  admission paths still require separate integration.
+  UART DMA, I2S and HDMI audio now share that host authority schema, bound to
+  each immutable DMA configuration and actual session IDs. Thirty host-only
+  cases pass with all twenty sources matching under
+  `dma-consumer-security-20261020/root-integration.json`. UART DMA adopts the
+  independently reviewed IDs before sealing its session; HDMI audio still has
+  offline decoding only. No native/runtime image or wire layout changes are
+  claimed. Production refuses modeled records; independently established
+  physical access and each device's remaining admission prerequisites stay required.
   [DMA1 applicability](dma.md#dma1-request-routing-remains-unresolved) remains
   source-blocked. Its register layout, dedicated gates/reset and interrupts are
   identified, but the CPUX request table does not establish the CPUS controller's
@@ -867,10 +879,38 @@ implementation is **planned**. Partial results apply only to the stated scope:
 - GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
-  of SMP. Healthy CLOSE now validates firmware power states, completes asynchronous
-  platform power-off and releases buffers only after verified OFF. Application
+  of SMP. The earlier returning profile's healthy CLOSE validates firmware power
+  states, completes asynchronous platform power-off and releases buffers only
+  after verified OFF. Application
   success requires STOPPED. Focused checks and Astra review pass under
   `gpu-returning-integration-20261018/`; physical shutdown remains untested.
+  Compute-only CLOSE now requests exact firmware common-context cleanup before
+  existing healthy shutdown. It requires matched receipt/slot and success status;
+  BUSY, missing/error receipt, stale timeline or revoked admission retains ownership
+  without healthy power-off. An unused context first initializes its client ring.
+  Seven actual-service composition cases pass with firmware, GPU/MMIO, isolation
+  and admission effects modeled under
+  `gpu-compute-cleanup-20261020/root-integration.json`. Root verifies all 83 compiled
+  repository inputs and 86 declared sources at `e01d065`. Three composition build
+  attempts, two linked images and setup failures retain their separate scopes.
+  A separate full compute-only application build `dae5a387…` matches all 166
+  compiled repository inputs and 371 declared sources under
+  `gpu-compute-cleanup-native-20261020/root-integration.json`; it was not executed.
+  Compute backing/VM mappings stay retained and reopen is refused; no full-application
+  result transfers from the composition model.
+  [Render firmware cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping)
+  is also implemented before healthy shutdown: fragment/geometry contexts, supporting
+  compute context, reverse-order render-target records and local/global free lists
+  require exact successful receipts. Partial receipts stay retained, and late
+  grow/reconstruction events fault through shutdown polling before resource handlers.
+  Eight modeled cases use actual reserved native owners and one built model image
+  with per-case selector patches. Root accepts the model's 85 compiled repository
+  inputs with one verified header-comment difference and 89 declared sources under
+  `gpu-render-cleanup-20261020/root-integration.json`. A separate texture application
+  build `6c45bdc3…` matches all 166 compiled repository inputs and 476 declared sources
+  under `gpu-render-cleanup-native-20261020/root-integration.json`; it was not executed.
+  Firmware, GPU pixels, MMIO and isolation remain modeled. Physical cleanup/visibility,
+  allocation reclamation, VM unmapping and reopen remain unqualified or unimplemented.
   The finite GPU adapter is integrated with eight passing linked cases and
   Astra review. Its worker/PMIC quiescence and retained object placement are
   checked. The returning composition's Nonsecure publication and host capture
@@ -1347,11 +1387,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   dependencies and 161 objects under `root-integration.json`; do not mix current
   objects into that image. Physical networking, entropy quality and RF/wire drain remain
   unqualified. [Explicit healthy reconnect](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service)
-  now preserves the retained session and IP stack; the fixed-address OPEN path
-  and separate WPA2 retirement/rearm boundaries pass one native composition.
-  Complete WPA2 reconnect handshakes, recovery after unexpected loss, DHCP
-  reconnect, IPv6, broader server operation and wider Wi-Fi security modes remain
-  open.
+  now preserves the retained session/IP stack for the same AP and fixed address,
+  after every socket reply/disposal and an IP-task offline receipt. OPEN emitted
+  PASS. The WPA2 fixture executes actual `board_radio_reconnect` and session polling:
+  retirement, fresh handshake/keys, address restoration, new TCP exchange and CLOSE
+  are verified from terminal RAM and client suspension. A reporting assertion
+  prevented PASS; its corrected one-line fixture guard remains unbuilt/unexecuted.
+  `board_radio_poll`, startup, initial firmware/association/authorization and lower
+  RF/entropy effects are unexecuted or explicitly modeled. Root accepts the scoped
+  closure under `radio-reconnect-20261020/root-integration.json`; four linked images
+  and eight configuration/build/preflight attempts remain preserved. The 82-input
+  repository comparison differs only in that final fixture guard; the declared
+  source difference is unrelated hardware documentation. Physical reconnection,
+  unexpected-loss recovery, DHCP reconnect, IPv6, broader server operation and
+  wider security modes remain unqualified or required.
   Native startup now hashes its private profile before deriving runtime settings,
   closing the earlier live-memory hash/copy gap; focused binding checks pass.
 

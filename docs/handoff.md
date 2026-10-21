@@ -17,9 +17,10 @@ these absent devices. Preserve both microSD cards and their native support.
 No MIPI camera, display or microphone is attached. OV5640 is the first sensor
 target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
-Current offline work covers external DMA0 consumer access-authority admission
-and bounded Wi-Fi reconnection design. These remain active and unaccepted.
-Accepted G2D/DI modes retain the modeled scopes listed below.
+GPU compute/render firmware cleanup and healthy same-AP fixed-address Wi-Fi
+reconnection are accepted within the separate model/build scopes below.
+GPU mappings/backing remain retained; unmapping, reclamation and reopen remain
+unfinished. Wi-Fi unexpected-loss and DHCP reconnect remain unsupported.
 
 Camera and thermal-monitor adapters now check actual mutex ownership after
 entry failure, independently of health. Four focused host cases pass under
@@ -113,6 +114,7 @@ functions and modes beyond these bounded applications.
 | [I2S duplex/repeated service](i2s-application.md), [cyclic DMA](i2s-stream.md) | Separate TX/RX channels; copied slots survive cancellation until delivery/ACK. Fixed cyclic TX and checked-copy RX/duplex are integrated. Continuity, cache visibility and wire drain remain unqualified; RX ordering blocker is below. | `i2s-duplex-20261018/integration.json`; `i2s-repeated-20261018/root-integration.json`; `i2s-hardware-cyclic-20261019/root-integration.json` |
 | [Runtime I2S PCM/file input](i2s-application.md#complete-file-input-retains-unknown-serial-completion) | Finite TX leases accept BEGIN_FILE/END_INPUT with a short final period. Normal EOF requires exact DMA consumption and FIFO empty; wire completion is unknown. TX/GEN, clocks, pins, catalogue and buffers remain retained; REAP/CLOSE refuse. Explicit CANCEL may truncate; prefix-plus-guards mode remains separate. Native/provider and client/host checks model hardware; physical playback/drain remain unqualified. | `i2s-file-playback-20261019/root-integration.json`; earlier refills: `i2s-runtime-pcm-20261019/` |
 | [Repeated keyboard/mimus/storage](../apps/mimus-board/README.md) | Workload 4 rearms only after transcript/sector/trigger delivery and matching ACK-response completion. Each generation needs fresh neutral→Enter and generation-bound storage overlap during unchanged EL0 recognition. Nonwrapping `UINT32_MAX` limit and original session deadline bound reuse; workload 0 remains version-1 one-shot. Lifecycle/transport/hardware/scheduler effects modeled; earlier arithmetic parity reused. Coordinator captures 1–32 generations/default 1 within 59 s/native 60 s; durable results precede ACK, failures preserve earlier output without retry/relaunch. Host fixtures/readiness only. Final `05c4b4d9…` unchanged; physical concurrency/capture/recovery/performance unqualified. | `mimus-repeated-board-20261020/root/integration.json`; host: `mimus-board-supervised-host-20261020/root-integration.json`, `checks-fixed/result.json`, `caller-entry.json` |
+| [Healthy Wi-Fi reconnect](radio-session.md#explicit-healthy-reconnect-preserves-the-existing-service) | Same AP/fixed address, after socket disposal and IP-task offline receipt. OPEN emits PASS; actual WPA2 owner/session retirement→fresh handshake→TCP/CLOSE is verified from terminal RAM/suspended client despite a reporting assertion/no PASS. Corrected fixture reporting remains unexecuted. Initial authorization/firmware/RF effects modeled; no `board_radio_poll`, startup or physical claim. DHCP and unexpected-loss recovery remain unsupported. | `radio-reconnect-20261020/root-integration.json`; four linked images/eight build/configuration/preflight attempts preserved |
 | [IPv4 TCP listener](board-radio.md#an-admitted-listener-verifies-one-copied-application-exchange) | One admitted peer and copied 1–256-byte exchange each way; backlog one, fenced child/listener disposal. Seven actual-stack model, four app and five host cases pass; native image linked, not executed. Pinned MIT stack uses generated IPv4 reply-checksum correction. Radio-only workload 3 retains inactive older USB host inputs; physical networking, entropy and wire drain remain unqualified. | `net-inbound-20261020/root-integration.json`, `closure.json`, `bringup-impact.json`; stack: [radio-network](radio-network.md) |
 | [Repeated Bluetooth recognition](bluetooth-native.md#repeated-headset-capture-and-recognition) | CVSD copied input and delivery-owned transcripts; unchanged recognizer remains EL0. Optional mSBC decodes 16 kHz speech through the same path. Transparent eSCO, receive bounds, acoustic quality and session timing remain physically unqualified. | `bluetooth-repeated-recognition-20261019/root-integration.json`; `bluetooth-msbc-20261019/root-integration.json` |
 | [Bluetooth caller PCM](bluetooth-native.md#caller-pcm-playback-and-duplex) | mSBC playback-only and recognition duplex; two immutable 2,400-byte periods, full USB delivery and ticket ACK before reuse. END seals admission; CANCEL can truncate audio. Credits/disconnect account for buffers, not rendering or wire drain. Image-specific case boundary is below. | `bluetooth-pcm-duplex-20261019/root-integration.json`, `profile-gate-delta.json` |
@@ -142,6 +144,7 @@ functions and modes beyond these bounded applications.
 | [G2D fill/copy/source-over-solid](g2d.md), [host](g2d-preparation.md) | Caller ARGB8888, ≤1280×720, guarded master-10 mappings and retained DE_SYS initialization. Current `01b71b3f…` acknowledges task-end and verifies mixer-reset pulse before output reads. Six completion forks use one submitted-job checkpoint, no resubmission; new image/source closure accepted. Earlier pixel/USB/boot/launcher evidence retains its scope; no repeated matrix. Ideal blending remains diagnostic. All resources retained; physical visibility/drain, SMP, pixels and broader modes remain unqualified or required. | `g2d-success-20261020/root-integration.json`; blend: `g2d-blend-20261020/root-integration.json`; earlier power/core scopes preserved |
 | [GPU programs/live input](gpu-compiled-programs.md) | Trusted sealed program, same-shape copied input, exact-sequence READ and CLOSE. Separate multi-dispatch and true 1D/2D grid profiles admit up to 31 workgroups/992 elements with 32 lanes. Numerical execution and device-cache visibility remain modeled/unqualified. | `gpu-dispatch-geometry-20261019/`; `gpu-workgroup-grid-20261019/root-integration.json`; `gpu-runtime-input-20261019/dma-header-integration/root-integration.json` |
 | [GPU indexed textures/depth/blend](gpu-render.md#depth-testing-and-source-over-blending) | Through 1080p with trusted shaders; per-frame depth OFF/LESS/LEQUAL/ALWAYS plus writes and straight-alpha source-over. Shared GEOM+FRAG_PR then final FRAG retains both rings through final completion. Old single-final-fragment ownership results are historical; legacy-profile-2 sequencing is separately checked. GPU/firmware and selected app/USB boundaries are modeled. Physical graphics, stencil/perspective, arbitrary shaders/blends, wider modes, presentation and disposal remain required. | `gpu-depth-blend-20261019/root-integration.json`, `closure.json`, `root/layout-review.json`, `reuse.json` |
+| [GPU compute cleanup](gpu-compute-service.md), [render cleanup](gpu-render.md#healthy-close-cleans-firmware-objects-before-stopping) | Exact successful context/render-target/free-list receipts precede healthy stop; partial progress stays retained and late reconstruction faults through shutdown. Seven compute/eight render composition cases model firmware/MMIO/isolation. Separate full native builds `dae5a387…`/`6c45bdc3…` compile/link current layouts only; no runtime-result transfer. Backing/VM stay retained, reopen refused; physical cleanup, unmapping and reclamation remain outstanding. | `gpu-compute-cleanup-20261020/root-integration.json`, `gpu-render-cleanup-20261020/root-integration.json`; builds: `gpu-compute-cleanup-native-20261020/`, `gpu-render-cleanup-native-20261020/` |
 | [GPU returning application](gpu-application.md), [NPU returning application](npu-application.md) | Workers stop and PMIC parks before cleanup. Reviewed Nonsecure publication and matched host restoration are preserved separately from retained live-input profiles. Physical inference and ROM return remain unqualified; critical frozen scopes are below. | `gpu-returning-repeat-fix-20261019/root-review.json`; `gpu-returning-host-20261019/root-host-source-review.json`; `npu-finite-return-20261018/frozen/`; `npu-finite-host-20261018/root-host-source-review.json` |
 
 ## Blockers and image-specific evidence boundaries
@@ -214,6 +217,10 @@ monitor that captures header/exception state and parks. Actual boot0 parser,
 cleanup/main-tail and eight AArch64 entry cases pass with independent reset-state
 models; one ordinary-file container contains the actual monitor. Evidence:
 `cold-entry-20261020/frozen/manifest.json`, `instructions/result.json`.
+The actual parser cache wrappers separately execute twenty synthetic set/way
+operations before disabling the data cache under `cold-boot-cache-20261020/audit.json`.
+Earlier parser checks substituted these wrappers; no old cases were replayed.
+This establishes neither full boot0 nor physical publication or remote/DMA exclusion.
 No FreeRTOS entry, remote-writer exclusion, memory ownership, physical boot,
 media write or recovery is established. Standalone OS boot remains incomplete;
 packer license/source equivalence remains unresolved. The primary agent owns
@@ -243,11 +250,13 @@ physical electrical authority remains unresolved. [DMA1 applicability](dma.md#dm
 is source-blocked after the bounded primary-source search: the CPUX request table
 does not establish CPUS DRAM encoding. No DMA1 implementation, build, descriptor
 or launch is enabled.
-DMA-copy host admission now requires external session/digest-bound selected-channel,
-controller and descriptor/data Nonsecure access authority. Eight host cases pass
-under `dma0-security-admission-20261020/root-integration.json`; there is no safe
-DMA security-register (`+0x20`) probe or physical authority claim. Other DMA0 consumers still need
-separate admission integration.
+DMA-copy, UART DMA, I2S and HDMI audio host admission require external session/
+configuration-bound channel, controller and descriptor/data Nonsecure access
+authority. Thirty additional consumer host cases and twenty source matches are
+accepted under `dma-consumer-security-20261020/root-integration.json`, without
+native/runtime changes. Production rejects model authority; no safe DMA security
+register probe or physical permission is established. Earlier images retain
+their runtime scopes, and HDMI audio remains offline observation only.
 
 The [provider clock record](provider-clock-reference.md) covers normalized REF24
 admission in TWI11/USB2/radio/CE/I2S/PWM. [SPI](spi-platform.md) has separate
