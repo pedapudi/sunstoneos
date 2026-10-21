@@ -13,6 +13,7 @@ struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_disposal;
 struct pvr_render_texture_request;
+struct pvr_render_texture_frame;
 
 #define PVR_GPU_SERVICE_CLIENTS 8u
 #define PVR_GPU_SERVICE_STACK_WORDS 4096u
@@ -167,6 +168,10 @@ int pvr_gpu_service_texture(struct pvr_gpu_service *,uint64_t epoch,
     TickType_t wait,uint64_t *ticket);
 int pvr_gpu_service_texture_output(struct pvr_gpu_service *,uint64_t ticket,
     const void **data,uint32_t *bytes);
+/* After a collected PRESENT, describe the lent snapshot to its client. The
+ * consumer stops reading it before sending RELEASE with that ticket. */
+int pvr_gpu_service_texture_present(struct pvr_gpu_service *,uint64_t ticket,
+    struct pvr_render_texture_frame *);
 /* Accept another frame only after acquired previous completion and copied output.
  * Acceptance acknowledges replacement of previous_frame; refusal preserves it. */
 int pvr_gpu_service_draw_next(struct pvr_gpu_service *,uint64_t epoch,uint32_t previous_frame,

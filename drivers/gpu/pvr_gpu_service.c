@@ -1002,7 +1002,7 @@ int pvr_gpu_service_texture(struct pvr_gpu_service *s,uint64_t epoch,const struc
     const void *data,uint64_t timeout,TickType_t wait,uint64_t *ticket)
 {
     if(!epoch || !ticket || !span(request,sizeof(*request)) || !timeout || timeout>INT64_MAX || wait==portMAX_DELAY ||
-        request->operation>PVR_TEXTURE_RELEASE || request->bytes>PVR_RENDER_TEXTURE_CHUNK ||
+        request->operation>PVR_TEXTURE_PRESENT || request->bytes>PVR_RENDER_TEXTURE_CHUNK ||
         (request->operation==PVR_TEXTURE_WRITE && !span(data,request->bytes)))return 0;
     unsigned slot;struct pvr_gpu_service_client *client=caller(s,&slot);
     if(!client || client->pending || client->next_ticket==UINT64_MAX || !s->config.render || !s->config.graphics ||
@@ -1038,6 +1038,23 @@ int pvr_gpu_service_texture_output(struct pvr_gpu_service *s,uint64_t ticket,con
     if(!pvr_render_texture_layout_profile(d->owner->profile.render.width,d->owner->profile.render.height,d->owner->draw,&l))return 0;
     *data=(const void *)(d->owner->payload_extent.cpu+d->owner->render.payload_bytes+l.download);
     *bytes=d->texture_output_bytes;return 1;
+}
+int pvr_gpu_service_texture_present(struct pvr_gpu_service *s,uint64_t ticket,struct pvr_render_texture_frame *out)
+{
+    if(!ticket || !out)return 0;
+    unsigned slot;struct pvr_gpu_service_client *c=caller(s,&slot);
+    if(!c || c->pending || !s->config.render || s->owner!=slot || s->phase!=PVR_GPU_SERVICE_READY)return 0;
+    struct pvr_render_service *d=s->config.render;struct pvr_render_texture_layout l;uint32_t stride,bytes;
+    if(atomic_load_explicit(&d->texture_output_state,memory_order_acquire)!=2 ||
+        d->texture_output_ticket!=ticket || d->texture_output_client!=slot ||
+        !pvr_render_texture_layout_profile(d->owner->profile.render.width,d->owner->profile.render.height,d->owner->draw,&l) ||
+        !pvr_render_texture_geometry(d->owner->profile.render.width,d->owner->profile.render.height,&stride,&bytes) ||
+        d->texture_output_bytes!=bytes)return 0;
+    uint64_t offset=d->owner->render.payload_bytes+l.copy;
+    *out=(struct pvr_render_texture_frame){(const void *)(d->owner->payload_extent.cpu+offset),
+        d->owner->payload_extent.physical+offset,bytes,d->owner->profile.render.width,
+        d->owner->profile.render.height,stride,d->texture_output_frame};
+    return 1;
 }
 
 int pvr_gpu_service_compute_input(struct pvr_gpu_service *s,uint32_t sequence,
