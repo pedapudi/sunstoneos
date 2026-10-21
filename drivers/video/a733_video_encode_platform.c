@@ -37,14 +37,25 @@ static int clock_now(void *v,uint64_t *out)
 }
 static int timely(struct a733_encode_platform *p)
 {uint64_t n;return clock_now(p,&n)==1&&n<p->deadline;}
+/* A busy registry is effect-free: another task is inside its short critical
+ * section. Retry for at most two scheduler ticks, so an equal-priority holder
+ * on this core can finish after a time slice; then report 0 (not held). */
+#define BUSY_RETRY_US 2000u
 static int held(struct a733_encode_platform *p)
 {
-    enum a733_clock_result c=a733_clock_token_status(p->config.clocks,&p->config.clock);
-    if(c==A733_CLOCK_BUSY)return 0;
-    if(c!=A733_CLOCK_OK)return fail(p);
-    enum a733_gpu_resource_result g=a733_gpu_resources_status(p->config.power,p->config.power_client,&p->config.pck);
-    if(g==A733_GPU_RESOURCE_BUSY)return 0;
-    return g==A733_GPU_RESOURCE_OK?1:fail(p);
+    uint64_t first=0,n;
+    for(unsigned tries=0;;++tries) {
+        enum a733_clock_result c=a733_clock_token_status(p->config.clocks,&p->config.clock);
+        if(c!=A733_CLOCK_OK&&c!=A733_CLOCK_BUSY)return fail(p);
+        if(c==A733_CLOCK_OK) {
+            enum a733_gpu_resource_result g=a733_gpu_resources_status(p->config.power,p->config.power_client,&p->config.pck);
+            if(g==A733_GPU_RESOURCE_OK)return 1;
+            if(g!=A733_GPU_RESOURCE_BUSY)return fail(p);
+        }
+        if(clock_now(p,&n)!=1)return -1;
+        if(!tries)first=n;
+        if(n>=p->deadline||n-first>=BUSY_RETRY_US||tries==65535)return 0;
+    }
 }
 static int lock(struct a733_encode_platform *p)
 {

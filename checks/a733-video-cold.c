@@ -74,7 +74,7 @@ int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&!strcmp(argv[3],"--reset")));uint8_t bytes[65536];
     FILE*f=fopen(argv[1],"rb");assert(f);size_t n=fread(bytes,1,sizeof(bytes),f);assert(n&&n<sizeof(bytes));fclose(f);
-    for(unsigned test=0;test<6;++test) {
+    for(unsigned test=0;test<7;++test) {
         if(argc==4&&test)continue;
         struct cold_model c={.fault=test};struct model*m=&c.m;
         setup(m,argc==4?UINT64_C(0x3331000021320):UINT64_C(0x3332100021321));
@@ -85,6 +85,7 @@ int main(int argc,char **argv)
         if(test==1)c.rom[0x2ca0]^=1;
         if(test==2)m->ccu[0x1998/4]=0;
         if(test==5)m->ve[0xe0/4]=0xdead;
+        if(test==6){m->osc=0x983fb0f7;m->ccu[0]=0xf8675f00;} /* 26MHz DCXO, N=96, M=104. */
         struct a733_clock_leases clocks={0};assert(a733_clock_leases_init(&clocks,now,m));
         struct a733_gpu_resource_manager power={0};
         struct a733_gpu_resource_ops po={now,read_any,unused_update,unused_rail};
@@ -106,7 +107,7 @@ int main(int argc,char **argv)
         int result=0;unsigned polls=0;
         while(!result&&++polls<20000)result=a733_video_jpeg_poll(&run);
         assert(polls<20000&&run.token==42);
-        if(!test) {
+        if(!test||test==6) {
             assert(result==1&&m->drain==2&&m->trigger&&!m->lock);
             assert(m->events[0].address==PCK+0x170&&m->events[5].address==PCK);
             assert(m->events[6].address==CCU+0xa8c&&m->events[11].address==CCU+0xa88);
@@ -125,7 +126,7 @@ int main(int argc,char **argv)
             assert(a733_video_jpeg_poll(&run)==-1&&accesses==m->reads+m->writes);
         }
         assert(clocks.slots[0].id==config.clock.id&&power.leases[2].token==token);
-        printf("case%u result%d cold_writes%u ROM_reads%u drain%u\n",test,result,test?m->writes:14,c.rom_reads,m->drain);
+        printf("case%u result%d cold_writes%u ROM_reads%u drain%u\n",test,result,test%6?m->writes:14,c.rom_reads,m->drain);
     }
-    puts("PASS: immutable-ROM cold admission, reset held through power acknowledgement, preserved counterpart gates, JPEG completion with independent drain, retained failures. Model only.");
+    puts("PASS: immutable-ROM cold admission, reset held through power acknowledgement, preserved counterpart gates, JPEG completion with independent drain, 24/26MHz DCXO references, retained failures. Model only.");
 }

@@ -41,9 +41,16 @@ A mutex serializes writes but does not replace a lifetime reservation.
 
 The binding validates tokens through `a733_clock_token_status()` and
 `a733_gpu_resources_status()` before register operations. Forged, stale or
-unhealthy reservations refuse access. A busy registry permits a later attempt
-where the JPEG callback supports pending work; a register callback that cannot
-proceed faults conservatively. Tokens remain held in both DONE and FAULT.
+unhealthy reservations refuse access. A busy result means another task is inside
+the registry's short critical section; the observation has no effect. As
+[the clock registry contract](clock-leases.md) requires, the binding polls again
+against its own deadline. It retries for at most 2 ms, two 1 ms scheduler ticks,
+so an equal-priority holder on the same core can finish after a time slice.
+If the registry is still busy, a callback that supports pending work returns
+pending, and a register callback faults and retains its resources. The shared
+register mutex already waits up to the job deadline, so a refused mutex entry
+also faults. The encoder binding applies the same rule. Tokens remain held in
+both DONE and FAULT.
 
 The admission callback authenticates the startup handoff, freezes input bytes and
 aliases, excludes both decoder masters and reserves interrupt 81. It must prove
@@ -62,7 +69,11 @@ The provider reads clock and power state before accessing the decoder window at
 
 The first profile accepts decoder clock mux zero or one, selecting VE1 or VE0.
 It derives the rate from the inherited reference clock, PLL multiplier, PLL input
-and output dividers, and decoder divider. The resulting rate must match private
+and output dividers, and decoder divider. The reference clock must come from an
+enabled, stable DCXO, and its multiplier and divider must convert that
+oscillator's 24, 19.2 or 26 MHz rate to 24 MHz. The decoder and encoder bindings
+apply this rule through the shared `a733_clock_reference.h` helper; the 26 MHz
+board's reference uses multiplier 96 and divider 104. The resulting rate must match private
 startup metadata and remain at or below 720 MHz. The authority provider must
 independently approve that frequency and rail combination for the board.
 The binding does not retune PLLs or change voltage.
@@ -168,6 +179,16 @@ It checked the external-reset hold interval and retained mutex after uncertain
 writes. A focused follow-up passed missing effective VE/PERI gate status,
 autonomous-power enabled/off states, and valid peripheral-derived fabric clocks.
 Those refusals occur before any VE register read or write.
+
+The model's oscillator reports an enabled, stable 24 MHz DCXO. Further cases
+admit the 26 MHz board's oscillator and reference words, `0x983fb0f7` and
+`0xf8675f00`, in inherited mode and in `checks/a733-video-cold.c`; the
+preparation trace is unchanged. A disabled or unstable DCXO, and a 26 MHz DCXO
+with equal multiplier and divider, are refused before any VE access. A clock
+registry held busy during JPEG programming and a PCK registry held busy while the
+drain is pending leave the write trace unchanged. A clock registry that stays
+busy past the retry interval retains the fault without holding the register
+mutex.
 
 `checks/a733-video-platform-reference.py` executes the original `libVE.so`
 `VeReset` instructions with the matching policy-table index. It records both
