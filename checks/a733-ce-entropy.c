@@ -97,7 +97,7 @@ static void setup(struct model *m,unsigned cold)
         .fabric={0x03000001,0x83000000,0x84000000},.fabric_hz={300000000,600000000,400000000},
         .health={9,325,0,0x30200},.configure_health=cold};
     /* Artificial model values: no production threshold or entropy assertion. */
-    *reg(m,0x07090160)=1;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
+    *reg(m,0x07090160)=0x10000003;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0x1908)=0x0a060a06;*reg(m,CCU+0x1988)=0x0a060000;
     *reg(m,CCU+0xac0)=0x81000000;*reg(m,CCU+0xac4)=0x30003;*reg(m,CCU+0x5e4)=4;

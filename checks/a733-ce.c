@@ -102,7 +102,7 @@ static void setup(struct model *m,unsigned high)
         .fabric={0x03000001,0x83000000,0x84000000},.fabric_hz={300000000,600000000,400000000},
         .health={9,325,0,0x30200}};
     /* Health values are artificial contract fixtures, not physical thresholds. */
-    *reg(m,0x07090160)=1;
+    *reg(m,0x07090160)=0x10000003;
     *reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0xa8)=0;*reg(m,CCU+0xac)=0;

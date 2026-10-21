@@ -161,7 +161,7 @@ static void setup(struct model *m,enum a733_ce_profile profile,unsigned cold)
         .health={9,325,0,0x30200},.configure_health=cold,.profile=profile};
     if (hash_only) {m->config.health_profile=0;m->config.configure_health=0;memset(m->config.health,0,sizeof(m->config.health));}
     /* Artificial model values: no production threshold or entropy assertion. */
-    *reg(m,0x07090160)=!hash_only;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
+    *reg(m,0x07090160)=0x10000002|!hash_only;*reg(m,CCU)=0xf8000000|79u<<8|79u<<16;
     *reg(m,CCU+0xa0)=0xfe000000|99u<<8|1u<<20;
     *reg(m,CCU+0x1908)=0x0a060a06;*reg(m,CCU+0x1988)=0x0a060000;
     *reg(m,CCU+0xac0)=0x81000000;*reg(m,CCU+0xac4)=0x30003;*reg(m,CCU+0x5e4)=4;
