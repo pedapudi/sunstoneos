@@ -7,7 +7,7 @@
 #include <string.h>
 static int update_read(void *,uintptr_t,uint32_t *);
 static int update_write(void *,uintptr_t,uint32_t);
-static int update_write_fifo(void *,uintptr_t,const uint32_t *,unsigned);
+static inline int update_write_fifo(void *,uintptr_t,const uint32_t *,unsigned);
 #define main inherited_platform_cases_not_run
 #include "storage-provider-model.h"
 #undef main
@@ -68,7 +68,7 @@ static int update_write(void *v,uintptr_t address,uint32_t value)
     return storage_write(v,address,value);
 }
 /* The native adapter admits a FIFO burst once, then stores every word. */
-static int update_write_fifo(void *v,uintptr_t address,const uint32_t *words,unsigned n)
+static inline int update_write_fifo(void *v,uintptr_t address,const uint32_t *words,unsigned n)
 {
     struct storage_model *s=v;struct model *c=&s->card;
     enum sunxi_mmc_kind kind=s->platform.config.kind;enum a733_mmc_emmc_host host=s->platform.config.emmc_host;
